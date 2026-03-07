@@ -26,7 +26,7 @@ export async function seedOwner(): Promise<void> {
 
   console.log(`[Auth] Seeding owner account: ${env.ownerUsername}`);
 
-  allowCreation();
+  const nonce = allowCreation();
 
   try {
     await auth.api.signUpEmail({
@@ -35,6 +35,7 @@ export async function seedOwner(): Promise<void> {
         password: env.ownerPassword,
         name: env.ownerUsername,
         username: env.ownerUsername,
+        __creationNonce: nonce,
       },
     });
   } catch (err) {
