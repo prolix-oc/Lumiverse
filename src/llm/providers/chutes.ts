@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class ChutesProvider extends OpenAICompatibleProvider {
   readonly name = "chutes";
+  readonly displayName = "Chutes";
   readonly defaultUrl = "https://llm.chutes.ai/v1";
 
   readonly capabilities: ProviderCapabilities = {

@@ -9,6 +9,7 @@ import type { GenerationRequest, GenerationResponse, StreamChunk } from "../type
  */
 export abstract class OpenAICompatibleProvider implements LlmProvider {
   abstract readonly name: string;
+  abstract readonly displayName: string;
   abstract readonly defaultUrl: string;
   abstract readonly capabilities: ProviderCapabilities;
 

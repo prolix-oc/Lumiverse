@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class DeepSeekProvider extends OpenAICompatibleProvider {
   readonly name = "deepseek";
+  readonly displayName = "DeepSeek";
   readonly defaultUrl = "https://api.deepseek.com/v1";
 
   readonly capabilities: ProviderCapabilities = {

@@ -3,6 +3,7 @@ import type { ProviderCapabilities } from "./param-schema";
 
 export interface LlmProvider {
   readonly name: string;
+  readonly displayName: string;
   readonly defaultUrl: string;
   readonly capabilities: ProviderCapabilities;
 

@@ -26,6 +26,7 @@ export default function SpindlePanel() {
 
   const [installUrl, setInstallUrl] = useState('')
   const [installing, setInstalling] = useState(false)
+  const [installError, setInstallError] = useState<string | null>(null)
   const [loadingAction, setLoadingAction] = useState<string | null>(null)
   const [importingLocal, setImportingLocal] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
@@ -82,11 +83,14 @@ export default function SpindlePanel() {
   const handleInstall = useCallback(async () => {
     if (!installUrl.trim()) return
     setInstalling(true)
+    setInstallError(null)
     try {
       await installExtension(installUrl.trim())
       setInstallUrl('')
       setAddMenuOpen(false)
     } catch (err: any) {
+      const message = err?.body?.error || err?.message || 'Installation failed'
+      setInstallError(message)
       console.error('[Spindle] Install failed:', err)
     } finally {
       setInstalling(false)
@@ -188,20 +192,22 @@ export default function SpindlePanel() {
   return (
     <>
     <div className={styles.panel}>
-      {/* Add extension menu */}
-      <div className={styles.installRow}>
-        <div className={styles.addMenuWrap}>
-          <button
-            ref={addMenuButtonRef}
-            className={styles.installBtn}
-            onClick={toggleAddMenu}
-            aria-expanded={addMenuOpen}
-            aria-haspopup="menu"
-          >
-            <Plus size={13} /> Add Extension <ChevronDown size={13} />
-          </button>
+      {/* Add extension menu — only visible to admin/owner */}
+      {isPrivileged && (
+        <div className={styles.installRow}>
+          <div className={styles.addMenuWrap}>
+            <button
+              ref={addMenuButtonRef}
+              className={styles.installBtn}
+              onClick={toggleAddMenu}
+              aria-expanded={addMenuOpen}
+              aria-haspopup="menu"
+            >
+              <Plus size={13} /> Add Extension <ChevronDown size={13} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {importSummary && <div className={styles.importSummary}>{importSummary}</div>}
 
@@ -350,7 +356,7 @@ export default function SpindlePanel() {
         </div>
       )}
     </div>
-    {addMenuOpen && createPortal(
+    {addMenuOpen && isPrivileged && createPortal(
       <div
         ref={addMenuRef}
         className={styles.addMenu}
@@ -388,6 +394,9 @@ export default function SpindlePanel() {
         >
           <Download size={13} /> {installing ? 'Installing...' : 'Install from Source'}
         </button>
+        {installError && (
+          <div className={styles.installError}>{installError}</div>
+        )}
       </div>,
       document.body
     )}

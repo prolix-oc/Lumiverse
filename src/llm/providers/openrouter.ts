@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class OpenRouterProvider extends OpenAICompatibleProvider {
   readonly name = "openrouter";
+  readonly displayName = "OpenRouter";
   readonly defaultUrl = "https://openrouter.ai/api/v1";
 
   readonly capabilities: ProviderCapabilities = {

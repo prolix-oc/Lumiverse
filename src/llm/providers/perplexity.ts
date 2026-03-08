@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class PerplexityProvider extends OpenAICompatibleProvider {
   readonly name = "perplexity";
+  readonly displayName = "Perplexity";
   readonly defaultUrl = "https://api.perplexity.ai";
 
   readonly capabilities: ProviderCapabilities = {

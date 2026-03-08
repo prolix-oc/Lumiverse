@@ -4,6 +4,7 @@ import type { GenerationRequest, GenerationResponse, StreamChunk } from "../type
 
 export class GoogleProvider implements LlmProvider {
   readonly name = "google";
+  readonly displayName = "Google Gemini";
   readonly defaultUrl = "https://generativelanguage.googleapis.com";
 
   readonly capabilities: ProviderCapabilities = {

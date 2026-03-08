@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class NanoGPTProvider extends OpenAICompatibleProvider {
   readonly name = "nanogpt";
+  readonly displayName = "NanoGPT";
   readonly defaultUrl = "https://nano-gpt.com/api/v1";
 
   readonly capabilities: ProviderCapabilities = {

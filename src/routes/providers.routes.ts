@@ -6,7 +6,7 @@ const app = new Hono();
 app.get("/", (c) => {
   const providers = getProviderList().map((p) => ({
     id: p.name,
-    name: p.name,
+    name: p.displayName,
     default_url: p.defaultUrl,
     capabilities: p.capabilities,
   }));

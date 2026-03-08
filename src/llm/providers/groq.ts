@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class GroqProvider extends OpenAICompatibleProvider {
   readonly name = "groq";
+  readonly displayName = "Groq";
   readonly defaultUrl = "https://api.groq.com/openai/v1";
 
   readonly capabilities: ProviderCapabilities = {

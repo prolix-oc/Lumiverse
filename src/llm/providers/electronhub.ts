@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class ElectronHubProvider extends OpenAICompatibleProvider {
   readonly name = "electronhub";
+  readonly displayName = "ElectronHub";
   readonly defaultUrl = "https://api.electronhub.top/v1";
 
   readonly capabilities: ProviderCapabilities = {

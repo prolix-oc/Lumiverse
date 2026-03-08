@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class AI21Provider extends OpenAICompatibleProvider {
   readonly name = "ai21";
+  readonly displayName = "AI21";
   readonly defaultUrl = "https://api.ai21.com/studio/v1";
 
   readonly capabilities: ProviderCapabilities = {

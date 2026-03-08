@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class FireworksProvider extends OpenAICompatibleProvider {
   readonly name = "fireworks";
+  readonly displayName = "Fireworks";
   readonly defaultUrl = "https://api.fireworks.ai/inference/v1";
 
   readonly capabilities: ProviderCapabilities = {

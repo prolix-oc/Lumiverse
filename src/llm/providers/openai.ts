@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class OpenAIProvider extends OpenAICompatibleProvider {
   readonly name = "openai";
+  readonly displayName = "OpenAI";
   readonly defaultUrl = "https://api.openai.com/v1";
 
   readonly capabilities: ProviderCapabilities = {

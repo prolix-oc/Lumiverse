@@ -6,6 +6,7 @@ const API_VERSION = "2023-06-01";
 
 export class AnthropicProvider implements LlmProvider {
   readonly name = "anthropic";
+  readonly displayName = "Anthropic";
   readonly defaultUrl = "https://api.anthropic.com";
 
   readonly capabilities: ProviderCapabilities = {

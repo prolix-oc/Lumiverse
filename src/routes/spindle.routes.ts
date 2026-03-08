@@ -118,8 +118,12 @@ app.put("/ephemeral/config", requireOwner, async (c) => {
 
 // POST /api/v1/spindle/install — Install from GitHub URL (admin/owner only)
 app.post("/install", requireOwner, async (c) => {
+  const viewer = getViewer(c);
+  if (!viewer.userId) {
+    return c.json({ error: "Unable to resolve user identity" }, 401);
+  }
+
   try {
-    const viewer = getViewer(c);
     const body = await c.req.json();
     if (!body.github_url) {
       return c.json({ error: "github_url is required" }, 400);

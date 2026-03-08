@@ -9,9 +9,9 @@ import type { ConnectionProfile, CreateConnectionProfileInput } from '@/types/ap
 import styles from './ConnectionManager.module.css'
 
 const FALLBACK_PROVIDERS = [
-  { id: 'openai', name: 'openai', default_url: 'https://api.openai.com/v1' },
-  { id: 'anthropic', name: 'anthropic', default_url: 'https://api.anthropic.com' },
-  { id: 'google', name: 'google', default_url: 'https://generativelanguage.googleapis.com' },
+  { id: 'openai', name: 'OpenAI', default_url: 'https://api.openai.com/v1' },
+  { id: 'anthropic', name: 'Anthropic', default_url: 'https://api.anthropic.com' },
+  { id: 'google', name: 'Google Gemini', default_url: 'https://generativelanguage.googleapis.com' },
 ]
 
 export default function ConnectionManager() {

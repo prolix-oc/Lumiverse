@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class XAIProvider extends OpenAICompatibleProvider {
   readonly name = "xai";
+  readonly displayName = "xAI (Grok)";
   readonly defaultUrl = "https://api.x.ai/v1";
 
   readonly capabilities: ProviderCapabilities = {

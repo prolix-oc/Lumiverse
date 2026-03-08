@@ -317,3 +317,9 @@
   color: var(--lumiverse-text-dim);
   font-size: 13px;
 }
+
+.installError {
+  font-size: 12px;
+  color: var(--lumiverse-danger);
+  padding: 4px 0;
+}

@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class SiliconFlowProvider extends OpenAICompatibleProvider {
   readonly name = "siliconflow";
+  readonly displayName = "SiliconFlow";
   readonly defaultUrl = "https://api.siliconflow.cn/v1";
 
   readonly capabilities: ProviderCapabilities = {

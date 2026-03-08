@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class ZAIProvider extends OpenAICompatibleProvider {
   readonly name = "zai";
+  readonly displayName = "Z.AI";
   readonly defaultUrl = "https://api.z.ai/v1";
 
   readonly capabilities: ProviderCapabilities = {

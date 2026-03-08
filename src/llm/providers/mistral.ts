@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 
 export class MistralProvider extends OpenAICompatibleProvider {
   readonly name = "mistral";
+  readonly displayName = "Mistral";
   readonly defaultUrl = "https://api.mistral.ai/v1";
 
   readonly capabilities: ProviderCapabilities = {

@@ -30,11 +30,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
   const [modelsLoading, setModelsLoading] = useState(false)
 
   const providerOptions = providers.length > 0
-    ? [
-        ...providers.map((p) => ({ value: p.id, label: p.name })),
-        { value: 'openrouter', label: 'OpenRouter' },
-        { value: 'custom', label: 'Custom (OpenAI-compatible)' },
-      ]
+    ? providers.map((p) => ({ value: p.id, label: p.name }))
     : FALLBACK_PROVIDERS
 
   const selectedProvider = providers.find((p) => p.id === provider)
