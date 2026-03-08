@@ -296,6 +296,16 @@ export function useCharacterBrowser() {
     [batchSelected, removeCharacters, setBatchMode]
   )
 
+  // Create new character
+  const createCharacter = useCallback(
+    async () => {
+      const character = await charactersApi.create({ name: 'New Character' })
+      addCharacter(character)
+      return character
+    },
+    [addCharacter]
+  )
+
   // Update character
   const updateCharacter = useCallback(
     async (id: string, input: any) => {
@@ -451,6 +461,7 @@ export function useCharacterBrowser() {
     toggleBatchSelect,
     selectAllBatch,
     clearBatchSelection,
+    createCharacter,
     updateCharacter,
     duplicateCharacter,
     uploadAvatar,

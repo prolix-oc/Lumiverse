@@ -22,6 +22,15 @@ export default function CharacterBrowser() {
   const browser = useCharacterBrowser()
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
   const openModal = useStore((s) => s.openModal)
+  const handleCreateNew = useCallback(async () => {
+    try {
+      const character = await browser.createCharacter()
+      setEditingCharacterId(character.id)
+    } catch (err) {
+      console.error('[CharacterBrowser] Failed to create character:', err)
+    }
+  }, [browser.createCharacter, setEditingCharacterId])
+
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -95,6 +104,7 @@ export default function CharacterBrowser() {
         onBatchModeChange={browser.setBatchMode}
         onImportFile={browser.importFiles}
         onImportUrl={() => setImportUrlOpen(true)}
+        onCreateNew={handleCreateNew}
         importLoading={browser.importLoading}
         onGroupChat={() => openModal('groupChatCreator')}
       />

@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { Plus, FileUp, Link, UserPlus } from 'lucide-react'
-import { useNavigate } from 'react-router'
 import styles from './ImportMenu.module.css'
 
 interface ImportMenuProps {
   onImportFile: (files: File[]) => void
   onImportUrl: () => void
+  onCreateNew: () => void
   importLoading: boolean
 }
 
@@ -14,12 +14,12 @@ const ACCEPTED_TYPES = '.json,.png,.charx'
 export default function ImportMenu({
   onImportFile,
   onImportUrl,
+  onCreateNew,
   importLoading,
 }: ImportMenuProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const navigate = useNavigate()
 
   // Close on outside click
   useEffect(() => {
@@ -61,7 +61,7 @@ export default function ImportMenu({
             className={styles.item}
             onClick={() => {
               setOpen(false)
-              navigate('/characters/new')
+              onCreateNew()
             }}
           >
             <UserPlus size={14} />

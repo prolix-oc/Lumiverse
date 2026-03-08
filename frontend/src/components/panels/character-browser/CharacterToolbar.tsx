@@ -34,6 +34,7 @@ interface CharacterToolbarProps {
   onBatchModeChange: (enabled: boolean) => void
   onImportFile: (files: File[]) => void
   onImportUrl: () => void
+  onCreateNew: () => void
   importLoading: boolean
   onGroupChat?: () => void
 }
@@ -59,6 +60,7 @@ export default function CharacterToolbar({
   onBatchModeChange,
   onImportFile,
   onImportUrl,
+  onCreateNew,
   importLoading,
   onGroupChat,
 }: CharacterToolbarProps) {
@@ -193,6 +195,7 @@ export default function CharacterToolbar({
         <ImportMenu
           onImportFile={onImportFile}
           onImportUrl={onImportUrl}
+          onCreateNew={onCreateNew}
           importLoading={importLoading}
         />
 

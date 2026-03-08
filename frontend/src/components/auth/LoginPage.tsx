@@ -85,7 +85,7 @@ export default function LoginPage() {
             </svg>
           </div>
           <h1 className={styles.logoTitle}>Lumiverse</h1>
-          <p className={styles.logoSubtitle}>Enter the loom</p>
+          <p className={styles.logoSubtitle}>{Math.random() < 0.076 ? 'Enter the goon' : 'Enter the loom'}</p>
         </motion.div>
 
         {/* Card */}
