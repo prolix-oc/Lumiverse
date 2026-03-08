@@ -23,7 +23,11 @@ export class GoogleProvider implements LlmProvider {
   };
 
   private baseUrl(apiUrl: string): string {
-    return (apiUrl || this.defaultUrl).replace(/\/+$/, "");
+    let url = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
+    // Strip path suffixes the user may have included that we append ourselves
+    url = url.replace(/\/v1beta\/models(\/.*)?$/, "");
+    url = url.replace(/\/v1beta$/, "");
+    return url;
   }
 
   async generate(apiKey: string, apiUrl: string, request: GenerationRequest): Promise<GenerationResponse> {

@@ -14,7 +14,11 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
   abstract readonly capabilities: ProviderCapabilities;
 
   protected baseUrl(apiUrl: string): string {
-    return (apiUrl || this.defaultUrl).replace(/\/+$/, "");
+    let url = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
+    // Strip path suffixes the user may have included that we append ourselves
+    url = url.replace(/\/chat\/completions$/, "");
+    url = url.replace(/\/models$/, "");
+    return url;
   }
 
   /** Override to add provider-specific headers (e.g. OpenRouter's HTTP-Referer). */

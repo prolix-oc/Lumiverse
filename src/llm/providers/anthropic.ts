@@ -25,7 +25,12 @@ export class AnthropicProvider implements LlmProvider {
   };
 
   private baseUrl(apiUrl: string): string {
-    return (apiUrl || this.defaultUrl).replace(/\/+$/, "");
+    let url = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
+    // Strip path suffixes the user may have included that we append ourselves
+    url = url.replace(/\/v1\/messages$/, "");
+    url = url.replace(/\/v1\/models$/, "");
+    url = url.replace(/\/v1$/, "");
+    return url;
   }
 
   private headers(apiKey: string): Record<string, string> {
