@@ -12,7 +12,7 @@
 .modal {
   position: relative;
   width: 100%;
-  max-width: clamp(340px, 94vw, 620px);
+  max-width: clamp(340px, 94vw, min(620px, var(--lumiverse-content-max-width, 620px)));
   max-height: 80vh;
   background: var(--lumiverse-gradient-modal);
   border-radius: 16px;

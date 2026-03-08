@@ -14,7 +14,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
   width: 100%;
-  max-width: clamp(340px, 94vw, 640px);
+  max-width: clamp(340px, 94vw, min(640px, var(--lumiverse-content-max-width, 640px)));
   display: flex;
   flex-direction: column;
   max-height: 90vh;

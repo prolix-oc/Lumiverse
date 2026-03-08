@@ -9,7 +9,7 @@
 }
 
 .modal {
-  width: clamp(340px, 94vw, 1200px);
+  width: clamp(340px, 94vw, min(1200px, var(--lumiverse-content-max-width, 1200px)));
   height: clamp(400px, 88vh, 860px);
   background: var(--lumiverse-bg);
   border: 1px solid var(--lumiverse-border);

@@ -9,7 +9,7 @@
 }
 
 .modal {
-  width: clamp(340px, 94vw, 900px);
+  width: clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)));
   max-height: min(760px, 88vh);
   display: flex;
   flex-direction: column;

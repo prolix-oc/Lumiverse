@@ -12,7 +12,7 @@
 .modal {
   position: relative;
   width: 100%;
-  max-width: clamp(340px, 94vw, 1100px);
+  max-width: clamp(340px, 94vw, min(1100px, var(--lumiverse-content-max-width, 1100px)));
   max-height: 85vh;
   display: flex;
   flex-direction: column;
