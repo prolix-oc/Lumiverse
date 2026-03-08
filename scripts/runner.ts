@@ -393,17 +393,54 @@ async function applyUpdate(): Promise<void> {
     if (line.trim()) addLog(`  ${line.trim()}`, "system");
   }
 
-  // Reinstall dependencies if package.json changed
+  // Check which files changed to decide what needs rebuilding
   const diffFiles = runGit("diff", "--name-only", "HEAD@{1}", "HEAD");
-  if (diffFiles.ok && diffFiles.out.includes("package.json")) {
-    addLog("package.json changed — reinstalling dependencies...", "system");
+  const changedFiles = diffFiles.ok ? diffFiles.out : "";
+
+  // Reinstall backend dependencies if package.json changed
+  if (changedFiles.includes("package.json")) {
+    addLog("package.json changed — reinstalling backend dependencies...", "system");
     const installProc = Bun.spawn(["bun", "install"], {
       cwd: PROJECT_ROOT,
       stdout: "pipe",
       stderr: "pipe",
     });
     await installProc.exited;
-    addLog("Dependencies updated.", "system");
+    addLog("Backend dependencies updated.", "system");
+  }
+
+  // Rebuild frontend if any frontend files changed
+  const frontendDir = join(PROJECT_ROOT, "frontend");
+  const frontendChanged = changedFiles.split("\n").some((f) => f.startsWith("frontend/"));
+
+  if (frontendChanged) {
+    // Reinstall frontend dependencies if its package.json changed
+    if (changedFiles.includes("frontend/package.json")) {
+      addLog("frontend/package.json changed — reinstalling frontend dependencies...", "system");
+      const feInstallProc = Bun.spawn(["bun", "install"], {
+        cwd: frontendDir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await feInstallProc.exited;
+      addLog("Frontend dependencies updated.", "system");
+    }
+
+    addLog("Frontend files changed — rebuilding frontend...", "system");
+    const buildProc = Bun.spawn(["bun", "run", "build"], {
+      cwd: frontendDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const buildOut = await new Response(buildProc.stdout).text();
+    const buildErr = await new Response(buildProc.stderr).text();
+    const buildCode = await buildProc.exited;
+
+    if (buildCode !== 0) {
+      addLog(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`, "system");
+    } else {
+      addLog("Frontend rebuilt successfully.", "system");
+    }
   }
 
   addLog("Update complete. Restarting server...", "system");
