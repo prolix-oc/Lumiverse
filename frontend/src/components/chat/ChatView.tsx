@@ -25,12 +25,17 @@ export default function ChatView() {
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const sceneBackground = useStore((s) => s.sceneBackground)
   const imageGeneration = useStore((s) => s.imageGeneration)
+  const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
 
   const innerStyle = useMemo(() => {
-    if (!chatContentMaxWidth) return undefined
-    return { '--lumiverse-chat-content-width': `${chatContentMaxWidth}px` } as React.CSSProperties
-  }, [chatContentMaxWidth])
+    switch (chatWidthMode) {
+      case 'comfortable': return { '--lumiverse-chat-content-width': '1000px' } as React.CSSProperties
+      case 'compact': return { '--lumiverse-chat-content-width': '760px' } as React.CSSProperties
+      case 'custom': return { '--lumiverse-chat-content-width': `${chatContentMaxWidth}px` } as React.CSSProperties
+      default: return undefined
+    }
+  }, [chatWidthMode, chatContentMaxWidth])
 
   // Load chat and messages
   useEffect(() => {

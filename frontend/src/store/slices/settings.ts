@@ -11,6 +11,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'personasPerPage',
   'chatSheldDisplayMode',
   'chatSheldEnterToSend',
+  'chatWidthMode',
   'chatContentMaxWidth',
   'portraitPanelSide',
   'theme',
@@ -132,7 +133,8 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   personasPerPage: 24,
   chatSheldDisplayMode: 'minimal',
   chatSheldEnterToSend: true,
-  chatContentMaxWidth: 0,
+  chatWidthMode: 'full',
+  chatContentMaxWidth: 900,
   portraitPanelSide: 'right',
   theme: null,
   drawerSettings: {

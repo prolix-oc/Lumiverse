@@ -158,6 +158,7 @@ function GeneralSettings() {
 
 function DisplaySettings() {
   const drawerSettings = useStore((s) => s.drawerSettings)
+  const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const charactersPerPage = useStore((s) => s.charactersPerPage)
@@ -168,21 +169,8 @@ function DisplaySettings() {
     setSetting('drawerSettings', { ...drawerSettings, ...patch })
   }
 
-  const widthPreset = chatContentMaxWidth === 0
-    ? 'full'
-    : chatContentMaxWidth === 1000
-      ? 'comfortable'
-      : chatContentMaxWidth === 760
-        ? 'compact'
-        : 'custom'
-
-  const setWidthPreset = (preset: string) => {
-    switch (preset) {
-      case 'full': return setSetting('chatContentMaxWidth', 0)
-      case 'comfortable': return setSetting('chatContentMaxWidth', 1000)
-      case 'compact': return setSetting('chatContentMaxWidth', 760)
-      case 'custom': return setSetting('chatContentMaxWidth', chatContentMaxWidth || 900)
-    }
+  const setWidthPreset = (preset: 'full' | 'comfortable' | 'compact' | 'custom') => {
+    setSetting('chatWidthMode', preset)
   }
 
   return (
@@ -199,7 +187,7 @@ function DisplaySettings() {
             <button
               key={preset}
               type="button"
-              className={clsx(styles.segmentedBtn, widthPreset === preset && styles.segmentedBtnActive)}
+              className={clsx(styles.segmentedBtn, chatWidthMode === preset && styles.segmentedBtnActive)}
               onClick={() => setWidthPreset(preset)}
             >
               {preset === 'full' ? 'Full' : preset === 'comfortable' ? 'Comfortable' : preset === 'compact' ? 'Compact' : 'Custom'}
@@ -208,7 +196,7 @@ function DisplaySettings() {
         </div>
       </div>
 
-      {widthPreset === 'custom' && (
+      {chatWidthMode === 'custom' && (
         <div className={styles.field}>
           <label className={styles.fieldLabel}>MAX WIDTH (px)</label>
           <div className={styles.rangeRow}>
@@ -218,10 +206,10 @@ function DisplaySettings() {
               min={500}
               max={2000}
               step={10}
-              value={chatContentMaxWidth || 900}
+              value={chatContentMaxWidth}
               onChange={(e) => setSetting('chatContentMaxWidth', parseInt(e.target.value, 10))}
             />
-            <span className={styles.rangeValue}>{chatContentMaxWidth || 900}px</span>
+            <span className={styles.rangeValue}>{chatContentMaxWidth}px</span>
           </div>
         </div>
       )}

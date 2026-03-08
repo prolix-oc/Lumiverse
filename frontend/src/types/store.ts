@@ -194,6 +194,7 @@ export interface SettingsSlice {
   personasPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
   chatSheldEnterToSend: boolean
+  chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   chatContentMaxWidth: number
   portraitPanelSide: 'left' | 'right'
   theme: ThemeConfig | null
