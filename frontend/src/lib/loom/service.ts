@@ -7,6 +7,7 @@ import type {
   MacroGroup,
   CategoryGroup,
 } from './types'
+import { generateUUID } from '@/lib/uuid'
 import {
   MARKER_NAMES,
   STRUCTURAL_MARKERS,
@@ -24,31 +25,12 @@ import {
 } from './constants'
 
 // ============================================================================
-// ID GENERATION
-// ============================================================================
-
-function generateId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    try { return crypto.randomUUID() } catch { /* fall through */ }
-  }
-  const hex = '0123456789abcdef'
-  let id = ''
-  for (let i = 0; i < 36; i++) {
-    if (i === 8 || i === 13 || i === 18 || i === 23) id += '-'
-    else if (i === 14) id += '4'
-    else if (i === 19) id += hex[(Math.random() * 4) | 8]
-    else id += hex[(Math.random() * 16) | 0]
-  }
-  return id
-}
-
-// ============================================================================
 // BLOCK FACTORY
 // ============================================================================
 
 export function createBlock(overrides: Partial<PromptBlock> = {}): PromptBlock {
   return {
-    id: generateId(),
+    id: generateUUID(),
     name: 'New Chat',
     content: '',
     role: 'system',
@@ -468,7 +450,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
   }
 
   return {
-    id: generateId(),
+    id: generateUUID(),
     name,
     description: `Imported from legacy preset "${stPresetData.name || name}"`,
     schemaVersion: 1,
@@ -501,7 +483,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
 export function createNewLoomPreset(name: string, description = ''): LoomPreset {
   const now = Date.now()
   return {
-    id: generateId(),
+    id: generateUUID(),
     name,
     description,
     schemaVersion: 1,

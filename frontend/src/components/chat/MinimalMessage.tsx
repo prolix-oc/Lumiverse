@@ -135,16 +135,18 @@ export default function MinimalMessage({ message, chatId }: MinimalMessageProps)
 
       {/* Actions */}
       {!isEditing && (
-        <MessageActions
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-          onToggleHidden={handleToggleHidden}
-          onFork={handleFork}
-          onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
-          isUser={isUser}
-          isHidden={isHidden}
-          content={message.content}
-        />
+        <div className={styles.actionsWrap}>
+          <MessageActions
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onToggleHidden={handleToggleHidden}
+            onFork={handleFork}
+            onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
+            isUser={isUser}
+            isHidden={isHidden}
+            content={message.content}
+          />
+        </div>
       )}
     </div>
   )

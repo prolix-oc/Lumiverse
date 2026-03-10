@@ -38,6 +38,7 @@ export class GoogleProvider implements LlmProvider {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: request.signal,
     });
 
     if (!res.ok) {

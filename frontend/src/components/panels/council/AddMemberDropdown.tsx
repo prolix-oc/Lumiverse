@@ -4,7 +4,9 @@ import type { CouncilMember } from 'lumiverse-spindle-types'
 import type { Pack, PackWithItems, LumiaItem } from '@/types/api'
 import { useStore } from '@/store'
 import { packsApi } from '@/api/packs'
+import useIsMobile from '@/hooks/useIsMobile'
 import LazyImage from '@/components/shared/LazyImage'
+import { generateUUID } from '@/lib/uuid'
 import styles from '../CouncilManager.module.css'
 
 interface AddMemberDropdownProps {
@@ -27,6 +29,7 @@ export default function AddMemberDropdown({ existingMembers, onAdd, onClose }: A
   const setPackWithItems = useStore((s) => s.setPackWithItems)
   const [searchTerm, setSearchTerm] = useState('')
   const [loadingPacks, setLoadingPacks] = useState(false)
+  const isMobile = useIsMobile()
 
   // Ensure all packs have their items loaded
   useEffect(() => {
@@ -74,7 +77,7 @@ export default function AddMemberDropdown({ existingMembers, onAdd, onClose }: A
   const handleSelect = useCallback(
     (item: AvailableItem) => {
       onAdd({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         packId: item.packId,
         packName: item.packName,
         itemId: item.itemId,
@@ -98,7 +101,7 @@ export default function AddMemberDropdown({ existingMembers, onAdd, onClose }: A
             placeholder="Search Lumias..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            autoFocus
+            autoFocus={!isMobile}
           />
           {searchTerm && (
             <button type="button" className={styles.addSearchClear} onClick={() => setSearchTerm('')}>

@@ -49,6 +49,7 @@ export class AnthropicProvider implements LlmProvider {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
+      signal: request.signal,
     });
 
     if (!res.ok) {

@@ -4,6 +4,7 @@ import type { CouncilMember, CouncilSettings, CouncilToolsSettings, CouncilToolD
 import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS, COUNCIL_SIDECAR_DEFAULTS } from 'lumiverse-spindle-types'
 import { councilApi } from '@/api/council'
 import { spindleApi } from '@/api/spindle'
+import { generateUUID } from '@/lib/uuid'
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -139,7 +140,7 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
       if (!item.definition) continue
       if (existingSet.has(`${packId}:${item.id}`)) continue
       newMembers.push({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         packId,
         packName: packData.name,
         itemId: item.id,

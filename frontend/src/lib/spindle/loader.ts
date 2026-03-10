@@ -9,6 +9,7 @@ import {
   createInputBarActionHandle,
   destroyAllPlacementsForExtension,
 } from './placement-helper'
+import { generateUUID } from '@/lib/uuid'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { useStore } from '@/store'
@@ -230,7 +231,7 @@ async function doLoadFrontendExtension(
           const needed = permissions.filter((p) => !cachedGrantedPermissions.includes(p))
           if (needed.length === 0) return cachedGrantedPermissions
 
-          const requestId = crypto.randomUUID()
+          const requestId = generateUUID()
 
           return new Promise<string[]>((resolve, reject) => {
             const handler = ((e: CustomEvent) => {

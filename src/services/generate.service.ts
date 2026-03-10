@@ -367,6 +367,9 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     }
   };
 
+  // Hoisted so the catch block can clean up the staged message on abort
+  let stagedMessageId: string | undefined;
+
   try {
 
   const connection = resolveConnection(input.userId, input.connection_id);
@@ -419,7 +422,6 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   const councilSettings = getCouncilSettings(input.userId);
   let councilResult: CouncilExecutionResult | null = null;
   let inlineTools: ToolDefinition[] | undefined;
-  let stagedMessageId: string | undefined;
 
   const councilActive = councilSettings.councilMode
     && councilSettings.toolsSettings.enabled
@@ -617,6 +619,25 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted
     activeGenerations.delete(generationId);
     activeChatGenerations.delete(chatKey);
+
+    // If this was a user-initiated abort (stop request), emit proper events so the
+    // frontend can reset its streaming state and clean up.
+    if (abortController.signal.aborted) {
+      // Clean up staged message if one was created (sidecar council mode)
+      if (stagedMessageId) {
+        try {
+          chatsSvc.deleteMessage(input.userId, stagedMessageId);
+        } catch { /* best-effort cleanup */ }
+      }
+      eventBus.emit(EventType.GENERATION_STOPPED, {
+        generationId,
+        chatId: input.chat_id,
+        content: "",
+      }, input.userId);
+      // Return a stopped status instead of throwing, so the HTTP response is clean
+      return { generationId, status: "stopped" };
+    }
+
     throw err;
   }
 }
@@ -992,13 +1013,14 @@ export function stopAllGenerations(): void {
 
 // --- Extension generation (stateless, synchronous, no WS events) ---
 
-export async function rawGenerate(userId: string, input: RawGenerateInput): Promise<GenerationResponse> {
+export async function rawGenerate(userId: string, input: RawGenerateInput & { signal?: AbortSignal }): Promise<GenerationResponse> {
   const { provider, apiKey, apiUrl } = await resolveRawProviderAndKey(userId, input);
   return provider.generate(apiKey, apiUrl, {
     messages: input.messages,
     model: input.model,
     parameters: input.parameters,
     stream: false,
+    signal: input.signal,
   });
 }
 

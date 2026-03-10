@@ -499,13 +499,15 @@
   transition: all var(--lumiverse-transition-fast);
 }
 
-.addBtn:hover {
+.addBtn:hover,
+.addBtn:active {
   border-color: var(--lumiverse-primary);
   color: var(--lumiverse-primary);
   background: color-mix(in srgb, var(--lumiverse-primary) 5%, transparent);
 }
 
-.addBtnSecondary:hover {
+.addBtnSecondary:hover,
+.addBtnSecondary:active {
   border-color: var(--lumiverse-text-muted);
   color: var(--lumiverse-text);
   background: var(--lumiverse-fill-hover);
@@ -592,6 +594,8 @@
   max-height: 240px;
   overflow-y: auto;
   padding: 4px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .addDropdownEmpty {
@@ -614,9 +618,15 @@
   text-align: left;
   color: var(--lumiverse-text);
   transition: background var(--lumiverse-transition-fast);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .addDropdownItem:hover {
+  background: var(--lumiverse-fill-hover);
+}
+
+.addDropdownItem:active {
   background: var(--lumiverse-fill-hover);
 }
 

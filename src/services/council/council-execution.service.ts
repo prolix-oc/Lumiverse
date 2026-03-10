@@ -216,13 +216,16 @@ async function executeMemberTools(
             member,
             identityMsg,
             contextMessages,
-            settings.toolsSettings
+            settings.toolsSettings,
+            input.signal
           );
         }
         success = true;
         break;
       } catch (err: any) {
         error = err.message;
+        // Don't retry if the generation was aborted — bail out immediately
+        if (input.signal?.aborted) break;
         if (attempt < MAX_RETRIES - 1) {
           await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
         }
@@ -276,7 +279,8 @@ async function invokeSidecarTool(
   member: CouncilMember,
   identityMsg: string,
   contextMessages: LlmMessage[],
-  toolsSettings: { maxWordsPerTool: number; timeoutMs: number }
+  toolsSettings: { maxWordsPerTool: number; timeoutMs: number },
+  signal?: AbortSignal
 ): Promise<string> {
   const brevityNote =
     toolsSettings.maxWordsPerTool > 0
@@ -316,6 +320,7 @@ ${tool.prompt}${brevityNote}`;
       top_p: sidecar.topP,
       max_tokens: sidecar.maxTokens,
     },
+    signal,
   });
 
   return response.content || "";

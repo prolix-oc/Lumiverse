@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { Download, Upload } from 'lucide-react'
 import { useStore } from '@/store'
 import { DEFAULT_THEME } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
@@ -68,6 +69,39 @@ export default function ThemePanel() {
     [update, current.baseColorsByMode, resolvedMode]
   )
 
+  const handleExportTheme = useCallback(() => {
+    const json = JSON.stringify(current, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `lumiverse-theme-${current.name?.toLowerCase().replace(/\s+/g, '-') || 'custom'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [current])
+
+  const handleImportTheme = useCallback(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        const text = await file.text()
+        const parsed = JSON.parse(text)
+        if (
+          typeof parsed === 'object' && parsed !== null &&
+          typeof parsed.mode === 'string' &&
+          typeof parsed.accent === 'object' && parsed.accent !== null
+        ) {
+          setTheme({ ...parsed, id: 'custom' } as ThemeConfig)
+        }
+      } catch { /* ignore invalid files */ }
+    }
+    input.click()
+  }, [setTheme])
+
   return (
     <div className={styles.panel}>
       <section className={styles.section}>
@@ -109,13 +143,21 @@ export default function ThemePanel() {
         />
       </section>
 
-      <button
-        type="button"
-        className={styles.resetBtn}
-        onClick={() => setTheme(null)}
-      >
-        Reset to Default
-      </button>
+      <div className={styles.themeActions}>
+        <button type="button" className={styles.actionBtn} onClick={handleExportTheme}>
+          <Download size={12} /> Export Theme
+        </button>
+        <button type="button" className={styles.actionBtn} onClick={handleImportTheme}>
+          <Upload size={12} /> Import Theme
+        </button>
+        <button
+          type="button"
+          className={styles.resetBtn}
+          onClick={() => setTheme(null)}
+        >
+          Reset to Default
+        </button>
+      </div>
     </div>
   )
 }

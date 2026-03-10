@@ -41,6 +41,8 @@ export interface GenerationRequest {
   stream?: boolean;
   /** Optional tool/function definitions for inline function calling. */
   tools?: ToolDefinition[];
+  /** Optional abort signal — when fired, cancels the in-flight HTTP request. */
+  signal?: AbortSignal;
 }
 
 export interface ToolDefinition {

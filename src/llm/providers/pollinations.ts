@@ -47,6 +47,7 @@ export class PollinationsProvider extends OpenAICompatibleProvider {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: request.signal,
     });
 
     if (!res.ok) {

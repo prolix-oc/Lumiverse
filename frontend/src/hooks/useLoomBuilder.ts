@@ -11,6 +11,7 @@ import {
   DEFAULT_ADVANCED_SETTINGS,
   SAMPLER_PARAMS,
 } from '@/lib/loom/constants'
+import { generateUUID } from '@/lib/uuid'
 import {
   createNewLoomPreset,
   marshalPreset,
@@ -312,7 +313,7 @@ export function useLoomBuilder() {
     try {
       const loom: LoomPreset = {
         ...jsonData,
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }

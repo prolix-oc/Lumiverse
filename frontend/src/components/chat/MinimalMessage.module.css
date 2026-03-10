@@ -167,3 +167,28 @@
     height: 30px;
   }
 }
+
+/* ── Actions wrapper ── */
+.actionsWrap {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+/* ── Mobile: pull actions out of flex flow ── */
+@media (max-width: 768px) {
+  .bubble {
+    max-width: 100%;
+  }
+
+  .actionsWrap {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+  }
+
+  .user .actionsWrap {
+    right: auto;
+    left: 6px;
+  }
+}

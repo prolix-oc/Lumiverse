@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { RotateCcw, Download, Upload } from 'lucide-react'
+import { RotateCcw } from 'lucide-react'
 import type { BaseColorKey, BaseColors } from '@/types/theme'
 import styles from './BaseColorPicker.module.css'
 import clsx from 'clsx'
@@ -258,35 +258,6 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
     onChange(updated)
   }, [baseColors, activeKey, onChange])
 
-  const handleExport = useCallback(() => {
-    const json = JSON.stringify(baseColors, null, 2)
-    const blob = new Blob([json], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'lumiverse-colors.json'
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [baseColors])
-
-  const handleImport = useCallback(() => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.json'
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) return
-      try {
-        const text = await file.text()
-        const parsed = JSON.parse(text)
-        if (typeof parsed === 'object' && parsed !== null) {
-          onChange(parsed)
-        }
-      } catch { /* ignore invalid */ }
-    }
-    input.click()
-  }, [onChange])
-
   // Canvas cursor position
   const cursorX = `${(sat / 100) * 100}%`
   const cursorY = `${(1 - val / 100) * 100}%`
@@ -391,12 +362,6 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
       <div className={styles.actions}>
         <button type="button" className={styles.actionBtn} onClick={handleReset}>
           <RotateCcw size={12} /> Reset
-        </button>
-        <button type="button" className={styles.actionBtn} onClick={handleExport}>
-          <Download size={12} /> Export
-        </button>
-        <button type="button" className={styles.actionBtn} onClick={handleImport}>
-          <Upload size={12} /> Import
         </button>
       </div>
     </div>

@@ -224,6 +224,10 @@ export function useWebSocket() {
         if (payload.generationId) {
           state.markGenerationEnded(payload.generationId)
         }
+        // Reset council executing state in case stop fired during council tools
+        if (state.councilExecuting) {
+          state.setCouncilExecuting(false)
+        }
         // Delay stopStreaming until after message reconciliation completes.
         // This keeps the streaming bubble visible while the HTTP fetch runs,
         // then both updates (stop streaming + set messages) happen in a single

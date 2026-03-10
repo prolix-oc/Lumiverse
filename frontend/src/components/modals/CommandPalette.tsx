@@ -1,12 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { Search, X } from 'lucide-react'
+import { Puzzle, Search, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import clsx from 'clsx'
 import { useStore } from '@/store'
 import { COMMANDS, GROUP_ORDER, type Command } from '@/lib/commands'
+import type { DrawerTabState } from '@/store/slices/spindle-placement'
 import styles from './CommandPalette.module.css'
+
+/** Convert extension drawer tabs into Command objects so they appear in search. */
+function extensionTabsToCommands(tabs: DrawerTabState[]): Command[] {
+  return tabs.map((tab) => ({
+    id: `ext-tab-${tab.id}`,
+    label: tab.title,
+    description: `Open extension tab`,
+    icon: Puzzle,
+    keywords: ['extension', 'spindle', tab.extensionId],
+    group: 'Extensions' as const,
+    run: () => useStore.getState().openDrawer(tab.id),
+  }))
+}
 
 // ── Match highlight ────────────────────────────────────────────────────────────
 
@@ -28,6 +42,7 @@ function highlightMatch(text: string, query: string): ReactNode {
 export default function CommandPalette() {
   const isOpen = useStore((s) => s.commandPaletteOpen)
   const close = useStore((s) => s.closeCommandPalette)
+  const drawerTabs = useStore((s) => s.drawerTabs)
   const navigate = useNavigate()
 
   const [query, setQuery] = useState('')
@@ -44,9 +59,10 @@ export default function CommandPalette() {
     }
   }, [isOpen])
 
-  // Build filtered, available command list
+  // Build filtered, available command list (static + extension tabs)
   const filtered = useMemo<Command[]>(() => {
-    const available = COMMANDS.filter((cmd) => cmd.isAvailable?.() ?? true)
+    const allCommands = [...COMMANDS, ...extensionTabsToCommands(drawerTabs)]
+    const available = allCommands.filter((cmd) => cmd.isAvailable?.() ?? true)
     if (!query.trim()) return available
     const q = query.toLowerCase()
     return available.filter(
@@ -55,7 +71,7 @@ export default function CommandPalette() {
         cmd.description.toLowerCase().includes(q) ||
         cmd.keywords.some((k) => k.toLowerCase().includes(q))
     )
-  }, [query])
+  }, [query, drawerTabs])
 
   // Clamp active index when filtered list shrinks
   useEffect(() => {

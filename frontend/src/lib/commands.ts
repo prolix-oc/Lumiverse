@@ -16,13 +16,13 @@ export interface Command {
   description: string
   icon: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
   keywords: string[]
-  group: 'Panels' | 'Settings' | 'Actions'
+  group: 'Panels' | 'Settings' | 'Actions' | 'Extensions'
   /** Return false to hide this command. Called at filter time, not at registration. */
   isAvailable?: () => boolean
   run: (navigate: NavigateFunction) => void | Promise<void>
 }
 
-export const GROUP_ORDER: Command['group'][] = ['Panels', 'Settings', 'Actions']
+export const GROUP_ORDER: Command['group'][] = ['Panels', 'Settings', 'Actions', 'Extensions']
 
 function openPanel(tabId: string) {
   useStore.getState().openDrawer(tabId)
