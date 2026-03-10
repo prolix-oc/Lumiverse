@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
-    "@lenml/tokenizer-claude": "^1.0.1",
-    "@lenml/tokenizers": "^1.0.4",
+    "@lenml/tokenizer-claude": "^3.7.2",
+    "@lenml/tokenizers": "^3.7.2",
     "@msgpack/msgpack": "^3.1.2",
     "better-auth": "^1.5.3",
     "gpt-tokenizer": "^2.8.1",

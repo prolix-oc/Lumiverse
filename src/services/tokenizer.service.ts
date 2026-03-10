@@ -108,9 +108,9 @@ async function loadHuggingFace(config: TokenizerConfig): Promise<TokenizerInstan
     try {
       const mod = await import(cfg.package);
 
-      // @lenml/tokenizer-* packages export fromPreTrained() which builds a tokenizer
-      // from embedded model data (tokenizerJSON + tokenizerConfig baked in)
-      if (typeof mod.fromPreTrained === "function" && mod.tokenizerJSON) {
+      // @lenml/tokenizer-* v3.x packages export fromPreTrained(params?) which builds
+      // a tokenizer from embedded model data (tokenizerJSON + tokenizerConfig baked in)
+      if (typeof mod.fromPreTrained === "function") {
         const tokenizer = mod.fromPreTrained();
         if (tokenizer?.encode) {
           return { count: (text: string) => tokenizer.encode(text).length };
@@ -130,9 +130,27 @@ async function loadHuggingFace(config: TokenizerConfig): Promise<TokenizerInstan
   // URL-based loading via @lenml/tokenizers
   if (cfg.url) {
     const { TokenizerLoader } = await import("@lenml/tokenizers");
+
+    // v3.x requires both tokenizerJSON and tokenizerConfig URLs.
+    // Auto-derive config URL from the tokenizer URL if not explicitly provided.
+    const configUrl = cfg.configUrl || cfg.url.replace(/tokenizer\.json$/, "tokenizer_config.json");
+
+    // If the user's URL doesn't end with tokenizer.json (e.g. a direct download link),
+    // try fetching the JSON data manually and use fromPreTrained() instead of fromPreTrainedUrls()
+    if (configUrl === cfg.url) {
+      const resp = await fetch(cfg.url);
+      if (!resp.ok) throw new Error(`Failed to fetch tokenizer.json from ${cfg.url}: ${resp.status}`);
+      const tokenizerJSON = await resp.json();
+      const tokenizer = TokenizerLoader.fromPreTrained({
+        tokenizerJSON,
+        tokenizerConfig: { tokenizer_class: "PreTrainedTokenizer" },
+      });
+      return { count: (text: string) => tokenizer.encode(text).length };
+    }
+
     const tokenizer = await TokenizerLoader.fromPreTrainedUrls({
       tokenizerJSON: cfg.url,
-      tokenizerConfig: cfg.configUrl ?? cfg.url.replace("tokenizer.json", "tokenizer_config.json"),
+      tokenizerConfig: configUrl,
     });
     return { count: (text: string) => tokenizer.encode(text).length };
   }

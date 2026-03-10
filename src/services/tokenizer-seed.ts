@@ -23,7 +23,10 @@ const BUILT_IN_CONFIGS = [
     id: "gemma-3",
     name: "Gemini / Gemma 3",
     type: "huggingface",
-    config: JSON.stringify({ url: "https://huggingface.co/google/gemma-3-1b-it/resolve/main/tokenizer.json" }),
+    config: JSON.stringify({
+      url: "https://huggingface.co/unsloth/gemma-3-4b-it/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/unsloth/gemma-3-4b-it/resolve/main/tokenizer_config.json",
+    }),
   },
   {
     id: "approximate-4",
