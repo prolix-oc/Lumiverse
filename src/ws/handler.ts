@@ -5,6 +5,7 @@ import { auth } from "../auth";
 import { consumeTicket } from "./tickets";
 import { getWorkerHost } from "../spindle/lifecycle";
 import * as managerSvc from "../spindle/manager.service";
+import { getFirstUserId } from "../auth/seed";
 
 export const wsHandler = upgradeWebSocket((c) => {
   // Authenticate during upgrade — extract userId + sessionId
@@ -76,6 +77,18 @@ export const wsHandler = upgradeWebSocket((c) => {
 
           sessionId = session.session.id;
         }
+
+        // Self-healing: first user (user 0) is always the instance owner.
+        if (userId && userRole !== "owner") {
+          const cachedFirstId = getFirstUserId();
+          if (cachedFirstId && cachedFirstId === userId) {
+            const { getDb } = await import("../db/connection");
+            getDb().run('UPDATE "user" SET role = ? WHERE id = ?', ["owner", userId]);
+            userRole = "owner";
+            console.log(`[WS] Self-healed owner role for first user ${userId}`);
+          }
+        }
+
         console.log(`[WS] Authenticated as user ${userId}, session ${sessionId}`);
 
         const raw = (ws as any).raw as import("bun").ServerWebSocket<unknown>;

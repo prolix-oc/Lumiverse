@@ -15,6 +15,17 @@ const CONTENT_TABLES = [
   "settings",
 ];
 
+/**
+ * Cached ID of the first-created user (user 0). Populated at startup by
+ * seedOwner() and used by enforceFirstUserOwner() for O(1) runtime checks.
+ */
+let firstUserId: string | null = null;
+
+/** Returns the cached first-user ID, or null if not yet resolved. */
+export function getFirstUserId(): string | null {
+  return firstUserId;
+}
+
 export async function seedOwner(): Promise<void> {
   const db = getDb();
 
@@ -47,30 +58,74 @@ export async function seedOwner(): Promise<void> {
   // The UPDATE is a separate step — if the process crashed between the
   // INSERT and this UPDATE on a previous run, the owner would be stuck
   // as "user" forever since the count-guard above would skip re-seeding.
-  const owner = db
-    .query('SELECT id, role FROM "user" WHERE username = ?')
-    .get(env.ownerUsername) as { id: string; role: string } | null;
+  //
+  // Lookup chain (most specific → broadest):
+  //   1. Exact username match
+  //   2. Case-insensitive username match (BetterAuth normalizes usernames)
+  //   3. First-created user (user 0) — guaranteed owner for single-user installs
+  type UserRow = { id: string; role: string; username: string };
+
+  let owner: UserRow | null = db
+    .query('SELECT id, role, username FROM "user" WHERE username = ?')
+    .get(env.ownerUsername) as UserRow | null;
+
+  if (!owner) {
+    owner = db
+      .query('SELECT id, role, username FROM "user" WHERE LOWER(username) = LOWER(?)')
+      .get(env.ownerUsername) as UserRow | null;
+    if (owner) {
+      console.log(`[Auth] Owner matched via case-insensitive lookup: "${owner.username}" (env: "${env.ownerUsername}")`);
+    }
+  }
+
+  if (!owner) {
+    // Fallback: the very first user created is the instance owner.
+    owner = db
+      .query('SELECT id, role, username FROM "user" ORDER BY createdAt ASC LIMIT 1')
+      .get() as UserRow | null;
+    if (owner) {
+      console.log(`[Auth] Owner resolved via first-user fallback: "${owner.username}" (id: ${owner.id})`);
+    }
+  }
 
   if (owner) {
+    firstUserId = owner.id;
     if (owner.role !== "owner") {
       db.run('UPDATE "user" SET role = ? WHERE id = ?', ["owner", owner.id]);
-      console.log(`[Auth] Promoted ${env.ownerUsername} to owner role (was "${owner.role}")`);
+      console.log(`[Auth] Promoted "${owner.username}" to owner role (was "${owner.role}")`);
     }
     provisionUserDirectories(owner.id);
+  } else {
+    console.error("[Auth] No users exist after seeding — this should never happen");
   }
 }
 
 export function backfillUserIds(): void {
   const db = getDb();
 
-  const owner = db
-    .query('SELECT id FROM "user" WHERE role = ? LIMIT 1')
-    .get("owner") as { id: string } | null;
+  // Prefer the cached first-user ID (set by seedOwner), fall back to role
+  // lookup, then to first-created user. This ensures backfill works even if
+  // the role column was somehow not updated.
+  let ownerId = firstUserId;
+  if (!ownerId) {
+    const row = db
+      .query('SELECT id FROM "user" WHERE role = ? LIMIT 1')
+      .get("owner") as { id: string } | null;
+    ownerId = row?.id ?? null;
+  }
+  if (!ownerId) {
+    const row = db
+      .query('SELECT id FROM "user" ORDER BY createdAt ASC LIMIT 1')
+      .get() as { id: string } | null;
+    ownerId = row?.id ?? null;
+  }
 
-  if (!owner) {
-    console.log("[Auth] No owner found, skipping backfill.");
+  if (!ownerId) {
+    console.log("[Auth] No users found, skipping backfill.");
     return;
   }
+
+  const owner = { id: ownerId };
 
   let totalBackfilled = 0;
 

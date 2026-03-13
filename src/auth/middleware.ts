@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { auth } from "./index";
 import { getDb } from "../db/connection";
+import { getFirstUserId } from "./seed";
 
 // Augment Hono's context variables
 declare module "hono" {
@@ -46,6 +47,18 @@ export async function requireAuth(c: Context, next: Next) {
       .get(session.user.id) as { role: string } | null;
     if (row?.role) {
       session.user.role = row.role;
+    }
+  }
+
+  // Self-healing: the first-created user (user 0) is ALWAYS the instance
+  // owner. If their role is somehow not "owner" (seed race, DB restore,
+  // BetterAuth reset), fix it on the fly so they never lose access.
+  if (session.user.role !== "owner") {
+    const cachedFirstId = getFirstUserId();
+    if (cachedFirstId && cachedFirstId === session.user.id) {
+      getDb().run('UPDATE "user" SET role = ? WHERE id = ?', ["owner", session.user.id]);
+      session.user.role = "owner";
+      console.log(`[Auth] Self-healed owner role for first user ${session.user.id}`);
     }
   }
 
