@@ -379,6 +379,7 @@ function DisplaySettings() {
 
 function ChatSettings() {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
@@ -469,6 +470,24 @@ function ChatSettings() {
           </button>
         </div>
       </div>
+
+      {displayMode === 'bubble' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>User message alignment</label>
+          <div className={styles.segmented}>
+            {(['left', 'right'] as const).map((align) => (
+              <button
+                key={align}
+                type="button"
+                className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
+                onClick={() => setSetting('bubbleUserAlign', align)}
+              >
+                {align === 'left' ? 'Left' : 'Right'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Chat Width</h3>
       <p className={styles.helperText}>

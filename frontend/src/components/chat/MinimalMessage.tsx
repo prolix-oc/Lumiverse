@@ -122,8 +122,8 @@ export default function MinimalMessage({ message, chatId }: MinimalMessageProps)
           <MessageAttachments attachments={message.extra.attachments} isUser={true} />
         )}
 
-        {/* Swipe controls */}
-        {message.swipes && message.swipes.length > 1 && !isEditing && (
+        {/* Swipe controls — always show on assistant messages for navigation */}
+        {!isUser && !isEditing && (
           <SwipeControls message={message} chatId={chatId} />
         )}
 

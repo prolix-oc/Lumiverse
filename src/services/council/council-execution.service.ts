@@ -202,10 +202,23 @@ async function executeMemberTools(
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         if (isExtensionTool) {
+          // Pass the bare tool name (not qualified) so extension handlers can
+          // match easily, and forward the full chat context so tools can act on it.
+          // Extension tools receive the exact same context as sidecar tools —
+          // system enrichment (character, persona, world info) plus the full
+          // chat history governed by the sidecar context window setting.
+          const bareToolName = extToolReg!.name;
+          const contextSummary = contextMessages
+            .map((m) => {
+              const prefix = m.role === "system" ? "" : `${m.role}: `;
+              return `${prefix}${typeof m.content === "string" ? m.content : ""}`;
+            })
+            .join("\n\n");
+
           content = await invokeExtensionToolViaWorker(
             extToolReg!.extension_id,
-            toolName,
-            {},
+            bareToolName,
+            { context: contextSummary },
             settings.toolsSettings.timeoutMs
           );
         } else {
@@ -383,7 +396,7 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
     } else {
       // Fallback: independently activate WI (for callers without enrichment)
       if (!character) character = charactersSvc.getCharacter(input.userId, chat.character_id);
-      const wiEntries = collectWorldInfoForCouncil(input.userId, character, persona);
+      const { entries: wiEntries } = collectWorldInfoForCouncil(input.userId, character, persona);
       if (wiEntries.length > 0) {
         const allMsgs = chatsSvc.getMessages(input.userId, input.chatId);
         const wiResult = activateWorldInfo({
@@ -496,7 +509,7 @@ export function collectWorldInfoForCouncil(
   userId: string,
   character: ReturnType<typeof charactersSvc.getCharacter>,
   persona: ReturnType<typeof personasSvc.resolvePersonaOrDefault>,
-): import("../../types/world-book").WorldBookEntry[] {
+): { entries: import("../../types/world-book").WorldBookEntry[]; worldBookIds: string[] } {
   const entries: import("../../types/world-book").WorldBookEntry[] = [];
   const seen = new Set<string>();
 
@@ -518,7 +531,7 @@ export function collectWorldInfoForCouncil(
     entries.push(...worldBooksSvc.listEntries(userId, gId));
   }
 
-  return entries;
+  return { entries, worldBookIds: Array.from(seen) };
 }
 
 const DELIBERATION_INSTRUCTIONS = `## Council Deliberation Instructions

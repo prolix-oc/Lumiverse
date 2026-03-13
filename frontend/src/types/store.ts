@@ -219,6 +219,7 @@ export interface SettingsSlice {
   charactersPerPage: number
   personasPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  bubbleUserAlign: 'left' | 'right'
   chatSheldEnterToSend: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   chatContentMaxWidth: number

@@ -193,12 +193,15 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // Optional vector retrieval for vectorized world book entries.
   // These entries are merged with keyword-activated entries when enabled.
-  const vectorActivated = await collectVectorActivatedWorldInfo(
-    ctx.userId,
-    wiSources.worldBookIds,
-    wiEntries,
-    messages,
-  );
+  // When pre-computed results are available (from the generation pipeline's
+  // council enrichment phase), reuse them to avoid redundant embedding queries.
+  const vectorActivated = ctx.precomputedVectorEntries
+    ?? await collectVectorActivatedWorldInfo(
+      ctx.userId,
+      wiSources.worldBookIds,
+      wiEntries,
+      messages,
+    );
   if (vectorActivated.length > 0) {
     const existing = new Set(wiResult.activatedEntries.map((e) => e.id));
     for (const { entry, score } of vectorActivated) {
@@ -341,7 +344,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         }
         historyCount++;
       }
-      breakdown.push({ type: "chat_history", name: "Chat History", messageCount: historyCount, content: historyParts.join("\n") });
+      breakdown.push({ type: "chat_history", name: "Chat History", messageCount: historyCount, firstMessageIndex: firstChatIdx, content: historyParts.join("\n") });
       chatHistoryInserted = true;
 
       // Strip reasoning from older chat history messages based on keepInHistory
@@ -842,12 +845,12 @@ function collectWorldInfoSources(
   };
 }
 
-interface VectorActivatedEntry {
+export interface VectorActivatedEntry {
   entry: import("../types/world-book").WorldBookEntry;
   score: number;
 }
 
-async function collectVectorActivatedWorldInfo(
+export async function collectVectorActivatedWorldInfo(
   userId: string,
   worldBookIds: string[],
   entries: import("../types/world-book").WorldBookEntry[],

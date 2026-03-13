@@ -56,6 +56,11 @@
     var(--lcs-glass-bg);
 }
 
+/* Left-aligned user override — mirrors character layout */
+.userLeft.user {
+  flex-direction: row;
+}
+
 /* Viewport-gated expensive effects — only rendered for visible cards */
 .card[data-in-viewport] {
   box-shadow:
@@ -154,6 +159,10 @@
   flex-direction: row-reverse;
 }
 
+.userLeft.user .header {
+  flex-direction: row;
+}
+
 .headerLeft {
   display: flex;
   align-items: center;
@@ -163,6 +172,10 @@
 
 .user .headerLeft {
   flex-direction: row-reverse;
+}
+
+.userLeft.user .headerLeft {
+  flex-direction: row;
 }
 
 /* ── Avatar — 44px rounded-square ── */
@@ -225,8 +238,16 @@
   align-items: flex-end;
 }
 
+.userLeft.user .metaWrap {
+  align-items: flex-start;
+}
+
 .user .metaPill {
   align-self: flex-end;
+}
+
+.userLeft.user .metaPill {
+  align-self: flex-start;
 }
 
 /* Meta pill — monospace badge */
@@ -292,6 +313,21 @@
   -webkit-mask-composite: source-in;
 }
 
+.userLeft.user .avatarBg {
+  left: 0;
+  right: auto;
+  mask-image:
+    linear-gradient(to right, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(to right, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  -webkit-mask-composite: source-in;
+}
+
 .avatarBgImg {
   position: absolute;
   top: 0;
@@ -332,6 +368,15 @@
   );
 }
 
+.userLeft.user .avatarBgScrim {
+  background: linear-gradient(
+    to right,
+    var(--lumiverse-bg, #0a0a0c) 0%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 70%, transparent) 50%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 45%, transparent) 100%
+  );
+}
+
 /* ── Content ── */
 .content {
   position: relative;
@@ -341,6 +386,10 @@
 
 .user .content {
   text-align: right;
+}
+
+.userLeft.user .content {
+  text-align: left;
 }
 
 /* ── Actions pill — hover reveal ── */
@@ -359,6 +408,11 @@
 .user .actionsPill {
   left: 24px;
   right: auto;
+}
+
+.userLeft.user .actionsPill {
+  right: 24px;
+  left: auto;
 }
 
 /* ── Mobile breakpoints ── */
@@ -394,6 +448,11 @@
   .user .actionsPill {
     left: 12px;
   }
+
+  .userLeft.user .actionsPill {
+    right: 12px;
+    left: auto;
+  }
 }
 
 @media (max-width: 480px) {
@@ -427,5 +486,10 @@
 
   .user .actionsPill {
     left: 10px;
+  }
+
+  .userLeft.user .actionsPill {
+    right: 10px;
+    left: auto;
   }
 }
