@@ -123,7 +123,7 @@ function buildMarkdown(backend: SystemInfo | null, backendError: string | null, 
 declare const __APP_VERSION__: string
 
 export default function Diagnostics() {
-  const extensions = useStore((s) => s.extensions)
+  const extensions = useStore((s) => s.extensions) ?? []
   const [backend, setBackend] = useState<SystemInfo | null>(null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
