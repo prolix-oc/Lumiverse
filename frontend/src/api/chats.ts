@@ -56,6 +56,14 @@ export const chatsApi = {
   getTree(chatId: string) {
     return get<ChatTreeNode>(`/chats/${chatId}/tree`)
   },
+
+  importChat(characterId: string, exportData: { chat: any; messages: any[] }) {
+    return post<{ chat_id: string; name: string; message_count: number }>('/chats/import', {
+      character_id: characterId,
+      chat: exportData.chat,
+      messages: exportData.messages,
+    })
+  },
 }
 
 export const messagesApi = {
