@@ -99,6 +99,8 @@ export interface ChatTreeNode {
   updated_at: number;
   message_count: number;
   branch_at_message: string | null;
+  branch_message_index: number | null;
+  branch_message_preview: string | null;
   children: ChatTreeNode[];
 }
 

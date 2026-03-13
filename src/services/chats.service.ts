@@ -164,9 +164,16 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
+  // Auto-name with character name
+  let chatName = input.name || "";
+  if (!chatName) {
+    const character = getCharacter(userId, input.character_id);
+    if (character) chatName = character.name;
+  }
+
   getDb()
     .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, userId, input.character_id, input.name || "", JSON.stringify(input.metadata || {}), now, now);
+    .run(id, userId, input.character_id, chatName, JSON.stringify(input.metadata || {}), now, now);
 
   // Insert the character's greeting as the opening message
   const character = getCharacter(userId, input.character_id);
@@ -483,13 +490,16 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
   const newChatId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  // Generate a cleaner name to avoid "Chat (branch) (branch) (branch)"
-  const originalName = chat.name || "Chat";
-  const cleanName = originalName.replace(/\s+\(branch\s*\d*\)$/i, "");
-  const branchCount = getDb()
+  // Branch names: "{baseName} — Branch at #{msgIndex}"
+  const character = getCharacter(userId, chat.character_id);
+  const baseName = (chat.name || character?.name || "Chat").replace(/\s+—\s+Branch.*$/i, "").replace(/\s+\(branch\s*\d*\)$/i, "");
+  const branchLabel = `${baseName} — Branch at #${msg.index_in_chat}`;
+
+  // De-duplicate if multiple branches @ same point
+  const existing = getDb()
     .query("SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND name LIKE ?")
-    .get(userId, `${cleanName} (branch%)`) as { count: number };
-  const newName = `${cleanName} (branch ${branchCount.count + 1})`;
+    .get(userId, `${branchLabel}%`) as { count: number };
+  const newName = existing.count > 0 ? `${branchLabel} (${existing.count + 1})` : branchLabel;
 
   const metadata = { ...chat.metadata, branched_from: chatId, branch_at_message: atMessageId };
 
@@ -551,6 +561,8 @@ export type ChatTreeNode = {
   updated_at: number
   message_count: number
   branch_at_message: string | null
+  branch_message_index: number | null
+  branch_message_preview: string | null
   children: ChatTreeNode[]
 }
 
@@ -575,13 +587,32 @@ function buildSubTree(userId: string, chatId: string, visited: Set<string>, dept
     if (child) children.push(child);
   }
 
+  const branchAtMessage = (chat.metadata.branch_at_message as string) ?? null;
+  let branch_message_index: number | null = null;
+  let branch_message_preview: string | null = null;
+
+  if (branchAtMessage) {
+    const branchMsg = db.query(
+      "SELECT index_in_chat, content FROM messages WHERE (id = ? OR (chat_id = ? AND index_in_chat = (SELECT index_in_chat FROM messages WHERE id = ? LIMIT 1))) LIMIT 1"
+    ).get(branchAtMessage, chatId, branchAtMessage) as { index_in_chat: number; content: string } | null;
+
+    if (branchMsg) {
+      branch_message_index = branchMsg.index_in_chat;
+      // Msg preview first 80 chars, stripped of markdown/newlines
+      const clean = branchMsg.content.replace(/[#*_~`>\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+      branch_message_preview = clean.length > 80 ? clean.slice(0, 77) + '...' : clean;
+    }
+  }
+
   return {
     id: chat.id,
     name: chat.name,
     created_at: chat.created_at,
     updated_at: chat.updated_at,
     message_count,
-    branch_at_message: (chat.metadata.branch_at_message as string) ?? null,
+    branch_at_message: branchAtMessage,
+    branch_message_index,
+    branch_message_preview,
     children,
   };
 }

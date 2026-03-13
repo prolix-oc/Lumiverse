@@ -166,6 +166,11 @@
   transition: color 0.1s ease;
 }
 
+/* Relevant items get a subtle accent tint on their icon */
+.itemIconRelevant {
+  color: var(--lumiverse-primary);
+}
+
 .item:hover .itemIcon,
 .itemActive .itemIcon {
   color: var(--lumiverse-primary);

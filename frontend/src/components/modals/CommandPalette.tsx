@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { Puzzle, Search, X } from 'lucide-react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useLocation } from 'react-router'
 import clsx from 'clsx'
 import { useStore } from '@/store'
-import { COMMANDS, GROUP_ORDER, type Command } from '@/lib/commands'
+import { COMMANDS, GROUP_ORDER, type Command, type CommandScope } from '@/lib/commands'
 import type { DrawerTabState } from '@/store/slices/spindle-placement'
 import styles from './CommandPalette.module.css'
 
@@ -43,7 +43,11 @@ export default function CommandPalette() {
   const isOpen = useStore((s) => s.commandPaletteOpen)
   const close = useStore((s) => s.closeCommandPalette)
   const drawerTabs = useStore((s) => s.drawerTabs)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const messageCount = useStore((s) => s.messages.length)
+  const streaming = useStore((s) => s.isStreaming)
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -59,24 +63,78 @@ export default function CommandPalette() {
     }
   }, [isOpen])
 
-  // Build filtered, available command list (static + extension tabs)
-  const filtered = useMemo<Command[]>(() => {
+  // Determine active scopes based on route and store state
+  const activeScopes = useMemo<Set<CommandScope>>(() => {
+    const scopes = new Set<CommandScope>(['global'])
+    const path = location.pathname
+
+    if (path.startsWith('/chat/')) {
+      scopes.add('chat')
+      if (!streaming && messageCount > 0) scopes.add('chat-idle')
+    } else if (path === '/') {
+      scopes.add('landing')
+    } else if (path === '/characters' || /^\/characters\/[^/]+/.test(path)) {
+      scopes.add('character')
+    }
+
+    return scopes
+  }, [location.pathname, streaming, messageCount])
+
+  const { grouped, orderedFlat, flatIndexMap } = useMemo(() => {
     const allCommands = [...COMMANDS, ...extensionTabsToCommands(drawerTabs)]
-    const available = allCommands.filter((cmd) => cmd.isAvailable?.() ?? true)
-    if (!query.trim()) return available
-    const q = query.toLowerCase()
-    return available.filter(
-      (cmd) =>
-        cmd.label.toLowerCase().includes(q) ||
-        cmd.description.toLowerCase().includes(q) ||
-        cmd.keywords.some((k) => k.toLowerCase().includes(q))
-    )
-  }, [query, drawerTabs])
+    
+    let filtered = allCommands.filter((cmd) => {
+      const isVisible = activeScopes.has(cmd.scope || 'global')
+      if (!isVisible) return false
+
+      const path = location.pathname
+      if (cmd.id === 'action-new-chat' && path === '/') return false
+      if (cmd.id === 'action-character-browser' && path === '/characters') return false
+
+      if (query.trim()) {
+        const q = query.toLowerCase()
+        return (
+          cmd.label.toLowerCase().includes(q) ||
+          cmd.description.toLowerCase().includes(q) ||
+          cmd.keywords.some((k) => k.toLowerCase().includes(q))
+        )
+      }
+      return true
+    })
+
+    const map = new Map<Command['group'], Command[]>()
+    for (const cmd of filtered) {
+      const arr = map.get(cmd.group) ?? []
+      arr.push(cmd)
+      map.set(cmd.group, arr)
+    }
+
+    for (const [, items] of map) {
+      items.sort((a, b) => a.label.localeCompare(b.label))
+    }
+
+    const groups: { group: Command['group']; items: Command[] }[] = []
+    const flat: Command[] = []
+    const idxMap = new Map<string, number>()
+
+    for (const g of GROUP_ORDER) {
+      const items = map.get(g)
+      if (items?.length) {
+        groups.push({ group: g, items })
+        for (const item of items) {
+          idxMap.set(item.id, flat.length)
+          flat.push(item)
+        }
+      }
+    }
+
+    return { grouped: groups, orderedFlat: flat, flatIndexMap: idxMap }
+  }, [query, drawerTabs, activeScopes, location.pathname])
 
   // Clamp active index when filtered list shrinks
   useEffect(() => {
-    setActiveIndex((i) => (filtered.length === 0 ? 0 : Math.min(i, filtered.length - 1)))
-  }, [filtered.length])
+    setActiveIndex((i) => (orderedFlat.length === 0 ? 0 : Math.min(i, orderedFlat.length - 1)))
+  }, [orderedFlat.length])
 
   // Scroll active item into view on keyboard navigation
   useEffect(() => {
@@ -85,25 +143,8 @@ export default function CommandPalette() {
       ?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
 
-  // Group the filtered results while preserving GROUP_ORDER
-  const grouped = useMemo(() => {
-    const map = new Map<Command['group'], Command[]>()
-    for (const cmd of filtered) {
-      const arr = map.get(cmd.group) ?? []
-      arr.push(cmd)
-      map.set(cmd.group, arr)
-    }
-    // Return in canonical order, skipping empty groups
-    return GROUP_ORDER.flatMap((g) => {
-      const cmds = map.get(g)
-      return cmds?.length ? [{ group: g, cmds }] : []
-    })
-  }, [filtered])
-
   function execute(cmd: Command) {
     close()
-    // Small timeout so the palette exit animation starts before any
-    // state changes triggered by the command cause re-renders
     setTimeout(() => void cmd.run(navigate), 10)
   }
 
@@ -113,7 +154,7 @@ export default function CommandPalette() {
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        setActiveIndex((i) => Math.min(i + 1, filtered.length - 1))
+        setActiveIndex((i) => Math.min(i + 1, orderedFlat.length - 1))
         break
       case 'ArrowUp':
         e.preventDefault()
@@ -121,21 +162,19 @@ export default function CommandPalette() {
         break
       case 'Enter':
         e.preventDefault()
-        if (filtered[activeIndex]) execute(filtered[activeIndex])
+        if (orderedFlat[activeIndex]) execute(orderedFlat[activeIndex])
         break
       case 'Escape':
-        // Consume the event so drawer / other escape handlers don't fire
         e.preventDefault()
         e.stopPropagation()
         close()
         break
       case 'Tab':
-        // Tab / Shift+Tab cycles through results without leaving the input
         e.preventDefault()
         if (e.shiftKey) {
           setActiveIndex((i) => Math.max(i - 1, 0))
         } else {
-          setActiveIndex((i) => Math.min(i + 1, filtered.length - 1))
+          setActiveIndex((i) => Math.min(i + 1, orderedFlat.length - 1))
         }
         break
     }
@@ -183,10 +222,10 @@ export default function CommandPalette() {
                 type="text"
                 role="combobox"
                 aria-autocomplete="list"
-                aria-expanded={filtered.length > 0}
-                aria-activedescendant={filtered[activeIndex] ? `cmd-${filtered[activeIndex].id}` : undefined}
+                aria-expanded={orderedFlat.length > 0}
+                aria-activedescendant={orderedFlat[activeIndex] ? `cmd-${orderedFlat[activeIndex].id}` : undefined}
                 className={styles.input}
-                placeholder="Search panels, settings, actions…"
+                placeholder="Search commands…"
                 value={query}
                 onChange={handleQueryChange}
                 onKeyDown={handleKeyDown}
@@ -215,47 +254,49 @@ export default function CommandPalette() {
               role="listbox"
               aria-label="Commands"
             >
-              {filtered.length === 0 ? (
+              {orderedFlat.length === 0 ? (
                 <div className={styles.empty}>
                   No results for &ldquo;{query}&rdquo;
                 </div>
               ) : (
-                grouped.map(({ group, cmds }) => (
-                  <div key={group} className={styles.group} role="group" aria-label={group}>
-                    <div className={styles.groupLabel}>{group}</div>
-                    {cmds.map((cmd) => {
-                      const idx = filtered.indexOf(cmd)
-                      const isActive = idx === activeIndex
-                      const Icon = cmd.icon
-                      return (
-                        <button
-                          key={cmd.id}
-                          id={`cmd-${cmd.id}`}
-                          type="button"
-                          role="option"
-                          aria-selected={isActive}
-                          data-idx={idx}
-                          className={clsx(styles.item, isActive && styles.itemActive)}
-                          onMouseEnter={() => setActiveIndex(idx)}
-                          onClick={() => execute(cmd)}
-                          tabIndex={-1}
-                        >
-                          <span className={styles.itemIcon}>
-                            <Icon size={15} strokeWidth={1.75} />
-                          </span>
-                          <span className={styles.itemBody}>
-                            <span className={styles.itemLabel}>
-                              {highlightMatch(cmd.label, query)}
+                grouped.map(({ group, items }) => {
+                  return (
+                    <div key={group} className={styles.group} role="group" aria-label={group}>
+                      <div className={styles.groupLabel}>{group}</div>
+                      {items.map((cmd) => {
+                        const idx = flatIndexMap.get(cmd.id) ?? -1
+                        const isActive = idx === activeIndex
+                        const Icon = cmd.icon
+                        return (
+                          <button
+                            key={cmd.id}
+                            id={`cmd-${cmd.id}`}
+                            type="button"
+                            role="option"
+                            aria-selected={isActive}
+                            data-idx={idx}
+                            className={clsx(styles.item, isActive && styles.itemActive)}
+                            onMouseEnter={() => setActiveIndex(idx)}
+                            onClick={() => execute(cmd)}
+                            tabIndex={-1}
+                          >
+                            <span className={styles.itemIcon}>
+                              <Icon size={15} strokeWidth={1.75} />
                             </span>
-                            <span className={styles.itemDesc}>
-                              {highlightMatch(cmd.description, query)}
+                            <span className={styles.itemBody}>
+                              <span className={styles.itemLabel}>
+                                {highlightMatch(cmd.label, query)}
+                              </span>
+                              <span className={styles.itemDesc}>
+                                {highlightMatch(cmd.description, query)}
+                              </span>
                             </span>
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                ))
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })
               )}
             </div>
 
