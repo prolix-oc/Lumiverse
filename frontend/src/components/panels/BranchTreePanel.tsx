@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { GitBranch, MessageCircle, Info } from 'lucide-react'
+import { GitBranch, MessageCircle, Info, Scissors } from 'lucide-react'
 import clsx from 'clsx'
 import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
@@ -61,6 +61,15 @@ function Node({ node, currentChatId }: NodeProps) {
             {' · '}
             {relativeTime(node.updated_at)}
           </span>
+          {node.branch_message_preview && (
+            <span className={styles.branchPreview} title={node.branch_message_preview}>
+              <Scissors size={10} strokeWidth={2} />
+              <span>
+                {node.branch_message_index !== null && `#${node.branch_message_index} · `}
+                {node.branch_message_preview}
+              </span>
+            </span>
+          )}
         </div>
         {isCurrent && (
           <span className={styles.nodeCurrentBadge}>here</span>
