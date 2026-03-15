@@ -262,6 +262,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     "selectedLoomStyles", "selectedLoomUtils", "selectedLoomRetrofits",
     "guidedGenerations", "promptBias",
     "theme",
+    "contextFilters",
   ];
   const settingsMap = settingsSvc.getSettingsByKeys(ctx.userId, settingsKeys);
 
@@ -366,6 +367,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       // Strip reasoning from older chat history messages based on keepInHistory
       if (reasoningVal) {
         stripReasoningFromChatHistory(result, firstChatIdx, historyCount, reasoningVal);
+      }
+
+      // Apply context filters (details blocks, loom tags, HTML tags)
+      const contextFiltersVal = settingsMap.get("contextFilters") as ContextFilters | undefined;
+      if (contextFiltersVal) {
+        applyContextFilters(result, firstChatIdx, historyCount, contextFiltersVal);
       }
       continue;
     }
@@ -1219,6 +1226,215 @@ function stripReasoningFromChatHistory(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Context Filters — strip or keep-only details blocks, loom tags, HTML tags
+// ---------------------------------------------------------------------------
+
+interface ContextFilterConfig {
+  enabled: boolean;
+  keepDepth: number;
+  /** When true, past keepDepth: keep ONLY matching content, strip everything else */
+  keepOnly?: boolean;
+}
+
+interface ContextFilterHtmlConfig extends ContextFilterConfig {
+  stripFonts?: boolean;
+  fontKeepDepth?: number;
+}
+
+interface ContextFilters {
+  htmlTags?: ContextFilterHtmlConfig;
+  detailsBlocks?: ContextFilterConfig;
+  loomItems?: ContextFilterConfig;
+}
+
+// Loom-related tags to match
+const LOOM_TAGS = [
+  "loom_sum", "loom_if", "loom_else", "loom_endif",
+  "lumia_ooc", "lumiaooc", "lumio_ooc", "lumioooc",
+  "loom_state", "loom_memory", "loom_context", "loom_inject", "loom_var", "loom_set", "loom_get",
+  "loom_record", "loomrecord", "loom_ledger", "loomledger",
+];
+
+// Pre-compiled regexes for loom tags (paired + self-closing)
+const LOOM_TAG_REGEXES = LOOM_TAGS.map((tag) => ({
+  paired: new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "gi"),
+  self: new RegExp(`<${tag}(?:\\s[^>]*)?\\/?>`, "gi"),
+}));
+
+// HTML formatting tags to strip (preserves inner text)
+const HTML_FORMAT_TAGS = ["span", "b", "i", "u", "em", "strong", "s", "strike", "sub", "sup", "mark", "small", "big"];
+const HTML_TAG_REGEXES = HTML_FORMAT_TAGS.map((tag) => ({
+  open: new RegExp(`<${tag}(?:\\s[^>]*)?>`, "gi"),
+  close: new RegExp(`</${tag}>`, "gi"),
+}));
+
+const MAX_FILTER_ITERATIONS = 20;
+
+/** Remove <details>...</details> blocks entirely (handles nesting). */
+function stripDetailsBlocks(content: string): string {
+  let result = content;
+  let prev: string;
+  let iter = 0;
+  do {
+    if (++iter > MAX_FILTER_ITERATIONS) break;
+    prev = result;
+    result = result.replace(/<details(?:\s[^>]*)?>([\s\S]*?)<\/details>/gi, "");
+  } while (result !== prev);
+  return result;
+}
+
+/** Extract only the inner text of <details>...</details> blocks, discard everything else. */
+function keepOnlyDetailsBlocks(content: string): string {
+  const parts: string[] = [];
+  const pattern = /<details(?:\s[^>]*)?>([\s\S]*?)<\/details>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    const inner = match[1].trim();
+    if (inner) parts.push(inner);
+  }
+  return parts.join("\n\n");
+}
+
+/** Remove all loom-related tags and their content. */
+function stripLoomTags(content: string): string {
+  let result = content;
+  for (const { paired, self } of LOOM_TAG_REGEXES) {
+    paired.lastIndex = 0;
+    self.lastIndex = 0;
+    result = result.replace(paired, "");
+    result = result.replace(self, "");
+  }
+  return result;
+}
+
+/** Extract only the inner text of loom-related tags, discard everything else. */
+function keepOnlyLoomTags(content: string): string {
+  const parts: string[] = [];
+  for (const { paired } of LOOM_TAG_REGEXES) {
+    paired.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = paired.exec(content)) !== null) {
+      const inner = match[1].trim();
+      if (inner) parts.push(inner);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+/** Strip HTML formatting tags (preserving inner text) + div handling. */
+function stripHtmlFormattingTags(content: string): string {
+  let result = content;
+
+  // Handle divs: extract codeblock containers, then strip remaining divs
+  let prev: string;
+  let iter = 0;
+  do {
+    if (++iter > MAX_FILTER_ITERATIONS) break;
+    prev = result;
+    result = result.replace(
+      /<div[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>(\s*```[\s\S]*?```\s*)<\/div>/gi,
+      "$1",
+    );
+    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "");
+  } while (result !== prev);
+  result = result.replace(/<\/div>/gi, "");
+
+  // Strip formatting tags (preserve inner text)
+  for (const { open, close } of HTML_TAG_REGEXES) {
+    open.lastIndex = 0;
+    close.lastIndex = 0;
+    result = result.replace(open, "");
+    result = result.replace(close, "");
+  }
+
+  return result;
+}
+
+/** Strip <font> tags (preserving inner text). */
+function stripFontTags(content: string): string {
+  return content.replace(/<font(?:\s[^>]*)?>/gi, "").replace(/<\/font>/gi, "");
+}
+
+/** Collapse 3+ consecutive newlines to 2 (standard paragraph break). */
+function collapseExcessiveNewlines(content: string): string {
+  return content.replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Apply context filters to chat history messages.
+ * For each filter, messages within keepDepth of the end are untouched.
+ * Older messages have the matching content stripped (normal mode) or
+ * everything EXCEPT the matching content stripped (keepOnly mode).
+ */
+function applyContextFilters(
+  result: LlmMessage[],
+  firstChatIdx: number,
+  historyCount: number,
+  filters: ContextFilters,
+): void {
+  const html = filters.htmlTags;
+  const details = filters.detailsBlocks;
+  const loom = filters.loomItems;
+
+  const htmlEnabled = html?.enabled ?? false;
+  const fontEnabled = html?.stripFonts ?? false;
+  const detailsEnabled = details?.enabled ?? false;
+  const loomEnabled = loom?.enabled ?? false;
+
+  if (!htmlEnabled && !detailsEnabled && !loomEnabled) return;
+
+  const htmlKeepDepth = html?.keepDepth ?? 3;
+  const fontKeepDepth = html?.fontKeepDepth ?? 3;
+  const detailsKeepDepth = details?.keepDepth ?? 3;
+  const loomKeepDepth = loom?.keepDepth ?? 5;
+
+  const detailsKeepOnly = details?.keepOnly ?? false;
+  const loomKeepOnly = loom?.keepOnly ?? false;
+
+  const endIdx = firstChatIdx + historyCount;
+
+  for (let i = firstChatIdx; i < endIdx; i++) {
+    const content = result[i].content;
+    if (typeof content !== "string") continue;
+
+    const depthFromEnd = endIdx - 1 - i;
+    let filtered = content;
+
+    // HTML tag stripping (always strip mode — no keepOnly for HTML)
+    if (htmlEnabled && depthFromEnd >= htmlKeepDepth) {
+      filtered = stripHtmlFormattingTags(filtered);
+    }
+    if (htmlEnabled && fontEnabled && depthFromEnd >= fontKeepDepth) {
+      filtered = stripFontTags(filtered);
+    }
+
+    // Details blocks
+    if (detailsEnabled && depthFromEnd >= detailsKeepDepth) {
+      if (detailsKeepOnly) {
+        filtered = keepOnlyDetailsBlocks(filtered);
+      } else {
+        filtered = stripDetailsBlocks(filtered);
+      }
+    }
+
+    // Loom tags
+    if (loomEnabled && depthFromEnd >= loomKeepDepth) {
+      if (loomKeepOnly) {
+        filtered = keepOnlyLoomTags(filtered);
+      } else {
+        filtered = stripLoomTags(filtered);
+      }
+    }
+
+    // Clean up excessive newlines left by removals
+    if (filtered !== content) {
+      filtered = collapseExcessiveNewlines(filtered).trim();
+      result[i] = { ...result[i], content: filtered };
+    }
+  }
+}
+
 /**
  * Apply CompletionSettings as a post-processing pass on the assembled messages.
  * Handles squashSystemMessages, useSystemPrompt, namesBehavior, and assistantPrefill
@@ -1571,6 +1787,12 @@ async function legacyAssembly(
     if (reasoningSetting?.value) {
       stripReasoningFromChatHistory(llmMessages, legacyFirstChatIdx, legacyHistoryCount, reasoningSetting.value);
       reasoningVal = reasoningSetting.value;
+    }
+
+    // Apply context filters (details blocks, loom tags, HTML tags)
+    const contextFiltersSetting = settingsSvc.getSetting(userId, "contextFilters");
+    if (contextFiltersSetting?.value) {
+      applyContextFilters(llmMessages, legacyFirstChatIdx, legacyHistoryCount, contextFiltersSetting.value as ContextFilters);
     }
   }
 
