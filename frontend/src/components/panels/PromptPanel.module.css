@@ -321,6 +321,10 @@
   margin-left: 4px;
 }
 
+.filterModeBlock {
+  padding: 2px 0 8px;
+}
+
 .filterDepthRow {
   display: flex;
   align-items: center;

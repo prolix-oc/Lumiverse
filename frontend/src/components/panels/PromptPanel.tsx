@@ -104,6 +104,26 @@ function FilterItem({
   )
 }
 
+function FilterKeepOnlyToggle({
+  id,
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  id: string
+  checked: boolean
+  onChange: (v: boolean) => void
+  label: string
+  hint: string
+}) {
+  return (
+    <div className={styles.filterModeBlock}>
+      <Toggle id={id} checked={checked} onChange={onChange} label={label} hint={hint} />
+    </div>
+  )
+}
+
 /* ── Main Panel ── */
 
 export default function PromptPanel() {
@@ -376,6 +396,17 @@ export default function PromptPanel() {
           depthValue={contextFilters.detailsBlocks.keepDepth}
           onDepthChange={(v) => updateContextFilter('detailsBlocks', 'keepDepth', v)}
         />
+        <Collapsible isOpen={contextFilters.detailsBlocks.enabled}>
+          <div className={styles.filterSub}>
+            <FilterKeepOnlyToggle
+              id="filter-details-keep-only"
+              checked={contextFilters.detailsBlocks.keepOnly ?? false}
+              onChange={(v) => updateContextFilter('detailsBlocks', 'keepOnly', v)}
+              label="Keep Only Details Content"
+              hint="Past the keep depth, discard everything except content inside <details> blocks"
+            />
+          </div>
+        </Collapsible>
 
         {/* Loom Tags */}
         <FilterItem
@@ -388,6 +419,17 @@ export default function PromptPanel() {
           onDepthChange={(v) => updateContextFilter('loomItems', 'keepDepth', v)}
           depthLabel="Keep Loom tags in last N messages"
         />
+        <Collapsible isOpen={contextFilters.loomItems.enabled}>
+          <div className={styles.filterSub}>
+            <FilterKeepOnlyToggle
+              id="filter-loom-keep-only"
+              checked={contextFilters.loomItems.keepOnly ?? false}
+              onChange={(v) => updateContextFilter('loomItems', 'keepOnly', v)}
+              label="Keep Only Loom Content"
+              hint="Past the keep depth, discard everything except content inside Loom-related tags"
+            />
+          </div>
+        </Collapsible>
       </EditorSection>
     </div>
   )

@@ -165,6 +165,7 @@ export interface SovereignHandSettings {
 export interface ContextFilterEntry {
   enabled: boolean
   keepDepth: number
+  keepOnly?: boolean
 }
 
 export interface HtmlTagsFilter extends ContextFilterEntry {

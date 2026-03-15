@@ -169,8 +169,8 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   },
   contextFilters: {
     htmlTags: { enabled: false, keepDepth: 3, stripFonts: false, fontKeepDepth: 3 },
-    detailsBlocks: { enabled: false, keepDepth: 3 },
-    loomItems: { enabled: false, keepDepth: 5 },
+    detailsBlocks: { enabled: false, keepDepth: 3, keepOnly: false },
+    loomItems: { enabled: false, keepDepth: 5, keepOnly: false },
   },
   reasoningSettings: {
     prefix: '<think>\n',
