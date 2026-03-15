@@ -5,17 +5,32 @@ export function registerRandomMacros(): void {
     builtIn: true,
     name: "random",
     category: "Random",
-    description: "Random integer between min and max (inclusive)",
-    returnType: "integer",
+    description:
+      "Random integer between min and max (inclusive), or pick a random item from a list of strings",
+    returnType: "string",
     args: [
-      { name: "min", description: "Minimum value (default 0)" },
-      { name: "max", description: "Maximum value (default 1)" },
+      { name: "min_or_item1", description: "Minimum value or first item" },
+      { name: "max_or_item2", description: "Maximum value or second item" },
     ],
+    isList: true,
     handler: (ctx) => {
-      const min = parseInt(ctx.args[0], 10) || 0;
-      const max = parseInt(ctx.args[1], 10) || 1;
-      if (max < min) return String(min);
-      return String(Math.floor(Math.random() * (max - min + 1)) + min);
+      if (ctx.args.length === 0) return String(Math.round(Math.random()));
+
+      // If all args are valid integers, use numeric range (first two args)
+      const allNumeric =
+        ctx.args.length <= 2 &&
+        ctx.args.every((a) => a.trim() !== "" && !isNaN(Number(a)));
+
+      if (allNumeric) {
+        const min = parseInt(ctx.args[0], 10) || 0;
+        const max = parseInt(ctx.args[1], 10) || 1;
+        if (max < min) return String(min);
+        return String(Math.floor(Math.random() * (max - min + 1)) + min);
+      }
+
+      // Otherwise, pick a random item from the list
+      const idx = Math.floor(Math.random() * ctx.args.length);
+      return ctx.args[idx];
     },
   });
 
