@@ -11,9 +11,9 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* In standalone PWA mode, iOS can miscalculate 100dvh.
-   Remove the dvh clamp — height:100% from the fixed html/body
-   chain is the correct constraint. */
+/* In standalone PWA mode, remove the dvh clamp — height:100% from the
+   position:fixed html/body chain is the correct constraint. iOS handles
+   keyboard scrolling natively within the fixed viewport. */
 :global(html[data-pwa]) .app {
   max-height: none;
 }

@@ -21,6 +21,19 @@ if (isStandalone) {
   document.documentElement.setAttribute('data-pwa', '')
 }
 
+// Add interactive-widget=resizes-content on non-WebKit browsers only.
+// Safari/WebKit ignores this attribute, and its presence may interfere
+// with viewport calculations on iOS/iPadOS PWAs. Detect WebKit by engine
+// rather than device — iOS/iPadOS Safari now reports as macOS in the UA.
+const isWebKit = /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
+
+if (!isWebKit) {
+  const viewport = document.querySelector('meta[name="viewport"]')
+  if (viewport) {
+    viewport.setAttribute('content', viewport.getAttribute('content') + ', interactive-widget=resizes-content')
+  }
+}
+
 // ── Viewport lock: prevent pinch-zoom and elastic overscroll ──
 // Safari ignores user-scalable=no and maximum-scale in the viewport meta tag
 // since iOS 10. These JS handlers catch the gestures that CSS alone cannot.
