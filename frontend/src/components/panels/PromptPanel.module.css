@@ -310,6 +310,76 @@
   font-style: italic;
 }
 
+/* ── Selection buttons ── */
+.selectionGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.selectionGroupDisabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.selectionBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.selectionBtn:hover {
+  background: var(--lumiverse-fill);
+  border-color: var(--lumiverse-border-hover);
+}
+
+.selectionBtnDisabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.selectionBtnIcon {
+  color: var(--lumiverse-primary);
+  flex-shrink: 0;
+}
+
+.selectionBtnLabel {
+  flex: 1;
+  font-weight: 500;
+}
+
+.selectionBtnBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--lumiverse-primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.selectionBtnChevron {
+  color: var(--lumiverse-text-dim);
+  flex-shrink: 0;
+}
+
 /* ── Filter items ── */
 .filterItem {
   padding: 2px 0;
