@@ -46,9 +46,57 @@ import {
   statSync,
   renameSync,
 } from "fs";
+import http from "node:http";
+import https from "node:https";
 import { join, resolve, relative, sep } from "path";
 
 const EPHEMERAL_MAX_FILES = 250;
+
+function requestWithAddressFamily(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string },
+  family: 4 | 6
+): Promise<{
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
+}> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const request = (parsed.protocol === "https:" ? https : http).request(
+      parsed,
+      {
+        method: options.method || "GET",
+        headers: options.headers,
+        family,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode || 0,
+            statusText: response.statusMessage || "",
+            headers: Object.fromEntries(
+              Object.entries(response.headers).map(([key, value]) => [
+                key,
+                Array.isArray(value) ? value.join(", ") : String(value ?? ""),
+              ])
+            ),
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      }
+    );
+
+    request.on("error", reject);
+    if (options.body) request.write(options.body);
+    request.end();
+  });
+}
 
 export class WorkerHost {
   private worker: Worker | null = null;
@@ -2407,22 +2455,39 @@ export class WorkerHost {
       }
       await validateHost(parsed.hostname);
 
-      const response = await fetch(url, {
-        method: options.method || "GET",
-        headers: options.headers,
-        body: options.body,
-      });
-      const text = await response.text();
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          status: response.status,
-          statusText: response.statusText,
-          headers: Object.fromEntries(response.headers.entries()),
-          body: text,
-        },
-      });
+      try {
+        const response = await fetch(url, {
+          method: options.method || "GET",
+          headers: options.headers,
+          body: options.body,
+        });
+        const text = await response.text();
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
+            body: text,
+          },
+        });
+      } catch (fetchErr: any) {
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(parsed.hostname)) {
+          throw fetchErr;
+        }
+
+        const retried = await requestWithAddressFamily(url, {
+          method: options.method || "GET",
+          headers: options.headers,
+          body: options.body,
+        }, 4);
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: retried,
+        });
+      }
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
