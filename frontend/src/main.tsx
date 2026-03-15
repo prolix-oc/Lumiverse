@@ -10,9 +10,23 @@ import './theme/global.css'
 // Register service worker for PWA support — autoUpdate reloads on new versions
 registerSW({ immediate: true })
 
-// Flag standalone PWA mode for CSS targeting
-if (window.matchMedia('(display-mode: standalone)').matches) {
+// Flag standalone PWA mode for CSS targeting.
+// Check both matchMedia (Chromium/Android) and navigator.standalone (iOS Safari)
+// since iOS PWA shells may not advertise display-mode: standalone via CSS.
+const isStandalone =
+  window.matchMedia('(display-mode: standalone)').matches ||
+  (window.navigator as any).standalone === true
+
+if (isStandalone) {
   document.documentElement.setAttribute('data-pwa', '')
+
+  // Measure actual viewport height — works around WebKit bug #237961 where
+  // CSS viewport units (dvh/vh/%) miscalculate in standalone + viewport-fit=cover.
+  const setAppHeight = () => {
+    document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`)
+  }
+  setAppHeight()
+  window.addEventListener('resize', setAppHeight)
 }
 
 // ── Viewport lock: prevent pinch-zoom and elastic overscroll ──

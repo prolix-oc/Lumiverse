@@ -125,26 +125,22 @@ select:focus-visible,
 .lce-hl-action { color: #fbbf24; font-style: italic; }
 
 /* ── PWA standalone mode hardening ──
-   Chromium PWAs in standalone display-mode can exhibit rendering
-   differences: pull-to-refresh interference, viewport sizing quirks,
-   and backdrop-filter compositing issues.
+   Avoids position:fixed + inset:0 which triggers WebKit bug #237961
+   (leaves a bottom gap when viewport-fit=cover is active in standalone
+   mode on iOS). Instead, use JS-measured --app-height (set in main.tsx)
+   for the actual viewport height, with 100% as the initial fallback.
 
-   Strategy: use position:fixed + inset:0 to create a truly locked
-   viewport that cannot be scrolled out of bounds, instead of stacking
-   100dvh on html/body/#root which causes layout thrashing when the
-   virtual keyboard changes the dynamic viewport height. */
+   iOS may not match the display-mode CSS media query in its PWA shell,
+   so html[data-pwa] selectors (set via navigator.standalone in main.tsx)
+   provide a JS-driven fallback. */
 @media (display-mode: standalone) {
   html {
-    /* Fixed positioning locks the viewport — it can never be scrolled
-       past its bounds regardless of content or keyboard state */
-    position: fixed;
-    inset: 0;
+    height: var(--app-height, 100%);
     overflow: hidden;
     overscroll-behavior: none;
   }
 
   body {
-    /* Fill the fixed html container */
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
@@ -159,4 +155,25 @@ select:focus-visible,
   #root {
     height: 100%;
   }
+}
+
+/* JS-driven fallback for iOS — navigator.standalone may be true even
+   when the display-mode CSS media query does not match. */
+html[data-pwa] {
+  height: var(--app-height, 100%);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html[data-pwa] body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  touch-action: manipulation;
+}
+
+html[data-pwa] #root {
+  height: 100%;
 }
