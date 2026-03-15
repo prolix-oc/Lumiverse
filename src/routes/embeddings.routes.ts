@@ -81,6 +81,15 @@ app.post("/world-books/:bookId/reindex", async (c) => {
   return c.json({ success: true, ...result, total: entries.length });
 });
 
+app.post("/force-reset", async (c) => {
+  try {
+    const result = await embeddingsSvc.forceResetLanceDB();
+    return c.json({ success: true, ...result });
+  } catch (err: any) {
+    return c.json({ error: err.message || "Force reset failed" }, 500);
+  }
+});
+
 app.post("/optimize", async (c) => {
   try {
     await embeddingsSvc.optimizeTable();

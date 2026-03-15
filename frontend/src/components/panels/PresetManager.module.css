@@ -30,7 +30,7 @@
 
 .presetBtnActive {
   background: var(--lumiverse-primary-light);
-  border-color: rgba(147, 112, 219, 0.3);
+  border-color: var(--lumiverse-primary-020);
   color: var(--lumiverse-primary);
 }
 

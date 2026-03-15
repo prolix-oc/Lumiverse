@@ -21,6 +21,7 @@ import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
 import * as imagesSvc from "./images.service";
 import { getCouncilSettings } from "./council/council-settings.service";
+import { getDb } from "../db/connection";
 import { readFileSync } from "fs";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,22 @@ const SAMPLER_KEY_MAP: Record<string, string> = {
   presencePenalty: "presence_penalty",
   repetitionPenalty: "repetition_penalty",
 };
+
+/**
+ * Sampler keys where a value of 0 means "exclude from request".
+ * This lets users disable individual samplers to avoid provider conflicts
+ * (e.g. Claude rejects requests that set both temperature and top_p).
+ * maxTokens and contextSize are excluded — 0 is never a valid intent for those.
+ */
+const ZERO_EXCLUDES_SAMPLER = new Set([
+  "temperature",
+  "topP",
+  "minP",
+  "topK",
+  "frequencyPenalty",
+  "presencePenalty",
+  "repetitionPenalty",
+]);
 
 /**
  * Default sampler values — mirrors the frontend's `defaultHint` from SAMPLER_PARAMS.
@@ -192,12 +209,15 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // Optional vector retrieval for vectorized world book entries.
   // These entries are merged with keyword-activated entries when enabled.
-  const vectorActivated = await collectVectorActivatedWorldInfo(
-    ctx.userId,
-    wiSources.worldBookIds,
-    wiEntries,
-    messages,
-  );
+  // When pre-computed results are available (from the generation pipeline's
+  // council enrichment phase), reuse them to avoid redundant embedding queries.
+  const vectorActivated = ctx.precomputedVectorEntries
+    ?? await collectVectorActivatedWorldInfo(
+      ctx.userId,
+      wiSources.worldBookIds,
+      wiEntries,
+      messages,
+    );
   if (vectorActivated.length > 0) {
     const existing = new Set(wiResult.activatedEntries.map((e) => e.id));
     for (const { entry, score } of vectorActivated) {
@@ -241,6 +261,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     "sovereignHand",
     "selectedLoomStyles", "selectedLoomUtils", "selectedLoomRetrofits",
     "guidedGenerations", "promptBias",
+    "theme",
+    "contextFilters",
   ];
   const settingsMap = settingsSvc.getSettingsByKeys(ctx.userId, settingsKeys);
 
@@ -251,12 +273,18 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     macroEnv.extra.reasoningSuffix = reasoningVal.suffix ?? "";
   }
 
+  // Populate theme info for {{userColorMode}} macro
+  const themeVal = settingsMap.get("theme");
+  if (themeVal) {
+    macroEnv.extra.theme = { mode: themeVal.mode ?? "dark" };
+  }
+
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
 
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (ctx.generationType === "impersonate" && ctx.impersonateMode === "oneliner") {
-    return await onelinerImpersonation(messages, character, persona, chat, connection, preset, promptBehavior, completionSettings, samplerOverrides, ctx, macroEnv);
+    return await onelinerImpersonation(messages, character, persona, chat, connection, preset, promptBehavior, completionSettings, samplerOverrides, ctx, macroEnv, reasoningVal);
   }
 
   // ---- Assembly loop ----
@@ -284,6 +312,13 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     // ---- Handle by marker type ----
 
     if (block.marker === "chat_history") {
+      const chatVectorMemories = await collectChatVectorMemory(ctx.userId, ctx.chatId, messages);
+      if (chatVectorMemories.length > 0) {
+        const memoryContent = "Past Memories (for context only):\n" + chatVectorMemories.join("\n\n");
+        result.push({ role: "system", content: memoryContent });
+        breakdown.push({ type: "long_term_memory", name: "Long-Term Memory", role: "system", content: memoryContent });
+      }
+
       // Insert new-chat separator if configured
       const newChatPrompt = promptBehavior.newChatPrompt;
       if (newChatPrompt) {
@@ -300,11 +335,13 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       // For regenerate: skip the target message (it has a blank swipe)
       // Also skip messages marked as hidden drafts (extra.hidden === true)
       let historyCount = 0;
+      const historyParts: string[] = [];
       for (const msg of messages) {
         if (ctx.excludeMessageId && msg.id === ctx.excludeMessageId) continue;
         if (msg.extra?.hidden === true) continue;
         const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
         const resolvedContent = (await evaluate(msg.content, macroEnv, registry)).text;
+        historyParts.push(resolvedContent);
         const attachments = Array.isArray(msg.extra?.attachments) ? msg.extra.attachments : [];
         if (attachments.length > 0) {
           // Build multipart content: text + attachment parts
@@ -324,12 +361,18 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         }
         historyCount++;
       }
-      breakdown.push({ type: "chat_history", name: "Chat History", messageCount: historyCount });
+      breakdown.push({ type: "chat_history", name: "Chat History", messageCount: historyCount, firstMessageIndex: firstChatIdx, content: historyParts.join("\n") });
       chatHistoryInserted = true;
 
       // Strip reasoning from older chat history messages based on keepInHistory
       if (reasoningVal) {
         stripReasoningFromChatHistory(result, firstChatIdx, historyCount, reasoningVal);
+      }
+
+      // Apply context filters (details blocks, loom tags, HTML tags)
+      const contextFiltersVal = settingsMap.get("contextFilters") as ContextFilters | undefined;
+      if (contextFiltersVal) {
+        applyContextFilters(result, firstChatIdx, historyCount, contextFiltersVal);
       }
       continue;
     }
@@ -375,14 +418,16 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
     // Content-bearing markers and regular blocks → resolve block.content
     const content = block.content || "";
-    const resolved = (await evaluate(content, macroEnv, registry)).text.trim();
+    const rawResolved = (await evaluate(content, macroEnv, registry)).text;
+    const resolved = rawResolved.trim();
     if (resolved) {
       // Append roles: collect for deferred application after full assembly
+      // Preserve original whitespace (especially leading newlines) for formatting
       if (isAppendRole(block.role)) {
         pendingAppends.push({
           baseRole: appendBaseRole(block.role),
           depth: block.depth || 0,
-          content: resolved,
+          content: rawResolved,
           blockName: block.name,
           blockId: block.id,
         });
@@ -823,12 +868,12 @@ function collectWorldInfoSources(
   };
 }
 
-interface VectorActivatedEntry {
+export interface VectorActivatedEntry {
   entry: import("../types/world-book").WorldBookEntry;
   score: number;
 }
 
-async function collectVectorActivatedWorldInfo(
+export async function collectVectorActivatedWorldInfo(
   userId: string,
   worldBookIds: string[],
   entries: import("../types/world-book").WorldBookEntry[],
@@ -839,63 +884,215 @@ async function collectVectorActivatedWorldInfo(
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
   if (!cfg.enabled || !cfg.vectorize_world_books) return [];
 
-  const contextSize = Math.max(1, cfg.preferred_context_size || 6);
-  const queryText = messages.slice(-contextSize).map((m) => m.content).join("\n").trim();
+  const contextSize = Math.max(1, cfg.preferred_context_size || 3);
+  const queryMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0).slice(-contextSize);
+  const queryText = queryMessages.map((m) => `[${m.name}]: ${m.content}`).join("\n").trim();
   if (!queryText) return [];
 
-  // Embed query once (or hit cache), regardless of how many world books
-  const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
-  if (!queryVector || queryVector.length === 0) return [];
+  try {
+    // Embed query once (or hit cache), regardless of how many world books
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+    if (!queryVector || queryVector.length === 0) return [];
 
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const out: VectorActivatedEntry[] = [];
-  const scored: Array<{ entry: import("../types/world-book").WorldBookEntry; score: number }> = [];
-  const seen = new Set<string>();
-  const topK = Math.max(1, cfg.retrieval_top_k || 4);
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    const out: VectorActivatedEntry[] = [];
+    const scored: Array<{ entry: import("../types/world-book").WorldBookEntry; score: number }> = [];
+    const seen = new Set<string>();
+    const topK = Math.max(1, cfg.retrieval_top_k || 4);
 
-  // Search all world books in parallel using the pre-computed vector
-  const searchResults = await Promise.allSettled(
-    worldBookIds.map((worldBookId) =>
-      embeddingsSvc.searchWorldBookEntriesWithVector(userId, worldBookId, queryVector, topK)
+    // Search all world books in parallel using the pre-computed vector
+    const searchResults = await Promise.allSettled(
+      worldBookIds.map((worldBookId) =>
+        embeddingsSvc.searchWorldBookEntriesWithVector(userId, worldBookId, queryVector, topK)
+      )
+    );
+
+    for (const result of searchResults) {
+      if (result.status === "rejected") {
+        console.warn("[WI] Vector search failed:", result.reason);
+        continue;
+      }
+      for (const hit of result.value) {
+        const entry = byId.get(hit.entry_id);
+        if (!entry) continue;
+        if (seen.has(entry.id)) continue;
+        if (entry.disabled || !entry.content.trim()) continue;
+        scored.push({ entry, score: hit.score });
+        seen.add(entry.id);
+      }
+    }
+
+    // Filter by similarity threshold 
+    if (cfg.similarity_threshold > 0) {
+      const cutoff = cfg.similarity_threshold;
+      scored.splice(0, scored.length, ...scored.filter((s) => s.score <= cutoff));
+    }
+
+    scored.sort((a, b) => a.score - b.score);
+
+    let cap = topK;
+    if (cfg.hybrid_weight_mode === "keyword_first") {
+      cap = Math.max(1, Math.ceil(topK / 2));
+    } else if (cfg.hybrid_weight_mode === "vector_first") {
+      cap = Math.min(24, topK * 2);
+    }
+
+    for (const item of scored.slice(0, cap)) {
+      out.push({ entry: item.entry, score: item.score });
+    }
+
+    return out;
+  } catch (err) {
+    console.warn("[prompt] Vector activated world info retrieval failed:", err);
+    return [];
+  }
+}
+
+/**
+ * Retrieve relevant memories from vectorized chat history for long-term context.
+ *
+ * What i went with:
+ * 1. Take the most recent N messages as a query (based on preferred_context_size)
+ * 2. Checks for cached query vector first (fast path)
+ * 3. If chunks aren't vectorized yet, falls back to SQLite recency-based retrieval
+ * 4. Excludes recent messages (within exclusionWindow) to avoid redundancy
+ * 5. Returns the most semantically relevant past memories
+ */
+async function collectChatVectorMemory(
+  userId: string,
+  chatId: string,
+  messages: Message[],
+): Promise<string[]> {
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) return [];
+
+  const params = embeddingsSvc.getChatMemoryParams(cfg.chat_memory_mode);
+  const contextSize = Math.max(1, cfg.preferred_context_size || 3);
+  const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
+  const queryMessages = visibleMessages.slice(-contextSize);
+  const queryText = queryMessages.map((m) => `[${m.name}]: ${m.content}`).join("\n").trim();
+  if (!queryText) return [];
+
+  try {
+    const queryHash = hashQueryText(queryText);
+    const cachedVector = await getQueryVectorFromCache(chatId, queryHash);
+
+    let queryVector: number[];
+
+    if (cachedVector) {
+      queryVector = cachedVector;
+    } else {
+      const chunks = chatsSvc.getChatChunks(userId, chatId);
+      const pendingChunks = chunks.filter(c => !c.vectorized_at);
+
+      if (pendingChunks.length > 0) {
+        // Chunks not ready - use SQLite fallback
+        return getRecentRelevantChunks(userId, chatId, queryText, cfg.retrieval_top_k);
+      }
+
+      // Generate query vector and cache it
+      const [vector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+      if (!vector || vector.length === 0) return [];
+
+      queryVector = vector;
+      await cacheQueryVector(chatId, queryHash, queryText, queryVector);
+    }
+
+    // Build exclusion set: exclude recent messages within the exclusion window
+    const excludeIds = new Set<string>();
+    const exclusionWindow = params.exclusionWindow;
+    const recentMessages = visibleMessages.slice(-exclusionWindow);
+    for (const m of recentMessages) {
+      excludeIds.add(m.id);
+    }
+
+    const limit = cfg.retrieval_top_k;
+    const hits = await embeddingsSvc.searchChatChunks(userId, chatId, queryVector, excludeIds, limit);
+
+    // Apply similarity threshold filtering
+    let filteredHits = hits;
+    if (cfg.similarity_threshold > 0) {
+      filteredHits = hits.filter(h => h.score <= cfg.similarity_threshold);
+    }
+
+    if (filteredHits.length > 0) {
+      console.info(`[chat-memory] Retrieved ${filteredHits.length} memory chunk(s) from past conversation`);
+    }
+
+    return filteredHits.map(h => h.content);
+  } catch (err) {
+    console.warn("[prompt] Chat memory retrieval failed:", err);
+    return [];
+  }
+}
+
+/**
+ * Hash query text for cache lookup.
+ */
+function hashQueryText(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
+}
+
+/**
+ * Get cached query vector from SQLite.
+ */
+async function getQueryVectorFromCache(chatId: string, queryHash: string): Promise<number[] | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const row = getDb()
+    .query("SELECT vector_json, expires_at FROM query_vector_cache WHERE chat_id = ? AND query_hash = ? AND expires_at > ?")
+    .get(chatId, queryHash, now) as any;
+
+  if (!row) return null;
+
+  try {
+    const vector = JSON.parse(row.vector_json);
+    // Update hit count and last used
+    getDb()
+      .query("UPDATE query_vector_cache SET hit_count = hit_count + 1, last_used_at = ? WHERE chat_id = ? AND query_hash = ?")
+      .run(now, chatId, queryHash);
+    return vector;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cache a query vector in SQLite.
+ */
+async function cacheQueryVector(chatId: string, queryHash: string, queryText: string, vector: number[]): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + 300; // 5 minutes
+
+  getDb()
+    .query(
+      `INSERT INTO query_vector_cache (id, chat_id, query_hash, query_text, vector_json, hit_count, created_at, last_used_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+       ON CONFLICT(chat_id, query_hash) DO UPDATE SET
+         vector_json = excluded.vector_json,
+         last_used_at = excluded.last_used_at,
+         expires_at = excluded.expires_at`
     )
-  );
+    .run(crypto.randomUUID(), chatId, queryHash, queryText, JSON.stringify(vector), now, now, expiresAt);
+}
 
-  for (const result of searchResults) {
-    if (result.status === "rejected") {
-      console.warn("[WI] Vector search failed:", result.reason);
-      continue;
-    }
-    for (const hit of result.value) {
-      const entry = byId.get(hit.entry_id);
-      if (!entry) continue;
-      if (seen.has(entry.id)) continue;
-      if (entry.disabled || !entry.content.trim()) continue;
-      scored.push({ entry, score: hit.score });
-      seen.add(entry.id);
-    }
-  }
+/**
+ * Fallback retrieval using SQLite when vectors aren't ready.
+ * Returns recent chunks that might be relevant based on recency.
+ */
+function getRecentRelevantChunks(userId: string, chatId: string, queryText: string, limit: number): string[] {
+  const chunks = chatsSvc.getChatChunks(userId, chatId);
 
-  // Filter by similarity threshold (LanceDB distance: lower = more similar).
-  // Threshold of 0 means no filtering.
-  if (cfg.similarity_threshold > 0) {
-    const cutoff = cfg.similarity_threshold;
-    scored.splice(0, scored.length, ...scored.filter((s) => s.score <= cutoff));
-  }
+  // Simple recency-based retrieval
+  const sorted = chunks.sort((a, b) => b.created_at - a.created_at);
+  const topChunks = sorted.slice(0, limit);
 
-  scored.sort((a, b) => a.score - b.score);
-
-  let cap = topK;
-  if (cfg.hybrid_weight_mode === "keyword_first") {
-    cap = Math.max(1, Math.ceil(topK / 2));
-  } else if (cfg.hybrid_weight_mode === "vector_first") {
-    cap = Math.min(24, topK * 2);
-  }
-
-  for (const item of scored.slice(0, cap)) {
-    out.push({ entry: item.entry, score: item.score });
-  }
-
-  return out;
+  return topChunks.map(c => c.content);
 }
 
 function injectEntryIntoCache(cache: WorldInfoCache, entry: import("../types/world-book").WorldBookEntry): void {
@@ -1029,6 +1226,215 @@ function stripReasoningFromChatHistory(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Context Filters — strip or keep-only details blocks, loom tags, HTML tags
+// ---------------------------------------------------------------------------
+
+interface ContextFilterConfig {
+  enabled: boolean;
+  keepDepth: number;
+  /** When true, past keepDepth: keep ONLY matching content, strip everything else */
+  keepOnly?: boolean;
+}
+
+interface ContextFilterHtmlConfig extends ContextFilterConfig {
+  stripFonts?: boolean;
+  fontKeepDepth?: number;
+}
+
+interface ContextFilters {
+  htmlTags?: ContextFilterHtmlConfig;
+  detailsBlocks?: ContextFilterConfig;
+  loomItems?: ContextFilterConfig;
+}
+
+// Loom-related tags to match
+const LOOM_TAGS = [
+  "loom_sum", "loom_if", "loom_else", "loom_endif",
+  "lumia_ooc", "lumiaooc", "lumio_ooc", "lumioooc",
+  "loom_state", "loom_memory", "loom_context", "loom_inject", "loom_var", "loom_set", "loom_get",
+  "loom_record", "loomrecord", "loom_ledger", "loomledger",
+];
+
+// Pre-compiled regexes for loom tags (paired + self-closing)
+const LOOM_TAG_REGEXES = LOOM_TAGS.map((tag) => ({
+  paired: new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "gi"),
+  self: new RegExp(`<${tag}(?:\\s[^>]*)?\\/?>`, "gi"),
+}));
+
+// HTML formatting tags to strip (preserves inner text)
+const HTML_FORMAT_TAGS = ["span", "b", "i", "u", "em", "strong", "s", "strike", "sub", "sup", "mark", "small", "big"];
+const HTML_TAG_REGEXES = HTML_FORMAT_TAGS.map((tag) => ({
+  open: new RegExp(`<${tag}(?:\\s[^>]*)?>`, "gi"),
+  close: new RegExp(`</${tag}>`, "gi"),
+}));
+
+const MAX_FILTER_ITERATIONS = 20;
+
+/** Remove <details>...</details> blocks entirely (handles nesting). */
+function stripDetailsBlocks(content: string): string {
+  let result = content;
+  let prev: string;
+  let iter = 0;
+  do {
+    if (++iter > MAX_FILTER_ITERATIONS) break;
+    prev = result;
+    result = result.replace(/<details(?:\s[^>]*)?>([\s\S]*?)<\/details>/gi, "");
+  } while (result !== prev);
+  return result;
+}
+
+/** Extract only the inner text of <details>...</details> blocks, discard everything else. */
+function keepOnlyDetailsBlocks(content: string): string {
+  const parts: string[] = [];
+  const pattern = /<details(?:\s[^>]*)?>([\s\S]*?)<\/details>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    const inner = match[1].trim();
+    if (inner) parts.push(inner);
+  }
+  return parts.join("\n\n");
+}
+
+/** Remove all loom-related tags and their content. */
+function stripLoomTags(content: string): string {
+  let result = content;
+  for (const { paired, self } of LOOM_TAG_REGEXES) {
+    paired.lastIndex = 0;
+    self.lastIndex = 0;
+    result = result.replace(paired, "");
+    result = result.replace(self, "");
+  }
+  return result;
+}
+
+/** Extract only the inner text of loom-related tags, discard everything else. */
+function keepOnlyLoomTags(content: string): string {
+  const parts: string[] = [];
+  for (const { paired } of LOOM_TAG_REGEXES) {
+    paired.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = paired.exec(content)) !== null) {
+      const inner = match[1].trim();
+      if (inner) parts.push(inner);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+/** Strip HTML formatting tags (preserving inner text) + div handling. */
+function stripHtmlFormattingTags(content: string): string {
+  let result = content;
+
+  // Handle divs: extract codeblock containers, then strip remaining divs
+  let prev: string;
+  let iter = 0;
+  do {
+    if (++iter > MAX_FILTER_ITERATIONS) break;
+    prev = result;
+    result = result.replace(
+      /<div[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>(\s*```[\s\S]*?```\s*)<\/div>/gi,
+      "$1",
+    );
+    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "");
+  } while (result !== prev);
+  result = result.replace(/<\/div>/gi, "");
+
+  // Strip formatting tags (preserve inner text)
+  for (const { open, close } of HTML_TAG_REGEXES) {
+    open.lastIndex = 0;
+    close.lastIndex = 0;
+    result = result.replace(open, "");
+    result = result.replace(close, "");
+  }
+
+  return result;
+}
+
+/** Strip <font> tags (preserving inner text). */
+function stripFontTags(content: string): string {
+  return content.replace(/<font(?:\s[^>]*)?>/gi, "").replace(/<\/font>/gi, "");
+}
+
+/** Collapse 3+ consecutive newlines to 2 (standard paragraph break). */
+function collapseExcessiveNewlines(content: string): string {
+  return content.replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Apply context filters to chat history messages.
+ * For each filter, messages within keepDepth of the end are untouched.
+ * Older messages have the matching content stripped (normal mode) or
+ * everything EXCEPT the matching content stripped (keepOnly mode).
+ */
+function applyContextFilters(
+  result: LlmMessage[],
+  firstChatIdx: number,
+  historyCount: number,
+  filters: ContextFilters,
+): void {
+  const html = filters.htmlTags;
+  const details = filters.detailsBlocks;
+  const loom = filters.loomItems;
+
+  const htmlEnabled = html?.enabled ?? false;
+  const fontEnabled = html?.stripFonts ?? false;
+  const detailsEnabled = details?.enabled ?? false;
+  const loomEnabled = loom?.enabled ?? false;
+
+  if (!htmlEnabled && !detailsEnabled && !loomEnabled) return;
+
+  const htmlKeepDepth = html?.keepDepth ?? 3;
+  const fontKeepDepth = html?.fontKeepDepth ?? 3;
+  const detailsKeepDepth = details?.keepDepth ?? 3;
+  const loomKeepDepth = loom?.keepDepth ?? 5;
+
+  const detailsKeepOnly = details?.keepOnly ?? false;
+  const loomKeepOnly = loom?.keepOnly ?? false;
+
+  const endIdx = firstChatIdx + historyCount;
+
+  for (let i = firstChatIdx; i < endIdx; i++) {
+    const content = result[i].content;
+    if (typeof content !== "string") continue;
+
+    const depthFromEnd = endIdx - 1 - i;
+    let filtered = content;
+
+    // HTML tag stripping (always strip mode — no keepOnly for HTML)
+    if (htmlEnabled && depthFromEnd >= htmlKeepDepth) {
+      filtered = stripHtmlFormattingTags(filtered);
+    }
+    if (htmlEnabled && fontEnabled && depthFromEnd >= fontKeepDepth) {
+      filtered = stripFontTags(filtered);
+    }
+
+    // Details blocks
+    if (detailsEnabled && depthFromEnd >= detailsKeepDepth) {
+      if (detailsKeepOnly) {
+        filtered = keepOnlyDetailsBlocks(filtered);
+      } else {
+        filtered = stripDetailsBlocks(filtered);
+      }
+    }
+
+    // Loom tags
+    if (loomEnabled && depthFromEnd >= loomKeepDepth) {
+      if (loomKeepOnly) {
+        filtered = keepOnlyLoomTags(filtered);
+      } else {
+        filtered = stripLoomTags(filtered);
+      }
+    }
+
+    // Clean up excessive newlines left by removals
+    if (filtered !== content) {
+      filtered = collapseExcessiveNewlines(filtered).trim();
+      result[i] = { ...result[i], content: filtered };
+    }
+  }
+}
+
 /**
  * Apply CompletionSettings as a post-processing pass on the assembled messages.
  * Handles squashSystemMessages, useSystemPrompt, namesBehavior, and assistantPrefill
@@ -1103,11 +1509,14 @@ function buildParameters(
 ): Record<string, any> {
   const params: Record<string, any> = {};
 
-  // Sampler overrides — when enabled, apply user values (or defaults for core params)
+  // Sampler overrides — when enabled, apply user values (or defaults for core params).
+  // A value of 0 on sampling params means "exclude from request", allowing users to
+  // avoid provider conflicts (e.g. Claude rejects requests with both temperature and top_p).
   if (overrides?.enabled) {
     for (const [camelKey, apiKey] of Object.entries(SAMPLER_KEY_MAP)) {
       const val = (overrides as any)[camelKey];
       if (val !== null && val !== undefined) {
+        if (val === 0 && ZERO_EXCLUDES_SAMPLER.has(camelKey)) continue;
         params[apiKey] = val;
       } else if (camelKey in SAMPLER_DEFAULTS) {
         // Core params: use the visual default so the request matches what the UI shows
@@ -1155,7 +1564,7 @@ function buildParameters(
  * user's reasoning effort setting. Does NOT override if the parameter
  * is already set (e.g. by a prior custom body or explicit override).
  */
-function injectReasoningParams(params: Record<string, any>, providerName: string, effort: string, model?: string): void {
+export function injectReasoningParams(params: Record<string, any>, providerName: string, effort: string, model?: string): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
       // Claude 4.6 models support adaptive thinking (recommended over manual budget)
@@ -1208,20 +1617,23 @@ async function onelinerImpersonation(
   samplerOverrides: SamplerOverrides | null,
   ctx: AssemblyContext,
   macroEnv: MacroEnv,
+  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string } | null,
 ): Promise<AssemblyResult> {
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
 
   // Chat history
   let messageCount = 0;
+  const historyParts: string[] = [];
   for (const msg of messages) {
     if (msg.extra?.hidden === true) continue;
     const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
     const resolvedContent = (await evaluate(msg.content, macroEnv, registry)).text;
     result.push({ role, content: resolvedContent });
+    historyParts.push(resolvedContent);
     messageCount++;
   }
-  breakdown.push({ type: "chat_history", name: "Chat History", messageCount });
+  breakdown.push({ type: "chat_history", name: "Chat History", messageCount, content: historyParts.join("\n") });
 
   // Impersonation prompt
   const prompt = promptBehavior.impersonationPrompt;
@@ -1244,8 +1656,8 @@ async function onelinerImpersonation(
     }
   }
 
-  // Build parameters from sampler overrides
-  const parameters = buildParameters(samplerOverrides, preset, null, connection?.provider, connection?.model);
+  // Build parameters from sampler overrides + reasoning settings
+  const parameters = buildParameters(samplerOverrides, preset, reasoningSettings, connection?.provider, connection?.model);
 
   return { messages: result, breakdown, parameters };
 }
@@ -1285,6 +1697,11 @@ async function legacyAssembly(
         macroEnv.extra.reasoningPrefix = reasoningSetting.value.prefix ?? "";
         macroEnv.extra.reasoningSuffix = reasoningSetting.value.suffix ?? "";
       }
+      // Populate theme info for {{userColorMode}} macro (legacy path)
+      const themeSetting = settingsSvc.getSetting(userId, "theme");
+      if (themeSetting?.value) {
+        macroEnv.extra.theme = { mode: themeSetting.value.mode ?? "dark" };
+      }
       // Populate Lumia / Loom context (legacy path)
       if (chat) populateLumiaLoomContext(macroEnv, userId, chat as Chat);
     }
@@ -1318,13 +1735,24 @@ async function legacyAssembly(
     }
   }
 
+  if (userId && chat) {
+    const chatVectorMemories = await collectChatVectorMemory(userId, chat.id, messages);
+    if (chatVectorMemories.length > 0) {
+      const memoryContent = "Past Memories (for context only):\n" + chatVectorMemories.join("\n\n");
+      llmMessages.push({ role: "system", content: memoryContent });
+      breakdown.push({ type: "long_term_memory", name: "Long-Term Memory", role: "system", content: memoryContent });
+    }
+  }
+
   // Chat history — evaluate macros in each message
   // Skip messages marked as hidden drafts (extra.hidden === true)
   const legacyFirstChatIdx = llmMessages.length;
   let legacyHistoryCount = 0;
+  const legacyHistoryParts: string[] = [];
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
     const resolved = await resolveMacros(m.content);
+    legacyHistoryParts.push(resolved);
     const attachments = Array.isArray(m.extra?.attachments) ? m.extra.attachments : [];
     if (attachments.length > 0) {
       const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolved }];
@@ -1350,15 +1778,26 @@ async function legacyAssembly(
     }
     legacyHistoryCount++;
   }
-  breakdown.push({ type: "chat_history", name: "Chat History (legacy)", messageCount: legacyHistoryCount });
+  breakdown.push({ type: "chat_history", name: "Chat History (legacy)", messageCount: legacyHistoryCount, content: legacyHistoryParts.join("\n") });
 
   // Strip reasoning from older chat history messages based on keepInHistory
+  let reasoningVal: { apiReasoning?: boolean; reasoningEffort?: string } | null = null;
   if (userId) {
     const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
     if (reasoningSetting?.value) {
       stripReasoningFromChatHistory(llmMessages, legacyFirstChatIdx, legacyHistoryCount, reasoningSetting.value);
+      reasoningVal = reasoningSetting.value;
+    }
+
+    // Apply context filters (details blocks, loom tags, HTML tags)
+    const contextFiltersSetting = settingsSvc.getSetting(userId, "contextFilters");
+    if (contextFiltersSetting?.value) {
+      applyContextFilters(llmMessages, legacyFirstChatIdx, legacyHistoryCount, contextFiltersSetting.value as ContextFilters);
     }
   }
 
-  return { messages: llmMessages, breakdown, parameters: {} };
+  // Build parameters with reasoning settings so API-level reasoning is injected
+  const parameters = buildParameters(null, null, reasoningVal, connection?.provider, connection?.model);
+
+  return { messages: llmMessages, breakdown, parameters };
 }

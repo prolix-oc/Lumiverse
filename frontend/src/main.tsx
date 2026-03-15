@@ -10,9 +10,28 @@ import './theme/global.css'
 // Register service worker for PWA support — autoUpdate reloads on new versions
 registerSW({ immediate: true })
 
-// Flag standalone PWA mode for CSS targeting
-if (window.matchMedia('(display-mode: standalone)').matches) {
+// Flag standalone PWA mode for CSS targeting.
+// Check both matchMedia (Chromium/Android) and navigator.standalone (iOS Safari)
+// since iOS PWA shells may not advertise display-mode: standalone via CSS.
+const isStandalone =
+  window.matchMedia('(display-mode: standalone)').matches ||
+  (window.navigator as any).standalone === true
+
+if (isStandalone) {
   document.documentElement.setAttribute('data-pwa', '')
+}
+
+// Add interactive-widget=resizes-content on non-WebKit browsers only.
+// Safari/WebKit ignores this attribute, and its presence may interfere
+// with viewport calculations on iOS/iPadOS PWAs. Detect WebKit by engine
+// rather than device — iOS/iPadOS Safari now reports as macOS in the UA.
+const isWebKit = /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
+
+if (!isWebKit) {
+  const viewport = document.querySelector('meta[name="viewport"]')
+  if (viewport) {
+    viewport.setAttribute('content', viewport.getAttribute('content') + ', interactive-widget=resizes-content')
+  }
 }
 
 // ── Viewport lock: prevent pinch-zoom and elastic overscroll ──

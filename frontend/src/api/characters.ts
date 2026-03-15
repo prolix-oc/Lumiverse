@@ -10,7 +10,7 @@ import type {
 } from '@/types/api'
 
 export const charactersApi = {
-  list(params?: { limit?: number; offset?: number; search?: string }) {
+  list(params?: { limit?: number; offset?: number; search?: string; sort?: string; seed?: number }) {
     return get<PaginatedResult<Character>>('/characters', params)
   },
 

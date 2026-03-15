@@ -25,4 +25,11 @@ export const embeddingsApi = {
       {}
     )
   },
+
+  forceReset() {
+    return post<{ success: boolean; deleted: boolean; path: string }>(
+      '/embeddings/force-reset',
+      {}
+    )
+  },
 }

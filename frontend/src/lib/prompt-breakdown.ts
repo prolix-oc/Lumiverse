@@ -1,6 +1,7 @@
 export const GROUP_COLORS: Record<string, string> = {
   lumiverse: '#8a7fb0',
   chatHistory: '#d4a842',
+  longTermMemory: '#e89b5f',
   worldInfo: '#68b87a',
   extensions: '#5bc0c0',
   system: '#5b8ca8',
@@ -29,6 +30,7 @@ export interface BreakdownGroup {
 const TYPE_TO_GROUP: Record<string, string> = {
   block: 'lumiverse',
   chat_history: 'chatHistory',
+  long_term_memory: 'longTermMemory',
   world_info: 'worldInfo',
   authors_note: 'extensions',
   separator: 'system',
@@ -39,6 +41,7 @@ const TYPE_TO_GROUP: Record<string, string> = {
 const GROUP_LABELS: Record<string, string> = {
   lumiverse: 'Lumiverse Prompts',
   chatHistory: 'Chat History',
+  longTermMemory: 'Long-Term Memory',
   worldInfo: 'World Info',
   extensions: 'Extensions / Author\'s Note',
   system: 'System',
@@ -63,7 +66,7 @@ export function groupBreakdownEntries(entries: BreakdownEntry[]): BreakdownGroup
   }
 
   // Return in a stable order
-  const order = ['lumiverse', 'chatHistory', 'worldInfo', 'extensions', 'system']
+  const order = ['lumiverse', 'chatHistory', 'longTermMemory', 'worldInfo', 'extensions', 'system']
   const result: BreakdownGroup[] = []
   for (const key of order) {
     const g = groupMap.get(key)

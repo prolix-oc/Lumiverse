@@ -86,20 +86,22 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
       const [councilTools, spindleTools, extensionList] = await Promise.all([
         councilApi.getTools(),
         spindleApi.getTools().catch(() => []),
-        spindleApi.list().catch(() => []),
+        spindleApi.list().catch(() => ({ extensions: [], isPrivileged: false })),
       ])
 
       // Build extension_id → display name lookup
       const extNameMap = new Map<string, string>()
-      for (const ext of extensionList) {
+      for (const ext of extensionList.extensions) {
         extNameMap.set(ext.id, ext.name)
       }
 
-      // Convert spindle ToolRegistrations → CouncilToolDefinition and merge
+      // Convert spindle ToolRegistrations → CouncilToolDefinition and merge.
+      // Use qualified name (extension_id:name) as key to match the council API format.
       const merged = new Map<string, CouncilToolDefinition>()
       for (const reg of spindleTools) {
-        merged.set(reg.name, {
-          name: reg.name,
+        const qualifiedName = `${reg.extension_id}:${reg.name}`
+        merged.set(qualifiedName, {
+          name: qualifiedName,
           displayName: reg.display_name,
           description: reg.description,
           category: 'extension',

@@ -25,7 +25,7 @@ export default function PromptItemizerModal() {
   const messageId = modalProps?.messageId as string | undefined
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<BreakdownCacheEntry | null>(null)
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(['lumiverse']))
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(['lumiverse', 'chatHistory', 'longTermMemory']))
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
 

@@ -4,7 +4,7 @@ import {
   User, Drama, Wand2, Link2, Package,
   Users, PenTool, Sparkles, FileText, Brain, ScrollText,
   MessageCircle, Image, Palette, Settings, X, Library, Puzzle,
-  GitFork, Globe, MessageSquareReply, GitBranch
+  GitFork, Globe, MessageSquareReply, GitBranch, Wallpaper
 } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
@@ -27,6 +27,7 @@ import WorldInfoFeedback from './WorldInfoFeedback'
 import OOCPanel from './OOCPanel'
 import PromptPanel from './PromptPanel'
 import ImageGenPanel from './ImageGenPanel'
+import WallpaperPanel from './WallpaperPanel'
 import BranchTreePanel from './BranchTreePanel'
 import styles from './ViewportDrawer.module.css'
 import clsx from 'clsx'
@@ -64,6 +65,7 @@ const TABS: Tab[] = [
   { id: 'feedback', icon: MessageSquareReply, label: 'Feedback', component: () => <CouncilFeedback /> },
   { id: 'worldinfo', icon: Globe, label: 'World Info', component: () => <WorldInfoFeedback /> },
   { id: 'imagegen', icon: Image, label: 'Image Gen', component: () => <ImageGenPanel /> },
+  { id: 'wallpaper', icon: Wallpaper, label: 'Wallpaper', component: () => <WallpaperPanel /> },
   { id: 'branches', icon: GitBranch, label: 'Branches', component: () => <BranchTreePanel /> },
   { id: 'theme', icon: Palette, label: 'Theme', component: () => <ThemePanel /> },
   { id: 'spindle', icon: Puzzle, label: 'Extensions', component: () => <SpindlePanel /> },

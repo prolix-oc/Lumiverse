@@ -5,12 +5,13 @@ import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/lo
 
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
+  spindlePrivileged: false,
   pendingPermissionRequest: null,
 
   loadExtensions: async () => {
     try {
-      const extensions = await spindleApi.list()
-      set({ extensions })
+      const { extensions, isPrivileged } = await spindleApi.list()
+      set({ extensions, spindlePrivileged: isPrivileged })
 
       await Promise.all(
         extensions.map(async (ext) => {

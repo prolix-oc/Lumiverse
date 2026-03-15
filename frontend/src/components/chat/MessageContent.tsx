@@ -174,6 +174,169 @@ marked.setOptions({
   renderer,
 })
 
+// ── HTML Island Isolation ──
+// Detects self-contained HTML blocks containing <style> tags and extracts them
+// for Shadow DOM rendering, preventing markdown parsing from breaking interactive
+// HTML (CSS checkbox/radio hacks, tabs, etc.) and isolating their styles.
+
+const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
+const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
+const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details)\b/i
+
+function extractHtmlIslands(
+  raw: string,
+  isStreaming: boolean,
+): { content: string; islands: string[] } {
+  if (!/<style[\s>]/i.test(raw)) return { content: raw, islands: [] }
+
+  // Don't extract during streaming if a <style> tag is still unclosed
+  if (isStreaming) {
+    const opens = (raw.match(/<style[\s>]/gi) || []).length
+    const closes = (raw.match(/<\/style\s*>/gi) || []).length
+    if (opens > closes) return { content: raw, islands: [] }
+  }
+
+  const islands: string[] = []
+  const lines = raw.split('\n')
+  const output: string[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const trimmed = lines[i].trim()
+
+    // Strategy 1: Block-level element that might wrap a <style> block.
+    // Collect the entire balanced tag tree, then check for <style> inside.
+    const blockMatch = trimmed.match(BLOCK_ELEMENT_RE)
+    if (blockMatch) {
+      const blockLines: string[] = []
+      const tag = blockMatch[1].toLowerCase()
+      const openRe = new RegExp(`<${tag}\\b`, 'gi')
+      const closeRe = new RegExp(`</${tag}\\b`, 'gi')
+      let depth = 0
+
+      while (i < lines.length) {
+        const line = lines[i]
+        blockLines.push(line)
+        depth += (line.match(openRe) || []).length - (line.match(closeRe) || []).length
+        i++
+        if (depth <= 0) break
+      }
+
+      const blockContent = blockLines.join('\n')
+
+      // Only isolate if the block is balanced and contains <style>
+      if (depth <= 0 && /<style[\s>]/i.test(blockContent)) {
+        const idx = islands.length
+        islands.push(blockContent)
+        output.push('', `<!--${HTML_ISLAND_TOKEN}_${idx}-->`, '')
+      } else {
+        // Not an island — pass through for normal markdown processing
+        output.push(...blockLines)
+      }
+      continue
+    }
+
+    // Strategy 2: Standalone <style> block not inside a wrapper element.
+    // Collect the style block + any subsequent sibling HTML.
+    if (/^\s*<style[\s>]/i.test(trimmed)) {
+      const buf: string[] = []
+
+      while (i < lines.length) {
+        buf.push(lines[i])
+        if (/<\/style\s*>/i.test(lines[i])) { i++; break }
+        i++
+      }
+
+      let depth = 0
+      let blanks = 0
+      while (i < lines.length) {
+        const t = lines[i].trim()
+        if (!t) {
+          blanks++
+          if (depth <= 0 && blanks >= 2) break
+          buf.push(lines[i])
+          i++
+          continue
+        }
+        blanks = 0
+
+        const oCount = (t.match(/<(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl)\b/gi) || []).length
+        const cCount = (t.match(/<\/(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl)\b/gi) || []).length
+        depth += oCount - cCount
+
+        if (/^<[a-zA-Z\/!]/.test(t) || depth > 0) {
+          buf.push(lines[i])
+          i++
+          if (depth <= 0) {
+            let p = i
+            while (p < lines.length && !lines[p].trim()) p++
+            if (p >= lines.length || !/^<[a-zA-Z\/]/.test(lines[p].trim())) break
+          }
+        } else {
+          break
+        }
+      }
+
+      while (buf.length && !buf[buf.length - 1].trim()) buf.pop()
+
+      const idx = islands.length
+      islands.push(buf.join('\n'))
+      output.push('', `<!--${HTML_ISLAND_TOKEN}_${idx}-->`, '')
+      continue
+    }
+
+    output.push(lines[i])
+    i++
+  }
+
+  return { content: output.join('\n'), islands }
+}
+
+interface ContentPiece {
+  type: 'markup' | 'island'
+  content: string
+}
+
+function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] {
+  if (!raw) return []
+
+  const { content, islands } = extractHtmlIslands(raw, isStreaming)
+
+  if (islands.length === 0) {
+    return [{ type: 'markup', content: formatContent(raw) }]
+  }
+
+  const html = formatContent(content)
+  const pieces: ContentPiece[] = []
+  let lastIdx = 0
+
+  for (const m of html.matchAll(ISLAND_RE)) {
+    const before = html.slice(lastIdx, m.index!)
+    if (before.trim()) pieces.push({ type: 'markup', content: before })
+    const idx = parseInt(m[1], 10)
+    if (islands[idx] != null) pieces.push({ type: 'island', content: islands[idx] })
+    lastIdx = m.index! + m[0].length
+  }
+
+  const after = html.slice(lastIdx)
+  if (after.trim()) pieces.push({ type: 'markup', content: after })
+
+  return pieces
+}
+
+function IsolatedHtml({ html }: { html: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
+    shadow.innerHTML = html
+  }, [html])
+
+  return <div ref={ref} className={styles.htmlIsland} />
+}
+
 export default function MessageContent({
   content,
   isUser,
@@ -254,10 +417,15 @@ export default function MessageContent({
           }
           // Otherwise skip — OOC content is hidden until rendered in the grouped box
         } else {
-          const html = formatContent(block.content)
-          elements.push(
-            <div key={i} className={styles.prose} dangerouslySetInnerHTML={{ __html: html }} />
-          )
+          const pieces = formatContentPieces(block.content, isStreaming)
+          for (let p = 0; p < pieces.length; p++) {
+            const piece = pieces[p]
+            elements.push(
+              piece.type === 'island'
+                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
+                : <div key={`${i}-${p}`} className={styles.prose} dangerouslySetInnerHTML={{ __html: piece.content }} />
+            )
+          }
         }
       }
     } else {
@@ -270,16 +438,21 @@ export default function MessageContent({
           )
           oocIndex++
         } else {
-          const html = formatContent(block.content)
-          elements.push(
-            <div key={i} className={styles.prose} dangerouslySetInnerHTML={{ __html: html }} />
-          )
+          const pieces = formatContentPieces(block.content, isStreaming)
+          for (let p = 0; p < pieces.length; p++) {
+            const piece = pieces[p]
+            elements.push(
+              piece.type === 'island'
+                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
+                : <div key={`${i}-${p}`} className={styles.prose} dangerouslySetInnerHTML={{ __html: piece.content }} />
+            )
+          }
         }
       }
     }
 
     return elements
-  }, [blocks, oocEnabled, lumiaOOCStyle])
+  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming])
 
   // Chunk fade animation for streaming tokens
   useLayoutEffect(() => {

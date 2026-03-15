@@ -1,3 +1,31 @@
+/* Theme-aware color-scheme — tells the browser to render native form
+   controls (select dropdowns, scrollbars, date pickers) using the
+   correct light/dark system chrome. */
+[data-theme-mode="dark"] {
+  color-scheme: dark;
+}
+
+[data-theme-mode="light"] {
+  color-scheme: light;
+}
+
+/* Global select/option theming — native <option> dropdowns render
+   outside the DOM with browser defaults. These rules ensure the
+   popup menu matches the active theme. */
+select {
+  background-color: var(--lumiverse-bg-deep, #0a0812);
+  color: var(--lumiverse-text, rgba(255, 255, 255, 0.9));
+}
+
+select option {
+  background-color: var(--lumiverse-bg-deep, #0a0812);
+  color: var(--lumiverse-text, rgba(255, 255, 255, 0.9));
+}
+
+select option:checked {
+  background-color: var(--lumiverse-primary-015, rgba(147, 112, 219, 0.15));
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
@@ -104,19 +132,23 @@ select:focus-visible,
    Strategy: use position:fixed + inset:0 to create a truly locked
    viewport that cannot be scrolled out of bounds, instead of stacking
    100dvh on html/body/#root which causes layout thrashing when the
-   virtual keyboard changes the dynamic viewport height. */
+   virtual keyboard changes the dynamic viewport height.
+
+   NOTE: iOS PWAs may not match this media query (they use
+   navigator.standalone instead). Do NOT duplicate these rules under
+   html[data-pwa] — position:fixed + inset:0 triggers WebKit bug #237961
+   on iOS (leaves a bottom gap with viewport-fit=cover). iOS PWAs rely
+   on the base styles in reset.css (height:100%, overflow:hidden). */
 @media (display-mode: standalone) {
   html {
-    /* Fixed positioning locks the viewport — it can never be scrolled
-       past its bounds regardless of content or keyboard state */
     position: fixed;
     inset: 0;
     overflow: hidden;
     overscroll-behavior: none;
+    background: var(--lumiverse-bg-deep, #0a0812);
   }
 
   body {
-    /* Fill the fixed html container */
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;

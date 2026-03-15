@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Plus, Trash2, BookOpen, Maximize2, ChevronDown, Upload, Globe, X, User, FileUp } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
@@ -232,17 +233,33 @@ export default function WorldBookPanel() {
   // Global world books popover
   const [globalPopoverOpen, setGlobalPopoverOpen] = useState(false)
   const globalPopoverRef = useRef<HTMLDivElement>(null)
+  const globalAddBtnRef = useRef<HTMLButtonElement>(null)
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null)
 
   useEffect(() => {
     if (!globalPopoverOpen) return
     const handleClick = (e: MouseEvent) => {
-      if (globalPopoverRef.current && !globalPopoverRef.current.contains(e.target as Node)) {
+      if (
+        globalPopoverRef.current && !globalPopoverRef.current.contains(e.target as Node) &&
+        globalAddBtnRef.current && !globalAddBtnRef.current.contains(e.target as Node)
+      ) {
         setGlobalPopoverOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [globalPopoverOpen])
+
+  const openGlobalPopover = useCallback(() => {
+    setGlobalPopoverOpen((prev) => {
+      const next = !prev
+      if (next && globalAddBtnRef.current) {
+        const rect = globalAddBtnRef.current.getBoundingClientRect()
+        setPopoverPos({ top: rect.bottom + 4, left: rect.right })
+      }
+      return next
+    })
+  }, [])
 
   const toggleGlobalBook = (id: string) => {
     const current = globalWorldBooks ?? []
@@ -265,11 +282,12 @@ export default function WorldBookPanel() {
         <div className={styles.globalHeader}>
           <Globe size={12} className={styles.globalIcon} />
           <span className={styles.globalLabel}>Always Active</span>
-          <div className={styles.globalPopoverWrapper} ref={globalPopoverRef}>
+          <div className={styles.globalPopoverWrapper}>
             <button
+              ref={globalAddBtnRef}
               type="button"
               className={styles.globalAddBtn}
-              onClick={() => setGlobalPopoverOpen((o) => !o)}
+              onClick={openGlobalPopover}
             >
               <Plus size={11} />
               <span>Add</span>
@@ -278,8 +296,12 @@ export default function WorldBookPanel() {
                 className={clsx(styles.chevron, globalPopoverOpen && styles.chevronOpen)}
               />
             </button>
-            {globalPopoverOpen && (
-              <div className={styles.globalPopover}>
+            {globalPopoverOpen && popoverPos && createPortal(
+              <div
+                ref={globalPopoverRef}
+                className={styles.globalPopover}
+                style={{ top: popoverPos.top, left: popoverPos.left }}
+              >
                 {books.length === 0 ? (
                   <div className={styles.globalPopoverEmpty}>No world books available</div>
                 ) : (
@@ -298,7 +320,8 @@ export default function WorldBookPanel() {
                     )
                   })
                 )}
-              </div>
+              </div>,
+              document.body
             )}
           </div>
         </div>

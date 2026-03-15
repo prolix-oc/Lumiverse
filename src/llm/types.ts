@@ -107,6 +107,9 @@ export interface AssemblyContext {
   councilToolResults?: CouncilToolResultSummary[];
   /** Named council tool results (variable_name → content). */
   councilNamedResults?: Record<string, string>;
+  /** Pre-computed vector-activated world info entries from the generation pipeline.
+   *  When provided, assembly reuses these instead of re-running vector retrieval. */
+  precomputedVectorEntries?: { entry: import("../types/world-book").WorldBookEntry; score: number }[];
 }
 
 /** Lightweight summary of a council tool result for macro access (avoids importing spindle-types). */
@@ -141,11 +144,13 @@ export interface AssemblyResult {
 }
 
 export interface AssemblyBreakdownEntry {
-  type: 'block' | 'chat_history' | 'separator' | 'utility' | 'world_info' | 'authors_note' | 'append';
+  type: 'block' | 'chat_history' | 'separator' | 'utility' | 'world_info' | 'authors_note' | 'append' | 'long_term_memory';
   name: string;
   role?: string;
   content?: string;
   blockId?: string;
   marker?: string;
   messageCount?: number;
+  /** Index of the first chat history message in the assembled messages array. */
+  firstMessageIndex?: number;
 }

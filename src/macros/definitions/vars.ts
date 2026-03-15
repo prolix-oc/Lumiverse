@@ -11,7 +11,7 @@ export function registerVariableMacros(): void {
     returnType: "string",
     args: [{ name: "key", description: "Variable name" }],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       return ctx.env.variables.local.get(key) ?? "";
     },
   });
@@ -27,8 +27,8 @@ export function registerVariableMacros(): void {
       { name: "value", description: "Value to set" },
     ],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
-      const value = ctx.args[1] ?? "";
+      const key = (ctx.args[0] || "").trim();
+      const value = ctx.isScoped ? ctx.body : (ctx.args[1] ?? "");
       ctx.env.variables.local.set(key, value);
       return "";
     },
@@ -45,7 +45,7 @@ export function registerVariableMacros(): void {
       { name: "value", description: "Number to add" },
     ],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       const addend = parseFloat(ctx.args[1]) || 0;
       const current = parseFloat(ctx.env.variables.local.get(key) || "0") || 0;
       const result = String(current + addend);
@@ -62,7 +62,7 @@ export function registerVariableMacros(): void {
     returnType: "integer",
     args: [{ name: "key", description: "Variable name" }],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       const current = parseInt(ctx.env.variables.local.get(key) || "0", 10) || 0;
       const result = String(current + 1);
       ctx.env.variables.local.set(key, result);
@@ -78,7 +78,7 @@ export function registerVariableMacros(): void {
     returnType: "integer",
     args: [{ name: "key", description: "Variable name" }],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       const current = parseInt(ctx.env.variables.local.get(key) || "0", 10) || 0;
       const result = String(current - 1);
       ctx.env.variables.local.set(key, result);
@@ -95,7 +95,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["varexists"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       return ctx.env.variables.local.has(key) ? "true" : "false";
     },
   });
@@ -109,7 +109,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["flushvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       ctx.env.variables.local.delete(key);
       return "";
     },
@@ -126,7 +126,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["getglobalvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       return ctx.env.variables.global.get(key) ?? "";
     },
   });
@@ -143,8 +143,8 @@ export function registerVariableMacros(): void {
     ],
     aliases: ["setglobalvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
-      const value = ctx.args[1] ?? "";
+      const key = (ctx.args[0] || "").trim();
+      const value = ctx.isScoped ? ctx.body : (ctx.args[1] ?? "");
       ctx.env.variables.global.set(key, value);
       return "";
     },
@@ -162,7 +162,7 @@ export function registerVariableMacros(): void {
     ],
     aliases: ["addglobalvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       const addend = parseFloat(ctx.args[1]) || 0;
       const current = parseFloat(ctx.env.variables.global.get(key) || "0") || 0;
       const result = String(current + addend);
@@ -180,7 +180,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["incglobalvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       const current = parseInt(ctx.env.variables.global.get(key) || "0", 10) || 0;
       const result = String(current + 1);
       ctx.env.variables.global.set(key, result);
@@ -197,7 +197,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["decglobalvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       const current = parseInt(ctx.env.variables.global.get(key) || "0", 10) || 0;
       const result = String(current - 1);
       ctx.env.variables.global.set(key, result);
@@ -214,7 +214,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["hasglobalvar", "gvarexists"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       return ctx.env.variables.global.has(key) ? "true" : "false";
     },
   });
@@ -228,7 +228,7 @@ export function registerVariableMacros(): void {
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["flushgvar", "flushglobalvar", "deleteglobalvar"],
     handler: (ctx) => {
-      const key = ctx.args[0] || "";
+      const key = (ctx.args[0] || "").trim();
       ctx.env.variables.global.delete(key);
       return "";
     },

@@ -21,8 +21,9 @@ export default function SpindlePanel() {
   const revokePermission = useStore((s) => s.revokePermission)
   const openSettings = useStore((s) => s.openSettings)
   const user = useStore((s) => s.user)
+  const spindlePrivileged = useStore((s) => s.spindlePrivileged)
 
-  const isPrivileged = user?.role === 'owner' || user?.role === 'admin'
+  const isPrivileged = spindlePrivileged || user?.role === 'owner' || user?.role === 'admin'
 
   const [installUrl, setInstallUrl] = useState('')
   const [installing, setInstalling] = useState(false)
@@ -221,8 +222,12 @@ export default function SpindlePanel() {
       {extensions.length === 0 ? (
         <div className={styles.emptyState}>
           No extensions installed yet.
-          <br />
-          Paste a GitHub URL above to install one.
+          {isPrivileged && (
+            <>
+              <br />
+              Click <strong>Add Extension</strong> above to get started.
+            </>
+          )}
         </div>
       ) : (
         <div className={styles.extensionList}>

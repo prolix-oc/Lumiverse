@@ -8,7 +8,7 @@ import * as chatsSvc from "./chats.service";
 import * as presetsSvc from "./presets.service";
 import * as settingsSvc from "./settings.service";
 import * as personasSvc from "./personas.service";
-import { assemblePrompt } from "./prompt-assembly.service";
+import { assemblePrompt, injectReasoningParams, collectVectorActivatedWorldInfo, type VectorActivatedEntry } from "./prompt-assembly.service";
 import * as charactersSvc from "./characters.service";
 import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationResponse, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
@@ -58,6 +58,8 @@ interface GenerationLifecycle {
   personaId?: string;
   /** Target character id (for group chat message attribution) */
   targetCharacterId?: string;
+  /** Chat history messages snapshot (used for accurate tokenization in breakdown) */
+  chatHistoryMessages?: LlmMessage[];
   /** Model + provider + preset info for breakdown storage */
   model?: string;
   providerName?: string;
@@ -127,6 +129,9 @@ interface PromptPipelineResult {
   messages: LlmMessage[];
   parameters: GenerationParameters;
   breakdown?: AssemblyBreakdownEntry[];
+  /** Snapshot of chat history messages taken before interceptors/post-processing,
+   *  used as the shared tokenization source for both dry-run and generation breakdowns. */
+  chatHistoryMessages?: LlmMessage[];
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   deferredWiState?: { chatId: string; metadata: any };
   spindleContext: SpindleContext;
@@ -220,6 +225,7 @@ async function runPromptPipeline(opts: {
   targetCharacterId?: string;
   councilToolResults?: any[];
   councilNamedResults?: Record<string, string>;
+  precomputedVectorEntries?: VectorActivatedEntry[];
 }): Promise<PromptPipelineResult> {
   // Build spindle context
   let spindleContext: SpindleContext = {
@@ -256,6 +262,7 @@ async function runPromptPipeline(opts: {
       targetCharacterId: opts.targetCharacterId,
       councilToolResults: opts.councilToolResults,
       councilNamedResults: opts.councilNamedResults,
+      precomputedVectorEntries: opts.precomputedVectorEntries,
     });
     messages = assemblyResult.messages;
     assembledParams = assemblyResult.parameters;
@@ -263,6 +270,20 @@ async function runPromptPipeline(opts: {
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
+  }
+
+  // Snapshot chat history messages BEFORE interceptors/post-processing can
+  // splice, merge, or reorder the array.  This snapshot is the shared
+  // tokenization source used by both dry-run and generation breakdowns.
+  let chatHistoryMessages: LlmMessage[] | undefined;
+  if (breakdown) {
+    const chEntry = breakdown.find(e => e.type === "chat_history");
+    if (chEntry?.firstMessageIndex != null && chEntry.messageCount && chEntry.messageCount > 0) {
+      chatHistoryMessages = messages.slice(
+        chEntry.firstMessageIndex,
+        chEntry.firstMessageIndex + chEntry.messageCount,
+      );
+    }
   }
 
   // Expose activated world info to spindle context
@@ -290,7 +311,7 @@ async function runPromptPipeline(opts: {
   // Merge parameters: assembled (from preset) < request overrides
   const parameters: GenerationParameters = { ...assembledParams, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, activatedWorldInfo, deferredWiState, spindleContext, deliberationHandledByMacro };
+  return { messages, parameters, breakdown, chatHistoryMessages, activatedWorldInfo, deferredWiState, spindleContext, deliberationHandledByMacro };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -422,6 +443,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   const councilSettings = getCouncilSettings(input.userId);
   let councilResult: CouncilExecutionResult | null = null;
   let inlineTools: ToolDefinition[] | undefined;
+  let precomputedVectorEntries: VectorActivatedEntry[] | undefined;
 
   const councilActive = councilSettings.councilMode
     && councilSettings.toolsSettings.enabled
@@ -486,7 +508,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         : null;
       const councilMessages = chatsSvc.getMessages(input.userId, input.chat_id)
         .filter(m => m.id !== excludeMessageId && m.id !== stagedMessageId);
-      const wiEntries = collectWorldInfoForCouncil(input.userId, fullCharacter, resolvedPersona);
+      const { entries: wiEntries, worldBookIds: wiBookIds } = collectWorldInfoForCouncil(input.userId, fullCharacter, resolvedPersona);
       let councilWiActivated = wiEntries.length > 0
         ? activateWorldInfo({
             entries: wiEntries,
@@ -495,13 +517,35 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
             wiState: {},
           }).activatedEntries
         : [];
+
+      // Run vector retrieval so council also sees vectorized world info entries.
+      // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
+      const vectorActivated = await collectVectorActivatedWorldInfo(
+        input.userId,
+        wiBookIds,
+        wiEntries,
+        councilMessages,
+      );
+      if (vectorActivated.length > 0) {
+        const existing = new Set(councilWiActivated.map(e => e.id));
+        for (const { entry } of vectorActivated) {
+          if (existing.has(entry.id)) continue;
+          councilWiActivated.push(entry);
+          existing.add(entry.id);
+        }
+      }
+
+      // Cache for assembly to reuse
+      precomputedVectorEntries = vectorActivated;
+
       console.debug(
-        "[generate] Council enrichment: char=%s, persona=%s, messages=%d, wi=%d/%d",
+        "[generate] Council enrichment: char=%s, persona=%s, messages=%d, wi=%d/%d, vector=%d",
         fullCharacter?.name ?? "none",
         resolvedPersona?.name ?? "none",
         councilMessages.length,
         councilWiActivated.length,
         wiEntries.length,
+        vectorActivated.length,
       );
 
       const councilEnrichment: CouncilEnrichment = {
@@ -564,6 +608,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     targetCharacterId: input.target_character_id,
     councilToolResults,
     councilNamedResults,
+    precomputedVectorEntries,
   });
 
   let { messages } = pipeline;
@@ -596,6 +641,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
 
   // Attach assembly metadata to lifecycle
   lifecycle.breakdown = breakdown;
+  lifecycle.chatHistoryMessages = pipeline.chatHistoryMessages;
   lifecycle.model = connection.model;
   lifecycle.providerName = provider.name;
   lifecycle.maxContext = mergedParams.max_context_length as number | undefined;
@@ -669,7 +715,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
   let tokenCount: DryRunResult["tokenCount"];
   if (pipeline.breakdown && pipeline.breakdown.length > 0) {
     try {
-      tokenCount = await tokenizerSvc.countBreakdown(connection.model, pipeline.breakdown);
+      tokenCount = await tokenizerSvc.countBreakdown(connection.model, pipeline.breakdown, pipeline.chatHistoryMessages);
     } catch {
       // non-fatal: skip token count if tokenizer fails
     }
@@ -935,7 +981,7 @@ async function runGeneration(
       let breakdownPayload: any;
       if (lifecycle.breakdown && lifecycle.breakdown.length > 0 && lifecycle.model) {
         try {
-          const tokenResult = await tokenizerSvc.countBreakdown(lifecycle.model, lifecycle.breakdown);
+          const tokenResult = await tokenizerSvc.countBreakdown(lifecycle.model, lifecycle.breakdown, lifecycle.chatHistoryMessages);
           breakdownPayload = {
             entries: tokenResult.breakdown,
             totalTokens: tokenResult.total_tokens,
@@ -1034,6 +1080,15 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
     const preset = presetsSvc.getPreset(userId, connection.preset_id);
     if (preset) {
       mergedParams = { ...preset.parameters, ...mergedParams };
+    }
+  }
+
+  // Inject API-level reasoning params from user settings
+  const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
+  if (reasoningSetting?.value?.apiReasoning) {
+    const effort = reasoningSetting.value.reasoningEffort || "auto";
+    if (effort !== "auto") {
+      injectReasoningParams(mergedParams, provider.name, effort, connection.model || undefined);
     }
   }
 

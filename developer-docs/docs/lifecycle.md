@@ -1,0 +1,32 @@
+# Lifecycle
+
+## Installation
+
+1. User provides a GitHub URL
+2. Lumiverse clones the repo to `{DATA_DIR}/extensions/{identifier}/repo/`
+3. Reads and validates `spindle.json`
+4. If no `dist/` folder exists, runs `bun build` on `src/backend.ts` and `src/frontend.ts`
+5. Extension is registered in the database
+6. Backend worker is started if the extension is enabled
+
+## Enable / Disable
+
+- **Enable:** starts the backend worker, loads the frontend module
+- **Disable:** sends `shutdown` to the worker (5s grace period), tears down the frontend module, unregisters all macros/interceptors/tools/context handlers
+
+## Update
+
+1. Runs `git pull` in the extension's repo directory
+2. Re-reads `spindle.json`
+3. Rebuilds from source if needed
+4. Restarts the worker if the extension was running
+
+## Removal
+
+1. Stops the worker
+2. Deletes the database row (cascades permission grants)
+3. Deletes the extension directory (repo + storage)
+
+## Startup Order
+
+On Lumiverse boot, all enabled extensions are started after database migrations complete. Extensions should not depend on a specific load order.

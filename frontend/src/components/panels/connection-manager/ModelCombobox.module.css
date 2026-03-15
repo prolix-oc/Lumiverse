@@ -77,7 +77,7 @@
 }
 
 .dropdownItem:hover {
-  background: rgba(147, 112, 219, 0.1);
+  background: var(--lumiverse-primary-010);
 }
 
 .dropdownEmpty {

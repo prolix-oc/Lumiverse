@@ -9,6 +9,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  RefreshCw,
   CheckSquare,
   Layers,
   UsersRound,
@@ -43,6 +44,7 @@ const SORT_OPTIONS: { value: CharacterSortField; label: string }[] = [
   { value: 'name', label: 'Name' },
   { value: 'recent', label: 'Recent' },
   { value: 'created', label: 'Created' },
+  { value: 'shuffle', label: 'Shuffle' },
 ]
 
 export default function CharacterToolbar({
@@ -162,14 +164,25 @@ export default function CharacterToolbar({
               ))}
             </div>
           )}
-          <button
-            type="button"
-            className={styles.iconBtn}
-            onClick={onToggleSortDirection}
-            title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
-          >
-            {sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-          </button>
+          {sortField === 'shuffle' ? (
+            <button
+              type="button"
+              className={styles.iconBtn}
+              onClick={onToggleSortDirection}
+              title="Reshuffle"
+            >
+              <RefreshCw size={14} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={styles.iconBtn}
+              onClick={onToggleSortDirection}
+              title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+            >
+              {sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+            </button>
+          )}
         </div>
 
         {/* View mode */}

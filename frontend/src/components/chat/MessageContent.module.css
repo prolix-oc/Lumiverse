@@ -226,6 +226,14 @@
   margin: 8px 0;
 }
 
+/* ── HTML Islands (Shadow DOM isolated content) ── */
+.htmlIsland {
+  display: block;
+  margin: 8px 0;
+  border-radius: var(--lcs-radius-sm);
+  overflow: hidden;
+}
+
 /* ── Chunk fade for streaming ── */
 .chunkFade {
   animation: lcs-chunk-fade 180ms ease-out both;

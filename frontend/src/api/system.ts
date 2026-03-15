@@ -23,6 +23,10 @@ export interface SystemInfo {
     version: string
     runtime: string
   }
+  git: {
+    branch: string
+    commit: string
+  }
 }
 
 export const systemApi = {

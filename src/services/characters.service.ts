@@ -5,6 +5,8 @@ import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../t
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 
+export type CharacterSortMode = "recent" | "discover";
+
 function rowToCharacter(row: any): Character {
   return {
     ...row,
@@ -24,6 +26,69 @@ export function listCharacters(userId: string, pagination: PaginationParams): Pa
     pagination,
     rowToCharacter
   );
+}
+
+/**
+ * Discovery sort: surfaces characters the user hasn't interacted with recently.
+ *
+ * Score components (higher = more discoverable):
+ *   - Never chatted bonus:  +1000
+ *   - Days since last chat: +0‑365  (capped)
+ *   - Rarity bonus:         +0‑100  (fewer chats = higher)
+ *   - Deterministic shuffle: +0‑200  (UUID-seeded, changes daily or on demand)
+ */
+export function listCharactersDiscover(
+  userId: string,
+  pagination: PaginationParams,
+  seed?: number
+): PaginatedResult<Character> {
+  const db = getDb();
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const shuffleSeed = seed ?? Math.floor(Date.now() / 86_400_000); // daily by default
+
+  const countRow = db
+    .query("SELECT COUNT(*) as count FROM characters WHERE user_id = ?")
+    .get(userId) as { count: number } | null;
+  const total = countRow?.count ?? 0;
+
+  const dataSql = `
+    SELECT c.*
+    FROM characters c
+    LEFT JOIN (
+      SELECT character_id,
+             COUNT(*)        AS chat_count,
+             MAX(updated_at) AS last_chat_at
+      FROM chats
+      WHERE user_id = ?
+      GROUP BY character_id
+    ) cs ON cs.character_id = c.id
+    WHERE c.user_id = ?
+    ORDER BY (
+      CASE WHEN COALESCE(cs.chat_count, 0) = 0 THEN 1000 ELSE 0 END
+      + MIN(COALESCE((? - cs.last_chat_at) / 86400, 365), 365)
+      + CASE WHEN COALESCE(cs.chat_count, 0) > 0
+          THEN MAX(100 - COALESCE(cs.chat_count, 0) * 2, 0)
+          ELSE 0 END
+      + ABS(
+          (UNICODE(SUBSTR(c.id, 1, 1)) * 31
+           + UNICODE(SUBSTR(c.id, 5, 1)) * 17
+           + UNICODE(SUBSTR(c.id, 10, 1)) * 13
+           + ?) % 200
+        )
+    ) DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  const rows = db
+    .query(dataSql)
+    .all(userId, userId, nowSeconds, shuffleSeed, pagination.limit, pagination.offset) as any[];
+
+  return {
+    data: rows.map(rowToCharacter),
+    total,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
 }
 
 export function getCharacter(userId: string, id: string): Character | null {

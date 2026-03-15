@@ -99,6 +99,8 @@ export interface ChatTreeNode {
   updated_at: number;
   message_count: number;
   branch_at_message: string | null;
+  branch_message_index: number | null;
+  branch_message_preview: string | null;
   children: ChatTreeNode[];
 }
 
@@ -405,6 +407,7 @@ export interface EmbeddingConfig {
   vectorize_world_books: boolean;
   vectorize_chat_messages: boolean;
   vectorize_chat_documents: boolean;
+  chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
   has_api_key: boolean;
 }
 

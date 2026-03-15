@@ -76,6 +76,8 @@ function buildMarkdown(backend: SystemInfo | null, backendError: string | null, 
     lines.push(`- **Status:** Unreachable (${backendError})`)
   } else if (backend) {
     lines.push(`- **Version:** ${backend.backend.version}`)
+    lines.push(`- **Branch:** ${backend.git.branch}`)
+    lines.push(`- **Commit:** ${backend.git.commit}`)
     lines.push(`- **Runtime:** ${backend.backend.runtime}`)
     lines.push(`- **OS:** ${getPlatformLabel(backend.os.platform)} ${backend.os.release} (${backend.os.arch})`)
     lines.push(`- **Host:** ${backend.os.hostname}`)
@@ -121,7 +123,7 @@ function buildMarkdown(backend: SystemInfo | null, backendError: string | null, 
 declare const __APP_VERSION__: string
 
 export default function Diagnostics() {
-  const extensions = useStore((s) => s.extensions)
+  const extensions = useStore((s) => s.extensions) ?? []
   const [backend, setBackend] = useState<SystemInfo | null>(null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -195,6 +197,8 @@ export default function Diagnostics() {
         ) : backend && (
           <div className={styles.grid}>
             <InfoRow label="Version" value={backend.backend.version} />
+            <InfoRow label="Branch" value={backend.git.branch} />
+            <InfoRow label="Commit" value={backend.git.commit} />
             <InfoRow label="Runtime" value={backend.backend.runtime} />
             <InfoRow label="OS" value={`${getPlatformLabel(backend.os.platform)} ${backend.os.release} (${backend.os.arch})`} />
             <InfoRow label="Host" value={backend.os.hostname} />

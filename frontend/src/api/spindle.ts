@@ -52,7 +52,7 @@ export interface EphemeralOverviewMe {
 
 export const spindleApi = {
   list() {
-    return get<ExtensionInfo[]>('/spindle')
+    return get<{ extensions: ExtensionInfo[]; isPrivileged: boolean }>('/spindle')
   },
 
   install(githubUrl: string) {

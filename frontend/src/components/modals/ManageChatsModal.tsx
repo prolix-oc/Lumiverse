@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import {
-  X, Search, MessageSquare, Pencil, Download, Trash2,
+  X, Search, MessageSquare, Pencil, Download, Upload, Trash2,
   ArrowRight, Check, SortAsc, FileText, Clock, Loader2, Plus,
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -56,8 +56,10 @@ export default function ManageChatsModal() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatSummary | null>(null)
+  const [importing, setImporting] = useState(false)
 
   const renameInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Fetch chats for this character
   const fetchChats = useCallback(async () => {
@@ -214,6 +216,38 @@ export default function ManageChatsModal() {
     }
   }, [characterId, closeModal, navigate])
 
+  const handleImportClick = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleImportFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      // Reset the input so re-selecting the same file triggers onChange
+      e.target.value = ''
+
+      setImporting(true)
+      try {
+        const text = await file.text()
+        const data = JSON.parse(text)
+
+        if (!data.chat || !data.messages) {
+          console.error('[ManageChats] Invalid chat export format')
+          return
+        }
+
+        await chatsApi.importChat(characterId, data)
+        await fetchChats()
+      } catch (err) {
+        console.error('[ManageChats] Failed to import chat:', err)
+      } finally {
+        setImporting(false)
+      }
+    },
+    [characterId, fetchChats]
+  )
+
   return createPortal(
     <AnimatePresence>
       <motion.div
@@ -259,6 +293,23 @@ export default function ManageChatsModal() {
               <SortAsc size={13} />
               {sortLabel}
             </button>
+            <button
+              type="button"
+              className={styles.sortBtn}
+              onClick={handleImportClick}
+              disabled={importing}
+              title="Import chat from exported JSON"
+            >
+              {importing ? <Loader2 size={13} /> : <Upload size={13} />}
+              Import
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              style={{ display: 'none' }}
+              onChange={handleImportFile}
+            />
           </div>
 
           <div className={styles.body}>

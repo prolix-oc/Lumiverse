@@ -143,11 +143,6 @@
   padding-right: 26px;
 }
 
-.select option {
-  background: #1a1828;
-  color: rgba(255, 255, 255, 0.9);
-}
-
 .helper {
   font-size: calc(9px * var(--lumiverse-font-scale, 1));
   color: rgba(255, 255, 255, 0.25);

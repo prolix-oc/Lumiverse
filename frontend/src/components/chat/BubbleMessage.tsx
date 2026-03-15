@@ -8,6 +8,7 @@ import ReasoningBlock from './ReasoningBlock'
 import StreamingIndicator from './StreamingIndicator'
 import BubbleActions from './BubbleActions'
 import LazyImage from '@/components/shared/LazyImage'
+import { useStore } from '@/store'
 import type { Message } from '@/types/api'
 import styles from './BubbleMessage.module.css'
 import clsx from 'clsx'
@@ -26,6 +27,7 @@ function formatMetaDate(timestamp: number) {
 }
 
 export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
+  const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const {
     isEditing,
     editContent,
@@ -51,12 +53,14 @@ export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
     handleToggleHidden,
     handleFork,
   } = useMessageCard(message, chatId)
+  const userLeft = isUser && bubbleUserAlign === 'left'
 
   return (
     <div
       className={clsx(
         styles.card,
         isUser ? styles.user : styles.character,
+        userLeft && styles.userLeft,
         isActivelyStreaming && styles.streaming,
         isHidden && styles.hidden,
       )}
@@ -123,7 +127,7 @@ export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
             reasoningDuration={reasoningDuration}
             isStreaming={isActivelyStreaming}
             variant="bubble"
-            align={isUser ? 'right' : undefined}
+            align={isUser && !userLeft ? 'right' : undefined}
           />
         )}
 
@@ -166,8 +170,8 @@ export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
           </div>
         )}
 
-        {/* Swipe controls */}
-        {!isUser && (message.swipes?.length > 1 || isLastMessage) && !isEditing && (
+        {/* Swipe controls — always show on assistant messages for navigation */}
+        {!isUser && !isEditing && (
           <SwipeControls message={message} chatId={chatId} variant="bubble" />
         )}
 

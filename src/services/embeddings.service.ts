@@ -1,5 +1,6 @@
 import { connect, type Connection, type Table } from "@lancedb/lancedb";
 import { join } from "path";
+import { rmSync, existsSync } from "fs";
 import { env } from "../env";
 import { getDb } from "../db/connection";
 import * as settingsSvc from "./settings.service";
@@ -33,6 +34,7 @@ export interface EmbeddingConfig {
   vectorize_world_books: boolean;
   vectorize_chat_messages: boolean;
   vectorize_chat_documents: boolean;
+  chat_memory_mode: "conservative" | "balanced" | "aggressive";
 }
 
 export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
@@ -94,6 +96,7 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
     vectorize_world_books: true,
     vectorize_chat_messages: false,
     vectorize_chat_documents: true,
+    chat_memory_mode: "balanced",
   };
 }
 
@@ -134,6 +137,12 @@ function normalizeConfig(input: any): EmbeddingConfig {
       input?.vectorize_chat_messages !== undefined ? !!input.vectorize_chat_messages : base.vectorize_chat_messages,
     vectorize_chat_documents:
       input?.vectorize_chat_documents !== undefined ? !!input.vectorize_chat_documents : base.vectorize_chat_documents,
+    chat_memory_mode:
+      input?.chat_memory_mode === "conservative" ||
+      input?.chat_memory_mode === "balanced" ||
+      input?.chat_memory_mode === "aggressive"
+        ? input.chat_memory_mode
+        : base.chat_memory_mode,
   };
 }
 
@@ -167,6 +176,36 @@ function rowId(userId: string, sourceType: string, sourceId: string, chunkIndex:
   return `${userId}:${sourceType}:${sourceId}:${chunkIndex}`;
 }
 
+export function getChatMemoryParams(mode: "conservative" | "balanced" | "aggressive") {
+  switch (mode) {
+    case "conservative":
+      return {
+        exclusionWindow: 30,
+        chunkTargetTokens: 600,
+        chunkMaxTokens: 1200,
+        chunkOverlapTokens: 100,
+        syncDebounceMs: 1000,
+      };
+    case "aggressive":
+      return {
+        exclusionWindow: 15,
+        chunkTargetTokens: 1000, 
+        chunkMaxTokens: 2000,
+        chunkOverlapTokens: 200,
+        syncDebounceMs: 300,
+      };
+    case "balanced":
+    default:
+      return {
+        exclusionWindow: 20,
+        chunkTargetTokens: 800,
+        chunkMaxTokens: 1600,
+        chunkOverlapTokens: 120,
+        syncDebounceMs: 500,
+      };
+  }
+}
+
 async function getConnection(): Promise<Connection> {
   if (!connPromise) connPromise = connect(LANCEDB_PATH);
   return connPromise;
@@ -177,37 +216,38 @@ async function tableExists(conn: Connection, name: string): Promise<boolean> {
   return names.includes(name);
 }
 
+async function getTableIfExists(): Promise<Table | null> {
+  const conn = await getConnection();
+  const exists = await tableExists(conn, EMBEDDINGS_TABLE);
+  if (exists) {
+    return conn.openTable(EMBEDDINGS_TABLE);
+  }
+  return null;
+}
+
 async function getOrCreateTable(seedRows?: EmbeddingRow[]): Promise<Table> {
   const conn = await getConnection();
   const exists = await tableExists(conn, EMBEDDINGS_TABLE);
   if (exists) {
     return conn.openTable(EMBEDDINGS_TABLE);
   }
-  const rows = seedRows && seedRows.length > 0 ? seedRows : [
-    {
-      id: "__seed__",
-      user_id: "__seed__",
-      source_type: "__seed__",
-      source_id: "__seed__",
-      owner_id: "__seed__",
-      chunk_index: 0,
-      content: "seed",
-      vector: [0, 0],
-      metadata_json: "{}",
-      updated_at: 0,
-    },
-  ];
-  const table = await conn.createTable(EMBEDDINGS_TABLE, asLanceRows(rows));
-  await table.delete(`id = ${sqlValue("__seed__")}`);
+  if (!seedRows || seedRows.length === 0) {
+    throw new Error("Cannot create embeddings table without initial seed rows to infer schema.");
+  }
+  const table = await conn.createTable(EMBEDDINGS_TABLE, asLanceRows(seedRows));
   return table;
 }
 
 async function ensureVectorIndex(table: Table): Promise<void> {
   if (vectorIndexReady) return;
   try {
-    await table.createIndex("vector");
+    await table.createIndex("vector", {
+      config: {
+        distanceType: "cosine"
+      }
+    } as any);
   } catch {
-    // Index may already exist.
+    // Index may already exist - that's fine
   }
   vectorIndexReady = true;
 }
@@ -389,7 +429,8 @@ export async function testEmbeddingConfig(
 }
 
 export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: string): Promise<void> {
-  const table = await getOrCreateTable();
+  const table = await getTableIfExists();
+  if (!table) return;
   await table.delete(
     `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND source_id = ${sqlValue(entryId)}`
   );
@@ -398,7 +439,8 @@ export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: st
 
 async function getExistingEntryContent(userId: string, entryId: string): Promise<string | null> {
   try {
-    const table = await getOrCreateTable();
+    const table = await getTableIfExists();
+    if (!table) return null;
     const rows = await table
       .query()
       .where(
@@ -580,7 +622,8 @@ export async function searchWorldBookEntries(
   const text = query.trim();
   if (!text) return [];
 
-  const table = await getOrCreateTable();
+  const table = await getTableIfExists();
+  if (!table) return [];
   const [vector] = await cachedEmbedTexts(userId, [text]);
   const rows = await table
     .query()
@@ -608,7 +651,8 @@ export async function searchWorldBookEntriesWithVector(
   vector: number[],
   limit = 8
 ): Promise<Array<{ entry_id: string; score: number; content: string }>> {
-  const table = await getOrCreateTable();
+  const table = await getTableIfExists();
+  if (!table) return [];
   const rows = await table
     .query()
     .nearestTo(vector)
@@ -634,9 +678,11 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   embeddingCache.clear();
 
   try {
-    const table = await getOrCreateTable();
-    await table.delete(`user_id = ${sqlValue(userId)}`);
-    scheduleOptimize();
+    const table = await getTableIfExists();
+    if (table) {
+      await table.delete(`user_id = ${sqlValue(userId)}`);
+      scheduleOptimize();
+    }
   } catch (err) {
     console.warn("[embeddings] Failed to delete LanceDB rows during invalidation:", err);
   }
@@ -652,4 +698,308 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   }
 
   vectorIndexReady = false;
+}
+
+/**
+ * Force reset the entire LanceDB vector store.
+ * Nukes the on-disk LanceDB directory, resets all module state, clears caches,
+ * and resets vectorized flags in SQLite. This is the nuclear option for
+ * recovering from corruption (e.g. "vector not divisible by 8" errors).
+ */
+export async function forceResetLanceDB(): Promise<{ deleted: boolean; path: string }> {
+  // 1. Cancel any pending optimize
+  if (optimizeTimer) {
+    clearTimeout(optimizeTimer);
+    optimizeTimer = null;
+  }
+
+  // 2. Clear in-memory caches
+  embeddingCache.clear();
+
+  // 3. Reset connection state so next access creates a fresh connection
+  connPromise = null;
+  vectorIndexReady = false;
+
+  // 4. Delete the entire LanceDB directory from disk
+  const deleted = existsSync(LANCEDB_PATH);
+  if (deleted) {
+    rmSync(LANCEDB_PATH, { recursive: true, force: true });
+    console.info(`[embeddings] Force-deleted LanceDB directory: ${LANCEDB_PATH}`);
+  }
+
+  // 5. Reset all vectorized flags in SQLite
+  try {
+    const db = getDb();
+    db.run(`UPDATE world_book_entries SET vectorized = 0`);
+    db.run(`UPDATE chat_chunks SET vectorized_at = NULL, vector_model = NULL`);
+    db.run(`DELETE FROM query_vector_cache`);
+  } catch (err) {
+    console.warn("[embeddings] Failed to reset SQLite vectorization state:", err);
+  }
+
+  console.info("[embeddings] LanceDB force reset complete. Vector store will reinitialize on next use.");
+  return { deleted, path: LANCEDB_PATH };
+}
+
+// --- Chat Vectorization ---
+
+export async function deleteChatChunkEmbeddings(userId: string, chatId: string, chunkId?: string): Promise<void> {
+  const table = await getTableIfExists();
+  if (!table) return;
+  let filter = `user_id = ${sqlValue(userId)} AND source_type = 'chat_chunk' AND owner_id = ${sqlValue(chatId)}`;
+  if (chunkId) {
+    filter += ` AND source_id = ${sqlValue(chunkId)}`;
+  }
+  await table.delete(filter);
+  scheduleOptimize();
+}
+
+export async function syncChatChunkEmbedding(
+  userId: string,
+  chatId: string,
+  chunkId: string,
+  content: string,
+  metadata?: Record<string, any>
+): Promise<void> {
+  const cfg = await getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) {
+    await deleteChatChunkEmbeddings(userId, chatId, chunkId);
+    return;
+  }
+  
+  const text = content.trim();
+  if (!text) {
+    await deleteChatChunkEmbeddings(userId, chatId, chunkId);
+    return;
+  }
+
+  const [vector] = await cachedEmbedTexts(userId, [text]);
+  if (!vector || vector.length === 0) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const row: EmbeddingRow = {
+    id: rowId(userId, "chat_chunk", chunkId, 0),
+    user_id: userId,
+    source_type: "chat_chunk",
+    source_id: chunkId,
+    owner_id: chatId,
+    chunk_index: 0,
+    content: text,
+    vector,
+    metadata_json: JSON.stringify(metadata || {}),
+    updated_at: now,
+  };
+
+  const table = await getOrCreateTable([row]);
+  await ensureVectorIndex(table);
+  await table
+    .mergeInsert("id")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute(asLanceRows([row]));
+
+  console.info(`[embeddings] Vectorized chat chunk ${chunkId} for chat ${chatId}`);
+
+  scheduleOptimize();
+}
+
+async function getExistingChatChunks(userId: string, chatId: string): Promise<Record<string, string>> {
+  const table = await getTableIfExists();
+  if (!table) return {};
+  const rows = await table
+    .query()
+    .where(`user_id = ${sqlValue(userId)} AND source_type = 'chat_chunk' AND owner_id = ${sqlValue(chatId)}`)
+    .select(["source_id", "content"])
+    .toArray();
+  const map: Record<string, string> = {};
+  for (const r of rows as any[]) {
+    map[r.source_id] = r.content;
+  }
+  return map;
+}
+
+export async function reindexChatMessages(
+  userId: string,
+  chatId: string,
+  chunks: Array<{ chunkId: string; content: string; metadata?: Record<string, any> }>
+): Promise<void> {
+  const cfg = await getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) {
+    // If disabled, just ensure it's wiped
+    await deleteChatChunkEmbeddings(userId, chatId);
+    return;
+  }
+
+  const validChunks = chunks.filter(c => c.content.trim().length > 0);
+  
+  // Smart Diffing: Query LanceDB for the chunks we already know about.
+  const existingChunks = await getExistingChatChunks(userId, chatId);
+  const chunksToUpsert: Array<{ chunkId: string; content: string; metadata?: Record<string, any> }> = [];
+  const validChunkIds = new Set<string>();
+
+  // 1. Find chunks that are entirely new OR have changed content.
+  for (const chunk of validChunks) {
+    validChunkIds.add(chunk.chunkId);
+    const existingContent = existingChunks[chunk.chunkId];
+    if (existingContent !== chunk.content.trim()) {
+      chunksToUpsert.push(chunk);
+    }
+  }
+
+  // 2. Find "orphaned" chunks.
+  const chunksToDelete: string[] = [];
+  for (const existingId of Object.keys(existingChunks)) {
+    if (!validChunkIds.has(existingId)) {
+      chunksToDelete.push(existingId);
+    }
+  }
+
+  // Delete orphaned chunks
+  for (const id of chunksToDelete) {
+    await deleteChatChunkEmbeddings(userId, chatId, id);
+  }
+
+  const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
+  for (let i = 0; i < chunksToUpsert.length; i += batchSize) {
+    const batch = chunksToUpsert.slice(i, i + batchSize);
+    try {
+      const texts = batch.map((c) => c.content.trim());
+      const vectors = await cachedEmbedTexts(userId, texts);
+      const now = Math.floor(Date.now() / 1000);
+
+      const rows: EmbeddingRow[] = batch.map((c, idx) => ({
+        id: rowId(userId, "chat_chunk", c.chunkId, 0),
+        user_id: userId,
+        source_type: "chat_chunk",
+        source_id: c.chunkId,
+        owner_id: chatId,
+        chunk_index: 0,
+        content: c.content.trim(),
+        vector: vectors[idx],
+        metadata_json: JSON.stringify(c.metadata || {}),
+        updated_at: now,
+      }));
+
+      const table = await getOrCreateTable(rows);
+      await ensureVectorIndex(table);
+      await table
+        .mergeInsert("id")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute(asLanceRows(rows));
+    } catch (err) {
+      console.warn("[embeddings] Batch chat embedding failed:", err);
+    }
+  }
+
+  if (chunksToDelete.length > 0 || chunksToUpsert.length > 0) {
+    console.info(`[embeddings] Synced chat memory for ${chatId.split('-')[0]}... (+${chunksToUpsert.length} updated, -${chunksToDelete.length} removed)`);
+  }
+
+  scheduleOptimize();
+}
+
+export async function searchChatChunks(
+  userId: string,
+  chatId: string,
+  vector: number[],
+  excludeIds: Set<string>,
+  limit = 8
+): Promise<Array<{ chunk_id: string; score: number; content: string; metadata: any }>> {
+  const table = await getTableIfExists();
+  if (!table) return [];
+
+  const rows = await table
+    .query()
+    .nearestTo(vector)
+    .where(`user_id = ${sqlValue(userId)} AND source_type = 'chat_chunk' AND owner_id = ${sqlValue(chatId)}`)
+    .select(["source_id", "content", "_distance", "metadata_json"])
+    .limit(Math.max(1, Math.min(limit + 50, 100))) // Fetch more to account for exclusion
+    .toArray();
+
+  const results: Array<{ chunk_id: string; score: number; content: string; metadata: any }> = [];
+  
+  for (const row of rows) {
+    if (results.length >= limit) break;
+    const chunkId = String(row.source_id);
+    let meta: any = {};
+    try {
+      meta = JSON.parse(row.metadata_json || "{}");
+    } catch (err) {
+      console.warn(`[embeddings] Failed to parse metadata for chunk ${chunkId}:`, err);
+      // Treat as empty metadata
+    }
+
+    // Check if this chunk contains messages that are in our exclude list
+    let shouldExclude = false;
+    if (meta.messageIds && Array.isArray(meta.messageIds)) {
+      if (meta.messageIds.some((id: string) => excludeIds.has(id))) {
+        shouldExclude = true;
+      }
+    } else if (excludeIds.has(chunkId)) {
+        shouldExclude = true;
+    }
+
+    if (shouldExclude) continue;
+
+    results.push({
+      chunk_id: chunkId,
+      score: typeof row._distance === "number" ? row._distance : 0,
+      content: String(row.content || ""),
+      metadata: meta
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Upsert a single chunk vector into LanceDB.
+ * Used by the vectorization queue for incremental updates.
+ */
+export async function upsertChunkVector(
+  userId: string,
+  chatId: string,
+  chunkId: string,
+  vector: number[],
+  content: string
+): Promise<void> {
+  const db = getDb();
+  const chunk = db.query("SELECT message_ids FROM chat_chunks WHERE id = ?").get(chunkId) as any;
+  const messageIds = chunk ? JSON.parse(chunk.message_ids) : [];
+
+  const now = Math.floor(Date.now() / 1000);
+  const row: EmbeddingRow = {
+    id: rowId(userId, "chat_chunk", chunkId, 0),
+    user_id: userId,
+    source_type: "chat_chunk",
+    source_id: chunkId,
+    owner_id: chatId,
+    chunk_index: 0,
+    content: content.trim(),
+    vector,
+    metadata_json: JSON.stringify({ chunkId, messageIds }),
+    updated_at: now,
+  };
+
+  const table = await getOrCreateTable([row]);
+  await ensureVectorIndex(table);
+  await table
+    .mergeInsert("id")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute(asLanceRows([row]));
+
+  scheduleOptimize();
+}
+
+/**
+ * Delete a specific chunk's vector from LanceDB.
+ */
+export async function deleteChunkVector(userId: string, chunkId: string): Promise<void> {
+  const table = await getTableIfExists();
+  if (!table) return;
+
+  const id = rowId(userId, "chat_chunk", chunkId, 0);
+  await table.delete(`id = ${sqlValue(id)}`);
 }

@@ -277,9 +277,30 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   mkdirSync(distDir, { recursive: true });
 
-  // Build backend entry if source exists
+  // Determine what needs building
   const backendSrc = join(srcDir, "backend.ts");
-  if (existsSync(backendSrc) && !existsSync(backendOut)) {
+  const frontendSrc = join(srcDir, "frontend.ts");
+  const needsBackendBuild = existsSync(backendSrc) && !existsSync(backendOut);
+  const needsFrontendBuild = existsSync(frontendSrc) && !existsSync(frontendOut);
+
+  // Install dependencies before building (only if there's something to build)
+  if (needsBackendBuild || needsFrontendBuild) {
+    const pkgJson = join(repo, "package.json");
+    if (existsSync(pkgJson)) {
+      const install = Bun.spawnSync({
+        cmd: ["bun", "install"],
+        cwd: repo,
+      });
+      if (install.exitCode !== 0) {
+        throw new Error(
+          `Dependency install failed: ${install.stderr.toString()}`
+        );
+      }
+    }
+  }
+
+  // Build backend entry if source exists
+  if (needsBackendBuild) {
     const proc = Bun.spawnSync({
       cmd: [
         "bun",
@@ -300,8 +321,7 @@ export async function buildExtension(identifier: string): Promise<void> {
   }
 
   // Build frontend entry if source exists
-  const frontendSrc = join(srcDir, "frontend.ts");
-  if (existsSync(frontendSrc) && !existsSync(frontendOut)) {
+  if (needsFrontendBuild) {
     const proc = Bun.spawnSync({
       cmd: [
         "bun",
@@ -426,6 +446,10 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
   if (!existsSync(repo)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+
+  // Clean build artifacts and installed dependencies so git pull succeeds
+  Bun.spawnSync({ cmd: ["git", "checkout", "."], cwd: repo });
+  Bun.spawnSync({ cmd: ["git", "clean", "-fd"], cwd: repo });
 
   const pullProc = Bun.spawnSync({
     cmd: ["git", "pull"],

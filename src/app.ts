@@ -43,7 +43,7 @@ app.use("*", compress());
 // the Bun server-level maxRequestBodySize (512 MB in index.ts) covers them.
 app.use("/api/*", async (c, next) => {
   const path = c.req.path;
-  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk") {
+  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/images") {
     return next();
   }
   return bodyLimit({

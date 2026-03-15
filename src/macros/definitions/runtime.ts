@@ -73,4 +73,16 @@ export function registerStateMacros(): void {
       return "false";
     },
   });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "userColorMode",
+    category: "State",
+    description: "User's selected color scheme (dark, light, or system)",
+    returnType: "string",
+    aliases: ["user_color_mode", "colorMode", "color_mode"],
+    handler: (ctx) => {
+      return (ctx.env.extra.theme?.mode as string) || "dark";
+    },
+  });
 }

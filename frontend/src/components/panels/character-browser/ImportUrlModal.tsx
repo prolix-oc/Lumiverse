@@ -45,7 +45,7 @@ export default function ImportUrlModal({
         </div>
         <form onSubmit={handleSubmit}>
           <p className={styles.hint}>
-            Paste a character URL from Chub, JanitorAI, or other supported sources.
+            Paste a character URL from Chub, JannyAI, or other supported sources.
           </p>
           <input
             type="url"

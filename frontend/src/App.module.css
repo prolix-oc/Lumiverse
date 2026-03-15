@@ -11,6 +11,13 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* In standalone PWA mode, remove the dvh clamp — height:100% from the
+   position:fixed html/body chain is the correct constraint. iOS handles
+   keyboard scrolling natively within the fixed viewport. */
+:global(html[data-pwa]) .app {
+  max-height: none;
+}
+
 .main {
   flex: 1 1 0;
   display: flex;

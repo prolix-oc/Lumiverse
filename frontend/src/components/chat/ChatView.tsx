@@ -1,10 +1,12 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router'
 import { AnimatePresence } from 'motion/react'
 import { UserRound } from 'lucide-react'
 import { useStore } from '@/store'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
+import { imagesApi } from '@/api/images'
+import type { WallpaperRef } from '@/types/store'
 import MessageList from './MessageList'
 import InputArea from './InputArea'
 import ScrollToBottom from './ScrollToBottom'
@@ -25,8 +27,10 @@ export default function ChatView() {
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const sceneBackground = useStore((s) => s.sceneBackground)
   const imageGeneration = useStore((s) => s.imageGeneration)
+  const wallpaper = useStore((s) => s.wallpaper)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
+  const videoRef = useRef<HTMLVideoElement>(null)
 
   const innerStyle = useMemo(() => {
     switch (chatWidthMode) {
@@ -48,6 +52,12 @@ export default function ChatView() {
         const chat = await chatsApi.get(chatId)
         if (cancelled) return
         setActiveChat(chatId, chat.character_id)
+
+        // Load per-chat wallpaper from metadata
+        const wp = chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
+        if (wp?.image_id) {
+          useStore.getState().setActiveChatWallpaper(wp)
+        }
 
         // Detect group chat and initialize group state
         const isGroup = chat.metadata?.group === true
@@ -114,6 +124,16 @@ export default function ChatView() {
     }
   }, [setActiveChat])
 
+  const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
+
+  // Resolve effective wallpaper: per-chat overrides global
+  const effectiveWallpaper = activeChatWallpaper ?? wallpaper.global
+  const wallpaperUrl = effectiveWallpaper?.image_id ? imagesApi.url(effectiveWallpaper.image_id) : null
+  const wallpaperIsVideo = effectiveWallpaper?.type === 'video'
+  const wallpaperOpacity = wallpaper.opacity ?? 0.3
+  const wallpaperFit = wallpaper.fit ?? 'cover'
+  const hasAnyBackground = !!(sceneBackground || wallpaperUrl)
+
   if (!chatId) return null
 
   return (
@@ -121,9 +141,38 @@ export default function ChatView() {
       className={clsx(
         styles.container,
         isStreaming && styles.streaming,
-        sceneBackground && styles.hasSceneBackground
+        (sceneBackground || wallpaperUrl) && styles.hasSceneBackground
       )}
     >
+      {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
+      {wallpaperUrl && !wallpaperIsVideo && (
+        <div
+          className={styles.wallpaperLayer}
+          style={{
+            backgroundImage: `url("${wallpaperUrl}")`,
+            opacity: sceneBackground ? 0 : wallpaperOpacity,
+            objectFit: wallpaperFit,
+            backgroundSize: wallpaperFit === 'fill' ? '100% 100%' : wallpaperFit,
+          }}
+        />
+      )}
+      {wallpaperUrl && wallpaperIsVideo && (
+        <video
+          ref={videoRef}
+          className={styles.wallpaperVideoLayer}
+          src={wallpaperUrl}
+          autoPlay
+          muted
+          loop
+          playsInline
+          style={{
+            opacity: sceneBackground ? 0 : wallpaperOpacity,
+            objectFit: wallpaperFit === 'fill' ? 'fill' : wallpaperFit,
+          }}
+        />
+      )}
+
+      {/* Scene background layer — overrides wallpaper when active */}
       <div
         className={styles.sceneBackgroundLayer}
         style={{
@@ -135,7 +184,7 @@ export default function ChatView() {
       <div
         className={styles.sceneTextContextLayer}
         style={{
-          opacity: sceneBackground ? 1 : 0,
+          opacity: hasAnyBackground ? 1 : 0,
           transitionDuration: `${Math.max(100, imageGeneration.fadeTransitionMs ?? 800)}ms`,
         }}
       />

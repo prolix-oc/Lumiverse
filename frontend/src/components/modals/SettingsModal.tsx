@@ -379,6 +379,7 @@ function DisplaySettings() {
 
 function ChatSettings() {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
@@ -469,6 +470,24 @@ function ChatSettings() {
           </button>
         </div>
       </div>
+
+      {displayMode === 'bubble' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>User message alignment</label>
+          <div className={styles.segmented}>
+            {(['left', 'right'] as const).map((align) => (
+              <button
+                key={align}
+                type="button"
+                className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
+                onClick={() => setSetting('bubbleUserAlign', align)}
+              >
+                {align === 'left' ? 'Left' : 'Right'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Chat Width</h3>
       <p className={styles.helperText}>
@@ -1306,6 +1325,7 @@ function EmbeddingsSettings() {
         vectorize_world_books: cfg.vectorize_world_books,
         vectorize_chat_messages: cfg.vectorize_chat_messages,
         vectorize_chat_documents: cfg.vectorize_chat_documents,
+        chat_memory_mode: cfg.chat_memory_mode,
         api_key: apiKey.trim() ? apiKey.trim() : undefined,
       })
       setCfg(saved)
@@ -1345,7 +1365,7 @@ function EmbeddingsSettings() {
   return (
     <div className={styles.settingsSection}>
       <h3 className={styles.sectionTitle}>Embeddings</h3>
-      <p className={styles.placeholder}>Configure your per-user embedding provider for vectorized world books and future chat/doc retrieval.</p>
+      <p className={styles.placeholder}>Configure vector embeddings for long-term memory retrieval. Vectorizes world books, chat messages, and documents for semantic search during generation.</p>
 
       {error && <p className={styles.errorText}>{error}</p>}
       {success && <p className={styles.successText}>{success}</p>}
@@ -1461,7 +1481,23 @@ function EmbeddingsSettings() {
           Maximum distance for vector matches (0 = no filtering, lower = stricter). LanceDB distance where 0 is identical.
         </span>
       </div>
-
+      {cfg.vectorize_chat_messages && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Memory Retrieval Mode</label>
+          <select
+            className={styles.select}
+            value={cfg.chat_memory_mode}
+            onChange={(e) => update({ chat_memory_mode: e.target.value as EmbeddingConfig['chat_memory_mode'] })}
+          >
+            <option value="conservative">Conservative - Fewer, high-quality memories</option>
+            <option value="balanced">Balanced - Standard retrieval (recommended)</option>
+            <option value="aggressive">Aggressive - More memories, lower threshold</option>
+          </select>
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+            Controls how many memories are retrieved and quality threshold. All chunking parameters are automatically optimized based on this mode.
+          </span>
+        </div>
+      )}
       <div className={styles.field}>
         <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
         <input
@@ -1497,7 +1533,7 @@ function EmbeddingsSettings() {
           checked={cfg.vectorize_chat_messages}
           onChange={(e) => update({ vectorize_chat_messages: e.target.checked })}
         />
-        <span>Vectorize chat messages (optional scaffold)</span>
+        <span>Vectorize chat messages (long-term memory)</span>
       </label>
 
       <div className={styles.drawerRow}>
@@ -1525,10 +1561,81 @@ function AdvancedSettings() {
 }
 
 function DangerZone() {
+  const [resetting, setResetting] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const [resetResult, setResetResult] = useState<string | null>(null)
+
+  const handleForceResetLanceDB = async () => {
+    if (!confirmReset) {
+      setConfirmReset(true)
+      return
+    }
+    setResetting(true)
+    setResetResult(null)
+    setConfirmReset(false)
+    try {
+      const res = await embeddingsApi.forceReset()
+      setResetResult(
+        res.deleted
+          ? 'LanceDB vector store deleted and reset. It will reinitialize on next use.'
+          : 'No LanceDB directory found — nothing to delete. SQLite flags reset.'
+      )
+    } catch (err: any) {
+      setResetResult(`Reset failed: ${err.body?.error || err.message || 'Unknown error'}`)
+    } finally {
+      setResetting(false)
+    }
+  }
+
   return (
     <div className={styles.settingsSection}>
       <h3 className={clsx(styles.sectionTitle, styles.danger)}>Danger Zone</h3>
-      <p className={styles.placeholder}>Destructive operations (clear cache, reset settings) will be available here.</p>
+
+      <div className={styles.field}>
+        <span className={styles.fieldLabel}>Force Reset LanceDB Vector Store</span>
+        <p style={{ fontSize: 12, color: 'var(--lumiverse-text-dim)', margin: 0 }}>
+          Completely wipes the LanceDB directory, clears all cached embeddings, and resets vectorization
+          flags. Useful for recovering from corruption (e.g. &quot;vector not divisible by 8&quot; errors).
+          The vector store will reinitialize automatically on next use.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+          <button
+            className={clsx(styles.smallBtn, styles.textBtnDanger)}
+            onClick={handleForceResetLanceDB}
+            disabled={resetting}
+            style={{
+              border: '1px solid var(--lumiverse-error)',
+              padding: '6px 12px',
+              opacity: resetting ? 0.5 : 1,
+            }}
+          >
+            {resetting
+              ? 'Resetting...'
+              : confirmReset
+              ? 'Are you sure? Click again to confirm'
+              : 'Reset LanceDB'}
+          </button>
+          {confirmReset && (
+            <button
+              className={styles.smallBtn}
+              onClick={() => setConfirmReset(false)}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+        {resetResult && (
+          <p style={{
+            fontSize: 12,
+            color: resetResult.startsWith('Reset failed')
+              ? 'var(--lumiverse-error)'
+              : 'var(--lumiverse-success, #4ade80)',
+            margin: 0,
+          }}>
+            {resetResult}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

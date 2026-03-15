@@ -436,7 +436,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
                     ))}
                   </div>
                 )}
-                <pre className={s.previewContent}>{previewText || (content ? 'Resolving...' : 'No content to preview')}</pre>
+                <pre className={s.previewContent}>{previewLoading ? 'Resolving...' : (previewText === '' && content ? '(Empty Output)' : previewText || 'No content to preview')}</pre>
               </div>
             )}
           </div>

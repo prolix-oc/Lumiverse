@@ -175,6 +175,8 @@
 
 .accordionBody {
   border-top: 1px solid var(--lumiverse-border);
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 /* Token table */

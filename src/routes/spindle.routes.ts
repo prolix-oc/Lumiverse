@@ -34,7 +34,7 @@ function canManageExtension(c: any, ext: ExtensionInfo): boolean {
   return managerSvc.canManageExtension(ext, viewer.userId, viewer.role);
 }
 
-// GET /api/v1/spindle — List all extensions with status
+// GET /api/v1/spindle — List all extensions with status + viewer privilege
 app.get("/", (c) => {
   const viewer = getViewer(c);
   const extensions = managerSvc.listForUser(viewer.userId, viewer.role).map((ext) => ({
@@ -45,7 +45,8 @@ app.get("/", (c) => {
         ? "stopped"
         : "stopped",
   }));
-  return c.json(extensions);
+  const isPrivileged = viewer.role === "owner" || viewer.role === "admin";
+  return c.json({ extensions, isPrivileged });
 });
 
 // GET /api/v1/spindle/ephemeral/overview — Admin overview with reservations

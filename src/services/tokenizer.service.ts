@@ -1,6 +1,6 @@
 import { getDb } from "../db/connection";
 import type { TokenizerConfig, TokenizerModelPattern, TokenCountResult, TokenCountBreakdownEntry } from "../types/tokenizer";
-import type { AssemblyBreakdownEntry } from "../llm/types";
+import { getTextContent, type AssemblyBreakdownEntry, type LlmMessage } from "../llm/types";
 
 /** A loaded tokenizer instance with a count(text) method. */
 interface TokenizerInstance {
@@ -233,7 +233,8 @@ export async function countWithTokenizer(tokenizerId: string, text: string): Pro
 
 export async function countBreakdown(
   modelId: string,
-  breakdown: AssemblyBreakdownEntry[]
+  breakdown: AssemblyBreakdownEntry[],
+  chatHistoryMessages?: LlmMessage[]
 ): Promise<TokenCountResult> {
   const tokenizerId = getTokenizerIdForModel(modelId);
   let tokenizerName: string | null = null;
@@ -250,21 +251,33 @@ export async function countBreakdown(
     }
   }
 
+  const countText = (text: string): number => {
+    if (!text) return 0;
+    if (instance) {
+      try { return instance.count(text); } catch { /* fall through */ }
+    }
+    return Math.ceil(text.length / 4);
+  };
+
   const entries: TokenCountBreakdownEntry[] = [];
   let totalTokens = 0;
 
   for (const entry of breakdown) {
-    const text = entry.content || "";
     let tokens = 0;
-    if (text && instance) {
-      try {
-        tokens = instance.count(text);
-      } catch {
-        tokens = Math.ceil(text.length / 4);
+
+    // For chat_history entries, tokenize from the pre-snapshotted messages
+    // when available. This gives an accurate per-message count that includes
+    // role text, matching what the LLM actually receives.
+    if (entry.type === "chat_history" && chatHistoryMessages && chatHistoryMessages.length > 0) {
+      for (const msg of chatHistoryMessages) {
+        const text = getTextContent(msg);
+        // Count role + content together to capture the full message footprint
+        tokens += countText(`${msg.role}\n${text}`);
       }
-    } else if (text) {
-      tokens = Math.ceil(text.length / 4);
+    } else {
+      tokens = countText(entry.content || "");
     }
+
     totalTokens += tokens;
     entries.push({
       name: entry.name,

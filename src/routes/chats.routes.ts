@@ -82,6 +82,38 @@ app.get("/:id/export", (c) => {
   return c.json(data);
 });
 
+app.post("/import", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+
+  if (!body.character_id) return c.json({ error: "character_id is required" }, 400);
+  if (!body.chat || !body.messages) return c.json({ error: "chat and messages are required" }, 400);
+
+  try {
+    const chat = svc.createChatRaw(userId, {
+      character_id: body.character_id,
+      name: body.chat.name || "Imported Chat",
+      metadata: body.chat.metadata || {},
+    });
+
+    const bulkMessages = (body.messages as any[]).map((m) => ({
+      is_user: Boolean(m.is_user),
+      name: m.name || "",
+      content: m.content || "",
+      send_date: m.send_date,
+      swipes: m.swipes,
+      swipe_id: m.swipe_id,
+      extra: m.extra,
+    }));
+
+    const msgCount = svc.bulkInsertMessages(chat.id, bulkMessages);
+
+    return c.json({ chat_id: chat.id, name: chat.name, message_count: msgCount }, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || "Import failed" }, 500);
+  }
+});
+
 app.get("/:id/tree", (c) => {
   const userId = c.get("userId");
   const tree = svc.getChatTree(userId, c.req.param("id"));

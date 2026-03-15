@@ -4,6 +4,7 @@ import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderIn
 export interface ChatSlice {
   activeChatId: string | null
   activeCharacterId: string | null
+  activeChatWallpaper: WallpaperRef | null
   messages: Message[]
   isStreaming: boolean
   streamingContent: string
@@ -14,6 +15,7 @@ export interface ChatSlice {
   streamingGenerationType: string | null
   totalChatLength: number
   setActiveChat: (chatId: string | null, characterId?: string | null) => void
+  setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
   setMessages: (messages: Message[], total?: number) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
@@ -34,7 +36,7 @@ export interface ChatSlice {
 
 // ---- Characters Slice ----
 export type CharacterFilterTab = 'all' | 'characters' | 'favorites' | 'groups'
-export type CharacterSortField = 'name' | 'recent' | 'created'
+export type CharacterSortField = 'name' | 'recent' | 'created' | 'shuffle'
 export type CharacterSortDirection = 'asc' | 'desc'
 export type CharacterViewMode = 'grid' | 'columns' | 'list'
 
@@ -212,6 +214,18 @@ export interface QuickReplySet {
   replies: QuickReply[]
 }
 
+// ---- Wallpaper Settings ----
+export interface WallpaperRef {
+  image_id: string
+  type: 'image' | 'video'
+}
+
+export interface WallpaperSettings {
+  global: WallpaperRef | null
+  opacity: number
+  fit: 'cover' | 'contain' | 'fill'
+}
+
 // ---- Settings Slice ----
 export interface SettingsSlice {
   enableLandingPage: boolean
@@ -219,6 +233,7 @@ export interface SettingsSlice {
   charactersPerPage: number
   personasPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  bubbleUserAlign: 'left' | 'right'
   chatSheldEnterToSend: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   chatContentMaxWidth: number
@@ -242,6 +257,8 @@ export interface SettingsSlice {
   globalWorldBooks: string[]
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
+  wallpaper: WallpaperSettings
+  setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
   setTheme: (theme: ThemeConfig | null) => void
   loadSettings: () => Promise<void>
@@ -396,6 +413,7 @@ export interface PendingPermissionRequest {
 
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
+  spindlePrivileged: boolean
   pendingPermissionRequest: PendingPermissionRequest | null
   loadExtensions: () => Promise<void>
   installExtension: (githubUrl: string) => Promise<void>

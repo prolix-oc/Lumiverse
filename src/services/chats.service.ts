@@ -7,6 +7,7 @@ import type { Message, CreateMessageInput, UpdateMessageInput } from "../types/m
 import type { BulkMessageInput } from "../types/migrate";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+import * as embeddingsSvc from "./embeddings.service";
 
 // --- Chat helpers ---
 
@@ -163,9 +164,16 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
+  // Auto-name with character name
+  let chatName = input.name || "";
+  if (!chatName) {
+    const character = getCharacter(userId, input.character_id);
+    if (character) chatName = character.name;
+  }
+
   getDb()
     .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, userId, input.character_id, input.name || "", JSON.stringify(input.metadata || {}), now, now);
+    .run(id, userId, input.character_id, chatName, JSON.stringify(input.metadata || {}), now, now);
 
   // Insert the character's greeting as the opening message
   const character = getCharacter(userId, input.character_id);
@@ -327,6 +335,13 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId?
   const row = getDb().query("SELECT * FROM messages WHERE id = ?").get(id) as any;
   const message = rowToMessage(row);
   eventBus.emit(EventType.MESSAGE_SENT, { chatId, message }, userId);
+
+  if (userId) {
+    updateChatChunks(userId, chatId, message).catch(err => {
+      console.warn("[chats] Failed to update chunks:", err);
+    });
+  }
+
   return message;
 }
 
@@ -356,6 +371,11 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   getDb().query(`UPDATE messages SET ${fields.join(", ")} WHERE id = ?`).run(...values);
   const updated = getMessage(userId, id)!;
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
+
+  rebuildChatChunks(userId, updated.chat_id).catch(err => {
+    console.warn("[chats] Failed to rebuild chunks after message edit:", err);
+  });
+
   return updated;
 }
 
@@ -365,6 +385,10 @@ export function deleteMessage(userId: string, id: string): boolean {
   const result = getDb().query("DELETE FROM messages WHERE id = ?").run(id);
   if (result.changes > 0) {
     eventBus.emit(EventType.MESSAGE_DELETED, { chatId: msg.chat_id, messageId: id }, userId);
+
+    rebuildChatChunks(userId, msg.chat_id).catch(err => {
+      console.warn("[chats] Failed to rebuild chunks after message delete:", err);
+    });
   }
   return result.changes > 0;
 }
@@ -404,6 +428,7 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
   getDb().query(`UPDATE messages SET ${updates} WHERE id = ?`).run(...values);
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
+
   return updated;
 }
 
@@ -465,28 +490,66 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
   const newChatId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  // Create the chat row directly — skip createChat() which auto-inserts a greeting
+  // Branch names: "{baseName} — Branch at #{msgIndex}"
+  const character = getCharacter(userId, chat.character_id);
+  const baseName = (chat.name || character?.name || "Chat").replace(/\s+—\s+Branch.*$/i, "").replace(/\s+\(branch\s*\d*\)$/i, "");
+  const branchLabel = `${baseName} — Branch at #${msg.index_in_chat}`;
+
+  // De-duplicate if multiple branches @ same point
+  const existing = getDb()
+    .query("SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND name LIKE ?")
+    .get(userId, `${branchLabel}%`) as { count: number };
+  const newName = existing.count > 0 ? `${branchLabel} (${existing.count + 1})` : branchLabel;
+
   const metadata = { ...chat.metadata, branched_from: chatId, branch_at_message: atMessageId };
-  getDb()
-    .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(newChatId, userId, chat.character_id, `${chat.name || "Chat"} (branch)`, JSON.stringify(metadata), now, now);
 
-  // Copy messages up to and including the branch point
-  const messages = getDb()
-    .query("SELECT * FROM messages WHERE chat_id = ? AND index_in_chat <= ? ORDER BY index_in_chat ASC")
-    .all(chatId, msg.index_in_chat) as any[];
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(newChatId, userId, chat.character_id, newName, JSON.stringify(metadata), now, now);
 
-  for (const m of messages) {
-    const newMsgId = crypto.randomUUID();
-    getDb()
-      .query(
-        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, extra, branch_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(newMsgId, newChatId, m.index_in_chat, m.is_user, m.name, m.content, m.send_date, m.swipe_id, m.swipes, m.extra, branchId, now);
+    const messages = db
+      .query("SELECT * FROM messages WHERE chat_id = ? AND index_in_chat <= ? ORDER BY index_in_chat ASC")
+      .all(chatId, msg.index_in_chat) as any[];
+
+    const idMap = new Map<string, string>();
+
+    for (const m of messages) {
+      const newMsgId = crypto.randomUUID();
+      idMap.set(m.id, newMsgId);
+      
+      // Relink parent_message_id to the new ID within this branch
+      const parentId = m.parent_message_id ? (idMap.get(m.parent_message_id) || null) : null;
+
+      db.query(
+        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, extra, parent_message_id, branch_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        newMsgId, 
+        newChatId, 
+        m.index_in_chat, 
+        m.is_user, 
+        m.name, 
+        m.content, 
+        m.send_date, 
+        m.swipe_id, 
+        m.swipes, 
+        m.extra, 
+        parentId, 
+        branchId, 
+        now
+      );
+    }
+  });
+
+  try {
+    tx();
+  } catch (err) {
+    console.error("[chats] Branch failed:", err);
+    return null;
   }
 
-  return getChat(userId, newChatId)!;
+  return getChat(userId, newChatId);
 }
 
 // Branch tree
@@ -498,6 +561,8 @@ export type ChatTreeNode = {
   updated_at: number
   message_count: number
   branch_at_message: string | null
+  branch_message_index: number | null
+  branch_message_preview: string | null
   children: ChatTreeNode[]
 }
 
@@ -522,13 +587,32 @@ function buildSubTree(userId: string, chatId: string, visited: Set<string>, dept
     if (child) children.push(child);
   }
 
+  const branchAtMessage = (chat.metadata.branch_at_message as string) ?? null;
+  let branch_message_index: number | null = null;
+  let branch_message_preview: string | null = null;
+
+  if (branchAtMessage) {
+    const branchMsg = db.query(
+      "SELECT index_in_chat, content FROM messages WHERE (id = ? OR (chat_id = ? AND index_in_chat = (SELECT index_in_chat FROM messages WHERE id = ? LIMIT 1))) LIMIT 1"
+    ).get(branchAtMessage, chatId, branchAtMessage) as { index_in_chat: number; content: string } | null;
+
+    if (branchMsg) {
+      branch_message_index = branchMsg.index_in_chat;
+      // Msg preview first 80 chars, stripped of markdown/newlines
+      const clean = branchMsg.content.replace(/[#*_~`>\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+      branch_message_preview = clean.length > 80 ? clean.slice(0, 77) + '...' : clean;
+    }
+  }
+
   return {
     id: chat.id,
     name: chat.name,
     created_at: chat.created_at,
     updated_at: chat.updated_at,
     message_count,
-    branch_at_message: (chat.metadata.branch_at_message as string) ?? null,
+    branch_at_message: branchAtMessage,
+    branch_message_index,
+    branch_message_preview,
     children,
   };
 }
@@ -623,4 +707,247 @@ export function exportChat(userId: string, chatId: string): { chat: Chat; messag
   if (!chat) return null;
   const messages = getMessages(userId, chatId);
   return { chat, messages };
+}
+
+// --- Chat Vectorization (Incremental) ---
+
+import * as vectorizationQueue from "./vectorization-queue.service";
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+interface ChatChunk {
+  id: string;
+  chat_id: string;
+  start_message_id: string;
+  end_message_id: string;
+  message_ids: string[];
+  content: string;
+  token_count: number;
+  vectorized_at: number | null;
+  vector_model: string | null;
+  retrieval_count: number;
+  last_retrieved_at: number | null;
+  message_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function rowToChatChunk(row: any): ChatChunk {
+  return {
+    id: row.id,
+    chat_id: row.chat_id,
+    start_message_id: row.start_message_id,
+    end_message_id: row.end_message_id,
+    message_ids: JSON.parse(row.message_ids),
+    content: row.content,
+    token_count: row.token_count,
+    vectorized_at: row.vectorized_at,
+    vector_model: row.vector_model,
+    retrieval_count: row.retrieval_count,
+    last_retrieved_at: row.last_retrieved_at,
+    message_count: row.message_count,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Get the last chunk for a chat, or null if no chunks exist.
+ */
+function getLastChatChunk(chatId: string): ChatChunk | null {
+  const row = getDb()
+    .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(chatId) as any;
+  return row ? rowToChatChunk(row) : null;
+}
+
+/**
+ * Get all chunks for a chat.
+ */
+export function getChatChunks(userId: string, chatId: string): ChatChunk[] {
+  const chat = getChat(userId, chatId);
+  if (!chat) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at ASC")
+    .all(chatId) as any[];
+
+  return rows.map(rowToChatChunk);
+}
+
+/**
+ * Determine if we should start a new chunk based on the last chunk and new message.
+ */
+async function shouldStartNewChunk(lastChunk: ChatChunk, newMessage: Message, userId: string): Promise<boolean> {
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  const params = embeddingsSvc.getChatMemoryParams(cfg.chat_memory_mode);
+
+  const newMessageTokens = estimateTokens(`[${newMessage.name}]: ${newMessage.content}`);
+  const wouldExceedTarget = lastChunk.token_count + newMessageTokens > params.chunkTargetTokens;
+
+  const lastMessageIds = lastChunk.message_ids;
+  const lastMessages = lastMessageIds.map(id => getMessage(userId, id)).filter(Boolean) as Message[];
+  const hasAssistantInChunk = lastMessages.some(m => !m.is_user);
+  const isNewUserMessage = newMessage.is_user;
+  const isTurnBoundary = isNewUserMessage && hasAssistantInChunk;
+
+  return wouldExceedTarget && isTurnBoundary;
+}
+
+/**
+ * Create a new chunk from a set of messages.
+ */
+function createChatChunk(chatId: string, messages: Message[]): ChatChunk {
+  const now = Math.floor(Date.now() / 1000);
+  const id = crypto.randomUUID();
+  const content = messages.map(m => `[${m.name}]: ${m.content}`).join("\n");
+  const tokenCount = estimateTokens(content);
+  const messageIds = messages.map(m => m.id);
+
+  getDb()
+    .query(
+      `INSERT INTO chat_chunks (
+        id, chat_id, start_message_id, end_message_id, message_ids, content,
+        token_count, message_count, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      chatId,
+      messages[0].id,
+      messages[messages.length - 1].id,
+      JSON.stringify(messageIds),
+      content,
+      tokenCount,
+      messages.length,
+      now,
+      now
+    );
+
+  return getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(id) as any;
+}
+
+/**
+ * Append a message to an existing chunk.
+ */
+function appendToChunk(chunkId: string, message: Message): void {
+  const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
+  if (!chunk) return;
+
+  const messageIds = JSON.parse(chunk.message_ids);
+  messageIds.push(message.id);
+
+  const newContent = chunk.content + `\n[${message.name}]: ${message.content}`;
+  const newTokenCount = estimateTokens(newContent);
+  const now = Math.floor(Date.now() / 1000);
+
+  getDb()
+    .query(
+      `UPDATE chat_chunks SET
+        end_message_id = ?,
+        message_ids = ?,
+        content = ?,
+        token_count = ?,
+        message_count = ?,
+        updated_at = ?,
+        vectorized_at = NULL,
+        vector_model = NULL
+      WHERE id = ?`
+    )
+    .run(message.id, JSON.stringify(messageIds), newContent, newTokenCount, messageIds.length, now, chunkId);
+}
+
+/**
+ * Update chunks incrementally when a new message is added.
+ * This is called after message creation and only touches the last chunk.
+ */
+async function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
+
+  const lastChunk = getLastChatChunk(chatId);
+
+  if (!lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId))) {
+    const newChunk = createChatChunk(chatId, [newMessage]);
+    vectorizationQueue.queueChunkVectorization(userId, chatId, newChunk.id, 5);
+  } else {
+    appendToChunk(lastChunk.id, newMessage);
+    vectorizationQueue.queueChunkVectorization(userId, chatId, lastChunk.id, 5);
+  }
+}
+
+/**
+ * Get vectorization status for a chat.
+ */
+export function getVectorizationStatus(userId: string, chatId: string): {
+  totalChunks: number;
+  vectorizedChunks: number;
+  pendingChunks: number;
+  queueStatus: any;
+} {
+  const chat = getChat(userId, chatId);
+  if (!chat) {
+    return { totalChunks: 0, vectorizedChunks: 0, pendingChunks: 0, queueStatus: {} };
+  }
+
+  const stats = getDb()
+    .query(
+      `SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN vectorized_at IS NOT NULL THEN 1 ELSE 0 END) as vectorized
+      FROM chat_chunks WHERE chat_id = ?`
+    )
+    .get(chatId) as any;
+
+  return {
+    totalChunks: stats?.total || 0,
+    vectorizedChunks: stats?.vectorized || 0,
+    pendingChunks: (stats?.total || 0) - (stats?.vectorized || 0),
+    queueStatus: vectorizationQueue.getQueueStatus(),
+  };
+}
+
+/**
+ * Rebuild all chunks for a chat from scratch.
+ * Used for migration or when chunk structure needs to be reset.
+ */
+export async function rebuildChatChunks(userId: string, chatId: string): Promise<void> {
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
+
+  const messages = getMessages(userId, chatId).filter(m => m.extra?.hidden !== true);
+  if (messages.length === 0) return;
+
+  getDb().query("DELETE FROM chat_chunks WHERE chat_id = ?").run(chatId);
+
+  const params = embeddingsSvc.getChatMemoryParams(cfg.chat_memory_mode);
+  const targetTokens = params.chunkTargetTokens;
+
+  let currentChunk: Message[] = [];
+  let currentTokens = 0;
+
+  for (const msg of messages) {
+    const msgTokens = estimateTokens(`[${msg.name}]: ${msg.content}`);
+    const isUserAfterAssistant = msg.is_user && currentChunk.some(m => !m.is_user);
+    const wouldExceedTarget = currentTokens + msgTokens > targetTokens;
+
+    if (currentChunk.length > 0 && isUserAfterAssistant && wouldExceedTarget) {
+      const chunk = createChatChunk(chatId, currentChunk);
+      vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
+      currentChunk = [];
+      currentTokens = 0;
+    }
+
+    currentChunk.push(msg);
+    currentTokens += msgTokens;
+  }
+
+  if (currentChunk.length > 0) {
+    const chunk = createChatChunk(chatId, currentChunk);
+    vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
+  }
+
+  console.info(`[chats] Rebuilt chunks for chat ${chatId}`);
 }

@@ -139,6 +139,11 @@ function lexMacroContent(input: string, start: number, len: number, tokens: Toke
   // Skip whitespace
   while (pos < len && (input[pos] === " " || input[pos] === "\t")) pos++;
 
+  if (pos < len && input[pos] !== ":" && input[pos] !== "}") {
+    tokens.push({ type: TokenType.SEPARATOR, value: " ", offset: pos });
+    pos = lexArgument(input, pos, len, tokens);
+  }
+
   // Scan separator + arguments
   // :: separator means each :: separates a new argument
   // : (single) means consume everything until }} as one argument (legacy)
