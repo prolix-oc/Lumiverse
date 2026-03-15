@@ -9,6 +9,8 @@ import QuickAddPackDropdown from './council/QuickAddPackDropdown'
 import type { CouncilMember } from 'lumiverse-spindle-types'
 import styles from './CouncilManager.module.css'
 
+const MIN_TOOL_TIMEOUT_MS = 15000
+
 export default function CouncilManager() {
   const councilSettings = useStore((s) => s.councilSettings)
   const availableCouncilTools = useStore((s) => s.availableCouncilTools)
@@ -198,7 +200,7 @@ export default function CouncilManager() {
             <NumberStepper
               value={ts.timeoutMs}
               onChange={(val) => setCouncilToolsSettings({ timeoutMs: val })}
-              min={5000}
+              min={MIN_TOOL_TIMEOUT_MS}
               max={120000}
               step={1000}
             />

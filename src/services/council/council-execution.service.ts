@@ -216,9 +216,14 @@ async function executeMemberTools(
             .join("\n\n");
 
           content = await invokeExtensionToolViaWorker(
+            input.userId,
             extToolReg!.extension_id,
             bareToolName,
-            { context: contextSummary },
+            {
+              context: contextSummary,
+              __userId: input.userId,
+              __deadlineMs: Date.now() + settings.toolsSettings.timeoutMs,
+            },
             settings.toolsSettings.timeoutMs
           );
         } else {
@@ -239,6 +244,7 @@ async function executeMemberTools(
         error = err.message;
         // Don't retry if the generation was aborted — bail out immediately
         if (input.signal?.aborted) break;
+        if (isExtensionTool) break;
         if (attempt < MAX_RETRIES - 1) {
           await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
         }
@@ -272,6 +278,7 @@ async function executeMemberTools(
 
 /** Route a tool call to the extension worker that registered it. */
 async function invokeExtensionToolViaWorker(
+  userId: string,
   extensionId: string,
   toolName: string,
   args: Record<string, unknown>,
@@ -281,7 +288,7 @@ async function invokeExtensionToolViaWorker(
   if (!host) {
     throw new Error(`Extension worker '${extensionId}' is not running`);
   }
-  return host.invokeExtensionTool(toolName, args, timeoutMs);
+  return host.invokeExtensionTool(toolName, { ...args, __userId: userId }, timeoutMs);
 }
 
 /** Call the sidecar LLM for a single tool. */
