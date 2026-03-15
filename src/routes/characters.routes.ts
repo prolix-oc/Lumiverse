@@ -4,8 +4,194 @@ import * as files from "../services/files.service";
 import * as images from "../services/images.service";
 import * as cardSvc from "../services/character-card.service";
 import { parsePagination } from "../services/pagination";
+import { safeFetch, SSRFError, validateHost } from "../utils/safe-fetch";
 
 const app = new Hono();
+
+// ─── URL parsing helpers ──────────────────────────────────────────────────
+
+const CHUB_DOMAINS = ["chub.ai", "www.chub.ai", "characterhub.org", "www.characterhub.org"];
+const JANNY_DOMAINS = ["jannyai.com", "www.jannyai.com"];
+
+function parseChubUrl(url: string): string | null {
+  const parts = url.split("/");
+  let domainIdx = -1;
+  for (let i = 0; i < parts.length; i++) {
+    if (CHUB_DOMAINS.includes(parts[i].toLowerCase())) {
+      domainIdx = i;
+      break;
+    }
+  }
+  if (domainIdx === -1) return null;
+
+  const rest = parts.slice(domainIdx + 1);
+  // Strip leading "characters" segment if present
+  const start = rest[0]?.toLowerCase() === "characters" ? 1 : 0;
+  const pathParts = rest.slice(start).filter(Boolean);
+  if (pathParts.length >= 2) {
+    return pathParts.slice(0, 2).join("/");
+  }
+  return null;
+}
+
+const UUID_RE = /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i;
+
+function parseJannyUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!JANNY_DOMAINS.includes(parsed.hostname.toLowerCase())) return null;
+  } catch {
+    return null;
+  }
+  const match = url.match(UUID_RE);
+  return match ? match[0] : null;
+}
+
+// ─── Chub.ai character fetcher ────────────────────────────────────────────
+
+async function fetchChubCharacter(chubPath: string, userId: string) {
+  const apiUrl = `https://api.chub.ai/api/characters/${chubPath}?full=true`;
+  const res = await safeFetch(apiUrl, {
+    timeoutMs: 15_000,
+    headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
+  });
+  if (!res.ok) {
+    throw new Error(`Chub API returned ${res.status}`);
+  }
+
+  const data = await res.json() as any;
+  const node = data?.node;
+  if (!node) throw new Error("Invalid Chub API response: missing node");
+
+  const def = node.definition ?? node;
+  const name = def.name || node.name;
+  if (!name) throw new Error("Character card from Chub is missing a name");
+
+  // Build a V2-style card object for parseCardJson
+  const card: Record<string, any> = {
+    spec: "chara_card_v2",
+    spec_version: "2.0",
+    data: {
+      name,
+      description: def.description ?? def.personality ?? "",
+      personality: def.tavern_personality ?? def.personality ?? "",
+      scenario: def.scenario ?? "",
+      first_mes: def.first_message ?? def.first_mes ?? "",
+      mes_example: def.mes_example ?? def.message_example ?? "",
+      creator: node.fullPath?.split("/")[0] ?? "",
+      creator_notes: def.creator_notes ?? "",
+      system_prompt: def.system_prompt ?? "",
+      post_history_instructions: def.post_history_instructions ?? "",
+      tags: Array.isArray(node.topics) ? node.topics : (Array.isArray(def.tags) ? def.tags : []),
+      alternate_greetings: Array.isArray(def.alternate_greetings) ? def.alternate_greetings : [],
+      extensions: def.extensions ?? {},
+    },
+  };
+
+  if (def.character_book) {
+    card.data.extensions = { ...card.data.extensions, character_book: def.character_book };
+  }
+
+  const cardInput = cardSvc.parseCardJson(card);
+  const character = svc.createCharacter(userId, cardInput);
+
+  // Fetch avatar image
+  const avatarUrl = node.max_res_url || node.avatar_url;
+  if (avatarUrl) {
+    try {
+      const imgRes = await safeFetch(avatarUrl, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+      if (imgRes.ok) {
+        const buf = await imgRes.arrayBuffer();
+        const contentType = imgRes.headers.get("content-type") || "image/png";
+        const ext = contentType.includes("webp") ? "webp" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
+        const file = new File([buf], `${character.id}.${ext}`, { type: contentType });
+        const image = await images.uploadImage(userId, file);
+        svc.setCharacterImage(userId, character.id, image.id);
+        svc.setCharacterAvatar(userId, character.id, image.filename);
+      }
+    } catch {
+      // Avatar fetch failed — character is still imported, just without an avatar
+    }
+  }
+
+  return svc.getCharacter(userId, character.id)!;
+}
+
+// ─── JannyAI character fetcher ────────────────────────────────────────────
+
+async function fetchJannyCharacter(uuid: string, userId: string) {
+  // safeFetch is GET-only; JannyAI requires POST — validate host then POST directly
+  await validateHost("api.jannyai.com");
+  const downloadRes = await fetch("https://api.jannyai.com/api/v1/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ characterId: uuid }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!downloadRes.ok) {
+    throw new Error(`JannyAI API returned ${downloadRes.status}`);
+  }
+
+  const result = await downloadRes.json() as any;
+  if (result.status !== "ok" || !result.downloadUrl) {
+    throw new Error(result.error || "JannyAI download failed");
+  }
+
+  // Download the PNG card from the provided URL
+  const pngRes = await safeFetch(result.downloadUrl, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+  if (!pngRes.ok) {
+    throw new Error(`Failed to download JannyAI character image: ${pngRes.status}`);
+  }
+
+  const buf = await pngRes.arrayBuffer();
+  const file = new File([buf], `${uuid}.png`, { type: "image/png" });
+
+  const cardInput = await cardSvc.extractCardFromPng(file);
+  const character = svc.createCharacter(userId, cardInput);
+
+  // Use the PNG as avatar
+  const image = await images.uploadImage(userId, file);
+  svc.setCharacterImage(userId, character.id, image.id);
+  svc.setCharacterAvatar(userId, character.id, image.filename);
+
+  return svc.getCharacter(userId, character.id)!;
+}
+
+// ─── Generic URL fetcher (PNG or JSON) ────────────────────────────────────
+
+async function fetchGenericCharacter(url: string, userId: string) {
+  const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+  if (!res.ok) throw new Error(`Failed to fetch URL: ${res.status}`);
+
+  const contentType = res.headers.get("content-type") || "";
+  const buf = await res.arrayBuffer();
+
+  if (contentType.includes("image/png") || url.toLowerCase().endsWith(".png")) {
+    const file = new File([buf], "import.png", { type: "image/png" });
+    const cardInput = await cardSvc.extractCardFromPng(file);
+    const character = svc.createCharacter(userId, cardInput);
+
+    const image = await images.uploadImage(userId, file);
+    svc.setCharacterImage(userId, character.id, image.id);
+    svc.setCharacterAvatar(userId, character.id, image.filename);
+
+    return svc.getCharacter(userId, character.id)!;
+  }
+
+  // Assume JSON
+  const text = new TextDecoder().decode(buf);
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error("URL did not return valid PNG or JSON character data");
+  }
+
+  const cardInput = cardSvc.parseCardJson(json);
+  const character = svc.createCharacter(userId, cardInput);
+  return svc.getCharacter(userId, character.id)!;
+}
 
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -19,6 +205,42 @@ app.post("/", async (c) => {
   if (!body.name) return c.json({ error: "name is required" }, 400);
   const character = svc.createCharacter(userId, body);
   return c.json(character, 201);
+});
+
+// --- Static routes MUST come before /:id to avoid shadowing ---
+
+app.post("/import-url", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  const url = body.url;
+  if (!url || typeof url !== "string") return c.json({ error: "url is required" }, 400);
+
+  try {
+    let character;
+
+    // Check for Chub.ai URL
+    const chubPath = parseChubUrl(url);
+    if (chubPath) {
+      character = await fetchChubCharacter(chubPath, userId);
+      return c.json({ character }, 201);
+    }
+
+    // Check for JannyAI URL
+    const jannyId = parseJannyUrl(url);
+    if (jannyId) {
+      character = await fetchJannyCharacter(jannyId, userId);
+      return c.json({ character }, 201);
+    }
+
+    // Generic URL (direct PNG or JSON link)
+    character = await fetchGenericCharacter(url, userId);
+    return c.json({ character }, 201);
+  } catch (err: any) {
+    if (err instanceof SSRFError) {
+      return c.json({ error: err.message }, 400);
+    }
+    return c.json({ error: err.message || "Failed to import from URL" }, 400);
+  }
 });
 
 app.get("/:id", (c) => {

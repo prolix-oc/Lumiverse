@@ -1,21 +1,22 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  padding: 20px;
+  z-index: 10002;
 }
 
 .modal {
-  width: 420px;
-  max-width: 90vw;
+  width: clamp(340px, 94vw, 420px);
   background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));
   border: 1px solid var(--lumiverse-border);
   border-radius: 14px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
   padding: 20px;
+  box-sizing: border-box;
 }
 
 .header {
@@ -138,4 +139,18 @@
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+@media (max-width: 600px) {
+  .overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .modal {
+    width: 100vw;
+    max-width: 100vw;
+    border-radius: 14px 14px 0 0;
+    padding: 20px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  }
 }

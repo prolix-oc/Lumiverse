@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router'
 import Fuse from 'fuse.js'
+import { toast } from '@/lib/toast'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
 import { get } from '@/api/client'
@@ -256,6 +257,7 @@ export function useCharacterBrowser() {
       try {
         const result = await charactersApi.importUrl(url)
         addCharacter(result.character)
+        toast.success(`${result.character.name} was imported`)
         if (result.character.extensions?.character_book?.entries?.length > 0) {
           setPendingLorebookImport(result.character)
         }
