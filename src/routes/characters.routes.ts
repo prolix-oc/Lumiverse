@@ -11,7 +11,7 @@ const app = new Hono();
 // ─── URL parsing helpers ──────────────────────────────────────────────────
 
 const CHUB_DOMAINS = ["chub.ai", "www.chub.ai", "characterhub.org", "www.characterhub.org"];
-const JANNY_DOMAINS = ["jannyai.com", "www.jannyai.com"];
+const JANNY_DOMAINS = ["janitorai.com", "www.janitorai.com", "jannyai.com", "www.jannyai.com"];
 
 function parseChubUrl(url: string): string | null {
   const parts = url.split("/");
@@ -68,18 +68,26 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
   if (!name) throw new Error("Character card from Chub is missing a name");
 
   // Build a V2-style card object for parseCardJson
+  // Chub API field names differ from the standard card spec:
+  //   Chub "personality"        → card "description"
+  //   Chub "tavern_personality" → card "personality"
+  //   Chub "description"        → card "creator_notes"
+  //   Chub "example_dialogs"    → card "mes_example"
+  //   Chub "first_message"      → card "first_mes"
+  //   Chub "embedded_lorebook"  → card "character_book"
+  const creatorName = node.fullPath?.split("/")[0] ?? "";
   const card: Record<string, any> = {
     spec: "chara_card_v2",
     spec_version: "2.0",
     data: {
       name,
-      description: def.description ?? def.personality ?? "",
-      personality: def.tavern_personality ?? def.personality ?? "",
+      description: def.personality ?? "",
+      personality: def.tavern_personality ?? "",
       scenario: def.scenario ?? "",
       first_mes: def.first_message ?? def.first_mes ?? "",
-      mes_example: def.mes_example ?? def.message_example ?? "",
-      creator: node.fullPath?.split("/")[0] ?? "",
-      creator_notes: def.creator_notes ?? "",
+      mes_example: def.example_dialogs ?? def.mes_example ?? "",
+      creator: creatorName,
+      creator_notes: def.description ?? def.creator_notes ?? "",
       system_prompt: def.system_prompt ?? "",
       post_history_instructions: def.post_history_instructions ?? "",
       tags: Array.isArray(node.topics) ? node.topics : (Array.isArray(def.tags) ? def.tags : []),
@@ -88,8 +96,9 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
     },
   };
 
-  if (def.character_book) {
-    card.data.extensions = { ...card.data.extensions, character_book: def.character_book };
+  const characterBook = def.embedded_lorebook ?? def.character_book;
+  if (characterBook) {
+    card.data.extensions = { ...card.data.extensions, character_book: characterBook };
   }
 
   const cardInput = cardSvc.parseCardJson(card);
