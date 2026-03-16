@@ -186,6 +186,8 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "generation",
   "interceptor",
   "context_handler",
+  "characters",
+  "chats",
 ]);
 
 function grantRequestedPermissionsByDefault(

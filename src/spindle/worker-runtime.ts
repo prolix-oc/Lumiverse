@@ -12,6 +12,11 @@ import type {
   SpindleAPI,
   ConnectionProfileDTO,
   PermissionDeniedDetail,
+  CharacterDTO,
+  CharacterCreateDTO,
+  CharacterUpdateDTO,
+  ChatDTO,
+  ChatUpdateDTO,
 } from "lumiverse-spindle-types";
 
 // ─── State ───────────────────────────────────────────────────────────────
@@ -565,6 +570,126 @@ const spindleApi: SpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_get", requestId, connectionId, userId });
       return result as ConnectionProfileDTO | null;
+    },
+  },
+
+  variables: {
+    local: {
+      async get(chatId: string, key: string): Promise<string> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_get_local", requestId, chatId, key });
+        return result as string;
+      },
+      async set(chatId: string, key: string, value: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_set_local", requestId, chatId, key, value });
+      },
+      async delete(chatId: string, key: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_delete_local", requestId, chatId, key });
+      },
+      async list(chatId: string): Promise<Record<string, string>> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_list_local", requestId, chatId });
+        return result as Record<string, string>;
+      },
+      async has(chatId: string, key: string): Promise<boolean> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_has_local", requestId, chatId, key });
+        return result as boolean;
+      },
+    },
+    global: {
+      async get(key: string): Promise<string> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_get_global", requestId, key });
+        return result as string;
+      },
+      async set(key: string, value: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_set_global", requestId, key, value });
+      },
+      async delete(key: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_delete_global", requestId, key });
+      },
+      async list(): Promise<Record<string, string>> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_list_global", requestId });
+        return result as Record<string, string>;
+      },
+      async has(key: string): Promise<boolean> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_has_global", requestId, key });
+        return result as boolean;
+      },
+    },
+  },
+
+  characters: {
+    async list(options?: { limit?: number; offset?: number }): Promise<{ data: CharacterDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "characters_list",
+        requestId,
+        limit: options?.limit,
+        offset: options?.offset,
+      });
+      return result as { data: CharacterDTO[]; total: number };
+    },
+    async get(characterId: string): Promise<CharacterDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "characters_get", requestId, characterId });
+      return result as CharacterDTO | null;
+    },
+    async create(input: CharacterCreateDTO): Promise<CharacterDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "characters_create", requestId, input });
+      return result as CharacterDTO;
+    },
+    async update(characterId: string, input: CharacterUpdateDTO): Promise<CharacterDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "characters_update", requestId, characterId, input });
+      return result as CharacterDTO;
+    },
+    async delete(characterId: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "characters_delete", requestId, characterId });
+      return result as boolean;
+    },
+  },
+
+  chats: {
+    async list(options?: { characterId?: string; limit?: number; offset?: number }): Promise<{ data: ChatDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "chats_list",
+        requestId,
+        characterId: options?.characterId,
+        limit: options?.limit,
+        offset: options?.offset,
+      });
+      return result as { data: ChatDTO[]; total: number };
+    },
+    async get(chatId: string): Promise<ChatDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "chats_get", requestId, chatId });
+      return result as ChatDTO | null;
+    },
+    async getActive(): Promise<ChatDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "chats_get_active", requestId });
+      return result as ChatDTO | null;
+    },
+    async update(chatId: string, input: ChatUpdateDTO): Promise<ChatDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "chats_update", requestId, chatId, input });
+      return result as ChatDTO;
+    },
+    async delete(chatId: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "chats_delete", requestId, chatId });
+      return result as boolean;
     },
   },
 

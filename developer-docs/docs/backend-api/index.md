@@ -20,6 +20,9 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
 | [Storage](storage.md) | Free | Scoped file storage (extension + per-user) |
 | [Ephemeral Storage](ephemeral-storage.md) | `ephemeral_storage` | Temporary storage with TTL and quotas |
+| [Variables](variables.md) | Free | Local (chat-scoped) and global variable access |
+| [Characters](characters.md) | `characters` | CRUD on character cards |
+| [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [Chat Mutation](chat-mutation.md) | `chat_mutation` | Read and modify chat messages |
 | [Event Tracking](event-tracking.md) | `event_tracking` | Structured telemetry and analytics |
 | [Secure Enclave](secure-enclave.md) | Free | Encrypted secret storage |

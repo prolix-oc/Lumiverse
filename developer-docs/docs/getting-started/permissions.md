@@ -14,6 +14,7 @@ These are always available:
 - **DOM** — inject sanitized HTML and CSS via the frontend DOM helper
 - **Drawer Tabs** — register tabs in the ViewportDrawer sidebar
 - **Input Bar Actions** — register actions in the chat input bar Extras popover
+- **Variables** — read/write local (chat-scoped) and global (cross-chat) variables
 - **Logging** — write to the server console
 - **Frontend <-> Backend messaging** — relay messages between your modules
 
@@ -27,6 +28,8 @@ These are always available:
 | `"cors_proxy"` | Make HTTP requests through the Lumiverse server (bypass CORS) |
 | `"context_handler"` | Register middleware that enriches the generation context before prompt assembly |
 | `"ephemeral_storage"` | Use temporary storage with TTL, memory pooling, and per-extension quotas |
+| `"characters"` | Full CRUD on character cards (list, get, create, update, delete) |
+| `"chats"` | CRUD on chat sessions (list, get, update, delete) + get active chat |
 | `"chat_mutation"` | Read and modify chat messages (append, update, delete) |
 | `"event_tracking"` | Track, query, and replay extension-level telemetry events |
 | `"ui_panels"` | Create floating widgets and docked edge panels that overlay/consume screen space |

@@ -665,7 +665,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   const { parameters: mergedParams, breakdown, activatedWorldInfo, deliberationHandledByMacro } = pipeline;
 
   // Inject sidecar breakdown entries for token visibility
-  if (lumiPipelineResults && lumiPipelineResults.size > 0) {
+  if (breakdown && lumiPipelineResults && lumiPipelineResults.size > 0) {
     for (const [key, result] of lumiPipelineResults) {
       breakdown.push({
         type: 'sidecar',

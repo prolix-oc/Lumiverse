@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { ChatSlice } from '@/types/store'
 import type { Message } from '@/types/api'
+import { settingsApi } from '@/api/settings'
 
 export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
   // Tracks recently ended generation IDs, so that a late `startStreaming()`
@@ -81,6 +82,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         regeneratingMessageId: null,
         streamingGenerationType: null,
       })
+      settingsApi.put('activeChatId', chatId).catch(() => {})
     },
 
     setActiveChatWallpaper: (wallpaper) => set({ activeChatWallpaper: wallpaper }),
