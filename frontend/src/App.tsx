@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Outlet } from 'react-router'
 import { useWebSocket } from '@/ws/useWebSocket'
 import { useStore } from '@/store'
@@ -11,6 +11,7 @@ import ViewportDrawer from '@/components/panels/ViewportDrawer'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
+import useIsMobile from '@/hooks/useIsMobile'
 import styles from './App.module.css'
 
 export default function App() {
@@ -18,6 +19,27 @@ export default function App() {
   useThemeApplicator()
   useCharacterTheme()
   useAppInit()
+
+  const isMobile = useIsMobile()
+  const dockPanels = useStore((s) => s.dockPanels)
+  const hiddenPlacements = useStore((s) => s.hiddenPlacements)
+
+  const dockInsets = useMemo(() => {
+    let left = 0, right = 0, top = 0, bottom = 0
+    for (const p of dockPanels) {
+      if (hiddenPlacements.includes(p.id)) continue
+      const size = p.collapsed ? 36 : p.size
+      // On mobile, left/right docks render as bottom sheets
+      const edge = isMobile && (p.edge === 'left' || p.edge === 'right') ? 'bottom' : p.edge
+      switch (edge) {
+        case 'left': left = Math.max(left, size); break
+        case 'right': right = Math.max(right, size); break
+        case 'top': top = Math.max(top, size); break
+        case 'bottom': bottom = Math.max(bottom, size); break
+      }
+    }
+    return { left, right, top, bottom }
+  }, [dockPanels, hiddenPlacements, isMobile])
 
   const loadSettings = useStore((s) => s.loadSettings)
   const isAuthenticated = useStore((s) => s.isAuthenticated)
@@ -68,7 +90,15 @@ export default function App() {
 
   return (
     <AuthGuard>
-      <div className={styles.app}>
+      <div
+        className={styles.app}
+        style={{
+          '--spindle-dock-left': `${dockInsets.left}px`,
+          '--spindle-dock-right': `${dockInsets.right}px`,
+          '--spindle-dock-top': `${dockInsets.top}px`,
+          '--spindle-dock-bottom': `${dockInsets.bottom}px`,
+        } as React.CSSProperties}
+      >
         <ErrorBoundary label="App">
           <main className={styles.main}>
             <Outlet />

@@ -23,6 +23,7 @@ import { registerStateMacros } from "./definitions/runtime";
 import { registerReasoningMacros } from "./definitions/cot";
 import { registerLumiaMacros } from "./definitions/lumia";
 import { registerLoomMacros } from "./definitions/loom";
+import { registerLumiEngineMacros } from "./definitions/lumi-engine";
 
 let initialized = false;
 
@@ -44,4 +45,5 @@ export function initMacros(): void {
   registerReasoningMacros();
   registerLumiaMacros();
   registerLoomMacros();
+  registerLumiEngineMacros();
 }

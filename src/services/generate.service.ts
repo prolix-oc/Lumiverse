@@ -9,6 +9,8 @@ import * as presetsSvc from "./presets.service";
 import * as settingsSvc from "./settings.service";
 import * as personasSvc from "./personas.service";
 import { assemblePrompt, injectReasoningParams, collectVectorActivatedWorldInfo, type VectorActivatedEntry } from "./prompt-assembly.service";
+import { executeLumiPipeline } from "./lumi/lumi-pipeline.service";
+import type { LumiPresetMetadata, LumiPipelineResult } from "../types/lumi-engine";
 import * as charactersSvc from "./characters.service";
 import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationResponse, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
@@ -226,6 +228,7 @@ async function runPromptPipeline(opts: {
   councilToolResults?: any[];
   councilNamedResults?: Record<string, string>;
   precomputedVectorEntries?: VectorActivatedEntry[];
+  lumiPipelineResults?: LumiPipelineResult;
 }): Promise<PromptPipelineResult> {
   // Build spindle context
   let spindleContext: SpindleContext = {
@@ -250,6 +253,7 @@ async function runPromptPipeline(opts: {
   if (opts.inputMessages) {
     messages = opts.inputMessages;
   } else {
+    // All presets (classic and lumi) go through the same assembly path
     const assemblyResult = await assemblePrompt({
       userId: opts.userId,
       chatId: opts.chatId,
@@ -263,7 +267,9 @@ async function runPromptPipeline(opts: {
       councilToolResults: opts.councilToolResults,
       councilNamedResults: opts.councilNamedResults,
       precomputedVectorEntries: opts.precomputedVectorEntries,
+      lumiPipelineResults: opts.lumiPipelineResults,
     });
+
     messages = assemblyResult.messages;
     assembledParams = assemblyResult.parameters;
     breakdown = assemblyResult.breakdown;
@@ -593,6 +599,49 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     }
   }
 
+  // Execute Lumi pipeline if preset uses the lumi engine
+  let lumiPipelineResults: LumiPipelineResult | undefined;
+  {
+    const presetId = input.preset_id || connection.preset_id;
+    const preset = presetId ? presetsSvc.getPreset(input.userId, presetId) : null;
+    console.log("[lumi] Preset lookup: id=%s engine=%s", presetId, preset?.engine);
+    if (preset?.engine === "lumi") {
+      const lumiMeta = preset.metadata as LumiPresetMetadata;
+      console.log("[lumi] Metadata: pipelines=%d sidecar.connectionProfileId=%s", lumiMeta?.pipelines?.length ?? 0, lumiMeta?.sidecar?.connectionProfileId);
+      // Resolve character and messages for pipeline context
+      const pipelineCharacter = charactersSvc.getCharacter(
+        input.userId,
+        input.target_character_id || chat?.character_id || "",
+      );
+      const pipelineMessages = chatsSvc.getMessages(input.userId, input.chat_id)
+        .filter((m) => m.id !== excludeMessageId && m.id !== stagedMessageId);
+
+      if (pipelineCharacter && chat && lumiMeta?.pipelines) {
+        console.log("[lumi] Executing pipeline with %d messages for context", pipelineMessages.length);
+        lumiPipelineResults = await executeLumiPipeline({
+          userId: input.userId,
+          chatId: input.chat_id,
+          pipelines: lumiMeta.pipelines,
+          sidecar: lumiMeta.sidecar || { connectionProfileId: null, model: null, temperature: 0.3, topP: 0.9, maxTokensPerModule: 512, contextWindow: 2048 },
+          messages: pipelineMessages,
+          character: pipelineCharacter,
+          persona: resolvedPersona,
+          chat,
+          signal: abortController.signal,
+        });
+        console.log("[lumi] Pipeline done: %d results", lumiPipelineResults?.size ?? 0);
+        if (lumiPipelineResults && lumiPipelineResults.size > 0) {
+          for (const [k, v] of lumiPipelineResults) {
+            console.log("[lumi]   module '%s': %d chars", k, v.content.length);
+          }
+        }
+        checkAborted();
+      } else {
+        console.warn("[lumi] Skipped: character=%s chat=%s pipelines=%s", !!pipelineCharacter, !!chat, !!lumiMeta?.pipelines);
+      }
+    }
+  }
+
   // Run shared prompt pipeline
   const pipeline = await runPromptPipeline({
     userId: input.userId,
@@ -609,10 +658,24 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     councilToolResults,
     councilNamedResults,
     precomputedVectorEntries,
+    lumiPipelineResults,
   });
 
   let { messages } = pipeline;
   const { parameters: mergedParams, breakdown, activatedWorldInfo, deliberationHandledByMacro } = pipeline;
+
+  // Inject sidecar breakdown entries for token visibility
+  if (breakdown && lumiPipelineResults && lumiPipelineResults.size > 0) {
+    for (const [key, result] of lumiPipelineResults) {
+      breakdown.push({
+        type: 'sidecar',
+        name: `Sidecar: ${key}`,
+        role: 'system',
+        preCountedTokens: result.usage?.total_tokens,
+        excludeFromTotal: true,
+      });
+    }
+  }
 
   // Persist deferred WI state after assembly
   if (pipeline.deferredWiState) {

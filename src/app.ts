@@ -24,6 +24,7 @@ import { spindleRoutes } from "./routes/spindle.routes";
 import { usersRoutes } from "./routes/users.routes";
 import { packsRoutes } from "./routes/packs.routes";
 import { councilRoutes } from "./routes/council.routes";
+import { lumiRoutes } from "./routes/lumi.routes";
 import { imageGenRoutes } from "./routes/image-gen.routes";
 import { characterGalleryRoutes } from "./routes/character-gallery.routes";
 import { embeddingsRoutes } from "./routes/embeddings.routes";
@@ -31,6 +32,7 @@ import { tokenizersRoutes } from "./routes/tokenizers.routes";
 import { spindleOAuthRoutes } from "./routes/spindle-oauth.routes";
 import { systemRoutes } from "./routes/system.routes";
 import { migrateRoutes } from "./routes/migrate.routes";
+import { presetProfilesRoutes } from "./routes/preset-profiles.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 
@@ -121,12 +123,14 @@ app.route("/api/v1/spindle", spindleRoutes);
 app.route("/api/v1/users", usersRoutes);
 app.route("/api/v1/packs", packsRoutes);
 app.route("/api/v1/council", councilRoutes);
+app.route("/api/v1/lumi", lumiRoutes);
 app.route("/api/v1/image-gen", imageGenRoutes);
 app.route("/api/v1/characters/:characterId/gallery", characterGalleryRoutes);
 app.route("/api/v1/embeddings", embeddingsRoutes);
 app.route("/api/v1/tokenizers", tokenizersRoutes);
 app.route("/api/v1/system", systemRoutes);
 app.route("/api/v1/migrate", migrateRoutes);
+app.route("/api/v1/preset-profiles", presetProfilesRoutes);
 
 // Issue single-use WS tickets (behind auth middleware)
 app.post("/api/v1/ws-ticket", (c) => {

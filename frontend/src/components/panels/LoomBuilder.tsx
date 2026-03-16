@@ -49,11 +49,15 @@ import {
   Dice1,
   StopCircle,
   Maximize2,
+  Camera,
+  Link,
+  Unlink,
 } from 'lucide-react'
 import clsx from 'clsx'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
+import { usePresetProfiles } from '@/hooks/usePresetProfiles'
 import { createBlock, createMarkerBlock } from '@/lib/loom/service'
 import {
   MARKER_NAMES,
@@ -966,8 +970,9 @@ function AdvancedSettingsPanel({ advancedSettings, onSave }: { advancedSettings:
 
   const seed = settings.seed ?? defaults.seed
   const stopStrings: string[] = settings.customStopStrings ?? defaults.customStopStrings
+  const collapseMessages: boolean = settings.collapseMessages ?? defaults.collapseMessages
 
-  const isActive = seed >= 0 || stopStrings.length > 0
+  const isActive = seed >= 0 || stopStrings.length > 0 || collapseMessages
 
   const handleSeedChange = (value: string) => {
     const num = parseInt(value)
@@ -990,7 +995,7 @@ function AdvancedSettingsPanel({ advancedSettings, onSave }: { advancedSettings:
       <div className={clsx(s.accordionHeader, isActive && s.accordionHeaderActive)} onClick={() => setIsExpanded(!isExpanded)}>
         <Wrench size={12} style={{ color: isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)', flexShrink: 0 }} />
         <span className={s.accordionTitle}>Advanced</span>
-        {isActive && <span className={s.accordionBadge}>{(seed >= 0 ? 1 : 0) + (stopStrings.length > 0 ? 1 : 0)}</span>}
+        {isActive && <span className={s.accordionBadge}>{(seed >= 0 ? 1 : 0) + (stopStrings.length > 0 ? 1 : 0) + (collapseMessages ? 1 : 0)}</span>}
         {isExpanded ? <ChevronDown size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} /> : <ChevronRight size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} />}
       </div>
       {isExpanded && (
@@ -1024,6 +1029,13 @@ function AdvancedSettingsPanel({ advancedSettings, onSave }: { advancedSettings:
               </div>
             )}
             <span className={s.settingsHint}>Appended to the request stop sequences</span>
+          </div>
+          <div className={s.settingsField}>
+            <label className={s.checkboxLabel}>
+              <input type="checkbox" className={s.checkbox} checked={collapseMessages} onChange={e => onSave({ collapseMessages: e.target.checked })} />
+              Collapse into single user message
+            </label>
+            <span className={s.settingsHint}>Merges all prompt blocks and chat history into one user message. Use with "Names in Messages: In Content" for turn separation.</span>
           </div>
         </div>
       )}
@@ -1130,6 +1142,31 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     importFromST,
     exportInternal,
   } = useLoomBuilder()
+
+  const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+
+  // Apply preset profile binding when the resolved binding changes (chat/character/default switch).
+  // Uses refs for values we read but don't want to trigger the effect on.
+  const saveBlocksRef = useRef(saveBlocks)
+  saveBlocksRef.current = saveBlocks
+  const activePresetRef = useRef(activePreset)
+  activePresetRef.current = activePreset
+
+  useEffect(() => {
+    const binding = presetProfiles.activeBinding
+    const currentBlocks = activePresetRef.current?.blocks
+    if (!binding || !currentBlocks?.length) return
+
+    const updatedBlocks = currentBlocks.map(b =>
+      b.id in binding.block_states ? { ...b, enabled: binding.block_states[b.id] } : b
+    )
+
+    // Only save if something actually changed
+    const changed = updatedBlocks.some((b, i) => b.enabled !== currentBlocks[i].enabled)
+    if (changed) {
+      saveBlocksRef.current(updatedBlocks)
+    }
+  }, [presetProfiles.activeBinding])
 
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
@@ -1353,6 +1390,94 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
           </div>
         )
       })()}
+
+      {/* Preset Profile Bindings */}
+      {activePreset && (
+        <div className={s.profileBar}>
+          <span className={s.profileLabel}>Profiles</span>
+          <div className={s.profileBtnGroup}>
+            {/* Capture / clear defaults */}
+            {!presetProfiles.hasDefaults ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.captureDefaults}
+                disabled={presetProfiles.isLoading}
+                title="Capture current block states as defaults"
+                type="button"
+              >
+                <Camera size={10} /> Capture Defaults
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.clearDefaults}
+                disabled={presetProfiles.isLoading}
+                title="Clear default block states"
+                type="button"
+              >
+                <Camera size={10} /> Defaults
+                <X size={8} />
+              </button>
+            )}
+
+            {/* Bind / unbind character */}
+            {!presetProfiles.hasCharacterBinding ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.bindToCharacter}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset}
+                title={!presetProfiles.hasDefaults ? 'Capture defaults first' : 'Bind current block states to this character'}
+                type="button"
+              >
+                <Link size={10} /> Character
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.unbindCharacter}
+                disabled={presetProfiles.isLoading}
+                title="Remove character binding"
+                type="button"
+              >
+                <Unlink size={10} /> Character
+                <X size={8} />
+              </button>
+            )}
+
+            {/* Bind / unbind chat */}
+            {!presetProfiles.hasChatBinding ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.bindToChat}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset}
+                title={!presetProfiles.hasDefaults ? 'Capture defaults first' : 'Bind current block states to this chat'}
+                type="button"
+              >
+                <Link size={10} /> Chat
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.unbindChat}
+                disabled={presetProfiles.isLoading}
+                title="Remove chat binding"
+                type="button"
+              >
+                <Unlink size={10} /> Chat
+                <X size={8} />
+              </button>
+            )}
+          </div>
+
+          {/* Active source indicator */}
+          {presetProfiles.activeSource !== 'none' && (
+            <span className={s.profileSourceBadge}>
+              {presetProfiles.activeSource === 'chat' ? 'CHAT' :
+               presetProfiles.activeSource === 'character' ? 'CHAR' : 'DEFAULT'}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Scrollable content: settings + block list */}
       <div className={s.scrollArea} ref={scrollAreaRef} onScroll={handleScrollCapture}>

@@ -951,6 +951,81 @@
 }
 
 /* ============================================================================
+   PRESET PROFILE BINDINGS
+   ============================================================================ */
+
+.profileBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-wrap: wrap;
+}
+
+.profileLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+}
+
+.profileBtnGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.profileBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.profileBtn:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text-muted);
+}
+
+.profileBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.profileBtnActive {
+  background: var(--lumiverse-primary-010, rgba(139, 92, 246, 0.1));
+  border-color: var(--lumiverse-primary-muted, rgba(139, 92, 246, 0.35));
+  color: var(--lumiverse-primary);
+}
+
+.profileBtnActive:hover:not(:disabled) {
+  background: var(--lumiverse-primary-010, rgba(139, 92, 246, 0.15));
+  color: var(--lumiverse-primary);
+}
+
+.profileSourceBadge {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--lumiverse-primary);
+  opacity: 0.8;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
    CONTEXT METER (stubbed)
    ============================================================================ */
 

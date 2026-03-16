@@ -7,17 +7,33 @@ import { toolRegistry } from "../../spindle/tool-registry";
 import * as managerSvc from "../../spindle/manager.service";
 
 const SETTINGS_KEY = "council_settings";
+const MIN_COUNCIL_TOOL_TIMEOUT_MS = 15_000;
+
+function normalizeCouncilSettings(settings: CouncilSettings): CouncilSettings {
+  return {
+    ...settings,
+    toolsSettings: {
+      ...settings.toolsSettings,
+      timeoutMs: Math.max(MIN_COUNCIL_TOOL_TIMEOUT_MS, settings.toolsSettings.timeoutMs || 0),
+    },
+  };
+}
 
 /** Load the full council settings for a user, falling back to defaults (deep merge). */
 export function getCouncilSettings(userId: string): CouncilSettings {
   const row = settingsSvc.getSetting(userId, SETTINGS_KEY);
-  if (!row) return { ...COUNCIL_SETTINGS_DEFAULTS, toolsSettings: { ...COUNCIL_TOOLS_DEFAULTS, sidecar: { ...COUNCIL_SIDECAR_DEFAULTS } } };
+  if (!row) {
+    return normalizeCouncilSettings({
+      ...COUNCIL_SETTINGS_DEFAULTS,
+      toolsSettings: { ...COUNCIL_TOOLS_DEFAULTS, sidecar: { ...COUNCIL_SIDECAR_DEFAULTS } },
+    });
+  }
 
   const stored = row.value as Partial<CouncilSettings>;
   const storedTools = stored.toolsSettings ?? {};
   const storedSidecar = (storedTools as any).sidecar ?? {};
 
-  return {
+  return normalizeCouncilSettings({
     ...COUNCIL_SETTINGS_DEFAULTS,
     ...stored,
     toolsSettings: {
@@ -28,13 +44,13 @@ export function getCouncilSettings(userId: string): CouncilSettings {
         ...storedSidecar,
       },
     },
-  };
+  });
 }
 
 /** Partial-merge update of council settings. */
 export function putCouncilSettings(userId: string, partial: Partial<CouncilSettings>): CouncilSettings {
   const current = getCouncilSettings(userId);
-  const merged: CouncilSettings = {
+  const merged = normalizeCouncilSettings({
     ...current,
     ...partial,
     toolsSettings: partial.toolsSettings
@@ -46,7 +62,7 @@ export function putCouncilSettings(userId: string, partial: Partial<CouncilSetti
             : current.toolsSettings.sidecar,
         }
       : current.toolsSettings,
-  };
+  });
   settingsSvc.putSetting(userId, SETTINGS_KEY, merged);
   return merged;
 }

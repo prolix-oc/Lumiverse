@@ -17,6 +17,7 @@ export interface Message {
   send_date: number;
   swipe_id: number;
   swipes: string[];
+  swipe_dates: number[];
   extra: Record<string, any>;
   parent_message_id: string | null;
   branch_id: string | null;

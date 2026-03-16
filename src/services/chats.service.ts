@@ -20,6 +20,7 @@ function rowToMessage(row: any): Message {
     ...row,
     is_user: !!row.is_user,
     swipes: JSON.parse(row.swipes),
+    swipe_dates: JSON.parse(row.swipe_dates || '[]'),
     extra: JSON.parse(row.extra),
     parent_message_id: row.parent_message_id || null,
     branch_id: row.branch_id || null,
@@ -317,15 +318,16 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId?
   const nextIndex = (maxIndex?.max_idx ?? -1) + 1;
 
   const swipes = [input.content];
+  const swipeDates = [now];
 
   getDb()
     .query(
-      `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, extra, parent_message_id, branch_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
-      now, 0, JSON.stringify(swipes), JSON.stringify(input.extra || {}),
+      now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates), JSON.stringify(input.extra || {}),
       input.parent_message_id || null, input.branch_id || null, now
     );
 
@@ -399,12 +401,14 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   const msg = getMessage(userId, messageId);
   if (!msg) return null;
 
+  const now = Math.floor(Date.now() / 1000);
   const swipes = [...msg.swipes, content];
+  const swipeDates = [...msg.swipe_dates, now];
   const newSwipeId = swipes.length - 1;
 
   getDb()
-    .query("UPDATE messages SET swipes = ?, swipe_id = ?, content = ? WHERE id = ?")
-    .run(JSON.stringify(swipes), newSwipeId, content, messageId);
+    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ? WHERE id = ?")
+    .run(JSON.stringify(swipes), JSON.stringify(swipeDates), newSwipeId, content, messageId);
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
@@ -440,6 +444,9 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
   const swipes = [...msg.swipes];
   swipes.splice(swipeIdx, 1);
 
+  const swipeDates = [...msg.swipe_dates];
+  swipeDates.splice(swipeIdx, 1);
+
   // Adjust swipe_id: if deleted swipe was before or at current, shift back (min 0)
   let newSwipeId = msg.swipe_id;
   if (swipeIdx < msg.swipe_id) {
@@ -451,8 +458,8 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
   const newContent = swipes[newSwipeId] ?? swipes[0];
 
   getDb()
-    .query("UPDATE messages SET swipes = ?, swipe_id = ?, content = ? WHERE id = ?")
-    .run(JSON.stringify(swipes), newSwipeId, newContent, messageId);
+    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ? WHERE id = ?")
+    .run(JSON.stringify(swipes), JSON.stringify(swipeDates), newSwipeId, newContent, messageId);
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
@@ -522,21 +529,22 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
       const parentId = m.parent_message_id ? (idMap.get(m.parent_message_id) || null) : null;
 
       db.query(
-        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, extra, parent_message_id, branch_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
-        newMsgId, 
-        newChatId, 
-        m.index_in_chat, 
-        m.is_user, 
-        m.name, 
-        m.content, 
-        m.send_date, 
-        m.swipe_id, 
-        m.swipes, 
-        m.extra, 
-        parentId, 
-        branchId, 
+        newMsgId,
+        newChatId,
+        m.index_in_chat,
+        m.is_user,
+        m.name,
+        m.content,
+        m.send_date,
+        m.swipe_id,
+        m.swipes,
+        m.swipe_dates,
+        m.extra,
+        parentId,
+        branchId,
         now
       );
     }
@@ -660,8 +668,8 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[])
   const now = Math.floor(Date.now() / 1000);
 
   const insert = db.query(
-    `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, extra, parent_message_id, branch_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   const tx = db.transaction(() => {
@@ -670,6 +678,10 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[])
       const swipes = m.swipes && m.swipes.length > 0 ? m.swipes : [m.content];
       const swipeId = m.swipe_id ?? 0;
       const sendDate = m.send_date ?? now;
+      // Use provided swipe_dates or fill all swipes with the message send_date
+      const swipeDates = m.swipe_dates && m.swipe_dates.length === swipes.length
+        ? m.swipe_dates
+        : swipes.map(() => sendDate);
 
       insert.run(
         crypto.randomUUID(),
@@ -681,6 +693,7 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[])
         sendDate,
         swipeId,
         JSON.stringify(swipes),
+        JSON.stringify(swipeDates),
         JSON.stringify(m.extra || {}),
         null,
         null,
@@ -716,6 +729,17 @@ import * as vectorizationQueue from "./vectorization-queue.service";
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
+
+  function stripReasoningTags(content: string): string {                                                                                                                       
+    // Remove complete (closed) reasoning blocks                                                                                                                               
+    let stripped = content.replace(                                                                                                                                            
+      /\s*<(think|thinking|reasoning)>[\s\S]*?<\/\1>\s*/gi,                                                                                                                    
+      ""                                                                                                                                                                       
+    );                                                                                                                                                                         
+    // Remove unclosed reasoning tags (interrupted generation)                                                                                                                 
+    stripped = stripped.replace(/\s*<(think|thinking|reasoning)>[\s\S]*$/i, "");                                                                                               
+    return stripped.trim();                                                                                                                                                    
+  } 
 
 interface ChatChunk {
   id: string;
@@ -802,7 +826,7 @@ async function shouldStartNewChunk(lastChunk: ChatChunk, newMessage: Message, us
 function createChatChunk(chatId: string, messages: Message[]): ChatChunk {
   const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
-  const content = messages.map(m => `[${m.name}]: ${m.content}`).join("\n");
+  const content = messages.map(m => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n")
   const tokenCount = estimateTokens(content);
   const messageIds = messages.map(m => m.id);
 
@@ -839,7 +863,7 @@ function appendToChunk(chunkId: string, message: Message): void {
   const messageIds = JSON.parse(chunk.message_ids);
   messageIds.push(message.id);
 
-  const newContent = chunk.content + `\n[${message.name}]: ${message.content}`;
+  const newContent = chunk.content + `\n[${message.name}]: ${stripReasoningTags(message.content)}`;
   const newTokenCount = estimateTokens(newContent);
   const now = Math.floor(Date.now() / 1000);
 

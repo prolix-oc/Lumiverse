@@ -6,7 +6,7 @@
  * Follows redirects safely by re-validating each hop.
  */
 
-import { resolve4, resolve6 } from "dns/promises";
+import { lookup, resolve4, resolve6 } from "dns/promises";
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -115,6 +115,18 @@ export async function validateHost(hostname: string): Promise<void> {
     v6Addrs = await resolve6(hostname);
   } catch {
     // No AAAA records
+  }
+
+  if (v4Addrs.length === 0 && v6Addrs.length === 0) {
+    try {
+      const lookupAddrs = await lookup(hostname, { all: true });
+      for (const addr of lookupAddrs) {
+        if (addr.family === 4) v4Addrs.push(addr.address);
+        if (addr.family === 6) v6Addrs.push(addr.address);
+      }
+    } catch {
+      // Fall through to the standard resolution error below.
+    }
   }
 
   if (v4Addrs.length === 0 && v6Addrs.length === 0) {

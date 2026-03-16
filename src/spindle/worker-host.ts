@@ -6,6 +6,8 @@ import type {
   ToolRegistration,
   ExtensionInfo,
   ConnectionProfileDTO,
+  CharacterDTO,
+  ChatDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
@@ -19,6 +21,9 @@ import { toolRegistry } from "./tool-registry";
 import * as managerSvc from "./manager.service";
 import * as generateSvc from "../services/generate.service";
 import * as connectionsSvc from "../services/connections.service";
+import * as charactersSvc from "../services/characters.service";
+import * as chatsSvc from "../services/chats.service";
+import * as settingsSvc from "../services/settings.service";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
 import { getDb } from "../db/connection";
 import {
@@ -46,9 +51,57 @@ import {
   statSync,
   renameSync,
 } from "fs";
+import http from "node:http";
+import https from "node:https";
 import { join, resolve, relative, sep } from "path";
 
 const EPHEMERAL_MAX_FILES = 250;
+
+function requestWithAddressFamily(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string },
+  family: 4 | 6
+): Promise<{
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
+}> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const request = (parsed.protocol === "https:" ? https : http).request(
+      parsed,
+      {
+        method: options.method || "GET",
+        headers: options.headers,
+        family,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode || 0,
+            statusText: response.statusMessage || "",
+            headers: Object.fromEntries(
+              Object.entries(response.headers).map(([key, value]) => [
+                key,
+                Array.isArray(value) ? value.join(", ") : String(value ?? ""),
+              ])
+            ),
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      }
+    );
+
+    request.on("error", reject);
+    if (options.body) request.write(options.body);
+    request.end();
+  });
+}
 
 export class WorkerHost {
   private worker: Worker | null = null;
@@ -560,6 +613,69 @@ export class WorkerHost {
         break;
       case "create_oauth_state":
         this.handleCreateOAuthState(msg.requestId);
+        break;
+      // ─── Variables (free tier) ────────────────────────────────────────
+      case "vars_get_local":
+        this.handleVarsGetLocal(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_set_local":
+        this.handleVarsSetLocal(msg.requestId, msg.chatId, msg.key, msg.value);
+        break;
+      case "vars_delete_local":
+        this.handleVarsDeleteLocal(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_list_local":
+        this.handleVarsListLocal(msg.requestId, msg.chatId);
+        break;
+      case "vars_has_local":
+        this.handleVarsHasLocal(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_get_global":
+        this.handleVarsGetGlobal(msg.requestId, msg.key, msg.userId);
+        break;
+      case "vars_set_global":
+        this.handleVarsSetGlobal(msg.requestId, msg.key, msg.value, msg.userId);
+        break;
+      case "vars_delete_global":
+        this.handleVarsDeleteGlobal(msg.requestId, msg.key, msg.userId);
+        break;
+      case "vars_list_global":
+        this.handleVarsListGlobal(msg.requestId, msg.userId);
+        break;
+      case "vars_has_global":
+        this.handleVarsHasGlobal(msg.requestId, msg.key, msg.userId);
+        break;
+      // ─── Characters (gated: "characters") ─────────────────────────────
+      case "characters_list":
+        this.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        break;
+      case "characters_get":
+        this.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);
+        break;
+      case "characters_create":
+        this.handleCharactersCreate(msg.requestId, msg.input, msg.userId);
+        break;
+      case "characters_update":
+        this.handleCharactersUpdate(msg.requestId, msg.characterId, msg.input, msg.userId);
+        break;
+      case "characters_delete":
+        this.handleCharactersDelete(msg.requestId, msg.characterId, msg.userId);
+        break;
+      // ─── Chats (gated: "chats") ───────────────────────────────────────
+      case "chats_list":
+        this.handleChatsList(msg.requestId, msg.characterId, msg.limit, msg.offset, msg.userId);
+        break;
+      case "chats_get":
+        this.handleChatsGet(msg.requestId, msg.chatId, msg.userId);
+        break;
+      case "chats_get_active":
+        this.handleChatsGetActive(msg.requestId, msg.userId);
+        break;
+      case "chats_update":
+        this.handleChatsUpdate(msg.requestId, msg.chatId, msg.input, msg.userId);
+        break;
+      case "chats_delete":
+        this.handleChatsDelete(msg.requestId, msg.chatId, msg.userId);
         break;
       case "log":
         this.handleLog(msg.level, msg.message);
@@ -2407,22 +2523,39 @@ export class WorkerHost {
       }
       await validateHost(parsed.hostname);
 
-      const response = await fetch(url, {
-        method: options.method || "GET",
-        headers: options.headers,
-        body: options.body,
-      });
-      const text = await response.text();
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          status: response.status,
-          statusText: response.statusText,
-          headers: Object.fromEntries(response.headers.entries()),
-          body: text,
-        },
-      });
+      try {
+        const response = await fetch(url, {
+          method: options.method || "GET",
+          headers: options.headers,
+          body: options.body,
+        });
+        const text = await response.text();
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
+            body: text,
+          },
+        });
+      } catch (fetchErr: any) {
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(parsed.hostname)) {
+          throw fetchErr;
+        }
+
+        const retried = await requestWithAddressFamily(url, {
+          method: options.method || "GET",
+          headers: options.headers,
+          body: options.body,
+        }, 4);
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: retried,
+        });
+      }
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -2482,6 +2615,413 @@ export class WorkerHost {
         });
       },
     });
+  }
+
+  // ─── Variables (free tier — no permission gating) ────────────────────
+
+  private getLocalVars(chatId: string): Record<string, string> {
+    const userId = this.getChatOwnerId(chatId);
+    if (!userId) throw new Error("Chat not found");
+    this.enforceScopedUser(userId);
+    const chat = chatsSvc.getChat(userId, chatId);
+    if (!chat) throw new Error("Chat not found");
+    return (chat.metadata?.macro_variables?.local as Record<string, string>) || {};
+  }
+
+  private setLocalVars(chatId: string, vars: Record<string, string>): void {
+    const userId = this.getChatOwnerId(chatId);
+    if (!userId) throw new Error("Chat not found");
+    const chat = chatsSvc.getChat(userId, chatId);
+    if (!chat) throw new Error("Chat not found");
+    const metadata = { ...chat.metadata };
+    const macroVars = (metadata.macro_variables as Record<string, unknown>) || {};
+    macroVars.local = vars;
+    metadata.macro_variables = macroVars;
+    chatsSvc.updateChat(userId, chatId, { metadata });
+  }
+
+  private getGlobalVars(userId: string): Record<string, string> {
+    const setting = settingsSvc.getSetting(userId, "macro_variables_global");
+    return (setting?.value as Record<string, string>) || {};
+  }
+
+  private setGlobalVars(userId: string, vars: Record<string, string>): void {
+    settingsSvc.putSetting(userId, "macro_variables_global", vars);
+  }
+
+  private handleVarsGetLocal(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getLocalVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsSetLocal(requestId: string, chatId: string, key: string, value: string): void {
+    try {
+      const vars = this.getLocalVars(chatId);
+      vars[key] = value;
+      this.setLocalVars(chatId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsDeleteLocal(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getLocalVars(chatId);
+      delete vars[key];
+      this.setLocalVars(chatId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsListLocal(requestId: string, chatId: string): void {
+    try {
+      const vars = this.getLocalVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsHasLocal(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getLocalVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: key in vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsGetGlobal(requestId: string, key: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        throw new Error("userId is required for operator-scoped extensions");
+      }
+      this.enforceScopedUser(resolvedUserId);
+      const vars = this.getGlobalVars(resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsSetGlobal(requestId: string, key: string, value: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        throw new Error("userId is required for operator-scoped extensions");
+      }
+      this.enforceScopedUser(resolvedUserId);
+      const vars = this.getGlobalVars(resolvedUserId);
+      vars[key] = value;
+      this.setGlobalVars(resolvedUserId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsDeleteGlobal(requestId: string, key: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        throw new Error("userId is required for operator-scoped extensions");
+      }
+      this.enforceScopedUser(resolvedUserId);
+      const vars = this.getGlobalVars(resolvedUserId);
+      delete vars[key];
+      this.setGlobalVars(resolvedUserId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsListGlobal(requestId: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        throw new Error("userId is required for operator-scoped extensions");
+      }
+      this.enforceScopedUser(resolvedUserId);
+      const vars = this.getGlobalVars(resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsHasGlobal(requestId: string, key: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        throw new Error("userId is required for operator-scoped extensions");
+      }
+      this.enforceScopedUser(resolvedUserId);
+      const vars = this.getGlobalVars(resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: key in vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Characters (gated: "characters") ──────────────────────────────
+
+  private toCharacterDTO(c: any): CharacterDTO {
+    return {
+      id: c.id,
+      name: c.name,
+      description: c.description || "",
+      personality: c.personality || "",
+      scenario: c.scenario || "",
+      first_mes: c.first_mes || "",
+      mes_example: c.mes_example || "",
+      creator_notes: c.creator_notes || "",
+      system_prompt: c.system_prompt || "",
+      post_history_instructions: c.post_history_instructions || "",
+      tags: Array.isArray(c.tags) ? c.tags : [],
+      alternate_greetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings : [],
+      creator: c.creator || "",
+      image_id: c.image_id || null,
+      created_at: c.created_at,
+      updated_at: c.updated_at,
+    };
+  }
+
+  private handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = charactersSvc.listCharacters(resolvedUserId, {
+        limit: Math.min(limit || 50, 200),
+        offset: offset || 0,
+      });
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((c) => this.toCharacterDTO(c)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleCharactersGet(requestId: string, characterId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const c = charactersSvc.getCharacter(resolvedUserId, characterId);
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: c ? this.toCharacterDTO(c) : null,
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleCharactersCreate(requestId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
+        throw new Error("Character name is required");
+      }
+
+      const c = charactersSvc.createCharacter(resolvedUserId, {
+        name: input.name,
+        description: input.description,
+        personality: input.personality,
+        scenario: input.scenario,
+        first_mes: input.first_mes,
+        mes_example: input.mes_example,
+        creator_notes: input.creator_notes,
+        system_prompt: input.system_prompt,
+        post_history_instructions: input.post_history_instructions,
+        tags: input.tags,
+        alternate_greetings: input.alternate_greetings,
+        creator: input.creator,
+      });
+      this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleCharactersUpdate(requestId: string, characterId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const c = charactersSvc.updateCharacter(resolvedUserId, characterId, input || {});
+      if (!c) throw new Error("Character not found");
+      this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleCharactersDelete(requestId: string, characterId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const deleted = charactersSvc.deleteCharacter(resolvedUserId, characterId);
+      this.postToWorker({ type: "response", requestId, result: deleted });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Chats CRUD (gated: "chats") ──────────────────────────────────
+
+  private toChatDTO(c: any): ChatDTO {
+    return {
+      id: c.id,
+      character_id: c.character_id,
+      name: c.name || "",
+      metadata: (typeof c.metadata === "object" && c.metadata) ? c.metadata : {},
+      created_at: c.created_at,
+      updated_at: c.updated_at,
+    };
+  }
+
+  private handleChatsList(
+    requestId: string,
+    characterId?: string,
+    limit?: number,
+    offset?: number,
+    userId?: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = chatsSvc.listChats(
+        resolvedUserId,
+        { limit: Math.min(limit || 50, 200), offset: offset || 0 },
+        characterId,
+      );
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((c) => this.toChatDTO(c)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatsGet(requestId: string, chatId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const c = chatsSvc.getChat(resolvedUserId, chatId);
+      this.postToWorker({ type: "response", requestId, result: c ? this.toChatDTO(c) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatsGetActive(requestId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const setting = settingsSvc.getSetting(resolvedUserId, "activeChatId");
+      if (!setting?.value || typeof setting.value !== "string") {
+        this.postToWorker({ type: "response", requestId, result: null });
+        return;
+      }
+
+      const chat = chatsSvc.getChat(resolvedUserId, setting.value);
+      this.postToWorker({ type: "response", requestId, result: chat ? this.toChatDTO(chat) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatsUpdate(requestId: string, chatId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const c = chatsSvc.updateChat(resolvedUserId, chatId, input || {});
+      if (!c) throw new Error("Chat not found");
+      this.postToWorker({ type: "response", requestId, result: this.toChatDTO(c) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatsDelete(requestId: string, chatId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const deleted = chatsSvc.deleteChat(resolvedUserId, chatId);
+      this.postToWorker({ type: "response", requestId, result: deleted });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
   }
 
   // ─── Logging ─────────────────────────────────────────────────────────

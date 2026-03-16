@@ -6,6 +6,7 @@ import { createPersonasSlice } from './slices/personas'
 import { createUISlice } from './slices/ui'
 import { createSettingsSlice } from './slices/settings'
 import { createPresetsSlice } from './slices/presets'
+import { createLumiSlice } from './slices/lumi'
 import { createConnectionsSlice } from './slices/connections'
 import { createPacksSlice } from './slices/packs'
 import { createCouncilSlice } from './slices/council'
@@ -25,6 +26,7 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createUISlice(...a),
   ...createSettingsSlice(...a),
   ...createPresetsSlice(...a),
+  ...createLumiSlice(...a),
   ...createConnectionsSlice(...a),
   ...createPacksSlice(...a),
   ...createCouncilSlice(...a),

@@ -326,6 +326,7 @@
   background: rgba(10, 10, 14, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--lumiverse-text-dim);
+  cursor: pointer;
   opacity: 0;
   transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
 }

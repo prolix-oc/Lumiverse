@@ -1,5 +1,6 @@
 import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, useSyncExternalStore } from 'react'
 import { marked } from 'marked'
+import { highlightCode } from '@/lib/codeHighlight'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
@@ -33,7 +34,13 @@ const renderer = createEmphasisAwareRenderer({
 
 renderer.code = ({ text, lang }) => {
   if (lang) {
-    return `<pre data-code-lang="${lang}"><code>${escapeHtml(text)}</code></pre>`
+    const highlighted = highlightCode(text, lang)
+    return `<div class="${styles.codeBlock}"><div class="${styles.codeHeader}"><span class="${styles.codeLang}">${escapeHtml(lang)}</span><button type="button" class="${styles.codeCopy}" data-code-copy title="Copy code"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div><pre><code class="hljs">${highlighted}</code></pre></div>`
+  }
+  // Fenced block with no lang — still render as block
+  if (text.includes('\n')) {
+    const highlighted = highlightCode(text)
+    return `<div class="${styles.codeBlock}"><div class="${styles.codeHeader}"><span class="${styles.codeLang}">text</span><button type="button" class="${styles.codeCopy}" data-code-copy title="Copy code"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div><pre><code class="hljs">${highlighted}</code></pre></div>`
   }
   return `<code>${escapeHtml(text)}</code>`
 }
@@ -382,6 +389,33 @@ export default function MessageContent({
     const handleClick = (e: MouseEvent) => {
       const img = (e.target as HTMLElement).closest('img[data-lightbox], .prose img') as HTMLImageElement | null
       if (img?.src) setLightboxSrc(img.src)
+    }
+    container.addEventListener('click', handleClick)
+    return () => container.removeEventListener('click', handleClick)
+  }, [])
+
+  // Attach click handler for code copy buttons
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const handleClick = (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest('[data-code-copy]') as HTMLButtonElement | null
+      if (!btn) return
+      const codeBlock = btn.closest(`.${styles.codeBlock}`)
+      const codeEl = codeBlock?.querySelector('code')
+      if (!codeEl) return
+      const text = codeEl.textContent || ''
+      navigator.clipboard.writeText(text).then(() => {
+        const label = btn.querySelector('span')
+        if (label) {
+          label.textContent = 'Copied!'
+          btn.classList.add(styles.codeCopied)
+          setTimeout(() => {
+            label.textContent = 'Copy'
+            btn.classList.remove(styles.codeCopied)
+          }, 2000)
+        }
+      })
     }
     container.addEventListener('click', handleClick)
     return () => container.removeEventListener('click', handleClick)

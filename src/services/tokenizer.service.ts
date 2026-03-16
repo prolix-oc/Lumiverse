@@ -265,10 +265,9 @@ export async function countBreakdown(
   for (const entry of breakdown) {
     let tokens = 0;
 
-    // For chat_history entries, tokenize from the pre-snapshotted messages
-    // when available. This gives an accurate per-message count that includes
-    // role text, matching what the LLM actually receives.
-    if (entry.type === "chat_history" && chatHistoryMessages && chatHistoryMessages.length > 0) {
+    if (entry.preCountedTokens != null) {
+      tokens = entry.preCountedTokens;
+    } else if (entry.type === "chat_history" && chatHistoryMessages && chatHistoryMessages.length > 0) {
       for (const msg of chatHistoryMessages) {
         const text = getTextContent(msg);
         // Count role + content together to capture the full message footprint
@@ -278,7 +277,9 @@ export async function countBreakdown(
       tokens = countText(entry.content || "");
     }
 
-    totalTokens += tokens;
+    if (!entry.excludeFromTotal) {
+      totalTokens += tokens;
+    }
     entries.push({
       name: entry.name,
       type: entry.type,

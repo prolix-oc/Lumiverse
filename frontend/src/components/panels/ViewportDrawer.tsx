@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
-  User, Drama, Wand2, Link2, Package,
+  User, Drama, Wand2, Link2, Package, Zap,
   Users, PenTool, Sparkles, FileText, Brain, ScrollText,
   MessageCircle, Image, Palette, Settings, X, Library, Puzzle,
   GitFork, Globe, MessageSquareReply, GitBranch, Wallpaper
@@ -15,6 +15,7 @@ import PersonaManager from './PersonaManager'
 import ConnectionManager from './ConnectionManager'
 import PresetManager from './PresetManager'
 import LoomBuilder from './LoomBuilder'
+import LumiBuilder from './LumiBuilder'
 import SummaryEditor from './SummaryEditor'
 import ThemePanel from './ThemePanel'
 import WorldBookPanel from './world-book/WorldBookPanel'
@@ -52,6 +53,7 @@ const TABS: Tab[] = [
   { id: 'profile', icon: User, label: 'Profile', component: () => <CharacterProfile /> },
   { id: 'presets', icon: Wand2, label: 'Reasoning', component: () => <PresetManager /> },
   { id: 'loom', icon: GitFork, label: 'Loom', component: () => <LoomBuilder compact /> },
+  { id: 'lumi', icon: Zap, label: 'Lumi', component: () => <LumiBuilder compact /> },
   { id: 'connections', icon: Link2, label: 'Connections', component: () => <ConnectionManager /> },
   { id: 'browser', icon: Package, label: 'Browser', component: () => <PackBrowser /> },
   { id: 'characters', icon: Users, label: 'Characters', component: () => <CharacterBrowser /> },
@@ -62,7 +64,7 @@ const TABS: Tab[] = [
   { id: 'prompt', icon: FileText, label: 'Prompt', component: () => <PromptPanel /> },
   { id: 'council', icon: Brain, label: 'Council', component: () => <CouncilManager /> },
   { id: 'summary', icon: ScrollText, label: 'Summary', component: () => <SummaryEditor /> },
-  { id: 'feedback', icon: MessageSquareReply, label: 'Feedback', component: () => <CouncilFeedback /> },
+{ id: 'feedback', icon: MessageSquareReply, label: 'Feedback', component: () => <CouncilFeedback /> },
   { id: 'worldinfo', icon: Globe, label: 'World Info', component: () => <WorldInfoFeedback /> },
   { id: 'imagegen', icon: Image, label: 'Image Gen', component: () => <ImageGenPanel /> },
   { id: 'wallpaper', icon: Wallpaper, label: 'Wallpaper', component: () => <WallpaperPanel /> },
@@ -268,7 +270,7 @@ export default function ViewportDrawer() {
                 <X size={16} />
               </button>
             </div>
-            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'browser') && styles.panelContentFull)}>
+            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)}>
               <ErrorBoundary label={activeTabConfig?.label}>
                 {activeTabConfig?.component()}
               </ErrorBoundary>

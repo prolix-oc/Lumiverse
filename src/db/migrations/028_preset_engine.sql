@@ -1,0 +1,1 @@
+ALTER TABLE presets ADD COLUMN engine TEXT NOT NULL DEFAULT 'classic';

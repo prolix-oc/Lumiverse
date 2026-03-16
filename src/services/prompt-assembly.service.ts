@@ -1,5 +1,5 @@
 import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry } from "../llm/types";
-import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote } from "../types/preset";
+import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
 import type { Persona } from "../types/persona";
@@ -20,6 +20,7 @@ import * as settingsSvc from "./settings.service";
 import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
 import * as imagesSvc from "./images.service";
+import * as presetProfilesSvc from "./preset-profiles.service";
 import { getCouncilSettings } from "./council/council-settings.service";
 import { getDb } from "../db/connection";
 import { readFileSync } from "fs";
@@ -175,11 +176,25 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   }
 
   // Extract Loom structures from preset
-  const blocks: PromptBlock[] = preset?.prompt_order ?? [];
+  const blocks: PromptBlock[] = (preset?.prompt_order ?? []).map((b: PromptBlock) => ({ ...b }));
   const prompts = preset?.prompts ?? {};
   const promptBehavior: PromptBehavior = prompts.promptBehavior ?? {};
   const completionSettings: CompletionSettings = prompts.completionSettings ?? {};
   const samplerOverrides: SamplerOverrides | null = preset?.parameters?.samplerOverrides ?? null;
+
+  // Apply preset profile binding — override block enabled states based on
+  // chat/character/default binding (if one exists for this preset)
+  if (resolvedPresetId && blocks.length) {
+    const resolved = presetProfilesSvc.resolveProfile(
+      ctx.userId,
+      resolvedPresetId,
+      chat.id,
+      characterId
+    );
+    if (resolved.binding) {
+      presetProfilesSvc.applyProfileToBlocks(blocks, resolved.binding);
+    }
+  }
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {
@@ -281,6 +296,27 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
+
+  // Inject Lumi pipeline results into macroEnv (if present)
+  if (ctx.lumiPipelineResults && ctx.lumiPipelineResults.size > 0) {
+    const pipelineResults = ctx.lumiPipelineResults;
+    const moduleNames = new Map<string, string>();
+    const lumiMeta = preset?.metadata as any;
+    if (lumiMeta?.pipelines) {
+      for (const pipeline of lumiMeta.pipelines) {
+        if (Array.isArray(pipeline.modules)) {
+          for (const mod of pipeline.modules) {
+            moduleNames.set(mod.key, mod.name);
+          }
+        }
+      }
+    }
+    macroEnv.extra.lumiPipeline = {
+      results: pipelineResults,
+      moduleNames,
+    };
+    console.log("[lumi-assembly] Injected %d pipeline results into macroEnv. Module names: %s", pipelineResults.size, [...moduleNames.values()].join(", "));
+  }
 
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (ctx.generationType === "impersonate" && ctx.impersonateMode === "oneliner") {
@@ -616,6 +652,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     applyAppendBlock(result, breakdown, append);
   }
 
+  // ---- Collapse all messages into a single user message (if enabled) ----
+  const advSettings: AdvancedSettings | undefined = prompts.advancedSettings;
+  if (advSettings?.collapseMessages) {
+    collapseToSingleUserMessage(result);
+  }
+
   // ---- Build parameters from sampler overrides + advanced settings + reasoning + custom body ----
   const parameters = buildParameters(samplerOverrides, preset, reasoningVal, connection?.provider, connection?.model);
 
@@ -718,7 +760,7 @@ async function applyGuidedGenerations(
  * When `settingsMap` is provided (from batch load), settings are read from it
  * instead of individual DB queries.
  */
-function populateLumiaLoomContext(
+export function populateLumiaLoomContext(
   macroEnv: MacroEnv,
   userId: string,
   chat: Chat,
@@ -829,7 +871,7 @@ function collectWorldInfoEntries(userId: string, character: Character, persona: 
   return collectWorldInfoSources(userId, character, persona, globalWorldBookIds).entries;
 }
 
-function collectWorldInfoSources(
+export function collectWorldInfoSources(
   userId: string,
   character: Character,
   persona: Persona | null,
@@ -1492,6 +1534,53 @@ function applyCompletionSettings(
   }
 
   // NOTE: assistantPrefill is now folded into the user nudge by assemblePrompt().
+}
+
+/**
+ * Collapse all assembled messages into a single `user` message.
+ *
+ * Concatenates text content from every message with double-newline separators.
+ * Media parts (images/audio) are collected into a single multipart message.
+ * Best used alongside `namesBehavior: 2` ("In Content") so user/assistant turns
+ * are visually separated by name prefixes within the collapsed text.
+ *
+ * Mutates the `result` array in place.
+ */
+function collapseToSingleUserMessage(result: LlmMessage[]): void {
+  if (result.length <= 1) return;
+
+  const textChunks: string[] = [];
+  const mediaParts: import("../llm/types").LlmMessagePart[] = [];
+
+  for (const msg of result) {
+    if (typeof msg.content === "string") {
+      if (msg.content) textChunks.push(msg.content);
+    } else {
+      // Multipart: collect text and media separately
+      for (const part of msg.content) {
+        if (part.type === "text") {
+          if (part.text) textChunks.push(part.text);
+        } else {
+          mediaParts.push(part);
+        }
+      }
+    }
+  }
+
+  const collapsed = textChunks.join("\n\n");
+
+  // Replace entire array with a single user message
+  result.length = 0;
+  if (mediaParts.length > 0) {
+    // Multipart: text first, then media
+    const parts: import("../llm/types").LlmMessagePart[] = [
+      { type: "text", text: collapsed },
+      ...mediaParts,
+    ];
+    result.push({ role: "user", content: parts });
+  } else {
+    result.push({ role: "user", content: collapsed });
+  }
 }
 
 /**

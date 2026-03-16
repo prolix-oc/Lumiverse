@@ -6,6 +6,7 @@ import {
   Check, Download, Loader2, RefreshCw,
 } from 'lucide-react'
 import { packsApi } from '@/api/packs'
+import { transformLucidPack, normalizePackJson } from '@/utils/pack-transform'
 import LazyImage from '@/components/shared/LazyImage'
 import type { PackWithItems } from '@/types/api'
 import styles from './PackBrowser.module.css'
@@ -28,53 +29,6 @@ const TAB_TO_COUNT_FIELD: Record<string, string> = {
   'Loom Retrofits': 'loomRetrofitCount',
   'Loom Narratives': 'narrativeStyleCount',
   'Council Tools': 'loomToolCount',
-}
-
-// Transform from Lucid.cards raw format to PackImportPayload
-function transformLucidPack(packData: any, catalogEntry: any) {
-  const cat = (c: string) => {
-    const lower = (c || '').toLowerCase()
-    if (lower.includes('utility') || lower.includes('utilities')) return 'loom_utility' as const
-    if (lower.includes('retrofit')) return 'retrofit' as const
-    return 'narrative_style' as const
-  }
-
-  return {
-    name: packData.packName || catalogEntry.packName || 'Unknown Pack',
-    author: packData.packAuthor || catalogEntry.packAuthor || '',
-    coverUrl: packData.coverUrl || catalogEntry.coverUrl || undefined,
-    version: String(packData.version || 1),
-    sourceUrl: `https://lucid.cards/api/lumia-dlc/${catalogEntry.slug}`,
-    extras: packData.packExtras?.length ? { items: packData.packExtras } : {},
-    lumiaItems: (packData.lumiaItems || []).map((item: any) => ({
-      name: item.lumiaName || item.name || 'Unknown',
-      avatarUrl: item.avatarUrl || undefined,
-      authorName: item.authorName || '',
-      definition: item.lumiaDefinition || item.definition || '',
-      personality: item.lumiaPersonality || item.personality || '',
-      behavior: item.lumiaBehavior || item.behavior || '',
-      genderIdentity: item.genderIdentity ?? 0,
-      version: String(item.version || 1),
-    })),
-    loomItems: (packData.loomItems || []).map((item: any) => ({
-      name: item.loomName || item.name || 'Unknown',
-      content: item.loomContent || item.content || '',
-      category: cat(item.loomCategory || item.category || ''),
-      authorName: item.authorName || '',
-      version: String(item.version || 1),
-    })),
-    loomTools: (packData.loomTools || []).map((tool: any) => ({
-      toolName: tool.toolName || tool.tool_name || 'unknown_tool',
-      displayName: tool.displayName || tool.display_name || '',
-      description: tool.description || '',
-      prompt: tool.prompt || '',
-      inputSchema: tool.inputSchema || tool.input_schema || {},
-      resultVariable: tool.resultVariable || tool.result_variable || '',
-      storeInDeliberation: tool.storeInDeliberation ?? tool.store_in_deliberation ?? false,
-      authorName: tool.authorName || '',
-      version: String(tool.version || 1),
-    })),
-  }
 }
 
 interface Props {
@@ -193,13 +147,14 @@ export default function ImportPackModal({ onImport, onClose }: Props) {
     if (lastImportedPack) onImport(lastImportedPack)
   }, [selectedPacks, importing, onImport])
 
-  // File import
+  // File import — unwrap { pack: {...} } wrapper if present (extension export format)
   const handleFile = useCallback(async (file: File) => {
     setFileError(null)
     setFileLoading(true)
     try {
       const text = await file.text()
-      const payload = JSON.parse(text)
+      const raw = JSON.parse(text)
+      const payload = normalizePackJson(raw)
       const pack = await packsApi.importJson(payload)
       onImport(pack)
     } catch (e: any) {

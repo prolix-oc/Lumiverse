@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal } from 'lucide-react'
+import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal, GitBranch } from 'lucide-react'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
@@ -19,6 +19,7 @@ export default function SpindlePanel() {
   const restartExtension = useStore((s) => s.restartExtension)
   const grantPermission = useStore((s) => s.grantPermission)
   const revokePermission = useStore((s) => s.revokePermission)
+  const switchBranch = useStore((s) => s.switchBranch)
   const openSettings = useStore((s) => s.openSettings)
   const user = useStore((s) => s.user)
   const spindlePrivileged = useStore((s) => s.spindlePrivileged)
@@ -32,6 +33,17 @@ export default function SpindlePanel() {
   const [importingLocal, setImportingLocal] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
+
+  // Branch selection for install
+  const [installBranches, setInstallBranches] = useState<string[]>([])
+  const [installBranch, setInstallBranch] = useState<string | null>(null)
+  const [fetchingBranches, setFetchingBranches] = useState(false)
+
+  // Branch switching for installed extensions
+  const [branchMenuExtId, setBranchMenuExtId] = useState<string | null>(null)
+  const [branchMenuBranches, setBranchMenuBranches] = useState<string[]>([])
+  const [branchMenuCurrent, setBranchMenuCurrent] = useState<string | null>(null)
+  const [fetchingExtBranches, setFetchingExtBranches] = useState(false)
   const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number; width: number }>({
     top: 0,
     left: 12,
@@ -81,13 +93,46 @@ export default function SpindlePanel() {
     }
   }, [addMenuOpen, computeAddMenuPosition])
 
+  // Fetch branches when install URL looks like a valid git URL
+  const fetchBranchesForUrl = useCallback(async (url: string) => {
+    if (!url.trim() || !url.includes('/')) {
+      setInstallBranches([])
+      setInstallBranch(null)
+      return
+    }
+    setFetchingBranches(true)
+    try {
+      const { branches } = await spindleApi.listRemoteBranches(url.trim())
+      setInstallBranches(branches)
+      setInstallBranch(null)
+    } catch {
+      setInstallBranches([])
+      setInstallBranch(null)
+    } finally {
+      setFetchingBranches(false)
+    }
+  }, [])
+
+  // Debounced branch fetch on URL change
+  useEffect(() => {
+    if (!installUrl.trim()) {
+      setInstallBranches([])
+      setInstallBranch(null)
+      return
+    }
+    const timeout = setTimeout(() => fetchBranchesForUrl(installUrl), 600)
+    return () => clearTimeout(timeout)
+  }, [installUrl, fetchBranchesForUrl])
+
   const handleInstall = useCallback(async () => {
     if (!installUrl.trim()) return
     setInstalling(true)
     setInstallError(null)
     try {
-      await installExtension(installUrl.trim())
+      await installExtension(installUrl.trim(), installBranch)
       setInstallUrl('')
+      setInstallBranch(null)
+      setInstallBranches([])
       setAddMenuOpen(false)
     } catch (err: any) {
       const message = err?.body?.error || err?.message || 'Installation failed'
@@ -96,7 +141,7 @@ export default function SpindlePanel() {
     } finally {
       setInstalling(false)
     }
-  }, [installUrl, installExtension])
+  }, [installUrl, installBranch, installExtension])
 
   const handleToggle = useCallback(async (ext: ExtensionInfo) => {
     setLoadingAction(ext.id)
@@ -145,6 +190,39 @@ export default function SpindlePanel() {
       setLoadingAction(null)
     }
   }, [removeExtension])
+
+  const handleOpenBranchMenu = useCallback(async (ext: ExtensionInfo) => {
+    if (branchMenuExtId === ext.id) {
+      setBranchMenuExtId(null)
+      return
+    }
+    setBranchMenuExtId(ext.id)
+    setBranchMenuBranches([])
+    setBranchMenuCurrent(null)
+    setFetchingExtBranches(true)
+    try {
+      const result = await spindleApi.getBranches(ext.id)
+      setBranchMenuBranches(result.branches)
+      setBranchMenuCurrent(result.current)
+    } catch (err: any) {
+      console.error('[Spindle] Failed to fetch branches:', err)
+      setBranchMenuExtId(null)
+    } finally {
+      setFetchingExtBranches(false)
+    }
+  }, [branchMenuExtId])
+
+  const handleSwitchBranch = useCallback(async (ext: ExtensionInfo, branch: string) => {
+    setLoadingAction(ext.id)
+    setBranchMenuExtId(null)
+    try {
+      await switchBranch(ext.id, branch)
+    } catch (err: any) {
+      console.error('[Spindle] Branch switch failed:', err)
+    } finally {
+      setLoadingAction(null)
+    }
+  }, [switchBranch])
 
   const handlePermissionToggle = useCallback(async (ext: ExtensionInfo, perm: string) => {
     try {
@@ -236,6 +314,8 @@ export default function SpindlePanel() {
               {(() => {
                 const installScope = ((ext.metadata as any)?.install_scope || 'operator') as 'operator' | 'user'
                 const installedBy = ((ext.metadata as any)?.installed_by_user_id || null) as string | null
+                const extBranch = ((ext.metadata as any)?.branch || null) as string | null
+                const isNonDefaultBranch = extBranch && extBranch !== 'main' && extBranch !== 'master'
                 const canManage = isPrivileged || (installScope === 'user' && !!user?.id && installedBy === user.id)
                 const scopeLabel = installScope === 'user' ? 'Personal' : 'Operator'
 
@@ -257,7 +337,14 @@ export default function SpindlePanel() {
                   <span className={styles.extensionMeta}>
                     v{ext.version} by {ext.author}
                   </span>
-                  <span className={styles.extensionMeta}>{scopeLabel}</span>
+                  <span className={styles.extensionMeta}>
+                    {scopeLabel}
+                    {isNonDefaultBranch && (
+                      <span className={styles.branchBadge}>
+                        <GitBranch size={10} /> {extBranch}
+                      </span>
+                    )}
+                  </span>
                 </div>
 
                 <div className={styles.extensionActions}>
@@ -277,35 +364,38 @@ export default function SpindlePanel() {
                 <div className={styles.extensionDesc}>{ext.description}</div>
               )}
 
-              {/* Permissions */}
-              {ext.permissions.length > 0 && (
-                <div className={styles.permissions}>
-                  {ext.permissions.map((perm) => {
-                    const granted = ext.granted_permissions.includes(perm)
-                    const pretty = perm
-                      .replaceAll('_', ' ')
-                      .replace(/\b\w/g, (ch) => ch.toUpperCase())
-                    return (
-                      <button
-                        key={perm}
-                        className={clsx(
-                          styles.permPill,
-                          granted ? styles.permPillActive : styles.permPillInactive
-                        )}
-                        onClick={() => handlePermissionToggle(ext, perm)}
-                        title={
-                          canManage
-                            ? `${pretty} (${granted ? 'Enabled' : 'Disabled'})`
-                            : 'Managed by operator'
-                        }
-                        disabled={!canManage}
-                      >
-                        {pretty}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+              {/* Permissions — union of declared + granted so runtime-requested perms are visible */}
+              {(() => {
+                const allPerms = [...new Set([...ext.permissions, ...ext.granted_permissions])]
+                return allPerms.length > 0 ? (
+                  <div className={styles.permissions}>
+                    {allPerms.map((perm) => {
+                      const granted = ext.granted_permissions.includes(perm)
+                      const pretty = perm
+                        .replaceAll('_', ' ')
+                        .replace(/\b\w/g, (ch) => ch.toUpperCase())
+                      return (
+                        <button
+                          key={perm}
+                          className={clsx(
+                            styles.permPill,
+                            granted ? styles.permPillActive : styles.permPillInactive
+                          )}
+                          onClick={() => handlePermissionToggle(ext, perm)}
+                          title={
+                            canManage
+                              ? `${pretty} (${granted ? 'Enabled' : 'Disabled'})`
+                              : 'Managed by operator'
+                          }
+                          disabled={!canManage}
+                        >
+                          {pretty}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null
+              })()}
 
               {/* Actions row */}
               <div className={styles.extensionActions}>
@@ -336,6 +426,16 @@ export default function SpindlePanel() {
                     <Github size={14} />
                   </a>
                 )}
+                {canManage && (
+                  <button
+                    className={clsx(styles.actionBtn, branchMenuExtId === ext.id && styles.actionBtnActive)}
+                    onClick={() => handleOpenBranchMenu(ext)}
+                    disabled={loadingAction === ext.id}
+                    title="Switch branch"
+                  >
+                    <GitBranch size={14} />
+                  </button>
+                )}
                 <button
                   className={styles.actionBtn}
                   onClick={() => openSettings('extensions')}
@@ -353,6 +453,33 @@ export default function SpindlePanel() {
                   <Trash2 size={14} />
                 </button>
               </div>
+
+              {/* Branch switch dropdown */}
+              {branchMenuExtId === ext.id && (
+                <div className={styles.branchMenu}>
+                  {fetchingExtBranches ? (
+                    <span className={styles.branchMenuLoading}>Loading branches...</span>
+                  ) : branchMenuBranches.length === 0 ? (
+                    <span className={styles.branchMenuLoading}>No remote branches found</span>
+                  ) : (
+                    branchMenuBranches.map((b) => (
+                      <button
+                        key={b}
+                        className={clsx(
+                          styles.branchMenuItem,
+                          b === branchMenuCurrent && styles.branchMenuItemCurrent
+                        )}
+                        onClick={() => b !== branchMenuCurrent && handleSwitchBranch(ext, b)}
+                        disabled={b === branchMenuCurrent || loadingAction === ext.id}
+                      >
+                        <GitBranch size={12} />
+                        {b}
+                        {b === branchMenuCurrent && <span className={styles.branchCurrentLabel}>current</span>}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
                   </>
                 )
               })()}
@@ -392,6 +519,27 @@ export default function SpindlePanel() {
           onKeyDown={(e) => e.key === 'Enter' && handleInstall()}
           disabled={installing}
         />
+        {fetchingBranches && (
+          <span className={styles.branchFetchHint}>Detecting branches...</span>
+        )}
+        {!fetchingBranches && installBranches.length > 1 && (
+          <div className={styles.branchSelect}>
+            <label className={styles.branchSelectLabel}>
+              <GitBranch size={11} /> Branch
+            </label>
+            <select
+              className={styles.branchSelectInput}
+              value={installBranch || ''}
+              onChange={(e) => setInstallBranch(e.target.value || null)}
+              disabled={installing}
+            >
+              <option value="">Default</option>
+              {installBranches.map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <button
           className={styles.menuActionBtn}
           onClick={handleInstall}

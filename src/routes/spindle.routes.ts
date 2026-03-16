@@ -118,6 +118,20 @@ app.put("/ephemeral/config", requireOwner, async (c) => {
   }
 });
 
+// POST /api/v1/spindle/branches — List branches from a remote GitHub URL (pre-install)
+app.post("/branches", requireOwner, async (c) => {
+  try {
+    const body = await c.req.json();
+    if (!body.github_url) {
+      return c.json({ error: "github_url is required" }, 400);
+    }
+    const branches = managerSvc.listRemoteBranches(body.github_url);
+    return c.json({ branches });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
 // POST /api/v1/spindle/install — Install from GitHub URL (admin/owner only)
 app.post("/install", requireOwner, async (c) => {
   const viewer = getViewer(c);
@@ -138,10 +152,13 @@ app.post("/install", requireOwner, async (c) => {
       installScope === "user"
         ? (typeof body.user_id === "string" && body.user_id.trim() ? body.user_id.trim() : viewer.userId)
         : null;
+    const branch =
+      typeof body.branch === "string" && body.branch.trim() ? body.branch.trim() : null;
 
     const ext = await managerSvc.install(body.github_url, {
       installScope,
       installedByUserId,
+      branch,
     });
 
     return c.json(ext, 201);
@@ -317,6 +334,49 @@ app.get("/:id/manifest", (c) => {
 
     const manifest = managerSvc.getManifest(ext.identifier);
     return c.json(manifest);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+// GET /api/v1/spindle/:id/branches — List branches for an installed extension
+app.get("/:id/branches", async (c) => {
+  try {
+    const ext = getVisibleExtension(c, c.req.param("id"));
+    if (!ext) return c.json({ error: "Not found" }, 404);
+
+    const result = managerSvc.getBranches(ext.identifier);
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+// POST /api/v1/spindle/:id/switch-branch — Switch to a different branch
+app.post("/:id/switch-branch", async (c) => {
+  try {
+    const ext = getVisibleExtension(c, c.req.param("id"));
+    if (!ext) return c.json({ error: "Not found" }, 404);
+    if (!canManageExtension(c, ext)) return c.json({ error: "Forbidden" }, 403);
+
+    const body = await c.req.json();
+    if (!body.branch || typeof body.branch !== "string") {
+      return c.json({ error: "branch is required" }, 400);
+    }
+
+    // Stop if running
+    if (lifecycle.isRunning(ext.id)) {
+      await lifecycle.stopExtension(ext.id);
+    }
+
+    const updated = await managerSvc.switchBranch(ext.identifier, body.branch);
+
+    // Restart if was enabled
+    if (ext.enabled) {
+      await lifecycle.startExtension(ext.id);
+    }
+
+    return c.json(updated);
   } catch (err: any) {
     return c.json({ error: err.message }, 400);
   }

@@ -14,6 +14,9 @@ import type {
   MessageEditedPayload,
   MessageDeletedPayload,
   MessageSwipedPayload,
+  LumiPipelineStartedPayload,
+  LumiModuleDonePayload,
+  LumiPipelineCompletedPayload,
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
 } from '@/types/ws-events'
@@ -326,6 +329,30 @@ export function useWebSocket() {
           deliberationBlock: '',
           totalDurationMs: payload.totalDurationMs,
         })
+      }),
+
+      // Lumi Pipeline events
+      wsClient.on(EventType.LUMI_PIPELINE_STARTED, (payload: LumiPipelineStartedPayload) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setLumiExecuting(true)
+          state.clearLumiResults()
+        }
+      }),
+
+      wsClient.on(EventType.LUMI_MODULE_DONE, (payload: LumiModuleDonePayload) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.addLumiResult(payload)
+        }
+      }),
+
+      wsClient.on(EventType.LUMI_PIPELINE_COMPLETED, (payload: LumiPipelineCompletedPayload) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setLumiExecuting(false)
+          state.setLumiPipelineResult(payload)
+        }
       }),
 
       // Spindle extension events

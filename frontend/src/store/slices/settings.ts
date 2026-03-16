@@ -31,6 +31,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'activeProfileId',
   'activePersonaId',
   'activeLoomPresetId',
+  'activeLumiPresetId',
   // Character browser preferences
   'favorites',
   'viewMode',
@@ -49,6 +50,10 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'selectedDefinition',
   'selectedBehaviors',
   'selectedPersonalities',
+  // Active Loom selections
+  'selectedLoomStyles',
+  'selectedLoomUtils',
+  'selectedLoomRetrofits',
   // Global world books (always active regardless of character)
   'globalWorldBooks',
   // Image generation settings

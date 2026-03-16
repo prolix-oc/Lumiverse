@@ -6,9 +6,12 @@
   height: 100%;
   max-height: 100dvh;
   background: var(--lumiverse-bg-deep);
-  /* Safe area insets for edge-to-edge rendering (viewport-fit=cover) */
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Safe area insets + Spindle dock panel insets */
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--spindle-dock-top, 0px));
+  padding-right: var(--spindle-dock-right, 0px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--spindle-dock-bottom, 0px));
+  padding-left: var(--spindle-dock-left, 0px);
+  transition: padding 0.2s ease;
 }
 
 /* In standalone PWA mode, remove the dvh clamp — height:100% from the

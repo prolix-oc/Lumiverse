@@ -6,7 +6,7 @@ export const presetsApi = {
     return get<PaginatedResult<Preset>>('/presets', params)
   },
 
-  listRegistry(params?: { limit?: number; offset?: number; provider?: string }) {
+  listRegistry(params?: { limit?: number; offset?: number; provider?: string; engine?: string }) {
     return get<PaginatedResult<PresetRegistryItem>>('/presets/registry', params)
   },
 

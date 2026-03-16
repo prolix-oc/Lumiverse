@@ -375,7 +375,71 @@ export function getAllLoomItems(userId: string, category?: string): LoomItem[] {
 
 // --- Import / Export ---
 
-export function importPack(userId: string, payload: PackImportPayload): PackWithItems {
+/**
+ * Normalizes a raw pack payload to PackImportPayload format.
+ * Handles:
+ * - Extension format fields (packName, lumiaName, lumiaDefinition, loomName, loomContent, etc.)
+ * - Wrapper objects ({ pack: {...} } or { success: true, pack: {...} })
+ * - snake_case tool fields (tool_name, display_name, input_schema, etc.)
+ * - Category normalization (utility/utilities → loom_utility, etc.)
+ */
+function normalizePackPayload(raw: any): PackImportPayload {
+  // Unwrap { pack: {...} } wrapper
+  const data = raw.pack && typeof raw.pack === "object" && !Array.isArray(raw.pack) ? raw.pack : raw;
+
+  // If it already has standard `name` + `lumiaItems` array with `definition` fields, it's likely
+  // already in PackImportPayload format. But we still normalize to handle mixed formats.
+
+  const normCategory = (c: string): "narrative_style" | "loom_utility" | "retrofit" => {
+    const lower = (c || "").toLowerCase();
+    if (lower.includes("utility") || lower.includes("utilities")) return "loom_utility";
+    if (lower.includes("retrofit")) return "retrofit";
+    return "narrative_style";
+  };
+
+  return {
+    name: data.name || data.packName || undefined,
+    author: data.author ?? data.packAuthor ?? undefined,
+    coverUrl: data.coverUrl || undefined,
+    version: data.version != null ? String(data.version) : undefined,
+    sourceUrl: data.sourceUrl || data.source_url || undefined,
+    extras: data.extras ?? (data.packExtras?.length ? { items: data.packExtras } : undefined),
+    lumiaItems: (data.lumiaItems || []).map((item: any) => ({
+      name: item.name || item.lumiaName || "Unknown",
+      avatarUrl: item.avatarUrl || item.avatar_url || undefined,
+      authorName: item.authorName || item.author_name || "",
+      definition: item.definition || item.lumiaDefinition || "",
+      personality: item.personality || item.lumiaPersonality || "",
+      behavior: item.behavior || item.lumiaBehavior || "",
+      genderIdentity: item.genderIdentity ?? item.gender_identity ?? 0,
+      version: item.version != null ? String(item.version) : undefined,
+      sortOrder: item.sortOrder ?? item.sort_order ?? undefined,
+    })),
+    loomItems: (data.loomItems || []).map((item: any) => ({
+      name: item.name || item.loomName || "Unknown",
+      content: item.content || item.loomContent || "",
+      category: normCategory(item.category || item.loomCategory || ""),
+      authorName: item.authorName || item.author_name || "",
+      version: item.version != null ? String(item.version) : undefined,
+      sortOrder: item.sortOrder ?? item.sort_order ?? undefined,
+    })),
+    loomTools: (data.loomTools || []).map((tool: any) => ({
+      toolName: tool.toolName || tool.tool_name || "unknown_tool",
+      displayName: tool.displayName || tool.display_name || "",
+      description: tool.description || "",
+      prompt: tool.prompt || "",
+      inputSchema: tool.inputSchema || tool.input_schema || {},
+      resultVariable: tool.resultVariable || tool.result_variable || "",
+      storeInDeliberation: tool.storeInDeliberation ?? tool.store_in_deliberation ?? false,
+      authorName: tool.authorName || tool.author_name || "",
+      version: tool.version != null ? String(tool.version) : undefined,
+      sortOrder: tool.sortOrder ?? tool.sort_order ?? undefined,
+    })),
+  };
+}
+
+export function importPack(userId: string, rawPayload: PackImportPayload): PackWithItems {
+  const payload = normalizePackPayload(rawPayload);
   const db = getDb();
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);

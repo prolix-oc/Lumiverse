@@ -6,6 +6,7 @@ export interface BulkMessageInput {
   content: string;
   send_date?: number;
   swipes?: string[];
+  swipe_dates?: number[];
   swipe_id?: number;
   extra?: Record<string, any>;
 }

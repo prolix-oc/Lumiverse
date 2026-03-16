@@ -43,7 +43,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
-  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const guidedGenerations = useStore((s) => s.guidedGenerations)
   const quickReplySets = useStore((s) => s.quickReplySets)
   const personas = useStore((s) => s.personas)
@@ -220,7 +220,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: effectivePersonaId || undefined,
-        preset_id: activeLoomPresetId || undefined,
+        preset_id: getActivePresetForGeneration() || undefined,
         generation_type: 'normal' as const,
       }
       // For group chats, let the backend pick the first speaker (or pass a specific one if forced)
@@ -263,7 +263,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeLoomPresetId, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleRegenerate = useCallback(async () => {
     if (isStreaming) return
@@ -296,6 +296,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       send_date: Math.floor(Date.now() / 1000),
       swipe_id: 0,
       swipes: [''],
+      swipe_dates: [Math.floor(Date.now() / 1000)],
       extra: {},
       parent_message_id: null,
       branch_id: null,
@@ -312,7 +313,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: activeLoomPresetId || undefined,
+        preset_id: getActivePresetForGeneration() || undefined,
         generation_type: 'normal',
       })
       if (generationNonceRef.current !== nonce) return
@@ -327,7 +328,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Regeneration Failed' })
     }
-  }, [chatId, isStreaming, messages, activeProfileId, activePersonaId, activeLoomPresetId, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, messages, activeProfileId, activePersonaId, getActivePresetForGeneration, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleContinue = useCallback(async () => {
     if (isStreaming) return
@@ -338,7 +339,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: activeLoomPresetId || undefined,
+        preset_id: getActivePresetForGeneration() || undefined,
       })
       if (generationNonceRef.current !== nonce) return
       startStreaming(res.generationId)
@@ -350,7 +351,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Continue Failed' })
     }
-  }, [chatId, isStreaming, activeProfileId, activePersonaId, activeLoomPresetId, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isStreaming) return
@@ -361,7 +362,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: activeLoomPresetId || undefined,
+        preset_id: getActivePresetForGeneration() || undefined,
         generation_type: 'impersonate',
         impersonate_mode: mode,
       })
@@ -375,7 +376,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Impersonation Failed' })
     }
-  }, [chatId, isStreaming, activeProfileId, activePersonaId, activeLoomPresetId, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
@@ -428,7 +429,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: activeLoomPresetId || undefined,
+        preset_id: getActivePresetForGeneration() || undefined,
       })
       openModal('dryRun', result)
     } catch (err: any) {
@@ -438,7 +439,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       setDryRunning(false)
     }
-  }, [chatId, dryRunning, isStreaming, activeProfileId, activePersonaId, activeLoomPresetId, openModal, setStreamingError])
+  }, [chatId, dryRunning, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, openModal, setStreamingError])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {

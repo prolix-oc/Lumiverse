@@ -1,0 +1,45 @@
+# Dependencies (rebuilt in image)
+node_modules
+frontend/node_modules
+
+# Built frontend (rebuilt in image)
+frontend/dist
+
+# User data
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Secrets
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Git / IDE / OS
+.git
+.gitignore
+.claude
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Docker files (no recursion)
+Dockerfile
+docker-compose.yml
+
+# Documentation
+*.md
+developer-docs
+
+# Scripts not needed at runtime
+scripts/setup-wizard.ts
+scripts/runner.ts
+scripts/runner-ui.ts
+scripts/migrate-sillytavern.ts

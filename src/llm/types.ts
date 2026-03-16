@@ -110,6 +110,8 @@ export interface AssemblyContext {
   /** Pre-computed vector-activated world info entries from the generation pipeline.
    *  When provided, assembly reuses these instead of re-running vector retrieval. */
   precomputedVectorEntries?: { entry: import("../types/world-book").WorldBookEntry; score: number }[];
+  /** Pipeline results from Lumi sidecar execution. */
+  lumiPipelineResults?: import("../types/lumi-engine").LumiPipelineResult;
 }
 
 /** Lightweight summary of a council tool result for macro access (avoids importing spindle-types). */
@@ -144,7 +146,7 @@ export interface AssemblyResult {
 }
 
 export interface AssemblyBreakdownEntry {
-  type: 'block' | 'chat_history' | 'separator' | 'utility' | 'world_info' | 'authors_note' | 'append' | 'long_term_memory';
+  type: 'block' | 'chat_history' | 'separator' | 'utility' | 'world_info' | 'authors_note' | 'append' | 'long_term_memory' | 'sidecar';
   name: string;
   role?: string;
   content?: string;
@@ -153,4 +155,8 @@ export interface AssemblyBreakdownEntry {
   messageCount?: number;
   /** Index of the first chat history message in the assembled messages array. */
   firstMessageIndex?: number;
+  /** Pre-counted token value (e.g. from sidecar usage stats). Skips local tokenization. */
+  preCountedTokens?: number;
+  /** If true, tokens are displayed but NOT added to the total (e.g. sidecar tokens spent on a separate LLM). */
+  excludeFromTotal?: boolean;
 }

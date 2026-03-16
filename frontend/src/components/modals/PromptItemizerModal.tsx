@@ -91,6 +91,8 @@ export default function PromptItemizerModal() {
   }
 
   const groups = data ? groupBreakdownEntries(data.entries) : []
+  const sidecarGroup = groups.find((g) => g.label === 'Sidecar (Lumi Pipeline)')
+  const mainGroups = groups.filter((g) => g.label !== 'Sidecar (Lumi Pipeline)')
 
   return createPortal(
     <AnimatePresence>
@@ -129,9 +131,9 @@ export default function PromptItemizerModal() {
             {!loading && !data && <div className={styles.empty}>No breakdown data available for this message.</div>}
             {!loading && data && !showRaw && (
               <>
-                <StackedBar groups={groups} total={data.totalTokens} />
-                <Legend groups={groups} />
-                {groups.map((group) => (
+                <StackedBar groups={mainGroups} total={data.totalTokens} />
+                <Legend groups={mainGroups} />
+                {mainGroups.map((group) => (
                   <GroupAccordion
                     key={group.label}
                     group={group}
@@ -140,6 +142,19 @@ export default function PromptItemizerModal() {
                     onToggle={() => toggleGroup(group.label)}
                   />
                 ))}
+                {sidecarGroup && sidecarGroup.tokens > 0 && (
+                  <>
+                    <div className={styles.sidecarDivider}>
+                      <span>Sidecar (separate LLM calls)</span>
+                    </div>
+                    <GroupAccordion
+                      group={sidecarGroup}
+                      total={sidecarGroup.tokens}
+                      open={openGroups.has(sidecarGroup.label)}
+                      onToggle={() => toggleGroup(sidecarGroup.label)}
+                    />
+                  </>
+                )}
               </>
             )}
             {!loading && data && showRaw && (
@@ -155,6 +170,11 @@ export default function PromptItemizerModal() {
               {data.maxContext > 0 && (
                 <span className={styles.footerMax}>
                   / {data.maxContext.toLocaleString()} ({((data.totalTokens / data.maxContext) * 100).toFixed(1)}%)
+                </span>
+              )}
+              {sidecarGroup && sidecarGroup.tokens > 0 && (
+                <span className={styles.footerMax} style={{ marginLeft: 6, color: '#e05daa' }}>
+                  + {sidecarGroup.tokens.toLocaleString()} sidecar
                 </span>
               )}
               <div className={styles.footerSpacer} />

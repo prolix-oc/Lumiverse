@@ -55,8 +55,12 @@ export const spindleApi = {
     return get<{ extensions: ExtensionInfo[]; isPrivileged: boolean }>('/spindle')
   },
 
-  install(githubUrl: string) {
-    return post<ExtensionInfo>('/spindle/install', { github_url: githubUrl })
+  install(githubUrl: string, branch?: string | null) {
+    return post<ExtensionInfo>('/spindle/install', { github_url: githubUrl, branch: branch || undefined })
+  },
+
+  listRemoteBranches(githubUrl: string) {
+    return post<{ branches: string[] }>('/spindle/branches', { github_url: githubUrl })
   },
 
   importLocal() {
@@ -68,6 +72,14 @@ export const spindleApi = {
 
   update(id: string) {
     return post<ExtensionInfo>(`/spindle/${id}/update`)
+  },
+
+  getBranches(id: string) {
+    return get<{ current: string | null; branches: string[] }>(`/spindle/${id}/branches`)
+  },
+
+  switchBranch(id: string, branch: string) {
+    return post<ExtensionInfo>(`/spindle/${id}/switch-branch`, { branch })
   },
 
   remove(id: string) {

@@ -22,7 +22,7 @@ export default function SwipeControls({ message, chatId, variant = 'default' }: 
   const setStreamingError = useStore((s) => s.setStreamingError)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
-  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
 
   const isLastAssistantMessage = !message.is_user && messages.length > 0 && messages[messages.length - 1].id === message.id
   const regenerateNonceRef = useRef(0)
@@ -38,7 +38,7 @@ export default function SwipeControls({ message, chatId, variant = 'default' }: 
         message_id: message.id,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: activeLoomPresetId || undefined,
+        preset_id: getActivePresetForGeneration() || undefined,
       })
       if (regenerateNonceRef.current !== nonce) return // stale response — a newer action took over
       startStreaming(res.generationId, message.id)
@@ -53,7 +53,7 @@ export default function SwipeControls({ message, chatId, variant = 'default' }: 
     message.id,
     activeProfileId,
     activePersonaId,
-    activeLoomPresetId,
+    getActivePresetForGeneration,
     beginStreaming,
     startStreaming,
     setStreamingError,

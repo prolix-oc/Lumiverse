@@ -48,8 +48,7 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
-      const activeLoomPresetId = useStore.getState().activeLoomPresetId
+      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
       if (!activeChatId) return
       beginStreaming()
       try {
@@ -57,7 +56,7 @@ export const COMMANDS: Command[] = [
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: activeLoomPresetId || undefined,
+          preset_id: getActivePresetForGeneration() || undefined,
           generation_type: 'regenerate',
         })
         startStreaming(res.generationId)
@@ -77,8 +76,7 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
-      const activeLoomPresetId = useStore.getState().activeLoomPresetId
+      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
       if (!activeChatId) return
       beginStreaming()
       try {
@@ -86,8 +84,9 @@ export const COMMANDS: Command[] = [
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: activeLoomPresetId || undefined,
+          preset_id: getActivePresetForGeneration() || undefined,
         })
+
         startStreaming(res.generationId)
       } catch (err: any) {
         const msg = err?.body?.error || err?.message || 'Failed to continue'
@@ -283,16 +282,16 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, openModal, addToast } = useStore.getState()
-      const activeLoomPresetId = useStore.getState().activeLoomPresetId
+      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
       if (!activeChatId) return
       try {
         const result = await generateApi.dryRun({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: activeLoomPresetId || undefined,
+          preset_id: getActivePresetForGeneration() || undefined,
         })
+
         openModal('dryRun', result)
       } catch (err: any) {
         addToast({ type: 'error', message: err?.body?.error || 'Dry run failed' })

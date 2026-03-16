@@ -22,6 +22,11 @@ export enum EventType {
   COUNCIL_MEMBER_DONE = 'COUNCIL_MEMBER_DONE',
   COUNCIL_COMPLETED = 'COUNCIL_COMPLETED',
 
+  // Lumi Pipeline
+  LUMI_PIPELINE_STARTED = 'LUMI_PIPELINE_STARTED',
+  LUMI_MODULE_DONE = 'LUMI_MODULE_DONE',
+  LUMI_PIPELINE_COMPLETED = 'LUMI_PIPELINE_COMPLETED',
+
   // Group Chat
   GROUP_TURN_STARTED = 'GROUP_TURN_STARTED',
   GROUP_ROUND_COMPLETE = 'GROUP_ROUND_COMPLETE',
@@ -99,4 +104,28 @@ export interface GroupRoundCompletePayload {
   chatId: string
   round: number
   charactersSpoken: string[]
+}
+
+export interface LumiPipelineStartedPayload {
+  chatId: string
+  moduleCount: number
+}
+
+export interface LumiModuleDonePayload {
+  chatId: string
+  moduleKey: string
+  moduleName: string
+  success: boolean
+  content?: string
+  error?: string
+  durationMs: number
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+export interface LumiPipelineCompletedPayload {
+  chatId: string
+  status: 'success' | 'skipped' | 'error' | 'aborted'
+  reason?: string
+  totalDurationMs?: number
+  totalUsage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
 }

@@ -1,9 +1,12 @@
 import { useState, useCallback, type ReactNode } from 'react'
-import { Layers, Hand, Filter, Info, Edit2, Check, X } from 'lucide-react'
+import { Layers, Hand, Filter, Info, Edit2, Check, X, User, Wrench, Sparkles, BookOpen, Zap, ChevronRight } from 'lucide-react'
 import { useStore } from '@/store'
 import { EditorSection } from '@/components/shared/FormComponents'
 import NumberStepper from '@/components/shared/NumberStepper'
+import LumiaSelector from '@/components/modals/LumiaSelector'
+import LoomSelector from '@/components/modals/LoomSelector'
 import type { SovereignHandSettings, ContextFilters } from '@/types/store'
+import type { LoomItemCategory } from '@/types/api'
 import clsx from 'clsx'
 import styles from './PromptPanel.module.css'
 
@@ -104,6 +107,33 @@ function FilterItem({
   )
 }
 
+function SelectionBtn({
+  icon: Icon,
+  label,
+  count,
+  onClick,
+  disabled = false,
+}: {
+  icon: typeof User
+  label: string
+  count: number
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      className={clsx(styles.selectionBtn, disabled && styles.selectionBtnDisabled)}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      <Icon size={14} className={styles.selectionBtnIcon} />
+      <span className={styles.selectionBtnLabel}>{label}</span>
+      {count > 0 && <span className={styles.selectionBtnBadge}>{count}</span>}
+      <ChevronRight size={14} className={styles.selectionBtnChevron} />
+    </button>
+  )
+}
+
 function FilterKeepOnlyToggle({
   id,
   checked,
@@ -126,6 +156,8 @@ function FilterKeepOnlyToggle({
 
 /* ── Main Panel ── */
 
+type LumiaSelectorMode = 'definition' | 'behavior' | 'personality'
+
 export default function PromptPanel() {
   const chimeraMode = useStore((s) => s.chimeraMode)
   const councilSettings = useStore((s) => s.councilSettings)
@@ -134,6 +166,11 @@ export default function PromptPanel() {
   const sovereignHand = useStore((s) => s.sovereignHand)
   const contextFilters = useStore((s) => s.contextFilters)
   const selectedDefinition = useStore((s) => s.selectedDefinition)
+  const selectedBehaviors = useStore((s) => s.selectedBehaviors)
+  const selectedPersonalities = useStore((s) => s.selectedPersonalities)
+  const selectedLoomStyles = useStore((s) => s.selectedLoomStyles)
+  const selectedLoomUtils = useStore((s) => s.selectedLoomUtils)
+  const selectedLoomRetrofits = useStore((s) => s.selectedLoomRetrofits)
   const setSetting = useStore((s) => s.setSetting)
   const saveCouncilSettings = useStore((s) => s.saveCouncilSettings)
 
@@ -143,6 +180,10 @@ export default function PromptPanel() {
   // Quirks editing state
   const [quirksValue, setQuirksValue] = useState(lumiaQuirks)
   const [isEditingQuirks, setIsEditingQuirks] = useState(false)
+
+  // Modal state
+  const [lumiaModal, setLumiaModal] = useState<LumiaSelectorMode | null>(null)
+  const [loomModal, setLoomModal] = useState<LoomItemCategory | null>(null)
 
   // Handlers
   const handleChimeraModeChange = useCallback(
@@ -193,15 +234,54 @@ export default function PromptPanel() {
   )
 
   const sovereignEnabled = sovereignHand.enabled
-  const filtersActive =
-    contextFilters.htmlTags.enabled ||
-    contextFilters.detailsBlocks.enabled ||
-    contextFilters.loomItems.enabled
+  const isCouncilActive = councilMode && councilMembersCount > 0
 
   const definitionCount = selectedDefinition ? 1 : 0
+  const behaviorCount = selectedBehaviors.length
+  const personalityCount = selectedPersonalities.length
+  const styleCount = selectedLoomStyles.length
+  const utilCount = selectedLoomUtils.length
+  const retrofitCount = selectedLoomRetrofits.length
 
   return (
     <div className={styles.panel}>
+      {/* ── Lumia Selection ── */}
+      <EditorSection Icon={User} title="Lumia Selection" defaultExpanded>
+        <p className={styles.desc}>
+          Select Lumia definitions, behaviors, and personalities from your loaded packs.
+        </p>
+
+        <div className={clsx(styles.selectionGroup, isCouncilActive && styles.selectionGroupDisabled)}>
+          <SelectionBtn
+            icon={User}
+            label={chimeraMode ? 'Chimera Definitions' : 'Definition'}
+            count={definitionCount}
+            onClick={() => setLumiaModal('definition')}
+            disabled={isCouncilActive}
+          />
+          <SelectionBtn
+            icon={Wrench}
+            label="Behaviors"
+            count={behaviorCount}
+            onClick={() => setLumiaModal('behavior')}
+            disabled={isCouncilActive}
+          />
+          <SelectionBtn
+            icon={Sparkles}
+            label="Personalities"
+            count={personalityCount}
+            onClick={() => setLumiaModal('personality')}
+            disabled={isCouncilActive}
+          />
+        </div>
+
+        {isCouncilActive && (
+          <p className={styles.modeNote}>
+            Individual Lumia selections are disabled while Council Mode is active. Configure members in the Council tab.
+          </p>
+        )}
+      </EditorSection>
+
       {/* ── Lumia Modes ── */}
       <EditorSection Icon={Layers} title="Lumia Modes" defaultExpanded>
         <p className={styles.desc}>
@@ -310,6 +390,35 @@ export default function PromptPanel() {
               )}
             </div>
           )}
+        </div>
+      </EditorSection>
+
+      {/* ── Loom Content ── */}
+      <EditorSection Icon={BookOpen} title="Loom Content" defaultExpanded={false}>
+        <p className={styles.desc}>
+          Select narrative styles, utilities, and retrofits from your loaded packs. These are injected
+          via <code>{'{{loomStyle}}'}</code>, <code>{'{{loomUtils}}'}</code>, and <code>{'{{loomRetrofits}}'}</code> macros.
+        </p>
+
+        <div className={styles.selectionGroup}>
+          <SelectionBtn
+            icon={BookOpen}
+            label="Narrative Styles"
+            count={styleCount}
+            onClick={() => setLoomModal('narrative_style')}
+          />
+          <SelectionBtn
+            icon={Wrench}
+            label="Loom Utilities"
+            count={utilCount}
+            onClick={() => setLoomModal('loom_utility')}
+          />
+          <SelectionBtn
+            icon={Zap}
+            label="Retrofits"
+            count={retrofitCount}
+            onClick={() => setLoomModal('retrofit')}
+          />
         </div>
       </EditorSection>
 
@@ -431,6 +540,14 @@ export default function PromptPanel() {
           </div>
         </Collapsible>
       </EditorSection>
+
+      {/* ── Selector Modals ── */}
+      {lumiaModal && (
+        <LumiaSelector mode={lumiaModal} onClose={() => setLumiaModal(null)} />
+      )}
+      {loomModal && (
+        <LoomSelector category={loomModal} onClose={() => setLoomModal(null)} />
+      )}
     </div>
   )
 }

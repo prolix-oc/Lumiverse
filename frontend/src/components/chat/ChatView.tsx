@@ -11,6 +11,7 @@ import MessageList from './MessageList'
 import InputArea from './InputArea'
 import ScrollToBottom from './ScrollToBottom'
 import CouncilPill from './CouncilPill'
+import LumiPill from './LumiPill'
 import PortraitPanel from './PortraitPanel'
 import styles from './ChatView.module.css'
 import clsx from 'clsx'
@@ -209,6 +210,7 @@ export default function ChatView() {
           <div className={styles.chatColumnInner} style={innerStyle}>
             <MessageList messages={messages} chatId={chatId} isStreaming={isStreaming} />
             <ScrollToBottom />
+            <LumiPill />
             <CouncilPill />
             <InputArea chatId={chatId} />
           </div>

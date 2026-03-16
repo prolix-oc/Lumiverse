@@ -102,7 +102,7 @@ export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
               <span className={styles.metaPill}>
                 #{message.index_in_chat}
                 <span className={styles.metaDot}>&middot;</span>
-                {formatMetaDate(message.send_date)}
+                {formatMetaDate(message.swipe_dates?.[message.swipe_id] ?? message.send_date)}
                 {tokenCount != null && (
                   <>
                     <span className={styles.metaDot}>&middot;</span>

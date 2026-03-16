@@ -2,6 +2,7 @@ export interface Preset {
   id: string;
   name: string;
   provider: string;
+  engine: string;
   parameters: Record<string, any>;
   prompt_order: any[];
   prompts: Record<string, any>;
@@ -13,6 +14,7 @@ export interface Preset {
 export interface CreatePresetInput {
   name: string;
   provider: string;
+  engine?: string;
   parameters?: Record<string, any>;
   prompt_order?: any[];
   prompts?: Record<string, any>;
@@ -35,6 +37,7 @@ export interface PromptBlock {
   isLocked: boolean;
   color: string | null;
   injectionTrigger: string[];
+  group: string | null;
 }
 
 export interface PromptBehavior {
@@ -71,6 +74,12 @@ export interface SamplerOverrides {
   frequencyPenalty: number | null;
   presencePenalty: number | null;
   repetitionPenalty: number | null;
+}
+
+export interface AdvancedSettings {
+  seed: number;
+  customStopStrings: string[];
+  collapseMessages: boolean;
 }
 
 export interface AuthorsNote {

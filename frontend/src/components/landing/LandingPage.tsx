@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router'
 import { motion, AnimatePresence } from 'motion/react'
-import { RefreshCw, MessageSquarePlus, Loader2, MessageSquare } from 'lucide-react'
+import { RefreshCw, MessageSquarePlus, Loader2, MessageSquare, Trash2 } from 'lucide-react'
 import { chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { useStore } from '@/store'
@@ -75,9 +75,10 @@ const cardVariants = {
 interface ChatCardProps {
   item: GroupedRecentChat
   onClick: () => void
+  onDelete?: () => void
 }
 
-function ChatCard({ item, onClick }: ChatCardProps) {
+function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
   const avatarUrl = item.character_id
     ? charactersApi.avatarUrl(item.character_id)
     : null
@@ -89,6 +90,19 @@ function ChatCard({ item, onClick }: ChatCardProps) {
       whileHover={{ y: -3 }}
       transition={{ duration: 0.2 }}
     >
+      {onDelete && (
+        <button
+          type="button"
+          className={styles.deleteBtn}
+          onClick={(e) => {
+            e.stopPropagation()
+            onDelete()
+          }}
+          title="Delete chat"
+        >
+          <Trash2 size={14} strokeWidth={1.5} />
+        </button>
+      )}
       <button type="button" className={styles.cardBtn} onClick={onClick}>
         <div className={styles.cardImage}>
           <LazyImage
@@ -204,6 +218,27 @@ export default function LandingPage() {
     [navigate, openModal]
   )
 
+  const handleDeleteChat = useCallback(
+    (item: GroupedRecentChat) => {
+      openModal('confirm', {
+        title: 'Delete Chat',
+        message: `This will permanently delete your chat with ${item.character_name}. This action cannot be undone.`,
+        variant: 'danger',
+        confirmText: 'Delete',
+        onConfirm: async () => {
+          try {
+            await chatsApi.delete(item.latest_chat_id)
+            setItems((prev) => prev.filter((i) => i.latest_chat_id !== item.latest_chat_id))
+            setTotal((prev) => prev - 1)
+          } catch (err: any) {
+            console.error('[Lumiverse] Error deleting chat:', err)
+          }
+        },
+      })
+    },
+    [openModal]
+  )
+
   const handleNewChat = useCallback(() => {
     navigate('/characters')
   }, [navigate])
@@ -313,6 +348,7 @@ export default function LandingPage() {
                     key={item.character_id}
                     item={item}
                     onClick={() => handleChatClick(item)}
+                    onDelete={item.chat_count === 1 ? () => handleDeleteChat(item) : undefined}
                   />
                 ))}
               </motion.div>

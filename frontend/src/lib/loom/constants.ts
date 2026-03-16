@@ -126,6 +126,7 @@ export const DEFAULT_COMPLETION_SETTINGS: CompletionSettings = {
 export const DEFAULT_ADVANCED_SETTINGS: AdvancedSettings = {
   seed: -1,
   customStopStrings: [],
+  collapseMessages: false,
 }
 
 // ============================================================================

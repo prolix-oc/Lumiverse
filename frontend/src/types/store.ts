@@ -1,4 +1,4 @@
-import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem } from './api'
+import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem, LoomItem } from './api'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -289,11 +289,15 @@ export interface PresetsSlice {
   presets: Record<string, Preset>
   activePresetId: string | null
   activeLoomPresetId: string | null
+  activeLumiPresetId: string | null
   loomRegistry: Record<string, LoomRegistryEntry>
   setPresets: (presets: Record<string, Preset>) => void
   setActivePreset: (id: string | null) => void
   setActiveLoomPreset: (id: string | null) => void
+  setActiveLumiPreset: (id: string | null) => void
   setLoomRegistry: (registry: Record<string, LoomRegistryEntry>) => void
+  /** Prefers Lumi preset when set. */
+  getActivePresetForGeneration: () => string | null
 }
 
 // ---- Connections Slice ----
@@ -324,6 +328,9 @@ export interface PacksSlice {
   selectedDefinition: LumiaItem | null
   selectedBehaviors: LumiaItem[]
   selectedPersonalities: LumiaItem[]
+  selectedLoomStyles: LoomItem[]
+  selectedLoomUtils: LoomItem[]
+  selectedLoomRetrofits: LoomItem[]
   packsWithItems: Record<string, PackWithItems>
 
   setPacks: (packs: Pack[]) => void
@@ -337,6 +344,9 @@ export interface PacksSlice {
   setSelectedDefinition: (def: LumiaItem | null) => void
   setSelectedBehaviors: (behaviors: LumiaItem[]) => void
   setSelectedPersonalities: (personalities: LumiaItem[]) => void
+  setSelectedLoomStyles: (items: LoomItem[]) => void
+  setSelectedLoomUtils: (items: LoomItem[]) => void
+  setSelectedLoomRetrofits: (items: LoomItem[]) => void
   setPackWithItems: (id: string, data: PackWithItems) => void
   removePackWithItems: (id: string) => void
 }
@@ -417,8 +427,9 @@ export interface SpindleSlice {
   spindlePrivileged: boolean
   pendingPermissionRequest: PendingPermissionRequest | null
   loadExtensions: () => Promise<void>
-  installExtension: (githubUrl: string) => Promise<void>
+  installExtension: (githubUrl: string, branch?: string | null) => Promise<void>
   updateExtension: (id: string) => Promise<void>
+  switchBranch: (id: string, branch: string) => Promise<void>
   removeExtension: (id: string) => Promise<void>
   enableExtension: (id: string) => Promise<void>
   disableExtension: (id: string) => Promise<void>
@@ -483,6 +494,21 @@ export interface WorldInfoSlice {
   activatedWorldInfo: ActivatedWorldInfoEntry[]
   setActivatedWorldInfo: (entries: ActivatedWorldInfoEntry[]) => void
   clearActivatedWorldInfo: () => void
+}
+
+// Lumi Feedback Slice
+import type { LumiModuleDonePayload, LumiPipelineCompletedPayload } from './ws-events'
+
+export interface LumiSlice {
+  lumiExecuting: boolean
+  lumiResults: LumiModuleDonePayload[]
+  lumiPipelineResult: LumiPipelineCompletedPayload | null
+
+  setLumiExecuting: (executing: boolean) => void
+  setLumiResults: (results: LumiModuleDonePayload[]) => void
+  addLumiResult: (result: LumiModuleDonePayload) => void
+  setLumiPipelineResult: (result: LumiPipelineCompletedPayload | null) => void
+  clearLumiResults: () => void
 }
 
 // ---- Group Chat Slice ----
@@ -575,6 +601,7 @@ export type AppStore = ChatSlice &
   ConnectionsSlice &
   PacksSlice &
   CouncilSlice &
+  LumiSlice &
   GenerationSlice &
   SummarySlice &
   SpindleSlice &

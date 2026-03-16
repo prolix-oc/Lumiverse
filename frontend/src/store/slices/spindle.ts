@@ -28,13 +28,20 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     }
   },
 
-  installExtension: async (githubUrl: string) => {
-    const ext = await spindleApi.install(githubUrl)
+  installExtension: async (githubUrl: string, branch?: string | null) => {
+    const ext = await spindleApi.install(githubUrl, branch)
     set((state) => ({ extensions: [ext, ...state.extensions] }))
   },
 
   updateExtension: async (id: string) => {
     const updated = await spindleApi.update(id)
+    set((state) => ({
+      extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
+    }))
+  },
+
+  switchBranch: async (id: string, branch: string) => {
+    const updated = await spindleApi.switchBranch(id, branch)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))

@@ -151,6 +151,7 @@ export interface Message {
   send_date: number;
   swipe_id: number;
   swipes: string[];
+  swipe_dates: number[];
   extra: MessageExtra;
   parent_message_id: string | null;
   branch_id: string | null;
@@ -565,6 +566,55 @@ export interface BulkImportResult {
 export interface BatchDeleteResult {
   deleted: string[]
   failed: string[]
+}
+
+export interface LumiModule {
+  key: string;
+  name: string;
+  enabled: boolean;
+  prompt: string;
+}
+
+
+export interface LumiPipeline {
+  key: string;
+  name: string;
+  enabled: boolean;
+  modules: LumiModule[];
+}
+
+export interface LumiSidecarConfig {
+  connectionProfileId: string | null;
+  model: string | null;
+  temperature: number;
+  topP: number;
+  maxTokensPerModule: number;
+  contextWindow: number;
+}
+
+export interface BlockGroupConfig {
+  name: string;
+  mode: 'radio' | 'checkbox';
+  order: number;
+  collapsed?: boolean;
+}
+
+export interface LumiPresetMetadata {
+  pipelines: LumiPipeline[];
+  sidecar: LumiSidecarConfig;
+  blockGroups?: BlockGroupConfig[];
+}
+
+export interface LumiFileFormat {
+  version: 2;
+  name: string;
+  provider: string;
+  pipelines: LumiPipeline[];
+  sidecar: LumiSidecarConfig;
+  blockGroups?: BlockGroupConfig[];
+  parameters: Record<string, any>;
+  prompts: Record<string, any>;
+  prompt_order: any[];
 }
 
 // ---- Pagination ----

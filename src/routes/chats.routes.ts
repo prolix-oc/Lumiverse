@@ -102,6 +102,7 @@ app.post("/import", async (c) => {
       content: m.content || "",
       send_date: m.send_date,
       swipes: m.swipes,
+      swipe_dates: m.swipe_dates,
       swipe_id: m.swipe_id,
       extra: m.extra,
     }));

@@ -58,6 +58,7 @@ export interface CompletionSettings {
 export interface AdvancedSettings {
   seed: number
   customStopStrings: string[]
+  collapseMessages: boolean
 }
 
 export interface PresetSource {

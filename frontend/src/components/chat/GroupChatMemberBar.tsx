@@ -16,7 +16,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   const isStreaming = useStore((s) => s.isStreaming)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
-  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const startStreaming = useStore((s) => s.startStreaming)
   const setStreamingError = useStore((s) => s.setStreamingError)
 
@@ -29,7 +29,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
           target_character_id: characterId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: activeLoomPresetId || undefined,
+          preset_id: getActivePresetForGeneration() || undefined,
           generation_type: 'normal',
         })
         startStreaming(res.generationId)
@@ -39,7 +39,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
         setStreamingError(msg)
       }
     },
-    [chatId, isStreaming, activeProfileId, activePersonaId, activeLoomPresetId, startStreaming, setStreamingError]
+    [chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, startStreaming, setStreamingError]
   )
 
   if (groupCharacterIds.length === 0) return null

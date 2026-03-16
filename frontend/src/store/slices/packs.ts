@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { PacksSlice } from '@/types/store'
-import type { Pack, PackWithItems, LumiaItem } from '@/types/api'
+import type { Pack, PackWithItems, LumiaItem, LoomItem } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 
 export const createPacksSlice: StateCreator<PacksSlice> = (set) => ({
@@ -12,6 +12,9 @@ export const createPacksSlice: StateCreator<PacksSlice> = (set) => ({
   selectedDefinition: null,
   selectedBehaviors: [],
   selectedPersonalities: [],
+  selectedLoomStyles: [],
+  selectedLoomUtils: [],
+  selectedLoomRetrofits: [],
   packsWithItems: {},
 
   setPacks: (packs: Pack[]) => set({ packs }),
@@ -40,6 +43,18 @@ export const createPacksSlice: StateCreator<PacksSlice> = (set) => ({
   setSelectedPersonalities: (personalities: LumiaItem[]) => {
     set({ selectedPersonalities: personalities })
     settingsApi.put('selectedPersonalities', personalities).catch(() => {})
+  },
+  setSelectedLoomStyles: (items: LoomItem[]) => {
+    set({ selectedLoomStyles: items })
+    settingsApi.put('selectedLoomStyles', items).catch(() => {})
+  },
+  setSelectedLoomUtils: (items: LoomItem[]) => {
+    set({ selectedLoomUtils: items })
+    settingsApi.put('selectedLoomUtils', items).catch(() => {})
+  },
+  setSelectedLoomRetrofits: (items: LoomItem[]) => {
+    set({ selectedLoomRetrofits: items })
+    settingsApi.put('selectedLoomRetrofits', items).catch(() => {})
   },
   setPackWithItems: (id: string, data: PackWithItems) =>
     set((s) => ({ packsWithItems: { ...s.packsWithItems, [id]: data } })),

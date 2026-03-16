@@ -1,0 +1,33 @@
+services:
+  lumiverse:
+    build: .
+    container_name: lumiverse
+    ports:
+      - "7860:7860"
+    environment:
+      # ── Required ──────────────────────────────────────────────────────
+      - OWNER_PASSWORD=changeme123        # min 8 chars, change this!
+
+      # ── Optional ──────────────────────────────────────────────────────
+      - OWNER_USERNAME=admin
+      - PORT=7860
+
+      # CORS: true = accept any origin (default for Docker).
+      # For production behind a reverse proxy, set to false and use TRUSTED_ORIGINS.
+      - TRUST_ANY_ORIGIN=true
+      # - TRUSTED_ORIGINS=https://lumiverse.example.com
+
+      # Encryption: auto-generated and stored in the data volume.
+      # Only set these if migrating from an existing install.
+      # - ENCRYPTION_KEY=
+      # - AUTH_SECRET=
+
+      # Spindle extension storage limits
+      # - SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES=524288000
+      # - SPINDLE_EPHEMERAL_EXTENSION_DEFAULT_MAX_BYTES=52428800
+    volumes:
+      - lumiverse-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  lumiverse-data:

@@ -281,6 +281,21 @@
   color: var(--lumiverse-text);
 }
 
+/* Sidecar divider */
+.sidecarDivider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #e05daa;
+  border-top: 1px solid var(--lumiverse-border);
+  margin-top: 4px;
+}
+
 /* Raw view */
 .rawView {
   font-family: 'SF Mono', 'Fira Code', monospace;

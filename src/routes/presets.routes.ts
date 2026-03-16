@@ -14,7 +14,8 @@ app.get("/registry", (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   const provider = c.req.query("provider") || undefined;
-  return c.json(svc.listPresetRegistry(userId, pagination, provider));
+  const engine = c.req.query("engine") || undefined;
+  return c.json(svc.listPresetRegistry(userId, pagination, provider, engine));
 });
 
 app.post("/", async (c) => {
