@@ -5,7 +5,9 @@ import {
 } from 'lucide-react'
 import { useStore } from '@/store'
 import { packsApi } from '@/api/packs'
+import { normalizePackJson } from '@/utils/pack-transform'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import PackEditorModal from '@/components/panels/pack-browser/PackEditorModal'
 import PackDropdown from './PackDropdown'
 import type { Pack, PackWithItems, LumiaItem, LoomItem, LoomTool } from '@/types/api'
 import clsx from 'clsx'
@@ -25,9 +27,11 @@ export default function ContentWorkshop() {
   const packsWithItems = useStore((s) => s.packsWithItems)
   const setPackWithItems = useStore((s) => s.setPackWithItems)
   const removePackWithItems = useStore((s) => s.removePackWithItems)
+  const updatePackInStore = useStore((s) => s.updatePackInStore)
   const openModal = useStore((s) => s.openModal)
 
   const [loading, setLoading] = useState(true)
+  const [editingPack, setEditingPack] = useState<Pack | null>(null)
   const [expandedPacks, setExpandedPacks] = useState<Set<string>>(new Set())
   const [loadingPacks, setLoadingPacks] = useState<Set<string>>(new Set())
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null)
@@ -165,16 +169,31 @@ export default function ContentWorkshop() {
     }
   }, [])
 
+  const handleEditPackMeta = useCallback(async (data: { name: string; author: string; cover_url: string }) => {
+    if (!editingPack) return
+    try {
+      const updated = await packsApi.update(editingPack.id, data)
+      updatePackInStore(editingPack.id, updated)
+      setEditingPack(null)
+    } catch (err) {
+      console.error('Failed to update pack:', err)
+    }
+  }, [editingPack, updatePackInStore])
+
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     setImporting(true)
     try {
       const text = await file.text()
-      const json = JSON.parse(text)
-      const result = await packsApi.importJson(json)
-      addPack(result)
-      setPackWithItems(result.id, result)
+      const raw = JSON.parse(text)
+      const payload = normalizePackJson(raw)
+      const result = await packsApi.importJson(payload)
+      // Mark as custom so it appears in the Creator Workshop as editable
+      await packsApi.update(result.id, { is_custom: true })
+      const updated = { ...result, is_custom: true }
+      addPack(updated)
+      setPackWithItems(result.id, updated)
       setSelectedPackId(result.id)
       setExpandedPacks((prev) => new Set(prev).add(result.id))
     } catch (err) {
@@ -245,6 +264,7 @@ export default function ContentWorkshop() {
               loading={loadingPacks.has(pack.id)}
               packData={packsWithItems[pack.id]}
               onToggle={() => togglePack(pack.id)}
+              onEdit={() => setEditingPack(pack)}
               onExport={() => handleExport(pack.id)}
               onDelete={() => setDeleteTarget({ type: 'pack', packId: pack.id, name: pack.name })}
               onCreateItem={(type) => handleCreateNewInPack(type, pack.id)}
@@ -289,6 +309,14 @@ export default function ContentWorkshop() {
           onCancel={() => setDeleteTarget(null)}
         />
       )}
+
+      {editingPack && (
+        <PackEditorModal
+          initialData={editingPack}
+          onSave={handleEditPackMeta}
+          onClose={() => setEditingPack(null)}
+        />
+      )}
     </div>
   )
 }
@@ -301,6 +329,7 @@ interface PackSectionProps {
   loading: boolean
   packData?: PackWithItems
   onToggle: () => void
+  onEdit: () => void
   onExport: () => void
   onDelete: () => void
   onCreateItem: (type: 'lumia' | 'loom' | 'tool') => void
@@ -308,7 +337,7 @@ interface PackSectionProps {
   onDeleteItem: (type: 'lumia' | 'loom' | 'tool', itemId: string, name: string) => void
 }
 
-function PackSection({ pack, expanded, loading, packData, onToggle, onExport, onDelete, onCreateItem, onEditItem, onDeleteItem }: PackSectionProps) {
+function PackSection({ pack, expanded, loading, packData, onToggle, onEdit, onExport, onDelete, onCreateItem, onEditItem, onDeleteItem }: PackSectionProps) {
   return (
     <div className={styles.packSection}>
       <div className={styles.packHeader} onClick={onToggle}>
@@ -317,6 +346,9 @@ function PackSection({ pack, expanded, loading, packData, onToggle, onExport, on
         </span>
         <span className={styles.packName}>{pack.name}</span>
         <div className={styles.packActions} onClick={(e) => e.stopPropagation()}>
+          <button type="button" className={styles.packActionBtn} onClick={onEdit} title="Edit pack details">
+            <Pencil size={13} />
+          </button>
           <button type="button" className={styles.packActionBtn} onClick={onExport} title="Export">
             <Download size={13} />
           </button>
