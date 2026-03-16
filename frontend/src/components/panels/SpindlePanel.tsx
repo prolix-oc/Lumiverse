@@ -277,35 +277,38 @@ export default function SpindlePanel() {
                 <div className={styles.extensionDesc}>{ext.description}</div>
               )}
 
-              {/* Permissions */}
-              {ext.permissions.length > 0 && (
-                <div className={styles.permissions}>
-                  {ext.permissions.map((perm) => {
-                    const granted = ext.granted_permissions.includes(perm)
-                    const pretty = perm
-                      .replaceAll('_', ' ')
-                      .replace(/\b\w/g, (ch) => ch.toUpperCase())
-                    return (
-                      <button
-                        key={perm}
-                        className={clsx(
-                          styles.permPill,
-                          granted ? styles.permPillActive : styles.permPillInactive
-                        )}
-                        onClick={() => handlePermissionToggle(ext, perm)}
-                        title={
-                          canManage
-                            ? `${pretty} (${granted ? 'Enabled' : 'Disabled'})`
-                            : 'Managed by operator'
-                        }
-                        disabled={!canManage}
-                      >
-                        {pretty}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+              {/* Permissions — union of declared + granted so runtime-requested perms are visible */}
+              {(() => {
+                const allPerms = [...new Set([...ext.permissions, ...ext.granted_permissions])]
+                return allPerms.length > 0 ? (
+                  <div className={styles.permissions}>
+                    {allPerms.map((perm) => {
+                      const granted = ext.granted_permissions.includes(perm)
+                      const pretty = perm
+                        .replaceAll('_', ' ')
+                        .replace(/\b\w/g, (ch) => ch.toUpperCase())
+                      return (
+                        <button
+                          key={perm}
+                          className={clsx(
+                            styles.permPill,
+                            granted ? styles.permPillActive : styles.permPillInactive
+                          )}
+                          onClick={() => handlePermissionToggle(ext, perm)}
+                          title={
+                            canManage
+                              ? `${pretty} (${granted ? 'Enabled' : 'Disabled'})`
+                              : 'Managed by operator'
+                          }
+                          disabled={!canManage}
+                        >
+                          {pretty}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null
+              })()}
 
               {/* Actions row */}
               <div className={styles.extensionActions}>
