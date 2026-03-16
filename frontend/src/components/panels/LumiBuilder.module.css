@@ -460,6 +460,7 @@
 .createOverlay {
   position: fixed;
   inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
   background: var(--lumiverse-overlay, rgba(0, 0, 0, 0.6));
   display: flex;
   align-items: center;

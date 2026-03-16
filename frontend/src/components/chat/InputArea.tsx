@@ -63,13 +63,6 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
 
-  // Extra bottom padding to prevent content clipping from the large border-radius.
-  // .app already handles safe-area clearance via padding-bottom, so this only
-  // needs enough breathing room for the border-radius curve, not safe area + curve.
-  const iphoneBottomPad = screenCornerRadius
-    ? Math.round(screenCornerRadius * 0.22) + 4
-    : 0
-
   const activeGuides = guidedGenerations.filter((g) => g.enabled)
   const activeGuideCount = activeGuides.length
   const activeQuickReplySets = quickReplySets.filter((s) => s.enabled)
@@ -481,7 +474,6 @@ export default function InputArea({ chatId }: InputAreaProps) {
         borderRadius: inputFocused
           ? 'var(--lcs-radius, 14px)'
           : `var(--lcs-radius, 14px) var(--lcs-radius, 14px) ${screenCornerRadius}px ${screenCornerRadius}px`,
-        ...(inputFocused ? {} : { paddingBottom: `${iphoneBottomPad}px` }),
       } : undefined}
     >
       {/* Author's Note Panel */}

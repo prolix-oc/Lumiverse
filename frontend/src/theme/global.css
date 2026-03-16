@@ -134,13 +134,13 @@ select:focus-visible,
    100dvh on html/body/#root which causes layout thrashing when the
    virtual keyboard changes the dynamic viewport height.
 
-   NOTE: iOS PWAs may not match this media query (they use
-   navigator.standalone instead). Do NOT duplicate these rules under
-   html[data-pwa] — position:fixed + inset:0 triggers WebKit bug #237961
-   on iOS (leaves a bottom gap with viewport-fit=cover). iOS PWAs rely
-   on the base styles in reset.css (height:100%, overflow:hidden). */
+   NOTE: Since iOS 16.4, iOS PWAs DO match this media query. The
+   html:not([data-ios-pwa]) selector excludes iOS from position:fixed +
+   inset:0, which triggers WebKit bug #237961 (bottom gap with
+   viewport-fit=cover). iOS PWAs rely on the base styles in reset.css
+   (height:100%, overflow:hidden) instead. */
 @media (display-mode: standalone) {
-  html {
+  html:not([data-ios-pwa]) {
     position: fixed;
     inset: 0;
     overflow: hidden;
@@ -149,6 +149,7 @@ select:focus-visible,
   }
 
   body {
+    width: var(--app-viewport-width, 100vw);
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
@@ -163,4 +164,25 @@ select:focus-visible,
   #root {
     height: 100%;
   }
+}
+
+/* ── iOS PWA viewport compensation ──
+   With viewport-fit=cover + black-translucent status bar, content renders
+   behind the status bar (starts at y=0), but height:100% on <html> still
+   resolves to the safe layout viewport (excluding the status bar height).
+   This leaves a gap at the bottom exactly equal to safe-area-inset-top.
+   Compensate by adding that height back so the document fills the screen.
+   See: https://itnext.io/make-your-pwas-look-handsome-on-ios-fd8fdfcd5777 */
+html[data-ios-pwa] {
+  /* Force html to the true physical screen height. CSS viewport units and
+     env(safe-area-inset-top) are unreliable across iOS versions in standalone
+     mode. --ios-screen-height is set from screen.height in main.tsx — the
+     actual device screen size in CSS pixels, immune to all viewport quirks. */
+  height: var(--ios-screen-height, 100%);
+  --ios-viewport-offset: env(safe-area-inset-top, 0px);
+  --app-shell-height: 100%;
+}
+
+html[data-pwa]:not([data-ios-pwa]) {
+  --app-shell-height: var(--app-viewport-height, 100dvh);
 }

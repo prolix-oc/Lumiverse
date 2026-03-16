@@ -3,6 +3,7 @@
 .overlay {
   position: fixed;
   inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
   z-index: 10020;
   background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.55));
   backdrop-filter: blur(12px) saturate(1.1);
@@ -272,7 +273,7 @@
 
   .palette {
     width: 100%;
-    max-height: calc(100vh - 16px);
+    max-height: calc(var(--app-viewport-height, 100dvh) - 16px);
   }
 
   .footer {

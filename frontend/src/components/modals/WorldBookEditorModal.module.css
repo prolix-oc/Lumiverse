@@ -1,6 +1,7 @@
 .overlay {
   position: fixed;
   inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
   z-index: 10000;
   display: flex;
   align-items: center;
@@ -387,8 +388,8 @@
 @media (max-width: 640px) {
   .modal {
     width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
+    height: calc(var(--app-viewport-height, 100dvh) + var(--ios-viewport-offset, 0px));
+    max-height: calc(var(--app-viewport-height, 100dvh) + var(--ios-viewport-offset, 0px));
     border-radius: 0;
   }
 

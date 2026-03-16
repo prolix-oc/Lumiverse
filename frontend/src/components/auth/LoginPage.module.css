@@ -2,7 +2,7 @@
 
 .page {
   position: relative;
-  min-height: 100dvh;
+  min-height: var(--app-viewport-height, 100dvh);
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -111,7 +111,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 100dvh;
+  min-height: var(--app-viewport-height, 100dvh);
   padding: 48px 24px;
   box-sizing: border-box;
 }
