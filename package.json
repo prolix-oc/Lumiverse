@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -10,7 +10,8 @@
     "runner:dev": "bun run scripts/runner.ts -- --dev",
     "start:all": "bun run build:frontend && FRONTEND_DIR=$(cd ../LumiverseFrontend/dist && pwd) bun run start",
     "build:frontend": "cd frontend && bun install && bun run build",
-    "migrate:st": "bun run scripts/migrate-sillytavern.ts"
+    "migrate:st": "bun run scripts/migrate-sillytavern.ts",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
