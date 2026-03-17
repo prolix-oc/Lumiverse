@@ -1378,7 +1378,7 @@ function stripHtmlFormattingTags(content: string): string {
       /<div[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>(\s*```[\s\S]*?```\s*)<\/div>/gi,
       "$1",
     );
-    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "");
+    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "$1");
   } while (result !== prev);
   result = result.replace(/<\/div>/gi, "");
 
@@ -1443,30 +1443,42 @@ function applyContextFilters(
     const depthFromEnd = endIdx - 1 - i;
     let filtered = content;
 
-    // HTML tag stripping (always strip mode — no keepOnly for HTML)
-    if (htmlEnabled && depthFromEnd >= htmlKeepDepth) {
+    const applyDetails = detailsEnabled && depthFromEnd >= detailsKeepDepth;
+    const applyLoom = loomEnabled && depthFromEnd >= loomKeepDepth;
+    const applyHtml = htmlEnabled && depthFromEnd >= htmlKeepDepth;
+    const applyFonts = htmlEnabled && fontEnabled && depthFromEnd >= fontKeepDepth;
+
+    // Phase 1: keepOnly extractions from ORIGINAL content, unioned if both active.
+    // This must run before HTML stripping so inner HTML is still intact for matching.
+    const hasKeepOnly = (applyDetails && detailsKeepOnly) || (applyLoom && loomKeepOnly);
+
+    if (hasKeepOnly) {
+      const parts: string[] = [];
+      if (applyDetails && detailsKeepOnly) {
+        const extracted = keepOnlyDetailsBlocks(content);
+        if (extracted) parts.push(extracted);
+      }
+      if (applyLoom && loomKeepOnly) {
+        const extracted = keepOnlyLoomTags(content);
+        if (extracted) parts.push(extracted);
+      }
+      filtered = parts.join("\n\n");
+    }
+
+    // Phase 2: strip modes (applied to extracted content or original)
+    if (applyDetails && !detailsKeepOnly) {
+      filtered = stripDetailsBlocks(filtered);
+    }
+    if (applyLoom && !loomKeepOnly) {
+      filtered = stripLoomTags(filtered);
+    }
+
+    // Phase 3: HTML tag stripping AFTER content extraction, so it cleans kept content too
+    if (applyHtml) {
       filtered = stripHtmlFormattingTags(filtered);
     }
-    if (htmlEnabled && fontEnabled && depthFromEnd >= fontKeepDepth) {
+    if (applyFonts) {
       filtered = stripFontTags(filtered);
-    }
-
-    // Details blocks
-    if (detailsEnabled && depthFromEnd >= detailsKeepDepth) {
-      if (detailsKeepOnly) {
-        filtered = keepOnlyDetailsBlocks(filtered);
-      } else {
-        filtered = stripDetailsBlocks(filtered);
-      }
-    }
-
-    // Loom tags
-    if (loomEnabled && depthFromEnd >= loomKeepDepth) {
-      if (loomKeepOnly) {
-        filtered = keepOnlyLoomTags(filtered);
-      } else {
-        filtered = stripLoomTags(filtered);
-      }
     }
 
     // Clean up excessive newlines left by removals

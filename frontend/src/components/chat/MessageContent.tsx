@@ -10,6 +10,7 @@ import {
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
 import { useStore } from '@/store'
+import { useDisplayRegex } from '@/hooks/useDisplayRegex'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
 import ImageLightbox from './ImageLightbox'
@@ -23,6 +24,7 @@ interface MessageContentProps {
   isStreaming?: boolean
   messageId?: string
   chatId?: string
+  depth?: number
 }
 
 // Custom renderer for sheld prose classes
@@ -351,6 +353,7 @@ export default function MessageContent({
   isStreaming = false,
   messageId,
   chatId,
+  depth = 0,
 }: MessageContentProps) {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
@@ -368,9 +371,14 @@ export default function MessageContent({
     () => stripAndDispatchMessageTags(content, { messageId, chatId, isUser, isStreaming }),
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
   )
+  const applyRegex = useDisplayRegex()
+  const regexAppliedContent = useMemo(
+    () => applyRegex(interceptorCleanedContent, isUser, depth),
+    [applyRegex, interceptorCleanedContent, isUser, depth],
+  )
   const resolvedContent = useMemo(
-    () => resolveDisplayMacros(interceptorCleanedContent, { charName, userName }),
-    [interceptorCleanedContent, charName, userName],
+    () => resolveDisplayMacros(regexAppliedContent, { charName, userName }),
+    [regexAppliedContent, charName, userName],
   )
 
   const blocks = useMemo(() => parseOOC(resolvedContent), [resolvedContent])

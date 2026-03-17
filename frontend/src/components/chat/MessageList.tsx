@@ -163,8 +163,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       {loadingOlder && (
         <div className={styles.loadingOlder}>Loading older messages...</div>
       )}
-      {visibleMessages.map((message) => (
-        <MessageCard key={`${message.id}:${message.index_in_chat}`} message={message} chatId={chatId} />
+      {visibleMessages.map((message, i) => (
+        <MessageCard
+          key={`${message.id}:${message.index_in_chat}`}
+          message={message}
+          chatId={chatId}
+          depth={visibleMessages.length - 1 - i}
+        />
       ))}
 
       {/* Group chat progress bar during nudge loop */}

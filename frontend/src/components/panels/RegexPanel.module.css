@@ -1,0 +1,366 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.topBarTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.topBarActions {
+  display: flex;
+  gap: 4px;
+}
+
+.iconBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.iconBtn:hover {
+  background: var(--lumiverse-surface-hover);
+  color: var(--lumiverse-text);
+}
+
+.scopeFilter {
+  display: flex;
+  gap: 4px;
+}
+
+.scopePill {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 12px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.scopePill:hover {
+  background: var(--lumiverse-surface-hover);
+}
+
+.scopePillActive {
+  background: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-fg, #fff);
+  border-color: var(--lumiverse-primary);
+}
+
+.scriptList {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scriptRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.scriptRow:hover {
+  background: var(--lumiverse-surface-hover);
+}
+
+.scriptRowExpanded {
+  background: var(--lumiverse-surface);
+  border: 1px solid var(--lumiverse-border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+
+.scriptName {
+  flex: 1;
+  font-size: 13px;
+  color: var(--lumiverse-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.scriptNameDisabled {
+  opacity: 0.5;
+}
+
+.badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--lumiverse-surface);
+  color: var(--lumiverse-text-dim);
+  border: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.badgePrompt {
+  color: var(--lumiverse-warning, #f59e0b);
+  border-color: var(--lumiverse-warning, #f59e0b);
+}
+
+.badgeResponse {
+  color: var(--lumiverse-success, #10b981);
+  border-color: var(--lumiverse-success, #10b981);
+}
+
+.badgeDisplay {
+  color: var(--lumiverse-info, #6366f1);
+  border-color: var(--lumiverse-info, #6366f1);
+}
+
+.toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--lumiverse-surface);
+  border: 1px solid var(--lumiverse-border);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--lumiverse-text-dim);
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.toggleOn {
+  background: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+}
+
+.toggleOn::after {
+  transform: translateX(14px);
+  background: var(--lumiverse-primary-fg, #fff);
+}
+
+.deleteBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  opacity: 0;
+  color: var(--lumiverse-danger, #ef4444);
+}
+
+.scriptRow:hover .deleteBtn {
+  opacity: 1;
+}
+
+/* ── Inline Editor ─────────────────────────────────── */
+
+.inlineEditor {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--lumiverse-surface);
+  border: 1px solid var(--lumiverse-border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  margin-bottom: 4px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldRow {
+  display: flex;
+  gap: 16px;
+}
+
+.fieldRow .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  font-weight: 500;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.fieldHint {
+  font-weight: 400;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.fieldInput {
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.fieldInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.fieldInputMono {
+  composes: fieldInput;
+  font-family: var(--lumiverse-mono, monospace);
+}
+
+.fieldTextarea {
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--lumiverse-mono, monospace);
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  outline: none;
+  resize: vertical;
+  min-height: 40px;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.fieldTextarea:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+/* ── Token bar for replace field ─────────────────── */
+
+.tokenBar {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tokenChip {
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: var(--lumiverse-mono, monospace);
+  border-radius: 4px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  line-height: 1.4;
+}
+
+.tokenChip:hover {
+  background: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-fg, #fff);
+  border-color: var(--lumiverse-primary);
+}
+
+.tokenChipHtml {
+  color: var(--lumiverse-info, #6366f1);
+  border-color: color-mix(in srgb, var(--lumiverse-info, #6366f1) 40%, transparent);
+}
+
+.tokenDivider {
+  width: 1px;
+  height: 14px;
+  background: var(--lumiverse-border);
+  margin: 0 2px;
+}
+
+.flagsRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.flagCheck {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.flagCheck input {
+  accent-color: var(--lumiverse-primary);
+}
+
+.placementRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.editModalLink {
+  font-size: 11px;
+  color: var(--lumiverse-primary);
+  cursor: pointer;
+  align-self: flex-end;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.editModalLink:hover {
+  text-decoration: underline;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 20px;
+  color: var(--lumiverse-text-dim);
+  font-size: 13px;
+  text-align: center;
+}

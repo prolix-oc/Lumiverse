@@ -7,16 +7,17 @@ import type { Message } from '@/types/api'
 interface MessageCardProps {
   message: Message
   chatId: string
+  depth?: number
 }
 
-const MessageCard = memo(function MessageCard({ message, chatId }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, chatId, depth = 0 }: MessageCardProps) {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
 
   if (displayMode === 'bubble') {
-    return <BubbleMessage message={message} chatId={chatId} />
+    return <BubbleMessage message={message} chatId={chatId} depth={depth} />
   }
 
-  return <MinimalMessage message={message} chatId={chatId} />
+  return <MinimalMessage message={message} chatId={chatId} depth={depth} />
 })
 
 export default MessageCard

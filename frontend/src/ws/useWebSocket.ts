@@ -386,6 +386,14 @@ export function useWebSocket() {
           routeBackendMessage(payload.extensionId, payload)
         }
       }),
+
+      // Regex script events — reload for multi-tab sync
+      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, () => {
+        store.getState().loadRegexScripts()
+      }),
+      wsClient.on(EventType.REGEX_SCRIPT_DELETED, () => {
+        store.getState().loadRegexScripts()
+      }),
     ]
 
     return () => {

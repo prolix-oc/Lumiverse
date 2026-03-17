@@ -17,9 +17,10 @@ import clsx from 'clsx'
 interface MinimalMessageProps {
   message: Message
   chatId: string
+  depth?: number
 }
 
-export default function MinimalMessage({ message, chatId }: MinimalMessageProps) {
+export default function MinimalMessage({ message, chatId, depth = 0 }: MinimalMessageProps) {
   const {
     isEditing,
     editContent,
@@ -112,6 +113,7 @@ export default function MinimalMessage({ message, chatId }: MinimalMessageProps)
             isStreaming={isActivelyStreaming}
             messageId={message.id}
             chatId={chatId}
+            depth={depth}
           />
         ) : isActivelyStreaming ? (
           <StreamingIndicator />

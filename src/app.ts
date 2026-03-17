@@ -33,6 +33,7 @@ import { spindleOAuthRoutes } from "./routes/spindle-oauth.routes";
 import { systemRoutes } from "./routes/system.routes";
 import { migrateRoutes } from "./routes/migrate.routes";
 import { presetProfilesRoutes } from "./routes/preset-profiles.routes";
+import { regexScriptsRoutes } from "./routes/regex-scripts.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 
@@ -131,6 +132,7 @@ app.route("/api/v1/tokenizers", tokenizersRoutes);
 app.route("/api/v1/system", systemRoutes);
 app.route("/api/v1/migrate", migrateRoutes);
 app.route("/api/v1/preset-profiles", presetProfilesRoutes);
+app.route("/api/v1/regex-scripts", regexScriptsRoutes);
 
 // Issue single-use WS tickets (behind auth middleware)
 app.post("/api/v1/ws-ticket", (c) => {

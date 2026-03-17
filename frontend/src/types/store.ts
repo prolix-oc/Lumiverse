@@ -591,6 +591,21 @@ export interface PromptBreakdownSlice {
   clearBreakdownsForChat: (chatId: string) => void
 }
 
+// ---- Regex Slice ----
+import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from '@/types/regex'
+
+export interface RegexSlice {
+  regexScripts: RegexScript[]
+  regexEditingId: string | null
+  loadRegexScripts: () => Promise<void>
+  addRegexScript: (input: CreateRegexScriptInput) => Promise<RegexScript>
+  updateRegexScript: (id: string, updates: UpdateRegexScriptInput) => Promise<void>
+  removeRegexScript: (id: string) => Promise<void>
+  reorderRegexScripts: (fromIdx: number, toIdx: number) => Promise<void>
+  toggleRegexScript: (id: string, disabled: boolean) => Promise<void>
+  setRegexEditingId: (id: string | null) => void
+}
+
 // ---- Combined Store ----
 export type AppStore = ChatSlice &
   CharactersSlice &
@@ -609,4 +624,5 @@ export type AppStore = ChatSlice &
   WorldInfoSlice &
   GroupChatSlice &
   SpindlePlacementSlice &
-  PromptBreakdownSlice
+  PromptBreakdownSlice &
+  RegexSlice

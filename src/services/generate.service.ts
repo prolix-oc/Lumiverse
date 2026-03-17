@@ -21,6 +21,7 @@ import type { CouncilExecutionResult } from "lumiverse-spindle-types";
 import { getCouncilSettings, getAvailableTools } from "./council/council-settings.service";
 import * as tokenizerSvc from "./tokenizer.service";
 import * as breakdownSvc from "./breakdown.service";
+import * as regexScriptsSvc from "./regex-scripts.service";
 
 interface GenerateInput {
   userId: string;
@@ -312,6 +313,43 @@ async function runPromptPipeline(opts: {
   const postProcessing = settingsSvc.getSetting(opts.userId, "promptPostProcessing");
   if (postProcessing?.value) {
     applyPostProcessing(messages, postProcessing.value);
+  }
+
+  // Apply regex scripts (prompt target)
+  {
+    const chatForRegex = chatsSvc.getChat(opts.userId, opts.chatId);
+    const characterId = opts.targetCharacterId || chatForRegex?.character_id;
+    const promptScripts = regexScriptsSvc.getActiveScripts(opts.userId, { characterId, chatId: opts.chatId, target: "prompt" });
+    if (promptScripts.length > 0) {
+      // Determine chat history bounds for depth calculation
+      const chEntry = breakdown?.find(e => e.type === "chat_history");
+      const chatHistoryStart = chEntry?.firstMessageIndex ?? 0;
+      const chatHistoryCount = chEntry?.messageCount ?? messages.length;
+
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        const placement = msg.role === "user" ? "user_input" as const
+          : msg.role === "assistant" ? "ai_output" as const
+          : "world_info" as const;
+
+        // Depth: distance from end of chat history portion (0 = latest)
+        const isChatHistory = i >= chatHistoryStart && i < chatHistoryStart + chatHistoryCount;
+        const depth = isChatHistory ? (chatHistoryStart + chatHistoryCount - 1 - i) : undefined;
+
+        if (typeof msg.content === "string") {
+          messages[i] = { ...msg, content: regexScriptsSvc.applyRegexScripts(msg.content, promptScripts, placement, depth) };
+        } else if (Array.isArray(msg.content)) {
+          messages[i] = {
+            ...msg,
+            content: msg.content.map((part: any) =>
+              part.type === "text"
+                ? { ...part, text: regexScriptsSvc.applyRegexScripts(part.text, promptScripts, placement, depth) }
+                : part
+            ),
+          };
+        }
+      }
+    }
   }
 
   // Merge parameters: assembled (from preset) < request overrides
@@ -928,7 +966,22 @@ async function runGeneration(
         // Flush any buffered CoT tokens before saving partial content
         flushCotBuffers();
         // Close unclosed reasoning tags so the frontend can properly collapse them
-        const closedContent = closeUnterminatedReasoningTags(userId, fullContent);
+        let closedContent = closeUnterminatedReasoningTags(userId, fullContent);
+
+        // Apply regex scripts (response target) to partial content on abort
+        {
+          const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
+            characterId: lifecycle.targetCharacterId,
+            chatId,
+            target: "response",
+          });
+          if (responseScripts.length > 0) {
+            closedContent = regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0);
+            if (fullReasoning) {
+              fullReasoning = regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0);
+            }
+          }
+        }
 
         if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
           chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, closedContent);
@@ -991,6 +1044,22 @@ async function runGeneration(
     if (!signal.aborted) {
       // Flush any remaining CoT detection buffers before saving
       flushCotBuffers();
+
+      // Apply regex scripts (response target) to completed content
+      {
+        const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
+          characterId: lifecycle.targetCharacterId,
+          chatId,
+          target: "response",
+        });
+        if (responseScripts.length > 0) {
+          fullContent = regexScriptsSvc.applyRegexScripts(fullContent, responseScripts, "ai_output", 0);
+          if (fullReasoning) {
+            fullReasoning = regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0);
+          }
+        }
+      }
+
       let messageId: string;
 
       if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {

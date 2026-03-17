@@ -60,6 +60,10 @@ export enum EventType {
 
   // Tool invocation (Spindle extension tools)
   TOOL_INVOCATION = "TOOL_INVOCATION",
+
+  // Regex Scripts
+  REGEX_SCRIPT_CHANGED = "REGEX_SCRIPT_CHANGED",
+  REGEX_SCRIPT_DELETED = "REGEX_SCRIPT_DELETED",
 }
 
 export interface EventMessage {

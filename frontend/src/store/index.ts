@@ -18,6 +18,7 @@ import { createWorldInfoSlice } from './slices/world-info'
 import { createGroupChatSlice } from './slices/group-chat'
 import { createSpindlePlacementSlice } from './slices/spindle-placement'
 import { createPromptBreakdownSlice } from './slices/prompt-breakdown'
+import { createRegexSlice } from './slices/regex'
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -38,4 +39,5 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createGroupChatSlice(...a),
   ...createSpindlePlacementSlice(...a),
   ...createPromptBreakdownSlice(...a),
+  ...createRegexSlice(...a),
 }))

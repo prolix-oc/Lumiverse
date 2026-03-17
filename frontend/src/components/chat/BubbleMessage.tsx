@@ -16,6 +16,7 @@ import clsx from 'clsx'
 interface BubbleMessageProps {
   message: Message
   chatId: string
+  depth?: number
 }
 
 function formatMetaDate(timestamp: number) {
@@ -26,7 +27,7 @@ function formatMetaDate(timestamp: number) {
   return `${month} ${day}, ${time}`
 }
 
-export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
+export default function BubbleMessage({ message, chatId, depth = 0 }: BubbleMessageProps) {
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const {
     isEditing,
@@ -157,6 +158,7 @@ export default function BubbleMessage({ message, chatId }: BubbleMessageProps) {
               isStreaming={isActivelyStreaming}
               messageId={message.id}
               chatId={chatId}
+              depth={depth}
             />
           ) : isActivelyStreaming ? (
             <StreamingIndicator />

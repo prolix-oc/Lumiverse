@@ -14,6 +14,8 @@ import ManageChatsModal from './ManageChatsModal'
 import ChatPickerModal from './ChatPickerModal'
 import PermissionRequestModal from './PermissionRequestModal'
 import CommandPalette from './CommandPalette'
+import RegexEditorModal from './RegexEditorModal'
+import RegexImportModal from './RegexImportModal'
 
 export default function ModalContainer() {
   const settingsModalOpen = useStore((s) => s.settingsModalOpen)
@@ -87,6 +89,8 @@ export default function ModalContainer() {
       {activeModal === 'lumiaEditor' && <LumiaEditorModal />}
       {activeModal === 'loomEditor' && <LoomEditorModal />}
       {activeModal === 'toolEditor' && <ToolEditorModal />}
+      {activeModal === 'regexEditor' && <RegexEditorModal />}
+      {activeModal === 'regexImport' && <RegexImportModal />}
 
       <PermissionRequestModal />
       <CommandPalette />

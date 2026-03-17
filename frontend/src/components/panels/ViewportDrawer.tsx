@@ -4,7 +4,7 @@ import {
   User, Drama, Wand2, Link2, Package, Zap,
   Users, PenTool, Sparkles, FileText, Brain, ScrollText,
   MessageCircle, Image, Palette, Settings, X, Library, Puzzle,
-  GitFork, Globe, MessageSquareReply, GitBranch, Wallpaper
+  GitFork, Globe, MessageSquareReply, GitBranch, Wallpaper, Replace
 } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
@@ -30,6 +30,7 @@ import PromptPanel from './PromptPanel'
 import ImageGenPanel from './ImageGenPanel'
 import WallpaperPanel from './WallpaperPanel'
 import BranchTreePanel from './BranchTreePanel'
+import RegexPanel from './RegexPanel'
 import styles from './ViewportDrawer.module.css'
 import clsx from 'clsx'
 
@@ -68,6 +69,7 @@ const TABS: Tab[] = [
   { id: 'worldinfo', icon: Globe, label: 'World Info', component: () => <WorldInfoFeedback /> },
   { id: 'imagegen', icon: Image, label: 'Image Gen', component: () => <ImageGenPanel /> },
   { id: 'wallpaper', icon: Wallpaper, label: 'Wallpaper', component: () => <WallpaperPanel /> },
+  { id: 'regex', icon: Replace, label: 'Regex', component: () => <RegexPanel /> },
   { id: 'branches', icon: GitBranch, label: 'Branches', component: () => <BranchTreePanel /> },
   { id: 'theme', icon: Palette, label: 'Theme', component: () => <ThemePanel /> },
   { id: 'spindle', icon: Puzzle, label: 'Extensions', component: () => <SpindlePanel /> },
