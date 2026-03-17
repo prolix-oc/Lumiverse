@@ -49,9 +49,14 @@ export async function startExtension(id: string): Promise<void> {
   const ext = managerSvc.getExtension(id);
   if (!ext) throw new Error(`Extension not found: ${id}`);
 
+  // Sync manifest from disk → DB before starting (picks up spindle.json edits)
+  managerSvc.syncManifestToDb(ext.identifier);
+
   try {
-    const manifest = managerSvc.getManifest(ext.identifier);
-    const host = new WorkerHost(ext.id, manifest, ext);
+    // Re-fetch after sync in case permissions/metadata changed
+    const freshExt = managerSvc.getExtension(id) ?? ext;
+    const manifest = managerSvc.getManifest(freshExt.identifier);
+    const host = new WorkerHost(freshExt.id, manifest, freshExt);
     await host.start();
     runningExtensions.set(id, host);
 

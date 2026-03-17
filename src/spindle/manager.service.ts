@@ -202,8 +202,10 @@ function grantRequestedPermissionsByDefault(
 }
 
 /**
- * Sync extension_grants with the current manifest permissions:
- * - Grant new non-privileged permissions automatically
+ * Reconcile extension_grants with the current manifest permissions:
+ * - Ensure every non-privileged manifest permission has a grant row
+ * - Only auto-grant privileged permissions if they are genuinely new
+ *   (not in previousPermissions) — existing privileged perms require manual approval
  * - Revoke grants for permissions no longer declared in the manifest
  */
 function syncPermissionGrants(
@@ -213,20 +215,93 @@ function syncPermissionGrants(
 ): void {
   const manifestSet = new Set(manifestPermissions);
   const previousSet = new Set(previousPermissions);
+  const granted = new Set(getGrantedPermissions(identifier));
 
-  // Grant newly-requested non-privileged permissions
-  const newlyRequested = manifestPermissions.filter(
-    (perm) => !previousSet.has(perm)
-  );
-  grantRequestedPermissionsByDefault(identifier, newlyRequested);
+  // Ensure all manifest permissions are granted appropriately
+  for (const perm of manifestPermissions) {
+    if (granted.has(perm)) continue; // already granted
+
+    if (PRIVILEGED_PERMISSIONS.has(perm)) {
+      // Only auto-grant privileged perms that are genuinely new to the manifest
+      // (not just missing from extension_grants while already declared)
+      if (!previousSet.has(perm)) {
+        // New privileged permission — skip, requires manual admin approval
+      }
+      // If it was in previousPermissions but grant is missing, it was
+      // intentionally revoked by an admin — don't re-grant
+    } else {
+      // Non-privileged: always ensure granted
+      grantPermission(identifier, perm);
+    }
+  }
 
   // Revoke grants for permissions removed from the manifest
-  const granted = getGrantedPermissions(identifier);
   for (const perm of granted) {
     if (!manifestSet.has(perm)) {
       revokePermission(identifier, perm);
     }
   }
+}
+
+/**
+ * Re-read spindle.json from disk and sync the DB row + permission grants
+ * if anything has changed. Safe to call on every start — no-ops when the
+ * manifest matches what the DB already has.
+ */
+export function syncManifestToDb(identifier: string): void {
+  let manifest: SpindleManifest;
+  try {
+    manifest = readManifest(identifier);
+  } catch {
+    // If manifest can't be read (e.g. repo missing), skip sync silently
+    return;
+  }
+
+  const db = getDb();
+  const row = db
+    .query("SELECT name, version, author, description, github, homepage, permissions FROM extensions WHERE identifier = ?")
+    .get(identifier) as {
+      name: string; version: string; author: string; description: string;
+      github: string; homepage: string; permissions: string;
+    } | null;
+  if (!row) return;
+
+  const dbPermissions: string[] = JSON.parse(row.permissions || "[]");
+  const manifestPermissions = manifest.permissions || [];
+
+  // Check if the extensions row needs updating
+  const metadataChanged =
+    row.name !== manifest.name ||
+    row.version !== manifest.version ||
+    row.author !== manifest.author ||
+    (row.description || "") !== (manifest.description || "") ||
+    row.github !== manifest.github ||
+    (row.homepage || "") !== (manifest.homepage || "");
+  const permissionsChanged =
+    JSON.stringify(dbPermissions) !== JSON.stringify(manifestPermissions);
+
+  if (metadataChanged || permissionsChanged) {
+    db.run(
+      `UPDATE extensions SET name = ?, version = ?, author = ?, description = ?,
+       github = ?, homepage = ?, permissions = ?, updated_at = unixepoch()
+       WHERE identifier = ?`,
+      [
+        manifest.name,
+        manifest.version,
+        manifest.author,
+        manifest.description || "",
+        manifest.github,
+        manifest.homepage || "",
+        JSON.stringify(manifestPermissions),
+        identifier,
+      ]
+    );
+  }
+
+  // Always reconcile grants against the manifest — even when the permissions
+  // column hasn't changed, the extension_grants table may be out of sync
+  // (e.g. manual DB edits, interrupted previous sync, etc.)
+  syncPermissionGrants(identifier, manifestPermissions, dbPermissions);
 }
 
 function resolveWithin(base: string, requestedPath: string, label: string): string {
