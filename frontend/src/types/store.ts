@@ -240,7 +240,7 @@ export interface SettingsSlice {
   chatContentMaxWidth: number
   modalWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   modalMaxWidth: number
-  portraitPanelSide: 'left' | 'right'
+  portraitPanelSide: 'left' | 'right' | 'none'
   theme: ThemeConfig | null
   drawerSettings: DrawerSettings
   toastPosition: ToastPosition

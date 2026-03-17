@@ -26,6 +26,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
   const [apiUrl, setApiUrl] = useState(profile?.api_url || '')
   const [model, setModel] = useState(profile?.model || '')
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
+  const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
   const [models, setModels] = useState<string[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
 
@@ -54,8 +55,16 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
     if (profile?.id) fetchModels()
   }, [profile?.id, fetchModels])
 
+  const showResponsesApiToggle = provider === 'openai'
+
   const handleSubmit = useCallback(() => {
     if (!name.trim()) return
+    const metadata: Record<string, any> = { ...profile?.metadata }
+    if (showResponsesApiToggle) {
+      metadata.use_responses_api = useResponsesApi
+    } else {
+      delete metadata.use_responses_api
+    }
     onSave({
       name: name.trim(),
       provider,
@@ -63,8 +72,9 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
       api_url: apiUrl.trim() || undefined,
       model: model.trim() || undefined,
       is_default: isDefault,
+      metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, onSave])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, profile?.metadata, onSave])
 
   return (
     <div className={styles.form}>
@@ -97,6 +107,14 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
           Set as default connection
         </label>
       </FormField>
+      {showResponsesApiToggle && (
+        <FormField label="" hint="Use /v1/responses instead of /v1/chat/completions">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={useResponsesApi} onChange={(e) => setUseResponsesApi(e.target.checked)} />
+            Use Responses API
+          </label>
+        </FormField>
+      )}
       <div className={styles.formActions}>
         <button type="button" className={styles.cancelBtn} onClick={onCancel}>Cancel</button>
         <button type="button" className={styles.saveBtn} onClick={handleSubmit} disabled={!name.trim()}>

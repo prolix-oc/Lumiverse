@@ -750,6 +750,11 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   // Strip internal-only keys before they reach the provider
   delete mergedParams.max_context_length;
 
+  // Inject connection-level metadata flags into parameters (e.g. use_responses_api)
+  if (connection.metadata?.use_responses_api) {
+    mergedParams.use_responses_api = true;
+  }
+
   // Resolve preset name for breakdown display
   const presetId = input.preset_id || connection.preset_id;
   if (presetId) {
@@ -1222,6 +1227,11 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
     if (effort !== "auto") {
       injectReasoningParams(mergedParams, provider.name, effort, connection.model || undefined);
     }
+  }
+
+  // Inject connection-level metadata flags into parameters (e.g. use_responses_api)
+  if (connection.metadata?.use_responses_api) {
+    mergedParams.use_responses_api = true;
   }
 
   return provider.generate(apiKey, apiUrl, {

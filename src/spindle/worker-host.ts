@@ -108,7 +108,7 @@ function requestWithAddressFamily(
 
 export class WorkerHost {
   private worker: Worker | null = null;
-  private eventUnsubscribers: (() => void)[] = [];
+  private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
     string,
     { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
@@ -261,10 +261,10 @@ export class WorkerHost {
 
   private cleanup(): void {
     // Unsubscribe from all events
-    for (const unsub of this.eventUnsubscribers) {
+    for (const unsub of this.eventUnsubscribers.values()) {
       unsub();
     }
-    this.eventUnsubscribers = [];
+    this.eventUnsubscribers.clear();
 
     // Unregister interceptor
     this.interceptorUnregister?.();
@@ -396,7 +396,7 @@ export class WorkerHost {
         this.handleSubscribeEvent(msg.event);
         break;
       case "unsubscribe_event":
-        // We don't track individual unsubs — cleaned up on stop
+        this.handleUnsubscribeEvent(msg.event);
         break;
       case "register_macro":
         this.handleRegisterMacro(msg.definition);
@@ -729,6 +729,12 @@ export class WorkerHost {
       return;
     }
 
+    // Clean up any existing subscription for this event before adding a new one
+    const existing = this.eventUnsubscribers.get(event);
+    if (existing) {
+      existing();
+    }
+
     const scopedUserId = this.getScopedUserId();
     const unsub = eventBus.on(eventType, (msg) => {
       if (scopedUserId && msg.userId !== scopedUserId) {
@@ -740,7 +746,15 @@ export class WorkerHost {
         payload: msg.payload,
       });
     });
-    this.eventUnsubscribers.push(unsub);
+    this.eventUnsubscribers.set(event, unsub);
+  }
+
+  private handleUnsubscribeEvent(event: string): void {
+    const unsub = this.eventUnsubscribers.get(event);
+    if (unsub) {
+      unsub();
+      this.eventUnsubscribers.delete(event);
+    }
   }
 
   // ─── Macro registration ──────────────────────────────────────────────

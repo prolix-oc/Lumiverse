@@ -551,8 +551,9 @@ function ChatSettings() {
         <select
           className={styles.select}
           value={portraitPanelSide}
-          onChange={(e) => setSetting('portraitPanelSide', e.target.value as 'left' | 'right')}
+          onChange={(e) => setSetting('portraitPanelSide', e.target.value as 'left' | 'right' | 'none')}
         >
+          <option value="none">None</option>
           <option value="left">Left</option>
           <option value="right">Right</option>
         </select>

@@ -190,7 +190,7 @@ export default function ChatView() {
         }}
       />
       <div className={styles.body}>
-        {portraitPanelSide === 'left' && (
+        {portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
           <>
             <AnimatePresence>
               {portraitPanelOpen && <PortraitPanel side="left" />}
@@ -216,7 +216,7 @@ export default function ChatView() {
           </div>
         </div>
 
-        {portraitPanelSide === 'right' && (
+        {portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
           <>
             <button
               type="button"

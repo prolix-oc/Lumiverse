@@ -216,7 +216,7 @@ function syncPermissionGrants(
 ): void {
   const manifestSet = new Set(manifestPermissions);
   const previousSet = new Set(previousPermissions);
-  const granted = new Set(getGrantedPermissions(identifier));
+  const granted: Set<string> = new Set(getGrantedPermissions(identifier));
 
   // Ensure all manifest permissions are granted appropriately
   for (const perm of manifestPermissions) {
