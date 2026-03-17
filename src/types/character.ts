@@ -36,3 +36,14 @@ export interface CreateCharacterInput {
 }
 
 export type UpdateCharacterInput = Partial<CreateCharacterInput>;
+
+export interface CharacterSummary {
+  id: string;
+  name: string;
+  creator: string;
+  tags: string[];
+  image_id: string | null;
+  created_at: number;
+  updated_at: number;
+  has_alternate_greetings: boolean;
+}

@@ -42,6 +42,22 @@ export interface CreateCharacterInput {
 
 export type UpdateCharacterInput = Partial<CreateCharacterInput>;
 
+export interface CharacterSummary {
+  id: string;
+  name: string;
+  creator: string;
+  tags: string[];
+  image_id: string | null;
+  created_at: number;
+  updated_at: number;
+  has_alternate_greetings: boolean;
+}
+
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
 // ---- Chat ----
 export interface Chat {
   id: string;

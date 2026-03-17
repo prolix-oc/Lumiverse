@@ -3,16 +3,16 @@ import { Star, Pencil } from 'lucide-react'
 import { charactersApi } from '@/api/characters'
 import { getTagColor } from '@/lib/tagColors'
 import LazyImage from '@/components/shared/LazyImage'
-import type { Character } from '@/types/api'
+import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterRow.module.css'
 import clsx from 'clsx'
 
 interface CharacterRowProps {
-  character: Character
+  character: Character | CharacterSummary
   isFavorite: boolean
   isSelected?: boolean
   batchMode?: boolean
-  onOpen: (character: Character) => void
+  onOpen: (character: Character | CharacterSummary) => void
   onEdit?: (id: string) => void
   onToggleFavorite: (id: string) => void
   onToggleBatch?: (id: string) => void
@@ -28,7 +28,9 @@ export default memo(function CharacterRow({
   onToggleFavorite,
   onToggleBatch,
 }: CharacterRowProps) {
-  const avatarUrl = charactersApi.avatarUrl(character.id) + (character.image_id ? `?v=${character.image_id}` : '')
+  const avatarUrl = character.image_id
+    ? charactersApi.imageUrl(character.image_id)
+    : charactersApi.avatarUrl(character.id)
   const tags = character.tags?.slice(0, 3) || []
 
   const handleClick = () => {

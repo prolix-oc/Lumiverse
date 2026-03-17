@@ -238,12 +238,23 @@ async function getOrCreateTable(seedRows?: EmbeddingRow[]): Promise<Table> {
   return table;
 }
 
+const MIN_ROWS_FOR_INDEX = 10_000;
+
 async function ensureVectorIndex(table: Table): Promise<void> {
   if (vectorIndexReady) return;
   try {
+    const rowCount = await table.countRows();
+    if (rowCount < MIN_ROWS_FOR_INDEX) {
+      // Brute-force search is fast enough for small tables and avoids
+      // KMeans warnings about empty clusters when rows < num_partitions * 256.
+      vectorIndexReady = true;
+      return;
+    }
+    const numPartitions = Math.max(1, Math.round(Math.sqrt(rowCount)));
     await table.createIndex("vector", {
       config: {
-        distanceType: "cosine"
+        distanceType: "cosine",
+        numPartitions,
       }
     } as any);
   } catch {

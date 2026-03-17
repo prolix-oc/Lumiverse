@@ -3,7 +3,7 @@ import type { ComponentType } from 'react'
 import {
   User, Wand2, GitFork, Link2, Package, Users, Drama, Library,
   PenTool, MessageCircle, FileText, Brain, ScrollText, MessageSquareReply,
-  Globe, Image, GitBranch, Palette, Puzzle, Wallpaper,
+  Globe, Image, GitBranch, Palette, Puzzle, Wallpaper, Replace,
   Settings, PanelRight, MessageSquare, Compass, Reply, Sliders,
   Plus, RotateCw, CornerDownLeft, Trash2, Edit3, Copy,
   Eye, EyeOff, Columns, FolderOpen, ClipboardCopy, Upload, Search
@@ -527,6 +527,15 @@ export const COMMANDS: Command[] = [
     keywords: ['wallpaper', 'background', 'backdrop', 'image', 'video', 'animated', 'mp4', 'webm'],
     group: 'Panels',
     run: () => openPanel('wallpaper'),
+  },
+  {
+    id: 'panel-regex',
+    label: 'Regex Scripts',
+    description: 'Create and manage regex find/replace scripts',
+    icon: Replace,
+    keywords: ['regex', 'find', 'replace', 'script', 'transform', 'filter', 'pattern', 'substitution'],
+    group: 'Panels',
+    run: () => openPanel('regex'),
   },
   {
     id: 'panel-branches',

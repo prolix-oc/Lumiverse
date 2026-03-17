@@ -1,17 +1,17 @@
-import { useRef, useCallback, useState, useEffect } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import CharacterCard from './CharacterCard'
-import type { Character } from '@/types/api'
+import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterGrid.module.css'
 
 interface CharacterGridProps {
-  characters: Character[]
+  characters: (Character | CharacterSummary)[]
   favorites: string[]
   batchMode: boolean
   batchSelected: string[]
   forcedColumns?: number
-  onOpen: (character: Character) => void
+  onOpen: (character: Character | CharacterSummary) => void
   onEdit: (id: string) => void
   onToggleFavorite: (id: string) => void
   onToggleBatch: (id: string) => void
@@ -36,6 +36,10 @@ export default function CharacterGrid({
   useScrollGate(parentRef)
   const [columns, setColumns] = useState(2)
   const [containerWidth, setContainerWidth] = useState(400)
+
+  // O(1) lookups instead of O(n) includes() per card
+  const favSet = useMemo(() => new Set(favorites), [favorites])
+  const batchSet = useMemo(() => new Set(batchSelected), [batchSelected])
 
   // Track whether viewport qualifies as desktop
   const [isDesktop, setIsDesktop] = useState(() => window.matchMedia('(min-width: 768px)').matches)
@@ -70,11 +74,11 @@ export default function CharacterGrid({
     count: rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => rowHeight,
-    overscan: 3,
+    overscan: 5,
   })
 
   const getCharacter = useCallback(
-    (rowIndex: number, colIndex: number): Character | undefined => {
+    (rowIndex: number, colIndex: number): Character | CharacterSummary | undefined => {
       const index = rowIndex * columns + colIndex
       return characters[index]
     },
@@ -104,7 +108,7 @@ export default function CharacterGrid({
               display: 'grid',
               gridTemplateColumns: `repeat(${columns}, 1fr)`,
               gap: `${GAP}px`,
-              padding: `0 ${GAP / 2}px`,
+              padding: `0 ${GAP / 2}px ${GAP}px`,
             }}
           >
             {Array.from({ length: columns }).map((_, colIndex) => {
@@ -114,8 +118,8 @@ export default function CharacterGrid({
                 <CharacterCard
                   key={character.id}
                   character={character}
-                  isFavorite={favorites.includes(character.id)}
-                  isSelected={batchSelected.includes(character.id)}
+                  isFavorite={favSet.has(character.id)}
+                  isSelected={batchSet.has(character.id)}
                   batchMode={batchMode}
                   onOpen={onOpen}
                   onEdit={onEdit}

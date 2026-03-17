@@ -1,6 +1,8 @@
 import { get, post, put, del, upload, BASE_URL } from './client'
 import type {
   Character,
+  CharacterSummary,
+  TagCount,
   CreateCharacterInput,
   UpdateCharacterInput,
   PaginatedResult,
@@ -9,9 +11,29 @@ import type {
   BatchDeleteResult,
 } from '@/types/api'
 
+export interface SummaryParams {
+  limit?: number
+  offset?: number
+  search?: string
+  tags?: string
+  sort?: string
+  direction?: string
+  filter?: string
+  favorite_ids?: string
+  seed?: number
+}
+
 export const charactersApi = {
   list(params?: { limit?: number; offset?: number; search?: string; sort?: string; seed?: number }) {
     return get<PaginatedResult<Character>>('/characters', params)
+  },
+
+  listSummaries(params?: SummaryParams) {
+    return get<PaginatedResult<CharacterSummary>>('/characters/summary', params)
+  },
+
+  listTags() {
+    return get<TagCount[]>('/characters/tags')
   },
 
   get(id: string) {
@@ -42,6 +64,11 @@ export const charactersApi = {
 
   avatarUrl(id: string) {
     return `${BASE_URL}/characters/${id}/avatar`
+  },
+
+  /** Direct image URL — bypasses character DB lookup when image_id is known */
+  imageUrl(imageId: string) {
+    return `${BASE_URL}/images/${imageId}`
   },
 
   importFile(file: File) {

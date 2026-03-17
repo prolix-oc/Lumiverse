@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",

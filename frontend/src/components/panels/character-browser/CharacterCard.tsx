@@ -3,17 +3,17 @@ import { Star, Pencil } from 'lucide-react'
 import { charactersApi } from '@/api/characters'
 import { getTagColor } from '@/lib/tagColors'
 import LazyImage from '@/components/shared/LazyImage'
-import type { Character } from '@/types/api'
+import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterCard.module.css'
 import clsx from 'clsx'
 
 interface CharacterCardProps {
-  character: Character
+  character: Character | CharacterSummary
   isFavorite: boolean
   isSelected?: boolean
   batchMode?: boolean
   compact?: boolean
-  onOpen: (character: Character) => void
+  onOpen: (character: Character | CharacterSummary) => void
   onEdit?: (id: string) => void
   onToggleFavorite: (id: string) => void
   onToggleBatch?: (id: string) => void
@@ -30,7 +30,10 @@ export default memo(function CharacterCard({
   onToggleFavorite,
   onToggleBatch,
 }: CharacterCardProps) {
-  const avatarUrl = charactersApi.avatarUrl(character.id) + (character.image_id ? `?v=${character.image_id}` : '')
+  // Use direct image URL when image_id is available (bypasses character DB lookup)
+  const avatarUrl = character.image_id
+    ? charactersApi.imageUrl(character.image_id)
+    : charactersApi.avatarUrl(character.id)
   const tags = character.tags?.slice(0, 3) || []
   const extraTagCount = (character.tags?.length || 0) - 3
 

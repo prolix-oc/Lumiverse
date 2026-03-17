@@ -1,9 +1,248 @@
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
+import type { Character, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+
+// ─── Summary queries (lightweight, for character browser) ─────────────────
+
+const SUMMARY_COLUMNS = `c.id, c.name, c.creator, c.tags, c.image_id, c.created_at, c.updated_at,
+  (json_array_length(c.alternate_greetings) > 0) as has_alternate_greetings`;
+
+function rowToSummary(row: any): CharacterSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    creator: row.creator,
+    tags: JSON.parse(row.tags),
+    image_id: row.image_id || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    has_alternate_greetings: !!row.has_alternate_greetings,
+  };
+}
+
+/** Escape special FTS5 query characters and append prefix wildcard */
+function sanitizeFtsQuery(input: string): string {
+  // Remove FTS5 operators/syntax characters
+  const cleaned = input.replace(/[":*()^{}~\-]/g, " ").trim();
+  if (!cleaned) return "";
+  // Split into tokens, add prefix wildcard to each for partial matching
+  return cleaned
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `"${t}"*`)
+    .join(" ");
+}
+
+export interface SummaryQueryOptions {
+  search?: string;
+  tags?: string[];
+  sort?: string;
+  direction?: "asc" | "desc";
+  favoriteIds?: string[];
+  filterMode?: "all" | "favorites" | "non-favorites";
+  seed?: number;
+}
+
+export function listCharacterSummaries(
+  userId: string,
+  pagination: PaginationParams,
+  options: SummaryQueryOptions = {}
+): PaginatedResult<CharacterSummary> {
+  const db = getDb();
+  const { search, tags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
+
+  // Use discover sort if requested
+  if (sort === "discover") {
+    return listCharacterSummariesDiscover(userId, pagination, options);
+  }
+
+  const whereClauses: string[] = ["c.user_id = ?"];
+  const whereParams: any[] = [userId];
+
+  // FTS5 search
+  let fromClause = "characters c";
+  if (search) {
+    const ftsQuery = sanitizeFtsQuery(search);
+    if (ftsQuery) {
+      fromClause = "characters c JOIN characters_fts fts ON fts.rowid = c.rowid";
+      whereClauses.push("characters_fts MATCH ?");
+      whereParams.push(ftsQuery);
+    }
+  }
+
+  // Tag AND filter
+  if (tags && tags.length > 0) {
+    for (const tag of tags) {
+      whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  // Favorites filter
+  if (filterMode === "favorites" && favoriteIds && favoriteIds.length > 0) {
+    whereClauses.push(`c.id IN (${favoriteIds.map(() => "?").join(",")})`);
+    whereParams.push(...favoriteIds);
+  } else if (filterMode === "non-favorites" && favoriteIds && favoriteIds.length > 0) {
+    whereClauses.push(`c.id NOT IN (${favoriteIds.map(() => "?").join(",")})`);
+    whereParams.push(...favoriteIds);
+  }
+
+  const whereStr = whereClauses.join(" AND ");
+
+  // Sort
+  let orderBy: string;
+  if (search && !sort) {
+    orderBy = "ORDER BY rank"; // FTS5 relevance
+  } else {
+    switch (sort) {
+      case "name":
+        orderBy = `ORDER BY c.name ${direction === "desc" ? "DESC" : "ASC"}`;
+        break;
+      case "created":
+        orderBy = `ORDER BY c.created_at ${direction === "desc" ? "DESC" : "ASC"}`;
+        break;
+      case "recent":
+      default:
+        orderBy = `ORDER BY c.updated_at ${direction === "desc" ? "DESC" : "ASC"}`;
+        break;
+    }
+  }
+
+  // Count
+  const countRow = db
+    .query(`SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`)
+    .get(...whereParams) as { count: number } | null;
+  const total = countRow?.count ?? 0;
+
+  // Data
+  const rows = db
+    .query(`SELECT ${SUMMARY_COLUMNS} FROM ${fromClause} WHERE ${whereStr} ${orderBy} LIMIT ? OFFSET ?`)
+    .all(...whereParams, pagination.limit, pagination.offset) as any[];
+
+  return {
+    data: rows.map(rowToSummary),
+    total,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
+}
+
+function listCharacterSummariesDiscover(
+  userId: string,
+  pagination: PaginationParams,
+  options: SummaryQueryOptions = {}
+): PaginatedResult<CharacterSummary> {
+  const db = getDb();
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const shuffleSeed = options.seed ?? Math.floor(Date.now() / 86_400_000);
+  const { search, tags, favoriteIds, filterMode = "all" } = options;
+
+  const whereClauses: string[] = ["c.user_id = ?"];
+  const whereParams: any[] = [userId];
+
+  let extraJoin = "";
+  if (search) {
+    const ftsQuery = sanitizeFtsQuery(search);
+    if (ftsQuery) {
+      extraJoin = "JOIN characters_fts fts ON fts.rowid = c.rowid";
+      whereClauses.push("characters_fts MATCH ?");
+      whereParams.push(ftsQuery);
+    }
+  }
+
+  if (tags && tags.length > 0) {
+    for (const tag of tags) {
+      whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  if (filterMode === "favorites" && favoriteIds && favoriteIds.length > 0) {
+    whereClauses.push(`c.id IN (${favoriteIds.map(() => "?").join(",")})`);
+    whereParams.push(...favoriteIds);
+  } else if (filterMode === "non-favorites" && favoriteIds && favoriteIds.length > 0) {
+    whereClauses.push(`c.id NOT IN (${favoriteIds.map(() => "?").join(",")})`);
+    whereParams.push(...favoriteIds);
+  }
+
+  const whereStr = whereClauses.join(" AND ");
+
+  const countRow = db
+    .query(`SELECT COUNT(*) as count FROM characters c ${extraJoin} WHERE ${whereStr}`)
+    .get(...whereParams) as { count: number } | null;
+  const total = countRow?.count ?? 0;
+
+  const dataSql = `
+    SELECT ${SUMMARY_COLUMNS}
+    FROM characters c
+    ${extraJoin}
+    LEFT JOIN (
+      SELECT character_id,
+             COUNT(*)        AS chat_count,
+             MAX(updated_at) AS last_chat_at
+      FROM chats
+      WHERE user_id = ?
+      GROUP BY character_id
+    ) cs ON cs.character_id = c.id
+    WHERE ${whereStr}
+    ORDER BY (
+      CASE WHEN COALESCE(cs.chat_count, 0) = 0 THEN 1000 ELSE 0 END
+      + MIN(COALESCE((? - cs.last_chat_at) / 86400, 365), 365)
+      + CASE WHEN COALESCE(cs.chat_count, 0) > 0
+          THEN MAX(100 - COALESCE(cs.chat_count, 0) * 2, 0)
+          ELSE 0 END
+      + ABS(
+          (UNICODE(SUBSTR(c.id, 1, 1)) * 31
+           + UNICODE(SUBSTR(c.id, 5, 1)) * 17
+           + UNICODE(SUBSTR(c.id, 10, 1)) * 13
+           + ?) % 200
+        )
+    ) DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  // Params: chats subquery userId, then where params, then score params, then pagination
+  const rows = db
+    .query(dataSql)
+    .all(userId, ...whereParams, nowSeconds, shuffleSeed, pagination.limit, pagination.offset) as any[];
+
+  return {
+    data: rows.map(rowToSummary),
+    total,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
+}
+
+// ─── Tags query ───────────────────────────────────────────────────────────
+
+export function listCharacterTags(userId: string): { tag: string; count: number }[] {
+  const rows = getDb()
+    .query(
+      `SELECT value as tag, COUNT(*) as count
+       FROM characters, json_each(characters.tags)
+       WHERE user_id = ?
+       GROUP BY value ORDER BY count DESC`
+    )
+    .all(userId) as any[];
+  return rows;
+}
+
+// ─── Avatar info (lightweight, no JSON parsing) ───────────────────────────
+
+export function getCharacterAvatarInfo(
+  userId: string,
+  id: string
+): { image_id: string | null; avatar_path: string | null } | null {
+  const row = getDb()
+    .query("SELECT image_id, avatar_path FROM characters WHERE id = ? AND user_id = ?")
+    .get(id, userId) as any;
+  if (!row) return null;
+  return { image_id: row.image_id || null, avatar_path: row.avatar_path || null };
+}
 
 export type CharacterSortMode = "recent" | "discover";
 

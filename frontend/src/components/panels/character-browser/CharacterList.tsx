@@ -1,15 +1,15 @@
 import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import CharacterRow from './CharacterRow'
-import type { Character } from '@/types/api'
+import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterList.module.css'
 
 interface CharacterListProps {
-  characters: Character[]
+  characters: (Character | CharacterSummary)[]
   favorites: string[]
   batchMode: boolean
   batchSelected: string[]
-  onOpen: (character: Character) => void
+  onOpen: (character: Character | CharacterSummary) => void
   onEdit: (id: string) => void
   onToggleFavorite: (id: string) => void
   onToggleBatch: (id: string) => void

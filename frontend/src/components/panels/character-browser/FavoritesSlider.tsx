@@ -1,11 +1,11 @@
 import CharacterCard from './CharacterCard'
-import type { Character } from '@/types/api'
+import type { Character, CharacterSummary } from '@/types/api'
 import styles from './FavoritesSlider.module.css'
 
 interface FavoritesSliderProps {
-  characters: Character[]
+  characters: (Character | CharacterSummary)[]
   favorites: string[]
-  onOpen: (character: Character) => void
+  onOpen: (character: Character | CharacterSummary) => void
   onToggleFavorite: (id: string) => void
 }
 

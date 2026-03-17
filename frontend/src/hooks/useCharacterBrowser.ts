@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router'
-import Fuse from 'fuse.js'
 import { toast } from '@/lib/toast'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
 import { get } from '@/api/client'
 import { useStore } from '@/store'
-import type { Character } from '@/types/api'
+import type { Character, CharacterSummary, TagCount } from '@/types/api'
 import type { LorebookInfo } from '@/components/modals/BulkImportProgressModal'
 
 const SEARCH_DEBOUNCE_MS = 150
@@ -17,7 +16,7 @@ export function useCharacterBrowser() {
   const charactersPerPage = useStore((s) => s.charactersPerPage)
   const setSetting = useStore((s) => s.setSetting)
 
-  // Store state
+  // Store state (still used for background population for other components)
   const characters = useStore((s) => s.characters)
   const charactersLoaded = useStore((s) => s.charactersLoaded)
   const setCharacters = useStore((s) => s.setCharacters)
@@ -47,7 +46,7 @@ export function useCharacterBrowser() {
   const removeCharacters = useStore((s) => s.removeCharacters)
   const updateCharacterInStore = useStore((s) => s.updateCharacter)
 
-  // Shuffle state — seed triggers backend re-fetch
+  // Shuffle state
   const [shuffleSeed, setShuffleSeed] = useState(() => Math.floor(Date.now() / 86_400_000))
 
   // Local state
@@ -62,6 +61,11 @@ export function useCharacterBrowser() {
   const [lorebookModalOpen, setLorebookModalOpen] = useState(false)
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery)
 
+  // ─── Server-side paginated summaries (the fast path) ────────────────────
+  const [browserItems, setBrowserItems] = useState<CharacterSummary[]>([])
+  const [browserTotal, setBrowserTotal] = useState(0)
+  const [allTags, setAllTags] = useState<TagCount[]>([])
+
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
@@ -69,23 +73,76 @@ export function useCharacterBrowser() {
     return () => clearTimeout(debounceRef.current)
   }, [searchQuery])
 
-  // Load all characters on mount if not yet loaded (paginate through API)
+  // ─── Fetch current page from server ─────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+
+    const params: Record<string, any> = {
+      limit: charactersPerPage,
+      offset: (currentPage - 1) * charactersPerPage,
+    }
+
+    // Sort
+    if (sortField === 'shuffle') {
+      params.sort = 'discover'
+      params.seed = shuffleSeed
+    } else {
+      params.sort = sortField
+      params.direction = sortDirection
+    }
+
+    // Search
+    if (debouncedQuery.trim()) {
+      params.search = debouncedQuery.trim()
+    }
+
+    // Tag filter
+    if (selectedTags.length > 0) {
+      params.tags = selectedTags.join(',')
+    }
+
+    // Favorites filter
+    if (filterTab === 'favorites' || filterTab === 'characters') {
+      params.filter = filterTab === 'favorites' ? 'favorites' : 'non-favorites'
+      if (favorites.length > 0) {
+        params.favorite_ids = favorites.join(',')
+      }
+    }
+
+    charactersApi
+      .listSummaries(params)
+      .then((result) => {
+        if (cancelled) return
+        setBrowserItems(result.data)
+        setBrowserTotal(result.total)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error('[CharacterBrowser] Failed to load summaries:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentPage, charactersPerPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, filterTab, favorites])
+
+  // ─── Load tags once ─────────────────────────────────────────────────────
+  useEffect(() => {
+    charactersApi.listTags().then(setAllTags).catch(() => {})
+  }, [])
+
+  // ─── Background: populate store with full characters (for other components) ──
   useEffect(() => {
     if (charactersLoaded) return
-    setLoading(true)
     const loadAll = async () => {
       const PAGE = 200
       let all: Character[] = []
       let offset = 0
       let total = Infinity
-      const params: { limit: number; offset: number; sort?: string; seed?: number } = { limit: PAGE, offset: 0 }
-      if (sortField === 'shuffle') {
-        params.sort = 'discover'
-        params.seed = shuffleSeed
-      }
       while (offset < total) {
-        params.offset = offset
-        const result = await charactersApi.list(params)
+        const result = await charactersApi.list({ limit: PAGE, offset })
         all = all.concat(result.data)
         total = result.total
         offset += result.data.length
@@ -93,109 +150,24 @@ export function useCharacterBrowser() {
       }
       setCharacters(all)
     }
-    loadAll()
-      .catch((err) => console.error('[CharacterBrowser] Failed to load:', err))
-      .finally(() => setLoading(false))
-  }, [charactersLoaded, setCharacters, sortField, shuffleSeed])
+    loadAll().catch((err) => console.error('[CharacterBrowser] Background load failed:', err))
+  }, [charactersLoaded, setCharacters])
 
-  // Re-fetch from backend when entering shuffle mode or reshuffling
+  // Reset to page 1 when filters change
   useEffect(() => {
-    if (sortField !== 'shuffle' || !charactersLoaded) return
-    setLoading(true)
-    const loadShuffled = async () => {
-      const PAGE = 200
-      let all: Character[] = []
-      let offset = 0
-      let total = Infinity
-      while (offset < total) {
-        const result = await charactersApi.list({ limit: PAGE, offset, sort: 'discover', seed: shuffleSeed })
-        all = all.concat(result.data)
-        total = result.total
-        offset += result.data.length
-        if (result.data.length < PAGE) break
-      }
-      setCharacters(all)
-    }
-    loadShuffled()
-      .catch((err) => console.error('[CharacterBrowser] Failed to load shuffled:', err))
-      .finally(() => setLoading(false))
-  }, [sortField, shuffleSeed, charactersLoaded, setCharacters])
+    setCurrentPage(1)
+  }, [filterTab, selectedTags, debouncedQuery, sortField, sortDirection, shuffleSeed])
 
-  // Fuse.js instance
-  const fuse = useMemo(
-    () =>
-      new Fuse(characters, {
-        keys: ['name', 'creator', 'creator_notes', 'tags'],
-        threshold: 0.3,
-      }),
-    [characters]
+  const totalPages = Math.max(1, Math.ceil(browserTotal / charactersPerPage))
+  const safePage = Math.min(currentPage, totalPages)
+
+  // Favorite characters (from store, for slider — uses full character data)
+  const favoriteCharacters = useMemo(
+    () => characters.filter((c) => favorites.includes(c.id)),
+    [characters, favorites]
   )
 
-  // Tag extraction: unique tags with counts
-  const allTags = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const char of characters) {
-      if (char.tags) {
-        for (const tag of char.tags) {
-          counts.set(tag, (counts.get(tag) || 0) + 1)
-        }
-      }
-    }
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([tag, count]) => ({ tag, count }))
-  }, [characters])
-
-  // Filtering pipeline
-  const filteredCharacters = useMemo(() => {
-    let result = characters
-
-    // 1. Filter tab
-    if (filterTab === 'favorites') {
-      result = result.filter((c) => favorites.includes(c.id))
-    }
-    // 'characters' tab shows non-favorites; 'all' shows everything
-    if (filterTab === 'characters') {
-      result = result.filter((c) => !favorites.includes(c.id))
-    }
-
-    // 2. Tag filter (AND logic)
-    if (selectedTags.length > 0) {
-      result = result.filter((c) =>
-        selectedTags.every((tag) => c.tags?.includes(tag))
-      )
-    }
-
-    // 3. Search
-    if (debouncedQuery.trim()) {
-      const searchResults = fuse.search(debouncedQuery)
-      const searchIds = new Set(searchResults.map((r) => r.item.id))
-      result = result.filter((c) => searchIds.has(c.id))
-    }
-
-    // 4. Sort (shuffle mode preserves backend order)
-    if (sortField !== 'shuffle') {
-      result = [...result].sort((a, b) => {
-        let cmp = 0
-        switch (sortField) {
-          case 'name':
-            cmp = a.name.localeCompare(b.name)
-            break
-          case 'recent':
-            cmp = (b.updated_at || 0) - (a.updated_at || 0)
-            break
-          case 'created':
-            cmp = (b.created_at || 0) - (a.created_at || 0)
-            break
-        }
-        return sortDirection === 'desc' ? -cmp : cmp
-      })
-    }
-
-    return result
-  }, [characters, filterTab, favorites, selectedTags, debouncedQuery, fuse, sortField, sortDirection])
-
-  // Reshuffle: when in shuffle mode, toggling direction generates a new seed
+  // Reshuffle
   const handleToggleSortDirection = useCallback(() => {
     if (sortField === 'shuffle') {
       setShuffleSeed(Date.now())
@@ -204,31 +176,12 @@ export function useCharacterBrowser() {
     }
   }, [sortField, toggleSortDirection])
 
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [filterTab, selectedTags, debouncedQuery, sortField, sortDirection, shuffleSeed])
-
-  // Paginate filtered results
-  const totalPages = Math.max(1, Math.ceil(filteredCharacters.length / charactersPerPage))
-  const safePage = Math.min(currentPage, totalPages)
-  const paginatedCharacters = useMemo(() => {
-    const start = (safePage - 1) * charactersPerPage
-    return filteredCharacters.slice(start, start + charactersPerPage)
-  }, [filteredCharacters, safePage, charactersPerPage])
-
   const setCharactersPerPage = useCallback(
     (perPage: number) => {
       setSetting('charactersPerPage', perPage)
       setCurrentPage(1)
     },
     [setSetting]
-  )
-
-  // Favorite characters (for slider)
-  const favoriteCharacters = useMemo(
-    () => characters.filter((c) => favorites.includes(c.id)),
-    [characters, favorites]
   )
 
   // Import file
@@ -239,6 +192,8 @@ export function useCharacterBrowser() {
       try {
         const result = await charactersApi.importFile(file)
         addCharacter(result.character)
+        // Refresh browser page to show new character
+        setBrowserTotal((t) => t + 1)
         if (result.character.extensions?.character_book?.entries?.length > 0) {
           setPendingLorebookImport(result.character)
         }
@@ -253,13 +208,12 @@ export function useCharacterBrowser() {
     [addCharacter]
   )
 
-  // Import multiple files — single file uses legacy path, 2+ opens bulk modal
+  // Import multiple files
   const importFiles = useCallback(
     async (files: File[]) => {
       if (files.length === 1) {
         return importFile(files[0])
       }
-      // Open bulk import modal
       setBulkImportFiles(files)
       setBulkImportOpen(true)
     },
@@ -270,6 +224,7 @@ export function useCharacterBrowser() {
   const handleBulkImportComplete = useCallback(
     (imported: Character[], lorebooks: LorebookInfo[]) => {
       if (imported.length > 0) addCharacters(imported)
+      setBrowserTotal((t) => t + imported.length)
       if (lorebooks.length > 0) {
         setPendingLorebooks(lorebooks)
       }
@@ -281,7 +236,6 @@ export function useCharacterBrowser() {
   const closeBulkImport = useCallback(() => {
     setBulkImportOpen(false)
     setBulkImportFiles([])
-    // If there are pending lorebooks, show the lorebook modal after a brief delay
     if (pendingLorebooks.length > 0) {
       setLorebookModalOpen(true)
     }
@@ -300,6 +254,7 @@ export function useCharacterBrowser() {
       try {
         const result = await charactersApi.importUrl(url)
         addCharacter(result.character)
+        setBrowserTotal((t) => t + 1)
         toast.success(`${result.character.name} was imported`)
         if (result.character.extensions?.character_book?.entries?.length > 0) {
           setPendingLorebookImport(result.character)
@@ -324,8 +279,8 @@ export function useCharacterBrowser() {
       try {
         const result = await charactersApi.batchDelete(ids, keepChats)
         removeCharacters(result.deleted)
+        setBrowserTotal((t) => Math.max(0, t - result.deleted.length))
       } catch {
-        // Fallback: delete individually
         let done = 0
         for (const id of ids) {
           try {
@@ -335,6 +290,7 @@ export function useCharacterBrowser() {
           setBatchDeleteProgress({ done, total: ids.length })
         }
         removeCharacters(ids)
+        setBrowserTotal((t) => Math.max(0, t - ids.length))
       }
       setBatchMode(false)
       setBatchDeleteProgress(null)
@@ -347,6 +303,7 @@ export function useCharacterBrowser() {
     async () => {
       const character = await charactersApi.create({ name: 'New Character' })
       addCharacter(character)
+      setBrowserTotal((t) => t + 1)
       return character
     },
     [addCharacter]
@@ -367,6 +324,7 @@ export function useCharacterBrowser() {
     async (id: string) => {
       const character = await charactersApi.duplicate(id)
       addCharacter(character)
+      setBrowserTotal((t) => t + 1)
       return character
     },
     [addCharacter]
@@ -388,18 +346,19 @@ export function useCharacterBrowser() {
     async (id: string) => {
       await charactersApi.delete(id)
       removeCharacters([id])
+      setBrowserTotal((t) => Math.max(0, t - 1))
     },
     [removeCharacters]
   )
 
   const openModal = useStore((s) => s.openModal)
 
-  // Open chat — reuse most recent existing chat, or create a new one
+  // Open chat
   const openChat = useCallback(
-    async (character: Character) => {
+    async (character: Character | CharacterSummary) => {
       try {
         const chats = await get<any[]>('/chats/character-chats/' + character.id)
-        
+
         if (chats.length === 1) {
           navigate(`/chat/${chats[0].id}`)
           return
@@ -414,10 +373,17 @@ export function useCharacterBrowser() {
           return
         }
 
-        // If character has alternate greetings, show picker
-        if (character.alternate_greetings?.length > 0) {
+        // Check for alternate greetings — use has_alternate_greetings from summary,
+        // or alternate_greetings from full character
+        const hasAlternates = 'has_alternate_greetings' in character
+          ? character.has_alternate_greetings
+          : (character as Character).alternate_greetings?.length > 0
+
+        if (hasAlternates) {
+          // Fetch full character for greeting content
+          const fullChar = await charactersApi.get(character.id)
           openModal('greetingPicker', {
-            character,
+            character: fullChar,
             onSelect: async (greetingIndex: number) => {
               try {
                 const chat = await chatsApi.create({
@@ -442,13 +408,18 @@ export function useCharacterBrowser() {
     [navigate, openModal]
   )
 
-  // Start a new chat — always creates, skips existing-chat check
+  // Start a new chat
   const startNewChat = useCallback(
-    async (character: Character) => {
+    async (character: Character | CharacterSummary) => {
       try {
-        if (character.alternate_greetings?.length > 0) {
+        const hasAlternates = 'has_alternate_greetings' in character
+          ? character.has_alternate_greetings
+          : (character as Character).alternate_greetings?.length > 0
+
+        if (hasAlternates) {
+          const fullChar = await charactersApi.get(character.id)
           openModal('greetingPicker', {
-            character,
+            character: fullChar,
             onSelect: async (greetingIndex: number) => {
               try {
                 const chat = await chatsApi.create({
@@ -473,11 +444,20 @@ export function useCharacterBrowser() {
     [navigate, openModal]
   )
 
+  // ─── Trigger a re-fetch of the current browser page ─────────────────────
+  const refreshBrowser = useCallback(() => {
+    // Bump a counter or toggle to force the useEffect to re-run
+    setCurrentPage((p) => p)
+    // Force re-fetch by toggling loading
+    setBrowserItems([])
+    setBrowserTotal(0)
+  }, [])
+
   return {
-    // State
-    characters: paginatedCharacters,
+    // State — browser items come from server-side pagination
+    characters: browserItems,
     allCharacters: characters,
-    totalFiltered: filteredCharacters.length,
+    totalFiltered: browserTotal,
     favoriteCharacters,
     loading,
     importLoading,
@@ -531,6 +511,7 @@ export function useCharacterBrowser() {
     batchDelete,
     openChat,
     startNewChat,
+    refreshBrowser,
     clearImportError: () => setImportError(null),
     clearPendingLorebookImport: () => setPendingLorebookImport(null),
   }

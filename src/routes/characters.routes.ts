@@ -216,6 +216,40 @@ app.get("/", (c) => {
   return c.json(svc.listCharacters(userId, pagination));
 });
 
+// ─── Lightweight summary endpoint for character browser ───────────────────
+app.get("/summary", (c) => {
+  const userId = c.get("userId");
+  const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
+  const search = c.req.query("search") || undefined;
+  const rawTags = c.req.query("tags");
+  const tags = rawTags ? rawTags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+  const sort = c.req.query("sort") || undefined;
+  const direction = (c.req.query("direction") as "asc" | "desc") || undefined;
+  const filterMode = (c.req.query("filter") as "all" | "favorites" | "non-favorites") || undefined;
+  const rawSeed = c.req.query("seed");
+  const seed = rawSeed ? parseInt(rawSeed, 10) : undefined;
+  const rawFavorites = c.req.query("favorite_ids");
+  const favoriteIds = rawFavorites ? rawFavorites.split(",").filter(Boolean) : undefined;
+
+  return c.json(
+    svc.listCharacterSummaries(userId, pagination, {
+      search,
+      tags,
+      sort,
+      direction,
+      favoriteIds,
+      filterMode,
+      seed: isNaN(seed as number) ? undefined : seed,
+    })
+  );
+});
+
+// ─── Tags endpoint for character browser ──────────────────────────────────
+app.get("/tags", (c) => {
+  const userId = c.get("userId");
+  return c.json(svc.listCharacterTags(userId));
+});
+
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
@@ -284,12 +318,12 @@ app.delete("/:id", (c) => {
 
 app.get("/:id/avatar", (c) => {
   const userId = c.get("userId");
-  const char = svc.getCharacter(userId, c.req.param("id"));
-  if (!char) return c.json({ error: "Not found" }, 404);
+  const info = svc.getCharacterAvatarInfo(userId, c.req.param("id"));
+  if (!info) return c.json({ error: "Not found" }, 404);
 
   // Prefer image_id, fall back to legacy avatar_path
-  if (char.image_id) {
-    const filepath = images.getImageFilePath(userId, char.image_id);
+  if (info.image_id) {
+    const filepath = images.getImageFilePath(userId, info.image_id);
     if (filepath) {
       const response = new Response(Bun.file(filepath));
       response.headers.set("Cache-Control", "public, max-age=31536000, immutable");
@@ -297,8 +331,8 @@ app.get("/:id/avatar", (c) => {
     }
   }
 
-  if (char.avatar_path) {
-    const filepath = files.getAvatarPath(char.avatar_path);
+  if (info.avatar_path) {
+    const filepath = files.getAvatarPath(info.avatar_path);
     if (filepath) {
       const response = new Response(Bun.file(filepath));
       response.headers.set("Cache-Control", "public, max-age=31536000, immutable");
