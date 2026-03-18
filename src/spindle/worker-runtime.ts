@@ -23,6 +23,9 @@ import type {
   WorldBookEntryDTO,
   WorldBookEntryCreateDTO,
   WorldBookEntryUpdateDTO,
+  PersonaDTO,
+  PersonaCreateDTO,
+  PersonaUpdateDTO,
 } from "lumiverse-spindle-types";
 
 // ─── State ───────────────────────────────────────────────────────────────
@@ -769,6 +772,59 @@ const spindleApi: SpindleAPI = {
     },
   },
 
+  personas: {
+    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: PersonaDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "personas_list",
+        requestId,
+        limit: options?.limit,
+        offset: options?.offset,
+        userId: options?.userId,
+      });
+      return result as { data: PersonaDTO[]; total: number };
+    },
+    async get(personaId: string, userId?: string): Promise<PersonaDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_get", requestId, personaId, userId });
+      return result as PersonaDTO | null;
+    },
+    async getDefault(userId?: string): Promise<PersonaDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_get_default", requestId, userId });
+      return result as PersonaDTO | null;
+    },
+    async getActive(userId?: string): Promise<PersonaDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_get_active", requestId, userId });
+      return result as PersonaDTO | null;
+    },
+    async create(input: PersonaCreateDTO, userId?: string): Promise<PersonaDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_create", requestId, input, userId });
+      return result as PersonaDTO;
+    },
+    async update(personaId: string, input: PersonaUpdateDTO, userId?: string): Promise<PersonaDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_update", requestId, personaId, input, userId });
+      return result as PersonaDTO;
+    },
+    async delete(personaId: string, userId?: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_delete", requestId, personaId, userId });
+      return result as boolean;
+    },
+    async switchActive(personaId: string | null, userId?: string): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "personas_switch", requestId, personaId, userId });
+    },
+    async getWorldBook(personaId: string, userId?: string): Promise<WorldBookDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "personas_get_world_book", requestId, personaId, userId });
+      return result as WorldBookDTO | null;
+    },
+  },
+
   permissions: {
     async getGranted(): Promise<string[]> {
       const requestId = crypto.randomUUID();
@@ -839,6 +895,21 @@ const spindleApi: SpindleAPI = {
     },
     error(msg: string) {
       post({ type: "log", level: "error", message: msg });
+    },
+  },
+
+  toast: {
+    success(message: string, options?: { title?: string; duration?: number }) {
+      post({ type: "toast_show", toastType: "success", message, title: options?.title, duration: options?.duration });
+    },
+    warning(message: string, options?: { title?: string; duration?: number }) {
+      post({ type: "toast_show", toastType: "warning", message, title: options?.title, duration: options?.duration });
+    },
+    error(message: string, options?: { title?: string; duration?: number }) {
+      post({ type: "toast_show", toastType: "error", message, title: options?.title, duration: options?.duration });
+    },
+    info(message: string, options?: { title?: string; duration?: number }) {
+      post({ type: "toast_show", toastType: "info", message, title: options?.title, duration: options?.duration });
     },
   },
 

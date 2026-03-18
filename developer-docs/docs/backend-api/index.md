@@ -24,10 +24,12 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Characters](characters.md) | `characters` | CRUD on character cards |
 | [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [World Books](world-books.md) | `world_books` | CRUD on world books and entries |
+| [Personas](personas.md) | `personas` | CRUD on personas + active switching + attached world books |
 | [Chat Mutation](chat-mutation.md) | `chat_mutation` | Read and modify chat messages |
 | [Event Tracking](event-tracking.md) | `event_tracking` | Structured telemetry and analytics |
 | [Secure Enclave](secure-enclave.md) | Free | Encrypted secret storage |
 | [CORS Proxy](cors-proxy.md) | `cors_proxy` | Server-side HTTP requests |
 | [OAuth](oauth.md) | `oauth` | OAuth callback handler registration |
 | [Logging](logging.md) | Free | Server console logging |
+| [Toast Notifications](toast.md) | Free | Show success/warning/error/info toasts in the frontend |
 | [Frontend Communication](frontend-communication.md) | Free | Message passing to/from frontend |

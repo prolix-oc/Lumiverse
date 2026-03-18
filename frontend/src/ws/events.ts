@@ -9,4 +9,5 @@ export type {
   MessageDeletedPayload,
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
+  SpindleToastPayload,
 } from '@/types/ws-events'

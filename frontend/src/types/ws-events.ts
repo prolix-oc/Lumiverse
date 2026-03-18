@@ -39,6 +39,7 @@ export enum EventType {
   SPINDLE_EXTENSION_UNLOADED = 'SPINDLE_EXTENSION_UNLOADED',
   SPINDLE_EXTENSION_ERROR = 'SPINDLE_EXTENSION_ERROR',
   SPINDLE_FRONTEND_MSG = 'SPINDLE_FRONTEND_MSG',
+  SPINDLE_TOAST = 'SPINDLE_TOAST',
   MESSAGE_TAG_INTERCEPTED = 'MESSAGE_TAG_INTERCEPTED',
 
   // Tool invocation (Spindle extension tools)
@@ -132,4 +133,13 @@ export interface LumiPipelineCompletedPayload {
   reason?: string
   totalDurationMs?: number
   totalUsage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+export interface SpindleToastPayload {
+  extensionId: string
+  extensionName: string
+  type: 'success' | 'warning' | 'error' | 'info'
+  message: string
+  title?: string
+  duration?: number
 }

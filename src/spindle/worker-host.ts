@@ -10,6 +10,7 @@ import type {
   ChatDTO,
   WorldBookDTO,
   WorldBookEntryDTO,
+  PersonaDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
@@ -26,6 +27,7 @@ import * as connectionsSvc from "../services/connections.service";
 import * as charactersSvc from "../services/characters.service";
 import * as chatsSvc from "../services/chats.service";
 import * as worldBooksSvc from "../services/world-books.service";
+import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
 import { getDb } from "../db/connection";
@@ -123,6 +125,9 @@ export class WorkerHost {
   private contextHandlerUnregister: (() => void) | null = null;
   private registeredMacroNames = new Set<string>();
   private macroValueCache = new Map<string, string>();
+  private toastTimestamps: number[] = [];
+  private static readonly TOAST_RATE_LIMIT = 5;
+  private static readonly TOAST_RATE_WINDOW_MS = 10_000;
   private onWorkerReady: (() => void) | null = null;
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
@@ -289,6 +294,7 @@ export class WorkerHost {
     }
     this.registeredMacroNames.clear();
     this.macroValueCache.clear();
+    this.toastTimestamps = [];
 
     // Unregister interceptors and context handlers
     interceptorPipeline.unregisterByExtension(this.extensionId);
@@ -717,6 +723,38 @@ export class WorkerHost {
         break;
       case "world_book_entries_delete":
         this.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
+        break;
+      // ─── Personas (gated: "personas") ──────────────────────────────────
+      case "personas_list":
+        this.handlePersonasList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        break;
+      case "personas_get":
+        this.handlePersonasGet(msg.requestId, msg.personaId, msg.userId);
+        break;
+      case "personas_get_default":
+        this.handlePersonasGetDefault(msg.requestId, msg.userId);
+        break;
+      case "personas_get_active":
+        this.handlePersonasGetActive(msg.requestId, msg.userId);
+        break;
+      case "personas_create":
+        this.handlePersonasCreate(msg.requestId, msg.input, msg.userId);
+        break;
+      case "personas_update":
+        this.handlePersonasUpdate(msg.requestId, msg.personaId, msg.input, msg.userId);
+        break;
+      case "personas_delete":
+        this.handlePersonasDelete(msg.requestId, msg.personaId, msg.userId);
+        break;
+      case "personas_switch":
+        this.handlePersonasSwitch(msg.requestId, msg.personaId, msg.userId);
+        break;
+      case "personas_get_world_book":
+        this.handlePersonasGetWorldBook(msg.requestId, msg.personaId, msg.userId);
+        break;
+      // ─── Toast (free tier) ────────────────────────────────────────────
+      case "toast_show":
+        this.handleToastShow(msg.toastType, msg.message, msg.title, msg.duration);
         break;
       case "log":
         this.handleLog(msg.level, msg.message);
@@ -3330,6 +3368,267 @@ export class WorkerHost {
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
+  }
+
+  // ─── Personas CRUD (gated: "personas") ────────────────────────────────
+
+  private toPersonaDTO(p: any): PersonaDTO {
+    return {
+      id: p.id,
+      name: p.name || "",
+      title: p.title || "",
+      description: p.description || "",
+      image_id: p.image_id || null,
+      attached_world_book_id: p.attached_world_book_id || null,
+      folder: p.folder || "",
+      is_default: !!p.is_default,
+      metadata: (typeof p.metadata === "object" && p.metadata) ? p.metadata : {},
+      created_at: p.created_at,
+      updated_at: p.updated_at,
+    };
+  }
+
+  private handlePersonasList(requestId: string, limit?: number, offset?: number, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = personasSvc.listPersonas(resolvedUserId, {
+        limit: Math.min(limit || 50, 200),
+        offset: offset || 0,
+      });
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((p) => this.toPersonaDTO(p)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasGet(requestId: string, personaId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const p = personasSvc.getPersona(resolvedUserId, personaId);
+      this.postToWorker({ type: "response", requestId, result: p ? this.toPersonaDTO(p) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasGetDefault(requestId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const p = personasSvc.getDefaultPersona(resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: p ? this.toPersonaDTO(p) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasGetActive(requestId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const setting = settingsSvc.getSetting(resolvedUserId, "activePersonaId");
+      if (!setting?.value || typeof setting.value !== "string") {
+        this.postToWorker({ type: "response", requestId, result: null });
+        return;
+      }
+
+      const persona = personasSvc.getPersona(resolvedUserId, setting.value);
+      this.postToWorker({ type: "response", requestId, result: persona ? this.toPersonaDTO(persona) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasCreate(requestId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
+        throw new Error("Persona name is required");
+      }
+
+      const p = personasSvc.createPersona(resolvedUserId, {
+        name: input.name,
+        title: input.title,
+        description: input.description,
+        folder: input.folder,
+        is_default: input.is_default,
+        attached_world_book_id: input.attached_world_book_id,
+        metadata: input.metadata,
+      });
+      this.postToWorker({ type: "response", requestId, result: this.toPersonaDTO(p) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasUpdate(requestId: string, personaId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const p = personasSvc.updatePersona(resolvedUserId, personaId, input || {});
+      if (!p) throw new Error("Persona not found");
+      this.postToWorker({ type: "response", requestId, result: this.toPersonaDTO(p) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasDelete(requestId: string, personaId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const deleted = personasSvc.deletePersona(resolvedUserId, personaId);
+      this.postToWorker({ type: "response", requestId, result: deleted });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasSwitch(requestId: string, personaId: string | null, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      // Validate persona exists if a non-null ID is provided
+      if (personaId !== null) {
+        const persona = personasSvc.getPersona(resolvedUserId, personaId);
+        if (!persona) throw new Error("Persona not found");
+      }
+
+      // Set the activePersonaId setting (putSetting emits SETTINGS_UPDATED)
+      settingsSvc.putSetting(resolvedUserId, "activePersonaId", personaId);
+      this.postToWorker({ type: "response", requestId, result: undefined });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handlePersonasGetWorldBook(requestId: string, personaId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const persona = personasSvc.getPersona(resolvedUserId, personaId);
+      if (!persona) throw new Error("Persona not found");
+
+      if (!persona.attached_world_book_id) {
+        this.postToWorker({ type: "response", requestId, result: null });
+        return;
+      }
+
+      const wb = worldBooksSvc.getWorldBook(resolvedUserId, persona.attached_world_book_id);
+      this.postToWorker({ type: "response", requestId, result: wb ? this.toWorldBookDTO(wb) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Toast (free tier) ───────────────────────────────────────────────
+
+  private handleToastShow(
+    toastType: string,
+    message: string,
+    title?: string,
+    duration?: number,
+  ): void {
+    const validTypes = ["success", "warning", "error", "info"];
+    if (!validTypes.includes(toastType)) {
+      console.warn(`[Spindle:${this.manifest.identifier}] Invalid toast type: ${toastType}`);
+      return;
+    }
+
+    if (typeof message !== "string" || !message.trim()) {
+      console.warn(`[Spindle:${this.manifest.identifier}] Toast message must be a non-empty string`);
+      return;
+    }
+
+    // Sliding-window rate limit
+    const now = Date.now();
+    this.toastTimestamps = this.toastTimestamps.filter(
+      (t) => now - t < WorkerHost.TOAST_RATE_WINDOW_MS,
+    );
+    if (this.toastTimestamps.length >= WorkerHost.TOAST_RATE_LIMIT) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Toast rate limit exceeded (${WorkerHost.TOAST_RATE_LIMIT}/${WorkerHost.TOAST_RATE_WINDOW_MS}ms)`,
+      );
+      return;
+    }
+    this.toastTimestamps.push(now);
+
+    // Sanitize inputs
+    const sanitizedMessage = message.slice(0, 500);
+    const sanitizedTitle = title ? title.slice(0, 100) : undefined;
+    let sanitizedDuration = duration;
+    if (sanitizedDuration !== undefined) {
+      sanitizedDuration = Math.max(1000, Math.min(30_000, sanitizedDuration));
+    }
+
+    // Broadcast — scoped to extension owner for user-scoped extensions
+    eventBus.emit(
+      EventType.SPINDLE_TOAST,
+      {
+        extensionId: this.extensionId,
+        extensionName: this.manifest.name,
+        type: toastType,
+        message: sanitizedMessage,
+        title: sanitizedTitle,
+        duration: sanitizedDuration,
+      },
+      this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+    );
   }
 
   // ─── Logging ─────────────────────────────────────────────────────────

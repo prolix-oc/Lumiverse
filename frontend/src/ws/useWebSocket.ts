@@ -387,6 +387,15 @@ export function useWebSocket() {
         routeBackendMessage(payload.extensionId, payload.data)
       }),
 
+      wsClient.on(EventType.SPINDLE_TOAST, (payload: { extensionId: string; extensionName: string; type: 'success' | 'warning' | 'error' | 'info'; message: string; title?: string; duration?: number }) => {
+        const toastFn = toast[payload.type]
+        if (!toastFn) return
+        const attributedTitle = payload.title
+          ? `${payload.extensionName}: ${payload.title}`
+          : payload.extensionName
+        toastFn(payload.message, { title: attributedTitle, duration: payload.duration })
+      }),
+
       // Legacy/event-bus bridge for message tag intercept notifications.
       // Some extensions emit MESSAGE_TAG_INTERCEPTED over WS and expect it
       // on the backend-message channel (ctx.onBackendMessage).

@@ -189,6 +189,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "characters",
   "chats",
   "world_books",
+  "personas",
 ]);
 
 function grantRequestedPermissionsByDefault(

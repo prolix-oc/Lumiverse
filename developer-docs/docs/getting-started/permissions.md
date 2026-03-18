@@ -16,6 +16,7 @@ These are always available:
 - **Input Bar Actions** — register actions in the chat input bar Extras popover
 - **Variables** — read/write local (chat-scoped) and global (cross-chat) variables
 - **Logging** — write to the server console
+- **Toast Notifications** — show success/warning/error/info toasts in the frontend UI
 - **Frontend <-> Backend messaging** — relay messages between your modules
 
 ## Gated Tier (must declare in `permissions` and be granted by the user)
@@ -31,6 +32,7 @@ These are always available:
 | `"characters"` | Full CRUD on character cards (list, get, create, update, delete) |
 | `"chats"` | CRUD on chat sessions (list, get, update, delete) + get active chat |
 | `"world_books"` | Full CRUD on world books and their entries (list, get, create, update, delete) |
+| `"personas"` | Full CRUD on personas (list, get, create, update, delete) + active switching + attached world book retrieval |
 | `"chat_mutation"` | Read and modify chat messages (append, update, delete) |
 | `"event_tracking"` | Track, query, and replay extension-level telemetry events |
 | `"ui_panels"` | Create floating widgets and docked edge panels that overlay/consume screen space |
