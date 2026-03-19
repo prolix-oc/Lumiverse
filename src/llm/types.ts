@@ -143,6 +143,16 @@ export interface AssemblyResult {
   parameters: Record<string, any>;
   /** Summary of all world info entries activated during this assembly. */
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
+  /** Statistics from the World Info activation pipeline (budget enforcement, etc.). */
+  worldInfoStats?: {
+    totalCandidates: number;
+    activatedBeforeBudget: number;
+    activatedAfterBudget: number;
+    evictedByBudget: number;
+    evictedByMinPriority: number;
+    estimatedTokens: number;
+    recursionPassesUsed: number;
+  };
   /** Deferred WI state to persist after generation completes. */
   deferredWiState?: { chatId: string; metadata: Record<string, any> };
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */

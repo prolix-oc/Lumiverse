@@ -9,7 +9,7 @@ import type { Preset } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
 import { evaluate, buildEnv, registry, initMacros } from "../macros";
 import type { MacroEnv } from "../macros";
-import { activateWorldInfo, type WiState } from "./world-info-activation.service";
+import { activateWorldInfo, type WiState, type WorldInfoSettings, DEFAULT_WORLD_INFO_SETTINGS } from "./world-info-activation.service";
 import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
@@ -206,11 +206,13 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   const wiSources = collectWorldInfoSources(ctx.userId, character, persona, globalWorldBooks);
   const wiEntries = wiSources.entries;
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
+  const worldInfoSettings = (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
   const wiResult = activateWorldInfo({
     entries: wiEntries,
     messages,
     chatTurn: messages.length,
     wiState,
+    settings: worldInfoSettings,
   });
   const wiCache = wiResult.cache;
 
@@ -710,6 +712,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     breakdown,
     parameters,
     activatedWorldInfo: activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
+    worldInfoStats: wiResult.stats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,
   };

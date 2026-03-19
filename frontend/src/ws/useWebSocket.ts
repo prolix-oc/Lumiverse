@@ -21,7 +21,7 @@ import type {
   GroupRoundCompletePayload,
 } from '@/types/ws-events'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
-import type { ActivatedWorldInfoEntry } from '@/types/api'
+import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 
 /**
  * Fetch the latest messages using the tail endpoint (single request).
@@ -310,10 +310,10 @@ export function useWebSocket() {
       }),
 
       // World Info activation
-      wsClient.on(EventType.WORLD_INFO_ACTIVATED, (payload: { chatId: string; entries: ActivatedWorldInfoEntry[] }) => {
+      wsClient.on(EventType.WORLD_INFO_ACTIVATED, (payload: { chatId: string; entries: ActivatedWorldInfoEntry[]; stats?: WorldInfoStats }) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
-          state.setActivatedWorldInfo(payload.entries)
+          state.setActivatedWorldInfo(payload.entries, payload.stats)
         }
       }),
 

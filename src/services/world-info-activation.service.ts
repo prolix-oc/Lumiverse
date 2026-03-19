@@ -15,17 +15,57 @@ export interface WiEntryState {
 
 export type WiState = Record<string, WiEntryState>;
 
+/**
+ * Global world info activation settings. Stored as the `worldInfoSettings`
+ * settings key. All fields have safe defaults that preserve backwards
+ * compatibility (no limits applied when unset).
+ */
+export interface WorldInfoSettings {
+  /** Default scan depth for entries with scan_depth=null. null = scan all messages. */
+  globalScanDepth: number | null;
+  /** Max recursion passes for keyword chaining (0 = no recursion). */
+  maxRecursionPasses: number;
+  /** Max total activated entries, including constants (0 = unlimited).
+   *  Constants are counted but never evicted — they take priority over conditional entries. */
+  maxActivatedEntries: number;
+  /** Approximate max total WI content in tokens (0 = unlimited). Uses chars/4 estimate. */
+  maxTokenBudget: number;
+  /** Minimum entry priority to be eligible for activation (0 = no filter). */
+  minPriority: number;
+}
+
+export const DEFAULT_WORLD_INFO_SETTINGS: WorldInfoSettings = {
+  globalScanDepth: null,
+  maxRecursionPasses: 3,
+  maxActivatedEntries: 0,
+  maxTokenBudget: 0,
+  minPriority: 0,
+};
+
 export interface ActivationInput {
   entries: WorldBookEntry[];
   messages: Message[];
   chatTurn: number;           // current turn number (messages.length)
   wiState: WiState;           // mutable — updated in place
+  settings?: Partial<WorldInfoSettings>;
+}
+
+/** Statistics about the activation run, useful for dry-run / debugging. */
+export interface ActivationStats {
+  totalCandidates: number;
+  activatedBeforeBudget: number;
+  activatedAfterBudget: number;
+  evictedByBudget: number;
+  evictedByMinPriority: number;
+  estimatedTokens: number;
+  recursionPassesUsed: number;
 }
 
 export interface ActivationResult {
   cache: WorldInfoCache;
   activatedEntries: WorldBookEntry[];
   wiState: WiState;
+  stats: ActivationStats;
 }
 
 /** Hoisted escaping regex — compiled once at module level. */
@@ -34,11 +74,14 @@ const REGEX_ESCAPE_PATTERN = /[.*+?^${}()|[\]\\]/g;
 /**
  * Run full World Info activation pipeline.
  *
- * Order: filter disabled → separate constants → keyword match → selective logic →
- * probability → sticky/cooldown/delay → group logic → sort → bucket by position.
+ * Order: filter disabled → filter minPriority → separate constants →
+ * keyword match (with global scan depth fallback) → selective logic →
+ * probability → sticky/cooldown/delay → group logic → sort →
+ * budget enforcement → bucket by position.
  */
 export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const { entries, messages, wiState } = input;
+  const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...input.settings };
 
   // 0. Cleanup wiState: Remove any keys that are no longer in the candidates list.
   // This prevents hidden sticky/active entries from persisting after a lorebook is removed.
@@ -50,7 +93,17 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   }
 
   // 1. Filter disabled entries
-  const candidates = entries.filter(e => !e.disabled);
+  const enabledEntries = entries.filter(e => !e.disabled);
+
+  // 1b. Filter by minimum priority threshold
+  let evictedByMinPriority = 0;
+  const candidates = enabledEntries.filter(e => {
+    if (settings.minPriority > 0 && e.priority < settings.minPriority && !e.constant) {
+      evictedByMinPriority++;
+      return false;
+    }
+    return true;
+  });
 
   // 2. Separate constants (always activate)
   const constants: WorldBookEntry[] = [];
@@ -90,8 +143,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const regexCache = new Map<string, RegExp | null>();
   const scanTextCache = new Map<string, string>();
 
-  const MAX_RECURSION_PASSES = 3;
-  for (let pass = 0; pass <= MAX_RECURSION_PASSES; pass++) {
+  let recursionPassesUsed = 0;
+  const maxPasses = Math.max(0, settings.maxRecursionPasses);
+  for (let pass = 0; pass <= maxPasses; pass++) {
     let activatedThisPass = false;
     const recursionText = recursionSourceParts.join("\n");
 
@@ -110,7 +164,11 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
       // vector retrieval (or should be marked as constant if always-on).
       if (entry.key.length === 0) continue;
 
-      const scanText = cachedBuildScanText(scanTextCache, messages, entry.scan_depth, recursionText);
+      // Resolve effective scan depth: per-entry value takes precedence,
+      // otherwise fall back to the global default.
+      const effectiveScanDepth = entry.scan_depth ?? settings.globalScanDepth;
+
+      const scanText = cachedBuildScanText(scanTextCache, messages, effectiveScanDepth, recursionText);
 
       const primaryMatch = entry.key.some(k =>
         matchesKey(k, scanText, entry.case_sensitive, entry.match_whole_words, entry.use_regex, regexCache)
@@ -157,6 +215,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     }
 
     if (!activatedThisPass) break;
+    recursionPassesUsed = pass + 1;
   }
 
   for (const entry of conditional) {
@@ -191,10 +250,92 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     return a.order_value - b.order_value;
   });
 
-  // 6. Bucket by position into WorldInfoCache
-  const cache = bucketByPosition(afterGroups);
+  // 6. Budget enforcement — cap total activated entries and token usage.
+  //    Constants are counted towards the budget but never evicted.
+  const activatedBeforeBudget = afterGroups.length;
+  const afterBudget = enforceBudget(afterGroups, settings);
+  const evictedByBudget = activatedBeforeBudget - afterBudget.length;
 
-  return { cache, activatedEntries: afterGroups, wiState };
+  // 7. Bucket by position into WorldInfoCache
+  const cache = bucketByPosition(afterBudget);
+
+  const stats: ActivationStats = {
+    totalCandidates: candidates.length,
+    activatedBeforeBudget,
+    activatedAfterBudget: afterBudget.length,
+    evictedByBudget,
+    evictedByMinPriority,
+    estimatedTokens: estimateTokens(afterBudget),
+    recursionPassesUsed,
+  };
+
+  return { cache, activatedEntries: afterBudget, wiState, stats };
+}
+
+// ---------------------------------------------------------------------------
+// Budget enforcement
+// ---------------------------------------------------------------------------
+
+/** Rough token estimate: chars / 4 is a reasonable heuristic for English text. */
+function estimateEntryTokens(content: string): number {
+  return Math.ceil(content.length / 4);
+}
+
+function estimateTokens(entries: WorldBookEntry[]): number {
+  let total = 0;
+  for (const e of entries) {
+    if (e.content) total += estimateEntryTokens(e.content);
+  }
+  return total;
+}
+
+/**
+ * Enforce global budget limits on activated entries.
+ * Entries are already sorted by priority desc, order_value asc.
+ * Constants are never evicted — they take priority over conditional entries.
+ */
+function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): WorldBookEntry[] {
+  let result = entries;
+
+  // Max activated entries cap
+  if (settings.maxActivatedEntries > 0 && result.length > settings.maxActivatedEntries) {
+    const constants: WorldBookEntry[] = [];
+    const nonConstants: WorldBookEntry[] = [];
+    for (const e of result) {
+      if (e.constant) constants.push(e);
+      else nonConstants.push(e);
+    }
+    // Allow all constants through, cap the remaining slots for conditional entries
+    const remaining = Math.max(0, settings.maxActivatedEntries - constants.length);
+    result = [...constants, ...nonConstants.slice(0, remaining)];
+  }
+
+  // Token budget cap
+  if (settings.maxTokenBudget > 0) {
+    let totalTokens = 0;
+    const kept: WorldBookEntry[] = [];
+
+    // Constants first (never evicted)
+    for (const e of result) {
+      if (e.constant) {
+        totalTokens += e.content ? estimateEntryTokens(e.content) : 0;
+        kept.push(e);
+      }
+    }
+
+    // Non-constants in priority order until budget exhausted
+    for (const e of result) {
+      if (e.constant) continue;
+      const tokens = e.content ? estimateEntryTokens(e.content) : 0;
+      if (totalTokens + tokens > settings.maxTokenBudget) continue;
+      totalTokens += tokens;
+      kept.push(e);
+    }
+
+    result = kept;
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

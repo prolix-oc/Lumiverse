@@ -1,15 +1,18 @@
 import { useState } from 'react'
-import { BookOpen, Search, ChevronDown, ChevronRight } from 'lucide-react'
+import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
 import { useStore } from '@/store'
 import type { ActivatedWorldInfoEntry } from '@/types/api'
 import styles from './WorldInfoFeedback.module.css'
 
 export default function WorldInfoFeedback() {
   const activatedWorldInfo = useStore((s) => s.activatedWorldInfo)
+  const worldInfoStats = useStore((s) => s.worldInfoStats)
   const hasEntries = activatedWorldInfo.length > 0
 
   const keywordEntries = activatedWorldInfo.filter((e) => e.source === 'keyword')
   const vectorEntries = activatedWorldInfo.filter((e) => e.source === 'vector')
+
+  const hasEvictions = worldInfoStats && (worldInfoStats.evictedByBudget > 0 || worldInfoStats.evictedByMinPriority > 0)
 
   return (
     <div className={styles.container}>
@@ -26,6 +29,41 @@ export default function WorldInfoFeedback() {
           <div className={styles.statusIdle}>No activated world info entries</div>
         )}
       </div>
+
+      {worldInfoStats && (
+        <div className={hasEvictions ? styles.statsBarWarning : styles.statsBar}>
+          <div className={styles.statsRow}>
+            <span className={styles.statLabel}>Candidates</span>
+            <span className={styles.statValue}>{worldInfoStats.totalCandidates}</span>
+          </div>
+          <div className={styles.statsRow}>
+            <span className={styles.statLabel}>Activated</span>
+            <span className={styles.statValue}>{worldInfoStats.activatedAfterBudget}</span>
+          </div>
+          {worldInfoStats.evictedByBudget > 0 && (
+            <div className={styles.statsRow}>
+              <AlertTriangle size={11} className={styles.warningIcon} />
+              <span className={styles.statLabel}>Evicted by budget</span>
+              <span className={styles.statValueWarn}>{worldInfoStats.evictedByBudget}</span>
+            </div>
+          )}
+          {worldInfoStats.evictedByMinPriority > 0 && (
+            <div className={styles.statsRow}>
+              <AlertTriangle size={11} className={styles.warningIcon} />
+              <span className={styles.statLabel}>Below min priority</span>
+              <span className={styles.statValueWarn}>{worldInfoStats.evictedByMinPriority}</span>
+            </div>
+          )}
+          <div className={styles.statsRow}>
+            <span className={styles.statLabel}>Est. tokens</span>
+            <span className={styles.statValue}>{worldInfoStats.estimatedTokens.toLocaleString()}</span>
+          </div>
+          <div className={styles.statsRow}>
+            <span className={styles.statLabel}>Recursion passes</span>
+            <span className={styles.statValue}>{worldInfoStats.recursionPassesUsed}</span>
+          </div>
+        </div>
+      )}
 
       {keywordEntries.length > 0 && (
         <div className={styles.sourceGroup}>
@@ -51,7 +89,7 @@ export default function WorldInfoFeedback() {
         </div>
       )}
 
-      {!hasEntries && (
+      {!hasEntries && !worldInfoStats && (
         <div className={styles.emptyState}>
           Activated world info entries will appear here during generation when world books are attached.
         </div>

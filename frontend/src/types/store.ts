@@ -269,6 +269,7 @@ export interface SettingsSlice {
   reasoningSettings: ReasoningSettings
   promptBias: string
   globalWorldBooks: string[]
+  worldInfoSettings: import('./api').WorldInfoSettings
   regenFeedback: RegenFeedbackSettings
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
@@ -502,11 +503,12 @@ export interface AuthSlice {
 }
 
 // ---- World Info Slice ----
-import type { ActivatedWorldInfoEntry } from './api'
+import type { ActivatedWorldInfoEntry, WorldInfoStats } from './api'
 
 export interface WorldInfoSlice {
   activatedWorldInfo: ActivatedWorldInfoEntry[]
-  setActivatedWorldInfo: (entries: ActivatedWorldInfoEntry[]) => void
+  worldInfoStats: WorldInfoStats | null
+  setActivatedWorldInfo: (entries: ActivatedWorldInfoEntry[], stats?: WorldInfoStats | null) => void
   clearActivatedWorldInfo: () => void
 }
 

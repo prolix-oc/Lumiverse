@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Trash2, BookOpen, Maximize2, ChevronDown, Upload, Globe, X, User, FileUp } from 'lucide-react'
+import { Plus, Trash2, BookOpen, Maximize2, ChevronDown, Upload, Globe, X, User, FileUp, Settings } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import { worldBooksApi } from '@/api/world-books'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ImportWorldBookModal from '@/components/modals/ImportWorldBookModal'
-import type { WorldBook, WorldBookEntry } from '@/types/api'
+import type { WorldBook, WorldBookEntry, WorldInfoSettings } from '@/types/api'
 import styles from './WorldBookPanel.module.css'
 import clsx from 'clsx'
 
@@ -15,7 +15,9 @@ export default function WorldBookPanel() {
   const openModal = useStore((s) => s.openModal)
   const isMobile = useIsMobile()
   const globalWorldBooks = useStore((s) => s.globalWorldBooks)
+  const worldInfoSettings = useStore((s) => s.worldInfoSettings)
   const setSetting = useStore((s) => s.setSetting)
+  const [wiSettingsOpen, setWiSettingsOpen] = useState(false)
 
   // Book list state
   const [books, setBooks] = useState<WorldBook[]>([])
@@ -346,6 +348,28 @@ export default function WorldBookPanel() {
         )}
       </div>
 
+      {/* Activation Settings */}
+      <div className={styles.wiSettingsSection}>
+        <button
+          type="button"
+          className={styles.wiSettingsToggle}
+          onClick={() => setWiSettingsOpen((o) => !o)}
+        >
+          <Settings size={12} />
+          <span>Activation Settings</span>
+          <ChevronDown
+            size={10}
+            className={clsx(styles.chevron, wiSettingsOpen && styles.chevronOpen)}
+          />
+        </button>
+        {wiSettingsOpen && (
+          <WorldInfoSettingsForm
+            settings={worldInfoSettings}
+            onChange={(patch) => setSetting('worldInfoSettings', { ...worldInfoSettings, ...patch })}
+          />
+        )}
+      </div>
+
       {/* Top bar: Book selector + actions */}
       <div className={styles.topBar}>
         <select
@@ -586,6 +610,113 @@ export default function WorldBookPanel() {
           onClose={() => setShowImport(false)}
         />
       )}
+    </div>
+  )
+}
+
+function WorldInfoSettingsForm({
+  settings,
+  onChange,
+}: {
+  settings: WorldInfoSettings
+  onChange: (patch: Partial<WorldInfoSettings>) => void
+}) {
+  return (
+    <div className={styles.wiSettingsBody}>
+      <div className={styles.wiField}>
+        <label className={styles.wiFieldLabel}>GLOBAL SCAN DEPTH</label>
+        <p className={styles.wiFieldHint}>
+          Default scan depth for entries without a per-entry setting. Controls how many recent messages are scanned for keywords.
+        </p>
+        <div className={styles.wiFieldRow}>
+          <input
+            type="number"
+            className={styles.wiFieldInput}
+            min={0}
+            max={200}
+            placeholder="Unlimited"
+            value={settings.globalScanDepth ?? ''}
+            onChange={(e) => {
+              const v = e.target.value.trim()
+              onChange({ globalScanDepth: v === '' ? null : Math.max(0, parseInt(v, 10) || 0) })
+            }}
+          />
+          {settings.globalScanDepth != null && (
+            <button type="button" className={styles.wiFieldClear} onClick={() => onChange({ globalScanDepth: null })}>
+              <X size={10} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className={styles.wiField}>
+        <label className={styles.wiFieldLabel}>MAX RECURSION PASSES</label>
+        <p className={styles.wiFieldHint}>
+          How many recursive keyword-chaining passes to run. 0 disables recursion entirely.
+        </p>
+        <div className={styles.wiFieldRow}>
+          <input
+            type="range"
+            className={styles.wiRange}
+            min={0}
+            max={10}
+            value={settings.maxRecursionPasses}
+            onChange={(e) => onChange({ maxRecursionPasses: parseInt(e.target.value, 10) })}
+          />
+          <span className={styles.wiRangeValue}>{settings.maxRecursionPasses}</span>
+        </div>
+      </div>
+
+      <div className={styles.wiField}>
+        <label className={styles.wiFieldLabel}>MAX ACTIVATED ENTRIES</label>
+        <p className={styles.wiFieldHint}>
+          Cap the total number of activated entries per generation. 0 = unlimited. Highest-priority entries survive; constants are never evicted.
+        </p>
+        <input
+          type="number"
+          className={styles.wiFieldInput}
+          min={0}
+          max={500}
+          placeholder="Unlimited"
+          value={settings.maxActivatedEntries || ''}
+          onChange={(e) => onChange({ maxActivatedEntries: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+        />
+      </div>
+
+      <div className={styles.wiField}>
+        <label className={styles.wiFieldLabel}>MAX TOKEN BUDGET</label>
+        <p className={styles.wiFieldHint}>
+          Approximate max WI content in tokens. 0 = unlimited. Entries included in priority order until budget is met.
+        </p>
+        <input
+          type="number"
+          className={styles.wiFieldInput}
+          min={0}
+          max={50000}
+          step={100}
+          placeholder="Unlimited"
+          value={settings.maxTokenBudget || ''}
+          onChange={(e) => onChange({ maxTokenBudget: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+        />
+      </div>
+
+      <div className={styles.wiField}>
+        <label className={styles.wiFieldLabel}>MIN PRIORITY THRESHOLD</label>
+        <p className={styles.wiFieldHint}>
+          Entries below this priority are excluded entirely. Constants are exempt. 0 = no filter.
+        </p>
+        <div className={styles.wiFieldRow}>
+          <input
+            type="range"
+            className={styles.wiRange}
+            min={0}
+            max={100}
+            value={settings.minPriority}
+            onChange={(e) => onChange({ minPriority: parseInt(e.target.value, 10) })}
+          />
+          <span className={styles.wiRangeValue}>{settings.minPriority}</span>
+        </div>
+      </div>
     </div>
   )
 }

@@ -63,8 +63,10 @@ window.visualViewport?.addEventListener('scroll', scheduleViewportSync)
 // viewport upward to reveal the focused input. This shifts the entire layout.
 // We counteract by scrolling back to 0 — the input bar repositions itself
 // above the keyboard via --app-keyboard-inset-bottom instead.
+// Guard with maxTouchPoints > 0 to skip macOS Safari "Add to Dock" apps,
+// which also set navigator.standalone but don't have this keyboard behavior.
 window.visualViewport?.addEventListener('scroll', () => {
-  if ((window.navigator as any).standalone && window.visualViewport?.offsetTop) {
+  if ((window.navigator as any).standalone && navigator.maxTouchPoints > 0 && window.visualViewport?.offsetTop) {
     window.scrollTo(0, 0)
   }
 })
@@ -78,11 +80,14 @@ const isStandalone =
 
 if (isStandalone) {
   document.documentElement.setAttribute('data-pwa', '')
-  // Tag iOS PWAs separately — position:fixed + inset:0 triggers WebKit
+  // Tag iOS/iPadOS PWAs separately — position:fixed + inset:0 triggers WebKit
   // bug #237961 (bottom gap with viewport-fit=cover). The standalone
   // media query now matches on iOS 16.4+, so we need an attribute to
   // exclude iOS from the Chromium-only position:fixed workaround.
-  if ((window.navigator as any).standalone === true) {
+  // Guard with maxTouchPoints > 0 to exclude macOS Safari "Add to Dock" apps,
+  // which also set navigator.standalone but need the position:fixed sizing path.
+  // (iOS/iPadOS: maxTouchPoints=5, macOS: maxTouchPoints=0)
+  if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 0) {
     document.documentElement.setAttribute('data-ios-pwa', '')
 
     // Set the true physical screen height via JS. CSS env(safe-area-inset-top)

@@ -1,16 +1,35 @@
 /* ── Group Chat Member Bar ── */
 .bar {
+  position: sticky;
+  top: -16px;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
-  margin-bottom: 4px;
-  border-radius: var(--lcs-radius-sm, 8px);
-  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+  margin: -16px -20px 4px;
+  border-radius: 0 0 var(--lcs-radius-sm, 8px) var(--lcs-radius-sm, 8px);
+  background: var(--lumiverse-bg, rgba(18, 18, 24, 0.95));
   border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  border-top: none;
+  backdrop-filter: blur(12px);
   flex-shrink: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+@media (max-width: 768px) {
+  .bar {
+    top: -8px;
+    margin: -8px -8px 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .bar {
+    top: -6px;
+    margin: -6px -6px 4px;
+  }
 }
 
 .bar::-webkit-scrollbar {

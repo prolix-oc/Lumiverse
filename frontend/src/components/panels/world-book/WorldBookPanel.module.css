@@ -468,3 +468,141 @@
   font-size: 13px;
   font-style: italic;
 }
+
+/* ── WI Activation Settings ── */
+.wiSettingsSection {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.wiSettingsToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.wiSettingsToggle:hover {
+  color: var(--lumiverse-text);
+}
+
+.wiSettingsBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 10px 10px;
+}
+
+.wiField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wiFieldLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.wiFieldHint {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  margin: 0 0 2px;
+  line-height: 1.4;
+}
+
+.wiFieldRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wiFieldInput {
+  width: 100%;
+  max-width: 120px;
+  padding: 5px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  outline: none;
+}
+
+.wiFieldInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.wiFieldInput::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.wiFieldClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.wiFieldClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
+.wiRange {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--lumiverse-border);
+  border-radius: 2px;
+  outline: none;
+}
+
+.wiRange::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--lumiverse-primary);
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.wiRange::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: var(--lumiverse-primary);
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.wiRangeValue {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-primary);
+  min-width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

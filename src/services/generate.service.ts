@@ -103,6 +103,15 @@ export interface DryRunResult {
     tokenizer_id: string | null;
     tokenizer_name: string | null;
   };
+  worldInfoStats?: {
+    totalCandidates: number;
+    activatedBeforeBudget: number;
+    activatedAfterBudget: number;
+    evictedByBudget: number;
+    evictedByMinPriority: number;
+    estimatedTokens: number;
+    recursionPassesUsed: number;
+  };
 }
 
 export interface BatchGenerateInput {
@@ -138,6 +147,7 @@ interface PromptPipelineResult {
    *  used as the shared tokenization source for both dry-run and generation breakdowns. */
   chatHistoryMessages?: LlmMessage[];
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
+  worldInfoStats?: DryRunResult["worldInfoStats"];
   deferredWiState?: { chatId: string; metadata: any };
   spindleContext: SpindleContext;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
@@ -251,6 +261,7 @@ async function runPromptPipeline(opts: {
   let assembledParams: GenerationParameters = {};
   let breakdown: AssemblyBreakdownEntry[] | undefined;
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
+  let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let deferredWiState: { chatId: string; metadata: any } | undefined;
 
   let deliberationHandledByMacro = false;
@@ -281,6 +292,7 @@ async function runPromptPipeline(opts: {
     assembledParams = assemblyResult.parameters;
     breakdown = assemblyResult.breakdown;
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
+    worldInfoStats = assemblyResult.worldInfoStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
   }
@@ -361,7 +373,7 @@ async function runPromptPipeline(opts: {
   // Merge parameters: assembled (from preset) < request overrides
   const parameters: GenerationParameters = { ...assembledParams, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, chatHistoryMessages, activatedWorldInfo, deferredWiState, spindleContext, deliberationHandledByMacro };
+  return { messages, parameters, breakdown, chatHistoryMessages, activatedWorldInfo, worldInfoStats, deferredWiState, spindleContext, deliberationHandledByMacro };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -735,6 +747,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     eventBus.emit(EventType.WORLD_INFO_ACTIVATED, {
       chatId: input.chat_id,
       entries: activatedWorldInfo,
+      stats: pipeline.worldInfoStats,
     }, input.userId);
   }
 
@@ -853,6 +866,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     model: connection.model,
     provider: provider.name,
     tokenCount,
+    worldInfoStats: pipeline.worldInfoStats,
   };
 }
 

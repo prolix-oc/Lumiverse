@@ -65,6 +65,15 @@ export interface DryRunResponse {
     tokenizer_id: string | null
     tokenizer_name: string | null
   }
+  worldInfoStats?: {
+    totalCandidates: number
+    activatedBeforeBudget: number
+    activatedAfterBudget: number
+    evictedByBudget: number
+    evictedByMinPriority: number
+    estimatedTokens: number
+    recursionPassesUsed: number
+  }
 }
 
 export interface BreakdownResponse {

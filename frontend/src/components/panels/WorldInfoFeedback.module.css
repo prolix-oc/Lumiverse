@@ -128,6 +128,50 @@
   color: var(--lumiverse-text);
 }
 
+.statsBar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill);
+  font-size: 11px;
+}
+
+.statsBarWarning {
+  composes: statsBar;
+  border-color: rgba(255, 171, 0, 0.3);
+}
+
+.statsRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.statLabel {
+  flex: 1;
+  color: var(--lumiverse-text-dim);
+}
+
+.statValue {
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.statValueWarn {
+  font-weight: 600;
+  color: #ffab00;
+  font-variant-numeric: tabular-nums;
+}
+
+.warningIcon {
+  color: #ffab00;
+  flex-shrink: 0;
+}
+
 .emptyState {
   text-align: center;
   padding: 32px 16px;

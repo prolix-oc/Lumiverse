@@ -428,6 +428,24 @@ export interface EmbeddingConfig {
   has_api_key: boolean;
 }
 
+export interface WorldInfoSettings {
+  globalScanDepth: number | null;
+  maxRecursionPasses: number;
+  maxActivatedEntries: number;
+  maxTokenBudget: number;
+  minPriority: number;
+}
+
+export interface WorldInfoStats {
+  totalCandidates: number;
+  activatedBeforeBudget: number;
+  activatedAfterBudget: number;
+  evictedByBudget: number;
+  evictedByMinPriority: number;
+  estimatedTokens: number;
+  recursionPassesUsed: number;
+}
+
 export interface ActivatedWorldInfoEntry {
   id: string;
   comment: string;

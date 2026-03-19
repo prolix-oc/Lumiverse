@@ -59,6 +59,8 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'selectedLoomRetrofits',
   // Global world books (always active regardless of character)
   'globalWorldBooks',
+  // World info activation settings (budget, scan depth, recursion)
+  'worldInfoSettings',
   // Image generation settings
   'imageGeneration',
   // Summarization settings
@@ -195,6 +197,13 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     position: 'user',
   },
   globalWorldBooks: [],
+  worldInfoSettings: {
+    globalScanDepth: null,
+    maxRecursionPasses: 3,
+    maxActivatedEntries: 0,
+    maxTokenBudget: 0,
+    minPriority: 0,
+  },
   promptBias: '',
   guidedGenerations: [],
   quickReplySets: [],

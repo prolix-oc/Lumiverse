@@ -19,6 +19,7 @@ export default function DryRunModal() {
 
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [paramsOpen, setParamsOpen] = useState(false)
+  const [wiStatsOpen, setWiStatsOpen] = useState(false)
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -39,7 +40,7 @@ export default function DryRunModal() {
     [closeModal],
   )
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats } = modalProps
 
   // Build a token count lookup from tokenCount.breakdown (matched by name)
   const tokensByName = new Map<string, number>()
@@ -152,6 +153,66 @@ export default function DryRunModal() {
                           </div>
                         )
                       })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* World Info Stats */}
+            {worldInfoStats && (
+              <div className={styles.collapsible}>
+                <button
+                  type="button"
+                  className={styles.collapsibleHeader}
+                  onClick={() => setWiStatsOpen((o) => !o)}
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(styles.chevron, wiStatsOpen && styles.chevronOpen)}
+                  />
+                  World Info ({worldInfoStats.activatedAfterBudget} activated
+                  {worldInfoStats.evictedByBudget > 0 && `, ${worldInfoStats.evictedByBudget} evicted`})
+                </button>
+                {wiStatsOpen && (
+                  <div className={styles.collapsibleBody}>
+                    <div className={styles.breakdownList}>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Total candidates</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.totalCandidates}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Activated (before budget)</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.activatedBeforeBudget}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Activated (after budget)</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.activatedAfterBudget}</span>
+                      </div>
+                      {worldInfoStats.evictedByBudget > 0 && (
+                        <div className={styles.breakdownEntry}>
+                          <span className={styles.breakdownLabel}>Evicted by budget</span>
+                          <span className={styles.breakdownTokens} style={{ color: '#ffab00' }}>
+                            {worldInfoStats.evictedByBudget}
+                          </span>
+                        </div>
+                      )}
+                      {worldInfoStats.evictedByMinPriority > 0 && (
+                        <div className={styles.breakdownEntry}>
+                          <span className={styles.breakdownLabel}>Below min priority</span>
+                          <span className={styles.breakdownTokens} style={{ color: '#ffab00' }}>
+                            {worldInfoStats.evictedByMinPriority}
+                          </span>
+                        </div>
+                      )}
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Estimated tokens</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.estimatedTokens.toLocaleString()}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Recursion passes used</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.recursionPassesUsed}</span>
+                      </div>
                     </div>
                   </div>
                 )}
