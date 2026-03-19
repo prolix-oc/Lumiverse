@@ -457,13 +457,15 @@ async function applyUpdate(): Promise<void> {
     addLog("Backend dependencies updated.", "system");
   }
 
-  // Always rebuild frontend after an update — backend may serve stale
-  // bundled assets otherwise (e.g. template/CSS changes won't appear).
+  // Check if any frontend files changed — rebuild only when needed.
   const frontendDir = join(PROJECT_ROOT, "frontend");
+  const hasFrontendChanges = changedFiles.split("\n").some((f: string) => f.startsWith("frontend/"));
 
-  // Reinstall frontend dependencies if its package.json changed
-  if (changedFiles.includes("frontend/package.json")) {
-    addLog("frontend/package.json changed — reinstalling frontend dependencies...", "system");
+  if (hasFrontendChanges) {
+    // Always install frontend deps before building — bun install is a fast
+    // no-op when nothing changed, and the diff-based detection of
+    // package.json changes can be unreliable (stale reflog, force-push, etc.)
+    addLog("Frontend changes detected — installing dependencies...", "system");
     const feInstallProc = Bun.spawn(["bun", "install"], {
       cwd: frontendDir,
       stdout: "pipe",
@@ -471,22 +473,22 @@ async function applyUpdate(): Promise<void> {
     });
     await feInstallProc.exited;
     addLog("Frontend dependencies updated.", "system");
-  }
 
-  addLog("Rebuilding frontend...", "system");
-  const buildProc = Bun.spawn(["bun", "run", "build"], {
-    cwd: frontendDir,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const buildOut = await new Response(buildProc.stdout).text();
-  const buildErr = await new Response(buildProc.stderr).text();
-  const buildCode = await buildProc.exited;
+    addLog("Rebuilding frontend...", "system");
+    const buildProc = Bun.spawn(["bun", "run", "build"], {
+      cwd: frontendDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const buildOut = await new Response(buildProc.stdout).text();
+    const buildErr = await new Response(buildProc.stderr).text();
+    const buildCode = await buildProc.exited;
 
-  if (buildCode !== 0) {
-    addLog(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`, "system");
-  } else {
-    addLog("Frontend rebuilt successfully.", "system");
+    if (buildCode !== 0) {
+      addLog(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`, "system");
+    } else {
+      addLog("Frontend rebuilt successfully.", "system");
+    }
   }
 
   addLog("Update complete. Restarting server...", "system");
@@ -863,6 +865,28 @@ async function executeBranchSwitch(target: string): Promise<void> {
 
 // ─── Rendering ──────────────────────────────────────────────────────────────
 
+let renderScheduled = false;
+let lastRenderTime = 0;
+const MIN_RENDER_INTERVAL = 33; // ~30fps cap — prevents stdout backpressure on Windows
+
+function render(): void {
+  const now = Date.now();
+  const elapsed = now - lastRenderTime;
+
+  if (elapsed < MIN_RENDER_INTERVAL) {
+    if (!renderScheduled) {
+      renderScheduled = true;
+      setTimeout(() => {
+        renderScheduled = false;
+        renderImmediate();
+      }, MIN_RENDER_INTERVAL - elapsed);
+    }
+    return;
+  }
+
+  renderImmediate();
+}
+
 function formatUptime(ms: number): string {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
@@ -885,7 +909,8 @@ function getStatusIndicator(): string {
 // Compact logo for the header bar
 const MINI_LOGO = `${C.purple}L${C.blue}U${C.cyan}M${C.purple}I${C.blue}V${C.cyan}E${C.purple}R${C.blue}S${C.cyan}E${C.R}`;
 
-function render(): void {
+function renderImmediate(): void {
+  lastRenderTime = Date.now();
   const out: string[] = [];
 
   // ─── Header bar (row 1-2) ──────────────────────────────────────────
@@ -981,13 +1006,15 @@ function render(): void {
 
   out.push(` ${actions}${C.R}`);
 
-  // ─── Write to terminal ─────────────────────────────────────────────
-  process.stdout.write(ansi.home);
+  // ─── Write to terminal (single batched write) ──────────────────────
+  // Batching all ANSI sequences into one write avoids the per-syscall
+  // overhead of the Windows Console API (conhost.exe), which blocks on
+  // each individual process.stdout.write() call.
+  let frame = ansi.home;
   for (let i = 0; i < out.length; i++) {
-    process.stdout.write(ansi.moveTo(i + 1, 1) + ansi.clearLine + out[i]);
+    frame += ansi.moveTo(i + 1, 1) + ansi.clearLine + out[i];
   }
-  // Flush any scrollback that may have accumulated from wrapped lines
-  rawWrite(ansi.clearScrollback);
+  rawWrite(frame);
 }
 
 // ─── Keyboard input ─────────────────────────────────────────────────────────
