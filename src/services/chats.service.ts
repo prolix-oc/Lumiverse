@@ -752,7 +752,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-  function stripReasoningTags(content: string): string {                                                                                                                       
+  export function stripReasoningTags(content: string): string {                                                                                                                       
     // Remove complete (closed) reasoning blocks                                                                                                                               
     let stripped = content.replace(                                                                                                                                            
       /\s*<(think|thinking|reasoning)>[\s\S]*?<\/\1>\s*/gi,                                                                                                                    
@@ -975,7 +975,8 @@ export async function rebuildChatChunks(userId: string, chatId: string): Promise
   let currentTokens = 0;
 
   for (const msg of messages) {
-    const msgTokens = estimateTokens(`[${msg.name}]: ${msg.content}`);
+    const strippedContent = stripReasoningTags(msg.content);
+    const msgTokens = estimateTokens(`[${msg.name}]: ${strippedContent}`);
     const isUserAfterAssistant = msg.is_user && currentChunk.some(m => !m.is_user);
     const wouldExceedTarget = currentTokens + msgTokens > targetTokens;
 
