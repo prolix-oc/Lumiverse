@@ -11,6 +11,7 @@ import { evaluate, buildEnv, registry, initMacros } from "../macros";
 import type { MacroEnv } from "../macros";
 import { activateWorldInfo, type WiState, type WorldInfoSettings, DEFAULT_WORLD_INFO_SETTINGS } from "./world-info-activation.service";
 import * as chatsSvc from "./chats.service";
+import { stripReasoningTags } from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as connectionsSvc from "./connections.service";
@@ -957,6 +958,12 @@ export interface VectorActivatedEntry {
   score: number;
 }
 
+function truncateToContextSize(text: string, maxTokens: number): string {
+  const maxChars = maxTokens * 3; 
+  if (text.length <= maxChars) return text;
+  return text.slice(-maxChars);
+}
+
 export async function collectVectorActivatedWorldInfo(
   userId: string,
   worldBookIds: string[],
@@ -970,7 +977,10 @@ export async function collectVectorActivatedWorldInfo(
 
   const contextSize = Math.max(1, cfg.preferred_context_size || 3);
   const queryMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0).slice(-contextSize);
-  const queryText = queryMessages.map((m) => `[${m.name}]: ${m.content}`).join("\n").trim();
+  const queryText = truncateToContextSize(
+    queryMessages.map((m) => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n").trim(),
+    8000
+  );
   if (!queryText) return [];
 
   try {
@@ -1054,7 +1064,10 @@ async function collectChatVectorMemory(
   const contextSize = Math.max(1, cfg.preferred_context_size || 3);
   const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
   const queryMessages = visibleMessages.slice(-contextSize);
-  const queryText = queryMessages.map((m) => `[${m.name}]: ${m.content}`).join("\n").trim();
+  const queryText = truncateToContextSize(
+    queryMessages.map((m) => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n").trim(),
+    8000
+  );
   if (!queryText) return [];
 
   try {
