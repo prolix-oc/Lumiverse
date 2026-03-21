@@ -1,5 +1,5 @@
 import { get, put, post } from './client'
-import type { EmbeddingConfig } from '@/types/api'
+import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
 
 export const embeddingsApi = {
   getConfig() {
@@ -29,6 +29,21 @@ export const embeddingsApi = {
   forceReset() {
     return post<{ success: boolean; deleted: boolean; path: string }>(
       '/embeddings/force-reset',
+      {}
+    )
+  },
+
+  getChatMemorySettings() {
+    return get<ChatMemorySettings>('/embeddings/chat-memory-settings')
+  },
+
+  updateChatMemorySettings(input: Partial<ChatMemorySettings>) {
+    return put<ChatMemorySettings>('/embeddings/chat-memory-settings', input)
+  },
+
+  recompileChatMemory(chatId: string) {
+    return post<{ success: boolean; totalChunks: number; vectorizedChunks: number; pendingChunks: number }>(
+      `/embeddings/chats/${encodeURIComponent(chatId)}/recompile`,
       {}
     )
   },

@@ -137,6 +137,22 @@ export interface ActivatedWorldInfoEntry {
   score?: number;
 }
 
+export interface MemoryStats {
+  enabled: boolean;
+  chunksRetrieved: number;
+  chunksAvailable: number;
+  chunksPending: number;
+  injectionMethod: "macro" | "fallback" | "disabled";
+  retrievedChunks: Array<{
+    score: number;
+    tokenEstimate: number;
+    messageRange: [number, number];
+    preview: string;
+  }>;
+  queryPreview: string;
+  settingsSource: "global" | "per_chat";
+}
+
 export interface AssemblyResult {
   messages: LlmMessage[];
   breakdown: AssemblyBreakdownEntry[];
@@ -153,6 +169,8 @@ export interface AssemblyResult {
     estimatedTokens: number;
     recursionPassesUsed: number;
   };
+  /** Statistics from long-term memory retrieval. */
+  memoryStats?: MemoryStats;
   /** Deferred WI state to persist after generation completes. */
   deferredWiState?: { chatId: string; metadata: Record<string, any> };
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */

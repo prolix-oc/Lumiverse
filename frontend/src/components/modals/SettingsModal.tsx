@@ -7,7 +7,7 @@ import { spindleApi } from '@/api/spindle'
 import { embeddingsApi } from '@/api/embeddings'
 import { PRESETS, DEFAULT_THEME } from '@/theme/presets'
 import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
-import type { EmbeddingConfig } from '@/types/api'
+import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
 import ModeSelector from '@/components/panels/theme-panel/ModeSelector'
 import UserManagement from '@/components/settings/UserManagement'
 import TokenizerManager from '@/components/settings/TokenizerManager'
@@ -1643,10 +1643,295 @@ function EmbeddingsSettings() {
 }
 
 function AdvancedSettings() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [cfg, setCfg] = useState<ChatMemorySettings | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const settings = await embeddingsApi.getChatMemorySettings()
+      setCfg(settings)
+      // Mark as loaded so auto-save doesn't fire on initial load
+      setTimeout(() => { loadedRef.current = true }, 50)
+    } catch (err: any) {
+      setError(err?.body?.error || err?.message || 'Failed to load chat memory settings')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const quickModePresets: Record<string, Pick<ChatMemorySettings, 'chunkTargetTokens' | 'chunkMaxTokens' | 'chunkOverlapTokens' | 'exclusionWindow'>> = {
+    conservative: { chunkTargetTokens: 600, chunkMaxTokens: 1200, chunkOverlapTokens: 100, exclusionWindow: 30 },
+    balanced: { chunkTargetTokens: 800, chunkMaxTokens: 1600, chunkOverlapTokens: 120, exclusionWindow: 20 },
+    aggressive: { chunkTargetTokens: 1000, chunkMaxTokens: 2000, chunkOverlapTokens: 200, exclusionWindow: 15 },
+  }
+
+  const loadedRef = useRef(false)
+  const dirtyRef = useRef(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const update = (patch: Partial<ChatMemorySettings>) => {
+    if (!cfg) return
+    const next = { ...cfg, ...patch }
+    // When switching to a quick mode, overlay its preset values so the UI reflects them
+    if (patch.quickMode && patch.quickMode in quickModePresets) {
+      Object.assign(next, quickModePresets[patch.quickMode])
+    }
+    dirtyRef.current = true
+    setCfg(next)
+  }
+
+  // Auto-save on change with debounce
+  useEffect(() => {
+    if (!cfg || !loadedRef.current || !dirtyRef.current) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      dirtyRef.current = false
+      setSaving(true)
+      setError(null)
+      try {
+        await embeddingsApi.updateChatMemorySettings(cfg)
+        setSuccess('Settings saved')
+        setTimeout(() => setSuccess(null), 1500)
+      } catch (err: any) {
+        setError(err?.body?.error || err?.message || 'Failed to save')
+      } finally {
+        setSaving(false)
+      }
+    }, 600)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [cfg])
+
+  if (loading || !cfg) {
+    return (
+      <div className={styles.settingsSection}>
+        <h3 className={styles.sectionTitle}>Advanced</h3>
+        <p className={styles.placeholder}>Loading...</p>
+      </div>
+    )
+  }
+
+  const isManualMode = cfg.quickMode === null
+
   return (
     <div className={styles.settingsSection}>
       <h3 className={styles.sectionTitle}>Advanced</h3>
-      <p className={styles.placeholder}>Advanced settings coming soon.</p>
+      <p className={styles.placeholder}>Fine-grained control over long-term memory chunking, retrieval, and formatting.</p>
+
+      {error && <p className={styles.errorText}>{error}</p>}
+      {success && <p className={styles.successText}>{success}</p>}
+
+      {/* Quick Mode / Manual toggle */}
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Memory Mode</label>
+        <div className={styles.segmented}>
+          {(['conservative', 'balanced', 'aggressive', null] as const).map((mode) => (
+            <button
+              key={mode ?? 'manual'}
+              type="button"
+              className={clsx(styles.segmentedBtn, cfg.quickMode === mode && styles.segmentedBtnActive)}
+              onClick={() => update({ quickMode: mode })}
+            >
+              {mode === null ? 'Manual' : mode.charAt(0).toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+        <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
+          Quick presets auto-configure chunking & exclusion. "Manual" unlocks all fields below.
+        </span>
+      </div>
+
+      {/* Section: Chunking */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Chunking</h4>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Target Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={200} max={2000}
+            value={cfg.chunkTargetTokens}
+            disabled={!isManualMode}
+            onChange={(e) => update({ chunkTargetTokens: Number(e.target.value) || 800 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Max Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={400} max={4000}
+            value={cfg.chunkMaxTokens}
+            disabled={!isManualMode}
+            onChange={(e) => update({ chunkMaxTokens: Number(e.target.value) || 1600 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Overlap Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={500}
+            value={cfg.chunkOverlapTokens}
+            disabled={!isManualMode}
+            onChange={(e) => update({ chunkOverlapTokens: Number(e.target.value) || 0 })}
+          />
+        </div>
+      </div>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Max Messages / Chunk</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={100}
+            value={cfg.maxMessagesPerChunk}
+            onChange={(e) => update({ maxMessagesPerChunk: Number(e.target.value) || 0 })}
+          />
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = unlimited</span>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Time Gap Split (min)</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={1440}
+            value={cfg.splitOnTimeGapMinutes}
+            onChange={(e) => update({ splitOnTimeGapMinutes: Number(e.target.value) || 0 })}
+          />
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = disabled</span>
+        </div>
+      </div>
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={cfg.splitOnSceneBreaks}
+          onChange={(e) => update({ splitOnSceneBreaks: e.target.checked })}
+        />
+        <span>Split on scene breaks (---, ***, ===)</span>
+      </label>
+
+      {/* Section: Retrieval */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Retrieval</h4>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Top-K Results</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={1} max={24}
+            value={cfg.retrievalTopK}
+            onChange={(e) => update({ retrievalTopK: Number(e.target.value) || 4 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Exclusion Window</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={5} max={100}
+            value={cfg.exclusionWindow}
+            disabled={!isManualMode}
+            onChange={(e) => update({ exclusionWindow: Number(e.target.value) || 20 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Similarity Threshold</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={1} step={0.05}
+            value={cfg.similarityThreshold}
+            onChange={(e) => update({ similarityThreshold: Number(e.target.value) || 0 })}
+          />
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = no filtering</span>
+        </div>
+      </div>
+
+      {/* Section: Query */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Query</h4>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Query Strategy</label>
+          <select
+            className={styles.select}
+            value={cfg.queryStrategy}
+            onChange={(e) => update({ queryStrategy: e.target.value as ChatMemorySettings['queryStrategy'] })}
+          >
+            <option value="recent_messages">Recent Messages</option>
+            <option value="last_user_message">Last User Message</option>
+            <option value="weighted_recent">Weighted Recent</option>
+          </select>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Query Context Size</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={1} max={64}
+            value={cfg.queryContextSize}
+            onChange={(e) => update({ queryContextSize: Number(e.target.value) || 6 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Query Max Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={1000} max={32000}
+            value={cfg.queryMaxTokens}
+            onChange={(e) => update({ queryMaxTokens: Number(e.target.value) || 8000 })}
+          />
+        </div>
+      </div>
+
+      {/* Section: Formatting */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Formatting</h4>
+      <span className={styles.placeholder} style={{ fontSize: 11 }}>
+        Templates control how retrieved memories appear in the prompt. Available placeholders: {'{{memories}}'}, {'{{content}}'}, {'{{score}}'}, {'{{startIndex}}'}, {'{{endIndex}}'}.
+      </span>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Header Template</label>
+        <textarea
+          className={styles.textarea}
+          rows={2}
+          value={cfg.memoryHeaderTemplate}
+          onChange={(e) => update({ memoryHeaderTemplate: e.target.value })}
+        />
+      </div>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Chunk Template</label>
+          <input
+            className={styles.select}
+            value={cfg.chunkTemplate}
+            onChange={(e) => update({ chunkTemplate: e.target.value })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Chunk Separator</label>
+          <input
+            className={styles.select}
+            value={cfg.chunkSeparator}
+            onChange={(e) => update({ chunkSeparator: e.target.value })}
+          />
+        </div>
+      </div>
+
+      {saving && <p className={styles.placeholder} style={{ marginTop: 8, fontSize: 11 }}>Saving...</p>}
     </div>
   )
 }

@@ -112,6 +112,7 @@ export interface DryRunResult {
     estimatedTokens: number;
     recursionPassesUsed: number;
   };
+  memoryStats?: import("../llm/types").MemoryStats;
 }
 
 export interface BatchGenerateInput {
@@ -148,6 +149,7 @@ interface PromptPipelineResult {
   chatHistoryMessages?: LlmMessage[];
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   worldInfoStats?: DryRunResult["worldInfoStats"];
+  memoryStats?: import("../llm/types").MemoryStats;
   deferredWiState?: { chatId: string; metadata: any };
   spindleContext: SpindleContext;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
@@ -262,6 +264,7 @@ async function runPromptPipeline(opts: {
   let breakdown: AssemblyBreakdownEntry[] | undefined;
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
+  let memoryStats: import("../llm/types").MemoryStats | undefined;
   let deferredWiState: { chatId: string; metadata: any } | undefined;
 
   let deliberationHandledByMacro = false;
@@ -293,6 +296,7 @@ async function runPromptPipeline(opts: {
     breakdown = assemblyResult.breakdown;
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     worldInfoStats = assemblyResult.worldInfoStats;
+    memoryStats = assemblyResult.memoryStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
   }
@@ -373,7 +377,7 @@ async function runPromptPipeline(opts: {
   // Merge parameters: assembled (from preset) < request overrides
   const parameters: GenerationParameters = { ...assembledParams, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, chatHistoryMessages, activatedWorldInfo, worldInfoStats, deferredWiState, spindleContext, deliberationHandledByMacro };
+  return { messages, parameters, breakdown, chatHistoryMessages, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -867,6 +871,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     provider: provider.name,
     tokenCount,
     worldInfoStats: pipeline.worldInfoStats,
+    memoryStats: pipeline.memoryStats,
   };
 }
 

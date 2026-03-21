@@ -428,6 +428,25 @@ export interface EmbeddingConfig {
   has_api_key: boolean;
 }
 
+export interface ChatMemorySettings {
+  chunkTargetTokens: number
+  chunkMaxTokens: number
+  chunkOverlapTokens: number
+  exclusionWindow: number
+  queryContextSize: number
+  retrievalTopK: number
+  similarityThreshold: number
+  queryStrategy: 'recent_messages' | 'last_user_message' | 'weighted_recent'
+  queryMaxTokens: number
+  memoryHeaderTemplate: string
+  chunkTemplate: string
+  chunkSeparator: string
+  splitOnSceneBreaks: boolean
+  splitOnTimeGapMinutes: number
+  maxMessagesPerChunk: number
+  quickMode: 'conservative' | 'balanced' | 'aggressive' | null
+}
+
 export interface WorldInfoSettings {
   globalScanDepth: number | null;
   maxRecursionPasses: number;

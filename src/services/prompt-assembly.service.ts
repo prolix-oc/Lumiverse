@@ -1,4 +1,4 @@
-import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry } from "../llm/types";
+import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry, type MemoryStats } from "../llm/types";
 import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
@@ -12,6 +12,13 @@ import type { MacroEnv } from "../macros";
 import { activateWorldInfo, type WiState, type WorldInfoSettings, DEFAULT_WORLD_INFO_SETTINGS } from "./world-info-activation.service";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags } from "./chats.service";
+import {
+  stripDetailsBlocks as _stripDetailsBlocks,
+  stripLoomTags as _stripLoomTags,
+  stripHtmlFormattingTags as _stripHtmlFormattingTags,
+  collapseExcessiveNewlines as _collapseExcessiveNewlines,
+  sanitizeForVectorization,
+} from "../utils/content-sanitizer";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as connectionsSvc from "./connections.service";
@@ -282,6 +289,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     "theme",
     "contextFilters",
     "summarization",
+    "chatMemorySettings",
   ];
   const settingsMap = settingsSvc.getSettingsByKeys(ctx.userId, settingsKeys);
 
@@ -327,6 +335,31 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     return await onelinerImpersonation(messages, character, persona, chat, connection, preset, promptBehavior, completionSettings, samplerOverrides, ctx, macroEnv, reasoningVal);
   }
 
+  // ---- Pre-loop: retrieve chat vector memories ----
+  const chatMemSettingsRaw = settingsMap.get("chatMemorySettings") ?? null;
+  const chatMemSettings = chatMemSettingsRaw
+    ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
+    : null;
+  const perChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
+
+  const memoryResult = await collectChatVectorMemory(
+    ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides,
+  );
+
+  // Store in macroEnv for {{memories}} macro access
+  macroEnv.extra.memory = {
+    chunks: memoryResult.chunks,
+    formatted: memoryResult.formatted,
+    count: memoryResult.count,
+    enabled: memoryResult.enabled,
+    settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+  };
+
+  // Detect if any enabled block uses the {{memories}} macro
+  const macroHandlesMemory = blocks.some(b =>
+    b.enabled && b.content && /\{\{memories(\b|::|\}\})/.test(b.content)
+  );
+
   // ---- Assembly loop ----
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
@@ -353,9 +386,9 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     // ---- Handle by marker type ----
 
     if (block.marker === "chat_history") {
-      const chatVectorMemories = await collectChatVectorMemory(ctx.userId, ctx.chatId, messages);
-      if (chatVectorMemories.length > 0) {
-        const memoryContent = "Past Memories (for context only):\n" + chatVectorMemories.join("\n\n");
+      // Inject memories as system message ONLY if no macro handles them
+      if (!macroHandlesMemory && memoryResult.count > 0) {
+        const memoryContent = memoryResult.formatted;
         result.push({ role: "system", content: memoryContent });
         breakdown.push({ type: "long_term_memory", name: "Long-Term Memory", role: "system", content: memoryContent });
       }
@@ -495,6 +528,20 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     }
   }
 
+  // ---- Long-Term Memory breakdown entry (macro path) ----
+  // When memories are injected via {{memories}} macro, their content is embedded
+  // inside a block. Add a separate breakdown entry so the prompt breakdown UI
+  // shows memories as their own group.
+  if (macroHandlesMemory && memoryResult.count > 0 && memoryResult.formatted) {
+    breakdown.push({
+      type: "long_term_memory",
+      name: "Long-Term Memory",
+      role: "system",
+      content: memoryResult.formatted,
+      excludeFromTotal: true, // tokens already counted in the block containing {{memories}}
+    });
+  }
+
   // ---- WI auto-injection (if no explicit marker blocks) ----
   //
   // WI position semantics:
@@ -520,7 +567,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // Position 1: "after" — insert just after chat history
   if (!hasWiAfter && wiCache.after.length > 0) {
-    const insertAt = firstChatIdx >= 0 ? firstChatIdx + chatMsgCount : result.length;
+    const insertAt = firstChatIdx >= 0 ? firstChatIdx + chatHistoryCount : result.length;
     injectWorldInfoAt(result, breakdown, wiCache.after, Math.min(insertAt, result.length), "World Info After (auto)");
   }
 
@@ -708,12 +755,31 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     parameters._include_usage = true;
   }
 
+  // Build memory stats for dry-run diagnostics
+  const memoryStats: MemoryStats = {
+    enabled: memoryResult.enabled,
+    chunksRetrieved: memoryResult.count,
+    chunksAvailable: memoryResult.chunksAvailable,
+    chunksPending: memoryResult.chunksPending,
+    injectionMethod: !memoryResult.enabled ? "disabled"
+      : macroHandlesMemory ? "macro" : "fallback",
+    retrievedChunks: memoryResult.chunks.map(c => ({
+      score: c.score,
+      tokenEstimate: Math.ceil(c.content.length / 4),
+      messageRange: [c.metadata?.startIndex ?? 0, c.metadata?.endIndex ?? 0] as [number, number],
+      preview: c.content,
+    })),
+    queryPreview: memoryResult.queryPreview,
+    settingsSource: memoryResult.settingsSource,
+  };
+
   return {
     messages: result,
     breakdown,
     parameters,
     activatedWorldInfo: activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
     worldInfoStats: wiResult.stats,
+    memoryStats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,
   };
@@ -1052,23 +1118,108 @@ export async function collectVectorActivatedWorldInfo(
  * 4. Excludes recent messages (within exclusionWindow) to avoid redundancy
  * 5. Returns the most semantically relevant past memories
  */
+
+export interface MemoryRetrievalResult {
+  chunks: Array<{ content: string; score: number; metadata: any }>;
+  formatted: string;
+  count: number;
+  enabled: boolean;
+  queryPreview: string;
+  settingsSource: "global" | "per_chat";
+  chunksAvailable: number;
+  chunksPending: number;
+}
+
+function buildQueryText(
+  messages: Message[],
+  settings: import("./embeddings.service").ChatMemorySettings,
+): string {
+  const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
+  const contextSize = Math.max(1, settings.queryContextSize);
+
+  switch (settings.queryStrategy) {
+    case "last_user_message": {
+      const lastUser = [...visibleMessages].reverse().find(m => m.is_user);
+      if (!lastUser) return "";
+      return truncateToContextSize(
+        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content)}`,
+        settings.queryMaxTokens,
+      );
+    }
+    case "weighted_recent": {
+      const queryMessages = visibleMessages.slice(-contextSize);
+      const parts = queryMessages.map(m =>
+        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+      );
+      // Repeat last message for recency bias
+      if (parts.length > 0) parts.push(parts[parts.length - 1]);
+      return truncateToContextSize(parts.join("\n").trim(), settings.queryMaxTokens);
+    }
+    case "recent_messages":
+    default: {
+      const queryMessages = visibleMessages.slice(-contextSize);
+      return truncateToContextSize(
+        queryMessages.map(m =>
+          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+        ).join("\n").trim(),
+        settings.queryMaxTokens,
+      );
+    }
+  }
+}
+
+function formatMemoryOutput(
+  chunks: Array<{ content: string; score: number; metadata: any }>,
+  settings: import("./embeddings.service").ChatMemorySettings,
+): string {
+  if (chunks.length === 0) return "";
+
+  const renderedChunks = chunks.map(c => {
+    let rendered = settings.chunkTemplate;
+    rendered = rendered.replace(/\{\{content\}\}/g, c.content);
+    rendered = rendered.replace(/\{\{score\}\}/g, c.score.toFixed(4));
+    const meta = c.metadata ?? {};
+    rendered = rendered.replace(/\{\{startIndex\}\}/g, String(meta.startIndex ?? "?"));
+    rendered = rendered.replace(/\{\{endIndex\}\}/g, String(meta.endIndex ?? "?"));
+    return rendered;
+  });
+
+  const joined = renderedChunks.join(settings.chunkSeparator);
+  return settings.memoryHeaderTemplate.replace(/\{\{memories\}\}/g, joined);
+}
+
 async function collectChatVectorMemory(
   userId: string,
   chatId: string,
   messages: Message[],
-): Promise<string[]> {
-  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  if (!cfg.enabled || !cfg.vectorize_chat_messages) return [];
+  chatMemorySettings?: import("./embeddings.service").ChatMemorySettings | null,
+  perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null,
+): Promise<MemoryRetrievalResult> {
+  const emptyResult: MemoryRetrievalResult = {
+    chunks: [], formatted: "", count: 0, enabled: false,
+    queryPreview: "", settingsSource: "global", chunksAvailable: 0, chunksPending: 0,
+  };
 
-  const params = embeddingsSvc.getChatMemoryParams(cfg.chat_memory_mode);
-  const contextSize = Math.max(1, cfg.preferred_context_size || 3);
-  const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
-  const queryMessages = visibleMessages.slice(-contextSize);
-  const queryText = truncateToContextSize(
-    queryMessages.map((m) => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n").trim(),
-    8000
-  );
-  if (!queryText) return [];
+  // Per-chat disable
+  if (perChatOverrides?.enabled === false) return emptyResult;
+
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) return emptyResult;
+
+  const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings ?? null, cfg);
+  const settingsSource: "per_chat" | "global" = perChatOverrides ? "per_chat" : "global";
+
+  // Apply per-chat overrides
+  const effectiveTopK = perChatOverrides?.retrievalTopK ?? settings.retrievalTopK;
+  const effectiveExclusionWindow = perChatOverrides?.exclusionWindow ?? settings.exclusionWindow;
+  const effectiveThreshold = settings.similarityThreshold;
+
+  const queryText = buildQueryText(messages, settings);
+  if (!queryText) return { ...emptyResult, enabled: true, settingsSource };
+
+  // Get chunk stats
+  const allChunks = chatsSvc.getChatChunks(userId, chatId);
+  const pendingChunks = allChunks.filter(c => !c.vectorized_at);
 
   try {
     const queryHash = hashQueryText(queryText);
@@ -1079,47 +1230,59 @@ async function collectChatVectorMemory(
     if (cachedVector) {
       queryVector = cachedVector;
     } else {
-      const chunks = chatsSvc.getChatChunks(userId, chatId);
-      const pendingChunks = chunks.filter(c => !c.vectorized_at);
-
       if (pendingChunks.length > 0) {
         // Chunks not ready - use SQLite fallback
-        return getRecentRelevantChunks(userId, chatId, queryText, cfg.retrieval_top_k);
+        const fallbackContents = getRecentRelevantChunks(userId, chatId, queryText, effectiveTopK);
+        const fallbackChunks = fallbackContents.map(c => ({ content: c, score: 0, metadata: {} }));
+        const formatted = formatMemoryOutput(fallbackChunks, settings);
+        return {
+          chunks: fallbackChunks, formatted, count: fallbackChunks.length, enabled: true,
+          queryPreview: queryText.slice(0, 200), settingsSource,
+          chunksAvailable: allChunks.length, chunksPending: pendingChunks.length,
+        };
       }
 
-      // Generate query vector and cache it
       const [vector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
-      if (!vector || vector.length === 0) return [];
+      if (!vector || vector.length === 0) return { ...emptyResult, enabled: true, settingsSource };
 
       queryVector = vector;
       await cacheQueryVector(chatId, queryHash, queryText, queryVector);
     }
 
-    // Build exclusion set: exclude recent messages within the exclusion window
+    // Build exclusion set
     const excludeIds = new Set<string>();
-    const exclusionWindow = params.exclusionWindow;
-    const recentMessages = visibleMessages.slice(-exclusionWindow);
+    const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
+    const recentMessages = visibleMessages.slice(-effectiveExclusionWindow);
     for (const m of recentMessages) {
       excludeIds.add(m.id);
     }
 
-    const limit = cfg.retrieval_top_k;
-    const hits = await embeddingsSvc.searchChatChunks(userId, chatId, queryVector, excludeIds, limit);
+    const hits = await embeddingsSvc.searchChatChunks(userId, chatId, queryVector, excludeIds, effectiveTopK, queryText, cfg.hybrid_weight_mode);
 
-    // Apply similarity threshold filtering
     let filteredHits = hits;
-    if (cfg.similarity_threshold > 0) {
-      filteredHits = hits.filter(h => h.score <= cfg.similarity_threshold);
+    if (effectiveThreshold > 0) {
+      filteredHits = hits.filter(h => h.score <= effectiveThreshold);
     }
 
     if (filteredHits.length > 0) {
       console.info(`[chat-memory] Retrieved ${filteredHits.length} memory chunk(s) from past conversation`);
     }
 
-    return filteredHits.map(h => h.content);
+    const chunks = filteredHits.map(h => ({
+      content: h.content,
+      score: h.score,
+      metadata: h.metadata ?? {},
+    }));
+    const formatted = formatMemoryOutput(chunks, settings);
+
+    return {
+      chunks, formatted, count: chunks.length, enabled: true,
+      queryPreview: queryText.slice(0, 200), settingsSource,
+      chunksAvailable: allChunks.length, chunksPending: pendingChunks.length,
+    };
   } catch (err) {
     console.warn("[prompt] Chat memory retrieval failed:", err);
-    return [];
+    return { ...emptyResult, enabled: true, settingsSource };
   }
 }
 
@@ -1368,18 +1531,11 @@ const HTML_TAG_REGEXES = HTML_FORMAT_TAGS.map((tag) => ({
 
 const MAX_FILTER_ITERATIONS = 20;
 
-/** Remove <details>...</details> blocks entirely (handles nesting). */
-function stripDetailsBlocks(content: string): string {
-  let result = content;
-  let prev: string;
-  let iter = 0;
-  do {
-    if (++iter > MAX_FILTER_ITERATIONS) break;
-    prev = result;
-    result = result.replace(/<details(?:\s[^>]*)?>([\s\S]*?)<\/details>/gi, "");
-  } while (result !== prev);
-  return result;
-}
+// Use shared implementations from content-sanitizer.ts
+const stripDetailsBlocks = _stripDetailsBlocks;
+const stripLoomTags = _stripLoomTags;
+const stripHtmlFormattingTags = _stripHtmlFormattingTags;
+const collapseExcessiveNewlines = _collapseExcessiveNewlines;
 
 /** Extract only the inner text of <details>...</details> blocks, discard everything else. */
 function keepOnlyDetailsBlocks(content: string): string {
@@ -1391,18 +1547,6 @@ function keepOnlyDetailsBlocks(content: string): string {
     if (inner) parts.push(inner);
   }
   return parts.join("\n\n");
-}
-
-/** Remove all loom-related tags and their content. */
-function stripLoomTags(content: string): string {
-  let result = content;
-  for (const { paired, self } of LOOM_TAG_REGEXES) {
-    paired.lastIndex = 0;
-    self.lastIndex = 0;
-    result = result.replace(paired, "");
-    result = result.replace(self, "");
-  }
-  return result;
 }
 
 /** Extract only the inner text of loom-related tags, discard everything else. */
@@ -1419,43 +1563,9 @@ function keepOnlyLoomTags(content: string): string {
   return parts.join("\n\n");
 }
 
-/** Strip HTML formatting tags (preserving inner text) + div handling. */
-function stripHtmlFormattingTags(content: string): string {
-  let result = content;
-
-  // Handle divs: extract codeblock containers, then strip remaining divs
-  let prev: string;
-  let iter = 0;
-  do {
-    if (++iter > MAX_FILTER_ITERATIONS) break;
-    prev = result;
-    result = result.replace(
-      /<div[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>(\s*```[\s\S]*?```\s*)<\/div>/gi,
-      "$1",
-    );
-    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "$1");
-  } while (result !== prev);
-  result = result.replace(/<\/div>/gi, "");
-
-  // Strip formatting tags (preserve inner text)
-  for (const { open, close } of HTML_TAG_REGEXES) {
-    open.lastIndex = 0;
-    close.lastIndex = 0;
-    result = result.replace(open, "");
-    result = result.replace(close, "");
-  }
-
-  return result;
-}
-
 /** Strip <font> tags (preserving inner text). */
 function stripFontTags(content: string): string {
   return content.replace(/<font(?:\s[^>]*)?>/gi, "").replace(/<\/font>/gi, "");
-}
-
-/** Collapse 3+ consecutive newlines to 2 (standard paragraph break). */
-function collapseExcessiveNewlines(content: string): string {
-  return content.replace(/\n{3,}/g, "\n\n");
 }
 
 /**
@@ -1892,9 +2002,9 @@ async function legacyAssembly(
   }
 
   if (userId && chat) {
-    const chatVectorMemories = await collectChatVectorMemory(userId, chat.id, messages);
-    if (chatVectorMemories.length > 0) {
-      const memoryContent = "Past Memories (for context only):\n" + chatVectorMemories.join("\n\n");
+    const legacyMemoryResult = await collectChatVectorMemory(userId, chat.id, messages);
+    if (legacyMemoryResult.count > 0) {
+      const memoryContent = legacyMemoryResult.formatted;
       llmMessages.push({ role: "system", content: memoryContent });
       breakdown.push({ type: "long_term_memory", name: "Long-Term Memory", role: "system", content: memoryContent });
     }

@@ -20,6 +20,7 @@ export default function DryRunModal() {
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [paramsOpen, setParamsOpen] = useState(false)
   const [wiStatsOpen, setWiStatsOpen] = useState(false)
+  const [memStatsOpen, setMemStatsOpen] = useState(false)
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -40,7 +41,7 @@ export default function DryRunModal() {
     [closeModal],
   )
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats } = modalProps
 
   // Build a token count lookup from tokenCount.breakdown (matched by name)
   const tokensByName = new Map<string, number>()
@@ -213,6 +214,73 @@ export default function DryRunModal() {
                         <span className={styles.breakdownLabel}>Recursion passes used</span>
                         <span className={styles.breakdownTokens}>{worldInfoStats.recursionPassesUsed}</span>
                       </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Memory Stats */}
+            {memoryStats && memoryStats.enabled && (
+              <div className={styles.collapsible}>
+                <button
+                  type="button"
+                  className={styles.collapsibleHeader}
+                  onClick={() => setMemStatsOpen((o) => !o)}
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(styles.chevron, memStatsOpen && styles.chevronOpen)}
+                  />
+                  Long-Term Memory ({memoryStats.chunksRetrieved} retrieved
+                  {memoryStats.chunksPending > 0 && `, ${memoryStats.chunksPending} pending`})
+                </button>
+                {memStatsOpen && (
+                  <div className={styles.collapsibleBody}>
+                    <div className={styles.breakdownList}>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Injection method</span>
+                        <span className={styles.breakdownTokens}>{memoryStats.injectionMethod}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Chunks available</span>
+                        <span className={styles.breakdownTokens}>{memoryStats.chunksAvailable}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Chunks pending vectorization</span>
+                        <span className={styles.breakdownTokens} style={memoryStats.chunksPending > 0 ? { color: '#ffab00' } : undefined}>
+                          {memoryStats.chunksPending}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Settings source</span>
+                        <span className={styles.breakdownTokens}>{memoryStats.settingsSource}</span>
+                      </div>
+                      {memoryStats.queryPreview && (
+                        <div className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <span className={styles.breakdownLabel}>Query preview</span>
+                          <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'auto', fontSize: 11 }}>
+                            {memoryStats.queryPreview}
+                          </span>
+                        </div>
+                      )}
+                      {memoryStats.retrievedChunks.length > 0 && (
+                        <>
+                          <div className={styles.breakdownEntry} style={{ marginTop: 8 }}>
+                            <span className={styles.breakdownLabel} style={{ fontWeight: 600 }}>Retrieved Chunks</span>
+                          </div>
+                          {memoryStats.retrievedChunks.map((chunk, i) => (
+                            <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, paddingLeft: 8 }}>
+                              <span className={styles.breakdownLabel}>
+                                #{i + 1} — score: {chunk.score.toFixed(4)}, ~{chunk.tokenEstimate} tokens
+                              </span>
+                              <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto', fontSize: 11, display: 'block' }}>
+                                {chunk.preview}
+                              </span>
+                            </div>
+                          ))}
+                        </>
+                      )}
                     </div>
                   </div>
                 )}

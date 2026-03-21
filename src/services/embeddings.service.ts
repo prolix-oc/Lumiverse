@@ -1,4 +1,4 @@
-import { connect, type Connection, type Table } from "@lancedb/lancedb";
+import { connect, Index, rerankers, type Connection, type Table } from "@lancedb/lancedb";
 import { join } from "path";
 import { rmSync, existsSync } from "fs";
 import { env } from "../env";
@@ -39,6 +39,163 @@ export interface EmbeddingConfig {
 
 export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
   has_api_key: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Chat Memory Settings — fine-grained control over long-term memory
+// ---------------------------------------------------------------------------
+
+export interface ChatMemorySettings {
+  // --- Chunking ---
+  chunkTargetTokens: number;      // Default 800. Range: 200–2000
+  chunkMaxTokens: number;         // Default 1600. Range: chunkTargetTokens–4000
+  chunkOverlapTokens: number;     // Default 120. Range: 0–500
+
+  // --- Exclusion ---
+  exclusionWindow: number;        // Default 20. Range: 5–100. Recent messages skipped during search
+
+  // --- Retrieval ---
+  queryContextSize: number;       // Default 6. Range: 1–64. Messages used to build query vector
+  retrievalTopK: number;          // Default 4. Range: 1–24
+  similarityThreshold: number;    // Default 0 (disabled). Range: 0–1
+
+  // --- Query ---
+  queryStrategy: "recent_messages" | "last_user_message" | "weighted_recent";
+  queryMaxTokens: number;         // Default 8000
+
+  // --- Formatting ---
+  memoryHeaderTemplate: string;   // Wraps entire block. Default below
+  chunkTemplate: string;          // Per-chunk. Default: "{{content}}". Supports: {{content}}, {{score}}, {{startIndex}}, {{endIndex}}
+  chunkSeparator: string;         // Default: "\n---\n"
+
+  // --- Chunk Splitting ---
+  splitOnSceneBreaks: boolean;    // Default true. Force split at ---, ***, <scene_break>
+  splitOnTimeGapMinutes: number;  // Default 0 (disabled). Force split after N minutes idle
+  maxMessagesPerChunk: number;    // Default 0 (unlimited)
+
+  // --- Quick Mode ---
+  quickMode: "conservative" | "balanced" | "aggressive" | null; // Default "balanced". null = manual
+}
+
+export interface PerChatMemoryOverrides {
+  enabled?: boolean;          // false = disable memory for this chat
+  retrievalTopK?: number;     // Override retrieval count
+  exclusionWindow?: number;   // Override exclusion window
+}
+
+export const DEFAULT_CHAT_MEMORY_SETTINGS: ChatMemorySettings = {
+  chunkTargetTokens: 800,
+  chunkMaxTokens: 1600,
+  chunkOverlapTokens: 120,
+  exclusionWindow: 20,
+  queryContextSize: 6,
+  retrievalTopK: 4,
+  similarityThreshold: 0,
+  queryStrategy: "recent_messages",
+  queryMaxTokens: 8000,
+  memoryHeaderTemplate: "Relevant context from earlier in this conversation:\n{{memories}}",
+  chunkTemplate: "{{content}}",
+  chunkSeparator: "\n---\n",
+  splitOnSceneBreaks: true,
+  splitOnTimeGapMinutes: 0,
+  maxMessagesPerChunk: 0,
+  quickMode: "balanced",
+};
+
+const CHAT_MEMORY_SETTINGS_KEY = "chatMemorySettings";
+
+/**
+ * Normalize user-provided ChatMemorySettings, filling in defaults.
+ */
+export function normalizeChatMemorySettings(input: any): ChatMemorySettings {
+  const d = DEFAULT_CHAT_MEMORY_SETTINGS;
+  return {
+    chunkTargetTokens: clampInt(input?.chunkTargetTokens, 200, 2000, d.chunkTargetTokens),
+    chunkMaxTokens: clampInt(input?.chunkMaxTokens, 400, 4000, d.chunkMaxTokens),
+    chunkOverlapTokens: clampInt(input?.chunkOverlapTokens, 0, 500, d.chunkOverlapTokens),
+    exclusionWindow: clampInt(input?.exclusionWindow, 5, 100, d.exclusionWindow),
+    queryContextSize: clampInt(input?.queryContextSize, 1, 64, d.queryContextSize),
+    retrievalTopK: clampInt(input?.retrievalTopK, 1, 24, d.retrievalTopK),
+    similarityThreshold: clampFloat(input?.similarityThreshold, 0, 1, d.similarityThreshold),
+    queryStrategy: ["recent_messages", "last_user_message", "weighted_recent"].includes(input?.queryStrategy)
+      ? input.queryStrategy : d.queryStrategy,
+    queryMaxTokens: clampInt(input?.queryMaxTokens, 1000, 32000, d.queryMaxTokens),
+    memoryHeaderTemplate: typeof input?.memoryHeaderTemplate === "string" ? input.memoryHeaderTemplate : d.memoryHeaderTemplate,
+    chunkTemplate: typeof input?.chunkTemplate === "string" ? input.chunkTemplate : d.chunkTemplate,
+    chunkSeparator: typeof input?.chunkSeparator === "string" ? input.chunkSeparator : d.chunkSeparator,
+    splitOnSceneBreaks: input?.splitOnSceneBreaks !== undefined ? !!input.splitOnSceneBreaks : d.splitOnSceneBreaks,
+    splitOnTimeGapMinutes: clampInt(input?.splitOnTimeGapMinutes, 0, 1440, d.splitOnTimeGapMinutes),
+    maxMessagesPerChunk: clampInt(input?.maxMessagesPerChunk, 0, 100, d.maxMessagesPerChunk),
+    quickMode: input?.quickMode === null ? null
+      : ["conservative", "balanced", "aggressive"].includes(input?.quickMode) ? input.quickMode
+      : d.quickMode,
+  };
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(v)));
+}
+
+function clampFloat(v: unknown, min: number, max: number, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
+}
+
+/**
+ * Resolve effective chat memory parameters. When quickMode is active,
+ * the preset map values override the fine-grained fields (backward compat).
+ * Falls back to legacy EmbeddingConfig fields when chatMemorySettings doesn't exist.
+ */
+export function resolveEffectiveChatMemorySettings(
+  chatMemorySettings: ChatMemorySettings | null,
+  legacyCfg: EmbeddingConfig,
+): ChatMemorySettings {
+  // Start from explicit settings or defaults
+  let settings = chatMemorySettings ?? { ...DEFAULT_CHAT_MEMORY_SETTINGS };
+
+  // If no explicit settings exist, derive from legacy EmbeddingConfig
+  if (!chatMemorySettings) {
+    settings = {
+      ...DEFAULT_CHAT_MEMORY_SETTINGS,
+      retrievalTopK: legacyCfg.retrieval_top_k,
+      queryContextSize: legacyCfg.preferred_context_size || DEFAULT_CHAT_MEMORY_SETTINGS.queryContextSize,
+      similarityThreshold: legacyCfg.similarity_threshold,
+      quickMode: legacyCfg.chat_memory_mode,
+    };
+  }
+
+  // When quickMode is active, overlay the preset values
+  if (settings.quickMode) {
+    const presetParams = getChatMemoryParams(settings.quickMode);
+    settings = {
+      ...settings,
+      chunkTargetTokens: presetParams.chunkTargetTokens,
+      chunkMaxTokens: presetParams.chunkMaxTokens,
+      chunkOverlapTokens: presetParams.chunkOverlapTokens,
+      exclusionWindow: presetParams.exclusionWindow,
+    };
+  }
+
+  return settings;
+}
+
+/**
+ * Load ChatMemorySettings from the settings table for a user.
+ */
+export function loadChatMemorySettings(userId: string): ChatMemorySettings | null {
+  const setting = settingsSvc.getSetting(userId, CHAT_MEMORY_SETTINGS_KEY);
+  if (!setting?.value) return null;
+  return normalizeChatMemorySettings(setting.value);
+}
+
+/**
+ * Save ChatMemorySettings to the settings table for a user.
+ */
+export function saveChatMemorySettings(userId: string, input: any): ChatMemorySettings {
+  const normalized = normalizeChatMemorySettings(input);
+  settingsSvc.putSetting(userId, CHAT_MEMORY_SETTINGS_KEY, normalized);
+  return normalized;
 }
 
 interface EmbeddingRow {
@@ -238,29 +395,77 @@ async function getOrCreateTable(seedRows?: EmbeddingRow[]): Promise<Table> {
   return table;
 }
 
-const MIN_ROWS_FOR_INDEX = 10_000;
+const MIN_ROWS_FOR_VECTOR_INDEX = 10_000;
+let scalarIndexReady = false;
+let ftsIndexReady = false;
 
 async function ensureVectorIndex(table: Table): Promise<void> {
   if (vectorIndexReady) return;
   try {
     const rowCount = await table.countRows();
-    if (rowCount < MIN_ROWS_FOR_INDEX) {
+    if (rowCount < MIN_ROWS_FOR_VECTOR_INDEX) {
       // Brute-force search is fast enough for small tables and avoids
       // KMeans warnings about empty clusters when rows < num_partitions * 256.
       vectorIndexReady = true;
       return;
     }
-    const numPartitions = Math.max(1, Math.round(Math.sqrt(rowCount)));
     await table.createIndex("vector", {
-      config: {
+      config: Index.hnswPq({
         distanceType: "cosine",
-        numPartitions,
-      }
+        m: 20,
+        efConstruction: 300,
+      }),
     } as any);
   } catch {
     // Index may already exist - that's fine
   }
   vectorIndexReady = true;
+}
+
+/**
+ * Ensure scalar indexes exist on filter columns for fast prefiltering.
+ * BTree for high-cardinality (user_id, owner_id), Bitmap for low-cardinality (source_type).
+ */
+async function ensureScalarIndexes(table: Table): Promise<void> {
+  if (scalarIndexReady) return;
+  const indexNames = new Set((await table.listIndices()).map((i: any) => i.name || i.indexName || ""));
+  const create = async (col: string, config?: any) => {
+    // LanceDB names indexes as {col}_idx by convention
+    if (indexNames.has(`${col}_idx`)) return;
+    try {
+      if (config) {
+        await table.createIndex(col, { config });
+      } else {
+        await table.createIndex(col);
+      }
+    } catch {
+      // Index may already exist
+    }
+  };
+  await create("user_id");
+  await create("owner_id");
+  await create("source_type", Index.bitmap());
+  scalarIndexReady = true;
+}
+
+/**
+ * Ensure FTS index exists on the content column for hybrid search.
+ */
+async function ensureFtsIndex(table: Table): Promise<void> {
+  if (ftsIndexReady) return;
+  const indexNames = new Set((await table.listIndices()).map((i: any) => i.name || i.indexName || ""));
+  if (indexNames.has("content_idx")) {
+    ftsIndexReady = true;
+    return;
+  }
+  try {
+    await table.createIndex("content", {
+      config: Index.fts(),
+    });
+  } catch {
+    // Index may already exist
+  }
+  ftsIndexReady = true;
 }
 
 export async function optimizeTable(): Promise<void> {
@@ -507,6 +712,8 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
 
   const table = await getOrCreateTable([row]);
   await ensureVectorIndex(table);
+  await ensureScalarIndexes(table);
+  await ensureFtsIndex(table);
   await table
     .mergeInsert("id")
     .whenMatchedUpdateAll()
@@ -595,6 +802,8 @@ export async function reindexWorldBookEntries(
 
       const table = await getOrCreateTable(rows);
       await ensureVectorIndex(table);
+      await ensureScalarIndexes(table);
+      await ensureFtsIndex(table);
       await table
         .mergeInsert("id")
         .whenMatchedUpdateAll()
@@ -636,15 +845,32 @@ export async function searchWorldBookEntries(
   const table = await getTableIfExists();
   if (!table) return [];
   const [vector] = await cachedEmbedTexts(userId, [text]);
-  const rows = await table
-    .query()
-    .nearestTo(vector)
-    .where(
-      `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND owner_id = ${sqlValue(worldBookId)}`
-    )
-    .select(["source_id", "content", "_distance"])
-    .limit(Math.max(1, Math.min(limit, 50)))
-    .toArray();
+  const filter = `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND owner_id = ${sqlValue(worldBookId)}`;
+  const effectiveLimit = Math.max(1, Math.min(limit, 50));
+
+  // Hybrid search: combine vector similarity with BM25 keyword matching via RRF
+  let rows: any[];
+  try {
+    const reranker = await rerankers.RRFReranker.create();
+    rows = await table
+      .query()
+      .nearestTo(vector)
+      .fullTextSearch(text)
+      .where(filter)
+      .rerank(reranker)
+      .select(["source_id", "content", "_distance", "_relevance_score"])
+      .limit(effectiveLimit)
+      .toArray();
+  } catch {
+    // FTS index may not exist yet — fall back to vector-only
+    rows = await table
+      .query()
+      .nearestTo(vector)
+      .where(filter)
+      .select(["source_id", "content", "_distance"])
+      .limit(effectiveLimit)
+      .toArray();
+  }
 
   return rows.map((row: any) => ({
     entry_id: String(row.source_id),
@@ -709,6 +935,8 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   }
 
   vectorIndexReady = false;
+  scalarIndexReady = false;
+  ftsIndexReady = false;
 }
 
 /**
@@ -730,6 +958,8 @@ export async function forceResetLanceDB(): Promise<{ deleted: boolean; path: str
   // 3. Reset connection state so next access creates a fresh connection
   connPromise = null;
   vectorIndexReady = false;
+  scalarIndexReady = false;
+  ftsIndexReady = false;
 
   // 4. Delete the entire LanceDB directory from disk
   const deleted = existsSync(LANCEDB_PATH);
@@ -803,6 +1033,8 @@ export async function syncChatChunkEmbedding(
 
   const table = await getOrCreateTable([row]);
   await ensureVectorIndex(table);
+  await ensureScalarIndexes(table);
+  await ensureFtsIndex(table);
   await table
     .mergeInsert("id")
     .whenMatchedUpdateAll()
@@ -893,6 +1125,8 @@ export async function reindexChatMessages(
 
       const table = await getOrCreateTable(rows);
       await ensureVectorIndex(table);
+      await ensureScalarIndexes(table);
+      await ensureFtsIndex(table);
       await table
         .mergeInsert("id")
         .whenMatchedUpdateAll()
@@ -915,53 +1149,170 @@ export async function searchChatChunks(
   chatId: string,
   vector: number[],
   excludeIds: Set<string>,
-  limit = 8
+  limit = 8,
+  queryText?: string,
+  hybridWeightMode?: "keyword_first" | "balanced" | "vector_first",
 ): Promise<Array<{ chunk_id: string; score: number; content: string; metadata: any }>> {
   const table = await getTableIfExists();
   if (!table) return [];
 
-  const rows = await table
-    .query()
-    .nearestTo(vector)
-    .where(`user_id = ${sqlValue(userId)} AND source_type = 'chat_chunk' AND owner_id = ${sqlValue(chatId)}`)
-    .select(["source_id", "content", "_distance", "metadata_json"])
-    .limit(Math.max(1, Math.min(limit + 50, 100))) // Fetch more to account for exclusion
-    .toArray();
+  const filter = `user_id = ${sqlValue(userId)} AND source_type = 'chat_chunk' AND owner_id = ${sqlValue(chatId)}`;
+  const fetchLimit = Math.max(1, Math.min(limit + 50, 150));
 
-  const results: Array<{ chunk_id: string; score: number; content: string; metadata: any }> = [];
-  
+  // Try hybrid search when query text is available
+  let rows: any[];
+  if (queryText?.trim() && hybridWeightMode !== "vector_first") {
+    try {
+      const reranker = await rerankers.RRFReranker.create();
+      rows = await table
+        .query()
+        .nearestTo(vector)
+        .fullTextSearch(queryText.trim())
+        .where(filter)
+        .rerank(reranker)
+        .select(["source_id", "content", "_distance", "_relevance_score", "metadata_json", "vector"])
+        .limit(fetchLimit)
+        .toArray();
+    } catch {
+      // FTS index may not exist yet — fall back to vector-only
+      rows = await table
+        .query()
+        .nearestTo(vector)
+        .where(filter)
+        .select(["source_id", "content", "_distance", "metadata_json", "vector"])
+        .limit(fetchLimit)
+        .toArray();
+    }
+  } else {
+    rows = await table
+      .query()
+      .nearestTo(vector)
+      .where(filter)
+      .select(["source_id", "content", "_distance", "metadata_json", "vector"])
+      .limit(fetchLimit)
+      .toArray();
+  }
+
+  // Parse and exclude
+  type ParsedRow = { chunkId: string; score: number; content: string; metadata: any; rowVector: number[] | null };
+  const candidates: ParsedRow[] = [];
+
   for (const row of rows) {
-    if (results.length >= limit) break;
     const chunkId = String(row.source_id);
     let meta: any = {};
     try {
       meta = JSON.parse(row.metadata_json || "{}");
-    } catch (err) {
-      console.warn(`[embeddings] Failed to parse metadata for chunk ${chunkId}:`, err);
+    } catch {
       // Treat as empty metadata
     }
 
-    // Check if this chunk contains messages that are in our exclude list
+    // Exclusion check
     let shouldExclude = false;
     if (meta.messageIds && Array.isArray(meta.messageIds)) {
       if (meta.messageIds.some((id: string) => excludeIds.has(id))) {
         shouldExclude = true;
       }
     } else if (excludeIds.has(chunkId)) {
-        shouldExclude = true;
+      shouldExclude = true;
     }
-
     if (shouldExclude) continue;
 
-    results.push({
-      chunk_id: chunkId,
+    // Extract vector for MMR (may be Float32Array from Lance)
+    let rowVector: number[] | null = null;
+    if (row.vector) {
+      rowVector = row.vector instanceof Float32Array ? Array.from(row.vector) : row.vector;
+    }
+
+    candidates.push({
+      chunkId,
       score: typeof row._distance === "number" ? row._distance : 0,
       content: String(row.content || ""),
-      metadata: meta
+      metadata: meta,
+      rowVector,
     });
   }
 
-  return results;
+  if (candidates.length === 0) return [];
+
+  // Apply MMR diversity selection
+  const selected = mmrSelect(candidates, vector, limit, 0.7);
+
+  return selected.map(c => ({
+    chunk_id: c.chunkId,
+    score: c.score,
+    content: c.content,
+    metadata: c.metadata,
+  }));
+}
+
+/**
+ * Maximal Marginal Relevance selection.
+ * Iteratively picks chunks that are relevant to the query but diverse from
+ * already-selected chunks. lambda controls the trade-off:
+ *   1.0 = pure relevance (no diversity), 0.0 = pure diversity.
+ *   0.7 is a good default for chat memory.
+ */
+function mmrSelect(
+  candidates: Array<{ chunkId: string; score: number; content: string; metadata: any; rowVector: number[] | null }>,
+  queryVector: number[],
+  k: number,
+  lambda = 0.7,
+): typeof candidates {
+  // If we don't have vectors for diversity, just return top-K by score
+  const withVectors = candidates.filter(c => c.rowVector !== null);
+  if (withVectors.length <= k || withVectors.length === 0) {
+    return candidates.slice(0, k);
+  }
+
+  const selected: typeof candidates = [];
+  const remaining = new Set(withVectors.map((_, i) => i));
+
+  for (let i = 0; i < k && remaining.size > 0; i++) {
+    let bestIdx = -1;
+    let bestMmr = -Infinity;
+
+    for (const idx of remaining) {
+      const candidate = withVectors[idx];
+      // Relevance: higher similarity to query = better (invert cosine distance)
+      const relevance = 1 - candidate.score;
+
+      // Diversity: max similarity to any already-selected chunk
+      let maxSimToSelected = 0;
+      if (selected.length > 0) {
+        for (const sel of selected) {
+          if (sel.rowVector && candidate.rowVector) {
+            const sim = cosineSimilarity(candidate.rowVector, sel.rowVector);
+            if (sim > maxSimToSelected) maxSimToSelected = sim;
+          }
+        }
+      }
+
+      const mmrScore = lambda * relevance - (1 - lambda) * maxSimToSelected;
+      if (mmrScore > bestMmr) {
+        bestMmr = mmrScore;
+        bestIdx = idx;
+      }
+    }
+
+    if (bestIdx >= 0) {
+      selected.push(withVectors[bestIdx]);
+      remaining.delete(bestIdx);
+    }
+  }
+
+  return selected;
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
 }
 
 /**
@@ -995,6 +1346,8 @@ export async function upsertChunkVector(
 
   const table = await getOrCreateTable([row]);
   await ensureVectorIndex(table);
+  await ensureScalarIndexes(table);
+  await ensureFtsIndex(table);
   await table
     .mergeInsert("id")
     .whenMatchedUpdateAll()

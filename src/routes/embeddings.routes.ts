@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import { getDb } from "../db/connection";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as worldBooksSvc from "../services/world-books.service";
+import * as chatsSvc from "../services/chats.service";
 
 const app = new Hono();
 
@@ -81,6 +83,21 @@ app.post("/world-books/:bookId/reindex", async (c) => {
   return c.json({ success: true, ...result, total: entries.length });
 });
 
+// --- Chat Memory Settings ---
+
+app.get("/chat-memory-settings", async (c) => {
+  const userId = c.get("userId");
+  const settings = embeddingsSvc.loadChatMemorySettings(userId);
+  return c.json(settings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS);
+});
+
+app.put("/chat-memory-settings", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  const updated = embeddingsSvc.saveChatMemorySettings(userId, body);
+  return c.json(updated);
+});
+
 app.post("/force-reset", async (c) => {
   try {
     const result = await embeddingsSvc.forceResetLanceDB();
@@ -97,6 +114,51 @@ app.post("/optimize", async (c) => {
   } catch (err: any) {
     return c.json({ error: err.message || "Optimize failed" }, 500);
   }
+});
+
+app.post("/chats/:chatId/recompile", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const chat = chatsSvc.getChat(userId, chatId);
+  if (!chat) return c.json({ error: "Chat not found" }, 404);
+
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_chat_messages) {
+    return c.json({ error: "Chat memory vectorization is not enabled" }, 400);
+  }
+
+  // 1. Rebuild chunks in SQLite (creates chunk rows, queues async vectorization)
+  await chatsSvc.rebuildChatChunks(userId, chatId);
+
+  // 2. Gather the freshly created chunks and embed them synchronously
+  const chunks = chatsSvc.getChatChunks(userId, chatId);
+  if (chunks.length > 0) {
+    await embeddingsSvc.reindexChatMessages(
+      userId,
+      chatId,
+      chunks.map(ch => ({
+        chunkId: ch.id,
+        content: ch.content,
+        metadata: { chunkId: ch.id, messageIds: ch.message_ids },
+      }))
+    );
+
+    // Mark all chunks as vectorized in SQLite
+    const now = Math.floor(Date.now() / 1000);
+    const db = getDb();
+    const stmt = db.query("UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?");
+    for (const ch of chunks) {
+      stmt.run(now, cfg.model, ch.id);
+    }
+  }
+
+  const status = chatsSvc.getVectorizationStatus(userId, chatId);
+  return c.json({
+    success: true,
+    totalChunks: status.totalChunks,
+    vectorizedChunks: status.vectorizedChunks,
+    pendingChunks: status.pendingChunks,
+  });
 });
 
 app.post("/world-books/:bookId/search", async (c) => {

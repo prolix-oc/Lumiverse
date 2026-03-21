@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit } from 'lucide-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
+import { embeddingsApi } from '@/api/embeddings'
 import { personasApi } from '@/api/personas'
 import { imagesApi } from '@/api/images'
 import { toast } from '@/lib/toast'
@@ -703,6 +704,25 @@ export default function InputArea({ chatId }: InputAreaProps) {
                 <span className={styles.personaMain}>
                   <StickyNote size={14} />
                   <span>Author's Note</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={styles.popRowBtn}
+                onClick={async () => {
+                  setOpenPopover(null)
+                  try {
+                    toast.info('Recompiling chat memories...')
+                    const res = await embeddingsApi.recompileChatMemory(chatId)
+                    toast.success(`Recompiled: ${res.totalChunks} chunk${res.totalChunks !== 1 ? 's' : ''}, ${res.pendingChunks} pending vectorization`)
+                  } catch (err: any) {
+                    toast.error(err?.message || 'Failed to recompile memories')
+                  }
+                }}
+              >
+                <span className={styles.personaMain}>
+                  <BrainCircuit size={14} />
+                  <span>Recompile Memories</span>
                 </span>
               </button>
             </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { watch, existsSync, type FSWatcher } from "fs";
 import { join } from "path";
 import { PROJECT_ROOT, SELF_RESTART_DEBOUNCE_MS } from "../lib/constants.js";
@@ -20,32 +20,15 @@ export function useSelfWatcher(
   const watchersRef = useRef<FSWatcher[]>([]);
   const pendingRef = useRef(false);
 
-  const doRestart = useCallback(async () => {
-    addLog("Restarting runner process...", "system");
-
-    // Stop file watchers
-    for (const w of watchersRef.current) w.close();
-    watchersRef.current = [];
-
-    // Let the caller clean up (stop server, etc.)
-    await onBeforeRestart();
-
-    // Restore terminal
-    leaveAltScreen();
-
-    console.log("Runner restarting due to source change...");
-
-    // Re-exec ourselves with the same arguments
-    const child = Bun.spawn([process.execPath, ...process.argv.slice(1)], {
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-      cwd: PROJECT_ROOT,
-    });
-
-    const code = await child.exited;
-    process.exit(code);
-  }, [addLog, onBeforeRestart, leaveAltScreen]);
+  // Store callbacks in refs so the effect doesn't depend on them.
+  // This prevents watchers from being torn down and recreated on every
+  // render, which was causing EMFILE (too many open files) over time.
+  const addLogRef = useRef(addLog);
+  const onBeforeRestartRef = useRef(onBeforeRestart);
+  const leaveAltScreenRef = useRef(leaveAltScreen);
+  addLogRef.current = addLog;
+  onBeforeRestartRef.current = onBeforeRestart;
+  leaveAltScreenRef.current = leaveAltScreen;
 
   useEffect(() => {
     const filesToWatch = [
@@ -56,11 +39,38 @@ export function useSelfWatcher(
     // Also watch the entire runner directory
     const dirToWatch = join(PROJECT_ROOT, "scripts/runner");
 
+    const doRestart = async () => {
+      addLogRef.current("Restarting runner process...", "system");
+
+      // Stop file watchers
+      for (const w of watchersRef.current) w.close();
+      watchersRef.current = [];
+
+      // Let the caller clean up (stop server, etc.)
+      await onBeforeRestartRef.current();
+
+      // Restore terminal
+      leaveAltScreenRef.current();
+
+      console.log("Runner restarting due to source change...");
+
+      // Re-exec ourselves with the same arguments
+      const child = Bun.spawn([process.execPath, ...process.argv.slice(1)], {
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+        cwd: PROJECT_ROOT,
+      });
+
+      const code = await child.exited;
+      process.exit(code);
+    };
+
     const scheduleRestart = (path: string) => {
       if (pendingRef.current) return;
       pendingRef.current = true;
       const filename = path.split("/").pop() || path;
-      addLog(`Runner source changed: ${filename}`, "system");
+      addLogRef.current(`Runner source changed: ${filename}`, "system");
       setTimeout(() => doRestart(), SELF_RESTART_DEBOUNCE_MS);
     };
 
@@ -96,5 +106,5 @@ export function useSelfWatcher(
       for (const w of watchersRef.current) w.close();
       watchersRef.current = [];
     };
-  }, [addLog, doRestart]);
+  }, []); // Run once — callbacks accessed via refs
 }

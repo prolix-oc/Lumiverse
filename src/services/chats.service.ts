@@ -8,6 +8,7 @@ import type { BulkMessageInput } from "../types/migrate";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
+import { sanitizeForVectorization } from "../utils/content-sanitizer";
 
 // --- Chat helpers ---
 
@@ -828,18 +829,51 @@ export function getChatChunks(userId: string, chatId: string): ChatChunk[] {
  */
 async function shouldStartNewChunk(lastChunk: ChatChunk, newMessage: Message, userId: string): Promise<boolean> {
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  const params = embeddingsSvc.getChatMemoryParams(cfg.chat_memory_mode);
+  const chatMemSettings = embeddingsSvc.resolveEffectiveChatMemorySettings(
+    embeddingsSvc.loadChatMemorySettings(userId),
+    cfg,
+  );
 
-  const newMessageTokens = estimateTokens(`[${newMessage.name}]: ${newMessage.content}`);
-  const wouldExceedTarget = lastChunk.token_count + newMessageTokens > params.chunkTargetTokens;
+  const newMessageTokens = estimateTokens(`[${newMessage.is_user ? "USER" : "CHARACTER"} | ${newMessage.name}]: ${newMessage.content}`);
+  const wouldExceedTarget = lastChunk.token_count + newMessageTokens > chatMemSettings.chunkTargetTokens;
 
   const lastMessageIds = lastChunk.message_ids;
   const lastMessages = lastMessageIds.map(id => getMessage(userId, id)).filter(Boolean) as Message[];
-  const hasAssistantInChunk = lastMessages.some(m => !m.is_user);
-  const isNewUserMessage = newMessage.is_user;
-  const isTurnBoundary = isNewUserMessage && hasAssistantInChunk;
 
-  return wouldExceedTarget && isTurnBoundary;
+  // Role boundary: always split when switching between user and character
+  if (lastMessages.length > 0) {
+    const lastIsUser = lastMessages[0].is_user;
+    if (lastIsUser !== newMessage.is_user) return true;
+  }
+
+  // Token target: split same-role chunks when exceeding target
+  if (wouldExceedTarget) return true;
+
+  // Scene break detection
+  if (chatMemSettings.splitOnSceneBreaks) {
+    const trimmed = newMessage.content.trimStart();
+    if (/^(---|===|\*\*\*|<scene_break\s*\/?>)/i.test(trimmed)) {
+      return true;
+    }
+  }
+
+  // Time gap detection
+  if (chatMemSettings.splitOnTimeGapMinutes > 0 && lastMessages.length > 0) {
+    const lastMsg = lastMessages[lastMessages.length - 1];
+    if (lastMsg.send_date && newMessage.send_date) {
+      const gapMs = Math.abs(newMessage.send_date - lastMsg.send_date);
+      if (gapMs > chatMemSettings.splitOnTimeGapMinutes * 60 * 1000) {
+        return true;
+      }
+    }
+  }
+
+  // Max messages per chunk
+  if (chatMemSettings.maxMessagesPerChunk > 0 && lastChunk.message_count >= chatMemSettings.maxMessagesPerChunk) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -848,7 +882,9 @@ async function shouldStartNewChunk(lastChunk: ChatChunk, newMessage: Message, us
 function createChatChunk(chatId: string, messages: Message[]): ChatChunk {
   const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
-  const content = messages.map(m => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n")
+  const content = messages.map(m =>
+    `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+  ).join("\n");
   const tokenCount = estimateTokens(content);
   const messageIds = messages.map(m => m.id);
 
@@ -885,7 +921,7 @@ function appendToChunk(chunkId: string, message: Message): void {
   const messageIds = JSON.parse(chunk.message_ids);
   messageIds.push(message.id);
 
-  const newContent = chunk.content + `\n[${message.name}]: ${stripReasoningTags(message.content)}`;
+  const newContent = chunk.content + `\n[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${sanitizeForVectorization(message.content)}`;
   const newTokenCount = estimateTokens(newContent);
   const now = Math.floor(Date.now() / 1000);
 
@@ -968,19 +1004,57 @@ export async function rebuildChatChunks(userId: string, chatId: string): Promise
 
   getDb().query("DELETE FROM chat_chunks WHERE chat_id = ?").run(chatId);
 
-  const params = embeddingsSvc.getChatMemoryParams(cfg.chat_memory_mode);
-  const targetTokens = params.chunkTargetTokens;
+  const chatMemSettings = embeddingsSvc.resolveEffectiveChatMemorySettings(
+    embeddingsSvc.loadChatMemorySettings(userId),
+    cfg,
+  );
+  const targetTokens = chatMemSettings.chunkTargetTokens;
 
   let currentChunk: Message[] = [];
   let currentTokens = 0;
 
   for (const msg of messages) {
-    const strippedContent = stripReasoningTags(msg.content);
-    const msgTokens = estimateTokens(`[${msg.name}]: ${strippedContent}`);
-    const isUserAfterAssistant = msg.is_user && currentChunk.some(m => !m.is_user);
+    const sanitizedContent = sanitizeForVectorization(msg.content);
+    const msgTokens = estimateTokens(`[${msg.is_user ? "USER" : "CHARACTER"} | ${msg.name}]: ${sanitizedContent}`);
     const wouldExceedTarget = currentTokens + msgTokens > targetTokens;
 
-    if (currentChunk.length > 0 && isUserAfterAssistant && wouldExceedTarget) {
+    let forceNewChunk = false;
+
+    // Role boundary: split when switching between user and character messages
+    if (currentChunk.length > 0 && currentChunk[0].is_user !== msg.is_user) {
+      forceNewChunk = true;
+    }
+
+    // Token target: split when chunk would exceed target (same-role consecutive messages)
+    if (currentChunk.length > 0 && wouldExceedTarget) {
+      forceNewChunk = true;
+    }
+
+    // Scene break detection
+    if (chatMemSettings.splitOnSceneBreaks && currentChunk.length > 0) {
+      const trimmed = msg.content.trimStart();
+      if (/^(---|===|\*\*\*|<scene_break\s*\/?>)/i.test(trimmed)) {
+        forceNewChunk = true;
+      }
+    }
+
+    // Time gap detection
+    if (chatMemSettings.splitOnTimeGapMinutes > 0 && currentChunk.length > 0) {
+      const lastMsg = currentChunk[currentChunk.length - 1];
+      if (lastMsg.send_date && msg.send_date) {
+        const gapMs = Math.abs(msg.send_date - lastMsg.send_date);
+        if (gapMs > chatMemSettings.splitOnTimeGapMinutes * 60 * 1000) {
+          forceNewChunk = true;
+        }
+      }
+    }
+
+    // Max messages per chunk
+    if (chatMemSettings.maxMessagesPerChunk > 0 && currentChunk.length >= chatMemSettings.maxMessagesPerChunk) {
+      forceNewChunk = true;
+    }
+
+    if (forceNewChunk) {
       const chunk = createChatChunk(chatId, currentChunk);
       vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
       currentChunk = [];

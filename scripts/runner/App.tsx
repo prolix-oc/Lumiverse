@@ -52,11 +52,7 @@ export function App({ isDev, leaveAltScreen }: AppProps): React.ReactElement {
   );
 
   // Self-watcher for runner source changes
-  const onBeforeRestart = useCallback(async () => {
-    await server.stop();
-  }, [server]);
-
-  useSelfWatcher(logBuffer.addLog, onBeforeRestart, leaveAltScreen);
+  useSelfWatcher(logBuffer.addLog, server.stop, leaveAltScreen);
 
   // --- Actions ---
   const shutdown = useCallback(async () => {

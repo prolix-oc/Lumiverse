@@ -74,6 +74,21 @@ export interface DryRunResponse {
     estimatedTokens: number
     recursionPassesUsed: number
   }
+  memoryStats?: {
+    enabled: boolean
+    chunksRetrieved: number
+    chunksAvailable: number
+    chunksPending: number
+    injectionMethod: 'macro' | 'fallback' | 'disabled'
+    retrievedChunks: Array<{
+      score: number
+      tokenEstimate: number
+      messageRange: [number, number]
+      preview: string
+    }>
+    queryPreview: string
+    settingsSource: 'global' | 'per_chat'
+  }
 }
 
 export interface BreakdownResponse {
