@@ -62,9 +62,6 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
   if (input.find_regex !== undefined && input.find_regex.length > MAX_PATTERN_LENGTH) {
     return "find_regex exceeds maximum length";
   }
-  if (input.replace_string !== undefined && input.replace_string.length > MAX_PATTERN_LENGTH) {
-    return "replace_string exceeds maximum length";
-  }
   if (input.flags !== undefined && !validateFlags(input.flags)) {
     return "Invalid flags — allowed: g, i, m, s, u";
   }

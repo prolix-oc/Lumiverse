@@ -3,6 +3,7 @@ import { useParams } from 'react-router'
 import { AnimatePresence } from 'motion/react'
 import { UserRound } from 'lucide-react'
 import { useStore } from '@/store'
+import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { imagesApi } from '@/api/images'
@@ -67,7 +68,11 @@ export default function ChatView() {
           const { characterPersonaBindings, personas: allPersonas, setActivePersona } = useStore.getState()
           const boundPersonaId = characterPersonaBindings[chat.character_id]
           if (boundPersonaId && allPersonas.some((p) => p.id === boundPersonaId)) {
+            const boundPersona = allPersonas.find((p) => p.id === boundPersonaId)
             setActivePersona(boundPersonaId)
+            if (boundPersona) {
+              toast.info(`Switched to persona: ${boundPersona.name}`)
+            }
           }
         }
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Fuse from 'fuse.js'
 import { personasApi } from '@/api/personas'
 import { useStore } from '@/store'
+import { toast } from '@/lib/toast'
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from '@/types/api'
 
 const SEARCH_DEBOUNCE_MS = 150
@@ -227,9 +228,18 @@ export function usePersonaBrowser() {
 
   const switchToPersona = useCallback(
     (id: string) => {
-      setActivePersona(activePersonaId === id ? null : id)
+      const deactivating = activePersonaId === id
+      setActivePersona(deactivating ? null : id)
+      if (deactivating) {
+        toast.info('Persona deactivated')
+      } else {
+        const persona = personas.find((p) => p.id === id)
+        if (persona) {
+          toast.info(`Switched to persona: ${persona.name}`)
+        }
+      }
     },
-    [activePersonaId, setActivePersona]
+    [activePersonaId, setActivePersona, personas]
   )
 
   const refresh = useCallback(async () => {

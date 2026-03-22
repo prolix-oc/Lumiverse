@@ -1,8 +1,10 @@
-import { inflateSync } from "zlib";
+import { inflateSync, inflateRawSync } from "zlib";
 import type { CreateCharacterInput } from "../types/character";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const ZIP_LOCAL_HEADER = 0x04034b50;
 const MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_CHARX_SIZE = 50 * 1024 * 1024; // 50 MB
 
 /**
  * Reads PNG chunks and extracts the text value for a given keyword.
@@ -81,6 +83,66 @@ function extractPngTextChunk(buffer: Buffer, keyword: string): string | null {
 
   return null;
 }
+
+// ── Minimal ZIP reader ──────────────────────────────────────────────────────
+
+interface ZipEntry {
+  filename: string;
+  compressedSize: number;
+  uncompressedSize: number;
+  compressionMethod: number; // 0 = stored, 8 = deflate
+  dataOffset: number;
+}
+
+/**
+ * Parses ZIP local file headers to build an entry list.
+ * Handles store (0) and deflate (8) compression methods.
+ */
+function parseZipEntries(buf: Buffer): ZipEntry[] {
+  const entries: ZipEntry[] = [];
+  let offset = 0;
+
+  while (offset + 30 <= buf.length) {
+    const sig = buf.readUInt32LE(offset);
+    if (sig !== ZIP_LOCAL_HEADER) break;
+
+    const compressionMethod = buf.readUInt16LE(offset + 8);
+    const compressedSize = buf.readUInt32LE(offset + 18);
+    const uncompressedSize = buf.readUInt32LE(offset + 22);
+    const filenameLen = buf.readUInt16LE(offset + 26);
+    const extraLen = buf.readUInt16LE(offset + 28);
+    const filename = buf.toString("utf-8", offset + 30, offset + 30 + filenameLen);
+    const dataOffset = offset + 30 + filenameLen + extraLen;
+
+    entries.push({ filename, compressedSize, uncompressedSize, compressionMethod, dataOffset });
+
+    // Advance past this entry's data
+    offset = dataOffset + compressedSize;
+  }
+
+  return entries;
+}
+
+/**
+ * Extracts the raw bytes of a ZIP entry.
+ */
+function readZipEntry(buf: Buffer, entry: ZipEntry): Buffer {
+  const raw = buf.subarray(entry.dataOffset, entry.dataOffset + entry.compressedSize);
+
+  if (entry.compressionMethod === 0) {
+    // Stored (uncompressed)
+    return raw;
+  } else if (entry.compressionMethod === 8) {
+    // Deflate
+    return inflateRawSync(raw, { maxOutputLength: MAX_DECOMPRESSED_SIZE });
+  }
+
+  throw new Error(`Unsupported ZIP compression method: ${entry.compressionMethod}`);
+}
+
+// ── Image type detection ────────────────────────────────────────────────────
+
+const IMAGE_EXTENSIONS = /\.(png|jpg|jpeg|gif|webp|avif|bmp|svg)$/i;
 
 /**
  * Maps raw character card data (V1/V2/V3 spec) to our CreateCharacterInput.
@@ -161,4 +223,89 @@ export function parseCardJson(json: unknown): CreateCharacterInput {
 
   // V1 flat format or plain CreateCharacterInput
   return mapCardToInput(obj);
+}
+
+export interface CharxResult {
+  card: CreateCharacterInput;
+  /** The avatar image file extracted from the archive, if found. */
+  avatarFile: File | null;
+}
+
+/**
+ * Extracts a character card and optional avatar from a .charx ZIP archive.
+ *
+ * Per the CCV3 spec, the ZIP must contain `card.json` at the root.
+ * Avatar images are searched in `assets/icon/images/` first, then any
+ * image file in the archive root or `assets/` tree.
+ */
+export async function extractCardFromCharx(file: File): Promise<CharxResult> {
+  const arrayBuf = await file.arrayBuffer();
+  if (arrayBuf.byteLength > MAX_CHARX_SIZE) {
+    throw new Error(`CHARX file too large (${(arrayBuf.byteLength / 1024 / 1024).toFixed(1)} MB, max ${MAX_CHARX_SIZE / 1024 / 1024} MB)`);
+  }
+
+  const buf = Buffer.from(arrayBuf);
+
+  // Validate ZIP signature
+  if (buf.length < 4 || buf.readUInt32LE(0) !== ZIP_LOCAL_HEADER) {
+    throw new Error("Not a valid CHARX file (invalid ZIP signature)");
+  }
+
+  const entries = parseZipEntries(buf);
+
+  // Find card.json at the root of the archive
+  const cardEntry = entries.find((e) => e.filename === "card.json");
+  if (!cardEntry) {
+    throw new Error("CHARX archive does not contain card.json at the root");
+  }
+
+  const cardBytes = readZipEntry(buf, cardEntry);
+  let json: any;
+  try {
+    json = JSON.parse(cardBytes.toString("utf-8"));
+  } catch {
+    throw new Error("Failed to parse card.json from CHARX archive");
+  }
+
+  const card = parseCardJson(json);
+
+  // Find the best avatar image:
+  // 1. assets/icon/images/* (spec-recommended location)
+  // 2. Any image at the root
+  // 3. Any image anywhere in assets/
+  let avatarEntry: ZipEntry | undefined;
+
+  // Priority 1: spec-recommended icon path
+  avatarEntry = entries.find(
+    (e) => e.filename.startsWith("assets/icon/images/") && IMAGE_EXTENSIONS.test(e.filename)
+  );
+
+  // Priority 2: image at root level
+  if (!avatarEntry) {
+    avatarEntry = entries.find(
+      (e) => !e.filename.includes("/") && IMAGE_EXTENSIONS.test(e.filename)
+    );
+  }
+
+  // Priority 3: any image in assets/
+  if (!avatarEntry) {
+    avatarEntry = entries.find(
+      (e) => e.filename.startsWith("assets/") && IMAGE_EXTENSIONS.test(e.filename)
+    );
+  }
+
+  let avatarFile: File | null = null;
+  if (avatarEntry) {
+    const imageBytes = readZipEntry(buf, avatarEntry);
+    const basename = avatarEntry.filename.split("/").pop() || "avatar.png";
+    const ext = basename.split(".").pop()?.toLowerCase() || "png";
+    const mimeMap: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+      gif: "image/gif", webp: "image/webp", avif: "image/avif",
+      bmp: "image/bmp", svg: "image/svg+xml",
+    };
+    avatarFile = new File([imageBytes], basename, { type: mimeMap[ext] || "image/png" });
+  }
+
+  return { card, avatarFile };
 }

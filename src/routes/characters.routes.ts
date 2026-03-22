@@ -188,13 +188,27 @@ async function fetchGenericCharacter(url: string, userId: string) {
     return svc.getCharacter(userId, character.id)!;
   }
 
+  if (contentType.includes("application/zip") || url.toLowerCase().endsWith(".charx")) {
+    const file = new File([buf], "import.charx", { type: "application/zip" });
+    const { card: cardInput, avatarFile } = await cardSvc.extractCardFromCharx(file);
+    const character = svc.createCharacter(userId, cardInput);
+
+    if (avatarFile) {
+      const image = await images.uploadImage(userId, avatarFile);
+      svc.setCharacterImage(userId, character.id, image.id);
+      svc.setCharacterAvatar(userId, character.id, image.filename);
+    }
+
+    return svc.getCharacter(userId, character.id)!;
+  }
+
   // Assume JSON
   const text = new TextDecoder().decode(buf);
   let json: any;
   try {
     json = JSON.parse(text);
   } catch {
-    throw new Error("URL did not return valid PNG or JSON character data");
+    throw new Error("URL did not return valid PNG, CHARX, or JSON character data");
   }
 
   const cardInput = cardSvc.parseCardJson(json);
@@ -393,11 +407,15 @@ app.post("/import-bulk", async (c) => {
       const filename = file.name || "unknown";
       try {
         let cardInput;
-        let isPng = false;
+        let avatarFile: File | null = null;
 
         if (file.type === "image/png" || filename.endsWith(".png")) {
           cardInput = await cardSvc.extractCardFromPng(file);
-          isPng = true;
+          avatarFile = file;
+        } else if (filename.endsWith(".charx")) {
+          const charxResult = await cardSvc.extractCardFromCharx(file);
+          cardInput = charxResult.card;
+          avatarFile = charxResult.avatarFile;
         } else {
           const text = await file.text();
           const json = JSON.parse(text);
@@ -431,8 +449,8 @@ app.post("/import-bulk", async (c) => {
           svc.setCharacterSourceFilename(userId, character.id, filename);
         }
 
-        if (isPng) {
-          const image = await images.uploadImage(userId, file);
+        if (avatarFile) {
+          const image = await images.uploadImage(userId, avatarFile);
           svc.setCharacterImage(userId, character.id, image.id);
           svc.setCharacterAvatar(userId, character.id, image.filename);
         }
@@ -489,6 +507,17 @@ app.post("/import", async (c) => {
         const image = await images.uploadImage(userId, file);
         svc.setCharacterImage(userId, character.id, image.id);
         svc.setCharacterAvatar(userId, character.id, image.filename);
+        const imported = svc.getCharacter(userId, character.id)!;
+        return c.json({ character: imported }, 201);
+      } else if (file.name?.endsWith(".charx")) {
+        // CHARX archive — ZIP with card.json + optional avatar
+        const { card: cardInput, avatarFile } = await cardSvc.extractCardFromCharx(file);
+        const character = svc.createCharacter(userId, cardInput);
+        if (avatarFile) {
+          const image = await images.uploadImage(userId, avatarFile);
+          svc.setCharacterImage(userId, character.id, image.id);
+          svc.setCharacterAvatar(userId, character.id, image.filename);
+        }
         const imported = svc.getCharacter(userId, character.id)!;
         return c.json({ character: imported }, 201);
       } else {
