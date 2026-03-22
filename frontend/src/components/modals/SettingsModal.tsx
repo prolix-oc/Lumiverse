@@ -1,0 +1,2032 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { motion } from 'motion/react'
+import { X, Settings, Shield, Palette, Sliders, MessageSquare, Users, PanelRight, Compass, Reply, HardDrive, RefreshCw, Puzzle, Database, Hash, Activity } from 'lucide-react'
+import { useStore } from '@/store'
+import { spindleApi } from '@/api/spindle'
+import { embeddingsApi } from '@/api/embeddings'
+import { PRESETS, DEFAULT_THEME } from '@/theme/presets'
+import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
+import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
+import ModeSelector from '@/components/panels/theme-panel/ModeSelector'
+import UserManagement from '@/components/settings/UserManagement'
+import TokenizerManager from '@/components/settings/TokenizerManager'
+import Diagnostics from '@/components/settings/Diagnostics'
+import styles from './SettingsModal.module.css'
+import clsx from 'clsx'
+
+interface SettingsModalProps {
+  onClose: () => void
+}
+
+const BASE_VIEWS = [
+  { id: 'general', icon: Settings, label: 'General' },
+  { id: 'display', icon: PanelRight, label: 'Display' },
+  { id: 'chat', icon: MessageSquare, label: 'Chat' },
+  { id: 'extensions', icon: Puzzle, label: 'Extensions' },
+  { id: 'guided', icon: Compass, label: 'Guided Gen' },
+  { id: 'quickReplies', icon: Reply, label: 'Quick Replies' },
+  { id: 'extensionPools', icon: HardDrive, label: 'Extension Pools' },
+  { id: 'embeddings', icon: Database, label: 'Embeddings' },
+  { id: 'appearance', icon: Palette, label: 'Appearance' },
+  { id: 'advanced', icon: Sliders, label: 'Advanced' },
+  { id: 'danger', icon: Shield, label: 'Danger Zone' },
+  { id: 'diagnostics', icon: Activity, label: 'Diagnostics' },
+] as const
+
+export default function SettingsModal({ onClose }: SettingsModalProps) {
+  const settingsActiveView = useStore((s) => s.settingsActiveView)
+  const user = useStore((s) => s.user)
+  const [activeView, setActiveView] = useState(settingsActiveView || 'general')
+
+  const isAdmin = user?.role === 'owner' || user?.role === 'admin'
+  const VIEWS = isAdmin
+    ? [...BASE_VIEWS, { id: 'tokenizers' as const, icon: Hash, label: 'Tokenizers' }, { id: 'users' as const, icon: Users, label: 'Users' }]
+    : [...BASE_VIEWS]
+
+  return createPortal(
+    <div className={styles.overlay} onClick={onClose}>
+      <motion.div
+        className={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        transition={{ duration: 0.15 }}
+      >
+        <div className={styles.header}>
+          <h2 className={styles.title}>Settings</h2>
+          <button type="button" className={styles.closeBtn} onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className={styles.body}>
+          <nav className={styles.sidebar}>
+            {VIEWS.map((view) => {
+              const Icon = view.icon
+              return (
+                <button
+                  key={view.id}
+                  type="button"
+                  className={clsx(styles.navBtn, activeView === view.id && styles.navBtnActive)}
+                  onClick={() => setActiveView(view.id)}
+                >
+                  <Icon size={14} />
+                  <span>{view.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+
+          <div className={styles.content}>
+            <SettingsView view={activeView} />
+            <div
+              className={clsx(
+                styles.extensionMountHost,
+                activeView !== 'extensions' && styles.extensionMountHostHidden
+              )}
+            >
+              <div className={styles.extensionMount} data-spindle-mount="settings_extensions" />
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>,
+    document.body
+  )
+}
+
+function SettingsView({ view }: { view: string }) {
+  switch (view) {
+    case 'general':
+      return <GeneralSettings />
+    case 'display':
+      return <DisplaySettings />
+    case 'chat':
+      return <ChatSettings />
+    case 'extensions':
+      return <ExtensionSettingsView />
+    case 'appearance':
+      return <AppearanceSettings />
+    case 'guided':
+      return <GuidedGenerationSettings />
+    case 'quickReplies':
+      return <QuickRepliesSettings />
+    case 'extensionPools':
+      return <ExtensionPoolSettings />
+    case 'advanced':
+      return <AdvancedSettings />
+    case 'embeddings':
+      return <EmbeddingsSettings />
+    case 'danger':
+      return <DangerZone />
+    case 'tokenizers':
+      return <TokenizerManager />
+    case 'users':
+      return <UserManagement />
+    case 'diagnostics':
+      return <Diagnostics />
+    default:
+      return <div className={styles.placeholder}>Select a settings category</div>
+  }
+}
+
+function createId(prefix: string) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function GeneralSettings() {
+  const enableLandingPage = useStore((s) => s.enableLandingPage)
+  const setSetting = useStore((s) => s.setSetting)
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>General</h3>
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={enableLandingPage}
+          onChange={(e) => setSetting('enableLandingPage', e.target.checked)}
+        />
+        <span>Enable landing page</span>
+      </label>
+    </div>
+  )
+}
+
+function DisplaySettings() {
+  const drawerSettings = useStore((s) => s.drawerSettings)
+  const modalWidthMode = useStore((s) => s.modalWidthMode)
+  const modalMaxWidth = useStore((s) => s.modalMaxWidth)
+  const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
+  const charactersPerPage = useStore((s) => s.charactersPerPage)
+  const personasPerPage = useStore((s) => s.personasPerPage)
+  const toastPosition = useStore((s) => s.toastPosition)
+  const setSetting = useStore((s) => s.setSetting)
+
+  const updateDrawer = (patch: Partial<DrawerSettings>) => {
+    setSetting('drawerSettings', { ...drawerSettings, ...patch })
+  }
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>Modal Width</h3>
+      <p className={styles.helperText}>
+        Constrain the maximum width of all modal dialogs. Affects settings, editors, and other popover panels.
+      </p>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>MODAL WIDTH</label>
+        <div className={styles.segmented}>
+          {(['full', 'comfortable', 'compact', 'custom'] as const).map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className={clsx(styles.segmentedBtn, modalWidthMode === preset && styles.segmentedBtnActive)}
+              onClick={() => setSetting('modalWidthMode', preset)}
+            >
+              {preset === 'full' ? 'Full' : preset === 'comfortable' ? 'Comfortable' : preset === 'compact' ? 'Compact' : 'Custom'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {modalWidthMode === 'custom' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>MAX WIDTH (px)</label>
+          <div className={styles.rangeRow}>
+            <input
+              type="range"
+              className={styles.rangeSlider}
+              min={340}
+              max={1400}
+              step={10}
+              value={modalMaxWidth}
+              onChange={(e) => setSetting('modalMaxWidth', parseInt(e.target.value, 10))}
+            />
+            <span className={styles.rangeValue}>{modalMaxWidth}px</span>
+          </div>
+        </div>
+      )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Drawer</h3>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>DRAWER SIDE</label>
+          <div className={styles.segmented}>
+            <button
+              type="button"
+              className={clsx(styles.segmentedBtn, drawerSettings.side === 'left' && styles.segmentedBtnActive)}
+              onClick={() => updateDrawer({ side: 'left' })}
+            >
+              Left
+            </button>
+            <button
+              type="button"
+              className={clsx(styles.segmentedBtn, drawerSettings.side === 'right' && styles.segmentedBtnActive)}
+              onClick={() => updateDrawer({ side: 'right' })}
+            >
+              Right
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>TAB POSITION</label>
+          <div className={styles.rangeRow}>
+            <input
+              type="range"
+              className={styles.rangeSlider}
+              min={0}
+              max={70}
+              value={drawerSettings.verticalPosition}
+              onChange={(e) => updateDrawer({ verticalPosition: parseInt(e.target.value, 10) })}
+            />
+            <span className={styles.rangeValue}>{drawerSettings.verticalPosition}%</span>
+          </div>
+        </div>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>TAB SIZE</label>
+        <div className={styles.segmented}>
+          <button
+            type="button"
+            className={clsx(styles.segmentedBtn, drawerSettings.tabSize === 'large' && styles.segmentedBtnActive)}
+            onClick={() => updateDrawer({ tabSize: 'large' })}
+          >
+            Large
+          </button>
+          <button
+            type="button"
+            className={clsx(styles.segmentedBtn, drawerSettings.tabSize === 'compact' && styles.segmentedBtnActive)}
+            onClick={() => updateDrawer({ tabSize: 'compact' })}
+          >
+            Compact
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>PANEL WIDTH</label>
+        <div className={styles.segmented}>
+          <button
+            type="button"
+            className={clsx(styles.segmentedBtn, drawerSettings.panelWidthMode === 'default' && styles.segmentedBtnActive)}
+            onClick={() => updateDrawer({ panelWidthMode: 'default' })}
+          >
+            Default
+          </button>
+          <button
+            type="button"
+            className={clsx(styles.segmentedBtn, drawerSettings.panelWidthMode === 'stChat' && styles.segmentedBtnActive)}
+            onClick={() => updateDrawer({ panelWidthMode: 'stChat' })}
+          >
+            ST Chat
+          </button>
+          <button
+            type="button"
+            className={clsx(styles.segmentedBtn, drawerSettings.panelWidthMode === 'custom' && styles.segmentedBtnActive)}
+            onClick={() => updateDrawer({ panelWidthMode: 'custom' })}
+          >
+            Custom
+          </button>
+        </div>
+      </div>
+
+      {drawerSettings.panelWidthMode === 'custom' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>CUSTOM WIDTH (vw)</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={20}
+            max={80}
+            value={drawerSettings.customPanelWidth}
+            onChange={(e) => updateDrawer({ customPanelWidth: parseInt(e.target.value, 10) || 35 })}
+          />
+        </div>
+      )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Notifications</h3>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>TOAST POSITION</label>
+        <div className={styles.segmented}>
+          {([
+            ['top-left', 'TL'],
+            ['top', 'Top'],
+            ['top-right', 'TR'],
+            ['bottom-left', 'BL'],
+            ['bottom', 'Bottom'],
+            ['bottom-right', 'BR'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={clsx(styles.segmentedBtn, toastPosition === value && styles.segmentedBtnActive)}
+              onClick={() => setSetting('toastPosition', value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>Pagination</h3>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>LANDING PAGE CHATS PER BATCH</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={4}
+          max={100}
+          value={landingPageChatsDisplayed}
+          onChange={(e) => setSetting('landingPageChatsDisplayed', parseInt(e.target.value, 10) || 12)}
+        />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>CHARACTERS PER PAGE</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={12}
+          max={200}
+          value={charactersPerPage}
+          onChange={(e) => setSetting('charactersPerPage', parseInt(e.target.value, 10) || 50)}
+        />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>PERSONAS PER PAGE</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={6}
+          max={200}
+          value={personasPerPage}
+          onChange={(e) => setSetting('personasPerPage', parseInt(e.target.value, 10) || 24)}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ChatSettings() {
+  const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
+  const enterToSend = useStore((s) => s.chatSheldEnterToSend)
+  const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const portraitPanelSide = useStore((s) => s.portraitPanelSide)
+  const chatWidthMode = useStore((s) => s.chatWidthMode)
+  const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
+  const messagesPerPage = useStore((s) => s.messagesPerPage)
+  const regenFeedback = useStore((s) => s.regenFeedback)
+  const setSetting = useStore((s) => s.setSetting)
+  const isMac = navigator.platform.toUpperCase().includes('MAC')
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>Chat</h3>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Display mode</label>
+        <div className={styles.displayModeGrid}>
+          {/* ── Minimal card ── */}
+          <button
+            type="button"
+            className={clsx(styles.displayModeCard, displayMode === 'minimal' && styles.displayModeCardActive)}
+            onClick={() => setSetting('chatSheldDisplayMode', 'minimal')}
+          >
+            <div className={styles.previewMinimal}>
+              {/* Character message */}
+              <div className={styles.previewMinimalMsg}>
+                <div className={styles.previewAccentLeft} />
+                <div className={styles.previewMinimalAvatar} />
+                <div className={styles.previewMinimalBody}>
+                  <div className={styles.previewLine} style={{ width: '80%' }} />
+                  <div className={styles.previewLine} style={{ width: '55%' }} />
+                </div>
+              </div>
+              {/* User message */}
+              <div className={clsx(styles.previewMinimalMsg, styles.previewMinimalMsgUser)}>
+                <div className={styles.previewAccentRight} />
+                <div className={styles.previewMinimalBody}>
+                  <div className={styles.previewLine} style={{ width: '65%' }} />
+                </div>
+              </div>
+              {/* Character message */}
+              <div className={styles.previewMinimalMsg}>
+                <div className={styles.previewAccentLeft} />
+                <div className={styles.previewMinimalAvatar} />
+                <div className={styles.previewMinimalBody}>
+                  <div className={styles.previewLine} style={{ width: '90%' }} />
+                  <div className={styles.previewLine} style={{ width: '40%' }} />
+                </div>
+              </div>
+            </div>
+            <span className={clsx(styles.displayModeLabel, displayMode === 'minimal' && styles.displayModeLabelActive)}>
+              Minimal
+            </span>
+          </button>
+
+          {/* ── Bubble card ── */}
+          <button
+            type="button"
+            className={clsx(styles.displayModeCard, displayMode === 'bubble' && styles.displayModeCardActive)}
+            onClick={() => setSetting('chatSheldDisplayMode', 'bubble')}
+          >
+            <div className={styles.previewBubble}>
+              {/* Character bubble message */}
+              <div className={styles.previewBubbleMsg}>
+                <div className={styles.previewBubbleFade} />
+                <div className={styles.previewBubbleHeader}>
+                  <div className={styles.previewBubbleAvatar} />
+                  <div className={styles.previewBubbleMeta}>
+                    <div className={styles.previewBubbleName} />
+                    <div className={styles.previewBubblePill} />
+                  </div>
+                </div>
+                <div className={styles.previewBubbleContent}>
+                  <div className={styles.previewLine} style={{ width: '90%' }} />
+                  <div className={styles.previewLine} style={{ width: '70%' }} />
+                  <div className={styles.previewLine} style={{ width: '50%' }} />
+                </div>
+              </div>
+              {/* User bubble message */}
+              <div className={clsx(styles.previewBubbleMsg, styles.previewBubbleMsgUser)}>
+                <div className={clsx(styles.previewBubbleFade, styles.previewBubbleFadeUser)} />
+                <div className={styles.previewBubbleContent}>
+                  <div className={styles.previewLine} style={{ width: '75%' }} />
+                  <div className={styles.previewLine} style={{ width: '55%' }} />
+                </div>
+              </div>
+            </div>
+            <span className={clsx(styles.displayModeLabel, displayMode === 'bubble' && styles.displayModeLabelActive)}>
+              Bubble
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {displayMode === 'bubble' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>User message alignment</label>
+          <div className={styles.segmented}>
+            {(['left', 'right'] as const).map((align) => (
+              <button
+                key={align}
+                type="button"
+                className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
+                onClick={() => setSetting('bubbleUserAlign', align)}
+              >
+                {align === 'left' ? 'Left' : 'Right'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Chat Width</h3>
+      <p className={styles.helperText}>
+        Constrain the chat message area width. Useful for ultrawide monitors where full-width messages stretch too far.
+      </p>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>CONTENT WIDTH</label>
+        <div className={styles.segmented}>
+          {(['full', 'comfortable', 'compact', 'custom'] as const).map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className={clsx(styles.segmentedBtn, chatWidthMode === preset && styles.segmentedBtnActive)}
+              onClick={() => setSetting('chatWidthMode', preset)}
+            >
+              {preset === 'full' ? 'Full' : preset === 'comfortable' ? 'Comfortable' : preset === 'compact' ? 'Compact' : 'Custom'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {chatWidthMode === 'custom' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>MAX WIDTH (px)</label>
+          <div className={styles.rangeRow}>
+            <input
+              type="range"
+              className={styles.rangeSlider}
+              min={500}
+              max={2000}
+              step={10}
+              value={chatContentMaxWidth}
+              onChange={(e) => setSetting('chatContentMaxWidth', parseInt(e.target.value, 10))}
+            />
+            <span className={styles.rangeValue}>{chatContentMaxWidth}px</span>
+          </div>
+        </div>
+      )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Messages Per Page</h3>
+      <p className={styles.helperText}>
+        How many messages to load at a time. Lower values improve loading speed on slow connections.
+      </p>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>MESSAGES PER PAGE</label>
+        <div className={styles.segmented}>
+          {[25, 50, 100, 200].map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={clsx(styles.segmentedBtn, !![25, 50, 100, 200].includes(messagesPerPage ?? 50) && (messagesPerPage ?? 50) === value && styles.segmentedBtnActive)}
+              onClick={() => setSetting('messagesPerPage', value)}
+            >
+              {value}
+            </button>
+          ))}
+          <button
+            type="button"
+            className={clsx(styles.segmentedBtn, ![25, 50, 100, 200].includes(messagesPerPage ?? 50) && styles.segmentedBtnActive)}
+            onClick={() => { if ([25, 50, 100, 200].includes(messagesPerPage ?? 50)) setSetting('messagesPerPage', 75) }}
+          >
+            Custom
+          </button>
+        </div>
+      </div>
+
+      {![25, 50, 100, 200].includes(messagesPerPage ?? 50) && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>CUSTOM VALUE</label>
+          <div className={styles.rangeRow}>
+            <input
+              type="range"
+              className={styles.rangeSlider}
+              min={10}
+              max={500}
+              step={5}
+              value={messagesPerPage ?? 50}
+              onChange={(e) => setSetting('messagesPerPage', parseInt(e.target.value, 10))}
+            />
+            <span className={styles.rangeValue}>{messagesPerPage ?? 50}</span>
+          </div>
+        </div>
+      )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Input</h3>
+
+      <div>
+        <label className={styles.toggle}>
+          <input
+            type="checkbox"
+            checked={enterToSend}
+            onChange={(e) => setSetting('chatSheldEnterToSend', e.target.checked)}
+          />
+          <span>Press Enter to send</span>
+        </label>
+        <p className={styles.toggleHint}>
+          {enterToSend
+            ? 'Use Shift+Enter for new line'
+            : `Use ${isMac ? 'Cmd' : 'Ctrl'}+Enter to send`}
+        </p>
+      </div>
+
+      <div>
+        <label className={styles.toggle}>
+          <input
+            type="checkbox"
+            checked={saveDraftInput}
+            onChange={(e) => setSetting('saveDraftInput', e.target.checked)}
+          />
+          <span>Save draft input</span>
+        </label>
+        <p className={styles.toggleHint}>
+          Automatically saves your unsent message so it persists across page refreshes and chat switches
+        </p>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Portrait panel side</label>
+        <select
+          className={styles.select}
+          value={portraitPanelSide}
+          onChange={(e) => setSetting('portraitPanelSide', e.target.value as 'left' | 'right' | 'none')}
+        >
+          <option value="none">None</option>
+          <option value="left">Left</option>
+          <option value="right">Right</option>
+        </select>
+      </div>
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Regeneration Feedback</h3>
+      <p className={styles.helperText}>
+        When enabled, a feedback prompt appears before each regeneration or swipe, letting you guide the next response.
+      </p>
+
+      <div>
+        <label className={styles.toggle}>
+          <input
+            type="checkbox"
+            checked={regenFeedback.enabled}
+            onChange={(e) => setSetting('regenFeedback', { ...regenFeedback, enabled: e.target.checked })}
+          />
+          <span>Prompt for feedback on regenerate</span>
+        </label>
+      </div>
+
+      {regenFeedback.enabled && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Injection position</label>
+          <div className={styles.segmented}>
+            {([
+              { value: 'user', label: 'User Message' },
+              { value: 'system', label: 'System Prompt' },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={clsx(styles.segmentedBtn, regenFeedback.position === opt.value && styles.segmentedBtnActive)}
+                onClick={() => setSetting('regenFeedback', { ...regenFeedback, position: opt.value })}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className={styles.toggleHint}>
+            {regenFeedback.position === 'user'
+              ? 'Feedback is appended to the last user message as [OOC: ...]'
+              : 'Feedback is appended to the end of the system prompt as [OOC: ...]'}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExtensionSettingsView() {
+  const extensions = useStore((s) => s.extensions)
+  const frontendCount = extensions.filter((ext) => ext.has_frontend).length
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>Extension Settings</h3>
+      <p className={styles.placeholder}>
+        Installed extensions can expose configuration controls here.
+        {frontendCount > 0
+          ? ` ${frontendCount} extension${frontendCount === 1 ? '' : 's'} can render frontend settings.`
+          : ' No frontend-capable extensions are currently installed.'}
+      </p>
+    </div>
+  )
+}
+
+function GuidedGenerationSettings() {
+  const guides = useStore((s) => s.guidedGenerations)
+  const setSetting = useStore((s) => s.setSetting)
+  const [editingId, setEditingId] = useState<string | null>(null)
+
+  const addGuide = () => {
+    const next: GuidedGeneration = {
+      id: createId('guide'),
+      name: 'New Guide',
+      content: '',
+      position: 'system',
+      mode: 'persistent',
+      enabled: false,
+      color: null,
+    }
+    setSetting('guidedGenerations', [...guides, next])
+    setEditingId(next.id)
+  }
+
+  const updateGuide = (id: string, patch: Partial<GuidedGeneration>) => {
+    setSetting('guidedGenerations', guides.map((g) => (g.id === id ? { ...g, ...patch } : g)))
+  }
+
+  const removeGuide = (id: string) => {
+    setSetting('guidedGenerations', guides.filter((g) => g.id !== id))
+    if (editingId === id) setEditingId(null)
+  }
+
+  return (
+    <div className={styles.settingsSection}>
+      <div className={styles.inlineHeader}>
+        <h3 className={styles.sectionTitle}>Guided Generations</h3>
+        <button type="button" className={styles.smallBtn} onClick={addGuide}>New Guide</button>
+      </div>
+      <p className={styles.placeholder}>Attach reusable prompts as system content or user prefixes/suffixes.</p>
+
+      {guides.length === 0 && <p className={styles.placeholder}>No guides configured yet.</p>}
+
+      {guides.map((g) => {
+        const editing = editingId === g.id
+        return (
+          <div key={g.id} className={styles.card}>
+            <div className={styles.cardRow}>
+              <button type="button" className={styles.iconToggle} onClick={() => updateGuide(g.id, { enabled: !g.enabled })}>
+                {g.enabled ? 'ON' : 'OFF'}
+              </button>
+              <div className={styles.cardTitleWrap}>
+                <div className={styles.cardTitle}>{g.name || 'Untitled Guide'}</div>
+                <div className={styles.cardMeta}>{g.mode} • {g.position}</div>
+              </div>
+              <button type="button" className={styles.textBtn} onClick={() => setEditingId(editing ? null : g.id)}>{editing ? 'Done' : 'Edit'}</button>
+              <button type="button" className={clsx(styles.textBtn, styles.textBtnDanger)} onClick={() => removeGuide(g.id)}>Delete</button>
+            </div>
+
+            {editing && (
+              <div className={styles.editorGrid}>
+                <input
+                  className={styles.select}
+                  value={g.name}
+                  onChange={(e) => updateGuide(g.id, { name: e.target.value })}
+                  placeholder="Guide name"
+                />
+                <div className={styles.drawerRow}>
+                  <select className={styles.select} value={g.position} onChange={(e) => updateGuide(g.id, { position: e.target.value as GuidedGeneration['position'] })}>
+                    <option value="system">System</option>
+                    <option value="user_prefix">Before message</option>
+                    <option value="user_suffix">After message</option>
+                  </select>
+                  <select className={styles.select} value={g.mode} onChange={(e) => updateGuide(g.id, { mode: e.target.value as GuidedGeneration['mode'] })}>
+                    <option value="persistent">Persistent</option>
+                    <option value="oneshot">One-shot</option>
+                  </select>
+                </div>
+                <textarea
+                  className={styles.textarea}
+                  value={g.content}
+                  onChange={(e) => updateGuide(g.id, { content: e.target.value })}
+                  placeholder="Guide prompt content"
+                  rows={4}
+                />
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function QuickRepliesSettings() {
+  const sets = useStore((s) => s.quickReplySets)
+  const setSetting = useStore((s) => s.setSetting)
+  const [editingSetId, setEditingSetId] = useState<string | null>(null)
+
+  const addSet = () => {
+    const next: QuickReplySet = {
+      id: createId('qrs'),
+      name: 'New Set',
+      color: null,
+      enabled: true,
+      replies: [],
+    }
+    setSetting('quickReplySets', [...sets, next])
+    setEditingSetId(next.id)
+  }
+
+  const updateSet = (id: string, patch: Partial<QuickReplySet>) => {
+    setSetting('quickReplySets', sets.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+  }
+
+  const removeSet = (id: string) => {
+    setSetting('quickReplySets', sets.filter((s) => s.id !== id))
+    if (editingSetId === id) setEditingSetId(null)
+  }
+
+  const addReply = (setId: string) => {
+    setSetting('quickReplySets', sets.map((s) => {
+      if (s.id !== setId) return s
+      return {
+        ...s,
+        replies: [...s.replies, { id: createId('qr'), label: 'New Reply', message: '' }],
+      }
+    }))
+  }
+
+  const updateReply = (setId: string, replyId: string, patch: { label?: string; message?: string }) => {
+    setSetting('quickReplySets', sets.map((s) => {
+      if (s.id !== setId) return s
+      return {
+        ...s,
+        replies: s.replies.map((r) => (r.id === replyId ? { ...r, ...patch } : r)),
+      }
+    }))
+  }
+
+  const removeReply = (setId: string, replyId: string) => {
+    setSetting('quickReplySets', sets.map((s) => {
+      if (s.id !== setId) return s
+      return {
+        ...s,
+        replies: s.replies.filter((r) => r.id !== replyId),
+      }
+    }))
+  }
+
+  return (
+    <div className={styles.settingsSection}>
+      <div className={styles.inlineHeader}>
+        <h3 className={styles.sectionTitle}>Quick Replies</h3>
+        <button type="button" className={styles.smallBtn} onClick={addSet}>New Set</button>
+      </div>
+      <p className={styles.placeholder}>Build your own quick-reply sets for the input bar popover.</p>
+
+      {sets.length === 0 && <p className={styles.placeholder}>No quick reply sets configured yet.</p>}
+
+      {sets.map((set) => {
+        const editing = editingSetId === set.id
+        return (
+          <div key={set.id} className={styles.card}>
+            <div className={styles.cardRow}>
+              <button type="button" className={styles.iconToggle} onClick={() => updateSet(set.id, { enabled: !set.enabled })}>
+                {set.enabled ? 'ON' : 'OFF'}
+              </button>
+              <div className={styles.cardTitleWrap}>
+                <div className={styles.cardTitle}>{set.name || 'Untitled Set'}</div>
+                <div className={styles.cardMeta}>{set.replies.length} replies</div>
+              </div>
+              <button type="button" className={styles.textBtn} onClick={() => setEditingSetId(editing ? null : set.id)}>{editing ? 'Done' : 'Edit'}</button>
+              <button type="button" className={clsx(styles.textBtn, styles.textBtnDanger)} onClick={() => removeSet(set.id)}>Delete</button>
+            </div>
+
+            {editing && (
+              <div className={styles.editorGrid}>
+                <input
+                  className={styles.select}
+                  value={set.name}
+                  onChange={(e) => updateSet(set.id, { name: e.target.value })}
+                  placeholder="Set name"
+                />
+
+                {set.replies.map((reply) => (
+                  <div key={reply.id} className={styles.quickReplyEditor}>
+                    <input
+                      className={styles.select}
+                      value={reply.label}
+                      onChange={(e) => updateReply(set.id, reply.id, { label: e.target.value })}
+                      placeholder="Label"
+                    />
+                    <textarea
+                      className={styles.textarea}
+                      value={reply.message}
+                      onChange={(e) => updateReply(set.id, reply.id, { message: e.target.value })}
+                      placeholder="Message"
+                      rows={2}
+                    />
+                    <button type="button" className={clsx(styles.textBtn, styles.textBtnDanger)} onClick={() => removeReply(set.id, reply.id)}>Remove</button>
+                  </div>
+                ))}
+
+                <button type="button" className={styles.smallBtn} onClick={() => addReply(set.id)}>Add Reply</button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let next = value
+  let unit = units[0]
+  for (const candidate of units) {
+    unit = candidate
+    next /= 1024
+    if (next < 1024) break
+  }
+  return `${next.toFixed(next >= 100 ? 0 : 1)} ${unit}`
+}
+
+type PoolEditUnit = 'bytes' | 'mb' | 'gb'
+
+function unitDivisor(unit: PoolEditUnit): number {
+  if (unit === 'gb') return 1024 * 1024 * 1024
+  if (unit === 'mb') return 1024 * 1024
+  return 1
+}
+
+function convertUnitValue(value: string, from: PoolEditUnit, to: PoolEditUnit): string {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const bytes = n * unitDivisor(from)
+  const converted = bytes / unitDivisor(to)
+  return String(Math.max(1, Math.round(converted)))
+}
+
+function parseValueToBytes(value: string, unit: PoolEditUnit): number {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return NaN
+  return Math.floor(n * unitDivisor(unit))
+}
+
+function parseOverridesDetailed(text: string, unit: PoolEditUnit): {
+  values: Record<string, number>
+  invalidLines: Array<{ line: number; content: string; reason: string }>
+} {
+  const out: Record<string, number> = {}
+  const invalidLines: Array<{ line: number; content: string; reason: string }> = []
+
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const [identifier, raw] = trimmed.includes('=')
+      ? trimmed.split('=').map((s) => s.trim())
+      : trimmed.split(':').map((s) => s.trim())
+    if (!identifier || !raw) {
+      invalidLines.push({ line: i + 1, content: trimmed, reason: 'expected identifier=value' })
+      continue
+    }
+    if (!/^[a-z][a-z0-9_]*$/.test(identifier)) {
+      invalidLines.push({ line: i + 1, content: trimmed, reason: 'invalid identifier format' })
+      continue
+    }
+    const match = raw.match(/^(\d+(?:\.\d+)?)\s*(b|mb|gb)?$/i)
+    if (!match) {
+      invalidLines.push({ line: i + 1, content: trimmed, reason: 'invalid numeric/unit value' })
+      continue
+    }
+    const numeric = Number(match[1])
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      invalidLines.push({ line: i + 1, content: trimmed, reason: 'value must be positive' })
+      continue
+    }
+    const explicitUnit = (match[2] || '').toLowerCase() as '' | 'b' | 'mb' | 'gb'
+    const resolvedUnit: PoolEditUnit = explicitUnit === 'gb'
+      ? 'gb'
+      : explicitUnit === 'mb'
+        ? 'mb'
+        : explicitUnit === 'b'
+          ? 'bytes'
+          : unit
+    out[identifier] = Math.floor(numeric * unitDivisor(resolvedUnit))
+  }
+
+  return { values: out, invalidLines }
+}
+
+function parseOverrides(text: string, unit: PoolEditUnit): Record<string, number> {
+  return parseOverridesDetailed(text, unit).values
+}
+
+function ExtensionPoolSettings() {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const [overviewMe, setOverviewMe] = useState<Awaited<ReturnType<typeof spindleApi.getEphemeralOverviewMe>> | null>(null)
+  const [overviewAdmin, setOverviewAdmin] = useState<Awaited<ReturnType<typeof spindleApi.getEphemeralOverviewAdmin>> | null>(null)
+
+  const [globalMaxBytes, setGlobalMaxBytes] = useState('')
+  const [extensionDefaultMaxBytes, setExtensionDefaultMaxBytes] = useState('')
+  const [reservationTtlMs, setReservationTtlMs] = useState('')
+  const [overrideText, setOverrideText] = useState('')
+  const [poolUnit, setPoolUnit] = useState<PoolEditUnit>('mb')
+  const [password, setPassword] = useState('')
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [focusedInvalidLine, setFocusedInvalidLine] = useState<number | null>(null)
+  const overridesRef = useRef<HTMLTextAreaElement | null>(null)
+
+  const canEditPools = !!overviewMe?.canEditPools
+
+  const load = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true)
+    else setLoading(true)
+    setError(null)
+    try {
+      const me = await spindleApi.getEphemeralOverviewMe()
+      setOverviewMe(me)
+
+      if (me.canEditPools) {
+        const [admin, cfg] = await Promise.all([
+          spindleApi.getEphemeralOverviewAdmin(),
+          spindleApi.getEphemeralConfig(),
+        ])
+        setOverviewAdmin(admin)
+        setGlobalMaxBytes(String(Math.round(cfg.globalMaxBytes / unitDivisor(poolUnit))))
+        setExtensionDefaultMaxBytes(String(Math.round(cfg.extensionDefaultMaxBytes / unitDivisor(poolUnit))))
+        setReservationTtlMs(String(cfg.reservationTtlMs))
+        setOverrideText(
+          Object.entries(cfg.extensionMaxOverrides)
+            .map(([id, bytes]) => `${id}=${Math.round(bytes / unitDivisor(poolUnit))}`)
+            .join('\n')
+        )
+      } else {
+        setOverviewAdmin(null)
+      }
+    } catch (err: any) {
+      const msg = err?.body?.error || err?.message || 'Failed to load pool settings'
+      setError(msg)
+    } finally {
+      if (isRefresh) setRefreshing(false)
+      else setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const rows = useMemo(() => {
+    if (overviewAdmin) return overviewAdmin.extensions
+    return overviewMe?.extensions || []
+  }, [overviewAdmin, overviewMe])
+
+  const overrideValidation = useMemo(
+    () => parseOverridesDetailed(overrideText, poolUnit),
+    [overrideText, poolUnit]
+  )
+
+  const globalBytesValue = parseValueToBytes(globalMaxBytes, poolUnit)
+  const extensionDefaultBytesValue = parseValueToBytes(extensionDefaultMaxBytes, poolUnit)
+  const hasPoolThresholdWarning =
+    Number.isFinite(globalBytesValue) &&
+    Number.isFinite(extensionDefaultBytesValue) &&
+    extensionDefaultBytesValue > globalBytesValue
+
+  const approxFullDefaultExtensions =
+    Number.isFinite(globalBytesValue) && Number.isFinite(extensionDefaultBytesValue) && extensionDefaultBytesValue > 0
+      ? Math.max(0, Math.floor(globalBytesValue / extensionDefaultBytesValue))
+      : 0
+
+  const handleSave = async () => {
+    setSaveMessage(null)
+    setError(null)
+    const global = parseValueToBytes(globalMaxBytes, poolUnit)
+    const extDefault = parseValueToBytes(extensionDefaultMaxBytes, poolUnit)
+    const ttl = Number(reservationTtlMs)
+
+    if (!Number.isFinite(global) || global <= 0) {
+      setError('Global max bytes must be a positive number')
+      return
+    }
+    if (!Number.isFinite(extDefault) || extDefault <= 0) {
+      setError('Per-extension default max bytes must be a positive number')
+      return
+    }
+    if (!Number.isFinite(ttl) || ttl <= 0) {
+      setError('Reservation TTL must be a positive number')
+      return
+    }
+
+    if (!password.trim()) {
+      setError('Owner password is required to save pool changes')
+      return
+    }
+
+    setSaving(true)
+    try {
+      await spindleApi.setEphemeralConfig({
+        password: password.trim(),
+        globalMaxBytes: Math.floor(global),
+        extensionDefaultMaxBytes: Math.floor(extDefault),
+        reservationTtlMs: Math.floor(ttl),
+        extensionMaxOverrides: parseOverrides(overrideText, poolUnit),
+      })
+      setSaveMessage('Pool configuration updated')
+      setPassword('')
+      await load(true)
+    } catch (err: any) {
+      const msg = err?.body?.error || err?.message || 'Failed to save pool settings'
+      setError(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const global = overviewAdmin?.global || overviewMe?.global
+
+  const focusInvalidOverrideLine = (lineNumber: number) => {
+    const ta = overridesRef.current
+    if (!ta) return
+    const lines = ta.value.split('\n')
+    const clamped = Math.max(1, Math.min(lineNumber, lines.length))
+    let start = 0
+    for (let i = 0; i < clamped - 1; i += 1) {
+      start += lines[i].length + 1
+    }
+    const end = start + (lines[clamped - 1]?.length || 0)
+    ta.focus()
+    ta.setSelectionRange(start, end)
+
+    const total = lines.length || 1
+    const ratio = (clamped - 1) / Math.max(1, total - 1)
+    const target = ratio * Math.max(0, ta.scrollHeight - ta.clientHeight)
+    ta.scrollTop = target
+
+    setFocusedInvalidLine(clamped)
+    window.setTimeout(() => setFocusedInvalidLine((prev) => (prev === clamped ? null : prev)), 1200)
+  }
+
+  const changePoolUnit = (nextUnit: PoolEditUnit) => {
+    if (nextUnit === poolUnit) return
+    setGlobalMaxBytes((v) => convertUnitValue(v, poolUnit, nextUnit))
+    setExtensionDefaultMaxBytes((v) => convertUnitValue(v, poolUnit, nextUnit))
+    setOverrideText((text) => {
+      const parsed = parseOverrides(text, poolUnit)
+      return Object.entries(parsed)
+        .map(([id, bytes]) => `${id}=${Math.max(1, Math.round(bytes / unitDivisor(nextUnit)))}`)
+        .join('\n')
+    })
+    setPoolUnit(nextUnit)
+  }
+
+  return (
+    <div className={styles.settingsSection}>
+      <div className={styles.inlineHeader}>
+        <h3 className={styles.sectionTitle}>Extension Ephemeral Pools</h3>
+        <button
+          type="button"
+          className={styles.iconBtnCompact}
+          onClick={() => load(true)}
+          disabled={refreshing || loading}
+          title="Refresh pool data"
+          aria-label="Refresh pool data"
+        >
+          <RefreshCw size={13} className={refreshing ? styles.spin : undefined} />
+        </button>
+      </div>
+
+      {loading ? (
+        <p className={styles.placeholder}>Loading extension pool metrics...</p>
+      ) : (
+        <>
+          {error && <p className={styles.errorText}>{error}</p>}
+          {saveMessage && <p className={styles.successText}>{saveMessage}</p>}
+
+          {global && (
+            <div className={styles.poolSummaryGrid}>
+              <div className={styles.poolSummaryCard}>
+                <span className={styles.fieldLabel}>GLOBAL USED</span>
+                <strong>{formatBytes(global.usedBytes)}</strong>
+              </div>
+              <div className={styles.poolSummaryCard}>
+                <span className={styles.fieldLabel}>GLOBAL RESERVED</span>
+                <strong>{formatBytes(global.reservedBytes)}</strong>
+              </div>
+              <div className={styles.poolSummaryCard}>
+                <span className={styles.fieldLabel}>GLOBAL AVAILABLE</span>
+                <strong>{formatBytes(global.availableBytes)}</strong>
+              </div>
+            </div>
+          )}
+
+          <div className={styles.poolList}>
+            {rows.map((row) => {
+              const usedPct = row.extensionMaxBytes > 0
+                ? Math.min(100, ((row.usedBytes + row.reservedBytes) / row.extensionMaxBytes) * 100)
+                : 0
+
+              return (
+                <div key={row.extensionId} className={styles.poolRow}>
+                  <div className={styles.poolRowTop}>
+                    <div>
+                      <div className={styles.cardTitle}>{row.name} <span className={styles.poolIdentifier}>({row.identifier})</span></div>
+                      <div className={styles.cardMeta}>
+                        {row.enabled ? 'Enabled' : 'Disabled'} • {row.hasEphemeralPermission ? 'ephemeral permission granted' : 'no ephemeral permission'}
+                      </div>
+                    </div>
+                    <div className={styles.poolNumbers}>
+                      {formatBytes(row.usedBytes)} used + {formatBytes(row.reservedBytes)} reserved / {formatBytes(row.extensionMaxBytes)}
+                    </div>
+                  </div>
+                  <div className={styles.poolBar}>
+                    <div className={styles.poolBarFill} style={{ width: `${usedPct}%` }} />
+                  </div>
+                  <div className={styles.cardMeta}>Files: {row.fileCount} • Available: {formatBytes(row.availableBytes)}</div>
+                </div>
+              )
+            })}
+          </div>
+
+          {canEditPools && (
+            <div className={styles.adminPoolSection}>
+              <h4 className={styles.subsectionTitle}>Pool Configuration</h4>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>EDIT SIZE UNIT</label>
+                <div className={styles.segmented}>
+                  <button type="button" className={clsx(styles.segmentedBtn, poolUnit === 'bytes' && styles.segmentedBtnActive)} onClick={() => changePoolUnit('bytes')}>Bytes</button>
+                  <button type="button" className={clsx(styles.segmentedBtn, poolUnit === 'mb' && styles.segmentedBtnActive)} onClick={() => changePoolUnit('mb')}>MB</button>
+                  <button type="button" className={clsx(styles.segmentedBtn, poolUnit === 'gb' && styles.segmentedBtnActive)} onClick={() => changePoolUnit('gb')}>GB</button>
+                </div>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>GLOBAL MAX ({poolUnit.toUpperCase()})</label>
+                <input className={styles.numberInput} type="number" min={1} value={globalMaxBytes} onChange={(e) => setGlobalMaxBytes(e.target.value)} />
+                <div className={styles.helperText}>
+                  {Number.isFinite(globalBytesValue)
+                    ? `${globalBytesValue.toLocaleString()} bytes`
+                    : 'Enter a positive number'}
+                </div>
+                {Number.isFinite(globalBytesValue) && Number.isFinite(extensionDefaultBytesValue) && extensionDefaultBytesValue > 0 && (
+                  <div className={styles.helperText}>
+                    Fits roughly {approxFullDefaultExtensions} extension(s) at the default cap.
+                  </div>
+                )}
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>PER-EXTENSION DEFAULT MAX ({poolUnit.toUpperCase()})</label>
+                <input className={styles.numberInput} type="number" min={1} value={extensionDefaultMaxBytes} onChange={(e) => setExtensionDefaultMaxBytes(e.target.value)} />
+                <div className={styles.helperText}>
+                  {Number.isFinite(extensionDefaultBytesValue)
+                    ? `${extensionDefaultBytesValue.toLocaleString()} bytes`
+                    : 'Enter a positive number'}
+                </div>
+                {hasPoolThresholdWarning && (
+                  <div className={styles.warningText}>
+                    Warning: per-extension default exceeds global cap.
+                  </div>
+                )}
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>RESERVATION TTL (MS)</label>
+                <input className={styles.numberInput} type="number" min={1} value={reservationTtlMs} onChange={(e) => setReservationTtlMs(e.target.value)} />
+                <div className={styles.helperText}>
+                  {Number.isFinite(Number(reservationTtlMs)) && Number(reservationTtlMs) > 0
+                    ? `${Math.round(Number(reservationTtlMs) / 1000)} seconds`
+                    : 'Enter a positive number'}
+                </div>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>PER-EXTENSION OVERRIDES (identifier=value per line, optional suffix b/mb/gb)</label>
+                <textarea
+                  ref={overridesRef}
+                  className={styles.textarea}
+                  rows={5}
+                  value={overrideText}
+                  onChange={(e) => setOverrideText(e.target.value)}
+                  placeholder={`simtracker=${poolUnit === 'gb' ? '1' : poolUnit === 'mb' ? '100' : '104857600'}`}
+                />
+                {overrideValidation.invalidLines.length > 0 && (
+                  <div className={styles.warningText}>
+                    Invalid override lines:{' '}
+                    {overrideValidation.invalidLines.map((x, idx) => (
+                      <span key={`${x.line}-${x.reason}`}>
+                        {idx > 0 ? ', ' : ''}
+                        <button
+                          type="button"
+                          className={styles.inlineLinkBtn}
+                          onClick={() => focusInvalidOverrideLine(x.line)}
+                        >
+                          {x.line}
+                        </button>
+                        <span> ({x.reason})</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {focusedInvalidLine !== null && (
+                  <div className={styles.helperText}>Focused line {focusedInvalidLine} in overrides editor.</div>
+                )}
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>OWNER PASSWORD (required to save)</label>
+                <input
+                  className={styles.select}
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter owner password"
+                />
+              </div>
+              <button type="button" className={styles.smallBtn} onClick={handleSave} disabled={saving}>
+                {saving ? 'Saving...' : 'Save Pool Config'}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function AppearanceSettings() {
+  const theme = useStore((s) => s.theme) as import('@/types/theme').ThemeConfig | null
+  const setTheme = useStore((s) => s.setTheme)
+  const openDrawer = useStore((s) => s.openDrawer)
+  const closeSettings = useStore((s) => s.closeSettings)
+
+  const current = theme ?? DEFAULT_THEME
+  const presetName = PRESETS.find((p) => p.id === current.id)?.name ?? 'Custom'
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>Appearance</h3>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Mode</label>
+        <ModeSelector value={current.mode} onChange={(mode) => {
+          const next = { ...current, mode }
+          if (!next.characterAware) next.id = 'custom'
+          setTheme(next)
+        }} />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Preset</label>
+        <select
+          className={styles.select}
+          value={current.id}
+          onChange={(e) => {
+            const preset = PRESETS.find((p) => p.id === e.target.value)
+            if (preset) setTheme(preset)
+          }}
+        >
+          {PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+          {!PRESETS.some((p) => p.id === current.id) && (
+            <option value={current.id}>Custom</option>
+          )}
+        </select>
+      </div>
+
+      <div className={styles.field}>
+        <button
+          type="button"
+          className={styles.select}
+          style={{ cursor: 'pointer', textAlign: 'left' }}
+          onClick={() => {
+            closeSettings()
+            openDrawer('theme')
+          }}
+        >
+          Open Theme Panel
+        </button>
+      </div>
+
+      <div className={styles.field}>
+        <button
+          type="button"
+          className={styles.select}
+          style={{ cursor: 'pointer', textAlign: 'left' }}
+          onClick={() => setTheme(null)}
+        >
+          Reset to Default
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function EmbeddingsSettings() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [apiKey, setApiKey] = useState('')
+  const [cfg, setCfg] = useState<EmbeddingConfig | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const next = await embeddingsApi.getConfig()
+      setCfg(next)
+    } catch (err: any) {
+      setError(err?.body?.error || err?.message || 'Failed to load embedding settings')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const update = (patch: Partial<EmbeddingConfig>) => {
+    if (!cfg) return
+    setCfg({ ...cfg, ...patch })
+  }
+
+  const save = async () => {
+    if (!cfg) return
+    setSaving(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      const saved = await embeddingsApi.updateConfig({
+        enabled: cfg.enabled,
+        provider: cfg.provider,
+        api_url: cfg.api_url,
+        model: cfg.model,
+        dimensions: cfg.dimensions,
+        retrieval_top_k: cfg.retrieval_top_k,
+        hybrid_weight_mode: cfg.hybrid_weight_mode,
+        preferred_context_size: cfg.preferred_context_size,
+        batch_size: cfg.batch_size,
+        similarity_threshold: cfg.similarity_threshold,
+        vectorize_world_books: cfg.vectorize_world_books,
+        vectorize_chat_messages: cfg.vectorize_chat_messages,
+        vectorize_chat_documents: cfg.vectorize_chat_documents,
+        chat_memory_mode: cfg.chat_memory_mode,
+        api_key: apiKey.trim() ? apiKey.trim() : undefined,
+      })
+      setCfg(saved)
+      setApiKey('')
+      setSuccess('Embedding settings saved')
+    } catch (err: any) {
+      setError(err?.body?.error || err?.message || 'Failed to save embedding settings')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const test = async () => {
+    setTesting(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await embeddingsApi.testConfig('Lumiverse vector test')
+      setCfg(result.config)
+      setSuccess(`Embedding test passed. Dimensions set to ${result.applied_dimensions}.`)
+    } catch (err: any) {
+      setError(err?.body?.error || err?.message || 'Embedding test failed')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  if (loading || !cfg) {
+    return (
+      <div className={styles.settingsSection}>
+        <h3 className={styles.sectionTitle}>Embeddings</h3>
+        <p className={styles.placeholder}>Loading embedding settings...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>Embeddings</h3>
+      <p className={styles.placeholder}>Configure vector embeddings for long-term memory retrieval. Vectorizes world books, chat messages, and documents for semantic search during generation.</p>
+
+      {error && <p className={styles.errorText}>{error}</p>}
+      {success && <p className={styles.successText}>{success}</p>}
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={cfg.enabled}
+          onChange={(e) => update({ enabled: e.target.checked })}
+        />
+        <span>Enable embeddings</span>
+      </label>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Provider</label>
+        <select className={styles.select} value={cfg.provider} onChange={(e) => update({ provider: e.target.value as EmbeddingConfig['provider'] })}>
+          <option value="openai-compatible">OpenAI Compatible</option>
+          <option value="openai">OpenAI</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="electronhub">ElectronHub</option>
+          <option value="nanogpt">Nano-GPT</option>
+        </select>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>API URL</label>
+        <input className={styles.select} value={cfg.api_url} onChange={(e) => update({ api_url: e.target.value })} />
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          Base domain auto-appends /v1/embeddings. Custom paths (e.g. /v1/embeddings) are used as-is.
+        </span>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Embedding Model</label>
+        <input className={styles.select} value={cfg.model} onChange={(e) => update({ model: e.target.value })} />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Dimensions (optional)</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={1}
+          value={cfg.dimensions ?? ''}
+          onChange={(e) => update({ dimensions: e.target.value ? Number(e.target.value) : null })}
+        />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Vector Recall Size (top-k)</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={1}
+          max={24}
+          value={cfg.retrieval_top_k}
+          onChange={(e) => update({ retrieval_top_k: Number(e.target.value || 1) })}
+        />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Hybrid Weight Mode</label>
+        <select
+          className={styles.select}
+          value={cfg.hybrid_weight_mode}
+          onChange={(e) => update({ hybrid_weight_mode: e.target.value as EmbeddingConfig['hybrid_weight_mode'] })}
+        >
+          <option value="keyword_first">Keyword First</option>
+          <option value="balanced">Balanced</option>
+          <option value="vector_first">Vector First</option>
+        </select>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Preferred Context Size (messages)</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={1}
+          max={64}
+          value={cfg.preferred_context_size}
+          onChange={(e) => update({ preferred_context_size: Number(e.target.value || 1) })}
+        />
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Embedding Batch Size</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={1}
+          max={200}
+          value={cfg.batch_size}
+          onChange={(e) => update({ batch_size: Math.max(1, Math.min(200, Number(e.target.value || 50))) })}
+        />
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          Number of entries to embed per API request during reindexing (1–200)
+        </span>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Similarity Threshold</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={0}
+          max={1}
+          step={0.05}
+          value={cfg.similarity_threshold}
+          onChange={(e) => update({ similarity_threshold: Math.max(0, Math.min(1, Number(e.target.value || 0))) })}
+        />
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          Maximum distance for vector matches (0 = no filtering, lower = stricter). LanceDB distance where 0 is identical.
+        </span>
+      </div>
+      {cfg.vectorize_chat_messages && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Memory Retrieval Mode</label>
+          <select
+            className={styles.select}
+            value={cfg.chat_memory_mode}
+            onChange={(e) => update({ chat_memory_mode: e.target.value as EmbeddingConfig['chat_memory_mode'] })}
+          >
+            <option value="conservative">Conservative - Fewer, high-quality memories</option>
+            <option value="balanced">Balanced - Standard retrieval (recommended)</option>
+            <option value="aggressive">Aggressive - More memories, lower threshold</option>
+          </select>
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+            Controls how many memories are retrieved and quality threshold. All chunking parameters are automatically optimized based on this mode.
+          </span>
+        </div>
+      )}
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
+        <input
+          className={styles.select}
+          type="password"
+          value={apiKey}
+          placeholder="Paste a new key to replace"
+          onChange={(e) => setApiKey(e.target.value)}
+        />
+      </div>
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={cfg.vectorize_world_books}
+          onChange={(e) => update({ vectorize_world_books: e.target.checked })}
+        />
+        <span>Vectorize world book entries</span>
+      </label>
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={cfg.vectorize_chat_documents}
+          onChange={(e) => update({ vectorize_chat_documents: e.target.checked })}
+        />
+        <span>Vectorize attached chat documents (scaffold)</span>
+      </label>
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={cfg.vectorize_chat_messages}
+          onChange={(e) => update({ vectorize_chat_messages: e.target.checked })}
+        />
+        <span>Vectorize chat messages (long-term memory)</span>
+      </label>
+
+      <div className={styles.drawerRow}>
+        <button type="button" className={styles.smallBtn} onClick={save} disabled={saving}>
+          {saving ? 'Saving...' : 'Save Embedding Settings'}
+        </button>
+        <button type="button" className={styles.smallBtn} onClick={test} disabled={testing || saving}>
+          {testing ? 'Testing...' : 'Test Embedding API'}
+        </button>
+      </div>
+      <p className={styles.placeholder}>
+        Testing auto-detects native model dimensions and applies them to this configuration.
+      </p>
+    </div>
+  )
+}
+
+function AdvancedSettings() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [cfg, setCfg] = useState<ChatMemorySettings | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const settings = await embeddingsApi.getChatMemorySettings()
+      setCfg(settings)
+      // Mark as loaded so auto-save doesn't fire on initial load
+      setTimeout(() => { loadedRef.current = true }, 50)
+    } catch (err: any) {
+      setError(err?.body?.error || err?.message || 'Failed to load chat memory settings')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const quickModePresets: Record<string, Pick<ChatMemorySettings, 'chunkTargetTokens' | 'chunkMaxTokens' | 'chunkOverlapTokens' | 'exclusionWindow'>> = {
+    conservative: { chunkTargetTokens: 600, chunkMaxTokens: 1200, chunkOverlapTokens: 100, exclusionWindow: 30 },
+    balanced: { chunkTargetTokens: 800, chunkMaxTokens: 1600, chunkOverlapTokens: 120, exclusionWindow: 20 },
+    aggressive: { chunkTargetTokens: 1000, chunkMaxTokens: 2000, chunkOverlapTokens: 200, exclusionWindow: 15 },
+  }
+
+  const loadedRef = useRef(false)
+  const dirtyRef = useRef(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const update = (patch: Partial<ChatMemorySettings>) => {
+    if (!cfg) return
+    const next = { ...cfg, ...patch }
+    // When switching to a quick mode, overlay its preset values so the UI reflects them
+    if (patch.quickMode && patch.quickMode in quickModePresets) {
+      Object.assign(next, quickModePresets[patch.quickMode])
+    }
+    dirtyRef.current = true
+    setCfg(next)
+  }
+
+  // Auto-save on change with debounce
+  useEffect(() => {
+    if (!cfg || !loadedRef.current || !dirtyRef.current) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      dirtyRef.current = false
+      setSaving(true)
+      setError(null)
+      try {
+        await embeddingsApi.updateChatMemorySettings(cfg)
+        setSuccess('Settings saved')
+        setTimeout(() => setSuccess(null), 1500)
+      } catch (err: any) {
+        setError(err?.body?.error || err?.message || 'Failed to save')
+      } finally {
+        setSaving(false)
+      }
+    }, 600)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [cfg])
+
+  if (loading || !cfg) {
+    return (
+      <div className={styles.settingsSection}>
+        <h3 className={styles.sectionTitle}>Advanced</h3>
+        <p className={styles.placeholder}>Loading...</p>
+      </div>
+    )
+  }
+
+  const isManualMode = cfg.quickMode === null
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={styles.sectionTitle}>Advanced</h3>
+      <p className={styles.placeholder}>Fine-grained control over long-term memory chunking, retrieval, and formatting.</p>
+
+      {error && <p className={styles.errorText}>{error}</p>}
+      {success && <p className={styles.successText}>{success}</p>}
+
+      {/* Quick Mode / Manual toggle */}
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Memory Mode</label>
+        <div className={styles.segmented}>
+          {(['conservative', 'balanced', 'aggressive', null] as const).map((mode) => (
+            <button
+              key={mode ?? 'manual'}
+              type="button"
+              className={clsx(styles.segmentedBtn, cfg.quickMode === mode && styles.segmentedBtnActive)}
+              onClick={() => update({ quickMode: mode })}
+            >
+              {mode === null ? 'Manual' : mode.charAt(0).toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+        <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
+          Quick presets auto-configure chunking & exclusion. "Manual" unlocks all fields below.
+        </span>
+      </div>
+
+      {/* Section: Chunking */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Chunking</h4>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Target Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={200} max={2000}
+            value={cfg.chunkTargetTokens}
+            disabled={!isManualMode}
+            onChange={(e) => update({ chunkTargetTokens: Number(e.target.value) || 800 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Max Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={400} max={4000}
+            value={cfg.chunkMaxTokens}
+            disabled={!isManualMode}
+            onChange={(e) => update({ chunkMaxTokens: Number(e.target.value) || 1600 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Overlap Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={500}
+            value={cfg.chunkOverlapTokens}
+            disabled={!isManualMode}
+            onChange={(e) => update({ chunkOverlapTokens: Number(e.target.value) || 0 })}
+          />
+        </div>
+      </div>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Max Messages / Chunk</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={100}
+            value={cfg.maxMessagesPerChunk}
+            onChange={(e) => update({ maxMessagesPerChunk: Number(e.target.value) || 0 })}
+          />
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = unlimited</span>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Time Gap Split (min)</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={1440}
+            value={cfg.splitOnTimeGapMinutes}
+            onChange={(e) => update({ splitOnTimeGapMinutes: Number(e.target.value) || 0 })}
+          />
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = disabled</span>
+        </div>
+      </div>
+
+      <label className={styles.toggle}>
+        <input
+          type="checkbox"
+          checked={cfg.splitOnSceneBreaks}
+          onChange={(e) => update({ splitOnSceneBreaks: e.target.checked })}
+        />
+        <span>Split on scene breaks (---, ***, ===)</span>
+      </label>
+
+      {/* Section: Retrieval */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Retrieval</h4>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Top-K Results</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={1} max={24}
+            value={cfg.retrievalTopK}
+            onChange={(e) => update({ retrievalTopK: Number(e.target.value) || 4 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Exclusion Window</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={5} max={100}
+            value={cfg.exclusionWindow}
+            disabled={!isManualMode}
+            onChange={(e) => update({ exclusionWindow: Number(e.target.value) || 20 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Similarity Threshold</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={0} max={1} step={0.05}
+            value={cfg.similarityThreshold}
+            onChange={(e) => update({ similarityThreshold: Number(e.target.value) || 0 })}
+          />
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = no filtering</span>
+        </div>
+      </div>
+
+      {/* Section: Query */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Query</h4>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Query Strategy</label>
+          <select
+            className={styles.select}
+            value={cfg.queryStrategy}
+            onChange={(e) => update({ queryStrategy: e.target.value as ChatMemorySettings['queryStrategy'] })}
+          >
+            <option value="recent_messages">Recent Messages</option>
+            <option value="last_user_message">Last User Message</option>
+            <option value="weighted_recent">Weighted Recent</option>
+          </select>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Query Context Size</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={1} max={64}
+            value={cfg.queryContextSize}
+            onChange={(e) => update({ queryContextSize: Number(e.target.value) || 6 })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Query Max Tokens</label>
+          <input
+            className={styles.numberInput}
+            type="number"
+            min={1000} max={32000}
+            value={cfg.queryMaxTokens}
+            onChange={(e) => update({ queryMaxTokens: Number(e.target.value) || 8000 })}
+          />
+        </div>
+      </div>
+
+      {/* Section: Formatting */}
+      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Formatting</h4>
+      <span className={styles.placeholder} style={{ fontSize: 11 }}>
+        Templates control how retrieved memories appear in the prompt. Available placeholders: {'{{memories}}'}, {'{{content}}'}, {'{{score}}'}, {'{{startIndex}}'}, {'{{endIndex}}'}.
+      </span>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Header Template</label>
+        <textarea
+          className={styles.textarea}
+          rows={2}
+          value={cfg.memoryHeaderTemplate}
+          onChange={(e) => update({ memoryHeaderTemplate: e.target.value })}
+        />
+      </div>
+
+      <div className={styles.drawerRow}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Chunk Template</label>
+          <input
+            className={styles.select}
+            value={cfg.chunkTemplate}
+            onChange={(e) => update({ chunkTemplate: e.target.value })}
+          />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>Chunk Separator</label>
+          <input
+            className={styles.select}
+            value={cfg.chunkSeparator}
+            onChange={(e) => update({ chunkSeparator: e.target.value })}
+          />
+        </div>
+      </div>
+
+      {saving && <p className={styles.placeholder} style={{ marginTop: 8, fontSize: 11 }}>Saving...</p>}
+    </div>
+  )
+}
+
+function DangerZone() {
+  const [resetting, setResetting] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const [resetResult, setResetResult] = useState<string | null>(null)
+
+  const handleForceResetLanceDB = async () => {
+    if (!confirmReset) {
+      setConfirmReset(true)
+      return
+    }
+    setResetting(true)
+    setResetResult(null)
+    setConfirmReset(false)
+    try {
+      const res = await embeddingsApi.forceReset()
+      setResetResult(
+        res.deleted
+          ? 'LanceDB vector store deleted and reset. It will reinitialize on next use.'
+          : 'No LanceDB directory found — nothing to delete. SQLite flags reset.'
+      )
+    } catch (err: any) {
+      setResetResult(`Reset failed: ${err.body?.error || err.message || 'Unknown error'}`)
+    } finally {
+      setResetting(false)
+    }
+  }
+
+  return (
+    <div className={styles.settingsSection}>
+      <h3 className={clsx(styles.sectionTitle, styles.danger)}>Danger Zone</h3>
+
+      <div className={styles.field}>
+        <span className={styles.fieldLabel}>Force Reset LanceDB Vector Store</span>
+        <p style={{ fontSize: 12, color: 'var(--lumiverse-text-dim)', margin: 0 }}>
+          Completely wipes the LanceDB directory, clears all cached embeddings, and resets vectorization
+          flags. Useful for recovering from corruption (e.g. &quot;vector not divisible by 8&quot; errors).
+          The vector store will reinitialize automatically on next use.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+          <button
+            className={clsx(styles.smallBtn, styles.textBtnDanger)}
+            onClick={handleForceResetLanceDB}
+            disabled={resetting}
+            style={{
+              border: '1px solid var(--lumiverse-error)',
+              padding: '6px 12px',
+              opacity: resetting ? 0.5 : 1,
+            }}
+          >
+            {resetting
+              ? 'Resetting...'
+              : confirmReset
+              ? 'Are you sure? Click again to confirm'
+              : 'Reset LanceDB'}
+          </button>
+          {confirmReset && (
+            <button
+              className={styles.smallBtn}
+              onClick={() => setConfirmReset(false)}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+        {resetResult && (
+          <p style={{
+            fontSize: 12,
+            color: resetResult.startsWith('Reset failed')
+              ? 'var(--lumiverse-error)'
+              : 'var(--lumiverse-success, #4ade80)',
+            margin: 0,
+          }}>
+            {resetResult}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}

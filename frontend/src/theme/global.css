@@ -1,0 +1,188 @@
+/* Theme-aware color-scheme — tells the browser to render native form
+   controls (select dropdowns, scrollbars, date pickers) using the
+   correct light/dark system chrome. */
+[data-theme-mode="dark"] {
+  color-scheme: dark;
+}
+
+[data-theme-mode="light"] {
+  color-scheme: light;
+}
+
+/* Global select/option theming — native <option> dropdowns render
+   outside the DOM with browser defaults. These rules ensure the
+   popup menu matches the active theme. */
+select {
+  background-color: var(--lumiverse-bg-deep, #0a0812);
+  color: var(--lumiverse-text, rgba(255, 255, 255, 0.9));
+}
+
+select option {
+  background-color: var(--lumiverse-bg-deep, #0a0812);
+  color: var(--lumiverse-text, rgba(255, 255, 255, 0.9));
+}
+
+select option:checked {
+  background-color: var(--lumiverse-primary-015, rgba(147, 112, 219, 0.15));
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--lumiverse-primary-020);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--lumiverse-primary-050);
+}
+
+/* Keyframes */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes lumiverseFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lumiverseSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lumiversePulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes lumiverseShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes lcs-bounce {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+@keyframes lcs-chunk-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Focus styles — subtle ring for interactive elements only */
+:focus-visible {
+  outline: 1.5px solid var(--lumiverse-primary-050);
+  outline-offset: 2px;
+}
+
+/* Form inputs use border-color instead of outline */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[contenteditable]:focus-visible {
+  outline: none;
+  border-color: var(--lumiverse-primary-050);
+}
+
+/* Selection */
+::selection {
+  background: var(--lumiverse-primary-020);
+  color: var(--lumiverse-text);
+}
+
+/* Syntax highlighter classes */
+.lce-hl-macro { color: #c084fc; }
+.lce-hl-dialog { color: #c084fc; font-weight: 600; }
+.lce-hl-marker { color: #f59e0b; font-weight: 600; }
+.lce-hl-html { color: #60a5fa; }
+.lce-hl-heading { color: #34d399; font-weight: 600; }
+.lce-hl-quote { color: #a78bfa; font-style: italic; }
+.lce-hl-bold { font-weight: 700; }
+.lce-hl-action { color: #fbbf24; font-style: italic; }
+
+/* ── PWA standalone mode hardening ──
+   Chromium PWAs in standalone display-mode can exhibit rendering
+   differences: pull-to-refresh interference, viewport sizing quirks,
+   and backdrop-filter compositing issues.
+
+   Strategy: use position:fixed + inset:0 to create a truly locked
+   viewport that cannot be scrolled out of bounds, instead of stacking
+   100dvh on html/body/#root which causes layout thrashing when the
+   virtual keyboard changes the dynamic viewport height.
+
+   NOTE: Since iOS 16.4, iOS PWAs DO match this media query. The
+   html:not([data-ios-pwa]) selector excludes iOS from position:fixed +
+   inset:0, which triggers WebKit bug #237961 (bottom gap with
+   viewport-fit=cover). iOS PWAs rely on the base styles in reset.css
+   (height:100%, overflow:hidden) instead. */
+@media (display-mode: standalone) {
+  html:not([data-ios-pwa]) {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: var(--lumiverse-bg-deep, #0a0812);
+  }
+
+  body {
+    width: var(--app-viewport-width, 100vw);
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    /* Force GPU compositing layer — fixes backdrop-filter not painting
+       in some Chromium PWA renderers (particularly Android WebAPK). */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    /* Prevent all touch-based viewport manipulation in PWA shell */
+    touch-action: manipulation;
+  }
+
+  #root {
+    height: 100%;
+  }
+}
+
+/* ── iOS PWA viewport compensation ──
+   With viewport-fit=cover + black-translucent status bar, content renders
+   behind the status bar (starts at y=0), but height:100% on <html> still
+   resolves to the safe layout viewport (excluding the status bar height).
+   This leaves a gap at the bottom exactly equal to safe-area-inset-top.
+   Compensate by adding that height back so the document fills the screen.
+   See: https://itnext.io/make-your-pwas-look-handsome-on-ios-fd8fdfcd5777 */
+html[data-ios-pwa] {
+  /* Force html to the true physical screen height. CSS viewport units and
+     env(safe-area-inset-top) are unreliable across iOS versions in standalone
+     mode. --ios-screen-height is set from screen.height in main.tsx — the
+     actual device screen size in CSS pixels, immune to all viewport quirks. */
+  height: var(--ios-screen-height, 100%);
+  --ios-viewport-offset: env(safe-area-inset-top, 0px);
+  --app-shell-height: 100%;
+}
+
+html[data-pwa]:not([data-ios-pwa]) {
+  --app-shell-height: var(--app-viewport-height, 100dvh);
+}

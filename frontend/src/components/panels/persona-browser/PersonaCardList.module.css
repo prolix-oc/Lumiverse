@@ -1,0 +1,129 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.empty {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--lumiverse-text-muted);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  outline: none;
+}
+
+.row:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.row:focus-visible {
+  box-shadow: 0 0 0 2px var(--lumiverse-primary);
+}
+
+.rowSelected {
+  background: rgba(147, 112, 219, 0.08);
+  border-color: var(--lumiverse-primary);
+}
+
+.rowActive {
+  box-shadow: 0 0 12px rgba(147, 112, 219, 0.35);
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid var(--lumiverse-border);
+}
+
+.avatarImg {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatarFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-primary-muted);
+  background: rgba(147, 112, 219, 0.08);
+}
+
+.info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title {
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desc {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badges {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badgeActive {
+  background: rgb(147, 112, 219);
+  color: white;
+}
+
+.badgeDefault {
+  background: rgb(218, 165, 32);
+  color: white;
+}
+
+.badgeConnected {
+  background: rgb(72, 187, 120);
+  color: white;
+}

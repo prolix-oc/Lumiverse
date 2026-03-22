@@ -1,0 +1,597 @@
+/* ── Floating input area — glassmorphic pill ── */
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 20;
+  background: var(--lumiverse-bg, rgba(28, 24, 38, 0.95));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--lcs-glass-bg) 78%, var(--lumiverse-bg-elevated) 22%),
+    color-mix(in srgb, var(--lcs-glass-bg) 70%, var(--lumiverse-bg) 30%)
+  );
+  border: 1px solid var(--lcs-glass-border);
+  border-radius: var(--lcs-radius, 14px);
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow:
+    0 14px 34px var(--lumiverse-fill-heavy),
+    var(--lumiverse-highlight-inset),
+    inset 0 -1px 0 var(--lcs-glass-border);
+  transition:
+    background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    border-radius var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    bottom var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+:global(html[data-ios-pwa]) .container {
+  /* .app has no bottom safe-area padding on iOS PWA, so this positions from
+     the screen edge. Background fills to the bottom; extra padding-bottom
+     keeps interactive content above the home indicator. When keyboard is
+     open, move up and drop the safe-area padding (keyboard covers it). */
+  bottom: var(--app-keyboard-inset-bottom, 0px);
+  padding-bottom: calc(10px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+}
+
+:global([data-glass]) .container {
+  backdrop-filter: blur(var(--lcs-glass-blur));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur));
+}
+
+.container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 85% at 50% -30%, color-mix(in srgb, var(--lumiverse-primary-020) 45%, transparent), transparent 58%),
+    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-text) 6%, transparent), transparent 70%);
+  z-index: 0;
+}
+
+.container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(color-mix(in srgb, var(--lumiverse-text) 8%, transparent) 0.7px, transparent 0.7px),
+    radial-gradient(color-mix(in srgb, var(--lumiverse-fill-heavy) 30%, transparent) 0.6px, transparent 0.6px);
+  background-size: 3px 3px, 5px 5px;
+  background-position: 0 0, 1px 2px;
+  opacity: 0.32;
+  mix-blend-mode: soft-light;
+  z-index: 0;
+}
+
+.container > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Action bar — regenerate / continue / stop ── */
+.actionBar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.actionDivider {
+  width: 1px;
+  height: 14px;
+  background: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 26px;
+  border: none;
+  border-radius: var(--lcs-radius-xs, 6px);
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.4));
+  cursor: pointer;
+  transition:
+    color var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+    background var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  padding: 0;
+}
+
+.actionBtn:hover {
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+}
+
+.actionBtnActive {
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.08));
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  padding: 0 4px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  background: var(--lumiverse-primary, rgba(140, 130, 255, 0.9));
+  color: #fff;
+  margin-left: 2px;
+}
+
+.guidePills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.guidePill {
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.65));
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.popoverSlot {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.2, 0.85, 0.22, 1);
+}
+
+.popoverSlotOpen {
+  grid-template-rows: 1fr;
+}
+
+.popoverSlotInner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.popover {
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.9));
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 88%, var(--lcs-glass-bg) 12%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  max-height: min(240px, 35vh);
+  overflow-y: auto;
+  animation: popover-fade 150ms ease-out both;
+  will-change: opacity;
+}
+
+.popoverClosing {
+  animation: popover-fade-out 140ms ease-in both;
+}
+
+@keyframes popover-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes popover-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+.popEmpty {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.4));
+  padding: 6px;
+}
+
+.popRowBtn {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  text-align: left;
+  cursor: pointer;
+}
+
+.personaMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.personaAvatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12));
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.personaAvatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.personaFallback {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  line-height: 1;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.65));
+  font-weight: 600;
+}
+
+.personaNameGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.personaTitle {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popoverSlot {
+    transition: none;
+  }
+
+  .popover {
+    animation: none;
+  }
+}
+
+.popRowBtn:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  border-color: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+}
+
+.popRowBtnActive {
+  border-color: var(--lumiverse-primary, rgba(140, 130, 255, 0.9));
+}
+
+.popMeta {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.4));
+}
+
+.popLink {
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-primary, rgba(140, 130, 255, 0.9));
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  padding: 4px 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.quickSet {
+  border-top: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  padding-top: 6px;
+}
+
+.quickSetName {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
+  padding: 2px 6px;
+}
+
+.stopBtn {
+  color: var(--lumiverse-danger, #ef4444);
+}
+
+.stopBtn:hover {
+  color: #fff;
+  background: var(--lumiverse-danger, #ef4444);
+}
+
+/* ── Attachment preview strip ── */
+.attachmentStrip {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.attachmentPreview {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--lcs-radius-xs, 6px);
+  overflow: hidden;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  max-height: 56px;
+}
+
+.attachmentThumb {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+}
+
+.attachmentLabel {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.65));
+  padding: 4px 22px 4px 8px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--lcs-transition-fast, 120ms ease);
+}
+
+.attachmentRemove:hover {
+  background: var(--lumiverse-danger, #ef4444);
+}
+
+/* ── Attach button ── */
+.attachBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--lcs-radius, 14px);
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.4));
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition:
+    color var(--lcs-transition-fast, 120ms ease),
+    background var(--lcs-transition-fast, 120ms ease);
+}
+
+.attachBtn:hover {
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+}
+
+.attachBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Input row — textarea + send button ── */
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.inputWrapper {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  min-height: 40px;
+  max-height: 180px;
+  border-radius: var(--lcs-radius, 14px);
+  border: none;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 0 0 1px var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  transition:
+    background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+  overflow: hidden;
+}
+
+.inputWrapper:focus-within {
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+  box-shadow: inset 0 0 0 1px var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4)),
+    0 0 0 2px var(--lumiverse-primary-010, rgba(140, 130, 255, 0.1));
+}
+
+.textarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  font-family: inherit;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+  padding: 9px 14px;
+  min-height: 40px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.textarea::placeholder {
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+}
+
+.textarea::-webkit-scrollbar {
+  width: 3px;
+}
+
+.textarea::-webkit-scrollbar-thumb {
+  background: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+}
+
+/* ── Send / Stop button ── */
+.sendBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--lcs-radius, 14px);
+  background: var(--lumiverse-primary, rgba(140, 130, 255, 0.9));
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+    transform var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+    opacity var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  padding: 0;
+}
+
+.sendBtn:hover {
+  background: var(--lumiverse-primary-hover, rgba(160, 150, 255, 0.95));
+  transform: scale(1.04);
+}
+
+.sendBtn:active {
+  transform: scale(0.96);
+}
+
+.sendBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  transform: none;
+}
+
+.sendBtnStop {
+  background: var(--lumiverse-danger, #ef4444);
+}
+
+.sendBtnStop:hover {
+  background: var(--lumiverse-danger-hover, #dc2626);
+}
+
+/* ── Extras popover ── */
+.extrasSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.extrasDivider {
+  height: 1px;
+  background: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  margin: 4px 0;
+}
+
+.extrasExtHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgb(45, 212, 191);
+  padding: 2px 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.3);
+  border-bottom: 1px solid color-mix(in srgb, rgb(45, 212, 191) 30%, var(--lumiverse-border));
+}
+
+.extrasExtBadge {
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(45, 212, 191, 0.14);
+  background: color-mix(in srgb, rgb(45, 212, 191) 14%, transparent);
+  color: rgb(45, 212, 191);
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border: 1px solid color-mix(in srgb, rgb(45, 212, 191) 25%, transparent);
+}
+
+/* ── Responsive ── */
+@media (min-width: 601px) {
+  .popover {
+    max-height: 320px;
+  }
+}
+
+@media (max-width: 600px) {
+  .container {
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    padding: 6px 10px 8px;
+  }
+
+  :global(html[data-ios-pwa]) .container {
+    bottom: var(--app-keyboard-inset-bottom, 0px);
+    padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+  }
+
+  /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px).
+     Compensate the taller line-height (16px × 1.5 = 24px) with reduced vertical
+     padding so the textarea stays 40px — matching the buttons. */
+  .textarea {
+    font-size: max(16px, calc(14px * var(--lumiverse-font-scale, 1)));
+    padding: 8px 14px;
+  }
+
+  .inputRow {
+    gap: 4px;
+  }
+}

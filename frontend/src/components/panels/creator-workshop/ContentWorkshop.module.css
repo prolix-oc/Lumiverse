@@ -1,0 +1,339 @@
+.workshop {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Quick Create Section */
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.quickCreateGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.quickCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.quickCard:hover {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-fill);
+}
+
+.quickCardIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(147, 112, 219, 0.1);
+  color: var(--lumiverse-primary);
+}
+
+.quickCardLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  text-align: center;
+}
+
+.quickCardSub {
+  font-size: 10px;
+  color: var(--lumiverse-text-muted);
+  text-align: center;
+}
+
+/* Pack Section */
+.packSection {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.packHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--lumiverse-fill-subtle);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.packHeader:hover {
+  background: var(--lumiverse-fill);
+}
+
+.packChevron {
+  display: flex;
+  align-items: center;
+  color: var(--lumiverse-text-muted);
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.packChevronOpen {
+  transform: rotate(90deg);
+}
+
+.packName {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.packActions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.packActionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.packActionBtn:hover {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text);
+}
+
+.packActionBtnDanger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--lumiverse-error, #ef4444);
+}
+
+.packBody {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Item Group */
+.itemGroup {
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.itemGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--lumiverse-bg);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.itemGroupCount {
+  color: var(--lumiverse-text-dim);
+  font-weight: 400;
+}
+
+.itemGroupAdd {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  margin-left: auto;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.itemGroupAdd:hover {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-primary);
+}
+
+/* Item Row */
+.itemRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--lumiverse-border);
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.itemRow:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.itemIcon {
+  display: flex;
+  align-items: center;
+  color: var(--lumiverse-text-muted);
+  flex-shrink: 0;
+}
+
+.itemAvatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.itemAvatarFallback {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--lumiverse-fill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  flex-shrink: 0;
+}
+
+.itemName {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemBadge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text-muted);
+  border: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.itemActions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.itemRow:hover .itemActions {
+  opacity: 1;
+}
+
+.itemActionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.itemActionBtn:hover {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text);
+}
+
+.itemActionBtnDanger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--lumiverse-error, #ef4444);
+}
+
+/* Import Section */
+.importSection {
+  display: flex;
+  gap: 8px;
+}
+
+.importBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  flex: 1;
+  justify-content: center;
+}
+
+.importBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.importBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Empty state */
+.emptyPacks {
+  text-align: center;
+  padding: 20px;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+}
+
+.emptyItems {
+  padding: 8px 12px;
+  color: var(--lumiverse-text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 20px;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+}

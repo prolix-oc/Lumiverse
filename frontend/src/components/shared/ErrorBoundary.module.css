@@ -1,0 +1,31 @@
+.fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--lumiverse-text, #ccc);
+  min-height: 80px;
+}
+
+.message {
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.retryBtn {
+  padding: 6px 16px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.15));
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.06));
+  color: var(--lumiverse-text, #ccc);
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.retryBtn:hover {
+  background: var(--lumiverse-fill-hover, rgba(255, 255, 255, 0.1));
+}

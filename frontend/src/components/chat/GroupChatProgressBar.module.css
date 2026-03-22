@@ -1,0 +1,100 @@
+/* ── Group Chat Progress Bar ── */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin: 4px 0;
+  border-radius: var(--lcs-radius-sm, 8px);
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+}
+
+.characterDots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.dot {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0.4;
+  transition: opacity 200ms ease;
+}
+
+.dotActive {
+  opacity: 1;
+}
+
+.dotSpoken {
+  opacity: 0.7;
+}
+
+.dotAvatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--lumiverse-bg-dark);
+  border: 2px solid transparent;
+  transition: border-color 200ms ease;
+}
+
+.dotActive .dotAvatar {
+  border-color: var(--lumiverse-primary);
+}
+
+.dotSpoken .dotAvatar {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.dotAvatarFallback {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-bg-dark);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  border: 2px solid transparent;
+  transition: border-color 200ms ease;
+}
+
+.dotActive .dotAvatarFallback {
+  border-color: var(--lumiverse-primary);
+}
+
+.dotSpoken .dotAvatarFallback {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.connector {
+  width: 12px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+
+.status {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.dotActive .dotAvatar,
+.dotActive .dotAvatarFallback {
+  animation: pulse 1.5s ease-in-out infinite;
+}

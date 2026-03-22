@@ -1,0 +1,95 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --app-viewport-width: 100vw;
+  --app-viewport-height: 100dvh;
+  --app-viewport-offset-top: 0px;
+  --app-viewport-offset-left: 0px;
+  --app-keyboard-inset-bottom: 0px;
+  --app-shell-height: var(--app-viewport-height);
+}
+
+html {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  font-family: var(--lumiverse-font-family);
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-bg-deep);
+  line-height: 1.5;
+  /* Prevent double-tap zoom and pinch zoom; still allows pan/scroll */
+  touch-action: manipulation;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* Prevent iOS Safari auto-zoom on input focus — iOS zooms when font-size < 16px.
+   !important is intentional: this is a hard platform constraint that must override
+   all CSS Module class selectors (which have higher specificity than element selectors). */
+@media screen and (max-width: 600px) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+html[data-pwa],
+html[data-pwa] body,
+html[data-pwa] #root {
+  width: var(--app-viewport-width);
+  height: var(--app-shell-height);
+}

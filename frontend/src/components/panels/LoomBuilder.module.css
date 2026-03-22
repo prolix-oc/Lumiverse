@@ -1,0 +1,1269 @@
+/* ============================================================================
+   LAYOUT
+   ============================================================================ */
+
+.layout {
+  display: flex;
+  flex-direction: column;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
+.layoutCompact {
+  height: 100%;
+}
+
+/* ============================================================================
+   HEADER & TOOLBAR
+   ============================================================================ */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--lumiverse-bg-elevated);
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.08));
+  position: relative;
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+   SCROLL AREA
+   ============================================================================ */
+
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 calc(24px + env(safe-area-inset-bottom, 0px));
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.blockList {
+  padding: 10px;
+}
+
+/* ============================================================================
+   FORM ELEMENTS
+   ============================================================================ */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.input {
+  padding: 9px 12px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.input:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010);
+}
+
+.textarea {
+  padding: 12px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  font-family: var(--lumiverse-font-mono, monospace);
+  min-height: 180px;
+  resize: vertical;
+  outline: none;
+  line-height: 1.6;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.textarea:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010);
+}
+
+.select {
+  padding: 9px 12px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.select:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010);
+}
+
+/* ============================================================================
+   BLOCK LIST ITEMS
+   ============================================================================ */
+
+.item {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  border: 1px solid var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.12));
+  border-radius: 10px;
+  margin-bottom: 4px;
+  transition: all var(--lumiverse-transition-fast);
+  gap: 6px;
+}
+
+.item:hover {
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.1));
+  border-color: var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.2));
+}
+
+.itemDragging {
+  opacity: 0.6;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  border-color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-bg-elevated);
+}
+
+.itemIndented {
+  margin-left: 14px;
+  border-left: 2px solid var(--lumiverse-primary-020);
+  border-top-left-radius: 2px;
+  border-bottom-left-radius: 2px;
+}
+
+.itemDisabled {
+  opacity: 0.4;
+}
+
+.marker {
+  background: var(--lumiverse-primary-light);
+  border-color: var(--lumiverse-primary-015);
+  border-style: dashed;
+  opacity: 0.5;
+}
+
+.marker:hover {
+  opacity: 0.8;
+  border-color: var(--lumiverse-primary-020);
+}
+
+/* ============================================================================
+   CATEGORY ACCORDION
+   ============================================================================ */
+
+.categoryHeader {
+  background: rgba(0, 0, 0, 0.1);
+  border-color: var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.2));
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 3px;
+  margin-top: 8px;
+  border-radius: 10px;
+}
+
+.categoryHeader:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.categoryName {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--lumiverse-text-muted);
+}
+
+.categoryCount {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  margin-left: 4px;
+}
+
+/* ============================================================================
+   BADGES
+   ============================================================================ */
+
+.badge {
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.badgeSystem {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.1);
+}
+
+.badgeUser {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.1);
+}
+
+.badgeAssistant {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.1);
+}
+
+.badgeUserAppend {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.badgeAssistantAppend {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.badgeMarker {
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary);
+  border: 1px solid var(--lumiverse-primary-010);
+}
+
+.triggerBadge {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 6px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary-muted);
+  line-height: 1;
+  border: 1px solid var(--lumiverse-primary-010);
+}
+
+/* ============================================================================
+   BUTTONS
+   ============================================================================ */
+
+.iconBtn {
+  padding: 6px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.iconBtn:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.06));
+  color: var(--lumiverse-text-muted);
+}
+
+.iconBtnDanger {
+  color: var(--lumiverse-text-dim);
+}
+
+.iconBtnDanger:hover {
+  color: var(--lumiverse-danger, #ef4444);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.dragHandle {
+  padding: 8px 4px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  touch-action: none;
+  margin: -2px 0;
+  opacity: 0.5;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.item:hover .dragHandle {
+  opacity: 1;
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.btn:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text);
+}
+
+.btnPrimary {
+  background: var(--lumiverse-primary);
+  color: white;
+  border-color: var(--lumiverse-primary);
+}
+
+.btnPrimary:hover {
+  opacity: 0.9;
+  background: var(--lumiverse-primary);
+  color: white;
+}
+
+.btnDanger {
+  background: var(--lumiverse-danger, #ef4444);
+  color: white;
+  border-color: var(--lumiverse-danger, #ef4444);
+}
+
+.btnSmall {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+/* ============================================================================
+   EMPTY STATE
+   ============================================================================ */
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--lumiverse-text-dim);
+  gap: 10px;
+}
+
+/* ============================================================================
+   MACRO INSERTER
+   ============================================================================ */
+
+.macroPanel {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-bg-elevated);
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: var(--lumiverse-shadow-sm);
+}
+
+.macroSearch {
+  padding: 8px;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.macroSearchInner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.macroSearchInner:focus-within {
+  border-color: var(--lumiverse-primary-020);
+}
+
+.macroSearchInput {
+  border: none;
+  padding: 2px;
+  background: transparent;
+  font-size: 12px;
+  width: 100%;
+  color: var(--lumiverse-text);
+  outline: none;
+}
+
+.macroGroup {
+  padding: 6px 0;
+}
+
+.macroGroupTitle {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 12px;
+}
+
+.macroItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 12px;
+  margin: 0 4px;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.macroItem:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+}
+
+.macroSyntax {
+  font-family: var(--lumiverse-font-mono, monospace);
+  font-size: 11px;
+  color: var(--lumiverse-primary);
+}
+
+.macroDesc {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  margin-left: 8px;
+  text-align: right;
+}
+
+/* ============================================================================
+   DROPDOWN MENU
+   ============================================================================ */
+
+.dropdownMenu {
+  position: absolute;
+  background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 12px;
+  padding: 4px;
+  min-width: 220px;
+  z-index: 100;
+  box-shadow: var(--lumiverse-shadow-lg);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.menuButton {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 8px;
+  text-align: left;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.menuButton:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.menuButtonDanger {
+  color: var(--lumiverse-danger, #ef4444);
+}
+
+.menuButtonDanger:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.sectionLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--lumiverse-text-dim);
+  padding: 8px 12px 4px;
+}
+
+.menuDivider {
+  border: none;
+  border-top: 1px solid var(--lumiverse-border);
+  margin: 4px 8px;
+}
+
+/* ============================================================================
+   POST HISTORY NOTE
+   ============================================================================ */
+
+.postHistoryNote {
+  font-size: 11px;
+  color: var(--lumiverse-warning, #f59e0b);
+  padding: 6px 10px;
+  background: rgba(245, 158, 11, 0.06);
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.1);
+  margin-top: 6px;
+}
+
+/* ============================================================================
+   ACCORDION SECTIONS (Generation, Prompt Behavior, Completion, Advanced)
+   ============================================================================ */
+
+.accordionSection {
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.accordionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.accordionHeader:hover {
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.accordionHeaderActive {
+  background: var(--lumiverse-primary-light);
+}
+
+.accordionHeaderActive:hover {
+  background: var(--lumiverse-primary-015);
+}
+
+.accordionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--lumiverse-text-muted);
+  flex: 1;
+}
+
+.accordionBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--lumiverse-primary);
+  color: white;
+  min-width: 14px;
+  text-align: center;
+}
+
+.accordionBody {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.accordionBodyGen {
+  padding: 6px 14px 14px;
+  gap: 2px;
+}
+
+/* ============================================================================
+   SAMPLER SLIDER
+   ============================================================================ */
+
+.sliderRow {
+  padding: 6px 0 4px;
+}
+
+.sliderHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.sliderLabel {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.sliderLabelSet {
+  color: var(--lumiverse-text);
+}
+
+.sliderLabelUnset {
+  color: var(--lumiverse-text-dim);
+}
+
+.sliderInput {
+  width: 72px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--lumiverse-font-mono, monospace);
+  text-align: right;
+  outline: none;
+  -moz-appearance: textfield;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.sliderInput::-webkit-outer-spin-button,
+.sliderInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.sliderInputSet {
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+}
+
+.sliderInputSet:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+.sliderInputUnset {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--lumiverse-text-dim);
+}
+
+.sliderTrack {
+  position: relative;
+  height: 6px;
+  background: rgba(128, 128, 128, 0.15);
+  border-radius: 3px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.sliderFill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--lumiverse-primary);
+  border-radius: 3px;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.sliderThumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  background: var(--lumiverse-primary);
+  border: 2px solid var(--lumiverse-bg);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--lumiverse-primary-020);
+}
+
+/* ============================================================================
+   SETTINGS FIELDS
+   ============================================================================ */
+
+.settingsField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settingsFieldLabel {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.settingsFieldLabelDefault {
+  color: var(--lumiverse-text-muted);
+}
+
+.settingsFieldLabelModified {
+  color: var(--lumiverse-text);
+}
+
+.settingsInput {
+  width: 100%;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.settingsInput:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+.settingsTextarea {
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  font-family: var(--lumiverse-font-mono, monospace);
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.settingsTextarea:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+.settingsHint {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+}
+
+.resetBtn {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid rgba(128, 128, 128, 0.15);
+  color: var(--lumiverse-text-dim);
+  font-size: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.resetBtn:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text-muted);
+  border-color: var(--lumiverse-border);
+}
+
+.samplerHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
+.samplerLabel {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--lumiverse-text-dim);
+  flex: 1;
+}
+
+/* ============================================================================
+   CHECKBOX TOGGLE
+   ============================================================================ */
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--lumiverse-text-muted);
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.checkboxLabel:hover {
+  color: var(--lumiverse-text);
+}
+
+.checkbox {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--lumiverse-primary);
+  cursor: pointer;
+}
+
+/* ============================================================================
+   CUSTOM BODY
+   ============================================================================ */
+
+.customBodyTextarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 12px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  font-family: var(--lumiverse-font-mono, monospace);
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.customBodyTextarea:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+.jsonError {
+  font-size: 10px;
+  color: var(--lumiverse-danger, #ef4444);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+/* ============================================================================
+   STOP STRINGS
+   ============================================================================ */
+
+.stopStringTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1));
+  border: 1px solid var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.12));
+  color: var(--lumiverse-text);
+  font-size: 10px;
+  font-family: var(--lumiverse-font-mono, monospace);
+}
+
+.stopStringRemove {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--lumiverse-text-dim);
+  display: flex;
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.stopStringRemove:hover {
+  color: var(--lumiverse-danger, #ef4444);
+}
+
+/* ============================================================================
+   CONNECTION PROFILE
+   ============================================================================ */
+
+.connectionProfile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 8px;
+}
+
+.connectionSource {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+}
+
+.connectionDot {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  opacity: 0.4;
+}
+
+.connectionModel {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+   PRESET PROFILE BINDINGS
+   ============================================================================ */
+
+.profileBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-wrap: wrap;
+}
+
+.profileLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+}
+
+.profileBtnGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.profileBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.profileBtn:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text-muted);
+}
+
+.profileBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.profileBtnActive {
+  background: var(--lumiverse-primary-010, rgba(139, 92, 246, 0.1));
+  border-color: var(--lumiverse-primary-muted, rgba(139, 92, 246, 0.35));
+  color: var(--lumiverse-primary);
+}
+
+.profileBtnActive:hover:not(:disabled) {
+  background: var(--lumiverse-primary-010, rgba(139, 92, 246, 0.15));
+  color: var(--lumiverse-primary);
+}
+
+.profileSourceBadge {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--lumiverse-primary);
+  opacity: 0.8;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   CONTEXT METER (stubbed)
+   ============================================================================ */
+
+.contextMeter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  border-bottom: 1px solid var(--lumiverse-border);
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.contextMeter:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.contextBar {
+  display: flex;
+  height: 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--lumiverse-fill-subtle);
+  flex: 1;
+  max-width: 160px;
+}
+
+.contextBarSegment {
+  height: 100%;
+  min-width: 1px;
+}
+
+.contextLabel {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+   CREATE PRESET MODAL
+   ============================================================================ */
+
+.createOverlay {
+  position: fixed;
+  inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.createDialog {
+  background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 16px;
+  padding: 24px;
+  width: 340px;
+  box-shadow: var(--lumiverse-shadow-lg);
+}
+
+.createTitle {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* ============================================================================
+   ACTION BAR (bottom)
+   ============================================================================ */
+
+.actionBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--lumiverse-border);
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  position: relative;
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+   TRUNCATION TOOLTIP
+   ============================================================================ */
+
+.truncTooltip {
+  position: relative;
+}
+
+.truncTooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  max-width: 320px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.97));
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  z-index: 200;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition-delay: 0s;
+}
+
+.truncTooltip:hover::after {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0.4s;
+}
+
+/* ============================================================================
+   BLOCK CONTENT AREA
+   ============================================================================ */
+
+.blockContent {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blockNameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.blockName {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blockPreview {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+/* ============================================================================
+   INJECTION TRIGGERS (Block Editor)
+   ============================================================================ */
+
+.triggerLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.triggerLabel:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+}
+
+.triggerLabelActive {
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-primary-light);
+}
+
+.triggerLabelInactive {
+  color: var(--lumiverse-text-dim);
+}
+
+.triggerCheckbox {
+  accent-color: var(--lumiverse-primary);
+}
+
+/* ============================================================================
+   MACRO PREVIEW PANEL
+   ============================================================================ */
+
+.previewPanel {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-bg-elevated);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.previewContent {
+  padding: 12px;
+  font-size: 12px;
+  font-family: var(--lumiverse-font-mono, monospace);
+  line-height: 1.6;
+  color: var(--lumiverse-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.previewDiagnostics {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.previewDiagWarn {
+  font-size: 10px;
+  color: var(--lumiverse-warning, #f59e0b);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.previewDiagError {
+  font-size: 10px;
+  color: var(--lumiverse-danger, #ef4444);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+

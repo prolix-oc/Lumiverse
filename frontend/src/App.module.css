@@ -1,0 +1,30 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: var(--app-shell-height, 100%);
+  max-height: var(--app-shell-height, 100dvh);
+  overflow: hidden;
+  background: var(--lumiverse-bg-deep);
+  /* Safe area insets + Spindle dock panel insets */
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--spindle-dock-top, 0px));
+  padding-right: var(--spindle-dock-right, 0px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--spindle-dock-bottom, 0px));
+  padding-left: var(--spindle-dock-left, 0px);
+  transition: padding 0.2s ease;
+}
+
+/* On iOS PWA, remove bottom safe-area padding from the shell so views can
+   extend into the home indicator zone (like the chat input bar filling to
+   the screen edge). Individual views handle their own safe-area clearance.
+   ChatView's overflow:clip would otherwise prevent the input from reaching
+   the screen bottom. */
+:global(html[data-ios-pwa]) .app {
+  padding-bottom: var(--spindle-dock-bottom, 0px);
+}
+
+.main {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}

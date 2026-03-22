@@ -1,0 +1,10 @@
+ALTER TABLE world_book_entries ADD COLUMN use_regex INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN prevent_recursion INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN exclude_recursion INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN delay_until_recursion INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN priority INTEGER NOT NULL DEFAULT 10;
+ALTER TABLE world_book_entries ADD COLUMN sticky INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN cooldown INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN delay INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN selective_logic INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_book_entries ADD COLUMN use_probability INTEGER NOT NULL DEFAULT 1;

@@ -1,0 +1,359 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
+  z-index: 10002;
+}
+
+.modal {
+  position: relative;
+  width: 100%;
+  max-width: clamp(380px, 94vw, min(560px, var(--lumiverse-content-max-width, 560px)));
+  max-height: 80vh;
+  background: var(--lumiverse-gradient-modal);
+  border-radius: 16px;
+  border: 1px solid var(--lumiverse-border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 40px rgba(147, 112, 219, 0.2);
+}
+
+.closeBtn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-bg-dark);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  z-index: 10;
+}
+
+.closeBtn:hover {
+  background: var(--lumiverse-bg-darker);
+  color: var(--lumiverse-text);
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 24px 28px 16px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  padding-right: 64px; /* Make room for the absolute positioned closeBtn */
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+  letter-spacing: -0.01em;
+}
+
+.count {
+  margin-left: 0;
+  font-size: 11.5px;
+  color: var(--lumiverse-text-dim);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  align-self: flex-start;
+}
+
+/* ── List ── */
+.list {
+  padding: 20px 28px 28px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 60vh;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+
+.list::-webkit-scrollbar { width: 4px; }
+.list::-webkit-scrollbar-track { background: transparent; }
+.list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+/* ── Chat Card ── */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 14px 18px;
+  border-radius: var(--lcs-radius-sm, 8px);
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  transition:
+    background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    transform var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+  animation: greetingEnter 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Left accent bar */
+.card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+  transition:
+    background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+.card:hover {
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transform: translateX(2px);
+}
+
+.card:hover::before {
+  background: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+}
+
+.card:active {
+  transform: translateX(2px) scale(0.995);
+}
+
+/* ── Active chat card (Most Recent) ── */
+.cardActive {
+  border-color: var(--lumiverse-primary-050);
+  background:
+    linear-gradient(135deg, var(--lumiverse-primary-010) 0%, transparent 50%),
+    var(--lumiverse-primary-010);
+  box-shadow:
+    0 0 0 0.5px var(--lumiverse-primary-020),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
+}
+
+.cardActive::before {
+  background: linear-gradient(
+    180deg,
+    var(--lumiverse-primary) 0%,
+    var(--lumiverse-primary-050) 100%
+  );
+  box-shadow: 0 0 8px var(--lumiverse-primary-020);
+}
+
+.cardActive:hover {
+  border-color: var(--lumiverse-primary-050);
+}
+
+.cardActive:hover::before {
+  box-shadow: 0 0 12px var(--lumiverse-primary-050);
+}
+
+/* ── New Chat Special Card ── */
+.newChatCard {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  border-style: dashed;
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-010);
+  margin-bottom: 8px;
+}
+
+.newChatCard::before {
+  display: none;
+}
+
+.newChatCard:hover {
+  background: var(--lumiverse-primary-015);
+  border-color: var(--lumiverse-primary);
+  transform: translateY(-2px);
+}
+
+.newChatIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--lumiverse-primary);
+  color: #fff;
+}
+
+.newChatCard .cardLabel {
+  color: var(--lumiverse-primary-text);
+}
+
+
+/* ── Card innards ── */
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 1;
+}
+
+.cardLabel {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  letter-spacing: 0.01em;
+}
+
+.activeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 10px;
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.cardPreview {
+  margin: 4px 0 0;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--lumiverse-text-dim);
+}
+
+.metaItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Context Menu ── */
+.menuBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  opacity: 0;
+}
+
+.card:hover .menuBtn,
+.cardActive .menuBtn {
+  opacity: 1;
+}
+
+.menuBtn:hover,
+.menuBtnActive {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text);
+  opacity: 1 !important;
+}
+
+.dropdown {
+  position: absolute;
+  top: 36px;
+  right: 12px;
+  z-index: 50;
+  width: 140px;
+  background: var(--lumiverse-bg-elevated);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-sm);
+  padding: 4px;
+  box-shadow: var(--lumiverse-shadow-md);
+  animation: greetingEnter 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dropdownItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+  text-align: left;
+}
+
+.dropdownItem:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
+.dropdownItemDanger:hover {
+  background: var(--lumiverse-danger-015);
+  color: var(--lumiverse-danger);
+}
+
+.editInput {
+  flex: 1;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border-hover);
+  color: var(--lumiverse-text);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  outline: none;
+  min-width: 0;
+}
+
+.editInput:focus {
+  border-color: var(--lumiverse-primary-050);
+}
+
+/* ── Staggered entrance animation ── */
+@keyframes greetingEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

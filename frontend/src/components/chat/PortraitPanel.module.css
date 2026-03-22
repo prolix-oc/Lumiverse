@@ -1,0 +1,273 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   SIDE PORTRAIT PANEL
+   Frosted crystalline sidebar — the avatar frame uses a double-border
+   technique (inner inset glow + outer border) for depth. A subtle
+   radial gradient behind the frame creates a soft ambient backlight.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.panelOuter {
+  flex: 0 0 auto;
+  overflow: hidden;
+  position: relative;
+}
+
+.panelOuterRight {
+  /* no border — the panel itself has its own border + margin */
+}
+
+.panelOuterLeft {
+  /* no border — the panel itself has its own border + margin */
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 220px;
+  padding: 18px 12px 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background:
+    linear-gradient(180deg, var(--lcs-glass-char-tint, rgba(100, 120, 255, 0.03)) 0%, transparent 40%),
+    var(--lcs-glass-bg, rgba(18, 16, 28, 0.55));
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  border-radius: var(--lcs-radius, 14px);
+  margin: 16px 0 8px 0;
+  height: calc(100% - 24px);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.06),
+    0 4px 24px rgba(0, 0, 0, 0.08);
+  scrollbar-width: thin;
+  scrollbar-color: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.08)) transparent;
+}
+
+:global([data-glass]) .panel {
+  backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+}
+
+.panel::-webkit-scrollbar {
+  width: var(--lcs-scrollbar-w, 5px);
+}
+
+.panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.panel::-webkit-scrollbar-thumb {
+  background: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+}
+
+/* ── Close button ── */
+.closeBtn {
+  position: absolute;
+  top: 24px;
+  right: 18px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  border-radius: 50%;
+  color: var(--lumiverse-text-muted, rgba(230, 230, 240, 0.45));
+  cursor: pointer;
+  transition:
+    background var(--lcs-transition-fast),
+    color var(--lcs-transition-fast),
+    border-color var(--lcs-transition-fast);
+  z-index: 2;
+}
+
+.closeBtn:hover {
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  border-color: var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1));
+}
+
+/* ── Avatar frame — double-border glass with ambient backlight ── */
+.frame {
+  position: relative;
+  width: 186px;
+  max-height: 380px;
+  border-radius: var(--lcs-radius, 14px);
+  overflow: hidden;
+  cursor: pointer;
+  border: 1.5px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  box-shadow:
+    0 6px 28px rgba(0, 0, 0, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+  transition:
+    border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    transform var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+  flex-shrink: 0;
+}
+
+/* Ambient backlight glow behind the frame */
+.frame::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: radial-gradient(
+    ellipse at 50% 100%,
+    var(--lumiverse-primary-010, rgba(140, 130, 255, 0.1)) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+  z-index: 1;
+}
+
+.frame:hover {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.22),
+    0 0 20px var(--lumiverse-primary-010, rgba(140, 130, 255, 0.1)),
+    0 0 0 1px var(--lumiverse-primary-015, rgba(140, 130, 255, 0.15)),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+  transform: scale(1.015);
+}
+
+.frame:hover::after {
+  opacity: 1;
+}
+
+.portrait {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  transition: transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.frame:hover .portrait {
+  transform: scale(1.03);
+}
+
+/* ── Placeholder fallback ── */
+.placeholder {
+  width: 186px;
+  height: 186px;
+  border-radius: var(--lcs-radius, 14px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 60%, var(--lumiverse-fill, rgba(255, 255, 255, 0.06)) 0%, transparent 70%),
+    var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.2));
+  font-size: calc(48px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+/* ── Character name ── */
+.name {
+  margin: 0;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  color: var(--lumiverse-primary-text, rgba(160, 150, 255, 0.95));
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 6px var(--lumiverse-primary-010, rgba(140, 130, 255, 0.1));
+}
+
+/* ── Gallery mosaic ── */
+.mosaic {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 80px;
+  grid-auto-flow: dense;
+  gap: 4px;
+}
+
+.mosaicCell {
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  transition:
+    border-color var(--lcs-transition-fast, 120ms ease),
+    box-shadow var(--lcs-transition-fast, 120ms ease);
+}
+
+.mosaicCell:hover {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+  box-shadow: 0 0 10px var(--lumiverse-primary-010, rgba(140, 130, 255, 0.1));
+}
+
+/* Wide images span 2 columns */
+.mosaicWide {
+  grid-column: span 2;
+}
+
+/* Tall images span 2 rows */
+.mosaicTall {
+  grid-row: span 2;
+}
+
+/* Featured images span 2x2 */
+.mosaicLarge {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+.mosaicImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mosaicCell:hover .mosaicImg {
+  transform: scale(1.05);
+}
+
+.mosaicPlaceholder {
+  width: 100%;
+  height: 100%;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+}
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .panelOuter {
+    display: none !important;
+  }
+}
+
+@media (min-width: 601px) and (max-width: 900px) {
+  .panel {
+    width: 164px;
+    padding: 14px 8px 10px;
+  }
+
+  .frame {
+    width: 144px;
+    max-height: 300px;
+  }
+
+  .placeholder {
+    width: 144px;
+    height: 144px;
+    font-size: calc(36px * var(--lumiverse-font-scale, 1));
+  }
+
+  .mosaic {
+    grid-auto-rows: 60px;
+    gap: 3px;
+  }
+}

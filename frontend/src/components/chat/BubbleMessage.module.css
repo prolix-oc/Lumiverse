@@ -1,0 +1,495 @@
+/* ── Bubble mode card ── */
+.card {
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--lcs-radius, 14px);
+  padding: 0;
+  border: none;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
+    var(--lcs-glass-bg);
+  box-shadow: 0 0 0 0.5px var(--lcs-glass-border);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition:
+    background var(--lcs-transition-fast),
+    border-color var(--lcs-transition-fast),
+    box-shadow 0.3s ease;
+}
+
+/* Hide accent bars */
+.card::before {
+  display: none;
+}
+
+/* Bottom specular highlight */
+.card::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.03), transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Character tint */
+.character {
+  flex-direction: row;
+  background:
+    linear-gradient(145deg, var(--lcs-glass-char-tint, rgba(100, 120, 255, 0.03)) 0%, transparent 40%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
+    var(--lcs-glass-bg);
+}
+
+/* User tint */
+.user {
+  flex-direction: row-reverse;
+  background:
+    linear-gradient(225deg, var(--lcs-glass-user-tint, rgba(255, 180, 100, 0.03)) 0%, transparent 40%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
+    var(--lcs-glass-bg);
+}
+
+/* Left-aligned user override — mirrors character layout */
+.userLeft.user {
+  flex-direction: row;
+}
+
+/* Viewport-gated expensive effects — only rendered for visible cards */
+.card[data-in-viewport] {
+  box-shadow:
+    0 0 0 0.5px var(--lcs-glass-border),
+    0 2px 6px rgba(0, 0, 0, 0.2),
+    0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* Only apply backdrop-filter when glass effects are enabled */
+:global([data-glass]) .card[data-in-viewport] {
+  backdrop-filter: blur(var(--lcs-glass-strong-blur, 40px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur, 40px)) saturate(1.2);
+}
+
+.card[data-in-viewport]:hover {
+  box-shadow:
+    0 0 0 0.5px var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1)),
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    0 4px 16px rgba(0, 0, 0, 0.22),
+    0 20px 56px rgba(0, 0, 0, 0.12),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(255, 255, 255, 0.018) 100%),
+    var(--lcs-glass-bg-hover, rgba(24, 22, 36, 0.65));
+}
+
+:global([data-theme-mode='light']) .card[data-in-viewport]:hover {
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.05),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.5);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(255, 255, 255, 0.04) 100%),
+    var(--lcs-glass-bg-hover, rgba(255, 255, 255, 0.75));
+}
+
+/* Hidden draft message — dimmed, darkened, dashed border */
+.hidden {
+  opacity: 0.4;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  filter: brightness(0.6) saturate(0.5);
+  transition:
+    opacity var(--lcs-transition),
+    filter var(--lcs-transition),
+    background var(--lcs-transition-fast),
+    border-color var(--lcs-transition-fast),
+    box-shadow 0.3s ease;
+}
+
+.hidden:hover {
+  opacity: 0.65;
+  filter: brightness(0.75) saturate(0.7);
+}
+
+.hiddenBadge {
+  color: rgba(255, 160, 80, 0.9);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+}
+
+/* Streaming state — GPU optimization */
+.streaming {
+  will-change: opacity, transform;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ── Bubble inner content ── */
+.bubble {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* Must sit above .avatarBg (z-index: 0) so the dissolving portrait
+     doesn't overlay the header, reasoning block, or other bubble content. */
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.user .header {
+  flex-direction: row-reverse;
+}
+
+.userLeft.user .header {
+  flex-direction: row;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.user .headerLeft {
+  flex-direction: row-reverse;
+}
+
+.userLeft.user .headerLeft {
+  flex-direction: row;
+}
+
+/* ── Avatar — 44px rounded-square ── */
+.avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  border: none;
+  position: relative;
+  z-index: 1;
+}
+
+.avatarFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+}
+
+/* ── Name ── */
+.name,
+.nameChar,
+.nameUser {
+  font-size: calc(20px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+:global([data-theme-mode='dark']) .nameChar {
+  color: var(--char-name-dark, #fff);
+}
+
+:global([data-theme-mode='light']) .nameChar {
+  color: var(--char-name-light, var(--lumiverse-text));
+}
+
+/* ── Meta wrap ── */
+.metaWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.user .metaWrap {
+  align-items: flex-end;
+}
+
+.userLeft.user .metaWrap {
+  align-items: flex-start;
+}
+
+.user .metaPill {
+  align-self: flex-end;
+}
+
+.userLeft.user .metaPill {
+  align-self: flex-start;
+}
+
+/* Meta pill — monospace badge */
+.metaPill {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-top: 5px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 0.02em;
+  flex-wrap: wrap;
+  gap: 0;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  line-height: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+/* metaPill blur removed — sits inside the card which already has 40px blur */
+
+.metaDot {
+  margin: 0 6px;
+  opacity: 0.35;
+}
+
+/* ── Dissolving avatar background ── */
+.avatarBg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  mask-image:
+    linear-gradient(to right, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(to right, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  -webkit-mask-composite: source-in;
+}
+
+.user .avatarBg {
+  left: auto;
+  right: 0;
+  mask-image:
+    linear-gradient(to left, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  -webkit-mask-image:
+    linear-gradient(to left, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  -webkit-mask-composite: source-in;
+}
+
+.userLeft.user .avatarBg {
+  left: 0;
+  right: auto;
+  mask-image:
+    linear-gradient(to right, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(to right, black 0%, black 25%, transparent 90%),
+    linear-gradient(to bottom, black 0%, black 55%, transparent 100%),
+    linear-gradient(to top, black 0%, black 85%, transparent 100%);
+  -webkit-mask-composite: source-in;
+}
+
+.avatarBgImg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+  opacity: 0.28;
+  transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card:hover .avatarBgImg {
+  opacity: 0.36;
+}
+
+.avatarBgScrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.character .avatarBgScrim {
+  background: linear-gradient(
+    to right,
+    var(--lumiverse-bg, #0a0a0c) 0%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 70%, transparent) 50%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 45%, transparent) 100%
+  );
+}
+
+.user .avatarBgScrim {
+  background: linear-gradient(
+    to left,
+    var(--lumiverse-bg, #0a0a0c) 0%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 70%, transparent) 50%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 45%, transparent) 100%
+  );
+}
+
+.userLeft.user .avatarBgScrim {
+  background: linear-gradient(
+    to right,
+    var(--lumiverse-bg, #0a0a0c) 0%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 70%, transparent) 50%,
+    color-mix(in srgb, var(--lumiverse-bg, #0a0a0c) 45%, transparent) 100%
+  );
+}
+
+/* ── Content ── */
+.content {
+  position: relative;
+  z-index: 1;
+  padding: 16px 24px 22px;
+}
+
+.user .content {
+  text-align: right;
+}
+
+.userLeft.user .content {
+  text-align: left;
+}
+
+/* ── Actions pill — hover reveal ── */
+.actionsPill {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  z-index: 5;
+  opacity: 0;
+}
+
+.card:hover .actionsPill {
+  opacity: 1;
+}
+
+.user .actionsPill {
+  left: 24px;
+  right: auto;
+}
+
+.userLeft.user .actionsPill {
+  right: 24px;
+  left: auto;
+}
+
+/* ── Mobile breakpoints ── */
+@media (max-width: 768px) {
+  .card {
+    border-radius: var(--lcs-radius, 14px);
+  }
+
+  .header {
+    padding: 12px 12px 0;
+    gap: 8px;
+  }
+
+  .content {
+    padding: 10px 12px 14px;
+  }
+
+  .avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .name {
+    font-size: calc(17px * var(--lumiverse-font-scale, 1));
+  }
+
+  .actionsPill {
+    top: 12px;
+    right: 12px;
+  }
+
+  .user .actionsPill {
+    left: 12px;
+  }
+
+  .userLeft.user .actionsPill {
+    right: 12px;
+    left: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .header {
+    padding: 10px 10px 0;
+    gap: 6px;
+  }
+
+  .headerLeft {
+    gap: 8px;
+  }
+
+  .content {
+    padding: 8px 10px 12px;
+  }
+
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+  }
+
+  .name {
+    font-size: calc(15px * var(--lumiverse-font-scale, 1));
+  }
+
+  .actionsPill {
+    top: 10px;
+    right: 10px;
+  }
+
+  .user .actionsPill {
+    left: 10px;
+  }
+
+  .userLeft.user .actionsPill {
+    right: 10px;
+    left: auto;
+  }
+}

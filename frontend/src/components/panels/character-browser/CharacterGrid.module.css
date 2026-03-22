@@ -1,0 +1,16 @@
+.scrollContainer {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+/* Suppress hover effects while scrolling — uses global selector
+   because child cards are from a different CSS module */
+.scrollContainer[data-scrolling] :global(*) {
+  pointer-events: none;
+}
+
+.row {
+  box-sizing: border-box;
+}

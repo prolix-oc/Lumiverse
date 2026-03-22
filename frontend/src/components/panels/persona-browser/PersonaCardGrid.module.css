@@ -1,0 +1,137 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+}
+
+.empty {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--lumiverse-text-muted);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  outline: none;
+}
+
+.card:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.card:focus-visible {
+  box-shadow: 0 0 0 2px var(--lumiverse-primary);
+}
+
+.cardSelected {
+  background: rgba(147, 112, 219, 0.08);
+  border-color: var(--lumiverse-primary);
+}
+
+.cardActive {
+  box-shadow: 0 0 12px rgba(147, 112, 219, 0.35);
+}
+
+.avatarWrap {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+}
+
+.avatarImg {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatarFallback {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-primary-muted);
+  background: rgba(147, 112, 219, 0.08);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.badges {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--lumiverse-bg);
+}
+
+.badgeActive {
+  background: rgb(147, 112, 219);
+  color: white;
+}
+
+.badgeDefault {
+  background: rgb(218, 165, 32);
+  color: white;
+}
+
+.badgeConnected {
+  background: rgb(72, 187, 120);
+  color: white;
+}
+
+.nameGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.name {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--lumiverse-text);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.title {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  line-height: 1.3;
+}
+
+.inlineEditor {
+  grid-column: 1 / -1;
+}

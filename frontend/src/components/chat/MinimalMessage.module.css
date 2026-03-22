@@ -1,0 +1,194 @@
+/* ── Minimal mode card — glassmorphic ── */
+.card {
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--lcs-radius);
+  background: var(--lcs-glass-bg);
+  border: 1px solid var(--lcs-glass-border);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  position: relative;
+  transition:
+    background var(--lcs-transition-fast),
+    border-color var(--lcs-transition-fast),
+    box-shadow var(--lcs-transition-fast);
+}
+
+/* Only apply backdrop-filter when glass effects are enabled */
+:global([data-glass]) .card[data-in-viewport] {
+  backdrop-filter: blur(var(--lcs-glass-blur));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur));
+}
+
+/* Accent bar — positioned via ::before */
+.card::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Character accent — purple, left */
+.character::before {
+  left: 0;
+  background: linear-gradient(180deg, var(--lumiverse-primary-050), var(--lumiverse-primary-020));
+  box-shadow: 0 0 8px var(--lumiverse-primary-015);
+}
+
+/* User accent — orange, right */
+.user::before {
+  right: 0;
+  background: linear-gradient(180deg, rgba(255, 165, 0, 0.8), rgba(255, 165, 0, 0.4));
+  box-shadow: 0 0 8px rgba(255, 165, 0, 0.25);
+}
+
+.card:hover {
+  background: var(--lumiverse-bg-elevated);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 0 16px var(--lumiverse-primary-010);
+}
+
+:global([data-theme-mode='light']) .card:hover {
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.04);
+}
+
+/* Hidden draft message — dimmed, darkened, dashed border */
+.hidden {
+  opacity: 0.4;
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.12);
+  filter: brightness(0.6) saturate(0.5);
+  transition:
+    opacity var(--lcs-transition),
+    filter var(--lcs-transition),
+    background var(--lcs-transition-fast),
+    border-color var(--lcs-transition-fast),
+    box-shadow var(--lcs-transition-fast);
+}
+
+.hidden:hover {
+  opacity: 0.65;
+  filter: brightness(0.75) saturate(0.7);
+}
+
+/* Streaming state — GPU optimization */
+.streaming {
+  will-change: opacity, transform;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ── Layout ── */
+.user {
+  flex-direction: row-reverse;
+}
+
+.character {
+  flex-direction: row;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--lumiverse-border);
+}
+
+.avatarFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+}
+
+.bubble {
+  flex: 1;
+  min-width: 0;
+  max-width: 85%;
+}
+
+.header {
+  margin-bottom: 4px;
+}
+
+.name {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.nameUser {
+  color: rgba(255, 165, 0, 0.85);
+}
+
+.nameChar {
+  color: var(--lumiverse-primary-text);
+}
+
+:global([data-theme-mode='dark']) .nameChar {
+  color: var(--char-name-dark, var(--lumiverse-primary-text));
+}
+
+:global([data-theme-mode='light']) .nameChar {
+  color: var(--char-name-light, var(--lumiverse-primary-text));
+}
+
+@media (max-width: 600px) {
+  .bubble {
+    max-width: 100%;
+  }
+
+  .card {
+    padding: 10px;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .card {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .avatar {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+/* ── Actions wrapper ── */
+.actionsWrap {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+/* ── Mobile: pull actions out of flex flow ── */
+@media (max-width: 768px) {
+  .bubble {
+    max-width: 100%;
+  }
+
+  .actionsWrap {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+  }
+
+  .user .actionsWrap {
+    right: auto;
+    left: 6px;
+  }
+}

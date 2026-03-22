@@ -1,0 +1,433 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.installRow {
+  display: flex;
+  gap: 8px;
+}
+
+.addMenuWrap {
+  position: relative;
+}
+
+.installInput {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.installInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.installInput::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.installBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-primary);
+  border: none;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.addMenu {
+  position: fixed;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  box-shadow: var(--lumiverse-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 11000;
+}
+
+.menuActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-primary);
+  border: none;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.menuActionBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.menuDivider {
+  height: 1px;
+  background: var(--lumiverse-border);
+}
+
+.menuLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--lumiverse-text-dim);
+}
+
+.installBtn:hover {
+  opacity: 0.9;
+}
+
+.installBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sectionLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--lumiverse-text-dim);
+}
+
+.importSummary {
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+}
+
+.extensionList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extensionCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.extensionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.extensionInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.extensionName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.extensionMeta {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}
+
+.extensionDesc {
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+  line-height: 1.4;
+}
+
+.extensionActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.actionBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border-hover);
+}
+
+.actionBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dangerBtn {
+  composes: actionBtn;
+  color: var(--lumiverse-danger);
+}
+
+.dangerBtn:hover {
+  background: var(--lumiverse-danger-015);
+  border-color: var(--lumiverse-danger);
+}
+
+.toggleBtn {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+}
+
+.toggleBtn::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.toggleOn {
+  background: var(--lumiverse-primary);
+}
+
+.toggleOn::after {
+  transform: translateX(16px);
+}
+
+.toggleOff {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--lumiverse-text-dim);
+}
+
+.statusRunning {
+  background: var(--lumiverse-success);
+}
+
+.statusStopped {
+  background: var(--lumiverse-text-dim);
+}
+
+.statusError {
+  background: var(--lumiverse-danger);
+}
+
+.permissions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.permPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.permPillActive {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-020);
+}
+
+.permPillInactive {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text-dim);
+  border-color: var(--lumiverse-border);
+}
+
+.permPill:hover {
+  transform: translateY(-1px);
+}
+
+.permPillInactive:hover {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border-hover);
+}
+
+.emptyState {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--lumiverse-text-dim);
+  font-size: 13px;
+}
+
+.installError {
+  font-size: 12px;
+  color: var(--lumiverse-danger);
+  padding: 4px 0;
+}
+
+/* ─── Branch badge on extension cards ─── */
+.branchBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+/* ─── Branch switch dropdown ─── */
+.branchMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.branchMenuLoading {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  padding: 6px 8px;
+}
+
+.branchMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--lumiverse-radius);
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  text-align: left;
+}
+
+.branchMenuItem:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.branchMenuItemCurrent {
+  color: var(--lumiverse-primary);
+  font-weight: 600;
+  cursor: default;
+}
+
+.branchCurrentLabel {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--lumiverse-text-dim);
+}
+
+.actionBtnActive {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-020);
+}
+
+/* ─── Branch select in install menu ─── */
+.branchSelect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.branchSelectLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  white-space: nowrap;
+}
+
+.branchSelectInput {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  outline: none;
+}
+
+.branchSelectInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.branchFetchHint {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}

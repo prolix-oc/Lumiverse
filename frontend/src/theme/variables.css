@@ -1,0 +1,124 @@
+:root {
+  /* Primary purple accent */
+  --lumiverse-primary: rgba(147, 112, 219, 0.9);
+  --lumiverse-primary-hover: rgba(167, 132, 239, 0.95);
+  --lumiverse-primary-light: rgba(147, 112, 219, 0.1);
+  --lumiverse-primary-muted: rgba(147, 112, 219, 0.6);
+  --lumiverse-primary-text: rgba(186, 135, 255, 0.95);
+  --lumiverse-primary-010: rgba(147, 112, 219, 0.1);
+  --lumiverse-primary-015: rgba(147, 112, 219, 0.15);
+  --lumiverse-primary-020: rgba(147, 112, 219, 0.2);
+  --lumiverse-primary-050: rgba(147, 112, 219, 0.5);
+
+  /* Secondary gray tones */
+  --lumiverse-secondary: rgba(128, 128, 128, 0.15);
+  --lumiverse-secondary-hover: rgba(128, 128, 128, 0.25);
+  --lumiverse-secondary-border: rgba(128, 128, 128, 0.25);
+
+  /* Status colors */
+  --lumiverse-danger: #ef4444;
+  --lumiverse-danger-hover: #dc2626;
+  --lumiverse-danger-015: rgba(239, 68, 68, 0.15);
+  --lumiverse-danger-020: rgba(239, 68, 68, 0.2);
+  --lumiverse-danger-050: rgba(239, 68, 68, 0.5);
+  --lumiverse-success: #22c55e;
+  --lumiverse-warning: #f59e0b;
+
+  /* Dark purple-tinted backgrounds */
+  --lumiverse-bg: rgba(28, 24, 38, 0.95);
+  --lumiverse-bg-elevated: rgba(35, 30, 48, 0.9);
+  --lumiverse-bg-hover: rgba(45, 40, 58, 0.9);
+  --lumiverse-bg-dark: rgba(0, 0, 0, 0.15);
+  --lumiverse-bg-darker: rgba(0, 0, 0, 0.25);
+  --lumiverse-bg-040: rgba(28, 24, 38, 0.4);
+  --lumiverse-bg-050: rgba(28, 24, 38, 0.5);
+  --lumiverse-bg-070: rgba(28, 24, 38, 0.7);
+  --lumiverse-bg-elevated-040: rgba(35, 30, 48, 0.4);
+  --lumiverse-bg-deep-080: rgba(20, 17, 28, 0.8);
+  --lumiverse-scene-text-scrim: rgba(7, 9, 16, 0.46);
+
+  /* Subtle purple-tinted borders */
+  --lumiverse-border: rgba(147, 112, 219, 0.12);
+  --lumiverse-border-hover: rgba(147, 112, 219, 0.25);
+  --lumiverse-border-light: rgba(128, 128, 128, 0.12);
+
+  /* Text colors */
+  --lumiverse-text: rgba(255, 255, 255, 0.9);
+  --lumiverse-text-muted: rgba(255, 255, 255, 0.65);
+  --lumiverse-text-dim: rgba(255, 255, 255, 0.4);
+  --lumiverse-text-hint: rgba(255, 255, 255, 0.3);
+
+  /* Border radii */
+  --lumiverse-radius-sm: 5px;
+  --lumiverse-radius: 8px;
+  --lumiverse-radius-md: 10px;
+  --lumiverse-radius-lg: 12px;
+  --lumiverse-radius-xl: 16px;
+
+  /* Shadows */
+  --lumiverse-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --lumiverse-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --lumiverse-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --lumiverse-shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 1px rgba(147, 112, 219, 0.3);
+  --lumiverse-shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.5);
+
+  /* Highlight insets */
+  --lumiverse-highlight-inset: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --lumiverse-highlight-inset-md: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --lumiverse-highlight-inset-lg: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+
+  /* Modal & overlays */
+  --lumiverse-modal-backdrop: rgba(0, 0, 0, 0.6);
+  --lumiverse-swatch-border: rgba(255, 255, 255, 0.15);
+  --lumiverse-gradient-modal: linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98));
+
+  /* Icon colors */
+  --lumiverse-icon: rgba(255, 255, 255, 0.9);
+  --lumiverse-icon-muted: rgba(255, 255, 255, 0.6);
+  --lumiverse-icon-dim: rgba(255, 255, 255, 0.4);
+
+  /* Fill colors */
+  --lumiverse-fill-subtle: rgba(0, 0, 0, 0.1);
+  --lumiverse-fill: rgba(0, 0, 0, 0.15);
+  --lumiverse-fill-hover: rgba(0, 0, 0, 0.2);
+  --lumiverse-fill-medium: rgba(0, 0, 0, 0.25);
+  --lumiverse-fill-strong: rgba(0, 0, 0, 0.3);
+  --lumiverse-fill-heavy: rgba(0, 0, 0, 0.5);
+  --lumiverse-fill-deepest: rgba(0, 0, 0, 0.7);
+
+  /* Card backgrounds */
+  --lumiverse-card-bg: linear-gradient(165deg, rgba(28, 24, 38, 0.95) 0%, rgba(24, 20, 34, 0.9) 50%, rgba(20, 17, 30, 0.95) 100%);
+  --lumiverse-card-image-bg: linear-gradient(135deg, rgba(20, 17, 28, 0.8) 0%, rgba(28, 22, 40, 0.6) 100%);
+
+  /* Neutral borders */
+  --lumiverse-border-neutral: rgba(128, 128, 128, 0.15);
+  --lumiverse-border-neutral-hover: rgba(128, 128, 128, 0.25);
+
+  /* Transitions */
+  --lumiverse-transition: 200ms ease;
+  --lumiverse-transition-fast: 150ms ease;
+
+  /* Typography */
+  --lumiverse-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --lumiverse-font-mono: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+
+  /* Chat Sheld — glassmorphic tokens */
+  --lcs-glass-bg: rgba(18, 16, 28, 0.55);
+  --lcs-glass-border: rgba(255, 255, 255, 0.06);
+  --lcs-glass-blur: 14px;
+  --lcs-glass-soft-blur: 8px;
+  --lcs-glass-strong-blur: 40px;
+  --lcs-radius: 14px;
+  --lcs-radius-sm: 8px;
+  --lcs-radius-xs: 5px;
+  --lcs-transition: 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  --lcs-transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --lumiverse-bg-deep: rgba(10, 8, 18, 1);
+  --lumiverse-font-scale: 1;
+
+  /* Chat Sheld — prose tokens */
+  --lumiverse-prose-italic: var(--lumiverse-text-muted);
+  --lumiverse-prose-bold: inherit;
+  --lumiverse-prose-dialogue: var(--lumiverse-primary-text);
+  --lumiverse-prose-blockquote: var(--lumiverse-text-muted);
+}

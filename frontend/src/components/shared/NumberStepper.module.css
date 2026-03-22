@@ -1,0 +1,71 @@
+.stepper {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-bg);
+  overflow: hidden;
+  height: 28px;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.stepper:focus-within {
+  border-color: var(--lumiverse-primary);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--lumiverse-text);
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.input::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.input::-webkit-outer-spin-button,
+.input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--lumiverse-border);
+  width: 22px;
+  flex-shrink: 0;
+}
+
+.btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  padding: 0;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.btn:hover {
+  background: rgba(147, 112, 219, 0.1);
+  color: var(--lumiverse-primary);
+}
+
+.btn:active {
+  background: rgba(147, 112, 219, 0.18);
+}
+
+.btn + .btn {
+  border-top: 1px solid var(--lumiverse-border);
+}

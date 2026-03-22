@@ -1,0 +1,315 @@
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.controlBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.controlBtn:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-text);
+}
+
+.enableRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.enableRow label {
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.detectionSection {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  background: var(--lumiverse-bg-dark);
+}
+
+.detectionHeader {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  margin-bottom: 8px;
+}
+
+.detectionHint {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.detectionModes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.modeOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.modeOption input[type="radio"] {
+  margin-top: 2px;
+  accent-color: var(--lumiverse-primary);
+}
+
+.modeLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.modeName {
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  font-weight: 500;
+}
+
+.modeDesc {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}
+
+.contextRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.contextRow label {
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+  white-space: nowrap;
+}
+
+.contextInput {
+  width: 60px;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 4px;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  font-family: inherit;
+  text-align: center;
+}
+
+.contextInput:focus {
+  border-color: var(--lumiverse-primary);
+  outline: none;
+}
+
+.defaultRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.defaultRow label {
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+  white-space: nowrap;
+}
+
+.defaultSelect {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 4px;
+  background: var(--lumiverse-bg-dark);
+  color: var(--lumiverse-text);
+  font-family: inherit;
+  max-width: 200px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.addCard {
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 8px;
+  aspect-ratio: 3 / 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--lumiverse-text-dim);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.addCard:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--lumiverse-text-dim);
+  text-align: center;
+}
+
+.emptyIcon {
+  opacity: 0.4;
+}
+
+.emptyTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+}
+
+.emptyHint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.emptyActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.count {
+  font-size: 11px;
+  color: var(--lumiverse-text-hint);
+}
+
+.uploading {
+  font-size: 11px;
+  color: var(--lumiverse-primary);
+  padding: 8px 0;
+}
+
+.galleryModal {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.galleryPickItem {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  aspect-ratio: 1;
+  transition: border-color 0.15s ease;
+}
+
+.galleryPickItem:hover {
+  border-color: var(--lumiverse-primary);
+}
+
+.galleryPickItem.selected {
+  border-color: var(--lumiverse-primary);
+  border-width: 2px;
+}
+
+.galleryPickImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.labelPrompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.labelPromptInput {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-bg-dark);
+  color: var(--lumiverse-text);
+  font-family: inherit;
+  outline: none;
+}
+
+.labelPromptInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.labelPromptActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.labelPromptBtn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.labelPromptBtn:hover {
+  background: var(--lumiverse-fill-hover);
+}
+
+.labelPromptBtnPrimary {
+  composes: labelPromptBtn;
+  background: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+  color: #fff;
+}
+
+.labelPromptBtnPrimary:hover {
+  opacity: 0.9;
+}

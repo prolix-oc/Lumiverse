@@ -1,0 +1,105 @@
+.wrapper {
+  position: relative;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.trigger:hover {
+  border-color: var(--lumiverse-border-hover);
+}
+
+.triggerOpen {
+  border-color: var(--lumiverse-primary);
+}
+
+.triggerLabel {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.triggerPlaceholder {
+  color: var(--lumiverse-text-muted);
+}
+
+.triggerChevron {
+  display: flex;
+  align-items: center;
+  color: var(--lumiverse-text-muted);
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.triggerChevronOpen {
+  transform: rotate(180deg);
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  box-shadow: var(--lumiverse-shadow);
+  z-index: 100;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.option:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.optionActive {
+  background: rgba(147, 112, 219, 0.1);
+  color: var(--lumiverse-primary);
+}
+
+.createOption {
+  color: var(--lumiverse-primary);
+  font-weight: 500;
+  border-top: 1px solid var(--lumiverse-border);
+}

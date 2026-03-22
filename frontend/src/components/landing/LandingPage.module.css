@@ -1,0 +1,549 @@
+.container {
+  position: relative;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--lumiverse-bg-deep);
+}
+
+.container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.container::-webkit-scrollbar-thumb {
+  background: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+}
+
+.container::-webkit-scrollbar-thumb:hover {
+  background: var(--lcs-scrollbar-thumb-hover, rgba(255, 255, 255, 0.25));
+}
+
+/* Ambient background */
+.bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.bgGlow {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.22;
+  background: radial-gradient(circle at center, var(--lumiverse-primary-015) 0%, var(--lumiverse-primary-010) 45%, transparent 72%);
+  will-change: transform, opacity;
+}
+
+.bgGlow1 {
+  width: 600px;
+  height: 600px;
+  top: -200px;
+  left: -100px;
+  animation: landingGlowFloatA 14s ease-in-out infinite;
+}
+
+.bgGlow2 {
+  width: 500px;
+  height: 500px;
+  bottom: -150px;
+  right: -100px;
+  animation: landingGlowFloatB 16s ease-in-out infinite;
+}
+
+.bgGlow3 {
+  width: 400px;
+  height: 400px;
+  left: calc(50% - 200px);
+  top: 40%;
+  animation: landingGlowFloatC 18s ease-in-out infinite;
+}
+
+@keyframes landingGlowFloatA {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translate3d(28px, 22px, 0) scale(1.05);
+    opacity: 0.26;
+  }
+}
+
+@keyframes landingGlowFloatB {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.18;
+  }
+  50% {
+    transform: translate3d(-26px, -16px, 0) scale(1.06);
+    opacity: 0.24;
+  }
+}
+
+@keyframes landingGlowFloatC {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.14;
+  }
+  50% {
+    transform: translate3d(0, -20px, 0) scale(1.08);
+    opacity: 0.2;
+  }
+}
+
+/* Grid pattern */
+.grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
+    linear-gradient(90deg, var(--lumiverse-primary-010) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+}
+
+/* Content */
+.content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 24px 32px;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  margin-bottom: 24px;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.logoIcon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+}
+
+.logoText h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+  letter-spacing: -0.02em;
+}
+
+.logoText span {
+  font-size: 13px;
+  color: var(--lumiverse-text-muted);
+}
+
+.headerRight {
+  display: flex;
+  gap: 8px;
+}
+
+.headerBtn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.headerBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--lumiverse-text);
+}
+
+.headerBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Main */
+.main {
+  flex: 1;
+}
+
+/* Grid */
+.gridCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 20px;
+}
+
+/* Card */
+.card {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--lumiverse-card-bg);
+  border: 1px solid var(--lumiverse-border);
+  box-shadow: var(--lumiverse-shadow-sm);
+  transition: border-color var(--lumiverse-transition), box-shadow var(--lumiverse-transition);
+  contain: layout style paint;
+}
+
+.card:hover {
+  border-color: var(--lumiverse-border-hover);
+  box-shadow: var(--lumiverse-shadow-md), 0 0 10px var(--lumiverse-primary-010);
+}
+
+/* Suppress hover effects while scrolling */
+.container[data-scrolling] .card {
+  pointer-events: none;
+}
+
+.cardBtn {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  cursor: pointer;
+  background: none;
+  border: none;
+  text-align: left;
+  color: inherit;
+}
+
+.cardImage {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+}
+
+.cardImageOverlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--lumiverse-bg-deep) 0%, transparent 60%);
+}
+
+.cardContent {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 14px;
+  z-index: 1;
+}
+
+.cardName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chatCountBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-primary-muted);
+  background: rgba(147, 112, 219, 0.12);
+  border: 1px solid var(--lumiverse-primary-020);
+  padding: 1px 6px;
+  border-radius: 20px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.cardTime {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}
+
+.cardAvatarFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+}
+
+.deleteBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(10, 10, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.card:hover .deleteBtn {
+  opacity: 1;
+}
+
+.deleteBtn:hover {
+  color: var(--lumiverse-danger);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* ---- Group Chat Card ---- */
+.groupCard {
+  border-color: var(--lumiverse-primary-020);
+}
+
+.groupCard:hover {
+  border-color: var(--lumiverse-primary-050);
+  box-shadow: var(--lumiverse-shadow-md), 0 0 16px var(--lumiverse-primary-015);
+}
+
+.groupCard .cardBtn {
+  position: relative;
+}
+
+.groupCard .cardContent {
+  z-index: 3;
+}
+
+.groupMosaic {
+  display: grid;
+  gap: 2px;
+}
+
+.groupMosaic2 {
+  grid-template-columns: 1.5fr 1fr;
+}
+
+.groupMosaic3 {
+  grid-template-columns: 1.5fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.groupMosaic3 .mosaicCell:first-child {
+  grid-row: 1 / -1;
+}
+
+.groupMosaic4 {
+  grid-template-columns: 1.4fr 1fr;
+  grid-template-rows: 1.4fr 1fr;
+}
+
+.mosaicCell {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.mosaicFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+}
+
+/* Overlay sits outside the grid so it isn't a grid item */
+.groupOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: linear-gradient(to top, var(--lumiverse-bg-deep) 0%, transparent 55%);
+  pointer-events: none;
+}
+
+.groupMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.groupBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--lumiverse-primary-muted);
+  background: rgba(147, 112, 219, 0.12);
+  border: 1px solid var(--lumiverse-primary-020);
+  padding: 2px 7px;
+  border-radius: 20px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* Skeleton */
+.skeletonCard {
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--lumiverse-card-bg);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.skeletonImage {
+  aspect-ratio: 3 / 4;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.02) 25%, rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0.02) 75%);
+  background-size: 200% 100%;
+  animation: lumiverseShimmer 1.5s ease-in-out infinite;
+}
+
+.skeletonContent {
+  padding: 12px 14px;
+}
+
+.skeletonTitle {
+  height: 14px;
+  width: 70%;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  margin-bottom: 6px;
+}
+
+.skeletonMeta {
+  height: 10px;
+  width: 40%;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Empty & Error */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+}
+
+.emptyIcon {
+  color: var(--lumiverse-primary-muted);
+  margin-bottom: 20px;
+  opacity: 0.5;
+}
+
+.emptyState h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  margin-bottom: 8px;
+}
+
+.emptyState p {
+  font-size: 14px;
+  color: var(--lumiverse-text-muted);
+}
+
+.errorState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  gap: 16px;
+  color: var(--lumiverse-text-muted);
+}
+
+.primaryBtn {
+  padding: 10px 24px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--lumiverse-primary), var(--lumiverse-primary-hover));
+  border: 1px solid var(--lumiverse-primary-050);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* Infinite scroll sentinel */
+.loadMoreSentinel {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+  min-height: 60px;
+}
+
+.loadingMore {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--lumiverse-text-muted);
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 24px 0;
+  color: var(--lumiverse-text-hint);
+  font-size: 13px;
+}
+
+/* Spin */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@media (max-width: 600px) {
+  .content {
+    padding: 16px;
+  }
+  .gridCards {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}

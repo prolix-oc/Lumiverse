@@ -1,0 +1,106 @@
+/* ── Edit area ── */
+.editArea {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editTextarea {
+  width: 100%;
+  min-height: 100px;
+  padding: 10px 12px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  color: var(--lumiverse-text);
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-family: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.editTextarea:focus {
+  border-color: var(--lumiverse-primary-muted);
+  outline: none;
+}
+
+/* ── Reasoning section ── */
+.reasoningSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reasoningTextarea {
+  min-height: 70px;
+  border-color: rgba(147, 112, 219, 0.25);
+  background: rgba(147, 112, 219, 0.04);
+}
+
+.reasoningTextarea:focus {
+  border-color: rgba(147, 112, 219, 0.5);
+}
+
+.contentSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-left: 2px;
+}
+
+/* ── Actions ── */
+.editActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.editCancelBtn {
+  padding: 6px 16px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.editSaveBtn {
+  padding: 6px 16px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  border-radius: 8px;
+  background: var(--lumiverse-primary-020);
+  border: 1px solid var(--lumiverse-primary-050);
+  color: var(--lumiverse-primary-text);
+  cursor: pointer;
+}
+
+/* ── Mobile ── */
+@media (max-width: 600px) {
+  .reasoningTextarea {
+    min-height: 56px;
+  }
+
+  .editTextarea {
+    min-height: 80px;
+  }
+
+  .editActions {
+    position: sticky;
+    bottom: 0;
+    padding: 6px 0;
+    background: var(--lumiverse-surface, inherit);
+  }
+}

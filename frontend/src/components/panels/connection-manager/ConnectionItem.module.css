@@ -1,0 +1,145 @@
+.item {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.itemActive {
+  background: var(--lumiverse-primary-light);
+}
+
+.itemRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.itemBtn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.itemBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.itemIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--lumiverse-border);
+}
+
+.itemInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.itemName {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.defaultStar {
+  flex-shrink: 0;
+  color: #f5a623;
+}
+
+.itemMeta {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}
+
+.activeCheck {
+  color: var(--lumiverse-primary);
+  flex-shrink: 0;
+}
+
+.itemActions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.actionBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.actionBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.deleteBtn:hover {
+  color: var(--lumiverse-error);
+}
+
+.testSuccess {
+  color: var(--lumiverse-success) !important;
+}
+
+.testFail {
+  color: var(--lumiverse-error) !important;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.testMessage {
+  padding: 0 8px 8px 50px;
+  font-size: 11px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.testMessageSuccess {
+  color: var(--lumiverse-success);
+}
+
+.testMessageFail {
+  color: var(--lumiverse-error);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

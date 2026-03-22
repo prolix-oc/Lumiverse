@@ -1,0 +1,30 @@
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(147, 112, 219, 0.1);
+  border: 2px dashed var(--lumiverse-primary);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--lumiverse-primary-muted);
+}
+
+.text {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}

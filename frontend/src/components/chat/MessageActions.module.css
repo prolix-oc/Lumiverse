@@ -1,0 +1,43 @@
+.actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--lumiverse-transition-fast);
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+/* Show on parent card hover */
+:global(.card):hover .actions,
+*:hover > .actions {
+  opacity: 1;
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.btn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.deleteBtn {
+  composes: btn;
+}
+
+.deleteBtn:hover {
+  color: var(--lumiverse-danger);
+  background: rgba(239, 68, 68, 0.1);
+}

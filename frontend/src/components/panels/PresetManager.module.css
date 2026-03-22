@@ -1,0 +1,218 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Quick preset buttons row ── */
+.presetRow {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.presetBtn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.presetBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.presetBtnActive {
+  background: var(--lumiverse-primary-light);
+  border-color: var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary);
+}
+
+/* ── Tag inputs row ── */
+.tagRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lumiverse-text-muted);
+}
+
+.input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+}
+
+/* ── Toggle row ── */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+.toggleLabel {
+  font-size: 13px;
+  color: var(--lumiverse-text);
+}
+
+.toggleDesc {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  margin-top: 1px;
+}
+
+.toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  background: var(--lumiverse-border);
+  transition: background var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.toggleOn {
+  background: var(--lumiverse-primary);
+}
+
+.toggleOn::after {
+  transform: translateX(16px);
+}
+
+/* ── Select dropdown ── */
+.select {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast);
+  appearance: auto;
+}
+
+.select:focus {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+}
+
+/* ── Textarea ── */
+.textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 56px;
+  transition: border-color var(--lumiverse-transition-fast);
+  box-sizing: border-box;
+}
+
+.textarea:focus {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+}
+
+/* ── Quick buttons row (for Start Reply With) ── */
+.quickBtnRow {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.quickBtn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.quickBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+/* ── Keep in history row ── */
+.historyRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.historyRow .input {
+  width: 64px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.historyHint {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  white-space: nowrap;
+}
+
+.clearBtn {
+  font-family: inherit;
+  color: var(--lumiverse-text-dim);
+}
+
+.clearBtn:hover {
+  color: var(--lumiverse-error, #ef4444);
+}

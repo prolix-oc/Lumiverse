@@ -1,0 +1,194 @@
+.wrapper {
+  position: absolute;
+  bottom: var(--lcs-input-safe-zone, 80px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  pointer-events: none;
+  animation: fadeIn 0.4s ease forwards;
+}
+
+.wrapper[data-state="hidden"] {
+  display: none;
+}
+
+.fadingOut {
+  animation: fadeOut 0.4s ease forwards;
+}
+
+.indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 18px;
+  min-width: 100px;
+  min-height: 48px;
+  background: var(--lumiverse-bg, rgba(28, 24, 38, 0.95));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-bg) 95%, transparent) 0%, var(--lumiverse-fill) 100%);
+  border: 1px solid var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 40%, transparent);
+  border-radius: 24px;
+  /* backdrop-filter applied only when glass is enabled — see below */
+  box-shadow: var(--lumiverse-shadow-md);
+  box-shadow: var(--lumiverse-shadow-md), 0 2px 12px color-mix(in srgb, var(--lumiverse-primary) 20%, transparent);
+  position: relative;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+:global(:not([data-glass])) .indicator {
+  background: var(--lumiverse-bg);
+}
+
+:global([data-glass]) .indicator {
+  backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+}
+
+/* Shimmer sweep */
+.indicator::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--lumiverse-primary) 15%, transparent), transparent);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.loading {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.complete {
+  animation: none;
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 50%, transparent);
+  background: var(--lumiverse-fill);
+}
+
+.complete::before {
+  animation: none;
+}
+
+.label {
+  font-family: "Courier New", "Monaco", "Consolas", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--lumiverse-primary);
+  white-space: nowrap;
+  position: relative;
+  z-index: 1;
+}
+
+.avatarStack {
+  display: flex;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--lumiverse-border);
+  box-shadow: var(--lumiverse-shadow-sm), 0 0 0 1px color-mix(in srgb, var(--lumiverse-primary) 40%, transparent);
+  object-fit: cover;
+  margin-left: -10px;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: avatarEnter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  opacity: 0;
+  transform: scale(0.8) translateY(4px);
+  background: linear-gradient(135deg, var(--lumiverse-bg) 0%, var(--lumiverse-fill) 100%);
+}
+
+.avatar:first-child {
+  margin-left: 0;
+}
+
+.avatar:hover {
+  box-shadow: var(--lumiverse-shadow-sm), 0 0 0 2px color-mix(in srgb, var(--lumiverse-primary) 50%, transparent);
+}
+
+/* Staggered animation delays */
+.avatar:nth-child(1) { animation-delay: 0ms; }
+.avatar:nth-child(2) { animation-delay: 50ms; }
+.avatar:nth-child(3) { animation-delay: 100ms; }
+.avatar:nth-child(4) { animation-delay: 150ms; }
+.avatar:nth-child(5) { animation-delay: 200ms; }
+.avatar:nth-child(6) { animation-delay: 250ms; }
+.avatar:nth-child(7) { animation-delay: 300ms; }
+.avatar:nth-child(8) { animation-delay: 350ms; }
+
+.overflow {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--lumiverse-border);
+  background: linear-gradient(135deg, var(--lumiverse-primary) 0%, color-mix(in srgb, var(--lumiverse-primary) 80%, black) 100%);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: -10px;
+  box-shadow: var(--lumiverse-shadow-sm);
+  animation: avatarEnter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation-delay: 300ms;
+}
+
+.completeIcon {
+  width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  color: var(--lumiverse-primary);
+  animation: iconPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.completeIcon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Animations */
+@keyframes pulse {
+  0%, 100% { box-shadow: var(--lumiverse-shadow-md), 0 2px 12px color-mix(in srgb, var(--lumiverse-primary) 20%, transparent); }
+  50% { box-shadow: var(--lumiverse-shadow-md), 0 3px 18px color-mix(in srgb, var(--lumiverse-primary) 35%, transparent); }
+}
+
+@keyframes shimmer {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+@keyframes avatarEnter {
+  0% { opacity: 0; transform: scale(0.8) translateY(4px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes iconPop {
+  0% { opacity: 0; transform: scale(0) rotate(-45deg); }
+  70% { transform: scale(1.2) rotate(10deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+
+@keyframes fadeIn {
+  0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes fadeOut {
+  0% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .avatar:nth-child(n+7) { display: none; }
+  .overflow { display: flex; }
+}

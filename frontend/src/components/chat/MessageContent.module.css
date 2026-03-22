@@ -1,0 +1,427 @@
+.content {
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  line-height: 1.65;
+  color: var(--lumiverse-text);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.contentUser {
+  opacity: 0.9;
+}
+
+.contentChar {}
+
+/* Prevent browser-generated quote marks on <q> wrappers */
+.prose q {
+  quotes: none;
+}
+
+.prose q::before,
+.prose q::after {
+  content: none;
+}
+
+/* ── Prose styles (Sheld theme) ── */
+.prose p {
+  margin: 0 0 0.5em;
+}
+
+.prose p:last-child {
+  margin-bottom: 0;
+}
+
+.prose em,
+.proseItalic {
+  color: var(--lumiverse-prose-italic);
+  font-style: italic;
+}
+
+.prose strong,
+.proseBold {
+  font-weight: 600;
+  color: var(--lumiverse-prose-bold);
+}
+
+.proseInlineEmphasis {
+  font-weight: 600;
+  color: var(--lumiverse-prose-bold);
+}
+
+.proseDialogue {
+  color: var(--lumiverse-prose-dialogue);
+}
+
+/* Inside <font> tags, dialogue/italic/bold defer to the font's color */
+.prose :global(font) .proseDialogue,
+.prose :global(font) em,
+.prose :global(font) .proseItalic,
+.prose :global(font) strong,
+.prose :global(font) .proseBold,
+.prose :global(font) .proseInlineEmphasis {
+  color: inherit;
+}
+
+/* Inside dialogue spans, italic/bold inherit the dialogue color */
+.proseDialogue em,
+.proseDialogue .proseItalic,
+.proseDialogue strong,
+.proseDialogue .proseBold,
+.proseDialogue .proseInlineEmphasis {
+  color: inherit;
+}
+
+/* Inline code */
+.prose code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--lcs-glass-border);
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", "Consolas", monospace;
+  font-size: 0.88em;
+  color: var(--lumiverse-primary-text);
+}
+
+/* ── Code Block Container ── */
+.codeBlock {
+  position: relative;
+  margin: 10px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.codeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.codeLang {
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", "Consolas", monospace;
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+
+.codeCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-family: inherit;
+  font-size: 0.72em;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.codeBlock:hover .codeCopy {
+  opacity: 1;
+}
+
+.codeCopy:hover {
+  color: var(--lumiverse-text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.codeCopied {
+  opacity: 1 !important;
+  color: var(--lumiverse-success, #4ade80) !important;
+}
+
+/* Code blocks */
+.codeBlock pre {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.codeBlock pre::-webkit-scrollbar {
+  height: 4px;
+}
+
+.codeBlock pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.codeBlock pre::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.codeBlock pre code {
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", "Consolas", monospace;
+  font-size: 0.85em;
+  line-height: 1.6;
+  color: var(--lumiverse-text);
+  background: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  tab-size: 2;
+}
+
+/* ── Standalone pre blocks (no wrapper) ── */
+.prose pre {
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-x: auto;
+  margin: 10px 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 0.85em;
+  line-height: 1.6;
+  color: var(--lumiverse-text);
+  white-space: pre-wrap;
+}
+
+/* ── Syntax Highlighting (Lumiverse Dark) ── */
+.codeBlock :global(.hljs-keyword),
+.codeBlock :global(.hljs-selector-tag),
+.codeBlock :global(.hljs-built_in),
+.codeBlock :global(.hljs-type) {
+  color: #c792ea;
+}
+
+.codeBlock :global(.hljs-string),
+.codeBlock :global(.hljs-addition) {
+  color: #c3e88d;
+}
+
+.codeBlock :global(.hljs-number),
+.codeBlock :global(.hljs-literal),
+.codeBlock :global(.hljs-selector-id) {
+  color: #f78c6c;
+}
+
+.codeBlock :global(.hljs-comment),
+.codeBlock :global(.hljs-quote) {
+  color: #637777;
+  font-style: italic;
+}
+
+.codeBlock :global(.hljs-meta),
+.codeBlock :global(.hljs-meta-keyword) {
+  color: #89ddff;
+}
+
+.codeBlock :global(.hljs-function),
+.codeBlock :global(.hljs-title) {
+  color: #82aaff;
+}
+
+.codeBlock :global(.hljs-attr),
+.codeBlock :global(.hljs-attribute),
+.codeBlock :global(.hljs-selector-attr) {
+  color: #ffcb6b;
+}
+
+.codeBlock :global(.hljs-variable),
+.codeBlock :global(.hljs-template-variable),
+.codeBlock :global(.hljs-params) {
+  color: #eeffff;
+}
+
+.codeBlock :global(.hljs-regexp) {
+  color: #89ddff;
+}
+
+.codeBlock :global(.hljs-deletion) {
+  color: #ff5370;
+}
+
+.codeBlock :global(.hljs-operator),
+.codeBlock :global(.hljs-punctuation) {
+  color: #89ddff;
+}
+
+.codeBlock :global(.hljs-tag) {
+  color: #f07178;
+}
+
+.codeBlock :global(.hljs-name) {
+  color: #f07178;
+}
+
+.codeBlock :global(.hljs-selector-class) {
+  color: #ffcb6b;
+}
+
+.codeBlock :global(.hljs-symbol),
+.codeBlock :global(.hljs-bullet) {
+  color: #c792ea;
+}
+
+.codeBlock :global(.hljs-section) {
+  color: #82aaff;
+  font-weight: 600;
+}
+
+.codeBlock :global(.hljs-emphasis) {
+  font-style: italic;
+}
+
+.codeBlock :global(.hljs-strong) {
+  font-weight: 600;
+}
+
+/* Blockquotes */
+.prose blockquote {
+  border-left: 2px solid var(--lumiverse-primary-020);
+  padding-left: 12px;
+  margin: 8px 0;
+  background: var(--lumiverse-primary-010);
+  border-radius: 0 var(--lcs-radius-xs) var(--lcs-radius-xs) 0;
+  padding: 6px 12px;
+  color: var(--lumiverse-prose-blockquote);
+  font-style: italic;
+}
+
+/* Headings */
+.prose h1 { font-size: 1.35em; font-weight: 600; margin: 0.7em 0 0.35em; }
+.prose h2 { font-size: 1.2em; font-weight: 600; margin: 0.7em 0 0.35em; }
+.prose h3 { font-size: 1.1em; font-weight: 600; margin: 0.7em 0 0.35em; }
+.prose h4 { font-size: 1.0em; font-weight: 600; margin: 0.7em 0 0.35em; }
+.prose h5 { font-size: 0.95em; font-weight: 600; margin: 0.7em 0 0.35em; }
+.prose h6 { font-size: 0.9em; font-weight: 600; margin: 0.7em 0 0.35em; }
+
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--lumiverse-border);
+  margin: 12px 0;
+}
+
+/* Lists */
+.prose ul, .prose ol {
+  padding-left: 1.4em;
+  margin: 4px 0;
+  list-style-position: outside;
+}
+
+.prose li {
+  list-style: disc;
+  margin: 2px 0;
+}
+
+.prose ol li {
+  list-style: decimal;
+}
+
+/* ── Links ── */
+.prose a,
+.proseLink {
+  color: var(--lumiverse-prose-link, var(--lumiverse-primary-text));
+  text-decoration: none;
+  transition: color var(--lumiverse-transition-fast), text-decoration var(--lumiverse-transition-fast);
+}
+
+.prose a:hover,
+.proseLink:hover {
+  text-decoration: underline;
+  filter: brightness(1.15);
+}
+
+/* ── Images ── */
+.proseImageWrap {
+  display: block;
+  margin: 8px 0;
+}
+
+.proseImage,
+.prose img {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+  border-radius: var(--lcs-radius-sm);
+  cursor: pointer;
+  transition: box-shadow var(--lumiverse-transition-fast);
+}
+
+.proseImage:hover,
+.prose img:hover {
+  box-shadow: var(--lumiverse-shadow-sm);
+}
+
+/* ── Tables ── */
+.proseTable,
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lcs-radius-xs);
+  overflow: hidden;
+}
+
+.proseTableHead,
+.prose th {
+  font-weight: 600;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-border);
+  padding: 8px 12px;
+  text-align: left;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+}
+
+.proseTableCell,
+.prose td {
+  padding: 8px 12px;
+  border: 1px solid var(--lumiverse-border);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+}
+
+.proseTableRow:nth-child(even) td,
+.prose tr:nth-child(even) td {
+  background: var(--lumiverse-bg-dark);
+}
+
+/* ── Media ── */
+.prose video,
+.prose audio {
+  max-width: 100%;
+  border-radius: var(--lcs-radius-sm);
+  margin: 8px 0;
+}
+
+.prose iframe {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: var(--lcs-radius-sm);
+  border: 1px solid var(--lumiverse-border);
+  margin: 8px 0;
+}
+
+/* ── HTML Islands (Shadow DOM isolated content) ── */
+.htmlIsland {
+  display: block;
+  margin: 8px 0;
+  border-radius: var(--lcs-radius-sm);
+  overflow: hidden;
+}
+
+/* ── Chunk fade for streaming ── */
+.chunkFade {
+  animation: lcs-chunk-fade 180ms ease-out both;
+}

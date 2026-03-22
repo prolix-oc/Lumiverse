@@ -1,0 +1,230 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal {
+  width: clamp(340px, 92vw, min(520px, var(--lumiverse-content-max-width, 520px)));
+  max-height: 85vh;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 16px;
+  box-shadow: var(--lumiverse-shadow-xl);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.closeBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.closeBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.progressSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progressLabel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--lumiverse-text-dim);
+}
+
+.progressCount {
+  font-variant-numeric: tabular-nums;
+  color: var(--lumiverse-text);
+  font-weight: 500;
+}
+
+.progressTrack {
+  height: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--lumiverse-primary);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+.currentFile {
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resultsList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.resultItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.resultIcon {
+  flex-shrink: 0;
+}
+
+.resultSuccess {
+  color: var(--lumiverse-success, #22c55e);
+}
+
+.resultError {
+  color: var(--lumiverse-danger, #ef4444);
+}
+
+.resultSkipped {
+  color: var(--lumiverse-warning, #f59e0b);
+}
+
+.resultName {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--lumiverse-text);
+}
+
+.resultDetail {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+}
+
+.summary {
+  display: flex;
+  gap: 16px;
+  padding: 10px 0 0;
+  font-size: 12px;
+  color: var(--lumiverse-text-dim);
+}
+
+.summaryItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.summaryDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.cancelBtn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.cancelBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.doneBtn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: none;
+  background: var(--lumiverse-primary);
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.doneBtn:hover {
+  opacity: 0.9;
+}
+
+.dedupToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.dedupToggle input {
+  accent-color: var(--lumiverse-primary);
+}

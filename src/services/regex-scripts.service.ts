@@ -1,0 +1,509 @@
+import { getDb } from "../db/connection";
+import { paginatedQuery } from "./pagination";
+import type { PaginationParams } from "../types/pagination";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
+import type {
+  RegexScript,
+  CreateRegexScriptInput,
+  UpdateRegexScriptInput,
+  RegexScriptExport,
+  RegexPlacement,
+  RegexScope,
+  RegexTarget,
+} from "../types/regex-script";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const VALID_PLACEMENTS = new Set(["user_input", "ai_output", "world_info", "reasoning"]);
+const VALID_SCOPES = new Set(["global", "character", "chat"]);
+const VALID_TARGETS = new Set(["prompt", "response", "display"]);
+const VALID_FLAGS = new Set(["g", "i", "m", "s", "u"]);
+const VALID_MACRO_MODES = new Set(["none", "raw", "escaped"]);
+const MAX_PATTERN_LENGTH = 10_000;
+
+function rowToRegexScript(row: any): RegexScript {
+  return {
+    ...row,
+    placement: JSON.parse(row.placement),
+    trim_strings: JSON.parse(row.trim_strings),
+    metadata: JSON.parse(row.metadata),
+    run_on_edit: !!row.run_on_edit,
+    disabled: !!row.disabled,
+  };
+}
+
+function validateFlags(flags: string): boolean {
+  for (const ch of flags) {
+    if (!VALID_FLAGS.has(ch)) return false;
+  }
+  // No duplicate flags
+  return new Set(flags).size === flags.length;
+}
+
+function validateRegex(pattern: string, flags: string): string | null {
+  if (pattern.length > MAX_PATTERN_LENGTH) return "find_regex exceeds maximum length";
+  if (!validateFlags(flags)) return "Invalid flags — allowed: g, i, m, s, u";
+  try {
+    new RegExp(pattern, flags);
+    return null;
+  } catch (e: any) {
+    return `Invalid regex: ${e.message}`;
+  }
+}
+
+function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, isCreate: boolean): string | null {
+  if (isCreate) {
+    const ci = input as CreateRegexScriptInput;
+    if (!ci.name?.trim()) return "name is required";
+    if (ci.find_regex === undefined || ci.find_regex === null) return "find_regex is required";
+  }
+
+  if (input.find_regex !== undefined && input.find_regex.length > MAX_PATTERN_LENGTH) {
+    return "find_regex exceeds maximum length";
+  }
+  if (input.flags !== undefined && !validateFlags(input.flags)) {
+    return "Invalid flags — allowed: g, i, m, s, u";
+  }
+  if (input.find_regex !== undefined || input.flags !== undefined) {
+    const pattern = input.find_regex ?? "";
+    const flags = input.flags ?? "gi";
+    const err = validateRegex(pattern, flags);
+    if (err) return err;
+  }
+  if (input.placement !== undefined) {
+    if (!Array.isArray(input.placement)) return "placement must be an array";
+    for (const p of input.placement) {
+      if (!VALID_PLACEMENTS.has(p)) return `Invalid placement: ${p}`;
+    }
+  }
+  if (input.scope !== undefined && !VALID_SCOPES.has(input.scope)) {
+    return `Invalid scope: ${input.scope}`;
+  }
+  if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
+    return "scope_id is required for non-global scope";
+  }
+  if (input.target !== undefined && !VALID_TARGETS.has(input.target)) {
+    return `Invalid target: ${input.target}`;
+  }
+  if (input.substitute_macros !== undefined && !VALID_MACRO_MODES.has(input.substitute_macros)) {
+    return `Invalid substitute_macros: ${input.substitute_macros}`;
+  }
+
+  return null;
+}
+
+// ── CRUD ─────────────────────────────────────────────────────────────────────
+
+export function listRegexScripts(
+  userId: string,
+  pagination: PaginationParams,
+  filters?: { scope?: RegexScope; target?: RegexTarget; character_id?: string; chat_id?: string }
+) {
+  const conditions = ["user_id = ?"];
+  const params: any[] = [userId];
+
+  if (filters?.scope) {
+    conditions.push("scope = ?");
+    params.push(filters.scope);
+  }
+  if (filters?.target) {
+    conditions.push("target = ?");
+    params.push(filters.target);
+  }
+  if (filters?.character_id) {
+    conditions.push("((scope = 'global') OR (scope = 'character' AND scope_id = ?))");
+    params.push(filters.character_id);
+  }
+  if (filters?.chat_id) {
+    conditions.push("((scope = 'global') OR (scope = 'chat' AND scope_id = ?))");
+    params.push(filters.chat_id);
+  }
+
+  const where = conditions.join(" AND ");
+  return paginatedQuery(
+    `SELECT * FROM regex_scripts WHERE ${where} ORDER BY sort_order ASC, created_at ASC`,
+    `SELECT COUNT(*) as count FROM regex_scripts WHERE ${where}`,
+    params,
+    pagination,
+    rowToRegexScript
+  );
+}
+
+export function getRegexScript(userId: string, id: string): RegexScript | null {
+  const row = getDb()
+    .query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?")
+    .get(id, userId) as any;
+  return row ? rowToRegexScript(row) : null;
+}
+
+export function createRegexScript(userId: string, input: CreateRegexScriptInput): RegexScript | string {
+  const err = validateInput(input, true);
+  if (err) return err;
+
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+
+  getDb()
+    .query(
+      `INSERT INTO regex_scripts (id, user_id, name, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      userId,
+      input.name.trim(),
+      input.find_regex,
+      input.replace_string ?? "",
+      input.flags ?? "gi",
+      JSON.stringify(input.placement ?? ["ai_output"]),
+      input.scope ?? "global",
+      input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
+      input.target ?? "response",
+      input.min_depth ?? null,
+      input.max_depth ?? null,
+      JSON.stringify(input.trim_strings ?? []),
+      input.run_on_edit ? 1 : 0,
+      input.substitute_macros ?? "none",
+      input.disabled ? 1 : 0,
+      input.sort_order ?? 0,
+      input.description ?? "",
+      JSON.stringify(input.metadata ?? {}),
+      now,
+      now
+    );
+
+  const script = getRegexScript(userId, id)!;
+  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
+  return script;
+}
+
+export function updateRegexScript(userId: string, id: string, input: UpdateRegexScriptInput): RegexScript | string | null {
+  const existing = getRegexScript(userId, id);
+  if (!existing) return null;
+
+  // If updating regex or flags, validate together
+  if (input.find_regex !== undefined || input.flags !== undefined) {
+    const pattern = input.find_regex ?? existing.find_regex;
+    const flags = input.flags ?? existing.flags;
+    const regexErr = validateRegex(pattern, flags);
+    if (regexErr) return regexErr;
+  }
+
+  const err = validateInput(input, false);
+  if (err) return err;
+
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name.trim()); }
+  if (input.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(input.find_regex); }
+  if (input.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(input.replace_string); }
+  if (input.flags !== undefined) { fields.push("flags = ?"); values.push(input.flags); }
+  if (input.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(input.placement)); }
+  if (input.scope !== undefined) { fields.push("scope = ?"); values.push(input.scope); }
+  if (input.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(input.scope_id); }
+  if (input.target !== undefined) { fields.push("target = ?"); values.push(input.target); }
+  if (input.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(input.min_depth); }
+  if (input.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(input.max_depth); }
+  if (input.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(input.trim_strings)); }
+  if (input.run_on_edit !== undefined) { fields.push("run_on_edit = ?"); values.push(input.run_on_edit ? 1 : 0); }
+  if (input.substitute_macros !== undefined) { fields.push("substitute_macros = ?"); values.push(input.substitute_macros); }
+  if (input.disabled !== undefined) { fields.push("disabled = ?"); values.push(input.disabled ? 1 : 0); }
+  if (input.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(input.sort_order); }
+  if (input.description !== undefined) { fields.push("description = ?"); values.push(input.description); }
+  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
+
+  if (fields.length === 0) return existing;
+
+  fields.push("updated_at = ?");
+  values.push(Math.floor(Date.now() / 1000));
+  values.push(id);
+  values.push(userId);
+
+  getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+
+  const updated = getRegexScript(userId, id)!;
+  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
+  return updated;
+}
+
+export function deleteRegexScript(userId: string, id: string): boolean {
+  const result = getDb()
+    .query("DELETE FROM regex_scripts WHERE id = ? AND user_id = ?")
+    .run(id, userId);
+  if (result.changes > 0) {
+    eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+    return true;
+  }
+  return false;
+}
+
+export function duplicateRegexScript(userId: string, id: string): RegexScript | null {
+  const existing = getRegexScript(userId, id);
+  if (!existing) return null;
+
+  const newId = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+
+  getDb()
+    .query(
+      `INSERT INTO regex_scripts (id, user_id, name, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      newId,
+      userId,
+      existing.name + " (Copy)",
+      existing.find_regex,
+      existing.replace_string,
+      existing.flags,
+      JSON.stringify(existing.placement),
+      existing.scope,
+      existing.scope_id,
+      existing.target,
+      existing.min_depth,
+      existing.max_depth,
+      JSON.stringify(existing.trim_strings),
+      existing.run_on_edit ? 1 : 0,
+      existing.substitute_macros,
+      existing.disabled ? 1 : 0,
+      existing.sort_order,
+      existing.description,
+      JSON.stringify(existing.metadata),
+      now,
+      now
+    );
+
+  const script = getRegexScript(userId, newId)!;
+  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id: newId, script }, userId);
+  return script;
+}
+
+export function reorderRegexScripts(userId: string, orderedIds: string[]): boolean {
+  const db = getDb();
+  const txn = db.transaction(() => {
+    for (let i = 0; i < orderedIds.length; i++) {
+      db.query("UPDATE regex_scripts SET sort_order = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+        .run(i, Math.floor(Date.now() / 1000), orderedIds[i], userId);
+    }
+  });
+  txn();
+  return true;
+}
+
+export function toggleRegexScript(userId: string, id: string, disabled: boolean): RegexScript | null {
+  const existing = getRegexScript(userId, id);
+  if (!existing) return null;
+
+  getDb()
+    .query("UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(disabled ? 1 : 0, Math.floor(Date.now() / 1000), id, userId);
+
+  const updated = getRegexScript(userId, id)!;
+  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
+  return updated;
+}
+
+// ── Pipeline ─────────────────────────────────────────────────────────────────
+
+/**
+ * Get active (enabled) scripts matching the given context, properly ordered by
+ * scope resolution: global → character → chat, within each tier by sort_order ASC, created_at ASC.
+ */
+export function getActiveScripts(
+  userId: string,
+  opts: { characterId?: string; chatId?: string; target: RegexTarget }
+): RegexScript[] {
+  const db = getDb();
+
+  // Build a query that fetches all candidate scripts and orders by scope tier, then sort_order
+  const conditions = [
+    "user_id = ?",
+    "disabled = 0",
+    "target = ?",
+  ];
+  const params: any[] = [userId, opts.target];
+
+  // Scope filter: include global + character-scoped + chat-scoped matching the current context
+  const scopeConditions: string[] = ["scope = 'global'"];
+  if (opts.characterId) {
+    scopeConditions.push("(scope = 'character' AND scope_id = ?)");
+    params.push(opts.characterId);
+  }
+  if (opts.chatId) {
+    scopeConditions.push("(scope = 'chat' AND scope_id = ?)");
+    params.push(opts.chatId);
+  }
+  conditions.push(`(${scopeConditions.join(" OR ")})`);
+
+  const where = conditions.join(" AND ");
+
+  const rows = db
+    .query(
+      `SELECT * FROM regex_scripts WHERE ${where}
+       ORDER BY
+         CASE scope WHEN 'global' THEN 0 WHEN 'character' THEN 1 WHEN 'chat' THEN 2 END ASC,
+         sort_order ASC, created_at ASC`
+    )
+    .all(...params) as any[];
+
+  return rows.map(rowToRegexScript);
+}
+
+/**
+ * Apply regex scripts to content string.
+ * Returns the transformed content.
+ */
+export function applyRegexScripts(
+  content: string,
+  scripts: RegexScript[],
+  placement: RegexPlacement,
+  depth?: number
+): string {
+  let result = content;
+
+  for (const script of scripts) {
+    // Check placement match
+    if (!script.placement.includes(placement)) continue;
+
+    // Check depth bounds
+    if (depth !== undefined) {
+      if (script.min_depth !== null && depth < script.min_depth) continue;
+      if (script.max_depth !== null && depth > script.max_depth) continue;
+    }
+
+    try {
+      const startTime = Date.now();
+      const regex = new RegExp(script.find_regex, script.flags);
+      result = result.replace(regex, script.replace_string);
+
+      // Apply trim_strings
+      if (script.trim_strings.length > 0) {
+        for (const trim of script.trim_strings) {
+          while (result.includes(trim)) {
+            result = result.replaceAll(trim, "");
+          }
+        }
+      }
+
+      // Safety check: skip script if it took > 500ms
+      if (Date.now() - startTime > 500) {
+        console.warn(`[RegexScripts] Script "${script.name}" (${script.id}) exceeded 500ms, skipping`);
+      }
+    } catch (e) {
+      console.warn(`[RegexScripts] Failed to apply script "${script.name}" (${script.id}):`, e);
+    }
+  }
+
+  return result;
+}
+
+// ── Test ─────────────────────────────────────────────────────────────────────
+
+export function testRegex(
+  findRegex: string,
+  replaceString: string,
+  flags: string,
+  content: string
+): { result: string; matches: number; error?: string } {
+  try {
+    const regex = new RegExp(findRegex, flags);
+    let matches = 0;
+    content.replace(regex, (...args) => {
+      matches++;
+      return args[0];
+    });
+    const result = content.replace(regex, replaceString);
+    return { result, matches };
+  } catch (e: any) {
+    return { result: content, matches: 0, error: e.message };
+  }
+}
+
+// ── Import / Export ──────────────────────────────────────────────────────────
+
+export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptExport {
+  const db = getDb();
+  let rows: any[];
+
+  if (ids && ids.length > 0) {
+    const placeholders = ids.map(() => "?").join(", ");
+    rows = db
+      .query(`SELECT * FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders}) ORDER BY sort_order ASC, created_at ASC`)
+      .all(userId, ...ids) as any[];
+  } else {
+    rows = db
+      .query("SELECT * FROM regex_scripts WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC")
+      .all(userId) as any[];
+  }
+
+  const scripts = rows.map(rowToRegexScript).map((s) => {
+    const { id, user_id, created_at, updated_at, ...rest } = s;
+    return rest;
+  });
+
+  return {
+    version: 1,
+    type: "lumiverse_regex_scripts",
+    scripts,
+    exported_at: Math.floor(Date.now() / 1000),
+  };
+}
+
+export function importRegexScripts(
+  userId: string,
+  payload: any
+): { imported: number; skipped: number; errors: string[] } {
+  const errors: string[] = [];
+  let imported = 0;
+  let skipped = 0;
+
+  // Detect SillyTavern format
+  const scripts = Array.isArray(payload)
+    ? payload
+    : payload?.scripts ?? [];
+
+  for (let i = 0; i < scripts.length; i++) {
+    let item = scripts[i];
+
+    // SillyTavern format conversion
+    if (item.scriptName || item.findRegex) {
+      item = {
+        name: item.scriptName ?? item.name ?? `Imported Script ${i + 1}`,
+        find_regex: item.findRegex ?? item.find_regex,
+        replace_string: item.replaceString ?? item.replace_string ?? "",
+        flags: item.flags ?? "gi",
+        placement: item.placement ?? ["ai_output"],
+        scope: item.scope ?? "global",
+        scope_id: item.scope_id ?? null,
+        target: item.target ?? "response",
+        min_depth: item.minDepth ?? item.min_depth ?? null,
+        max_depth: item.maxDepth ?? item.max_depth ?? null,
+        trim_strings: item.trimStrings ?? item.trim_strings ?? [],
+        run_on_edit: item.runOnEdit ?? item.run_on_edit ?? false,
+        substitute_macros: item.substituteRegex !== undefined ? (item.substituteRegex ? "raw" : "none") : (item.substitute_macros ?? "none"),
+        disabled: item.disabled ?? false,
+        sort_order: item.sort_order ?? i,
+        description: item.description ?? "",
+        metadata: item.metadata ?? {},
+      };
+    }
+
+    if (!item.name || !item.find_regex) {
+      errors.push(`Script ${i}: missing name or find_regex`);
+      skipped++;
+      continue;
+    }
+
+    const result = createRegexScript(userId, item);
+    if (typeof result === "string") {
+      errors.push(`Script "${item.name}": ${result}`);
+      skipped++;
+    } else {
+      imported++;
+    }
+  }
+
+  return { imported, skipped, errors };
+}

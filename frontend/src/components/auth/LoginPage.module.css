@@ -1,0 +1,367 @@
+/* ─── Page shell ─────────────────────────────────────────────────────── */
+
+.page {
+  position: relative;
+  min-height: var(--app-viewport-height, 100dvh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--lumiverse-bg-deep, #0a0812);
+}
+
+/* ─── Ambient background ─────────────────────────────────────────────── */
+
+.bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.bgGlow {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.22;
+  background: radial-gradient(
+    circle at center,
+    var(--lumiverse-primary-015) 0%,
+    var(--lumiverse-primary-010) 45%,
+    transparent 72%
+  );
+  will-change: transform, opacity;
+}
+
+.bgGlow1 {
+  width: 600px;
+  height: 600px;
+  top: -180px;
+  right: -120px;
+  animation: loginGlowA 14s ease-in-out infinite;
+}
+
+.bgGlow2 {
+  width: 500px;
+  height: 500px;
+  bottom: -140px;
+  left: -100px;
+  animation: loginGlowB 16s ease-in-out infinite;
+}
+
+.bgGlow3 {
+  width: 350px;
+  height: 350px;
+  left: calc(50% - 175px);
+  top: 38%;
+  animation: loginGlowC 18s ease-in-out infinite;
+}
+
+@keyframes loginGlowA {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translate3d(-20px, 18px, 0) scale(1.06);
+    opacity: 0.28;
+  }
+}
+
+@keyframes loginGlowB {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.16;
+  }
+  50% {
+    transform: translate3d(22px, -14px, 0) scale(1.05);
+    opacity: 0.24;
+  }
+}
+
+@keyframes loginGlowC {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.12;
+  }
+  50% {
+    transform: translate3d(0, -16px, 0) scale(1.1);
+    opacity: 0.2;
+  }
+}
+
+/* ─── Grid pattern ───────────────────────────────────────────────────── */
+
+.grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
+    linear-gradient(90deg, var(--lumiverse-primary-010) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse at center, black 20%, transparent 65%);
+}
+
+/* ─── Content wrapper ────────────────────────────────────────────────── */
+
+.content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--app-viewport-height, 100dvh);
+  padding: 48px 24px;
+  box-sizing: border-box;
+}
+
+/* ─── Logo block ─────────────────────────────────────────────────────── */
+
+.logoBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 32px;
+}
+
+.logoIcon {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+  margin-bottom: 20px;
+  box-shadow: 0 0 40px var(--lumiverse-primary-010);
+}
+
+.logoTitle {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+.logoSubtitle {
+  font-size: 14px;
+  color: var(--lumiverse-text-dim);
+  margin: 6px 0 0;
+  letter-spacing: 0.04em;
+}
+
+/* ─── Glassmorphic card ──────────────────────────────────────────────── */
+
+.card {
+  position: relative;
+  width: min(400px, 100%);
+  padding: 32px;
+  border-radius: 20px;
+  background: var(--lumiverse-gradient-modal);
+  border: 1px solid var(--lumiverse-border);
+  box-shadow:
+    var(--lumiverse-shadow-xl),
+    0 0 80px -20px rgba(147, 112, 219, 0.08);
+  overflow: hidden;
+}
+
+/* Top highlight edge — mimics light hitting glass */
+.cardHighlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 20%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.08) 80%,
+    transparent 100%
+  );
+}
+
+/* ─── Form ───────────────────────────────────────────────────────────── */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Input wrapper — handles the glow border effect */
+.inputWrap {
+  position: relative;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--lumiverse-border);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.inputWrapFocused {
+  border-color: var(--lumiverse-primary-050);
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010);
+}
+
+.input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.input::placeholder {
+  color: var(--lumiverse-text-hint);
+}
+
+/* ─── Submit button ──────────────────────────────────────────────────── */
+
+.submitBtn {
+  position: relative;
+  width: 100%;
+  padding: 13px 20px;
+  border-radius: 12px;
+  border: 1px solid var(--lumiverse-primary-050);
+  background: linear-gradient(
+    135deg,
+    var(--lumiverse-primary),
+    var(--lumiverse-primary-hover)
+  );
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  margin-top: 4px;
+  transition: opacity var(--lumiverse-transition-fast);
+  box-shadow:
+    0 2px 12px rgba(147, 112, 219, 0.2),
+    var(--lumiverse-highlight-inset);
+}
+
+.submitBtn:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.submitBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Loading state ──────────────────────────────────────────────────── */
+
+.loadingState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: loginSpin 0.7s linear infinite;
+}
+
+@keyframes loginSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Error message ──────────────────────────────────────────────────── */
+
+.error {
+  overflow: hidden;
+}
+
+.errorInner {
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: var(--lumiverse-danger-015);
+  border: 1px solid var(--lumiverse-danger-020);
+  color: var(--lumiverse-danger, #ef4444);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* ─── Footer ─────────────────────────────────────────────────────────── */
+
+.footer {
+  margin-top: 28px;
+  font-size: 13px;
+  color: var(--lumiverse-text-hint);
+  letter-spacing: 0.02em;
+}
+
+/* ─── Mobile ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .content {
+    padding: 32px 20px;
+    /* Let content push taller than viewport when keyboard is open */
+    justify-content: flex-start;
+    padding-top: 18vh;
+  }
+
+  .card {
+    padding: 24px 20px;
+    border-radius: 16px;
+  }
+
+  .logoIcon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+  }
+
+  .logoIcon svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  .logoTitle {
+    font-size: 24px;
+  }
+
+  .logoBlock {
+    margin-bottom: 24px;
+  }
+}
+
+/* When virtual keyboard is visible, the viewport shrinks.
+   Ensure the page scrolls instead of clipping. */
+@media (max-height: 500px) {
+  .content {
+    justify-content: flex-start;
+    padding-top: 24px;
+  }
+}

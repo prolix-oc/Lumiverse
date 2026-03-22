@@ -1,0 +1,118 @@
+/* ── Group Chat Member Bar ── */
+.bar {
+  position: sticky;
+  top: -16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  margin: -16px -20px 4px;
+  border-radius: 0 0 var(--lcs-radius-sm, 8px) var(--lcs-radius-sm, 8px);
+  background: var(--lumiverse-bg, rgba(18, 18, 24, 0.95));
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  border-top: none;
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+@media (max-width: 768px) {
+  .bar {
+    top: -8px;
+    margin: -8px -8px 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .bar {
+    top: -6px;
+    margin: -6px -6px 4px;
+  }
+}
+
+.bar::-webkit-scrollbar {
+  display: none;
+}
+
+.member {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  transition: all 180ms ease;
+  flex-shrink: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.member:hover {
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.memberActive {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-010);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--lumiverse-bg-dark);
+  border: 2px solid transparent;
+  transition: border-color 200ms ease;
+}
+
+.memberActive .avatar {
+  border-color: var(--lumiverse-primary);
+}
+
+.avatarFallback {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-bg-dark);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  border: 2px solid transparent;
+  transition: border-color 200ms ease;
+}
+
+.memberActive .avatarFallback {
+  border-color: var(--lumiverse-primary);
+}
+
+.name {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* Talkativeness indicator as border opacity */
+.talkHigh .avatar,
+.talkHigh .avatarFallback {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.talkLow .avatar,
+.talkLow .avatarFallback {
+  border-color: rgba(255, 255, 255, 0.04);
+}

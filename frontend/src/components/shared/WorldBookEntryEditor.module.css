@@ -1,0 +1,155 @@
+/* ── Entry editor ── */
+.entryEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+}
+
+.sectionHeading {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.entryFieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entryFieldRow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.entryField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.entryFieldSmall {
+  flex: 0 0 90px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--lumiverse-text-muted);
+}
+
+.entryInput {
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.entryInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+
+.entryTextarea {
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: var(--lumiverse-text);
+  outline: none;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.entryTextarea:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.entrySelect {
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  outline: none;
+  cursor: pointer;
+}
+
+.toggleRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.toggleLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  cursor: pointer;
+}
+
+.toggleLabel input {
+  accent-color: var(--lumiverse-primary);
+}
+
+/* ── Collapsible group ── */
+.groupToggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--lumiverse-text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.groupToggle:hover {
+  color: var(--lumiverse-text);
+}
+
+.groupToggleIcon {
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.groupToggleOpen {
+  transform: rotate(90deg);
+}
+
+/* ── Read-only value ── */
+.readOnlyValue {
+  font-size: 11.5px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--lumiverse-text-dim);
+  padding: 5px 8px;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  user-select: all;
+}

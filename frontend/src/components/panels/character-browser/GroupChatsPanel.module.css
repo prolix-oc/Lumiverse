@@ -1,0 +1,293 @@
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---- Shared mosaic ---- */
+.mosaic {
+  overflow: hidden;
+  display: grid;
+  gap: 1.5px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.mosaicSmall {
+  width: 56px;
+  height: 56px;
+}
+
+.mosaicLarge {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.mosaic2 {
+  grid-template-columns: 1.4fr 1fr;
+}
+
+.mosaic3 {
+  grid-template-columns: 1.4fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.mosaic3 .mosaicCell:first-child {
+  grid-row: 1 / -1;
+}
+
+.mosaic4 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.mosaicCell {
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+.mosaicFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary-muted);
+}
+
+/* ---- Grid layout ---- */
+.gridLayout {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.gridColumns2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.gridCard {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--lumiverse-card-bg);
+  border: 1px solid var(--lumiverse-primary-020);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.gridCard:hover {
+  border-color: var(--lumiverse-primary-050);
+  box-shadow: var(--lumiverse-shadow-md, 0 4px 12px rgba(0,0,0,0.3)), 0 0 14px var(--lumiverse-primary-015);
+}
+
+.gridCardImage {
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+}
+
+.gridCardOverlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--lumiverse-bg-deep) 0%, transparent 55%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.gridCardContent {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 10px 12px;
+  z-index: 2;
+}
+
+.gridCardName {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.gridCardMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+}
+
+.memberBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  color: var(--lumiverse-primary-muted);
+  background: rgba(147, 112, 219, 0.12);
+  border: 1px solid var(--lumiverse-primary-020);
+  padding: 1px 6px;
+  border-radius: 20px;
+}
+
+.gridDeleteBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgba(10, 10, 14, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--lumiverse-text-dim);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.gridCard:hover .gridDeleteBtn {
+  opacity: 1;
+}
+
+.gridDeleteBtn:hover {
+  color: var(--lumiverse-danger);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* ---- List layout ---- */
+.listLayout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.listCard {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--lumiverse-card-bg);
+  border: 1px solid var(--lumiverse-primary-020);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  width: 100%;
+  transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.listCard:hover {
+  background: var(--lumiverse-fill-hover);
+  border-color: var(--lumiverse-primary-050);
+  box-shadow: 0 0 12px var(--lumiverse-primary-010);
+}
+
+.listCardInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.listCardName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listCardMeta {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}
+
+.listDeleteBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(10, 10, 14, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--lumiverse-text-dim);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.listCard:hover .listDeleteBtn {
+  opacity: 1;
+}
+
+.listDeleteBtn:hover {
+  color: var(--lumiverse-danger);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* ---- Empty state ---- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  gap: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--lumiverse-text-muted);
+}
+
+.emptyIcon {
+  opacity: 0.4;
+  color: var(--lumiverse-primary-muted);
+}
+
+.createBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.createBtn:hover {
+  background: var(--lumiverse-primary-020);
+  border-color: var(--lumiverse-primary-050);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

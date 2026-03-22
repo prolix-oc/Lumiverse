@@ -1,0 +1,101 @@
+/* ── Greetings Indicator — Frosted pill with prismatic hover glow ── */
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  margin-top: 6px;
+  border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
+  border-radius: calc(var(--lcs-radius, 14px) + 6px);
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--lumiverse-text-muted, rgba(230, 230, 240, 0.6));
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+:global(:not([data-glass])) .indicator {
+  background: var(--lumiverse-bg-elevated, rgba(30, 28, 40, 0.95));
+}
+
+:global([data-glass]) .indicator {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+}
+
+.indicator:hover {
+  color: var(--lumiverse-primary-text);
+  background: var(--lumiverse-primary-010);
+  border-color: var(--lumiverse-primary-020);
+  box-shadow: 0 0 12px var(--lumiverse-primary-010);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary-text);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* ── Bubble variant — dark glassmorphic pill, right-aligned ── */
+.indicatorBubble {
+  align-self: flex-end;
+  margin: 0 24px 18px 0;
+  padding: 5px 14px;
+  border-radius: calc(var(--lcs-radius, 14px) + 2px);
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.5);
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  letter-spacing: 0.04em;
+  position: relative;
+  z-index: 1;
+}
+
+:global(:not([data-glass])) .indicatorBubble {
+  background: var(--lcs-glass-bg);
+}
+
+:global([data-glass]) .indicatorBubble {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+}
+
+.indicatorBubble:hover {
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  box-shadow: none;
+}
+
+.indicatorBubble .badge {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+@media (max-width: 768px) {
+  .indicatorBubble {
+    margin: 0 16px 14px 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .indicatorBubble {
+    margin: 0 12px 14px 0;
+  }
+}

@@ -1,0 +1,36 @@
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--lumiverse-radius-md);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.segment {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: var(--lumiverse-radius);
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.segment:hover {
+  color: var(--lumiverse-text-muted);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.segmentActive {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary);
+  box-shadow: var(--lumiverse-shadow-sm);
+}

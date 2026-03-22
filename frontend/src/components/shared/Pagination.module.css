@@ -1,0 +1,112 @@
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+
+.perPage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.perPageSelect {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--lumiverse-input-bg, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+.perPageSelect:focus {
+  border-color: var(--lumiverse-primary-050);
+}
+
+.perPageLabel {
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.navBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast, 0.15s);
+}
+
+.navBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lumiverse-text);
+}
+
+.navBtn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.pageBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast, 0.15s);
+}
+
+.pageBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lumiverse-text);
+}
+
+.pageBtnActive {
+  background: var(--lumiverse-primary-015, rgba(139, 95, 199, 0.15));
+  border-color: var(--lumiverse-primary-030, rgba(139, 95, 199, 0.3));
+  color: var(--lumiverse-primary, #8b5fc7);
+  font-weight: 600;
+}
+
+.pageBtnActive:hover {
+  background: var(--lumiverse-primary-020, rgba(139, 95, 199, 0.2));
+}
+
+.ellipsis {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  color: var(--lumiverse-text-hint, rgba(255, 255, 255, 0.25));
+  user-select: none;
+}
+
+.info {
+  font-size: 11px;
+  color: var(--lumiverse-text-hint, rgba(255, 255, 255, 0.25));
+}

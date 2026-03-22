@@ -1,0 +1,408 @@
+/* Layout */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ─── Collapsible section ─────────────────────────────────── */
+.section {
+  overflow: hidden;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--lumiverse-border);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  color: var(--lumiverse-text);
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.chevron {
+  display: flex;
+  color: var(--lumiverse-text-dim);
+  transition: transform 0.2s ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.sectionIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary);
+}
+
+.sectionTitle {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.sectionBadge {
+  font-size: 10px;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.badgeActive {
+  background: rgba(147, 112, 219, 0.15);
+  color: var(--lumiverse-primary);
+  border: 1px solid rgba(147, 112, 219, 0.2);
+}
+
+.badgeOff {
+  background: rgba(128, 128, 128, 0.1);
+  color: var(--lumiverse-text-dim);
+  border: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+.sectionBody {
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ─── Status indicator ────────────────────────────────────── */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.statusNoChat {
+  background: rgba(255, 152, 0, 0.08);
+  color: rgba(255, 152, 0, 0.8);
+  border: 1px solid rgba(255, 152, 0, 0.15);
+}
+
+.statusExists {
+  background: rgba(76, 175, 80, 0.08);
+  color: rgba(76, 175, 80, 0.8);
+  border: 1px solid rgba(76, 175, 80, 0.15);
+}
+
+.statusEmpty {
+  background: rgba(128, 128, 128, 0.06);
+  color: var(--lumiverse-text-dim);
+  border: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+/* ─── Textarea ────────────────────────────────────────────── */
+.textarea {
+  width: 100%;
+  min-height: 140px;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--lumiverse-text);
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.textarea:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 3px rgba(147, 112, 219, 0.1);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.textarea::placeholder {
+  color: var(--lumiverse-text-dim);
+  opacity: 0.6;
+}
+
+/* ─── Action buttons row ──────────────────────────────────── */
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.actionBtn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+}
+
+.actionBtn:hover:not(:disabled) {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border-hover);
+}
+
+.actionBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.actionBtnPrimary {
+  background: var(--lumiverse-primary-light);
+  border-color: rgba(147, 112, 219, 0.2);
+  color: var(--lumiverse-primary);
+}
+
+.actionBtnPrimary:hover:not(:disabled) {
+  background: rgba(147, 112, 219, 0.2);
+  border-color: rgba(147, 112, 219, 0.35);
+  color: var(--lumiverse-primary);
+}
+
+.actionBtnDanger:hover:not(:disabled) {
+  background: rgba(244, 67, 54, 0.08);
+  color: var(--lumiverse-error);
+  border-color: rgba(244, 67, 54, 0.2);
+}
+
+/* ─── Unsaved indicator ───────────────────────────────────── */
+.unsaved {
+  font-size: 11px;
+  color: rgba(255, 193, 7, 0.8);
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(255, 193, 7, 0.06);
+  border: 1px solid rgba(255, 193, 7, 0.15);
+  text-align: center;
+}
+
+/* ─── Radio group ─────────────────────────────────────────── */
+.radioGroup {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.radioOption {
+  display: flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--lumiverse-text-dim);
+  transition: all var(--lumiverse-transition-fast);
+  user-select: none;
+}
+
+.radioOption:hover {
+  background: rgba(128, 128, 128, 0.06);
+  color: var(--lumiverse-text-muted);
+}
+
+.radioOption input {
+  display: none;
+}
+
+.radioSelected {
+  background: var(--lumiverse-primary-light);
+  border-color: rgba(147, 112, 219, 0.3);
+  color: var(--lumiverse-primary);
+}
+
+.radioSelected:hover {
+  background: rgba(147, 112, 219, 0.15);
+  color: var(--lumiverse-primary);
+}
+
+/* ─── Description text ────────────────────────────────────── */
+.desc {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  line-height: 1.5;
+  padding: 0;
+  margin: 0;
+}
+
+/* ─── Field layout ────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.fieldHint {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  margin-top: 1px;
+}
+
+.fieldInput {
+  width: 100%;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.fieldInput:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 3px rgba(147, 112, 219, 0.1);
+}
+
+.fieldSelect {
+  width: 100%;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.fieldSelect:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 3px rgba(147, 112, 219, 0.1);
+}
+
+.fieldRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.fieldRow3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+/* ─── Warning box ─────────────────────────────────────────── */
+.warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 152, 0, 0.06);
+  border: 1px solid rgba(255, 152, 0, 0.15);
+  font-size: 11px;
+  color: rgba(255, 152, 0, 0.8);
+  line-height: 1.4;
+}
+
+.warning svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ─── Spinner ─────────────────────────────────────────────── */
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(147, 112, 219, 0.2);
+  border-top-color: var(--lumiverse-primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Error display ───────────────────────────────────────── */
+.errorBox {
+  font-size: 11px;
+  color: var(--lumiverse-error);
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: rgba(244, 67, 54, 0.06);
+  border: 1px solid rgba(244, 67, 54, 0.15);
+}
+
+/* ─── Toggle switch ──────────────────────────────────────── */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggleLabel {
+  font-size: 12px;
+  color: var(--lumiverse-text);
+}
+
+.toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--lumiverse-surface);
+  border: 1px solid var(--lumiverse-border);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--lumiverse-text-dim);
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.toggleOn {
+  background: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+}
+
+.toggleOn::after {
+  transform: translateX(14px);
+  background: var(--lumiverse-primary-fg, #fff);
+}

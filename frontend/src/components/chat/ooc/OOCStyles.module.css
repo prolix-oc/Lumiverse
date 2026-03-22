@@ -1,0 +1,448 @@
+/* ── Animations ── */
+
+@keyframes loom-weave {
+  0%, 100% {
+    opacity: 0.6;
+    background-position: 0% 50%;
+  }
+  50% {
+    opacity: 1;
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes loom-shimmer {
+  0% { left: -100%; }
+  100% { left: 150%; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 15px rgba(147, 112, 219, 0.4); }
+  50% { box-shadow: 0 0 25px rgba(147, 112, 219, 0.6); }
+}
+
+/* ═══════════════════════════════════════════════
+   Social Card
+   ═══════════════════════════════════════════════ */
+
+.socialCard {
+  display: flex;
+  flex-direction: row;
+  gap: 14px;
+  padding: 16px 18px;
+  margin: 16px 4px;
+  border-radius: 16px;
+  border: 1px solid rgba(147, 112, 219, 0.2);
+  background: linear-gradient(168deg, rgba(20, 16, 28, 0.85) 0%, rgba(30, 24, 42, 0.75) 50%, rgba(25, 20, 35, 0.8) 100%);
+  background-size: 200% 200%;
+  animation: loom-weave 8s ease-in-out infinite;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.socialCard:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(147, 112, 219, 0.15);
+}
+
+/* Shimmer overlay */
+.socialCard::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(147, 112, 219, 0.04), transparent);
+  animation: loom-shimmer 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Accent line at top */
+.socialCard::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(147, 112, 219, 0.6), rgba(186, 135, 255, 0.4), transparent);
+  background-size: 200% 100%;
+  animation: loom-weave 8s ease-in-out infinite;
+}
+
+.socialAvatarContainer {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+.socialAvatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid rgba(147, 112, 219, 0.5);
+  object-fit: cover;
+}
+
+.socialAvatarPlaceholder {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid rgba(147, 112, 219, 0.5);
+  background: linear-gradient(135deg, #9370db 0%, #7b5fc4 50%, #8a2be2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+}
+
+.socialContentColumn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.socialHeaderRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.socialName {
+  font-weight: 600;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  color: rgba(186, 135, 255, 0.95);
+}
+
+.socialThread {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: rgba(147, 112, 219, 0.5);
+  font-style: italic;
+}
+
+.socialContent {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* ═══════════════════════════════════════════════
+   Margin Note
+   ═══════════════════════════════════════════════ */
+
+.marginNote {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  margin: 12px 4px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.marginNoteAlt {
+  flex-direction: row-reverse;
+}
+
+.marginTag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  min-height: 48px;
+  background: linear-gradient(135deg, rgba(147, 112, 219, 0.3), rgba(147, 112, 219, 0.15));
+  flex-shrink: 0;
+}
+
+.marginNote:not(.marginNoteAlt) .marginTag {
+  border-radius: 10px 0 0 10px;
+}
+
+.marginNoteAlt .marginTag {
+  border-radius: 0 10px 10px 0;
+}
+
+.marginTagAvatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.marginTagLetter {
+  font-weight: 700;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  color: rgba(186, 135, 255, 0.9);
+}
+
+.marginContentArea {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, rgba(30, 24, 42, 0.8) 0%, rgba(40, 32, 55, 0.75) 100%);
+}
+
+.marginLabel {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  text-transform: uppercase;
+  color: rgba(186, 135, 255, 0.8);
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.marginText {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* ═══════════════════════════════════════════════
+   Whisper Bubble
+   ═══════════════════════════════════════════════ */
+
+.whisper {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 4px;
+}
+
+.whisperAlt {
+  flex-direction: row-reverse;
+}
+
+.whisperAvatarWrap {
+  flex-shrink: 0;
+}
+
+.whisperAvatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid rgba(147, 112, 219, 0.5);
+  object-fit: cover;
+}
+
+.whisperAvatarPlaceholder {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid rgba(147, 112, 219, 0.5);
+  background: linear-gradient(135deg, #9370db 0%, #7b5fc4 50%, #8a2be2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+}
+
+.whisperBubble {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 16px;
+  border-radius: 16px;
+  border-top-left-radius: 4px;
+  background: linear-gradient(145deg, rgba(30, 24, 42, 0.85) 0%, rgba(40, 32, 55, 0.8) 50%, rgba(35, 28, 48, 0.85) 100%);
+  border: 1px solid rgba(147, 112, 219, 0.3);
+  position: relative;
+}
+
+.whisperAlt .whisperBubble {
+  border-top-left-radius: 16px;
+  border-top-right-radius: 4px;
+}
+
+/* Accent line at top of bubble */
+.whisperBubble::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(147, 112, 219, 0.4), transparent);
+}
+
+.whisperHeader {
+  margin-bottom: 6px;
+}
+
+.whisperName {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  font-style: italic;
+  color: rgba(186, 135, 255, 0.8);
+}
+
+.whisperText {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* ═══════════════════════════════════════════════
+   Raw Text
+   ═══════════════════════════════════════════════ */
+
+.raw {
+  display: inline;
+  font-style: italic;
+  color: rgba(147, 112, 219, 0.9);
+}
+
+/* ═══════════════════════════════════════════════
+   IRC Chat Room
+   ═══════════════════════════════════════════════ */
+
+.ircContainer {
+  display: block;
+  position: relative;
+  font-family: 'Courier New', Consolas, 'Lucida Console', monospace;
+  background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1a 100%);
+  border: 1px solid #333;
+  border-left: 3px solid #9370db;
+  border-radius: 4px;
+  margin: 12px 0;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Scanline overlay for retro feel */
+.ircContainer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  opacity: 0.5;
+}
+
+.ircHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: linear-gradient(180deg, #252540 0%, #1e1e35 100%);
+  border-bottom: 1px solid #333;
+  font-family: 'Courier New', Consolas, monospace;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #888;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ircToggleBtn {
+  background: none;
+  border: none;
+  color: #9370db;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: transform 0.2s ease;
+}
+
+.ircToggleBtn:hover {
+  background: rgba(147, 112, 219, 0.15);
+}
+
+.ircToggleBtnCollapsed {
+  transform: rotate(-90deg);
+}
+
+.ircBodyWrapper {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.ircBodyWrapperCollapsed {
+  grid-template-rows: 0fr;
+}
+
+.ircBodyWrapperCollapsed .ircMessages {
+  opacity: 0;
+  transform: translate3d(0, -10px, 0);
+}
+
+.ircMessages {
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  transform: translate3d(0, 0, 0);
+}
+
+/* Block display with inline spans — text flows naturally like real IRC */
+.ircMsg {
+  display: block;
+  padding: 3px 10px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-family: 'Courier New', Consolas, monospace;
+  line-height: 1.5;
+  border-bottom: 1px solid rgba(26, 26, 46, 0.5);
+  transition: background-color 0.15s ease;
+  background: transparent;
+}
+
+.ircMsg:last-child {
+  border-bottom: none;
+}
+
+.ircMsg:hover {
+  background: rgba(147, 112, 219, 0.08);
+}
+
+.ircMsgAlt {
+  background: rgba(147, 112, 219, 0.03);
+}
+
+.ircMsgAlt:hover {
+  background: rgba(147, 112, 219, 0.1);
+}
+
+.ircTimestamp {
+  color: #555;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  margin-right: 6px;
+}
+
+.ircNick {
+  color: #9370db;
+  font-weight: 700;
+  white-space: nowrap;
+  margin-right: 6px;
+}
+
+.ircText {
+  word-break: break-word;
+}
+
+.ircMention {
+  color: #9370db;
+  font-weight: 700;
+}

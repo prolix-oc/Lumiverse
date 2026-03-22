@@ -1,0 +1,40 @@
+.btn {
+  position: absolute;
+  bottom: calc(var(--lcs-input-safe-zone, 100px) - 10px);
+  right: 20px;
+  z-index: 32;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-bg-deep-080);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transition:
+    background var(--lumiverse-transition),
+    border-color var(--lumiverse-transition),
+    color var(--lumiverse-transition),
+    transform var(--lumiverse-transition),
+    opacity var(--lumiverse-transition);
+  animation: lumiverseSlideUp 180ms ease-out both;
+}
+
+:global(:not([data-glass])) .btn {
+  background: var(--lumiverse-bg-deep, var(--lumiverse-bg));
+}
+
+:global([data-glass]) .btn {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+}
+
+.btn:hover {
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border-hover);
+  transform: translateY(-1px);
+}

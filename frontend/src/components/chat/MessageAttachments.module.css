@@ -1,0 +1,98 @@
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
+.attachmentsUser {
+  justify-content: flex-end;
+}
+
+/* ── User-sent images — prominent shared-media card ── */
+.imageThumbUser {
+  display: block;
+  overflow: hidden;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  cursor: pointer;
+  padding: 0;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--lcs-radius, 14px);
+  max-width: 240px;
+  max-height: 240px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  transition:
+    border-color var(--lcs-transition-fast, 120ms ease),
+    box-shadow var(--lcs-transition-fast, 120ms ease),
+    transform var(--lcs-transition-fast, 120ms ease);
+}
+
+.imageThumbUser:hover {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  transform: scale(1.02);
+}
+
+.imageThumbUser img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  max-width: 240px;
+  max-height: 240px;
+}
+
+/* ── Assistant images — inline prose style (matches greeting images) ── */
+.inlineImageWrap {
+  display: block;
+  margin: 8px 0;
+}
+
+.inlineImage {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+  border-radius: var(--lcs-radius-sm, 8px);
+  cursor: pointer;
+  transition: box-shadow var(--lcs-transition-fast, 120ms ease);
+}
+
+.inlineImage:hover {
+  box-shadow: var(--lumiverse-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.3));
+}
+
+/* ── Mobile: scale user images down ── */
+@media (max-width: 480px) {
+  .imageThumbUser {
+    max-width: 180px;
+    max-height: 180px;
+  }
+
+  .imageThumbUser img {
+    max-width: 180px;
+    max-height: 180px;
+  }
+}
+
+/* ── Audio ── */
+.audioWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.audioPlayer {
+  width: 100%;
+  height: 32px;
+  border-radius: var(--lcs-radius-xs, 6px);
+}
+
+.audioName {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

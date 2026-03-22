@@ -1,0 +1,92 @@
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text);
+}
+
+.btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.counter {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  color: var(--lumiverse-text-dim);
+  min-width: 36px;
+  text-align: center;
+}
+
+.bubble {
+  align-self: flex-end;
+  margin: 0 24px 18px 0;
+  padding: 2px 4px;
+  gap: 2px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.04em;
+}
+
+.bubble .btn {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.bubble .btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.bubble .btn:disabled {
+  color: rgba(255, 255, 255, 0.15);
+  opacity: 1;
+}
+
+.bubble .counter {
+  min-width: 32px;
+  text-align: center;
+  user-select: none;
+  font-size: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+@media (max-width: 768px) {
+  .bubble {
+    margin: 0 12px 12px 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .bubble {
+    margin: 0 10px 10px 0;
+  }
+}

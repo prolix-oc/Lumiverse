@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2D2840"/>
+      <stop offset="100%" stop-color="#1C1826"/>
+    </linearGradient>
+    <linearGradient id="star" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#BA87FF"/>
+      <stop offset="100%" stop-color="#9370DB"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Four-point star / sparkle -->
+  <path d="M256 96 L288 208 L400 240 L288 272 L256 384 L224 272 L112 240 L224 208 Z" fill="url(#star)" opacity="0.95"/>
+  <!-- Small accent sparkle -->
+  <path d="M368 128 L378 160 L410 170 L378 180 L368 212 L358 180 L326 170 L358 160 Z" fill="#BA87FF" opacity="0.6"/>
+</svg>
