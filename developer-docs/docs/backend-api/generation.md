@@ -61,12 +61,12 @@ const results = await spindle.generate.batch({
 
 Run the full prompt assembly pipeline — macros, world info, context filters, memory retrieval, token counting — without actually calling the LLM. Useful for prompt debugging, token budget analysis, and previewing what the model will see.
 
-### `spindle.generate.dryRun(input)`
+### `spindle.generate.dryRun(input, userId?)`
 
 ```ts
 const result = await spindle.generate.dryRun({
   chatId: 'chat-id',
-})
+}, userId) // userId required for operator-scoped extensions
 
 spindle.log.info(`Provider: ${result.provider}, Model: ${result.model}`)
 spindle.log.info(`Assembled ${result.messages.length} messages`)
@@ -95,7 +95,7 @@ const result = await spindle.generate.dryRun({
   presetId: 'specific-preset',           // default: connection's linked preset
   generationType: 'continue',            // default: 'normal'
   parameters: { temperature: 0.8 },      // override sampler params
-})
+}, userId)
 ```
 
 ### DryRunRequestDTO
@@ -108,6 +108,12 @@ const result = await spindle.generate.dryRun({
 | `presetId` | `string` | Optional. Use a specific preset. |
 | `generationType` | `string` | Optional. One of `"normal"`, `"continue"`, `"regenerate"`, `"swipe"`, `"impersonate"`. |
 | `parameters` | `Record<string, unknown>` | Optional. Override sampler parameters. |
+
+`dryRun` also accepts a second argument:
+
+| Argument | Type | Description |
+|---|---|---|
+| `userId` | `string` | **Required for operator-scoped extensions.** The user ID to scope the dry run to. For user-scoped extensions, this is inferred automatically and can be omitted. |
 
 ### DryRunResultDTO
 

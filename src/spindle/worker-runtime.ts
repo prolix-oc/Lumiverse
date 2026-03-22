@@ -161,12 +161,13 @@ const spindleApi: SpindleAPI = {
         input: { ...input, type: "batch" },
       });
     },
-    async dryRun(input) {
+    async dryRun(input, userId?: string) {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "generate_dry_run",
         requestId,
         input,
+        userId,
       });
       return result as import("lumiverse-spindle-types").DryRunResultDTO;
     },
