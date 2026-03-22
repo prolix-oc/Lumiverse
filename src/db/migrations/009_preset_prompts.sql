@@ -1,1 +1,0 @@
-ALTER TABLE presets ADD COLUMN prompts TEXT NOT NULL DEFAULT '{}';
