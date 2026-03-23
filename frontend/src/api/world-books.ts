@@ -2,7 +2,8 @@ import { get, post, put, del } from './client'
 import type {
   WorldBook, CreateWorldBookInput, UpdateWorldBookInput,
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
-  PaginatedResult
+  PaginatedResult, WorldBookDiagnostics, WorldBookReindexProgress,
+  WorldBookReindexResult, WorldBookVectorSummary,
 } from '@/types/api'
 
 export const worldBooksApi = {
@@ -59,11 +60,26 @@ export const worldBooksApi = {
     return post<{ world_book: WorldBook; entry_count: number }>('/world-books/import-character-book', { characterId })
   },
 
+  getVectorSummary(bookId: string) {
+    return get<WorldBookVectorSummary>(`/world-books/${bookId}/vector-summary`)
+  },
+
+  setSemanticActivation(bookId: string, enabled: boolean) {
+    return post<{ summary: WorldBookVectorSummary; updated_entries: number }>(
+      `/world-books/${bookId}/semantic-activation`,
+      { enabled }
+    )
+  },
+
+  getDiagnostics(bookId: string, chatId: string) {
+    return post<WorldBookDiagnostics>(`/world-books/${bookId}/diagnostics`, { chatId })
+  },
+
   reindexVectors(
     bookId: string,
     options?: {
       batchSize?: number
-      onProgress?: (progress: { indexed: number; removed: number; failed: number; total: number; current: number }) => void
+      onProgress?: (progress: WorldBookReindexProgress) => void
     }
   ) {
     const body: Record<string, any> = {}
@@ -71,7 +87,7 @@ export const worldBooksApi = {
 
     if (options?.onProgress) {
       // SSE streaming mode
-      return new Promise<{ success: boolean; indexed: number; removed: number; failed: number; total: number }>(
+      return new Promise<WorldBookReindexResult>(
         async (resolve, reject) => {
           try {
             const res = await fetch(`/api/v1/embeddings/world-books/${encodeURIComponent(bookId)}/reindex`, {
@@ -122,7 +138,17 @@ export const worldBooksApi = {
                 }
               }
             }
-            resolve(finalResult || { success: true, indexed: 0, removed: 0, failed: 0, total: 0 })
+            resolve(finalResult || {
+              success: true,
+              total: 0,
+              current: 0,
+              eligible: 0,
+              indexed: 0,
+              removed: 0,
+              skipped_not_enabled: 0,
+              skipped_disabled_or_empty: 0,
+              failed: 0,
+            })
           } catch (err: any) {
             reject(err)
           }
@@ -131,7 +157,7 @@ export const worldBooksApi = {
     }
 
     // Non-streaming fallback
-    return post<{ success: boolean; indexed: number; removed: number; failed: number; total: number }>(
+    return post<WorldBookReindexResult>(
       `/embeddings/world-books/${encodeURIComponent(bookId)}/reindex`,
       body
     )

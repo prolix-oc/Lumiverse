@@ -123,6 +123,199 @@
   font-size: 12px;
 }
 
+.embeddingChecklist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--lumiverse-border-neutral);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.embeddingChecklistHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.embeddingChecklistHeaderCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.embeddingChecklistEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
+}
+
+.embeddingChecklistTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.embeddingChecklistSubtitle {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--lumiverse-text-muted);
+}
+
+.embeddingChecklistScore {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--lumiverse-fill);
+  border: 1px solid var(--lumiverse-border-neutral);
+  flex-shrink: 0;
+}
+
+.embeddingChecklistScoreValue {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+}
+
+.embeddingChecklistScoreLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lumiverse-primary-text);
+}
+
+.embeddingChecklistProgress {
+  position: relative;
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--lumiverse-fill);
+}
+
+.embeddingChecklistProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--lumiverse-primary-020), var(--lumiverse-primary));
+}
+
+.embeddingChecklistItems {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.embeddingChecklistItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--lumiverse-border-neutral);
+  background: var(--lumiverse-fill);
+  min-width: 0;
+}
+
+.embeddingChecklistItemComplete {
+  border-color: var(--lumiverse-border);
+  background: linear-gradient(180deg, var(--lumiverse-fill) 0%, var(--lumiverse-primary-010) 100%);
+}
+
+.embeddingChecklistStep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border-neutral);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--lumiverse-text-muted);
+  flex-shrink: 0;
+}
+
+.embeddingChecklistItemBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.embeddingChecklistItemTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.embeddingChecklistItemLabel {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--lumiverse-text);
+}
+
+.embeddingChecklistItemDescription {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--lumiverse-text-muted);
+}
+
+.embeddingChecklistDone,
+.embeddingChecklistTodo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid var(--lumiverse-border-neutral);
+}
+
+.embeddingChecklistDone {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary-text);
+  border-color: var(--lumiverse-border);
+}
+
+.embeddingChecklistTodo {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-muted);
+}
+
+@media (max-width: 720px) {
+  .embeddingChecklistHeader {
+    flex-direction: column;
+  }
+
+  .embeddingChecklistScore {
+    align-items: flex-start;
+  }
+
+  .embeddingChecklistItems {
+    grid-template-columns: 1fr;
+  }
+}
+
 .poolSummaryGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -3,6 +3,7 @@ import type {
   WorldBook, WorldBookEntry,
   CreateWorldBookInput, UpdateWorldBookInput,
   CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
+  WorldBookVectorIndexStatus, WorldBookVectorSummary,
 } from "../types/world-book";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -12,7 +13,20 @@ function rowToBook(row: any): WorldBook {
   return { ...row, metadata: JSON.parse(row.metadata) };
 }
 
+function normalizeVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
+  if (
+    row.vector_index_status === "not_enabled" ||
+    row.vector_index_status === "pending" ||
+    row.vector_index_status === "indexed" ||
+    row.vector_index_status === "error"
+  ) {
+    return row.vector_index_status;
+  }
+  return row.vectorized ? "pending" : "not_enabled";
+}
+
 function rowToEntry(row: any): WorldBookEntry {
+  const vectorIndexStatus = normalizeVectorIndexStatus(row);
   return {
     ...row,
     key: JSON.parse(row.key),
@@ -30,10 +44,29 @@ function rowToEntry(row: any): WorldBookEntry {
     delay_until_recursion: !!row.delay_until_recursion,
     use_probability: !!row.use_probability,
     vectorized: !!row.vectorized,
+    vector_index_status: vectorIndexStatus,
+    vector_indexed_at: row.vector_indexed_at ?? null,
+    vector_index_error: row.vector_index_error || null,
     scan_depth: row.scan_depth ?? null,
     automation_id: row.automation_id || null,
     extensions: JSON.parse(row.extensions),
   };
+}
+
+function getPendingVectorIndexState(vectorized: boolean): {
+  vector_index_status: WorldBookVectorIndexStatus;
+  vector_indexed_at: null;
+  vector_index_error: null;
+} {
+  return {
+    vector_index_status: vectorized ? "pending" : "not_enabled",
+    vector_indexed_at: null,
+    vector_index_error: null,
+  };
+}
+
+function shouldResetVectorIndex(input: UpdateWorldBookEntryInput): boolean {
+  return input.vectorized !== undefined || input.content !== undefined || input.disabled !== undefined;
 }
 
 // --- World Book CRUD ---
@@ -88,6 +121,86 @@ export function deleteWorldBook(userId: string, id: string): boolean {
   return getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
 
+export function getWorldBookVectorSummary(userId: string, worldBookId: string): WorldBookVectorSummary | null {
+  const book = getWorldBook(userId, worldBookId);
+  if (!book) return null;
+
+  const entries = listEntries(userId, worldBookId);
+  const summary: WorldBookVectorSummary = {
+    total: entries.length,
+    enabled: 0,
+    non_empty: 0,
+    enabled_non_empty: 0,
+    not_enabled: 0,
+    pending: 0,
+    indexed: 0,
+    error: 0,
+  };
+
+  for (const entry of entries) {
+    const hasContent = (entry.content || "").trim().length > 0;
+    if (entry.vectorized) summary.enabled += 1;
+    if (hasContent) summary.non_empty += 1;
+    if (hasContent && entry.vectorized) summary.enabled_non_empty += 1;
+    summary[entry.vector_index_status] += 1;
+  }
+
+  return summary;
+}
+
+export function setWorldBookSemanticActivation(
+  userId: string,
+  worldBookId: string,
+  enabled: boolean,
+): { summary: WorldBookVectorSummary; updated_entries: number } | null {
+  const book = getWorldBook(userId, worldBookId);
+  if (!book) return null;
+
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  let updatedEntries = 0;
+
+  if (enabled) {
+    updatedEntries = db.query(
+      `UPDATE world_book_entries
+       SET vectorized = 1,
+           vector_index_status = 'pending',
+           vector_indexed_at = NULL,
+           vector_index_error = NULL,
+           updated_at = ?
+       WHERE world_book_id = ?
+         AND length(trim(content)) > 0`
+    ).run(now, worldBookId).changes;
+  } else {
+    updatedEntries = db.query(
+      `UPDATE world_book_entries
+       SET vectorized = 0,
+           vector_index_status = 'not_enabled',
+           vector_indexed_at = NULL,
+           vector_index_error = NULL,
+           updated_at = ?
+       WHERE world_book_id = ?`
+    ).run(now, worldBookId).changes;
+  }
+
+  if (updatedEntries > 0) {
+    db.query("UPDATE world_books SET updated_at = ? WHERE id = ?").run(now, worldBookId);
+  }
+
+  if (!enabled) {
+    for (const entry of listEntries(userId, worldBookId)) {
+      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+      });
+    }
+  }
+
+  return {
+    summary: getWorldBookVectorSummary(userId, worldBookId)!,
+    updated_entries: updatedEntries,
+  };
+}
+
 // --- World Book Entry CRUD ---
 
 export function listEntriesPaginated(userId: string, worldBookId: string, pagination: PaginationParams): PaginatedResult<WorldBookEntry> {
@@ -124,6 +237,8 @@ export function createEntry(userId: string, worldBookId: string, input: CreateWo
   const id = crypto.randomUUID();
   const uid = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const vectorized = !!input.vectorized;
+  const vectorIndexState = getPendingVectorIndexState(vectorized);
 
   getDb()
     .query(
@@ -134,8 +249,9 @@ export function createEntry(userId: string, worldBookId: string, input: CreateWo
         case_sensitive, match_whole_words, automation_id,
         use_regex, prevent_recursion, exclude_recursion, delay_until_recursion,
         priority, sticky, cooldown, delay, selective_logic, use_probability,
-        vectorized, extensions, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        vectorized, vector_index_status, vector_indexed_at, vector_index_error,
+        extensions, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id, worldBookId, uid,
@@ -168,7 +284,10 @@ export function createEntry(userId: string, worldBookId: string, input: CreateWo
       input.delay ?? 0,
       input.selective_logic ?? 0,
       input.use_probability !== false ? 1 : 0,
-      input.vectorized ? 1 : 0,
+      vectorized ? 1 : 0,
+      vectorIndexState.vector_index_status,
+      vectorIndexState.vector_indexed_at,
+      vectorIndexState.vector_index_error,
       JSON.stringify(input.extensions || {}),
       now, now
     );
@@ -211,6 +330,17 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   }
 
   if (input.extensions !== undefined) { fields.push("extensions = ?"); values.push(JSON.stringify(input.extensions)); }
+
+  if (shouldResetVectorIndex(input)) {
+    const nextVectorized = input.vectorized ?? existing.vectorized;
+    const vectorIndexState = getPendingVectorIndexState(nextVectorized);
+    fields.push("vector_index_status = ?");
+    values.push(vectorIndexState.vector_index_status);
+    fields.push("vector_indexed_at = ?");
+    values.push(vectorIndexState.vector_indexed_at);
+    fields.push("vector_index_error = ?");
+    values.push(vectorIndexState.vector_index_error);
+  }
 
   if (fields.length === 0) return existing;
 
@@ -264,7 +394,7 @@ export function importWorldBook(
     metadata: { source: "import" },
   });
 
-  // Normalize entries: object-keyed → array
+  // Normalize entries: object-keyed to array
   let rawEntries: any[] = [];
   const src = payload.entries;
   if (Array.isArray(src)) {
@@ -380,8 +510,9 @@ export function importWorldBookBulk(
       case_sensitive, match_whole_words, automation_id,
       use_regex, prevent_recursion, exclude_recursion, delay_until_recursion,
       priority, sticky, cooldown, delay, selective_logic, use_probability,
-      vectorized, extensions, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      vectorized, vector_index_status, vector_indexed_at, vector_index_error,
+      extensions, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   let entryCount = 0;
@@ -432,7 +563,10 @@ export function importWorldBookBulk(
         raw.delay ?? 0,
         raw.selectiveLogic ?? raw.selective_logic ?? 0,
         (raw.useProbability !== undefined ? raw.useProbability : (raw.use_probability !== undefined ? raw.use_probability : true)) ? 1 : 0,
-        0, // vectorized — always false for bulk import, user can re-enable
+        0, // vectorized is always false for bulk import; user can re-enable it later
+        "not_enabled",
+        null,
+        null,
         JSON.stringify(raw.extensions || {}),
         now, now
       );

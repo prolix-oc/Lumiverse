@@ -172,7 +172,7 @@ export default function DryRunModal() {
                     size={14}
                     className={clsx(styles.chevron, wiStatsOpen && styles.chevronOpen)}
                   />
-                  World Info ({worldInfoStats.activatedAfterBudget} activated
+                  World Info ({worldInfoStats.totalActivated} activated
                   {worldInfoStats.evictedByBudget > 0 && `, ${worldInfoStats.evictedByBudget} evicted`})
                 </button>
                 {wiStatsOpen && (
@@ -181,6 +181,18 @@ export default function DryRunModal() {
                       <div className={styles.breakdownEntry}>
                         <span className={styles.breakdownLabel}>Total candidates</span>
                         <span className={styles.breakdownTokens}>{worldInfoStats.totalCandidates}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Keyword activated</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.keywordActivated}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Vector activated</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.vectorActivated}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Activated (final)</span>
+                        <span className={styles.breakdownTokens}>{worldInfoStats.totalActivated}</span>
                       </div>
                       <div className={styles.breakdownEntry}>
                         <span className={styles.breakdownLabel}>Activated (before budget)</span>
@@ -214,6 +226,14 @@ export default function DryRunModal() {
                         <span className={styles.breakdownLabel}>Recursion passes used</span>
                         <span className={styles.breakdownTokens}>{worldInfoStats.recursionPassesUsed}</span>
                       </div>
+                      {worldInfoStats.queryPreview && (
+                        <div className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <span className={styles.breakdownLabel}>Vector query preview</span>
+                          <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'auto', fontSize: 11 }}>
+                            {worldInfoStats.queryPreview}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

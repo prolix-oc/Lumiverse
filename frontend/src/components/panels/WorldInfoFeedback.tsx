@@ -20,9 +20,9 @@ export default function WorldInfoFeedback() {
         {hasEntries ? (
           <div className={styles.statusComplete}>
             <BookOpen size={14} />
-            <span>{activatedWorldInfo.length} entries activated</span>
+            <span>{worldInfoStats?.totalActivated ?? activatedWorldInfo.length} entries activated</span>
             <span className={styles.entryCount}>
-              {keywordEntries.length} keyword, {vectorEntries.length} vector
+              {worldInfoStats?.keywordActivated ?? keywordEntries.length} keyword, {worldInfoStats?.vectorActivated ?? vectorEntries.length} vector
             </span>
           </div>
         ) : (
@@ -37,8 +37,16 @@ export default function WorldInfoFeedback() {
             <span className={styles.statValue}>{worldInfoStats.totalCandidates}</span>
           </div>
           <div className={styles.statsRow}>
-            <span className={styles.statLabel}>Activated</span>
-            <span className={styles.statValue}>{worldInfoStats.activatedAfterBudget}</span>
+            <span className={styles.statLabel}>Activated total</span>
+            <span className={styles.statValue}>{worldInfoStats.totalActivated}</span>
+          </div>
+          <div className={styles.statsRow}>
+            <span className={styles.statLabel}>Keyword activated</span>
+            <span className={styles.statValue}>{worldInfoStats.keywordActivated}</span>
+          </div>
+          <div className={styles.statsRow}>
+            <span className={styles.statLabel}>Vector activated</span>
+            <span className={styles.statValue}>{worldInfoStats.vectorActivated}</span>
           </div>
           {worldInfoStats.evictedByBudget > 0 && (
             <div className={styles.statsRow}>

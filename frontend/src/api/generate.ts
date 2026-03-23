@@ -73,6 +73,10 @@ export interface DryRunResponse {
     evictedByMinPriority: number
     estimatedTokens: number
     recursionPassesUsed: number
+    keywordActivated: number
+    vectorActivated: number
+    totalActivated: number
+    queryPreview: string
   }
   memoryStats?: {
     enabled: boolean

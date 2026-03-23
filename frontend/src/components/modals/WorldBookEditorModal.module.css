@@ -310,6 +310,140 @@
   opacity: 0.85;
 }
 
+.secondaryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), opacity var(--lumiverse-transition-fast);
+}
+
+.secondaryBtn:hover {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-light);
+}
+
+.primaryActionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--lumiverse-primary);
+  color: #fff;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.primaryActionBtn:hover {
+  opacity: 0.9;
+}
+
+.primaryActionBtn:disabled,
+.secondaryBtn:disabled,
+.newEntryBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vectorSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.vectorSummaryTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vectorSummaryGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+}
+
+.vectorSummaryGrid span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.bulkSemanticToggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  cursor: pointer;
+}
+
+.bulkSemanticToggle:hover,
+.bulkSemanticToggle:focus-within {
+  border-color: var(--lumiverse-primary);
+}
+
+.bulkSemanticCheckbox {
+  margin-top: 2px;
+  accent-color: var(--lumiverse-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.bulkSemanticBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bulkSemanticTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  line-height: 1.4;
+}
+
+.bulkSemanticMeta,
+.bulkSemanticHint {
+  font-size: 11.5px;
+  color: var(--lumiverse-text-muted);
+  line-height: 1.45;
+}
+
+.bookActionRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding-top: 2px;
+}
+
+.vectorStatusText {
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+}
+
 .entryList {
   display: flex;
   flex-direction: column;

@@ -1,12 +1,23 @@
 import { Hono } from "hono";
 import * as svc from "../services/world-books.service";
 import * as charSvc from "../services/characters.service";
+import * as chatsSvc from "../services/chats.service";
+import * as embeddingsSvc from "../services/embeddings.service";
+import * as personasSvc from "../services/personas.service";
+import * as settingsSvc from "../services/settings.service";
 import { parsePagination } from "../services/pagination";
+import { collectVectorActivatedWorldInfoDetailed, getWorldInfoVectorQueryPreview } from "../services/prompt-assembly.service";
+import { activateWorldInfo, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 
 const MAX_IMPORT_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const app = new Hono();
+
+function estimateWorldInfoTokens(entries: Array<{ content: string }>): number {
+  const totalChars = entries.reduce((sum, entry) => sum + (entry.content || "").length, 0);
+  return Math.ceil(totalChars / 4);
+}
 
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -42,6 +53,162 @@ app.delete("/:id", (c) => {
   const userId = c.get("userId");
   if (!svc.deleteWorldBook(userId, c.req.param("id"))) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
+});
+
+app.get("/:id/vector-summary", (c) => {
+  const userId = c.get("userId");
+  const summary = svc.getWorldBookVectorSummary(userId, c.req.param("id"));
+  if (!summary) return c.json({ error: "World book not found" }, 404);
+  return c.json(summary);
+});
+
+app.post("/:id/semantic-activation", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ enabled?: boolean }>().catch(() => ({} as { enabled?: boolean }));
+  if (typeof body.enabled !== "boolean") {
+    return c.json({ error: "enabled must be a boolean" }, 400);
+  }
+  const result = svc.setWorldBookSemanticActivation(userId, c.req.param("id"), body.enabled);
+  if (!result) return c.json({ error: "World book not found" }, 404);
+  return c.json(result);
+});
+
+app.post("/:id/diagnostics", async (c) => {
+  const userId = c.get("userId");
+  const bookId = c.req.param("id");
+  const body = await c.req.json<{ chatId?: string }>().catch(() => ({} as { chatId?: string }));
+  if (!body.chatId) return c.json({ error: "chatId is required" }, 400);
+
+  const book = svc.getWorldBook(userId, bookId);
+  if (!book) return c.json({ error: "World book not found" }, 404);
+
+  const chat = chatsSvc.getChat(userId, body.chatId);
+  if (!chat) return c.json({ error: "Chat not found" }, 404);
+
+  const character = charSvc.getCharacter(userId, chat.character_id);
+  if (!character) return c.json({ error: "Character not found" }, 404);
+
+  const persona = personasSvc.resolvePersonaOrDefault(userId);
+  const globalWorldBooks = (settingsSvc.getSetting(userId, "globalWorldBooks")?.value as string[] | undefined) ?? [];
+  const messages = chatsSvc.getMessages(userId, chat.id);
+  const vectorSummary = svc.getWorldBookVectorSummary(userId, bookId)!;
+  const bookEntries = svc.listEntries(userId, bookId);
+  const attachmentSources = {
+    character: character.extensions?.world_book_id === bookId,
+    persona: persona?.attached_world_book_id === bookId,
+    global: globalWorldBooks.includes(bookId),
+  };
+  const isAttached = attachmentSources.character || attachmentSources.persona || attachmentSources.global;
+
+  const embeddings = await embeddingsSvc.getEmbeddingConfig(userId);
+  const queryPreview = await getWorldInfoVectorQueryPreview(userId, messages);
+  const blockerMessages: string[] = [];
+
+  if (!isAttached) {
+    blockerMessages.push("This world book is not attached to the current character, active persona, or global world books.");
+  }
+
+  const worldInfoSettings = (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
+  const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
+
+  const wiResult = isAttached
+    ? activateWorldInfo({
+        entries: bookEntries,
+        messages,
+        chatTurn: messages.length,
+        wiState: JSON.parse(JSON.stringify(wiState)),
+        settings: worldInfoSettings,
+      })
+    : activateWorldInfo({
+        entries: [],
+        messages,
+        chatTurn: messages.length,
+        wiState: {},
+        settings: worldInfoSettings,
+      });
+
+  const keywordHits = wiResult.activatedEntries.map((entry) => ({
+    entry_id: entry.id,
+    comment: entry.comment || "",
+  }));
+
+  const vectorDetail = isAttached
+    ? await collectVectorActivatedWorldInfoDetailed(userId, [bookId], bookEntries, messages)
+    : {
+        entries: [],
+        queryPreview,
+        eligibleCount: 0,
+        hitsBeforeThreshold: 0,
+        hitsAfterThreshold: 0,
+        thresholdRejected: 0,
+        topK: Math.max(1, embeddings.retrieval_top_k || 4),
+        cap: Math.max(1, embeddings.retrieval_top_k || 4),
+        blockerMessages: [] as string[],
+      };
+
+  blockerMessages.push(...vectorDetail.blockerMessages);
+
+  if (vectorDetail.thresholdRejected > 0 && vectorDetail.entries.length === 0) {
+    blockerMessages.push("Vector matches were found, but all of them were rejected by the current similarity threshold.");
+  }
+
+  if (worldInfoSettings.minPriority && worldInfoSettings.minPriority > 0) {
+    const belowMinPriority = bookEntries.some((entry) => !entry.disabled && !entry.constant && entry.priority < worldInfoSettings.minPriority!);
+    if (belowMinPriority && keywordHits.length === 0 && vectorDetail.entries.length === 0) {
+      blockerMessages.push("Entry priority is below the current World Info minimum priority setting.");
+    }
+  }
+
+  if (
+    wiResult.stats.evictedByBudget > 0 &&
+    keywordHits.length === 0 &&
+    vectorDetail.entries.length === 0 &&
+    bookEntries.some((entry) => !entry.disabled && (entry.content || "").trim().length > 0)
+  ) {
+    blockerMessages.push("World Info budget limits may be crowding this book out of the final prompt.");
+  }
+
+  const mergedIds = new Set(wiResult.activatedEntries.map((entry) => entry.id));
+  const mergedEntries = [...wiResult.activatedEntries];
+  let vectorActivatedCount = 0;
+  for (const item of vectorDetail.entries) {
+    if (mergedIds.has(item.entry.id)) continue;
+    mergedIds.add(item.entry.id);
+    mergedEntries.push(item.entry);
+    vectorActivatedCount += 1;
+  }
+
+  return c.json({
+    book_id: bookId,
+    chat_id: chat.id,
+    attachment_sources: attachmentSources,
+    embeddings: {
+      enabled: embeddings.enabled,
+      has_api_key: embeddings.has_api_key,
+      dimensions: embeddings.dimensions,
+      vectorize_world_books: embeddings.vectorize_world_books,
+      ready: embeddings.enabled && embeddings.has_api_key && !!embeddings.dimensions && embeddings.vectorize_world_books,
+    },
+    vector_summary: vectorSummary,
+    query_preview: vectorDetail.queryPreview || queryPreview,
+    eligible_entries: vectorDetail.eligibleCount,
+    keyword_hits: keywordHits,
+    vector_hits: vectorDetail.entries.map((item) => ({
+      entry_id: item.entry.id,
+      comment: item.entry.comment || "",
+      score: item.score,
+    })),
+    blocker_messages: Array.from(new Set(blockerMessages)),
+    stats: {
+      ...wiResult.stats,
+      activatedAfterBudget: mergedEntries.length,
+      estimatedTokens: estimateWorldInfoTokens(mergedEntries),
+      keywordActivated: keywordHits.length,
+      vectorActivated: vectorActivatedCount,
+      totalActivated: mergedEntries.length,
+      queryPreview: vectorDetail.queryPreview || queryPreview,
+    },
+  });
 });
 
 // --- World Book Import ---
