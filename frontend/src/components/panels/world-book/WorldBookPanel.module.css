@@ -482,7 +482,7 @@
 .diagnosticsCard {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   padding: 10px;
   border-radius: 8px;
   border: 1px solid var(--lumiverse-border);
@@ -526,10 +526,134 @@
 .diagnosticsBlocker {
   padding: 8px 10px;
   border-radius: 6px;
-  background: rgba(255, 184, 0, 0.12);
-  color: #ffd16a;
+  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 72%, var(--lumiverse-bg));
+  color: var(--lumiverse-text-dim);
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+.diagnosticsSectionLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
+}
+
+.diagnosticsHits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnosticsHit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.diagnosticsHitHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.diagnosticsHitText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.diagnosticsHitTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.diagnosticsHitSummary {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--lumiverse-text-dim);
+}
+
+.diagnosticsHitScores {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.diagnosticsScorePill,
+.diagnosticsDistancePill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  font-size: 11px;
+  color: var(--lumiverse-text);
+}
+
+.diagnosticsBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.diagnosticsBreakdownItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+}
+
+.diagnosticsBreakdownLabel {
+  font-size: 10.5px;
+  color: var(--lumiverse-text-muted);
+}
+
+.diagnosticsBreakdownValue {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.diagnosticsPreview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnosticsPreviewLabel {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
+}
+
+.diagnosticsPreviewText {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--lumiverse-text-dim);
 }
 
 /* ── Entry list ── */

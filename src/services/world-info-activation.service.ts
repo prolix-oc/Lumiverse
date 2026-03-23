@@ -72,6 +72,15 @@ export interface ActivationResult {
   stats: ActivationStats;
 }
 
+export interface FinalizedWorldInfoEntries {
+  cache: WorldInfoCache;
+  activatedEntries: WorldBookEntry[];
+  activatedBeforeBudget: number;
+  activatedAfterBudget: number;
+  evictedByBudget: number;
+  estimatedTokens: number;
+}
+
 /** Hoisted escaping regex — compiled once at module level. */
 const REGEX_ESCAPE_PATTERN = /[.*+?^${}()|[\]\\]/g;
 
@@ -245,39 +254,49 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     }
   }
 
-  // 4. Group logic — entries with same group_name compete
-  const afterGroups = applyGroupLogic(activated);
+  const finalized = finalizeActivatedWorldInfoEntries(activated, settings);
 
-  // 5. Sort by priority (desc), then order_value (asc)
+  const stats: ActivationStats = {
+    totalCandidates: candidates.length,
+    activatedBeforeBudget: finalized.activatedBeforeBudget,
+    activatedAfterBudget: finalized.activatedAfterBudget,
+    evictedByBudget: finalized.evictedByBudget,
+    evictedByMinPriority,
+    estimatedTokens: finalized.estimatedTokens,
+    recursionPassesUsed,
+    keywordActivated: finalized.activatedEntries.length,
+    vectorActivated: 0,
+    totalActivated: finalized.activatedEntries.length,
+    queryPreview: "",
+  };
+
+  return { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
+}
+
+export function finalizeActivatedWorldInfoEntries(
+  entries: WorldBookEntry[],
+  settingsInput?: Partial<WorldInfoSettings>,
+): FinalizedWorldInfoEntries {
+  const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...settingsInput };
+
+  const afterGroups = applyGroupLogic([...entries]);
   afterGroups.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     return a.order_value - b.order_value;
   });
 
-  // 6. Budget enforcement — cap total activated entries and token usage.
-  //    Constants are counted towards the budget but never evicted.
   const activatedBeforeBudget = afterGroups.length;
-  const afterBudget = enforceBudget(afterGroups, settings);
-  const evictedByBudget = activatedBeforeBudget - afterBudget.length;
+  const activatedEntries = enforceBudget(afterGroups, settings);
+  const evictedByBudget = activatedBeforeBudget - activatedEntries.length;
 
-  // 7. Bucket by position into WorldInfoCache
-  const cache = bucketByPosition(afterBudget);
-
-  const stats: ActivationStats = {
-    totalCandidates: candidates.length,
+  return {
+    cache: bucketByPosition(activatedEntries),
+    activatedEntries,
     activatedBeforeBudget,
-    activatedAfterBudget: afterBudget.length,
+    activatedAfterBudget: activatedEntries.length,
     evictedByBudget,
-    evictedByMinPriority,
-    estimatedTokens: estimateTokens(afterBudget),
-    recursionPassesUsed,
-    keywordActivated: afterBudget.length,
-    vectorActivated: 0,
-    totalActivated: afterBudget.length,
-    queryPreview: "",
+    estimatedTokens: estimateTokens(activatedEntries),
   };
-
-  return { cache, activatedEntries: afterBudget, wiState, stats };
 }
 
 // ---------------------------------------------------------------------------

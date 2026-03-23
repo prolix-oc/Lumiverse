@@ -8,8 +8,9 @@ import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ImportWorldBookModal, { type WorldBookImportResult } from '@/components/modals/ImportWorldBookModal'
 import PostImportWorldBookModal from '@/components/shared/PostImportWorldBookModal'
+import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookDiagnosticsModal'
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
-import type { WorldBook, WorldBookDiagnostics, WorldBookEntry, WorldBookVectorSummary, WorldInfoSettings } from '@/types/api'
+import type { WorldBook, WorldBookEntry, WorldBookVectorSummary, WorldInfoSettings } from '@/types/api'
 import styles from './WorldBookPanel.module.css'
 import clsx from 'clsx'
 
@@ -39,8 +40,7 @@ export default function WorldBookPanel() {
   const [bookDescription, setBookDescription] = useState('')
   const [vectorStatus, setVectorStatus] = useState<string | null>(null)
   const [vectorSummary, setVectorSummary] = useState<WorldBookVectorSummary | null>(null)
-  const [diagnostics, setDiagnostics] = useState<WorldBookDiagnostics | null>(null)
-  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false)
   const [semanticUpdating, setSemanticUpdating] = useState(false)
   const [postImportBook, setPostImportBook] = useState<WorldBook | null>(null)
 
@@ -120,14 +120,14 @@ export default function WorldBookPanel() {
         setBookDescription(book.description)
       }
       setSelectedEntryId(null)
-      setDiagnostics(null)
+      setShowDiagnosticsModal(false)
     } else {
       setEntries([])
       setEntryTotal(0)
       setEntryOffset(0)
       setSelectedEntryId(null)
       setVectorSummary(null)
-      setDiagnostics(null)
+      setShowDiagnosticsModal(false)
     }
   }, [selectedBookId, books, loadEntries, loadVectorSummary])
 
@@ -243,18 +243,9 @@ export default function WorldBookPanel() {
   }, [selectedBookId, loadEntries])
 
   const handleDiagnostics = useCallback(async () => {
-    if (!selectedBookId || !activeChatId || diagnosticsLoading) return
-    try {
-      setDiagnosticsLoading(true)
-      const result = await worldBooksApi.getDiagnostics(selectedBookId, activeChatId)
-      setDiagnostics(result)
-    } catch {
-      setDiagnostics(null)
-      setVectorStatus('Failed to diagnose the current chat')
-    } finally {
-      setDiagnosticsLoading(false)
-    }
-  }, [selectedBookId, activeChatId, diagnosticsLoading])
+    if (!selectedBookId || !activeChatId) return
+    setShowDiagnosticsModal(true)
+  }, [selectedBookId, activeChatId])
 
   const handleDeleteEntry = useCallback(
     async (entryId: string) => {
@@ -351,6 +342,7 @@ export default function WorldBookPanel() {
   }
 
   const activeGlobalBooks = books.filter((b) => (globalWorldBooks ?? []).includes(b.id))
+  const selectedBook = books.find((book) => book.id === selectedBookId) ?? null
 
   return (
     <div className={styles.panel}>
@@ -592,38 +584,13 @@ export default function WorldBookPanel() {
                   type="button"
                   className={styles.subtleActionBtn}
                   onClick={handleDiagnostics}
-                  disabled={!activeChatId || diagnosticsLoading}
+                  disabled={!activeChatId}
                 >
                   <Search size={12} />
-                  <span>{diagnosticsLoading ? 'Diagnosing...' : 'Diagnose Current Chat'}</span>
+                  <span>Diagnose Current Chat</span>
                 </button>
               </div>
               {vectorStatus && <span className={styles.vectorStatusText}>{vectorStatus}</span>}
-              {diagnostics && (
-                <div className={styles.diagnosticsCard}>
-                  <div className={styles.diagnosticsHeader}>
-                    <span>Current chat diagnostics</span>
-                    <span className={styles.diagnosticsMeta}>
-                      {diagnostics.keyword_hits.length} keyword, {diagnostics.vector_hits.length} vector
-                    </span>
-                  </div>
-                  <div className={styles.diagnosticsSummary}>
-                    <span>Attached: {diagnostics.attachment_sources.character || diagnostics.attachment_sources.persona || diagnostics.attachment_sources.global ? 'yes' : 'no'}</span>
-                    <span>Eligible: {diagnostics.eligible_entries}</span>
-                    <span>Embeddings ready: {diagnostics.embeddings.ready ? 'yes' : 'no'}</span>
-                  </div>
-                  {diagnostics.query_preview && (
-                    <div className={styles.diagnosticsQuery}>{diagnostics.query_preview}</div>
-                  )}
-                  {diagnostics.blocker_messages.length > 0 && (
-                    <div className={styles.diagnosticsBlockers}>
-                      {diagnostics.blocker_messages.map((message) => (
-                        <div key={message} className={styles.diagnosticsBlocker}>{message}</div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           )}
 
@@ -759,6 +726,14 @@ export default function WorldBookPanel() {
         <PostImportWorldBookModal
           book={postImportBook}
           onClose={() => setPostImportBook(null)}
+        />
+      )}
+
+      {showDiagnosticsModal && selectedBook && activeChatId && (
+        <WorldBookDiagnosticsModal
+          book={selectedBook}
+          chatId={activeChatId}
+          onClose={() => setShowDiagnosticsModal(false)}
         />
       )}
     </div>

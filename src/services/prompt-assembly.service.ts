@@ -9,7 +9,13 @@ import type { Preset } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
 import { evaluate, buildEnv, registry, initMacros } from "../macros";
 import type { MacroEnv } from "../macros";
-import { activateWorldInfo, type WiState, type WorldInfoSettings, DEFAULT_WORLD_INFO_SETTINGS } from "./world-info-activation.service";
+import {
+  activateWorldInfo,
+  finalizeActivatedWorldInfoEntries,
+  type WiState,
+  type WorldInfoSettings,
+  DEFAULT_WORLD_INFO_SETTINGS,
+} from "./world-info-activation.service";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags } from "./chats.service";
 import {
@@ -227,16 +233,6 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     wiState,
     settings: worldInfoSettings,
   });
-  const wiCache = wiResult.cache;
-  const keywordActivatedCount = wiResult.activatedEntries.length;
-
-  // Build activated world info summary (keyword-activated entries first)
-  const activatedWorldInfo: ActivatedWorldInfoEntry[] = wiResult.activatedEntries.map((e) => ({
-    id: e.id,
-    comment: e.comment || '',
-    keys: e.key || [],
-    source: 'keyword' as const,
-  }));
 
   // Optional vector retrieval for vectorized world book entries.
   // These entries are merged with keyword-activated entries when enabled.
@@ -250,30 +246,24 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       wiEntries,
       messages,
     );
-  if (vectorActivated.length > 0) {
-    const existing = new Set(wiResult.activatedEntries.map((e) => e.id));
-    for (const { entry, score } of vectorActivated) {
-      if (existing.has(entry.id)) continue;
-      injectEntryIntoCache(wiCache, entry);
-      wiResult.activatedEntries.push(entry);
-      existing.add(entry.id);
-      activatedWorldInfo.push({
-        id: entry.id,
-        comment: entry.comment || '',
-        keys: entry.key || [],
-        source: 'vector',
-        score,
-      });
-    }
-  }
+  const mergedWorldInfo = mergeActivatedWorldInfoEntries(
+    wiResult.activatedEntries,
+    vectorActivated,
+    worldInfoSettings,
+  );
+  const wiCache = mergedWorldInfo.cache;
+  wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
+  const activatedWorldInfo = mergedWorldInfo.activatedWorldInfo;
 
   const worldInfoStats = {
     ...wiResult.stats,
-    activatedAfterBudget: wiResult.activatedEntries.length,
-    estimatedTokens: estimateWorldInfoTokens(wiResult.activatedEntries),
-    keywordActivated: keywordActivatedCount,
-    vectorActivated: Math.max(0, wiResult.activatedEntries.length - keywordActivatedCount),
-    totalActivated: wiResult.activatedEntries.length,
+    activatedBeforeBudget: mergedWorldInfo.activatedBeforeBudget,
+    activatedAfterBudget: mergedWorldInfo.activatedAfterBudget,
+    evictedByBudget: mergedWorldInfo.evictedByBudget,
+    estimatedTokens: mergedWorldInfo.estimatedTokens,
+    keywordActivated: mergedWorldInfo.keywordActivated,
+    vectorActivated: mergedWorldInfo.vectorActivated,
+    totalActivated: mergedWorldInfo.totalActivated,
     queryPreview: vectorQueryPreview,
   };
 
@@ -1037,9 +1027,49 @@ export function collectWorldInfoSources(
   };
 }
 
+type WorldBookEntryModel = import("../types/world-book").WorldBookEntry;
+type HybridWeightMode = import("./embeddings.service").EmbeddingConfig["hybrid_weight_mode"];
+
+interface WorldInfoVectorRankingPreset {
+  candidateMultiplier: number;
+  weights: {
+    vector: number;
+    primaryExact: number;
+    primaryPartial: number;
+    secondaryExact: number;
+    secondaryPartial: number;
+    commentExact: number;
+    commentPartial: number;
+    priority: number;
+  };
+}
+
+interface VectorQueryLexicalState {
+  normalizedText: string;
+  tokenSet: Set<string>;
+}
+
+export interface VectorScoreBreakdown {
+  vectorSimilarity: number;
+  primaryExact: number;
+  primaryPartial: number;
+  secondaryExact: number;
+  secondaryPartial: number;
+  commentExact: number;
+  commentPartial: number;
+  priority: number;
+}
+
 export interface VectorActivatedEntry {
-  entry: import("../types/world-book").WorldBookEntry;
+  entry: WorldBookEntryModel;
   score: number;
+  distance: number;
+  finalScore: number;
+  matchedPrimaryKeys: string[];
+  matchedSecondaryKeys: string[];
+  matchedComment: string | null;
+  scoreBreakdown: VectorScoreBreakdown;
+  searchTextPreview: string;
 }
 
 export interface VectorWorldInfoRetrievalResult {
@@ -1054,9 +1084,267 @@ export interface VectorWorldInfoRetrievalResult {
   blockerMessages: string[];
 }
 
-function estimateWorldInfoTokens(entries: import("../types/world-book").WorldBookEntry[]): number {
-  const totalChars = entries.reduce((sum, entry) => sum + (entry.content || "").length, 0);
-  return Math.ceil(totalChars / 4);
+export interface MergedWorldInfoEntriesResult {
+  cache: WorldInfoCache;
+  activatedEntries: WorldBookEntryModel[];
+  activatedWorldInfo: ActivatedWorldInfoEntry[];
+  keywordActivated: number;
+  vectorActivated: number;
+  totalActivated: number;
+  estimatedTokens: number;
+  activatedBeforeBudget: number;
+  activatedAfterBudget: number;
+  evictedByBudget: number;
+}
+
+const WORLD_INFO_VECTOR_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "had", "has",
+  "have", "he", "her", "him", "his", "if", "in", "into", "is", "it", "its", "of", "on",
+  "or", "she", "that", "the", "their", "them", "there", "they", "this", "to", "was",
+  "were", "with", "you", "your",
+]);
+
+const WORLD_INFO_VECTOR_PRESETS: Record<HybridWeightMode, WorldInfoVectorRankingPreset> = {
+  keyword_first: {
+    candidateMultiplier: 4,
+    weights: {
+      vector: 0.6,
+      primaryExact: 0.7,
+      primaryPartial: 0.3,
+      secondaryExact: 0.4,
+      secondaryPartial: 0.16,
+      commentExact: 0.32,
+      commentPartial: 0.14,
+      priority: 0.08,
+    },
+  },
+  balanced: {
+    candidateMultiplier: 3,
+    weights: {
+      vector: 0.8,
+      primaryExact: 0.55,
+      primaryPartial: 0.24,
+      secondaryExact: 0.28,
+      secondaryPartial: 0.12,
+      commentExact: 0.24,
+      commentPartial: 0.1,
+      priority: 0.06,
+    },
+  },
+  vector_first: {
+    candidateMultiplier: 2,
+    weights: {
+      vector: 1.0,
+      primaryExact: 0.4,
+      primaryPartial: 0.18,
+      secondaryExact: 0.18,
+      secondaryPartial: 0.08,
+      commentExact: 0.16,
+      commentPartial: 0.06,
+      priority: 0.04,
+    },
+  },
+};
+
+function normalizeLexicalText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeLexicalText(text: string): string[] {
+  return normalizeLexicalText(text)
+    .split(" ")
+    .filter((token) => token.length > 1 && !WORLD_INFO_VECTOR_STOPWORDS.has(token));
+}
+
+function dedupeStringsCaseInsensitive(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function hasExactPhraseMatch(normalizedText: string, value: string): boolean {
+  const normalizedValue = normalizeLexicalText(value);
+  if (!normalizedText || !normalizedValue) return false;
+  return ` ${normalizedText} `.includes(` ${normalizedValue} `);
+}
+
+function getPhraseTokenOverlap(tokenSet: Set<string>, value: string): number {
+  const tokens = tokenizeLexicalText(value);
+  if (tokens.length === 0) return 0;
+  let matched = 0;
+  for (const token of tokens) {
+    if (tokenSet.has(token)) matched += 1;
+  }
+  return matched / tokens.length;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function distanceToSimilarity(distance: number): number {
+  return 1 / (1 + Math.max(0, distance));
+}
+
+function buildVectorQueryLexicalState(queryText: string): VectorQueryLexicalState {
+  return {
+    normalizedText: normalizeLexicalText(queryText),
+    tokenSet: new Set(tokenizeLexicalText(queryText)),
+  };
+}
+
+function getWorldInfoVectorPreset(mode: HybridWeightMode): WorldInfoVectorRankingPreset {
+  return WORLD_INFO_VECTOR_PRESETS[mode] ?? WORLD_INFO_VECTOR_PRESETS.balanced;
+}
+
+function scoreVectorWorldInfoCandidate(
+  entry: WorldBookEntryModel,
+  candidate: embeddingsSvc.WorldBookSearchCandidate,
+  queryState: VectorQueryLexicalState,
+  preset: WorldInfoVectorRankingPreset,
+): VectorActivatedEntry {
+  const matchedPrimaryKeys: string[] = [];
+  const matchedSecondaryKeys: string[] = [];
+
+  let primaryExactCount = 0;
+  let primaryPartialBest = 0;
+  for (const key of entry.key || []) {
+    if (hasExactPhraseMatch(queryState.normalizedText, key)) {
+      primaryExactCount += 1;
+      matchedPrimaryKeys.push(key);
+      continue;
+    }
+    const overlap = getPhraseTokenOverlap(queryState.tokenSet, key);
+    if (overlap >= 0.6) matchedPrimaryKeys.push(key);
+    primaryPartialBest = Math.max(primaryPartialBest, overlap);
+  }
+
+  let secondaryExactCount = 0;
+  let secondaryPartialBest = 0;
+  for (const key of entry.keysecondary || []) {
+    if (hasExactPhraseMatch(queryState.normalizedText, key)) {
+      secondaryExactCount += 1;
+      matchedSecondaryKeys.push(key);
+      continue;
+    }
+    const overlap = getPhraseTokenOverlap(queryState.tokenSet, key);
+    if (overlap >= 0.6) matchedSecondaryKeys.push(key);
+    secondaryPartialBest = Math.max(secondaryPartialBest, overlap);
+  }
+
+  const comment = (entry.comment || "").trim();
+  const commentExactMatch = comment ? hasExactPhraseMatch(queryState.normalizedText, comment) : false;
+  const commentPartialOverlap = comment ? getPhraseTokenOverlap(queryState.tokenSet, comment) : 0;
+  const matchedComment = (commentExactMatch || commentPartialOverlap >= 0.75) ? comment : null;
+
+  const vectorSimilarity = distanceToSimilarity(candidate.distance);
+  const primaryExactScore = Math.min(primaryExactCount, 2) * preset.weights.primaryExact;
+  const primaryPartialScore = primaryPartialBest * preset.weights.primaryPartial;
+  const secondaryExactScore = Math.min(secondaryExactCount, 2) * preset.weights.secondaryExact;
+  const secondaryPartialScore = secondaryPartialBest * preset.weights.secondaryPartial;
+  const commentExactScore = commentExactMatch ? preset.weights.commentExact : 0;
+  const commentPartialScore = (!commentExactMatch ? commentPartialOverlap : 0) * preset.weights.commentPartial;
+  const priorityScore = clamp01((entry.priority || 0) / 100) * preset.weights.priority;
+  const vectorScore = vectorSimilarity * preset.weights.vector;
+
+  const finalScore =
+    vectorScore +
+    primaryExactScore +
+    primaryPartialScore +
+    secondaryExactScore +
+    secondaryPartialScore +
+    commentExactScore +
+    commentPartialScore +
+    priorityScore;
+
+  return {
+    entry,
+    score: finalScore,
+    distance: candidate.distance,
+    finalScore,
+    matchedPrimaryKeys: dedupeStringsCaseInsensitive(matchedPrimaryKeys),
+    matchedSecondaryKeys: dedupeStringsCaseInsensitive(matchedSecondaryKeys),
+    matchedComment,
+    scoreBreakdown: {
+      vectorSimilarity: vectorScore,
+      primaryExact: primaryExactScore,
+      primaryPartial: primaryPartialScore,
+      secondaryExact: secondaryExactScore,
+      secondaryPartial: secondaryPartialScore,
+      commentExact: commentExactScore,
+      commentPartial: commentPartialScore,
+      priority: priorityScore,
+    },
+    searchTextPreview: candidate.searchTextPreview,
+  };
+}
+
+export function mergeActivatedWorldInfoEntries(
+  keywordEntries: WorldBookEntryModel[],
+  vectorEntries: VectorActivatedEntry[],
+  settingsInput?: Partial<WorldInfoSettings>,
+): MergedWorldInfoEntriesResult {
+  const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...settingsInput };
+  const mergedEntries: WorldBookEntryModel[] = [];
+  const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
+  const seen = new Set<string>();
+
+  for (const entry of keywordEntries) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    mergedEntries.push(entry);
+    sources.set(entry.id, { source: "keyword" });
+  }
+
+  for (const item of vectorEntries) {
+    if (seen.has(item.entry.id)) continue;
+    if (settings.minPriority > 0 && item.entry.priority < settings.minPriority && !item.entry.constant) {
+      continue;
+    }
+    seen.add(item.entry.id);
+    mergedEntries.push(item.entry);
+    sources.set(item.entry.id, { source: "vector", score: item.finalScore });
+  }
+
+  const finalized = finalizeActivatedWorldInfoEntries(mergedEntries, settings);
+  const activatedWorldInfo: ActivatedWorldInfoEntry[] = finalized.activatedEntries.map((entry) => {
+    const source = sources.get(entry.id);
+    return {
+      id: entry.id,
+      comment: entry.comment || "",
+      keys: entry.key || [],
+      source: source?.source ?? "keyword",
+      score: source?.score,
+    };
+  });
+
+  const keywordActivated = activatedWorldInfo.filter((entry) => entry.source === "keyword").length;
+  const vectorActivated = activatedWorldInfo.length - keywordActivated;
+
+  return {
+    cache: finalized.cache,
+    activatedEntries: finalized.activatedEntries,
+    activatedWorldInfo,
+    keywordActivated,
+    vectorActivated,
+    totalActivated: finalized.activatedEntries.length,
+    estimatedTokens: finalized.estimatedTokens,
+    activatedBeforeBudget: finalized.activatedBeforeBudget,
+    activatedAfterBudget: finalized.activatedAfterBudget,
+    evictedByBudget: finalized.evictedByBudget,
+  };
 }
 
 function truncateToContextSize(text: string, maxTokens: number): string {
@@ -1070,7 +1358,10 @@ function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: numb
     .filter((m) => !(m.extra?.hidden) && m.content.trim().length > 0)
     .slice(-Math.max(1, contextSize));
   return truncateToContextSize(
-    queryMessages.map((m) => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n").trim(),
+    queryMessages
+      .map((m) => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(stripReasoningTags(m.content))}`)
+      .join("\n")
+      .trim(),
     8000,
   );
 }
@@ -1087,7 +1378,7 @@ function isVectorEligibleWorldInfoEntry(entry: import("../types/world-book").Wor
 export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
   worldBookIds: string[],
-  entries: import("../types/world-book").WorldBookEntry[],
+  entries: WorldBookEntryModel[],
   messages: Message[],
 ): Promise<VectorWorldInfoRetrievalResult> {
   const emptyResult: VectorWorldInfoRetrievalResult = {
@@ -1147,12 +1438,13 @@ export async function collectVectorActivatedWorldInfoDetailed(
     }
 
     const byId = new Map(eligibleEntries.map((entry) => [entry.id, entry]));
-    const scored: Array<{ entry: import("../types/world-book").WorldBookEntry; score: number }> = [];
-    const seen = new Set<string>();
+    const preset = getWorldInfoVectorPreset(cfg.hybrid_weight_mode);
+    const fetchLimit = Math.min(100, Math.max(topK * preset.candidateMultiplier, topK));
+    const candidates = new Map<string, { entry: WorldBookEntryModel; candidate: embeddingsSvc.WorldBookSearchCandidate }>();
 
     const searchResults = await Promise.allSettled(
       worldBookIds.map((worldBookId) =>
-        embeddingsSvc.searchWorldBookEntriesWithVector(userId, worldBookId, queryVector, topK)
+        embeddingsSvc.searchWorldBookEntriesHybridWithVector(userId, worldBookId, queryText, queryVector, fetchLimit)
       )
     );
 
@@ -1164,31 +1456,36 @@ export async function collectVectorActivatedWorldInfoDetailed(
       for (const hit of result.value) {
         const entry = byId.get(hit.entry_id);
         if (!entry) continue;
-        if (seen.has(entry.id)) continue;
-        scored.push({ entry, score: hit.score });
-        seen.add(entry.id);
+        const existing = candidates.get(entry.id);
+        if (!existing || hit.distance < existing.candidate.distance) {
+          candidates.set(entry.id, { entry, candidate: hit });
+        }
       }
     }
 
-    const hitsBeforeThreshold = scored.length;
-    if (cfg.similarity_threshold > 0) {
-      const cutoff = cfg.similarity_threshold;
-      scored.splice(0, scored.length, ...scored.filter((s) => s.score <= cutoff));
-    }
-    const hitsAfterThreshold = scored.length;
+    const pooledCandidates = Array.from(candidates.values());
+    const hitsBeforeThreshold = pooledCandidates.length;
+    const filteredCandidates = cfg.similarity_threshold > 0
+      ? pooledCandidates.filter((item) => item.candidate.distance <= cfg.similarity_threshold)
+      : pooledCandidates;
+    const hitsAfterThreshold = filteredCandidates.length;
     const thresholdRejected = hitsBeforeThreshold - hitsAfterThreshold;
+    const queryState = buildVectorQueryLexicalState(queryText);
+    const scored = filteredCandidates.map(({ entry, candidate }) =>
+      scoreVectorWorldInfoCandidate(entry, candidate, queryState, preset)
+    );
 
-    scored.sort((a, b) => a.score - b.score);
+    scored.sort((a, b) => {
+      if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      if (b.entry.priority !== a.entry.priority) return b.entry.priority - a.entry.priority;
+      return a.entry.order_value - b.entry.order_value;
+    });
 
-    let cap = topK;
-    if (cfg.hybrid_weight_mode === "keyword_first") {
-      cap = Math.max(1, Math.ceil(topK / 2));
-    } else if (cfg.hybrid_weight_mode === "vector_first") {
-      cap = Math.min(24, topK * 2);
-    }
+    const cap = topK;
 
     return {
-      entries: scored.slice(0, cap).map((item) => ({ entry: item.entry, score: item.score })),
+      entries: scored.slice(0, cap),
       queryPreview: queryText,
       eligibleCount: eligibleEntries.length,
       hitsBeforeThreshold,
@@ -1254,32 +1551,14 @@ export async function getActivatedWorldInfoForChat(
     settings: worldInfoSettings,
   });
 
-  const activated: ActivatedWorldInfoEntry[] = wiResult.activatedEntries.map((e) => ({
-    id: e.id,
-    comment: e.comment || "",
-    keys: e.key || [],
-    source: "keyword" as const,
-  }));
-
   const vectorActivated = await collectVectorActivatedWorldInfo(
     userId, wiSources.worldBookIds, wiSources.entries, messages,
   );
-  if (vectorActivated.length > 0) {
-    const existing = new Set(wiResult.activatedEntries.map((e) => e.id));
-    for (const { entry, score } of vectorActivated) {
-      if (existing.has(entry.id)) continue;
-      existing.add(entry.id);
-      activated.push({
-        id: entry.id,
-        comment: entry.comment || "",
-        keys: entry.key || [],
-        source: "vector",
-        score,
-      });
-    }
-  }
-
-  return activated;
+  return mergeActivatedWorldInfoEntries(
+    wiResult.activatedEntries,
+    vectorActivated,
+    worldInfoSettings,
+  ).activatedWorldInfo;
 }
 
 /**
@@ -1527,40 +1806,6 @@ function getRecentRelevantChunks(userId: string, chatId: string, queryText: stri
   const topChunks = sorted.slice(0, limit);
 
   return topChunks.map(c => c.content);
-}
-
-function injectEntryIntoCache(cache: WorldInfoCache, entry: import("../types/world-book").WorldBookEntry): void {
-  const content = entry.content;
-  if (!content) return;
-  const role: "system" | "user" | "assistant" =
-    entry.role === "user" || entry.role === "assistant" ? entry.role : "system";
-
-  switch (entry.position) {
-    case 0:
-      cache.before.push({ content, role });
-      break;
-    case 1:
-      cache.after.push({ content, role });
-      break;
-    case 2:
-      cache.anBefore.push({ content, role });
-      break;
-    case 3:
-      cache.anAfter.push({ content, role });
-      break;
-    case 4:
-      cache.depth.push({ content, role, depth: entry.depth });
-      break;
-    case 5:
-      cache.emBefore.push({ content, role });
-      break;
-    case 6:
-      cache.emAfter.push({ content, role });
-      break;
-    default:
-      cache.before.push({ content, role });
-      break;
-  }
 }
 
 function injectWorldInfoAt(

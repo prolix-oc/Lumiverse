@@ -66,7 +66,14 @@ function getPendingVectorIndexState(vectorized: boolean): {
 }
 
 function shouldResetVectorIndex(input: UpdateWorldBookEntryInput): boolean {
-  return input.vectorized !== undefined || input.content !== undefined || input.disabled !== undefined;
+  return (
+    input.vectorized !== undefined ||
+    input.content !== undefined ||
+    input.comment !== undefined ||
+    input.key !== undefined ||
+    input.keysecondary !== undefined ||
+    input.disabled !== undefined
+  );
 }
 
 // --- World Book CRUD ---

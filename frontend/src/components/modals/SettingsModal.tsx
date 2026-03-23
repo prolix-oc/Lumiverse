@@ -1606,7 +1606,7 @@ function EmbeddingsSettings() {
           className={styles.numberInput}
           type="number"
           min={1}
-          max={24}
+          max={50}
           value={cfg.retrieval_top_k}
           onChange={(e) => update({ retrieval_top_k: Number(e.target.value || 1) })}
         />
@@ -1924,7 +1924,7 @@ function AdvancedSettings() {
           <input
             className={styles.numberInput}
             type="number"
-            min={1} max={24}
+            min={1} max={50}
             value={cfg.retrievalTopK}
             onChange={(e) => update({ retrievalTopK: Number(e.target.value) || 4 })}
           />
