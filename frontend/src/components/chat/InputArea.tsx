@@ -1,11 +1,12 @@
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama } from 'lucide-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
 import { embeddingsApi } from '@/api/embeddings'
+import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { imagesApi } from '@/api/images'
 import { toast } from '@/lib/toast'
@@ -61,6 +62,17 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
+  const expressionDisplay = useStore((s) => s.expressionDisplay)
+  const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
+
+  // Track whether the active character has expressions configured
+  const [hasExpressions, setHasExpressions] = useState(false)
+  useEffect(() => {
+    if (!activeCharacterId) { setHasExpressions(false); return }
+    expressionsApi.get(activeCharacterId)
+      .then((cfg) => setHasExpressions(!!cfg?.enabled && Object.keys(cfg.mappings || {}).length > 0))
+      .catch(() => setHasExpressions(false))
+  }, [activeCharacterId])
 
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
@@ -768,6 +780,21 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   <span>Recompile Memories</span>
                 </span>
               </button>
+              {hasExpressions && !expressionDisplay.enabled && (
+                <button
+                  type="button"
+                  className={styles.popRowBtn}
+                  onClick={() => {
+                    setOpenPopover(null)
+                    setExpressionDisplay({ enabled: true, minimized: false })
+                  }}
+                >
+                  <span className={styles.personaMain}>
+                    <Drama size={14} />
+                    <span>Show Expression Display</span>
+                  </span>
+                </button>
+              )}
             </div>
           )}
 

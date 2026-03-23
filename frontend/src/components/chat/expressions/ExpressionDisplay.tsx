@@ -342,6 +342,15 @@ export default function ExpressionDisplay() {
           {display.frameless ? 'Show Frame' : 'Hide Frame'}
         </button>
         <button
+          className={display.clickThrough ? styles.contextMenuActive : styles.contextMenuItem}
+          onClick={() => {
+            setExpressionDisplay({ clickThrough: !display.clickThrough })
+            setContextMenu(null)
+          }}
+        >
+          {display.clickThrough ? 'Disable Click-Through' : 'Enable Click-Through'}
+        </button>
+        <button
           className={styles.contextMenuItem}
           onClick={() => { toggleMinimized(); setContextMenu(null) }}
         >
@@ -376,6 +385,7 @@ export default function ExpressionDisplay() {
     styles.container,
     display.frameless ? styles.frameless : styles.framed,
     dragging.current ? styles.containerDragging : '',
+    display.clickThrough ? styles.clickThrough : '',
   ].filter(Boolean).join(' ')
 
   return createPortal(
@@ -389,14 +399,17 @@ export default function ExpressionDisplay() {
           height: size.height + (display.frameless ? 0 : 28),
           opacity: display.opacity,
         }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onContextMenu={handleContextMenu}
+        onContextMenu={!display.clickThrough ? handleContextMenu : undefined}
       >
-        {/* Drag handle */}
+        {/* Drag handle — always interactive even in click-through mode */}
         {display.frameless ? (
-          <div className={styles.dragHandleFrameless}>
+          <div
+            className={styles.dragHandleFrameless}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onContextMenu={display.clickThrough ? handleContextMenu : undefined}
+          >
             <span className={styles.handleName}>{character?.name}</span>
             <button type="button" className={styles.handleBtn} onClick={(e) => { e.stopPropagation(); toggleMinimized() }}>
               <Minus size={12} />
@@ -406,7 +419,13 @@ export default function ExpressionDisplay() {
             </button>
           </div>
         ) : (
-          <div className={styles.dragHandle}>
+          <div
+            className={styles.dragHandle}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onContextMenu={display.clickThrough ? handleContextMenu : undefined}
+          >
             <span className={styles.handleName}>{character?.name}</span>
             <button type="button" className={styles.handleBtn} onClick={(e) => { e.stopPropagation(); toggleMinimized() }}>
               <Minus size={12} />
@@ -418,7 +437,12 @@ export default function ExpressionDisplay() {
         )}
 
         {/* Expression image with crossfade */}
-        <div className={styles.imageContainer}>
+        <div
+          className={styles.imageContainer}
+          onPointerDown={!display.clickThrough ? handlePointerDown : undefined}
+          onPointerMove={!display.clickThrough ? handlePointerMove : undefined}
+          onPointerUp={!display.clickThrough ? handlePointerUp : undefined}
+        >
           <AnimatePresence mode="sync">
             {currentImageUrl && (
               <motion.img
