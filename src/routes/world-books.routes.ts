@@ -6,18 +6,17 @@ import * as embeddingsSvc from "../services/embeddings.service";
 import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
 import { parsePagination } from "../services/pagination";
-import { collectVectorActivatedWorldInfoDetailed, getWorldInfoVectorQueryPreview } from "../services/prompt-assembly.service";
+import {
+  collectVectorActivatedWorldInfoDetailed,
+  getWorldInfoVectorQueryPreview,
+  mergeActivatedWorldInfoEntries,
+} from "../services/prompt-assembly.service";
 import { activateWorldInfo, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 
 const MAX_IMPORT_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const app = new Hono();
-
-function estimateWorldInfoTokens(entries: Array<{ content: string }>): number {
-  const totalChars = entries.reduce((sum, entry) => sum + (entry.content || "").length, 0);
-  return Math.ceil(totalChars / 4);
-}
 
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -127,11 +126,6 @@ app.post("/:id/diagnostics", async (c) => {
         settings: worldInfoSettings,
       });
 
-  const keywordHits = wiResult.activatedEntries.map((entry) => ({
-    entry_id: entry.id,
-    comment: entry.comment || "",
-  }));
-
   const vectorDetail = isAttached
     ? await collectVectorActivatedWorldInfoDetailed(userId, [bookId], bookEntries, messages)
     : {
@@ -148,34 +142,61 @@ app.post("/:id/diagnostics", async (c) => {
 
   blockerMessages.push(...vectorDetail.blockerMessages);
 
+  const mergedWorldInfo = mergeActivatedWorldInfoEntries(
+    wiResult.activatedEntries,
+    vectorDetail.entries,
+    worldInfoSettings,
+  );
+
+  const keywordHits = mergedWorldInfo.activatedWorldInfo
+    .filter((entry) => entry.source === "keyword")
+    .map((entry) => ({
+      entry_id: entry.id,
+      comment: entry.comment || "",
+    }));
+
   if (vectorDetail.thresholdRejected > 0 && vectorDetail.entries.length === 0) {
     blockerMessages.push("Vector matches were found, but all of them were rejected by the current similarity threshold.");
   }
 
   if (worldInfoSettings.minPriority && worldInfoSettings.minPriority > 0) {
     const belowMinPriority = bookEntries.some((entry) => !entry.disabled && !entry.constant && entry.priority < worldInfoSettings.minPriority!);
-    if (belowMinPriority && keywordHits.length === 0 && vectorDetail.entries.length === 0) {
+    if (belowMinPriority && mergedWorldInfo.totalActivated === 0) {
       blockerMessages.push("Entry priority is below the current World Info minimum priority setting.");
     }
   }
 
   if (
-    wiResult.stats.evictedByBudget > 0 &&
-    keywordHits.length === 0 &&
-    vectorDetail.entries.length === 0 &&
+    mergedWorldInfo.evictedByBudget > 0 &&
+    mergedWorldInfo.totalActivated === 0 &&
     bookEntries.some((entry) => !entry.disabled && (entry.content || "").trim().length > 0)
   ) {
     blockerMessages.push("World Info budget limits may be crowding this book out of the final prompt.");
   }
 
-  const mergedIds = new Set(wiResult.activatedEntries.map((entry) => entry.id));
-  const mergedEntries = [...wiResult.activatedEntries];
-  let vectorActivatedCount = 0;
-  for (const item of vectorDetail.entries) {
-    if (mergedIds.has(item.entry.id)) continue;
-    mergedIds.add(item.entry.id);
-    mergedEntries.push(item.entry);
-    vectorActivatedCount += 1;
+  if (
+    vectorDetail.entries.length > 0 &&
+    mergedWorldInfo.vectorActivated === 0 &&
+    mergedWorldInfo.evictedByBudget > 0
+  ) {
+    blockerMessages.push("Semantic matches were found, but the World Info max-activated or token budget limits left no room for them after keyword activation.");
+  }
+
+  if (
+    vectorDetail.entries.length > 0 &&
+    mergedWorldInfo.vectorActivated === 0 &&
+    mergedWorldInfo.totalActivated === 0
+  ) {
+    blockerMessages.push("Vector candidates were found, but they lost to group, minimum-priority, or budget rules before final injection.");
+  }
+
+  if (
+    vectorDetail.entries.length > 0 &&
+    mergedWorldInfo.vectorActivated === 0 &&
+    keywordHits.length > 0 &&
+    mergedWorldInfo.evictedByBudget === 0
+  ) {
+    blockerMessages.push("Semantic matches were found, but the top vector hits were already activated by keyword, so the final list still counts them as keyword entries.");
   }
 
   return c.json({
@@ -197,15 +218,24 @@ app.post("/:id/diagnostics", async (c) => {
       entry_id: item.entry.id,
       comment: item.entry.comment || "",
       score: item.score,
+      distance: item.distance,
+      final_score: item.finalScore,
+      matched_primary_keys: item.matchedPrimaryKeys,
+      matched_secondary_keys: item.matchedSecondaryKeys,
+      matched_comment: item.matchedComment,
+      score_breakdown: item.scoreBreakdown,
+      search_text_preview: item.searchTextPreview,
     })),
     blocker_messages: Array.from(new Set(blockerMessages)),
     stats: {
       ...wiResult.stats,
-      activatedAfterBudget: mergedEntries.length,
-      estimatedTokens: estimateWorldInfoTokens(mergedEntries),
-      keywordActivated: keywordHits.length,
-      vectorActivated: vectorActivatedCount,
-      totalActivated: mergedEntries.length,
+      activatedBeforeBudget: mergedWorldInfo.activatedBeforeBudget,
+      activatedAfterBudget: mergedWorldInfo.activatedAfterBudget,
+      evictedByBudget: mergedWorldInfo.evictedByBudget,
+      estimatedTokens: mergedWorldInfo.estimatedTokens,
+      keywordActivated: mergedWorldInfo.keywordActivated,
+      vectorActivated: mergedWorldInfo.vectorActivated,
+      totalActivated: mergedWorldInfo.totalActivated,
       queryPreview: vectorDetail.queryPreview || queryPreview,
     },
   });

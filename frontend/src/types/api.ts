@@ -425,6 +425,22 @@ export interface WorldBookDiagnostics {
     entry_id: string;
     comment: string;
     score: number;
+    distance: number;
+    final_score: number;
+    matched_primary_keys: string[];
+    matched_secondary_keys: string[];
+    matched_comment: string | null;
+    score_breakdown: {
+      vectorSimilarity: number;
+      primaryExact: number;
+      primaryPartial: number;
+      secondaryExact: number;
+      secondaryPartial: number;
+      commentExact: number;
+      commentPartial: number;
+      priority: number;
+    };
+    search_text_preview: string;
   }>;
   blocker_messages: string[];
   stats: WorldInfoStats;

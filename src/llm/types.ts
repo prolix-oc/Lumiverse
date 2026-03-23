@@ -109,7 +109,7 @@ export interface AssemblyContext {
   councilNamedResults?: Record<string, string>;
   /** Pre-computed vector-activated world info entries from the generation pipeline.
    *  When provided, assembly reuses these instead of re-running vector retrieval. */
-  precomputedVectorEntries?: { entry: import("../types/world-book").WorldBookEntry; score: number }[];
+  precomputedVectorEntries?: import("../services/prompt-assembly.service").VectorActivatedEntry[];
   /** Pipeline results from Lumi sidecar execution. */
   lumiPipelineResults?: import("../types/lumi-engine").LumiPipelineResult;
   /** User-provided feedback text for regeneration guidance. */

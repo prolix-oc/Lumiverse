@@ -8,7 +8,13 @@ import * as chatsSvc from "./chats.service";
 import * as presetsSvc from "./presets.service";
 import * as settingsSvc from "./settings.service";
 import * as personasSvc from "./personas.service";
-import { assemblePrompt, injectReasoningParams, collectVectorActivatedWorldInfo, type VectorActivatedEntry } from "./prompt-assembly.service";
+import {
+  assemblePrompt,
+  injectReasoningParams,
+  collectVectorActivatedWorldInfo,
+  mergeActivatedWorldInfoEntries,
+  type VectorActivatedEntry,
+} from "./prompt-assembly.service";
 import { executeLumiPipeline } from "./lumi/lumi-pipeline.service";
 import type { LumiPresetMetadata, LumiPipelineResult } from "../types/lumi-engine";
 import * as charactersSvc from "./characters.service";
@@ -607,14 +613,10 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         wiEntries,
         councilMessages,
       );
-      if (vectorActivated.length > 0) {
-        const existing = new Set(councilWiActivated.map(e => e.id));
-        for (const { entry } of vectorActivated) {
-          if (existing.has(entry.id)) continue;
-          councilWiActivated.push(entry);
-          existing.add(entry.id);
-        }
-      }
+      councilWiActivated = mergeActivatedWorldInfoEntries(
+        councilWiActivated,
+        vectorActivated,
+      ).activatedEntries;
 
       // Cache for assembly to reuse
       precomputedVectorEntries = vectorActivated;

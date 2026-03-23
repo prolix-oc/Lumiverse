@@ -17,6 +17,8 @@ const EMBEDDING_SETTINGS_KEY = "embeddingConfig";
 const EMBEDDING_SECRET_KEY = "embedding_api_key";
 const LANCEDB_PATH = join(env.dataDir, "lancedb");
 const EMBEDDINGS_TABLE = "embeddings";
+const WORLD_BOOK_VECTOR_VERSION = 2;
+const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
 
 export type EmbeddingProvider =
   | "openai-compatible"
@@ -46,6 +48,24 @@ export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
   has_api_key: boolean;
 }
 
+export interface WorldBookEmbeddingMetadata {
+  comment?: string;
+  key?: string[];
+  keysecondary?: string[];
+  world_book_id?: string;
+  search_text?: string;
+  vector_version?: number;
+}
+
+export interface WorldBookSearchCandidate {
+  entry_id: string;
+  distance: number;
+  lexical_score: number | null;
+  content: string;
+  searchTextPreview: string;
+  metadata: WorldBookEmbeddingMetadata;
+}
+
 // ---------------------------------------------------------------------------
 // Chat Memory Settings — fine-grained control over long-term memory
 // ---------------------------------------------------------------------------
@@ -61,7 +81,7 @@ export interface ChatMemorySettings {
 
   // --- Retrieval ---
   queryContextSize: number;       // Default 6. Range: 1–64. Messages used to build query vector
-  retrievalTopK: number;          // Default 4. Range: 1–24
+  retrievalTopK: number;          // Default 4. Range: 1–50
   similarityThreshold: number;    // Default 0 (disabled). Range: 0–1
 
   // --- Query ---
@@ -120,7 +140,7 @@ export function normalizeChatMemorySettings(input: any): ChatMemorySettings {
     chunkOverlapTokens: clampInt(input?.chunkOverlapTokens, 0, 500, d.chunkOverlapTokens),
     exclusionWindow: clampInt(input?.exclusionWindow, 5, 100, d.exclusionWindow),
     queryContextSize: clampInt(input?.queryContextSize, 1, 64, d.queryContextSize),
-    retrievalTopK: clampInt(input?.retrievalTopK, 1, 24, d.retrievalTopK),
+    retrievalTopK: clampInt(input?.retrievalTopK, 1, 50, d.retrievalTopK),
     similarityThreshold: clampFloat(input?.similarityThreshold, 0, 1, d.similarityThreshold),
     queryStrategy: ["recent_messages", "last_user_message", "weighted_recent"].includes(input?.queryStrategy)
       ? input.queryStrategy : d.queryStrategy,
@@ -234,6 +254,7 @@ let connPromise: Promise<Connection> | null = null;
 let vectorIndexReady = false;
 let optimizeTimer: ReturnType<typeof setTimeout> | null = null;
 const OPTIMIZE_DEBOUNCE_MS = 30_000; // 30 seconds after last write
+const worldBookVectorVersionChecked = new Set<string>();
 
 function providerDefaultModel(provider: EmbeddingProvider): string {
   if (provider === "nanogpt") return "text-embedding-3-small";
@@ -273,7 +294,7 @@ function normalizeConfig(input: any): EmbeddingConfig {
     dimensions: Number.isFinite(input?.dimensions) && input.dimensions > 0 ? Math.floor(input.dimensions) : null,
     retrieval_top_k:
       Number.isFinite(input?.retrieval_top_k) && input.retrieval_top_k > 0
-        ? Math.min(24, Math.floor(input.retrieval_top_k))
+        ? Math.min(50, Math.floor(input.retrieval_top_k))
         : base.retrieval_top_k,
     hybrid_weight_mode:
       input?.hybrid_weight_mode === "keyword_first" ||
@@ -403,6 +424,112 @@ async function getOrCreateTable(seedRows?: EmbeddingRow[]): Promise<Table> {
 const MIN_ROWS_FOR_VECTOR_INDEX = 10_000;
 let scalarIndexReady = false;
 let ftsIndexReady = false;
+
+function getWorldBookVectorVersionCacheKey(userId: string): string {
+  return `${userId}:${WORLD_BOOK_VECTOR_VERSION}`;
+}
+
+function normalizeVectorSearchText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function uniqueNonEmpty(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+export function buildWorldBookEntrySearchText(entry: WorldBookEntry): string {
+  const primaryKeys = uniqueNonEmpty(entry.key || []);
+  const secondaryKeys = uniqueNonEmpty(entry.keysecondary || []);
+  const comment = (entry.comment || "").trim();
+  const content = (entry.content || "").trim();
+  const sections: string[] = [];
+
+  if (comment) sections.push(`Entry title: ${comment}`);
+  if (primaryKeys.length > 0) sections.push(`Primary keys: ${primaryKeys.join(", ")}`);
+  if (secondaryKeys.length > 0) sections.push(`Secondary keys: ${secondaryKeys.join(", ")}`);
+  if (content) sections.push(`Content:\n${content}`);
+
+  return normalizeVectorSearchText(sections.join("\n\n")) || content;
+}
+
+function buildWorldBookEmbeddingMetadata(
+  entry: WorldBookEntry,
+  searchText: string,
+): WorldBookEmbeddingMetadata {
+  return {
+    comment: entry.comment,
+    key: entry.key,
+    keysecondary: entry.keysecondary,
+    world_book_id: entry.world_book_id,
+    search_text: searchText,
+    vector_version: WORLD_BOOK_VECTOR_VERSION,
+  };
+}
+
+function parseWorldBookEmbeddingMetadata(raw: unknown): WorldBookEmbeddingMetadata {
+  if (!raw || typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw) as WorldBookEmbeddingMetadata;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function ensureWorldBookVectorVersion(userId: string): Promise<void> {
+  const cacheKey = getWorldBookVectorVersionCacheKey(userId);
+  if (worldBookVectorVersionChecked.has(cacheKey)) return;
+
+  const setting = settingsSvc.getSetting(userId, WORLD_BOOK_VECTOR_VERSION_KEY);
+  const storedValue = typeof setting?.value === "number"
+    ? setting.value
+    : Number(setting?.value);
+
+  if (storedValue === WORLD_BOOK_VECTOR_VERSION) {
+    worldBookVectorVersionChecked.add(cacheKey);
+    return;
+  }
+
+  try {
+    const table = await getTableIfExists();
+    if (table) {
+      await table.delete(
+        `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry'`
+      );
+      scheduleOptimize();
+    }
+  } catch (err) {
+    console.warn("[embeddings] Failed to invalidate legacy world-book vectors:", err);
+  }
+
+  try {
+    getDb().query(
+      `UPDATE world_book_entries
+       SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+           vector_indexed_at = NULL,
+           vector_index_error = NULL
+       WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
+    ).run(userId);
+  } catch (err) {
+    console.warn("[embeddings] Failed to reset world-book vector state for new schema:", err);
+  }
+
+  settingsSvc.putSetting(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
+  worldBookVectorVersionChecked.add(cacheKey);
+}
 
 async function ensureVectorIndex(table: Table): Promise<void> {
   if (vectorIndexReady) return;
@@ -694,7 +821,10 @@ function isEligibleWorldBookEntry(entry: WorldBookEntry): boolean {
   return entry.vectorized && !entry.disabled && (entry.content || "").trim().length > 0;
 }
 
-async function getExistingEntryContent(userId: string, entryId: string): Promise<string | null> {
+async function getExistingWorldBookVectorPayload(
+  userId: string,
+  entryId: string,
+): Promise<{ content: string; searchText: string; vectorVersion: number | null } | null> {
   try {
     const table = await getTableIfExists();
     if (!table) return null;
@@ -703,12 +833,19 @@ async function getExistingEntryContent(userId: string, entryId: string): Promise
       .where(
         `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND source_id = ${sqlValue(entryId)}`
       )
-      .select(["content"])
+      .select(["content", "metadata_json"])
       .limit(1)
       .toArray();
-    if (rows.length > 0 && typeof (rows[0] as any).content === "string") {
-      return (rows[0] as any).content;
-    }
+    if (rows.length === 0) return null;
+
+    const row = rows[0] as any;
+    if (typeof row.content !== "string") return null;
+    const metadata = parseWorldBookEmbeddingMetadata(row.metadata_json);
+    return {
+      content: row.content,
+      searchText: typeof metadata.search_text === "string" ? metadata.search_text : "",
+      vectorVersion: typeof metadata.vector_version === "number" ? metadata.vector_version : null,
+    };
   } catch {
     // Table may not exist yet
   }
@@ -716,6 +853,7 @@ async function getExistingEntryContent(userId: string, entryId: string): Promise
 }
 
 export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBookEntry): Promise<void> {
+  await ensureWorldBookVectorVersion(userId);
   const desiredStatus = getDesiredWorldBookVectorStatus(entry);
   if (!entry.vectorized) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
@@ -725,6 +863,7 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
 
   const cfg = await getEmbeddingConfig(userId);
   const content = (entry.content || "").trim();
+  const searchText = buildWorldBookEntrySearchText(entry);
   if (!cfg.enabled || !cfg.vectorize_world_books || entry.disabled || !content) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
     updateWorldBookEntryVectorState(entry.id, "pending", null, null);
@@ -732,15 +871,20 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
   }
 
   try {
-    const existing = await getExistingEntryContent(userId, entry.id);
+    const existing = await getExistingWorldBookVectorPayload(userId, entry.id);
     const now = Math.floor(Date.now() / 1000);
 
-    if (existing === content) {
+    if (
+      existing &&
+      existing.content === content &&
+      existing.searchText === searchText &&
+      existing.vectorVersion === WORLD_BOOK_VECTOR_VERSION
+    ) {
       updateWorldBookEntryVectorState(entry.id, "indexed", now, null);
       return;
     }
 
-    const [vector] = await cachedEmbedTexts(userId, [content]);
+    const [vector] = await cachedEmbedTexts(userId, [searchText]);
     const row: EmbeddingRow = {
       id: rowId(userId, "world_book_entry", entry.id, 0),
       user_id: userId,
@@ -750,12 +894,7 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
       chunk_index: 0,
       content,
       vector,
-      metadata_json: JSON.stringify({
-        comment: entry.comment,
-        key: entry.key,
-        keysecondary: entry.keysecondary,
-        world_book_id: entry.world_book_id,
-      }),
+      metadata_json: JSON.stringify(buildWorldBookEmbeddingMetadata(entry, searchText)),
       updated_at: now,
     };
 
@@ -842,12 +981,14 @@ export async function reindexWorldBookEntries(
     return progress;
   }
 
+  await ensureWorldBookVectorVersion(userId);
+
   for (let i = 0; i < toIndex.length; i += batchSize) {
     const batch = toIndex.slice(i, i + batchSize);
 
     try {
-      const texts = batch.map((e) => (e.content || "").trim());
-      const vectors = await cachedEmbedTexts(userId, texts);
+      const searchTexts = batch.map((entry) => buildWorldBookEntrySearchText(entry));
+      const vectors = await cachedEmbedTexts(userId, searchTexts);
       const now = Math.floor(Date.now() / 1000);
 
       const rows: EmbeddingRow[] = batch.map((entry, idx) => ({
@@ -859,12 +1000,7 @@ export async function reindexWorldBookEntries(
         chunk_index: 0,
         content: (entry.content || "").trim(),
         vector: vectors[idx],
-        metadata_json: JSON.stringify({
-          comment: entry.comment,
-          key: entry.key,
-          keysecondary: entry.keysecondary,
-          world_book_id: entry.world_book_id,
-        }),
+        metadata_json: JSON.stringify(buildWorldBookEmbeddingMetadata(entry, searchTexts[idx])),
         updated_at: now,
       }));
 
@@ -913,41 +1049,100 @@ export async function searchWorldBookEntries(
   const text = query.trim();
   if (!text) return [];
 
+  const [vector] = await cachedEmbedTexts(userId, [text]);
+  const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, text, vector, limit);
+  return rows.map((row) => ({
+    entry_id: row.entry_id,
+    score: row.distance,
+    content: row.content,
+  }));
+}
+
+/**
+ * Search world book entries using a pre-computed vector and optional query text,
+ * returning enough metadata to rerank candidates deterministically.
+ */
+export async function searchWorldBookEntriesHybridWithVector(
+  userId: string,
+  worldBookId: string,
+  queryText: string,
+  vector: number[],
+  limit = 8
+): Promise<WorldBookSearchCandidate[]> {
+  await ensureWorldBookVectorVersion(userId);
   const table = await getTableIfExists();
   if (!table) return [];
-  const [vector] = await cachedEmbedTexts(userId, [text]);
-  const filter = `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND owner_id = ${sqlValue(worldBookId)}`;
-  const effectiveLimit = Math.max(1, Math.min(limit, 50));
 
-  // Hybrid search: combine vector similarity with BM25 keyword matching via RRF
-  let rows: any[];
-  try {
-    const reranker = await rerankers.RRFReranker.create();
-    rows = await table
-      .query()
-      .nearestTo(vector)
-      .fullTextSearch(text)
-      .where(filter)
-      .rerank(reranker)
-      .select(["source_id", "content", "_distance", "_relevance_score"])
-      .limit(effectiveLimit)
-      .toArray();
-  } catch {
-    // FTS index may not exist yet — fall back to vector-only
-    rows = await table
-      .query()
-      .nearestTo(vector)
-      .where(filter)
-      .select(["source_id", "content", "_distance"])
-      .limit(effectiveLimit)
-      .toArray();
+  const trimmedQuery = queryText.trim();
+  const filter = `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND owner_id = ${sqlValue(worldBookId)}`;
+  const effectiveLimit = Math.max(1, Math.min(limit, 100));
+
+  const vectorRows = await table
+    .query()
+    .nearestTo(vector)
+    .where(filter)
+    .select(["source_id", "content", "_distance", "metadata_json"])
+    .limit(effectiveLimit)
+    .toArray();
+
+  const merged = new Map<string, WorldBookSearchCandidate>();
+
+  for (const row of vectorRows) {
+    const metadata = parseWorldBookEmbeddingMetadata(row.metadata_json);
+    merged.set(String(row.source_id), {
+      entry_id: String(row.source_id),
+      distance: typeof row._distance === "number" ? row._distance : 0,
+      lexical_score: null,
+      content: String(row.content || ""),
+      searchTextPreview: typeof metadata.search_text === "string" ? metadata.search_text : "",
+      metadata,
+    });
   }
 
-  return rows.map((row: any) => ({
-    entry_id: String(row.source_id),
-    score: typeof row._distance === "number" ? row._distance : 0,
-    content: String(row.content || ""),
-  }));
+  if (trimmedQuery) {
+    try {
+      const lexicalRows = await table
+        .query()
+        .fullTextSearch(trimmedQuery)
+        .where(filter)
+        .select(["source_id", "content", "_score", "metadata_json"])
+        .limit(effectiveLimit)
+        .toArray();
+
+      for (const row of lexicalRows) {
+        const entryId = String(row.source_id);
+        const metadata = parseWorldBookEmbeddingMetadata(row.metadata_json);
+        const lexicalScore = typeof row._score === "number" ? row._score : null;
+        const existing = merged.get(entryId);
+
+        if (existing) {
+          existing.lexical_score = lexicalScore;
+          if (!existing.searchTextPreview && typeof metadata.search_text === "string") {
+            existing.searchTextPreview = metadata.search_text;
+          }
+          if ((!existing.content || existing.content.length === 0) && typeof row.content === "string") {
+            existing.content = row.content;
+          }
+          if (!existing.metadata.search_text && metadata.search_text) {
+            existing.metadata = { ...existing.metadata, ...metadata };
+          }
+        } else {
+          merged.set(entryId, {
+            entry_id: entryId,
+            distance: Number.POSITIVE_INFINITY,
+            lexical_score: lexicalScore,
+            content: String(row.content || ""),
+            searchTextPreview: typeof metadata.search_text === "string" ? metadata.search_text : "",
+            metadata,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("[embeddings] World-book FTS candidate fetch failed:", err);
+    }
+  }
+
+  return Array.from(merged.values());
 }
 
 /**
@@ -959,22 +1154,11 @@ export async function searchWorldBookEntriesWithVector(
   vector: number[],
   limit = 8
 ): Promise<Array<{ entry_id: string; score: number; content: string }>> {
-  const table = await getTableIfExists();
-  if (!table) return [];
-  const rows = await table
-    .query()
-    .nearestTo(vector)
-    .where(
-      `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND owner_id = ${sqlValue(worldBookId)}`
-    )
-    .select(["source_id", "content", "_distance"])
-    .limit(Math.max(1, Math.min(limit, 50)))
-    .toArray();
-
-  return rows.map((row: any) => ({
-    entry_id: String(row.source_id),
-    score: typeof row._distance === "number" ? row._distance : 0,
-    content: String(row.content || ""),
+  const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, "", vector, limit);
+  return rows.map((row) => ({
+    entry_id: row.entry_id,
+    score: row.distance,
+    content: row.content,
   }));
 }
 
@@ -1009,6 +1193,9 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   } catch (err) {
     console.warn("[embeddings] Failed to reset world book vector index state:", err);
   }
+
+  settingsSvc.putSetting(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
+  worldBookVectorVersionChecked.add(getWorldBookVectorVersionCacheKey(userId));
 
   vectorIndexReady = false;
   scalarIndexReady = false;
