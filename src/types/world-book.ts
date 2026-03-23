@@ -88,11 +88,21 @@ export interface WorldBookDiagnostics {
     has_api_key: boolean;
     dimensions: number | null;
     vectorize_world_books: boolean;
+    similarity_threshold: number;
+    rerank_cutoff: number;
     ready: boolean;
   };
   vector_summary: WorldBookVectorSummary;
   query_preview: string;
   eligible_entries: number;
+  retrieval: {
+    top_k: number;
+    hits_before_threshold: number;
+    hits_after_threshold: number;
+    threshold_rejected: number;
+    hits_after_rerank_cutoff: number;
+    rerank_rejected: number;
+  };
   keyword_hits: Array<{
     entry_id: string;
     comment: string;
@@ -103,6 +113,7 @@ export interface WorldBookDiagnostics {
     score: number;
     distance: number;
     final_score: number;
+    lexical_candidate_score: number | null;
     matched_primary_keys: string[];
     matched_secondary_keys: string[];
     matched_comment: string | null;
@@ -114,7 +125,10 @@ export interface WorldBookDiagnostics {
       secondaryPartial: number;
       commentExact: number;
       commentPartial: number;
+      focusBoost: number;
       priority: number;
+      broadPenalty: number;
+      focusMissPenalty: number;
     };
     search_text_preview: string;
   }>;

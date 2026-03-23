@@ -1428,6 +1428,7 @@ function EmbeddingsSettings() {
         preferred_context_size: cfg.preferred_context_size,
         batch_size: cfg.batch_size,
         similarity_threshold: cfg.similarity_threshold,
+        rerank_cutoff: cfg.rerank_cutoff,
         vectorize_world_books: cfg.vectorize_world_books,
         vectorize_chat_messages: cfg.vectorize_chat_messages,
         vectorize_chat_documents: cfg.vectorize_chat_documents,
@@ -1658,13 +1659,29 @@ function EmbeddingsSettings() {
           className={styles.numberInput}
           type="number"
           min={0}
-          max={1}
+          max={2}
           step={0.05}
           value={cfg.similarity_threshold}
-          onChange={(e) => update({ similarity_threshold: Math.max(0, Math.min(1, Number(e.target.value || 0))) })}
+          onChange={(e) => update({ similarity_threshold: Math.max(0, Math.min(2, Number(e.target.value || 0))) })}
         />
         <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
-          Maximum distance for vector matches (0 = no filtering, lower = stricter). LanceDB distance where 0 is identical.
+          Maximum cosine distance for vector matches (0 = no filtering, lower = stricter). LanceDB cosine distance starts at 0 for identical text and can go above 1.
+        </span>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>World Book Rerank Cutoff</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={0}
+          max={2}
+          step={0.01}
+          value={cfg.rerank_cutoff}
+          onChange={(e) => update({ rerank_cutoff: Math.max(0, Math.min(2, Number(e.target.value || 0))) })}
+        />
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          Minimum rerank score required after boosts and penalties are applied to world-book vector hits. 0 = no post-rerank filtering.
         </span>
       </div>
       {cfg.vectorize_chat_messages && (
@@ -1945,11 +1962,13 @@ function AdvancedSettings() {
           <input
             className={styles.numberInput}
             type="number"
-            min={0} max={1} step={0.05}
+            min={0} max={2} step={0.05}
             value={cfg.similarityThreshold}
-            onChange={(e) => update({ similarityThreshold: Number(e.target.value) || 0 })}
+            onChange={(e) => update({ similarityThreshold: Math.max(0, Math.min(2, Number(e.target.value) || 0)) })}
           />
-          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = no filtering</span>
+          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
+            0 = no filtering. Cosine distance can exceed 1, so useful cutoffs are not limited to 0–1.
+          </span>
         </div>
       </div>
 
