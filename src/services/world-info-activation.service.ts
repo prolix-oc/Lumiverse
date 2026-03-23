@@ -81,6 +81,11 @@ export interface FinalizedWorldInfoEntries {
   estimatedTokens: number;
 }
 
+export interface FinalizeWorldInfoOptions {
+  skipGroupLogic?: boolean;
+  preserveOrder?: boolean;
+}
+
 /** Hoisted escaping regex — compiled once at module level. */
 const REGEX_ESCAPE_PATTERN = /[.*+?^${}()|[\]\\]/g;
 
@@ -276,14 +281,20 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
 export function finalizeActivatedWorldInfoEntries(
   entries: WorldBookEntry[],
   settingsInput?: Partial<WorldInfoSettings>,
+  options: FinalizeWorldInfoOptions = {},
 ): FinalizedWorldInfoEntries {
   const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...settingsInput };
 
-  const afterGroups = applyGroupLogic([...entries]);
-  afterGroups.sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    return a.order_value - b.order_value;
-  });
+  const afterGroups = options.skipGroupLogic
+    ? [...entries]
+    : applyGroupLogic([...entries]);
+
+  if (!options.preserveOrder) {
+    afterGroups.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.order_value - b.order_value;
+    });
+  }
 
   const activatedBeforeBudget = afterGroups.length;
   const activatedEntries = enforceBudget(afterGroups, settings);

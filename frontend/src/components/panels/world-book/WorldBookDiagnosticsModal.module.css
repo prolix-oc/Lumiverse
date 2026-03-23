@@ -69,6 +69,7 @@
   flex-shrink: 0;
 }
 
+.secondaryButton,
 .refreshButton,
 .closeButton {
   display: inline-flex;
@@ -83,6 +84,7 @@
     opacity var(--lumiverse-transition-fast);
 }
 
+.secondaryButton,
 .refreshButton {
   padding: 9px 14px;
   border: 1px solid var(--lumiverse-border);
@@ -93,11 +95,25 @@
   cursor: pointer;
 }
 
+.secondaryButton:hover:not(:disabled),
 .refreshButton:hover:not(:disabled) {
   border-color: var(--lumiverse-primary);
   background: var(--lumiverse-primary-light);
 }
 
+.secondaryButtonSuccess {
+  border-color: color-mix(in srgb, #4cbf87 35%, var(--lumiverse-border));
+  background: rgba(76, 191, 135, 0.12);
+  color: var(--lumiverse-text);
+}
+
+.secondaryButtonError {
+  border-color: color-mix(in srgb, #d39b32 35%, var(--lumiverse-border));
+  background: rgba(211, 155, 50, 0.12);
+  color: var(--lumiverse-text);
+}
+
+.secondaryButton:disabled,
 .refreshButton:disabled,
 .closeButton:disabled {
   opacity: 0.6;
@@ -229,6 +245,24 @@
   line-height: 1.55;
 }
 
+.inlineNotice {
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--lumiverse-text);
+}
+
+.inlineNoticeSuccess {
+  border: 1px solid color-mix(in srgb, #4cbf87 30%, var(--lumiverse-border));
+  background: rgba(76, 191, 135, 0.1);
+}
+
+.inlineNoticeError {
+  border: 1px solid color-mix(in srgb, #d39b32 30%, var(--lumiverse-border));
+  background: rgba(211, 155, 50, 0.1);
+}
+
 .metricsGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -328,6 +362,31 @@
   background: color-mix(in srgb, var(--lumiverse-bg) 76%, transparent);
   font-size: 12px;
   font-weight: 700;
+  color: var(--lumiverse-text);
+}
+
+.scoreGuide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-bg) 78%, transparent);
+}
+
+.scoreGuideTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
+}
+
+.scoreGuideText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
   color: var(--lumiverse-text);
 }
 

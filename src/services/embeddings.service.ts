@@ -38,6 +38,7 @@ export interface EmbeddingConfig {
   preferred_context_size: number;
   batch_size: number;
   similarity_threshold: number;
+  rerank_cutoff: number;
   vectorize_world_books: boolean;
   vectorize_chat_messages: boolean;
   vectorize_chat_documents: boolean;
@@ -82,7 +83,7 @@ export interface ChatMemorySettings {
   // --- Retrieval ---
   queryContextSize: number;       // Default 6. Range: 1–64. Messages used to build query vector
   retrievalTopK: number;          // Default 4. Range: 1–50
-  similarityThreshold: number;    // Default 0 (disabled). Range: 0–1
+  similarityThreshold: number;    // Default 0 (disabled). Range: 0–2
 
   // --- Query ---
   queryStrategy: "recent_messages" | "last_user_message" | "weighted_recent";
@@ -141,7 +142,7 @@ export function normalizeChatMemorySettings(input: any): ChatMemorySettings {
     exclusionWindow: clampInt(input?.exclusionWindow, 5, 100, d.exclusionWindow),
     queryContextSize: clampInt(input?.queryContextSize, 1, 64, d.queryContextSize),
     retrievalTopK: clampInt(input?.retrievalTopK, 1, 50, d.retrievalTopK),
-    similarityThreshold: clampFloat(input?.similarityThreshold, 0, 1, d.similarityThreshold),
+    similarityThreshold: clampFloat(input?.similarityThreshold, 0, 2, d.similarityThreshold),
     queryStrategy: ["recent_messages", "last_user_message", "weighted_recent"].includes(input?.queryStrategy)
       ? input.queryStrategy : d.queryStrategy,
     queryMaxTokens: clampInt(input?.queryMaxTokens, 1000, 32000, d.queryMaxTokens),
@@ -276,6 +277,7 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
     preferred_context_size: 6,
     batch_size: 50,
     similarity_threshold: 0,
+    rerank_cutoff: 0,
     vectorize_world_books: true,
     vectorize_chat_messages: false,
     vectorize_chat_documents: true,
@@ -312,8 +314,12 @@ function normalizeConfig(input: any): EmbeddingConfig {
         : base.batch_size,
     similarity_threshold:
       Number.isFinite(input?.similarity_threshold) && input.similarity_threshold >= 0
-        ? Math.min(1, input.similarity_threshold)
+        ? Math.min(2, input.similarity_threshold)
         : base.similarity_threshold,
+    rerank_cutoff:
+      Number.isFinite(input?.rerank_cutoff) && input.rerank_cutoff >= 0
+        ? Math.min(2, input.rerank_cutoff)
+        : base.rerank_cutoff,
     vectorize_world_books:
       input?.vectorize_world_books !== undefined ? !!input.vectorize_world_books : base.vectorize_world_books,
     vectorize_chat_messages:

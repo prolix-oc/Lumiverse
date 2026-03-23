@@ -27,6 +27,7 @@ export interface ExpressionDisplaySettings {
   customHeight: number
   minimized: boolean
   frameless: boolean
+  clickThrough: boolean
   x: number
   y: number
   opacity: number
@@ -39,6 +40,7 @@ export const DEFAULT_EXPRESSION_DISPLAY: ExpressionDisplaySettings = {
   customHeight: 300,
   minimized: false,
   frameless: true,
+  clickThrough: false,
   x: -1,
   y: -1,
   opacity: 1,

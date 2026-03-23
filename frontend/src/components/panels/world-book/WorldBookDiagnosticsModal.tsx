@@ -5,6 +5,8 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  Check,
+  Copy,
   Link2,
   RefreshCcw,
   Search,
@@ -27,11 +29,30 @@ const DIAGNOSTIC_BREAKDOWN_LABELS: Array<{
   { key: 'secondaryPartial', label: 'Alias partial' },
   { key: 'commentExact', label: 'Title exact' },
   { key: 'commentPartial', label: 'Title partial' },
+  { key: 'focusBoost', label: 'Focus boost' },
   { key: 'priority', label: 'Priority' },
+  { key: 'broadPenalty', label: 'Broad penalty' },
+  { key: 'focusMissPenalty', label: 'Focus miss penalty' },
 ]
+
+const SCORE_GUIDE_TITLE = 'How to read these scores'
+const SCORE_GUIDE_BODY =
+  'Vector distance is the raw semantic distance, so lower is better. Rerank score is the final composite ranking after boosts and penalties, so higher is better.'
+const LEXICAL_GUIDE_BODY =
+  'Lexical candidate score is an optional keyword/FTS-side signal used during reranking. Higher means stronger lexical support when it appears.'
+const CUTOFF_GUIDE_BODY =
+  'Similarity Threshold filters on vector distance before reranking. Rerank Cutoff filters on rerank score after reranking.'
 
 function formatDiagnosticNumber(value: number): string {
   return Number.isFinite(value) ? value.toFixed(3) : '0.000'
+}
+
+function formatDiagnosticBreakdownValue(
+  key: keyof WorldBookDiagnostics['vector_hits'][number]['score_breakdown'],
+  value: number,
+): string {
+  const formatted = formatDiagnosticNumber(value)
+  return key === 'broadPenalty' || key === 'focusMissPenalty' ? `-${formatted}` : formatted
 }
 
 function truncateDiagnosticPreview(text: string, maxLength = 420): string {
@@ -59,6 +80,32 @@ function buildDiagnosticMatchSummary(hit: WorldBookDiagnostics['vector_hits'][nu
   return `Lexical boosts came from ${reasons.join(' | ')}.`
 }
 
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  try {
+    const successful = document.execCommand('copy')
+    if (!successful) {
+      throw new Error('The browser refused the copy command.')
+    }
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 interface Props {
   book: WorldBook
   chatId: string
@@ -69,10 +116,14 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
   const [diagnostics, setDiagnostics] = useState<WorldBookDiagnostics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
+  const [copyMessage, setCopyMessage] = useState<string | null>(null)
 
   const loadDiagnostics = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setCopyState('idle')
+    setCopyMessage(null)
     try {
       const result = await worldBooksApi.getDiagnostics(book.id, chatId)
       setDiagnostics(result)
@@ -238,6 +289,138 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
     } as const
   }, [attached, diagnostics, displacedSemanticCount, error, freshSemanticCount, loading])
 
+  const reportText = useMemo(() => {
+    if (!diagnostics) return ''
+
+    const lines: string[] = [
+      'WORLD BOOK CHAT DIAGNOSTICS',
+      `Book: ${book.name}`,
+      `Book ID: ${book.id}`,
+      `Chat ID: ${chatId}`,
+      '',
+      'SUMMARY',
+      `Hero: ${hero.title}`,
+      `Attached: ${attached ? attachedSources.join(', ') : 'No'}`,
+      `Eligible semantic entries: ${diagnostics.eligible_entries}`,
+      `Indexed: ${diagnostics.vector_summary.indexed}`,
+      `Pending: ${diagnostics.vector_summary.pending}`,
+      `Errors: ${diagnostics.vector_summary.error}`,
+      `Vector recall size (top-k): ${diagnostics.retrieval.top_k}`,
+      `Hits before similarity threshold: ${diagnostics.retrieval.hits_before_threshold}`,
+      `Rejected by similarity threshold: ${diagnostics.retrieval.threshold_rejected}`,
+      `Rejected by rerank cutoff: ${diagnostics.retrieval.rerank_rejected}`,
+      `Reranked vector hits: ${diagnostics.vector_hits.length}`,
+      `Keyword hits: ${diagnostics.keyword_hits.length}`,
+      `Keyword/vector overlap: ${overlapCount}`,
+      `Fresh semantic candidates: ${freshSemanticCount}`,
+      `Displaced semantic candidates: ${displacedSemanticCount}`,
+      '',
+      'EMBEDDINGS',
+      `Enabled: ${diagnostics.embeddings.enabled}`,
+      `API key configured: ${diagnostics.embeddings.has_api_key}`,
+      `Dimensions: ${diagnostics.embeddings.dimensions ?? 'Missing'}`,
+      `World-book vectorization: ${diagnostics.embeddings.vectorize_world_books}`,
+      `Similarity threshold: ${formatDiagnosticNumber(diagnostics.embeddings.similarity_threshold)}`,
+      `Rerank cutoff: ${formatDiagnosticNumber(diagnostics.embeddings.rerank_cutoff)}`,
+      `Ready: ${diagnostics.embeddings.ready}`,
+      '',
+      'FINAL WORLD INFO STATS',
+      `Total candidates: ${diagnostics.stats.totalCandidates}`,
+      `Activated before budget: ${diagnostics.stats.activatedBeforeBudget}`,
+      `Activated after budget: ${diagnostics.stats.activatedAfterBudget}`,
+      `Evicted by budget: ${diagnostics.stats.evictedByBudget}`,
+      `Evicted by min priority: ${diagnostics.stats.evictedByMinPriority}`,
+      `Keyword activated: ${diagnostics.stats.keywordActivated}`,
+      `Vector activated: ${diagnostics.stats.vectorActivated}`,
+      `Total activated: ${diagnostics.stats.totalActivated}`,
+      `Estimated tokens: ${diagnostics.stats.estimatedTokens}`,
+      `Recursion passes used: ${diagnostics.stats.recursionPassesUsed}`,
+      '',
+      'SCORING GUIDE',
+      `- ${SCORE_GUIDE_BODY}`,
+      `- ${LEXICAL_GUIDE_BODY}`,
+      `- ${CUTOFF_GUIDE_BODY}`,
+      '',
+      'QUERY PREVIEW',
+      diagnostics.query_preview || '(empty)',
+      '',
+      'BLOCKERS / NOTES',
+    ]
+
+    if (noteMessages.length === 0) {
+      lines.push('(none)')
+    } else {
+      for (const message of noteMessages) {
+        lines.push(`- ${message}`)
+      }
+    }
+
+    lines.push('', 'KEYWORD HITS')
+    if (diagnostics.keyword_hits.length === 0) {
+      lines.push('(none)')
+    } else {
+      for (const hit of diagnostics.keyword_hits) {
+        lines.push(`- ${hit.comment || '(unnamed entry)'} [${hit.entry_id}]`)
+      }
+    }
+
+    lines.push('', 'VECTOR HITS')
+    if (diagnostics.vector_hits.length === 0) {
+      lines.push('(none)')
+    } else {
+      diagnostics.vector_hits.forEach((hit, index) => {
+        lines.push(
+          `${index + 1}. ${hit.comment || '(unnamed entry)'} [${hit.entry_id}]`,
+          `   vector_distance=${formatDiagnosticNumber(hit.distance)} rerank_score=${formatDiagnosticNumber(hit.final_score)} lexical_candidate_score=${hit.lexical_candidate_score == null ? '(none)' : formatDiagnosticNumber(hit.lexical_candidate_score)}`,
+          `   matched_primary_keys=${hit.matched_primary_keys.join(', ') || '(none)'}`,
+          `   matched_secondary_keys=${hit.matched_secondary_keys.join(', ') || '(none)'}`,
+          `   matched_comment=${hit.matched_comment || '(none)'}`,
+          `   overlaps_keyword=${keywordHitIds.has(hit.entry_id)}`,
+          `   score_breakdown=${Object.entries(hit.score_breakdown)
+            .map(([key, value]) => `${key}:${key === 'broadPenalty' || key === 'focusMissPenalty' ? `-${formatDiagnosticNumber(value)}` : formatDiagnosticNumber(value)}`)
+            .join(', ')}`,
+          '   search_text_preview:',
+          `   ${truncateDiagnosticPreview(hit.search_text_preview || '(empty)', 800).replace(/\n/g, '\n   ')}`,
+        )
+      })
+    }
+
+    return lines.join('\n')
+  }, [
+    attached,
+    attachedSources,
+    book.id,
+    book.name,
+    chatId,
+    diagnostics,
+    displacedSemanticCount,
+    freshSemanticCount,
+    hero.title,
+    keywordHitIds,
+    noteMessages,
+    overlapCount,
+  ])
+
+  const handleCopyReport = useCallback(async () => {
+    if (!diagnostics || !reportText) return
+
+    setCopyState('copying')
+    setCopyMessage(null)
+
+    try {
+      await copyTextToClipboard(reportText)
+      setCopyState('copied')
+      setCopyMessage('Diagnostics report copied to clipboard.')
+      window.setTimeout(() => {
+        setCopyState((current) => (current === 'copied' ? 'idle' : current))
+        setCopyMessage((current) => (current === 'Diagnostics report copied to clipboard.' ? null : current))
+      }, 2400)
+    } catch (err: any) {
+      setCopyState('error')
+      setCopyMessage(err?.message || 'Failed to copy diagnostics report.')
+    }
+  }, [diagnostics, reportText])
+
   const handleBackdropClick = (event: MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) onClose()
   }
@@ -264,6 +447,25 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
           <div className={styles.headerActions}>
             <button
               type="button"
+              className={clsx(
+                styles.secondaryButton,
+                copyState === 'copied' && styles.secondaryButtonSuccess,
+                copyState === 'error' && styles.secondaryButtonError,
+              )}
+              onClick={() => void handleCopyReport()}
+              disabled={!diagnostics || copyState === 'copying'}
+            >
+              {copyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}
+              <span>
+                {copyState === 'copying'
+                  ? 'Copying...'
+                  : copyState === 'copied'
+                    ? 'Copied'
+                    : 'Copy report'}
+              </span>
+            </button>
+            <button
+              type="button"
               className={styles.refreshButton}
               onClick={() => void loadDiagnostics()}
               disabled={loading}
@@ -283,6 +485,17 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
         </div>
 
         <div className={styles.body}>
+          {copyMessage && (
+            <div
+              className={clsx(
+                styles.inlineNotice,
+                copyState === 'error' ? styles.inlineNoticeError : styles.inlineNoticeSuccess,
+              )}
+            >
+              {copyMessage}
+            </div>
+          )}
+
           <section className={clsx(styles.heroCard, styles[`hero${hero.tone}`])}>
             <div className={styles.heroIcon}>
               {hero.tone === 'success' ? <CheckCircle2 size={20} /> : hero.tone === 'warning' ? <AlertTriangle size={20} /> : <Sparkles size={20} />}
@@ -364,6 +577,13 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                       <span className={styles.sectionCount}>{diagnostics.vector_hits.length}</span>
                     </div>
 
+                    <div className={styles.scoreGuide}>
+                      <div className={styles.scoreGuideTitle}>{SCORE_GUIDE_TITLE}</div>
+                      <p className={styles.scoreGuideText}>{SCORE_GUIDE_BODY}</p>
+                      <p className={styles.scoreGuideText}>{LEXICAL_GUIDE_BODY}</p>
+                      <p className={styles.scoreGuideText}>{CUTOFF_GUIDE_BODY}</p>
+                    </div>
+
                     {diagnostics.vector_hits.length === 0 ? (
                       <div className={styles.emptyState}>
                         No vector hits survived the threshold and rerank steps for this chat.
@@ -372,7 +592,7 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                       <div className={styles.hitList}>
                         {diagnostics.vector_hits.map((hit) => {
                           const breakdownItems = DIAGNOSTIC_BREAKDOWN_LABELS
-                            .map(({ key, label }) => ({ label, value: hit.score_breakdown[key] }))
+                            .map(({ key, label }) => ({ key, label, value: hit.score_breakdown[key] }))
                             .filter((item) => item.value > 0.001)
 
                           return (
@@ -388,8 +608,12 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                                   <p className={styles.hitSummary}>{buildDiagnosticMatchSummary(hit)}</p>
                                 </div>
                                 <div className={styles.hitScores}>
-                                  <span className={styles.scorePill}>Final {formatDiagnosticNumber(hit.final_score)}</span>
-                                  <span className={styles.distancePill}>Dist {formatDiagnosticNumber(hit.distance)}</span>
+                                  <span className={styles.scorePill}>
+                                    Rerank score {formatDiagnosticNumber(hit.final_score)}
+                                  </span>
+                                  <span className={styles.distancePill}>
+                                    Vector distance {formatDiagnosticNumber(hit.distance)}
+                                  </span>
                                 </div>
                               </div>
 
@@ -416,7 +640,9 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                                   {breakdownItems.map((item) => (
                                     <span key={`${hit.entry_id}-${item.label}`} className={styles.breakdownChip}>
                                       <span className={styles.breakdownLabel}>{item.label}</span>
-                                      <span className={styles.breakdownValue}>{formatDiagnosticNumber(item.value)}</span>
+                                      <span className={styles.breakdownValue}>
+                                        {formatDiagnosticBreakdownValue(item.key, item.value)}
+                                      </span>
                                     </span>
                                   ))}
                                 </div>
@@ -476,6 +702,14 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                         <span className={styles.factValue}>{diagnostics.embeddings.vectorize_world_books ? 'On' : 'Off'}</span>
                       </div>
                       <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Similarity threshold</span>
+                        <span className={styles.factValue}>{formatDiagnosticNumber(diagnostics.embeddings.similarity_threshold)}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Rerank cutoff</span>
+                        <span className={styles.factValue}>{formatDiagnosticNumber(diagnostics.embeddings.rerank_cutoff)}</span>
+                      </div>
+                      <div className={styles.factRow}>
                         <span className={styles.factLabel}>Semantic-ready</span>
                         <span className={styles.factValue}>{diagnostics.embeddings.ready ? 'Ready' : 'Not ready'}</span>
                       </div>
@@ -490,6 +724,18 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                       </div>
                     </div>
                     <div className={styles.factList}>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Vector recall size</span>
+                        <span className={styles.factValue}>{diagnostics.retrieval.top_k}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Rejected by similarity threshold</span>
+                        <span className={styles.factValue}>{diagnostics.retrieval.threshold_rejected}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Rejected by rerank cutoff</span>
+                        <span className={styles.factValue}>{diagnostics.retrieval.rerank_rejected}</span>
+                      </div>
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>Activated before budget</span>
                         <span className={styles.factValue}>{diagnostics.stats.activatedBeforeBudget}</span>

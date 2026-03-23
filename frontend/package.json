@@ -20,7 +20,7 @@
     "highlight.js": "^11.11.1",
     "immer": "^10.1.1",
     "lucide-react": "^0.468.0",
-    "lumiverse-spindle-types": "0.1.9",
+    "lumiverse-spindle-types": "0.2.0",
     "marked": "^15.0.4",
     "motion": "^12.0.0",
     "react": "^19.0.0",

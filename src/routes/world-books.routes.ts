@@ -128,13 +128,15 @@ app.post("/:id/diagnostics", async (c) => {
 
   const vectorDetail = isAttached
     ? await collectVectorActivatedWorldInfoDetailed(userId, [bookId], bookEntries, messages)
-    : {
+      : {
         entries: [],
         queryPreview,
         eligibleCount: 0,
         hitsBeforeThreshold: 0,
         hitsAfterThreshold: 0,
         thresholdRejected: 0,
+        hitsAfterRerankCutoff: 0,
+        rerankRejected: 0,
         topK: Math.max(1, embeddings.retrieval_top_k || 4),
         cap: Math.max(1, embeddings.retrieval_top_k || 4),
         blockerMessages: [] as string[],
@@ -154,9 +156,18 @@ app.post("/:id/diagnostics", async (c) => {
       entry_id: entry.id,
       comment: entry.comment || "",
     }));
+  const keywordHitIds = new Set(keywordHits.map((entry) => entry.entry_id));
+  const vectorKeywordOverlapCount = vectorDetail.entries.reduce(
+    (count, item) => count + (keywordHitIds.has(item.entry.id) ? 1 : 0),
+    0,
+  );
 
   if (vectorDetail.thresholdRejected > 0 && vectorDetail.entries.length === 0) {
     blockerMessages.push("Vector matches were found, but all of them were rejected by the current similarity threshold.");
+  }
+
+  if (vectorDetail.rerankRejected > 0 && vectorDetail.entries.length === 0) {
+    blockerMessages.push("Vector matches survived raw similarity filtering, but all of them were rejected by the current rerank cutoff.");
   }
 
   if (worldInfoSettings.minPriority && worldInfoSettings.minPriority > 0) {
@@ -194,7 +205,8 @@ app.post("/:id/diagnostics", async (c) => {
     vectorDetail.entries.length > 0 &&
     mergedWorldInfo.vectorActivated === 0 &&
     keywordHits.length > 0 &&
-    mergedWorldInfo.evictedByBudget === 0
+    mergedWorldInfo.evictedByBudget === 0 &&
+    vectorKeywordOverlapCount === vectorDetail.entries.length
   ) {
     blockerMessages.push("Semantic matches were found, but the top vector hits were already activated by keyword, so the final list still counts them as keyword entries.");
   }
@@ -208,11 +220,21 @@ app.post("/:id/diagnostics", async (c) => {
       has_api_key: embeddings.has_api_key,
       dimensions: embeddings.dimensions,
       vectorize_world_books: embeddings.vectorize_world_books,
+      similarity_threshold: embeddings.similarity_threshold,
+      rerank_cutoff: embeddings.rerank_cutoff,
       ready: embeddings.enabled && embeddings.has_api_key && !!embeddings.dimensions && embeddings.vectorize_world_books,
     },
     vector_summary: vectorSummary,
     query_preview: vectorDetail.queryPreview || queryPreview,
     eligible_entries: vectorDetail.eligibleCount,
+    retrieval: {
+      top_k: vectorDetail.topK,
+      hits_before_threshold: vectorDetail.hitsBeforeThreshold,
+      hits_after_threshold: vectorDetail.hitsAfterThreshold,
+      threshold_rejected: vectorDetail.thresholdRejected,
+      hits_after_rerank_cutoff: vectorDetail.hitsAfterRerankCutoff,
+      rerank_rejected: vectorDetail.rerankRejected,
+    },
     keyword_hits: keywordHits,
     vector_hits: vectorDetail.entries.map((item) => ({
       entry_id: item.entry.id,
@@ -220,6 +242,7 @@ app.post("/:id/diagnostics", async (c) => {
       score: item.score,
       distance: item.distance,
       final_score: item.finalScore,
+      lexical_candidate_score: item.lexicalCandidateScore,
       matched_primary_keys: item.matchedPrimaryKeys,
       matched_secondary_keys: item.matchedSecondaryKeys,
       matched_comment: item.matchedComment,
