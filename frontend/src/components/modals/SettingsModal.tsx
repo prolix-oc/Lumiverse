@@ -1468,6 +1468,32 @@ function EmbeddingsSettings() {
     )
   }
 
+  const setupChecklist = [
+    {
+      label: 'Embeddings enabled',
+      description: 'Turns on vector features across Lumiverse.',
+      complete: cfg.enabled,
+    },
+    {
+      label: 'API key configured',
+      description: 'Lets the app reach your embedding provider.',
+      complete: cfg.has_api_key,
+    },
+    {
+      label: 'Embedding dimensions detected',
+      description: 'Run a test once so Lumiverse knows the vector size.',
+      complete: !!cfg.dimensions,
+    },
+    {
+      label: 'World-book vectorization enabled',
+      description: 'Allows lorebook entries to be indexed and searched semantically.',
+      complete: cfg.vectorize_world_books,
+    },
+  ]
+  const completedChecklistCount = setupChecklist.filter((item) => item.complete).length
+  const checklistPercent = Math.round((completedChecklistCount / setupChecklist.length) * 100)
+  const checklistReady = completedChecklistCount === setupChecklist.length
+
   return (
     <div className={styles.settingsSection}>
       <h3 className={styles.sectionTitle}>Embeddings</h3>
@@ -1475,6 +1501,60 @@ function EmbeddingsSettings() {
 
       {error && <p className={styles.errorText}>{error}</p>}
       {success && <p className={styles.successText}>{success}</p>}
+
+      <div className={styles.embeddingChecklist}>
+        <div className={styles.embeddingChecklistHeader}>
+          <div className={styles.embeddingChecklistHeaderCopy}>
+            <div className={styles.embeddingChecklistEyebrow}>Readiness</div>
+            <div className={styles.embeddingChecklistTitle}>Embedding setup</div>
+            <div className={styles.embeddingChecklistSubtitle}>
+              {checklistReady
+                ? 'Vector search is ready for world books.'
+                : `${completedChecklistCount} of ${setupChecklist.length} setup steps complete.`}
+            </div>
+          </div>
+          <div className={styles.embeddingChecklistScore}>
+            <span className={styles.embeddingChecklistScoreValue}>
+              {completedChecklistCount}/{setupChecklist.length}
+            </span>
+            <span className={styles.embeddingChecklistScoreLabel}>
+              {checklistReady ? 'Ready' : 'In progress'}
+            </span>
+          </div>
+        </div>
+        <div className={styles.embeddingChecklistProgress}>
+          <span
+            className={styles.embeddingChecklistProgressFill}
+            style={{ width: `${checklistPercent}%` }}
+          />
+        </div>
+        <div className={styles.embeddingChecklistItems}>
+          {setupChecklist.map((item, index) => (
+            <div
+              key={item.label}
+              className={clsx(
+                styles.embeddingChecklistItem,
+                item.complete && styles.embeddingChecklistItemComplete,
+              )}
+            >
+              <span className={styles.embeddingChecklistStep}>
+                {String(index + 1).padStart(2, '0')}
+              </span>
+              <div className={styles.embeddingChecklistItemBody}>
+                <div className={styles.embeddingChecklistItemTop}>
+                  <span className={styles.embeddingChecklistItemLabel}>{item.label}</span>
+                  <span className={item.complete ? styles.embeddingChecklistDone : styles.embeddingChecklistTodo}>
+                    {item.complete ? 'Ready' : 'Needs attention'}
+                  </span>
+                </div>
+                <span className={styles.embeddingChecklistItemDescription}>
+                  {item.description}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
 
       <label className={styles.toggle}>
         <input
@@ -1568,7 +1648,7 @@ function EmbeddingsSettings() {
           onChange={(e) => update({ batch_size: Math.max(1, Math.min(200, Number(e.target.value || 50))) })}
         />
         <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
-          Number of entries to embed per API request during reindexing (1–200)
+          Number of entries to embed per API request during reindexing (1-200)
         </span>
       </div>
 

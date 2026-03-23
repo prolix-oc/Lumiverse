@@ -228,6 +228,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     settings: worldInfoSettings,
   });
   const wiCache = wiResult.cache;
+  const keywordActivatedCount = wiResult.activatedEntries.length;
 
   // Build activated world info summary (keyword-activated entries first)
   const activatedWorldInfo: ActivatedWorldInfoEntry[] = wiResult.activatedEntries.map((e) => ({
@@ -241,6 +242,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // These entries are merged with keyword-activated entries when enabled.
   // When pre-computed results are available (from the generation pipeline's
   // council enrichment phase), reuse them to avoid redundant embedding queries.
+  const vectorQueryPreview = await getWorldInfoVectorQueryPreview(ctx.userId, messages);
   const vectorActivated = ctx.precomputedVectorEntries
     ?? await collectVectorActivatedWorldInfo(
       ctx.userId,
@@ -264,6 +266,16 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       });
     }
   }
+
+  const worldInfoStats = {
+    ...wiResult.stats,
+    activatedAfterBudget: wiResult.activatedEntries.length,
+    estimatedTokens: estimateWorldInfoTokens(wiResult.activatedEntries),
+    keywordActivated: keywordActivatedCount,
+    vectorActivated: Math.max(0, wiResult.activatedEntries.length - keywordActivatedCount),
+    totalActivated: wiResult.activatedEntries.length,
+    queryPreview: vectorQueryPreview,
+  };
 
   // ---- Defer WI state persistence to after generation ----
   const deferredWiState = {
@@ -784,7 +796,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     parameters,
     assistantPrefill,
     activatedWorldInfo: activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
-    worldInfoStats: wiResult.stats,
+    worldInfoStats,
     memoryStats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,
@@ -1030,43 +1042,114 @@ export interface VectorActivatedEntry {
   score: number;
 }
 
+export interface VectorWorldInfoRetrievalResult {
+  entries: VectorActivatedEntry[];
+  queryPreview: string;
+  eligibleCount: number;
+  hitsBeforeThreshold: number;
+  hitsAfterThreshold: number;
+  thresholdRejected: number;
+  topK: number;
+  cap: number;
+  blockerMessages: string[];
+}
+
+function estimateWorldInfoTokens(entries: import("../types/world-book").WorldBookEntry[]): number {
+  const totalChars = entries.reduce((sum, entry) => sum + (entry.content || "").length, 0);
+  return Math.ceil(totalChars / 4);
+}
+
 function truncateToContextSize(text: string, maxTokens: number): string {
   const maxChars = maxTokens * 3; 
   if (text.length <= maxChars) return text;
   return text.slice(-maxChars);
 }
 
-export async function collectVectorActivatedWorldInfo(
+function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: number): string {
+  const queryMessages = messages
+    .filter((m) => !(m.extra?.hidden) && m.content.trim().length > 0)
+    .slice(-Math.max(1, contextSize));
+  return truncateToContextSize(
+    queryMessages.map((m) => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n").trim(),
+    8000,
+  );
+}
+
+export async function getWorldInfoVectorQueryPreview(userId: string, messages: Message[]): Promise<string> {
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  return buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3);
+}
+
+function isVectorEligibleWorldInfoEntry(entry: import("../types/world-book").WorldBookEntry): boolean {
+  return entry.vectorized && !entry.disabled && (entry.content || "").trim().length > 0;
+}
+
+export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
   worldBookIds: string[],
   entries: import("../types/world-book").WorldBookEntry[],
   messages: Message[],
-): Promise<VectorActivatedEntry[]> {
-  if (worldBookIds.length === 0) return [];
+): Promise<VectorWorldInfoRetrievalResult> {
+  const emptyResult: VectorWorldInfoRetrievalResult = {
+    entries: [],
+    queryPreview: "",
+    eligibleCount: 0,
+    hitsBeforeThreshold: 0,
+    hitsAfterThreshold: 0,
+    thresholdRejected: 0,
+    topK: 0,
+    cap: 0,
+    blockerMessages: [],
+  };
+
+  if (worldBookIds.length === 0) {
+    return {
+      ...emptyResult,
+      blockerMessages: ["No attached world books are active for this chat."],
+    };
+  }
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  if (!cfg.enabled || !cfg.vectorize_world_books) return [];
+  const blockerMessages: string[] = [];
+  const topK = Math.max(1, cfg.retrieval_top_k || 4);
+  const queryText = buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3);
+  const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
 
-  const contextSize = Math.max(1, cfg.preferred_context_size || 3);
-  const queryMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0).slice(-contextSize);
-  const queryText = truncateToContextSize(
-    queryMessages.map((m) => `[${m.name}]: ${stripReasoningTags(m.content)}`).join("\n").trim(),
-    8000
-  );
-  if (!queryText) return [];
+  if (!cfg.enabled) blockerMessages.push("Embeddings are disabled.");
+  if (!cfg.has_api_key) blockerMessages.push("No embedding API key is configured.");
+  if (!cfg.dimensions) blockerMessages.push("Embeddings have not been tested yet, so dimensions are still unknown.");
+  if (!cfg.vectorize_world_books) blockerMessages.push("World-book vectorization is disabled in embeddings settings.");
+  if (!queryText) blockerMessages.push("The current chat does not have enough visible recent text to build a vector query.");
+  if (eligibleEntries.length === 0) blockerMessages.push("This chat has no semantic-enabled, non-disabled, non-empty lorebook entries to search.");
+
+  if (blockerMessages.length > 0) {
+    return {
+      ...emptyResult,
+      queryPreview: queryText,
+      eligibleCount: eligibleEntries.length,
+      topK,
+      cap: topK,
+      blockerMessages,
+    };
+  }
 
   try {
-    // Embed query once (or hit cache), regardless of how many world books
     const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
-    if (!queryVector || queryVector.length === 0) return [];
+    if (!queryVector || queryVector.length === 0) {
+      return {
+        ...emptyResult,
+        queryPreview: queryText,
+        eligibleCount: eligibleEntries.length,
+        topK,
+        cap: topK,
+        blockerMessages: ["The embedding provider returned an empty query vector."],
+      };
+    }
 
-    const byId = new Map(entries.map((entry) => [entry.id, entry]));
-    const out: VectorActivatedEntry[] = [];
+    const byId = new Map(eligibleEntries.map((entry) => [entry.id, entry]));
     const scored: Array<{ entry: import("../types/world-book").WorldBookEntry; score: number }> = [];
     const seen = new Set<string>();
-    const topK = Math.max(1, cfg.retrieval_top_k || 4);
 
-    // Search all world books in parallel using the pre-computed vector
     const searchResults = await Promise.allSettled(
       worldBookIds.map((worldBookId) =>
         embeddingsSvc.searchWorldBookEntriesWithVector(userId, worldBookId, queryVector, topK)
@@ -1082,17 +1165,18 @@ export async function collectVectorActivatedWorldInfo(
         const entry = byId.get(hit.entry_id);
         if (!entry) continue;
         if (seen.has(entry.id)) continue;
-        if (entry.disabled || !entry.content.trim()) continue;
         scored.push({ entry, score: hit.score });
         seen.add(entry.id);
       }
     }
 
-    // Filter by similarity threshold 
+    const hitsBeforeThreshold = scored.length;
     if (cfg.similarity_threshold > 0) {
       const cutoff = cfg.similarity_threshold;
       scored.splice(0, scored.length, ...scored.filter((s) => s.score <= cutoff));
     }
+    const hitsAfterThreshold = scored.length;
+    const thresholdRejected = hitsBeforeThreshold - hitsAfterThreshold;
 
     scored.sort((a, b) => a.score - b.score);
 
@@ -1103,15 +1187,40 @@ export async function collectVectorActivatedWorldInfo(
       cap = Math.min(24, topK * 2);
     }
 
-    for (const item of scored.slice(0, cap)) {
-      out.push({ entry: item.entry, score: item.score });
-    }
-
-    return out;
+    return {
+      entries: scored.slice(0, cap).map((item) => ({ entry: item.entry, score: item.score })),
+      queryPreview: queryText,
+      eligibleCount: eligibleEntries.length,
+      hitsBeforeThreshold,
+      hitsAfterThreshold,
+      thresholdRejected,
+      topK,
+      cap,
+      blockerMessages,
+    };
   } catch (err) {
     console.warn("[prompt] Vector activated world info retrieval failed:", err);
-    return [];
+    return {
+      ...emptyResult,
+      queryPreview: queryText,
+      eligibleCount: eligibleEntries.length,
+      topK,
+      cap: topK,
+      blockerMessages: [
+        err instanceof Error ? err.message : "Vector activated world info retrieval failed.",
+      ],
+    };
   }
+}
+
+export async function collectVectorActivatedWorldInfo(
+  userId: string,
+  worldBookIds: string[],
+  entries: import("../types/world-book").WorldBookEntry[],
+  messages: Message[],
+): Promise<VectorActivatedEntry[]> {
+  const result = await collectVectorActivatedWorldInfoDetailed(userId, worldBookIds, entries, messages);
+  return result.entries;
 }
 
 /**

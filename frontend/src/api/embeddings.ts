@@ -1,5 +1,5 @@
 import { get, put, post } from './client'
-import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
+import type { EmbeddingConfig, ChatMemorySettings, WorldBookReindexResult } from '@/types/api'
 
 export const embeddingsApi = {
   getConfig() {
@@ -20,7 +20,7 @@ export const embeddingsApi = {
   },
 
   reindexWorldBook(bookId: string) {
-    return post<{ success: boolean; indexed: number; removed: number; total: number }>(
+    return post<WorldBookReindexResult>(
       `/embeddings/world-books/${encodeURIComponent(bookId)}/reindex`,
       {}
     )

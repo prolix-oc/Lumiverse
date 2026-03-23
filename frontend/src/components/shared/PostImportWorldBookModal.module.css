@@ -1,0 +1,234 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 10, 0.62);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1500;
+  padding: 20px;
+}
+
+.modal {
+  width: clamp(360px, 92vw, min(700px, var(--lumiverse-content-max-width, 700px)));
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 16px;
+  box-shadow: var(--lumiverse-shadow-xl, 0 24px 64px rgba(0, 0, 0, 0.35));
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
+  margin-bottom: 6px;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 20px 0;
+}
+
+.copy,
+.copySubtle {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.copy {
+  color: var(--lumiverse-text);
+}
+
+.copySubtle {
+  color: var(--lumiverse-text-muted);
+}
+
+.closeBtn,
+.skipBtn,
+.actionCard {
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  background: transparent;
+  color: inherit;
+}
+
+.closeBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-text-dim);
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.closeBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.error {
+  margin: 16px 20px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 86, 86, 0.12);
+  color: #ff9b9b;
+  font-size: 13px;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px 20px 0;
+}
+
+.actionCard {
+  text-align: left;
+  padding: 15px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 178px;
+  background: var(--lumiverse-fill-subtle);
+  transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.actionCard:hover:enabled {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-light);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+}
+
+.actionCard:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.actionCardRecommended {
+  border-color: var(--lumiverse-primary);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.actionTopRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.actionIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: var(--lumiverse-bg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.actionBadge {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--lumiverse-primary-light);
+  color: var(--lumiverse-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.actionBadgeMuted {
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-muted);
+}
+
+.actionEyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
+}
+
+.actionTitle {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.actionMeta {
+  font-size: 12.5px;
+  color: var(--lumiverse-text-muted);
+  line-height: 1.5;
+  flex: 1;
+}
+
+.actionHint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px 20px 18px;
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.footerHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+}
+
+.skipBtn {
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.skipBtn:hover {
+  background: var(--lumiverse-primary-light);
+}
+
+@media (max-width: 760px) {
+  .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

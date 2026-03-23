@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import clsx from 'clsx'
 import type { WorldBookEntry } from '@/types/api'
+import { getVectorIndexStatusDescription, getVectorIndexStatusLabel } from '@/lib/worldBookVectorization'
 import NumberStepper from './NumberStepper'
 import styles from './WorldBookEntryEditor.module.css'
 
@@ -38,6 +39,14 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
   const [timingOpen, setTimingOpen] = useState(false)
   const [recursionOpen, setRecursionOpen] = useState(false)
   const [metadataOpen, setMetadataOpen] = useState(false)
+  const vectorStatusClass =
+    entry.vector_index_status === 'indexed'
+      ? styles.vectorStatusIndexed
+      : entry.vector_index_status === 'error'
+        ? styles.vectorStatusError
+        : entry.vector_index_status === 'pending'
+          ? styles.vectorStatusPending
+          : styles.vectorStatusNotEnabled
 
   // Local state for text fields to prevent prop-sync from overwriting in-progress edits
   const [content, setContent] = useState(entry.content)
@@ -256,8 +265,16 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
               checked={entry.vectorized}
               onChange={() => onImmediateUpdate(entry.id, { vectorized: !entry.vectorized })}
             />
-            Vectorized
+            Use for semantic activation
           </label>
+        </div>
+        <div className={styles.vectorStatusRow}>
+          <span className={clsx(styles.vectorStatusBadge, vectorStatusClass)}>
+            {getVectorIndexStatusLabel(entry.vector_index_status)}
+          </span>
+          <span className={styles.vectorStatusText}>
+            {getVectorIndexStatusDescription(entry)}
+          </span>
         </div>
         <div className={styles.entryFieldRow}>
           <div className={clsx(styles.entryField, styles.entryFieldSmall)}>

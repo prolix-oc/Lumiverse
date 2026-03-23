@@ -9,8 +9,13 @@ import clsx from 'clsx'
 
 type ImportTab = 'file' | 'url'
 
+export interface WorldBookImportResult {
+  world_book: WorldBook
+  entry_count: number
+}
+
 interface Props {
-  onImport: (book: WorldBook) => void
+  onImport: (result: WorldBookImportResult) => void
   onClose: () => void
 }
 
@@ -42,7 +47,7 @@ export default function ImportWorldBookModal({ onImport, onClose }: Props) {
         payload.description = `Uploaded at ${new Date().toLocaleString()}`
       }
       const result = await worldBooksApi.importJson(payload)
-      onImport(result.world_book)
+      onImport(result)
     } catch (e: any) {
       setFileError(e.message || 'Failed to import file')
       setFileLoading(false)
@@ -63,7 +68,7 @@ export default function ImportWorldBookModal({ onImport, onClose }: Props) {
     setUrlLoading(true)
     try {
       const result = await worldBooksApi.importUrl(url.trim())
-      onImport(result.world_book)
+      onImport(result)
     } catch (e: any) {
       setUrlError(e.message || 'Failed to import from URL')
       setUrlLoading(false)

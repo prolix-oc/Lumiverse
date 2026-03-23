@@ -5,7 +5,12 @@ import { env } from "../env";
 import { getDb } from "../db/connection";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
-import type { WorldBookEntry } from "../types/world-book";
+import type {
+  WorldBookEntry,
+  WorldBookReindexProgress,
+  WorldBookReindexResult,
+  WorldBookVectorIndexStatus,
+} from "../types/world-book";
 import { embeddingCache, computeCacheKey, type ModelFingerprint } from "./embedding-cache";
 
 const EMBEDDING_SETTINGS_KEY = "embeddingConfig";
@@ -653,6 +658,42 @@ export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: st
   scheduleOptimize();
 }
 
+function getDesiredWorldBookVectorStatus(entry: WorldBookEntry): WorldBookVectorIndexStatus {
+  return entry.vectorized ? "pending" : "not_enabled";
+}
+
+function updateWorldBookEntryVectorState(
+  entryId: string,
+  status: WorldBookVectorIndexStatus,
+  indexedAt: number | null,
+  error: string | null,
+): void {
+  getDb().query(
+    `UPDATE world_book_entries
+     SET vector_index_status = ?, vector_indexed_at = ?, vector_index_error = ?
+     WHERE id = ?`
+  ).run(status, indexedAt, error, entryId);
+}
+
+function updateWorldBookEntriesVectorState(
+  entryIds: string[],
+  status: WorldBookVectorIndexStatus,
+  indexedAt: number | null,
+  error: string | null,
+): void {
+  if (entryIds.length === 0) return;
+  const placeholders = entryIds.map(() => "?").join(", ");
+  getDb().query(
+    `UPDATE world_book_entries
+     SET vector_index_status = ?, vector_indexed_at = ?, vector_index_error = ?
+     WHERE id IN (${placeholders})`
+  ).run(status, indexedAt, error, ...entryIds);
+}
+
+function isEligibleWorldBookEntry(entry: WorldBookEntry): boolean {
+  return entry.vectorized && !entry.disabled && (entry.content || "").trim().length > 0;
+}
+
 async function getExistingEntryContent(userId: string, entryId: string): Promise<string | null> {
   try {
     const table = await getTableIfExists();
@@ -675,52 +716,66 @@ async function getExistingEntryContent(userId: string, entryId: string): Promise
 }
 
 export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBookEntry): Promise<void> {
+  const desiredStatus = getDesiredWorldBookVectorStatus(entry);
+  if (!entry.vectorized) {
+    await deleteWorldBookEntryEmbeddings(userId, entry.id);
+    updateWorldBookEntryVectorState(entry.id, desiredStatus, null, null);
+    return;
+  }
+
   const cfg = await getEmbeddingConfig(userId);
-  if (!cfg.enabled || !cfg.vectorize_world_books || entry.disabled) {
-    await deleteWorldBookEntryEmbeddings(userId, entry.id);
-    return;
-  }
   const content = (entry.content || "").trim();
-  if (!content) {
+  if (!cfg.enabled || !cfg.vectorize_world_books || entry.disabled || !content) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
+    updateWorldBookEntryVectorState(entry.id, "pending", null, null);
     return;
   }
 
-  // Skip re-embedding if content hasn't changed
-  const existing = await getExistingEntryContent(userId, entry.id);
-  if (existing === content) return;
+  try {
+    const existing = await getExistingEntryContent(userId, entry.id);
+    const now = Math.floor(Date.now() / 1000);
 
-  const [vector] = await cachedEmbedTexts(userId, [content]);
-  const now = Math.floor(Date.now() / 1000);
-  const row: EmbeddingRow = {
-    id: rowId(userId, "world_book_entry", entry.id, 0),
-    user_id: userId,
-    source_type: "world_book_entry",
-    source_id: entry.id,
-    owner_id: entry.world_book_id,
-    chunk_index: 0,
-    content,
-    vector,
-    metadata_json: JSON.stringify({
-      comment: entry.comment,
-      key: entry.key,
-      keysecondary: entry.keysecondary,
-      world_book_id: entry.world_book_id,
-    }),
-    updated_at: now,
-  };
+    if (existing === content) {
+      updateWorldBookEntryVectorState(entry.id, "indexed", now, null);
+      return;
+    }
 
-  const table = await getOrCreateTable([row]);
-  await ensureVectorIndex(table);
-  await ensureScalarIndexes(table);
-  await ensureFtsIndex(table);
-  await table
-    .mergeInsert("id")
-    .whenMatchedUpdateAll()
-    .whenNotMatchedInsertAll()
-    .execute(asLanceRows([row]));
+    const [vector] = await cachedEmbedTexts(userId, [content]);
+    const row: EmbeddingRow = {
+      id: rowId(userId, "world_book_entry", entry.id, 0),
+      user_id: userId,
+      source_type: "world_book_entry",
+      source_id: entry.id,
+      owner_id: entry.world_book_id,
+      chunk_index: 0,
+      content,
+      vector,
+      metadata_json: JSON.stringify({
+        comment: entry.comment,
+        key: entry.key,
+        keysecondary: entry.keysecondary,
+        world_book_id: entry.world_book_id,
+      }),
+      updated_at: now,
+    };
 
-  scheduleOptimize();
+    const table = await getOrCreateTable([row]);
+    await ensureVectorIndex(table);
+    await ensureScalarIndexes(table);
+    await ensureFtsIndex(table);
+    await table
+      .mergeInsert("id")
+      .whenMatchedUpdateAll()
+      .whenNotMatchedInsertAll()
+      .execute(asLanceRows([row]));
+
+    updateWorldBookEntryVectorState(entry.id, "indexed", now, null);
+    scheduleOptimize();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Vector indexing failed";
+    updateWorldBookEntryVectorState(entry.id, "error", null, message);
+    throw err;
+  }
 }
 
 export async function reindexWorldBookEntries(
@@ -728,56 +783,69 @@ export async function reindexWorldBookEntries(
   entries: WorldBookEntry[],
   options?: {
     batchSize?: number;
-    onProgress?: (progress: { indexed: number; removed: number; failed: number; total: number; current: number }) => void;
+    onProgress?: (progress: WorldBookReindexProgress) => void;
   }
-): Promise<{
-  indexed: number;
-  removed: number;
-  failed: number;
-}> {
+) : Promise<WorldBookReindexResult> {
   const batchSize = Math.max(1, Math.min(options?.batchSize ?? 50, 200));
-  let indexed = 0;
-  let removed = 0;
-  let failed = 0;
-  let current = 0;
-  const total = entries.length;
-
-  // Separate entries with content (to index) from disabled/empty (to remove)
+  const progress: WorldBookReindexProgress = {
+    total: entries.length,
+    current: 0,
+    eligible: 0,
+    indexed: 0,
+    removed: 0,
+    skipped_not_enabled: 0,
+    skipped_disabled_or_empty: 0,
+    failed: 0,
+  };
   const toIndex: WorldBookEntry[] = [];
-  const toRemove: WorldBookEntry[] = [];
+  const notEnabled: WorldBookEntry[] = [];
+  const disabledOrEmpty: WorldBookEntry[] = [];
+
   for (const entry of entries) {
-    if (entry.disabled || !(entry.content || "").trim()) {
-      toRemove.push(entry);
+    if (!entry.vectorized) {
+      notEnabled.push(entry);
+      progress.skipped_not_enabled += 1;
+    } else if (!isEligibleWorldBookEntry(entry)) {
+      disabledOrEmpty.push(entry);
+      progress.skipped_disabled_or_empty += 1;
     } else {
       toIndex.push(entry);
     }
   }
+  progress.eligible = toIndex.length;
 
-  // Remove disabled/empty entries from the vector index
-  for (const entry of toRemove) {
+  for (const entry of notEnabled) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
-    removed += 1;
-    current += 1;
-    options?.onProgress?.({ indexed, removed, failed, total, current });
+    updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
+    progress.removed += 1;
+    progress.current += 1;
+    options?.onProgress?.({ ...progress });
   }
 
-  // Batch-embed entries
+  for (const entry of disabledOrEmpty) {
+    await deleteWorldBookEntryEmbeddings(userId, entry.id);
+    updateWorldBookEntryVectorState(entry.id, "pending", null, null);
+    progress.removed += 1;
+    progress.current += 1;
+    options?.onProgress?.({ ...progress });
+  }
+
+  const cfg = await getEmbeddingConfig(userId);
+  if (!cfg.enabled || !cfg.vectorize_world_books) {
+    for (const entry of toIndex) {
+      await deleteWorldBookEntryEmbeddings(userId, entry.id);
+      updateWorldBookEntryVectorState(entry.id, "pending", null, null);
+      progress.removed += 1;
+      progress.current += 1;
+      options?.onProgress?.({ ...progress });
+    }
+    return progress;
+  }
+
   for (let i = 0; i < toIndex.length; i += batchSize) {
     const batch = toIndex.slice(i, i + batchSize);
 
     try {
-      const cfg = await getEmbeddingConfig(userId);
-      if (!cfg.enabled || !cfg.vectorize_world_books) {
-        // If disabled, clean up all remaining
-        for (const entry of batch) {
-          await deleteWorldBookEntryEmbeddings(userId, entry.id);
-          removed += 1;
-          current += 1;
-          options?.onProgress?.({ indexed, removed, failed, total, current });
-        }
-        continue;
-      }
-
       const texts = batch.map((e) => (e.content || "").trim());
       const vectors = await cachedEmbedTexts(userId, texts);
       const now = Math.floor(Date.now() / 1000);
@@ -810,14 +878,17 @@ export async function reindexWorldBookEntries(
         .whenNotMatchedInsertAll()
         .execute(asLanceRows(rows));
 
-      indexed += batch.length;
-      current += batch.length;
-      options?.onProgress?.({ indexed, removed, failed, total, current });
+      updateWorldBookEntriesVectorState(batch.map((entry) => entry.id), "indexed", now, null);
+      progress.indexed += batch.length;
+      progress.current += batch.length;
+      options?.onProgress?.({ ...progress });
     } catch (err) {
       console.warn("[embeddings] Batch embedding failed:", err);
-      failed += batch.length;
-      current += batch.length;
-      options?.onProgress?.({ indexed, removed, failed, total, current });
+      const message = err instanceof Error ? err.message : "Batch vector indexing failed";
+      updateWorldBookEntriesVectorState(batch.map((entry) => entry.id), "error", null, message);
+      progress.failed += batch.length;
+      progress.current += batch.length;
+      options?.onProgress?.({ ...progress });
     }
   }
 
@@ -828,7 +899,7 @@ export async function reindexWorldBookEntries(
     console.warn("[embeddings] Post-reindex optimize failed:", err);
   }
 
-  return { indexed, removed, failed };
+  return progress;
 }
 
 export async function searchWorldBookEntries(
@@ -909,7 +980,8 @@ export async function searchWorldBookEntriesWithVector(
 
 /**
  * Invalidate all vectors for a user when their embedding model changes.
- * Clears in-memory cache, deletes LanceDB rows, and resets vectorized flags.
+ * Clears in-memory cache, deletes LanceDB rows, and resets index state while
+ * preserving semantic opt-in.
  */
 export async function invalidateAllVectors(userId: string): Promise<void> {
   embeddingCache.clear();
@@ -927,11 +999,15 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   try {
     const db = getDb();
     db.run(
-      `UPDATE world_book_entries SET vectorized = 0 WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`,
+      `UPDATE world_book_entries
+       SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+           vector_indexed_at = NULL,
+           vector_index_error = NULL
+       WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`,
       [userId]
     );
   } catch (err) {
-    console.warn("[embeddings] Failed to reset vectorized flags:", err);
+    console.warn("[embeddings] Failed to reset world book vector index state:", err);
   }
 
   vectorIndexReady = false;
@@ -942,7 +1018,7 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
 /**
  * Force reset the entire LanceDB vector store.
  * Nukes the on-disk LanceDB directory, resets all module state, clears caches,
- * and resets vectorized flags in SQLite. This is the nuclear option for
+ * and resets vector index state in SQLite. This is the nuclear option for
  * recovering from corruption (e.g. "vector not divisible by 8" errors).
  */
 export async function forceResetLanceDB(): Promise<{ deleted: boolean; path: string }> {
@@ -968,10 +1044,15 @@ export async function forceResetLanceDB(): Promise<{ deleted: boolean; path: str
     console.info(`[embeddings] Force-deleted LanceDB directory: ${LANCEDB_PATH}`);
   }
 
-  // 5. Reset all vectorized flags in SQLite
+  // 5. Reset world book index state in SQLite while preserving semantic opt-in
   try {
     const db = getDb();
-    db.run(`UPDATE world_book_entries SET vectorized = 0`);
+    db.run(
+      `UPDATE world_book_entries
+       SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+           vector_indexed_at = NULL,
+           vector_index_error = NULL`
+    );
     db.run(`UPDATE chat_chunks SET vectorized_at = NULL, vector_model = NULL`);
     db.run(`DELETE FROM query_vector_cache`);
   } catch (err) {

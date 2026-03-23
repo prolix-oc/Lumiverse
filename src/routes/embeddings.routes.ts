@@ -47,14 +47,23 @@ app.post("/world-books/:bookId/reindex", async (c) => {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         };
 
-        send("progress", { indexed: 0, removed: 0, failed: 0, total: entries.length, current: 0 });
+        send("progress", {
+          total: entries.length,
+          current: 0,
+          eligible: 0,
+          indexed: 0,
+          removed: 0,
+          skipped_not_enabled: 0,
+          skipped_disabled_or_empty: 0,
+          failed: 0,
+        });
 
         try {
           const result = await embeddingsSvc.reindexWorldBookEntries(userId, entries, {
             batchSize,
             onProgress: (progress) => send("progress", progress),
           });
-          send("done", { success: true, ...result, total: entries.length });
+          send("done", { success: true, ...result });
         } catch (err: any) {
           send("error", { error: err.message || "Reindex failed" });
         }
@@ -80,7 +89,7 @@ app.post("/world-books/:bookId/reindex", async (c) => {
 
   // Non-streaming fallback
   const result = await embeddingsSvc.reindexWorldBookEntries(userId, entries, { batchSize });
-  return c.json({ success: true, ...result, total: entries.length });
+  return c.json({ success: true, ...result });
 });
 
 // --- Chat Memory Settings ---

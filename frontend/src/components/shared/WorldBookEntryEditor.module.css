@@ -113,6 +113,53 @@
   accent-color: var(--lumiverse-primary);
 }
 
+.vectorStatusRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vectorStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.vectorStatusNotEnabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lumiverse-text-muted);
+}
+
+.vectorStatusPending {
+  background: rgba(255, 184, 0, 0.14);
+  color: #ffd16a;
+}
+
+.vectorStatusIndexed {
+  background: rgba(71, 201, 126, 0.16);
+  color: #8ef0b4;
+}
+
+.vectorStatusError {
+  background: rgba(255, 86, 86, 0.14);
+  color: #ff9b9b;
+}
+
+.vectorStatusText {
+  font-size: 11.5px;
+  color: var(--lumiverse-text-muted);
+  line-height: 1.45;
+  flex: 1;
+  min-width: 180px;
+}
+
 /* ── Collapsible group ── */
 .groupToggle {
   display: flex;

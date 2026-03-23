@@ -173,6 +173,10 @@ export interface AssemblyResult {
     evictedByMinPriority: number;
     estimatedTokens: number;
     recursionPassesUsed: number;
+    keywordActivated: number;
+    vectorActivated: number;
+    totalActivated: number;
+    queryPreview: string;
   };
   /** Statistics from long-term memory retrieval. */
   memoryStats?: MemoryStats;

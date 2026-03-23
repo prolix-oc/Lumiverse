@@ -116,6 +116,10 @@ export interface DryRunResult {
     evictedByMinPriority: number;
     estimatedTokens: number;
     recursionPassesUsed: number;
+    keywordActivated: number;
+    vectorActivated: number;
+    totalActivated: number;
+    queryPreview: string;
   };
   memoryStats?: import("../llm/types").MemoryStats;
 }

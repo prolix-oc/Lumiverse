@@ -59,6 +59,10 @@ export interface ActivationStats {
   evictedByMinPriority: number;
   estimatedTokens: number;
   recursionPassesUsed: number;
+  keywordActivated: number;
+  vectorActivated: number;
+  totalActivated: number;
+  queryPreview: string;
 }
 
 export interface ActivationResult {
@@ -267,6 +271,10 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     evictedByMinPriority,
     estimatedTokens: estimateTokens(afterBudget),
     recursionPassesUsed,
+    keywordActivated: afterBudget.length,
+    vectorActivated: 0,
+    totalActivated: afterBudget.length,
+    queryPreview: "",
   };
 
   return { cache, activatedEntries: afterBudget, wiState, stats };
