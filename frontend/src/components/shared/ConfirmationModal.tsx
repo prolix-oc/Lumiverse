@@ -1,9 +1,8 @@
-import { useEffect, useCallback, type ReactNode } from 'react'
+import { useEffect, useCallback, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { AlertTriangle, AlertCircle, Info, X } from 'lucide-react'
 import styles from './ConfirmationModal.module.css'
-import clsx from 'clsx'
 
 type Variant = 'danger' | 'warning' | 'safe'
 
@@ -25,25 +24,16 @@ interface ConfirmationModalProps {
 
 const variantConfig = {
   danger: {
-    iconBg: 'rgba(239, 68, 68, 0.15)',
-    iconColor: 'var(--lumiverse-danger, #ef4444)',
-    confirmBg: 'linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(220, 38, 38, 0.9))',
-    glow: 'rgba(239, 68, 68, 0.3)',
-    border: 'rgba(239, 68, 68, 0.2)',
+    accent: 'var(--lumiverse-danger, #ef4444)',
+    border: 'color-mix(in srgb, var(--lumiverse-danger, #ef4444) 28%, var(--lumiverse-border, rgba(255, 255, 255, 0.08)))',
   },
   warning: {
-    iconBg: 'rgba(245, 158, 11, 0.15)',
-    iconColor: 'var(--lumiverse-warning, #f59e0b)',
-    confirmBg: 'linear-gradient(135deg, rgba(245, 158, 11, 0.9), rgba(217, 119, 6, 0.9))',
-    glow: 'rgba(245, 158, 11, 0.3)',
-    border: 'rgba(245, 158, 11, 0.2)',
+    accent: 'var(--lumiverse-warning, #f59e0b)',
+    border: 'color-mix(in srgb, var(--lumiverse-warning, #f59e0b) 28%, var(--lumiverse-border, rgba(255, 255, 255, 0.08)))',
   },
   safe: {
-    iconBg: 'rgba(147, 112, 219, 0.15)',
-    iconColor: 'var(--lumiverse-primary, #9370db)',
-    confirmBg: 'linear-gradient(135deg, rgba(147, 112, 219, 0.9), rgba(124, 58, 237, 0.9))',
-    glow: 'rgba(147, 112, 219, 0.3)',
-    border: 'rgba(147, 112, 219, 0.2)',
+    accent: 'var(--lumiverse-primary, #9370db)',
+    border: 'color-mix(in srgb, var(--lumiverse-primary, #9370db) 28%, var(--lumiverse-border, rgba(255, 255, 255, 0.08)))',
   },
 }
 
@@ -51,6 +41,14 @@ const variantIcons = {
   danger: <AlertCircle size={24} />,
   warning: <AlertTriangle size={24} />,
   safe: <Info size={24} />,
+}
+
+function getVariantStyle(variant: Variant): CSSProperties {
+  const config = variantConfig[variant]
+  return {
+    '--confirmation-accent': config.accent,
+    '--confirmation-accent-border': config.border,
+  } as CSSProperties
 }
 
 export default function ConfirmationModal({
@@ -88,8 +86,8 @@ export default function ConfirmationModal({
     [onCancel]
   )
 
-  const config = variantConfig[variant]
   const displayIcon = customIcon || variantIcons[variant]
+  const modalStyle = getVariantStyle(variant)
 
   return createPortal(
     <AnimatePresence>
@@ -109,17 +107,14 @@ export default function ConfirmationModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
-            style={{
-              borderColor: config.border,
-              boxShadow: `0 25px 50px -12px rgba(0,0,0,0.5), 0 0 40px ${config.glow}`,
-            }}
+            style={modalStyle}
           >
             <button onClick={onCancel} type="button" className={styles.closeBtn} aria-label="Close">
               <X size={16} />
             </button>
 
             <div className={styles.content}>
-              <div className={styles.iconWrap} style={{ background: config.iconBg, color: config.iconColor }}>
+              <div className={styles.iconWrap}>
                 {displayIcon}
               </div>
               <h3 className={styles.title}>{title}</h3>
@@ -135,7 +130,7 @@ export default function ConfirmationModal({
                   onClick={onSecondary}
                   type="button"
                   className={styles.confirmBtn}
-                  style={{ background: variantConfig[secondaryVariant || variant].confirmBg }}
+                  style={getVariantStyle(secondaryVariant || variant)}
                 >
                   {secondaryText}
                 </button>
@@ -144,7 +139,7 @@ export default function ConfirmationModal({
                 onClick={onConfirm}
                 type="button"
                 className={styles.confirmBtn}
-                style={{ background: config.confirmBg, boxShadow: `0 4px 12px ${config.glow}` }}
+                style={modalStyle}
               >
                 {confirmText}
               </button>

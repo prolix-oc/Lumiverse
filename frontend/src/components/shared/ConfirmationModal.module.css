@@ -7,15 +7,27 @@
   justify-content: center;
   padding: 20px;
   background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
+  backdrop-filter: blur(8px);
 }
 
 .modal {
+  --confirmation-accent: var(--lumiverse-primary, #9370db);
+  --confirmation-accent-border: color-mix(in srgb, var(--lumiverse-primary, #9370db) 28%, var(--lumiverse-border, rgba(255, 255, 255, 0.08)));
   position: relative;
   width: 100%;
   max-width: 420px;
-  background: var(--lumiverse-gradient-modal);
-  border-radius: 16px;
-  border: 1px solid;
+  background:
+    radial-gradient(
+      120% 120% at 50% 0%,
+      color-mix(in srgb, var(--confirmation-accent) 10%, transparent) 0%,
+      transparent 58%
+    ),
+    var(--lumiverse-gradient-modal, var(--lumiverse-bg));
+  border-radius: var(--lumiverse-radius-xl, 16px);
+  border: 1px solid var(--confirmation-accent-border);
+  box-shadow:
+    var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.5)),
+    0 18px 48px color-mix(in srgb, var(--confirmation-accent) 14%, transparent);
   overflow: hidden;
 }
 
@@ -28,37 +40,50 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--lumiverse-bg-dark);
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1));
   border: 1px solid var(--lumiverse-border);
-  border-radius: 8px;
-  color: var(--lumiverse-text-muted);
+  border-radius: var(--lumiverse-radius, 8px);
+  color: var(--lumiverse-text-dim);
   cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast),
+    transform var(--lumiverse-transition-fast);
 }
 
 .closeBtn:hover {
-  background: var(--lumiverse-bg-darker);
+  background: color-mix(in srgb, var(--confirmation-accent) 14%, var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1)));
+  border-color: var(--confirmation-accent-border);
   color: var(--lumiverse-text);
 }
 
 .content {
   padding: 28px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .iconWrap {
   width: 56px;
   height: 56px;
-  margin: 0 auto 20px;
+  margin: 0 auto 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 14px;
+  border-radius: calc(var(--lumiverse-radius-lg, 12px) + 2px);
+  background: color-mix(in srgb, var(--confirmation-accent) 14%, var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1)));
+  border: 1px solid var(--confirmation-accent-border);
+  color: var(--confirmation-accent);
+  box-shadow: var(--lumiverse-highlight-inset, inset 0 1px 0 rgba(255, 255, 255, 0.1));
 }
 
 .title {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 18px;
   font-weight: 600;
+  line-height: 1.25;
   color: var(--lumiverse-text);
   text-align: center;
 }
@@ -66,8 +91,32 @@
 .message {
   font-size: 14px;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--lumiverse-text-muted);
   text-align: center;
+}
+
+.message :global(p) {
+  margin: 0;
+}
+
+.message :global(p + p) {
+  margin-top: 10px;
+}
+
+.message :global(strong) {
+  color: var(--lumiverse-text);
+}
+
+.message :global(ul),
+.message :global(ol) {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  text-align: left;
+  color: var(--lumiverse-text-muted);
+}
+
+.message :global(li + li) {
+  margin-top: 6px;
 }
 
 .actions {
@@ -81,17 +130,22 @@
   padding: 12px 20px;
   font-size: 14px;
   font-weight: 500;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  color: rgba(255, 255, 255, 0.8);
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: calc(var(--lumiverse-radius-md, 10px));
+  color: var(--lumiverse-text);
   cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
+  box-shadow: var(--lumiverse-highlight-inset, inset 0 1px 0 rgba(255, 255, 255, 0.1));
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast),
+    transform var(--lumiverse-transition-fast);
 }
 
 .cancelBtn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: color-mix(in srgb, var(--confirmation-accent) 14%, var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1)));
+  border-color: var(--confirmation-accent-border);
 }
 
 .confirmBtn {
@@ -99,14 +153,45 @@
   padding: 12px 20px;
   font-size: 14px;
   font-weight: 600;
-  border: none;
-  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--confirmation-accent) 36%, transparent);
+  border-radius: calc(var(--lumiverse-radius-md, 10px));
+  background: linear-gradient(
+    135deg,
+    var(--confirmation-accent) 0%,
+    color-mix(in srgb, var(--confirmation-accent) 82%, black) 100%
+  );
   color: #ffffff;
   cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--confirmation-accent) 22%, transparent);
+  transition:
+    transform var(--lumiverse-transition-fast),
+    filter var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
 }
 
 .confirmBtn:hover {
   transform: translateY(-1px);
-  filter: brightness(1.1);
+  filter: brightness(1.05);
+  box-shadow: 0 14px 28px color-mix(in srgb, var(--confirmation-accent) 28%, transparent);
+}
+
+.cancelBtn:focus-visible,
+.confirmBtn:focus-visible,
+.closeBtn:focus-visible {
+  outline: none;
+}
+
+@media (max-width: 480px) {
+  .backdrop {
+    padding: 12px;
+  }
+
+  .content {
+    padding: 24px 18px 20px;
+  }
+
+  .actions {
+    flex-direction: column-reverse;
+    padding: 0 18px 18px;
+  }
 }
