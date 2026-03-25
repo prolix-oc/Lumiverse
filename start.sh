@@ -33,6 +33,7 @@ err()   { echo -e "${RED}[error]${NC} $*" >&2; }
 
 IS_TERMUX=false
 IS_PROOT=false
+TERMUX_BUN_METHOD=""  # "direct" | "grun" — how to invoke bun on Termux
 
 # Detect native Termux: $PREFIX is always set in Termux shell sessions
 if [[ -n "${PREFIX:-}" && -d "/data/data/com.termux" ]]; then
@@ -41,6 +42,17 @@ if [[ -n "${PREFIX:-}" && -d "/data/data/com.termux" ]]; then
 elif [[ -f "/etc/os-release" && -d "/data/data/com.termux" ]] 2>/dev/null; then
   IS_PROOT=true
 fi
+
+# ─── Bun execution wrapper ─────────────────────────────────────────────────
+# On Termux, bun may need glibc-runner (grun) to execute.
+# All bun invocations outside install_deps() should use _bun instead of bun.
+_bun() {
+  if [[ "$TERMUX_BUN_METHOD" == "grun" ]]; then
+    grun bun "$@"
+  else
+    bun "$@"
+  fi
+}
 
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 
@@ -82,21 +94,38 @@ _resolve_bun() {
   export PATH="$BUN_INSTALL/bin:$PATH"
   [[ -f "$BUN_INSTALL/env" ]] && source "$BUN_INSTALL/env"
 
-  if command -v bun &>/dev/null; then
-    return 0
-  fi
-
-  # Fallback: check common locations directly (covers proot /root/.bun, etc.)
-  local try_paths=(
+  # Build list of candidate paths
+  local candidates=()
+  local found
+  found="$(command -v bun 2>/dev/null || true)"
+  [[ -n "$found" ]] && candidates+=("$found")
+  candidates+=(
     "$BUN_INSTALL/bin/bun"
     "$HOME/.bun/bin/bun"
     "/root/.bun/bin/bun"
   )
-  for try in "${try_paths[@]}"; do
-    if [[ -x "$try" ]]; then
-      export PATH="$(dirname "$try"):$PATH"
-      return 0
+
+  for try in "${candidates[@]}"; do
+    [[ -x "$try" ]] || continue
+    export PATH="$(dirname "$try"):$PATH"
+
+    # On Termux, the binary may exist with +x but fail to execute due to
+    # missing glibc linker or seccomp restrictions. Verify it actually runs.
+    if [[ "$IS_TERMUX" == true ]]; then
+      # Method 1: direct execution (bun-termux wrapper or native)
+      if "$try" --version &>/dev/null 2>&1; then
+        TERMUX_BUN_METHOD="direct"
+        return 0
+      fi
+      # Method 2: grun (glibc-runner) — invokes glibc's ld.so explicitly
+      if command -v grun &>/dev/null && grun "$try" --version &>/dev/null 2>&1; then
+        TERMUX_BUN_METHOD="grun"
+        return 0
+      fi
+      continue  # Binary exists but can't execute — try next candidate
     fi
+
+    return 0
   done
 
   return 1
@@ -115,9 +144,11 @@ _install_bun_termux() {
     exit 1
   fi
 
-  info "Installing Termux prerequisites (glibc-repo, glibc-runner, build-essential)..."
+  # proot is needed for bun install — Android's seccomp filter blocks
+  # certain syscalls, and proot intercepts them via ptrace.
+  info "Installing Termux prerequisites (glibc-repo, glibc-runner, proot, build-essential)..."
   pkg update -y
-  pkg install -y git curl build-essential glibc-repo glibc-runner
+  pkg install -y git curl build-essential glibc-repo glibc-runner proot
 
   # The official Bun installer downloads the linux-aarch64 glibc binary,
   # which is exactly what we need — glibc-runner will execute it.
@@ -136,11 +167,24 @@ _install_bun_termux() {
   #   - Remaps shebang paths to Termux prefix
   if [[ ! -d "$HOME/.bun-termux" ]]; then
     info "Installing bun-termux wrapper..."
-    git clone https://github.com/Happ1ness-dev/bun-termux.git "$HOME/.bun-termux"
-    (cd "$HOME/.bun-termux" && make && make install)
-    ok "bun-termux wrapper installed"
+    if git clone https://github.com/Happ1ness-dev/bun-termux.git "$HOME/.bun-termux" 2>/dev/null \
+       && (cd "$HOME/.bun-termux" && make && make install) 2>/dev/null; then
+      ok "bun-termux wrapper installed"
+    else
+      warn "bun-termux wrapper build failed — will use grun (glibc-runner) fallback"
+      rm -rf "$HOME/.bun-termux" 2>/dev/null || true
+    fi
   else
     info "bun-termux wrapper already present, skipping..."
+  fi
+
+  # Determine which execution method works
+  local bun_bin="${BUN_INSTALL}/bin/bun"
+  if [[ -x "$bun_bin" ]] && "$bun_bin" --version &>/dev/null 2>&1; then
+    TERMUX_BUN_METHOD="direct"
+  elif command -v grun &>/dev/null && grun "$bun_bin" --version &>/dev/null 2>&1; then
+    TERMUX_BUN_METHOD="grun"
+    warn "Using grun (glibc-runner) to execute Bun — bun-termux wrapper not functional"
   fi
 }
 
@@ -176,7 +220,13 @@ ALIASES
 ensure_bun() {
   # ── Try to resolve an existing Bun installation ──────────────────────────
   if _resolve_bun; then
-    ok "Bun $(bun --version) found"
+    local ver
+    ver="$(_bun --version 2>/dev/null || echo 'unknown')"
+    if [[ "$TERMUX_BUN_METHOD" == "grun" ]]; then
+      ok "Bun $ver found (via glibc-runner)"
+    else
+      ok "Bun $ver found"
+    fi
     return
   fi
 
@@ -197,7 +247,13 @@ ensure_bun() {
 
   # ── Make bun available in this session ──────────────────────────────────
   if _resolve_bun; then
-    ok "Bun $(bun --version) installed successfully"
+    local ver
+    ver="$(_bun --version 2>/dev/null || echo 'unknown')"
+    if [[ "$TERMUX_BUN_METHOD" == "grun" ]]; then
+      ok "Bun $ver installed (via glibc-runner)"
+    else
+      ok "Bun $ver installed successfully"
+    fi
     return
   fi
 
@@ -225,25 +281,25 @@ run_setup_if_needed() {
     info "First run detected — launching setup wizard..."
     echo ""
     install_deps "$BACKEND_DIR" "backend"
-    (cd "$BACKEND_DIR" && bun run scripts/setup-wizard.ts)
+    (cd "$BACKEND_DIR" && _bun run scripts/setup-wizard.ts)
   fi
 }
 
 run_setup() {
   install_deps "$BACKEND_DIR" "backend"
-  (cd "$BACKEND_DIR" && bun run scripts/setup-wizard.ts)
+  (cd "$BACKEND_DIR" && _bun run scripts/setup-wizard.ts)
 }
 
 run_reset_password() {
   install_deps "$BACKEND_DIR" "backend"
   info "Launching password reset..."
-  (cd "$BACKEND_DIR" && bun run reset-password)
+  (cd "$BACKEND_DIR" && _bun run reset-password)
 }
 
 run_migrate_st() {
   install_deps "$BACKEND_DIR" "backend"
   info "Launching SillyTavern migration helper..."
-  (cd "$BACKEND_DIR" && bun run migrate:st)
+  (cd "$BACKEND_DIR" && _bun run migrate:st)
 }
 
 # ─── Install dependencies ───────────────────────────────────────────────────
@@ -254,11 +310,25 @@ install_deps() {
 
   info "Installing $name dependencies..."
 
-  if [[ "$IS_TERMUX" == true || "$IS_PROOT" == true ]]; then
+  if [[ "$IS_TERMUX" == true ]]; then
     # Android doesn't support hardlinks — use file copy backend instead.
-    # Without this, bun install fails with EPERM on node_modules linking.
-    # Clear Bun's install cache first — proot filesystem emulation can
-    # corrupt cached packages, causing random "Cannot find package" errors.
+    # Clear Bun's install cache first — filesystem emulation can corrupt
+    # cached packages, causing random "Cannot find package" errors.
+    if [[ -d "$HOME/.bun/install/cache" ]]; then
+      rm -rf "$HOME/.bun/install/cache"
+    fi
+    # Wrap bun install in proot to intercept syscalls blocked by Android's
+    # seccomp filter. Without this, bun install can crash with "Bad system
+    # call" (SIGSYS) on operations that use blocked syscalls.
+    # --link2symlink: converts hardlink attempts to symlinks (Android limitation)
+    # -0: fake root UID for permission checks
+    if [[ "$TERMUX_BUN_METHOD" == "grun" ]]; then
+      (cd "$dir" && proot --link2symlink -0 grun bun install --backend=copyfile)
+    else
+      (cd "$dir" && proot --link2symlink -0 bun install --backend=copyfile)
+    fi
+  elif [[ "$IS_PROOT" == true ]]; then
+    # Inside proot-distro: proot already intercepts syscalls, just need copyfile backend
     if [[ -d "$HOME/.bun/install/cache" ]]; then
       rm -rf "$HOME/.bun/install/cache"
     fi
@@ -282,7 +352,7 @@ build_frontend() {
   install_deps "$FRONTEND_DIR" "frontend"
 
   info "Building frontend..."
-  (cd "$FRONTEND_DIR" && bun run build)
+  (cd "$FRONTEND_DIR" && _bun run build)
   ok "Frontend built -> $FRONTEND_DIR/dist"
 }
 
@@ -303,7 +373,7 @@ start_backend() {
   install_deps "$BACKEND_DIR" "backend"
 
   # Clear Bun transpiler cache to avoid stale bytecode after updates
-  bun --clear-cache 2>/dev/null || true
+  _bun --clear-cache 2>/dev/null || true
 
   # Export FRONTEND_DIR for the backend process
   export FRONTEND_DIR="$frontend_dist"
@@ -329,7 +399,7 @@ start_backend() {
     if [[ "$MODE" == "dev" ]]; then
       runner_args="-- --dev"
     fi
-    (cd "$BACKEND_DIR" && bun run scripts/runner.tsx $runner_args) || {
+    (cd "$BACKEND_DIR" && _bun run scripts/runner.tsx $runner_args) || {
       warn "Visual runner failed — falling back to plain mode..."
       USE_RUNNER=false
     }
@@ -342,9 +412,9 @@ start_backend() {
     echo ""
 
     if [[ "$MODE" == "dev" ]]; then
-      (cd "$BACKEND_DIR" && bun run dev)
+      (cd "$BACKEND_DIR" && _bun run dev)
     else
-      (cd "$BACKEND_DIR" && bun run start)
+      (cd "$BACKEND_DIR" && _bun run start)
     fi
   fi
 }
