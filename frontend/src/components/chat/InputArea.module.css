@@ -440,8 +440,8 @@
 
 .inputWrapper:focus-within {
   background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
-  box-shadow: inset 0 0 0 1px var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4)),
-    0 0 0 2px var(--lumiverse-primary-010, rgba(140, 130, 255, 0.1));
+  box-shadow: inset 0 0 0 1px var(--lcs-glass-border-hover, var(--lumiverse-border-hover)),
+    0 0 0 2px color-mix(in srgb, var(--lumiverse-border-hover) 55%, transparent);
 }
 
 .textarea {

@@ -9,18 +9,24 @@
   width: 100%;
   min-height: 100px;
   padding: 10px 12px;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 82%, var(--lcs-glass-bg) 18%);
+  border: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
   border-radius: 10px;
   color: var(--lumiverse-text);
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   line-height: 1.6;
   resize: vertical;
+  transition:
+    background var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+    border-color var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
 }
 
 .editTextarea:focus {
-  border-color: var(--lumiverse-primary-muted);
+  background: color-mix(in srgb, var(--lumiverse-fill) 82%, var(--lcs-glass-bg) 18%);
+  border-color: var(--lcs-glass-border-hover, var(--lumiverse-border-hover));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-border-hover) 45%, transparent);
   outline: none;
 }
 
@@ -33,12 +39,12 @@
 
 .reasoningTextarea {
   min-height: 70px;
-  border-color: var(--lumiverse-primary-020);
-  background: var(--lumiverse-primary-010);
+  border-color: var(--lcs-glass-border, var(--lumiverse-border));
+  background: color-mix(in srgb, var(--lcs-glass-bg) 30%, var(--lumiverse-fill-subtle) 70%);
 }
 
 .reasoningTextarea:focus {
-  border-color: var(--lumiverse-primary-050);
+  border-color: var(--lcs-glass-border-hover, var(--lumiverse-border-hover));
 }
 
 .contentSection {
