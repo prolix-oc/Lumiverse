@@ -235,7 +235,81 @@ export interface ConnectionModelsResult {
   error?: string
 }
 
+// ---- Image Gen Connection Profile ----
+export interface ImageGenConnectionProfile {
+  id: string;
+  name: string;
+  provider: string;
+  api_url: string;
+  model: string;
+  is_default: boolean;
+  has_api_key: boolean;
+  default_parameters: Record<string, any>;
+  metadata: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateImageGenConnectionInput {
+  name: string;
+  provider: string;
+  api_url?: string;
+  model?: string;
+  is_default?: boolean;
+  default_parameters?: Record<string, any>;
+  metadata?: Record<string, any>;
+  api_key?: string;
+}
+
+export type UpdateImageGenConnectionInput = Partial<CreateImageGenConnectionInput>;
+
+export interface ImageGenConnectionTestResult {
+  success: boolean;
+  message: string;
+  provider: string;
+}
+
+export interface ImageGenConnectionModelsResult {
+  models: Array<{ id: string; label: string }>;
+  provider: string;
+  error?: string;
+}
+
+export interface ImageGenParameterSchema {
+  type: 'number' | 'integer' | 'boolean' | 'string' | 'select' | 'image_array';
+  default?: any;
+  min?: number;
+  max?: number;
+  step?: number;
+  description: string;
+  required?: boolean;
+  options?: Array<{ id: string; label: string }>;
+  group?: string;
+}
+
+export interface ImageGenProviderCapabilities {
+  parameters: Record<string, ImageGenParameterSchema>;
+  apiKeyRequired: boolean;
+  modelListStyle: 'static' | 'dynamic' | 'google';
+  staticModels?: Array<{ id: string; label: string }>;
+  defaultUrl: string;
+}
+
+export interface ImageGenProviderInfo {
+  id: string;
+  name: string;
+  capabilities: ImageGenProviderCapabilities;
+}
+
 // ---- Persona ----
+export interface PersonaAddon {
+  id: string
+  label: string
+  content: string
+  enabled: boolean
+  sort_order: number
+}
+
 export interface Persona {
   id: string;
   name: string;

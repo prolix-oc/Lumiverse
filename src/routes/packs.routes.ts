@@ -10,6 +10,10 @@ const app = new Hono();
 app.get("/", (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
+  const includeItems = c.req.query("include_items") === "true";
+  if (includeItems) {
+    return c.json(svc.listPacksWithItems(userId, pagination));
+  }
   return c.json(svc.listPacks(userId, pagination));
 });
 

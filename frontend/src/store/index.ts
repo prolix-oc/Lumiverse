@@ -20,6 +20,7 @@ import { createSpindlePlacementSlice } from './slices/spindle-placement'
 import { createPromptBreakdownSlice } from './slices/prompt-breakdown'
 import { createRegexSlice } from './slices/regex'
 import { createExpressionSlice } from './slices/expressions'
+import { createImageGenConnectionsSlice } from './slices/image-gen-connections'
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -42,4 +43,5 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createPromptBreakdownSlice(...a),
   ...createRegexSlice(...a),
   ...createExpressionSlice(...a),
+  ...createImageGenConnectionsSlice(...a),
 }))

@@ -106,7 +106,7 @@
   border-radius: 6px;
   background: var(--lumiverse-primary);
   border: none;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   cursor: pointer;
   flex-shrink: 0;
   transition: opacity var(--lumiverse-transition-fast);
@@ -204,12 +204,12 @@
   max-width: 200px;
   padding: 5px 9px;
   border-radius: 6px;
-  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.97));
+  background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
   font-size: 11px;
   white-space: nowrap;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
   z-index: 200;
   opacity: 0;
   pointer-events: none;
@@ -334,7 +334,7 @@
   border-radius: 6px;
   background: var(--lumiverse-primary);
   border: none;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 11.5px;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
@@ -371,7 +371,7 @@
   border-radius: 8px;
   border: 1px solid transparent;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 11.5px;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);

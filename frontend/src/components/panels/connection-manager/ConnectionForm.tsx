@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { FormField, TextInput, Select } from '@/components/shared/FormComponents'
 import { connectionsApi } from '@/api/connections'
+import { useStore } from '@/store'
 import ModelCombobox from './ModelCombobox'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
@@ -27,6 +28,8 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
   const [model, setModel] = useState(profile?.model || '')
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
   const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
+  const [bindReasoning, setBindReasoning] = useState(!!profile?.metadata?.reasoningBindings)
+  const reasoningSettings = useStore((s) => s.reasoningSettings)
   const [models, setModels] = useState<string[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
 
@@ -65,6 +68,11 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
     } else {
       delete metadata.use_responses_api
     }
+    if (bindReasoning) {
+      metadata.reasoningBindings = { settings: { ...reasoningSettings } }
+    } else {
+      delete metadata.reasoningBindings
+    }
     onSave({
       name: name.trim(),
       provider,
@@ -74,7 +82,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, profile?.metadata, onSave])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, bindReasoning, reasoningSettings, profile?.metadata, onSave])
 
   return (
     <div className={styles.form}>
@@ -115,6 +123,12 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
           </label>
         </FormField>
       )}
+      <FormField label="" hint="Save current reasoning settings and auto-apply when this connection is selected">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+          <input type="checkbox" checked={bindReasoning} onChange={(e) => setBindReasoning(e.target.checked)} />
+          Bind reasoning settings
+        </label>
+      </FormField>
       <div className={styles.formActions}>
         <button type="button" className={styles.cancelBtn} onClick={onCancel}>Cancel</button>
         <button type="button" className={styles.saveBtn} onClick={handleSubmit} disabled={!name.trim()}>

@@ -406,6 +406,14 @@ export function useWebSocket() {
         syncExtensions()
       }),
 
+      wsClient.on(EventType.SPINDLE_EXTENSION_STATUS, (payload: { extensionId?: string; operation: string; name?: string }) => {
+        useStore.getState().setExtensionOperationStatus(
+          payload.extensionId ?? null,
+          payload.operation,
+          payload.name ?? null
+        )
+      }),
+
       wsClient.on(EventType.SPINDLE_FRONTEND_MSG, (payload: { extensionId: string; data: unknown }) => {
         routeBackendMessage(payload.extensionId, payload.data)
       }),
@@ -421,6 +429,24 @@ export function useWebSocket() {
           ? `${payload.extensionName}: ${payload.title}`
           : payload.extensionName
         toastFn(payload.message, { title: attributedTitle, duration: payload.duration })
+      }),
+
+      wsClient.on(EventType.SPINDLE_THEME_OVERRIDES, (payload: { extensionId: string; extensionName: string; overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } } | null }) => {
+        const hasVars = payload.overrides?.variables && Object.keys(payload.overrides.variables).length > 0
+        const hasModeVars = payload.overrides?.variablesByMode && (
+          Object.keys(payload.overrides.variablesByMode.dark ?? {}).length > 0 ||
+          Object.keys(payload.overrides.variablesByMode.light ?? {}).length > 0
+        )
+        if (hasVars || hasModeVars) {
+          store.getState().setExtensionThemeOverride({
+            extensionId: payload.extensionId,
+            extensionName: payload.extensionName,
+            variables: payload.overrides!.variables ?? {},
+            variablesByMode: payload.overrides!.variablesByMode,
+          })
+        } else {
+          store.getState().clearExtensionThemeOverride(payload.extensionId)
+        }
       }),
 
       // Legacy/event-bus bridge for message tag intercept notifications.

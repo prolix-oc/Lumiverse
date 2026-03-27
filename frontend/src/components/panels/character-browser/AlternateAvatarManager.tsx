@@ -160,7 +160,7 @@ export default function AlternateAvatarManager({
         {uploadProgress !== null && (
           <div className={styles.avatarCard}>
             <div className={styles.uploadingThumb}>
-              <div className={styles.uploadFill} style={{ height: `${uploadProgress}%` }} />
+              <div className={styles.uploadFill} style={{ transform: `scaleY(${uploadProgress / 100})` }} />
               <span className={styles.uploadPercent}>{uploadProgress}%</span>
             </div>
             <span className={styles.avatarLabel}>Uploading...</span>

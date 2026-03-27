@@ -19,6 +19,16 @@ export interface ImagePalette {
     left: RGB
     right: RGB
   }
+  /** Per-region flatness score (0–1). High values indicate a monotone/solid
+   *  background region that should be deprioritized for color sampling. */
+  flatness: {
+    top: number
+    center: number
+    bottom: number
+    left: number
+    right: number
+    full: number
+  }
   average: RGB
   isLight: boolean
 }
@@ -67,11 +77,15 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 
 // ── Dominant color from pixel data ──
 
-function dominantFromData(data: Uint8ClampedArray): RGB {
+interface DominantResult { color: RGB; flatness: number }
+
+function dominantFromData(data: Uint8ClampedArray): DominantResult {
   const buckets = new Map<string, { count: number; r: number; g: number; b: number }>()
+  let totalOpaque = 0
 
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 48) continue
+    totalOpaque++
     const r = data[i], g = data[i + 1], b = data[i + 2]
     const qr = Math.round(r / 24) * 24
     const qg = Math.round(g / 24) * 24
@@ -93,11 +107,17 @@ function dominantFromData(data: Uint8ClampedArray): RGB {
     if (!best || bucket.count > best.count) best = bucket
   })
 
-  if (!best || best.count === 0) return { r: 128, g: 128, b: 128 }
+  if (!best || best.count === 0) return { color: { r: 128, g: 128, b: 128 }, flatness: 1 }
+  // Flatness = what fraction of opaque pixels fell into the winning bucket.
+  // >0.5 is a strong monotone signal (solid bg). <0.25 is varied/interesting.
+  const flatness = totalOpaque > 0 ? best.count / totalOpaque : 1
   return {
-    r: Math.round(best.r / best.count),
-    g: Math.round(best.g / best.count),
-    b: Math.round(best.b / best.count),
+    color: {
+      r: Math.round(best.r / best.count),
+      g: Math.round(best.g / best.count),
+      b: Math.round(best.b / best.count),
+    },
+    flatness,
   }
 }
 
@@ -144,7 +164,8 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) {
     const grey: RGB = { r: 128, g: 128, b: 128 }
-    return { dominant: grey, regions: { top: grey, center: grey, bottom: grey, left: grey, right: grey }, average: grey, isLight: false }
+    const flatRegions = { top: 1, center: 1, bottom: 1, left: 1, right: 1, full: 1 }
+    return { dominant: grey, regions: { top: grey, center: grey, bottom: grey, left: grey, right: grey }, flatness: flatRegions, average: grey, isLight: false }
   }
 
   canvas.width = SAMPLE_SIZE
@@ -153,20 +174,23 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
 
   // Full-image analysis
   const fullData = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data
-  const dominant = dominantFromData(fullData)
+  const fullResult = dominantFromData(fullData)
   const average = averageFromData(fullData)
 
   // Per-region analysis
   const regionDefs = getRegions(SAMPLE_SIZE, SAMPLE_SIZE)
   const regions = {} as ImagePalette['regions']
+  const flatness = { full: fullResult.flatness } as ImagePalette['flatness']
   for (const [name, rect] of Object.entries(regionDefs)) {
     const regionData = ctx.getImageData(rect.x, rect.y, rect.w, rect.h).data
-    ;(regions as any)[name] = dominantFromData(regionData)
+    const result = dominantFromData(regionData)
+    ;(regions as any)[name] = result.color
+    ;(flatness as any)[name] = result.flatness
   }
 
-  const isLight = luminance(dominant.r, dominant.g, dominant.b) > 152
+  const isLight = luminance(fullResult.color.r, fullResult.color.g, fullResult.color.b) > 152
 
-  return { dominant, regions, average, isLight }
+  return { dominant: fullResult.color, regions, flatness, average, isLight }
 }
 
 /**

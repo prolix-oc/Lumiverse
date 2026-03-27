@@ -7,6 +7,7 @@ import { useStore } from '@/store'
 import LazyImage from '@/components/shared/LazyImage'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { RecentChat } from '@/types/api'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import type { CharacterViewMode } from '@/types/store'
 import styles from './GroupChatsPanel.module.css'
 import clsx from 'clsx'
@@ -126,13 +127,14 @@ export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
     )
   }
 
-  const isGrid = viewMode === 'grid' || viewMode === 'columns'
+  const isGrid = viewMode === 'grid' || viewMode === 'single'
 
   return (
-    <div className={styles.panel}>
-      <div className={clsx(
+    <PanelFadeIn>
+      <div className={styles.panel}>
+        <div className={clsx(
         isGrid ? styles.gridLayout : styles.listLayout,
-        viewMode === 'columns' && styles.gridColumns2,
+        viewMode === 'single' && styles.gridColumns1,
       )}>
         {groupChats.map((chat) => {
           const charIds: string[] = chat.metadata?.character_ids ?? []
@@ -217,7 +219,8 @@ export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
         }
         variant="danger"
         confirmText="Delete"
-      />
-    </div>
+        />
+      </div>
+    </PanelFadeIn>
   )
 }

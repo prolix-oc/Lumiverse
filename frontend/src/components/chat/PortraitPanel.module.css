@@ -6,7 +6,8 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 .panelOuter {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   position: relative;
 }
@@ -40,11 +41,13 @@
     0 4px 24px rgba(0, 0, 0, 0.08);
   scrollbar-width: thin;
   scrollbar-color: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.08)) transparent;
+  contain: layout style;
 }
 
 :global([data-glass]) .panel {
-  backdrop-filter: blur(var(--lcs-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  will-change: backdrop-filter;
 }
 
 .panel::-webkit-scrollbar {
@@ -88,10 +91,11 @@
   border-color: var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1));
 }
 
-/* ── Avatar frame — double-border glass with ambient backlight ── */
+/* ── Avatar frame — aspect-ratio-driven with cross-fade on switch ── */
 .frame {
   position: relative;
   width: 186px;
+  min-height: 120px;
   max-height: 380px;
   border-radius: var(--lcs-radius, 14px);
   overflow: hidden;
@@ -101,7 +105,9 @@
     0 6px 28px rgba(0, 0, 0, 0.18),
     0 0 0 1px rgba(255, 255, 255, 0.03),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
   transition:
+    height 320ms cubic-bezier(0.4, 0, 0.2, 1),
     border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     transform var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
@@ -122,7 +128,7 @@
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
-  z-index: 1;
+  z-index: 3;
 }
 
 .frame:hover {
@@ -139,16 +145,52 @@
   opacity: 1;
 }
 
-.portrait {
+/* ── Cross-fade avatar layers ── */
+.avatarImg {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
-  object-fit: contain;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
   display: block;
-  transition: transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition:
+    opacity 300ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
 }
 
-.frame:hover .portrait {
+.avatarImgIn {
+  opacity: 1;
+}
+
+.avatarImgLoading {
+  opacity: 0;
+}
+
+.avatarImgOut {
+  opacity: 0;
+  z-index: 0;
+}
+
+.frame:hover .avatarImg {
   transform: scale(1.03);
+}
+
+.avatarSpinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--lumiverse-primary, #9370db);
+  opacity: 0.5;
+  z-index: 2;
+  animation: portrait-spin 1s linear infinite;
+}
+
+@keyframes portrait-spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
 /* ── Placeholder fallback ── */
@@ -243,11 +285,7 @@
 }
 
 /* ── Responsive ── */
-@media (max-width: 600px) {
-  .panelOuter {
-    display: none !important;
-  }
-}
+/* Mobile hide is handled by .portraitSide in ChatView.module.css */
 
 @media (min-width: 601px) and (max-width: 900px) {
   .panel {
@@ -257,7 +295,7 @@
 
   .frame {
     width: 144px;
-    max-height: 300px;
+    max-height: 260px;
   }
 
   .placeholder {

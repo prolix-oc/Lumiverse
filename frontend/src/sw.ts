@@ -80,6 +80,7 @@ self.addEventListener('push', (event) => {
     tag?: string
     data?: { url?: string; chatId?: string; characterName?: string }
     icon?: string
+    image?: string
   }
 
   // Suppress if user is actively looking at the app (WS handles in-app)
@@ -110,6 +111,7 @@ self.addEventListener('push', (event) => {
         icon: payload.icon || '/icon-192.png',
         badge: '/icon-192.png',
         tag: payload.tag,
+        image: payload.image,
         data: payload.data,
       } as NotificationOptions)
     })

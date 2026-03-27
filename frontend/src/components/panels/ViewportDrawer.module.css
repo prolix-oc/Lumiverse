@@ -39,50 +39,38 @@
   justify-content: center;
   gap: 8px;
   padding: 16px 8px 20px;
-  background: linear-gradient(180deg, var(--lumiverse-bg) 0%, var(--lumiverse-bg-deep) 100%);
+  background: var(--lcs-glass-bg, var(--lumiverse-bg));
   border: 1px solid var(--lumiverse-border-hover);
-  color: var(--lumiverse-text);
+  color: var(--lumiverse-text-muted);
   cursor: pointer;
   pointer-events: auto;
-  transition: background 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .wrapperRight .drawerTab {
   border-right: none;
   border-radius: 12px 0 0 12px;
-  box-shadow:
-    -4px 0 16px var(--lumiverse-primary-015),
-    inset 1px 0 0 var(--lumiverse-primary-010);
 }
 
 .wrapperLeft .drawerTab {
   border-left: none;
   border-radius: 0 12px 12px 0;
-  box-shadow:
-    4px 0 16px var(--lumiverse-primary-015),
-    inset -1px 0 0 var(--lumiverse-primary-010);
 }
 
 .drawerTab:hover {
-  background: linear-gradient(
-    180deg,
-    var(--lumiverse-bg-elevated, var(--lumiverse-bg)) 0%,
-    var(--lumiverse-bg) 100%
-  );
+  background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
   border-color: var(--lumiverse-primary-050);
-  box-shadow:
-    -6px 0 24px var(--lumiverse-border-hover),
-    inset 1px 0 0 var(--lumiverse-primary-020);
+  color: var(--lumiverse-text);
 }
 
 .wrapperLeft .drawerTab:hover {
-  box-shadow:
-    6px 0 24px var(--lumiverse-border-hover),
-    inset -1px 0 0 var(--lumiverse-primary-020);
+  /* inherits from .drawerTab:hover */
 }
 
 .drawerTabActive {
+  background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
   border-color: var(--lumiverse-primary-050);
+  color: var(--lumiverse-text);
 }
 
 .drawerTabCompact {
@@ -95,19 +83,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, var(--lumiverse-primary), var(--lumiverse-primary-hover));
-  border-radius: 8px;
-  color: #fff;
-  box-shadow: 0 2px 8px var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary);
 }
 
 .drawerTabCompact .tabIconBox {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  box-shadow: none;
+  /* inherits */
 }
 
 /* ── Backdrop ── */
@@ -126,10 +106,11 @@
   width: var(--drawer-panel-w);
   height: 100%;
   display: flex;
-  background: linear-gradient(180deg, var(--lumiverse-bg) 0%, var(--lumiverse-bg-deep) 100%);
+  background: var(--lumiverse-bg-deep);
   box-shadow: var(--lumiverse-shadow-xl);
   pointer-events: auto;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .wrapperRight .drawer {
@@ -148,7 +129,7 @@
   width: 56px;
   flex-shrink: 0;
   background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
-  padding: 8px 2px;
+  padding: 6px 0;
   gap: 4px;
   border-right: 1px solid var(--lumiverse-primary-020);
 }
@@ -233,17 +214,19 @@
   background: var(--lumiverse-primary-020);
   color: var(--lumiverse-primary);
   box-shadow: inset 3px 0 0 var(--lumiverse-primary);
+  border-radius: 0 8px 8px 0;
 }
 
 .wrapperLeft .tabBtnActive {
   box-shadow: inset -3px 0 0 var(--lumiverse-primary);
+  border-radius: 8px 0 0 8px;
 }
 
 /* ── Extension tab styles ── */
 
 .tabDivider {
   height: 1px;
-  margin: 4px 8px;
+  margin: 4px 6px;
   background: var(--lumiverse-primary-020);
   flex-shrink: 0;
 }
@@ -419,7 +402,7 @@
     border-right: none !important;
     border-left: none !important;
     border-bottom: 1px solid var(--lumiverse-primary-020);
-    padding: 6px 8px;
+    padding: 8px 8px;
     gap: 2px;
     flex-shrink: 0;
   }
@@ -445,13 +428,14 @@
   }
 
   .tabBtn {
-    width: 38px;
-    height: 38px;
+    width: 42px;
+    height: 42px;
     flex-shrink: 0;
   }
 
   .tabBtnActive {
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
+    border-radius: 8px 8px 0 0 !important;
   }
 
   .sidebarBottom {
@@ -466,13 +450,13 @@
   }
 
   .sidebarBottom .tabBtn {
-    width: 38px;
-    height: 38px;
+    width: 42px;
+    height: 42px;
   }
 
   .tabDivider {
     width: 1px;
-    height: 24px;
+    height: 28px;
     margin: 0 4px;
   }
 }

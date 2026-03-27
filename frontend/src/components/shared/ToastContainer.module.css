@@ -57,6 +57,8 @@
 /* ── Individual toast ──────────────────────────────── */
 .toast {
   pointer-events: auto;
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -67,11 +69,9 @@
 }
 
 :global([data-glass]) .toast {
-  backdrop-filter: blur(var(--lcs-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
   max-width: 400px;
-  position: relative;
-  overflow: hidden;
   cursor: default;
 }
 

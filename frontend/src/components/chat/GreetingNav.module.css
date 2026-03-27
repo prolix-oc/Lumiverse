@@ -24,8 +24,8 @@
 }
 
 :global([data-glass]) .indicator {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .indicator:hover {
@@ -72,8 +72,8 @@
 }
 
 :global([data-glass]) .indicatorBubble {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .indicatorBubble:hover {

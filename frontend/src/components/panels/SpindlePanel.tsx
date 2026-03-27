@@ -1,12 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal, GitBranch } from 'lucide-react'
+import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal, GitBranch, Loader2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
+
+const OPERATION_LABELS: Record<string, string> = {
+  installing: 'Installing...',
+  installed: 'Installed',
+  updating: 'Updating...',
+  updated: 'Updated',
+  enabling: 'Starting...',
+  enabled: 'Started',
+  disabling: 'Stopping...',
+  disabled: 'Stopped',
+  restarting: 'Restarting...',
+  restarted: 'Restarted',
+  removing: 'Removing...',
+  removed: 'Removed',
+}
 
 export default function SpindlePanel() {
   const extensions = useStore((s) => s.extensions)
@@ -24,8 +39,11 @@ export default function SpindlePanel() {
   const user = useStore((s) => s.user)
   const spindlePrivileged = useStore((s) => s.spindlePrivileged)
 
+  const extensionOperationStatus = useStore((s) => s.extensionOperationStatus)
+
   const isPrivileged = spindlePrivileged || user?.role === 'owner' || user?.role === 'admin'
 
+  const [togglingPerm, setTogglingPerm] = useState<string | null>(null)
   const [installUrl, setInstallUrl] = useState('')
   const [installing, setInstalling] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
@@ -225,6 +243,8 @@ export default function SpindlePanel() {
   }, [switchBranch])
 
   const handlePermissionToggle = useCallback(async (ext: ExtensionInfo, perm: string) => {
+    const key = `${ext.id}:${perm}`
+    setTogglingPerm(key)
     try {
       if (ext.granted_permissions.includes(perm as SpindlePermission)) {
         await revokePermission(ext.id, perm)
@@ -233,6 +253,8 @@ export default function SpindlePanel() {
       }
     } catch (err: any) {
       console.error('[Spindle] Permission toggle failed:', err)
+    } finally {
+      setTogglingPerm(null)
     }
   }, [grantPermission, revokePermission])
 
@@ -360,6 +382,14 @@ export default function SpindlePanel() {
                 </div>
               </div>
 
+              {/* Operation status indicator */}
+              {extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation.endsWith('ing') && (
+                <div className={styles.operationStatus}>
+                  <Loader2 size={12} className={styles.spinner} />
+                  {OPERATION_LABELS[extensionOperationStatus.operation] ?? extensionOperationStatus.operation}
+                </div>
+              )}
+
               {ext.description && (
                 <div className={styles.extensionDesc}>{ext.description}</div>
               )}
@@ -371,6 +401,7 @@ export default function SpindlePanel() {
                   <div className={styles.permissions}>
                     {allPerms.map((perm) => {
                       const granted = ext.granted_permissions.includes(perm)
+                      const isToggling = togglingPerm === `${ext.id}:${perm}`
                       const pretty = perm
                         .replaceAll('_', ' ')
                         .replace(/\b\w/g, (ch) => ch.toUpperCase())
@@ -379,7 +410,8 @@ export default function SpindlePanel() {
                           key={perm}
                           className={clsx(
                             styles.permPill,
-                            granted ? styles.permPillActive : styles.permPillInactive
+                            granted ? styles.permPillActive : styles.permPillInactive,
+                            isToggling && styles.permPillToggling
                           )}
                           onClick={() => handlePermissionToggle(ext, perm)}
                           title={
@@ -387,8 +419,9 @@ export default function SpindlePanel() {
                               ? `${pretty} (${granted ? 'Enabled' : 'Disabled'})`
                               : 'Managed by operator'
                           }
-                          disabled={!canManage}
+                          disabled={!canManage || isToggling}
                         >
+                          {isToggling && <Loader2 size={10} className={styles.spinner} />}
                           {pretty}
                         </button>
                       )
@@ -405,7 +438,9 @@ export default function SpindlePanel() {
                   disabled={loadingAction === ext.id || !canManage}
                   title={canManage ? 'Update' : 'Managed by operator'}
                 >
-                  <RefreshCw size={14} />
+                  {loadingAction === ext.id && extensionOperationStatus?.operation === 'updating'
+                    ? <Loader2 size={14} className={styles.spinner} />
+                    : <RefreshCw size={14} />}
                 </button>
                 <button
                   className={styles.actionBtn}
@@ -413,7 +448,9 @@ export default function SpindlePanel() {
                   disabled={loadingAction === ext.id || !ext.enabled}
                   title={ext.enabled ? 'Restart extension' : 'Extension is not enabled'}
                 >
-                  <RotateCw size={14} />
+                  {loadingAction === ext.id && extensionOperationStatus?.operation === 'restarting'
+                    ? <Loader2 size={14} className={styles.spinner} />
+                    : <RotateCw size={14} />}
                 </button>
                 {ext.github && (
                   <a

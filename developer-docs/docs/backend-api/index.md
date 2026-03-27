@@ -18,6 +18,8 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Context Handlers](context-handlers.md) | `context_handler` | Enrich the generation context before assembly |
 | [LLM Tools](llm-tools.md) | `tools` | Register function-calling tools + Council-eligible tools |
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
+| [Image Generation](image-generation.md) | `image_gen` | Generate images via image gen connection profiles |
+| [Theme](theme.md) | `app_manipulation` | Apply CSS variable overrides on top of the user's theme |
 | [Storage](storage.md) | Free | Scoped file storage (extension + per-user) |
 | [Ephemeral Storage](ephemeral-storage.md) | `ephemeral_storage` | Temporary storage with TTL and quotas |
 | [Variables](variables.md) | Free | Local (chat-scoped) and global variable access |

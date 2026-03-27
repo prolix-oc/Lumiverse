@@ -347,7 +347,7 @@
   border-radius: var(--lumiverse-radius);
   border: none;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
 }

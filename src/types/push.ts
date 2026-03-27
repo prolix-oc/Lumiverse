@@ -30,6 +30,7 @@ export interface PushPayload {
     characterName?: string;
   };
   icon?: string;
+  image?: string;
 }
 
 export interface PushNotificationPreferences {

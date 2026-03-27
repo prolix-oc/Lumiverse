@@ -6,6 +6,7 @@ import { resolveMode } from '@/hooks/useThemeApplicator'
 import type { ThemeConfig, ThemeMode, BaseColors } from '@/types/theme'
 import ModeSelector from './theme-panel/ModeSelector'
 import PresetGrid from './theme-panel/PresetGrid'
+import ExtensionThemes from './theme-panel/ExtensionThemes'
 import AccentPicker from './theme-panel/AccentPicker'
 import BaseColorPicker from './theme-panel/BaseColorPicker'
 import DepthControls from './theme-panel/DepthControls'
@@ -17,9 +18,17 @@ export default function ThemePanel() {
 
   const current = theme ?? DEFAULT_THEME
 
+  // Always read the latest theme from the store to avoid stale closures
+  // (e.g. useCharacterTheme may async-update accent/baseColors after render)
+  const getLatest = useCallback(
+    () => (useStore.getState().theme ?? DEFAULT_THEME) as ThemeConfig,
+    []
+  )
+
   const update = useCallback(
     (patch: Partial<ThemeConfig>) => {
-      const next = { ...current, ...patch }
+      const latest = getLatest()
+      const next = { ...latest, ...patch }
       // characterAware themes dynamically derive accent/baseColors from the
       // active character, so keep the preset id so the selection is preserved
       if (!next.characterAware) {
@@ -27,7 +36,7 @@ export default function ThemePanel() {
       }
       setTheme(next as ThemeConfig)
     },
-    [current, setTheme]
+    [getLatest, setTheme]
   )
 
   const handleModeChange = useCallback(
@@ -36,8 +45,12 @@ export default function ThemePanel() {
   )
 
   const handlePresetSelect = useCallback(
-    (preset: ThemeConfig) => setTheme(preset),
-    [setTheme]
+    (preset: ThemeConfig) => {
+      // Preserve the user's current mode when selecting any preset
+      const latest = getLatest()
+      setTheme({ ...preset, mode: latest.mode })
+    },
+    [setTheme, getLatest]
   )
 
   const handleAccentChange = useCallback(
@@ -113,6 +126,8 @@ export default function ThemePanel() {
         <h4 className={styles.sectionLabel}>Presets</h4>
         <PresetGrid activeId={current.id} onSelect={handlePresetSelect} />
       </section>
+
+      <ExtensionThemes />
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>Accent Color</h4>

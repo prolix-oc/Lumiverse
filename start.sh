@@ -142,27 +142,31 @@ _resolve_bun() {
 
   for try in "${candidates[@]}"; do
     [[ -x "$try" ]] || continue
-    export PATH="$(dirname "$try"):$PATH"
 
     # On Termux, the binary may exist with +x but fail to execute due to
     # missing glibc linker or seccomp restrictions. Verify it actually runs.
     if [[ "$IS_TERMUX" == true ]]; then
       # Tier 1: direct execution (bun-termux wrapper or native)
-      if "$try" --version &>/dev/null 2>&1; then
+      # Subshell suppresses shell-level signal diagnostics (e.g. "Bad system call")
+      if ("$try" --version) &>/dev/null 2>&1; then
         TERMUX_BUN_METHOD="direct"
         TERMUX_BUN_PATH="$try"
+        # Only add raw bun to PATH when it can execute natively
+        export PATH="$(dirname "$try"):$PATH"
         return 0
       fi
       # Tier 2: grun (glibc-runner) — invokes glibc's ld.so explicitly
-      if command -v grun &>/dev/null && grun "$try" --version &>/dev/null 2>&1; then
+      # Don't add raw bun to PATH — it can't execute without grun
+      if command -v grun &>/dev/null && (grun "$try" --version) &>/dev/null 2>&1; then
         TERMUX_BUN_METHOD="grun"
         TERMUX_BUN_PATH="$try"
         return 0
       fi
       # Tier 3: proot + explicit glibc linker (slower but most compatible)
+      # Don't add raw bun to PATH — it can't execute without proot
       local glibc_ld="${PREFIX:-}/glibc/lib/ld-linux-aarch64.so.1"
       if [[ -x "$glibc_ld" ]] && command -v proot &>/dev/null \
-         && proot --link2symlink -0 "$glibc_ld" --library-path "${PREFIX}/glibc/lib" "$try" --version &>/dev/null 2>&1; then
+         && (proot --link2symlink -0 "$glibc_ld" --library-path "${PREFIX}/glibc/lib" "$try" --version) &>/dev/null 2>&1; then
         TERMUX_BUN_METHOD="proot"
         TERMUX_BUN_PATH="$try"
         return 0
@@ -170,6 +174,7 @@ _resolve_bun() {
       continue  # Binary exists but can't execute — try next candidate
     fi
 
+    export PATH="$(dirname "$try"):$PATH"
     return 0
   done
 
@@ -226,15 +231,15 @@ _install_bun_termux() {
   # Determine which execution method works (same 3-tier detection as _resolve_bun)
   local bun_bin="${BUN_INSTALL}/bin/bun"
   local glibc_ld="${PREFIX}/glibc/lib/ld-linux-aarch64.so.1"
-  if [[ -x "$bun_bin" ]] && "$bun_bin" --version &>/dev/null 2>&1; then
+  if [[ -x "$bun_bin" ]] && ("$bun_bin" --version) &>/dev/null 2>&1; then
     TERMUX_BUN_METHOD="direct"
     TERMUX_BUN_PATH="$bun_bin"
-  elif command -v grun &>/dev/null && grun "$bun_bin" --version &>/dev/null 2>&1; then
+  elif command -v grun &>/dev/null && (grun "$bun_bin" --version) &>/dev/null 2>&1; then
     TERMUX_BUN_METHOD="grun"
     TERMUX_BUN_PATH="$bun_bin"
     warn "Using grun (glibc-runner) to execute Bun — bun-termux wrapper not functional"
   elif [[ -x "$glibc_ld" ]] && command -v proot &>/dev/null \
-       && proot --link2symlink -0 "$glibc_ld" --library-path "${PREFIX}/glibc/lib" "$bun_bin" --version &>/dev/null 2>&1; then
+       && (proot --link2symlink -0 "$glibc_ld" --library-path "${PREFIX}/glibc/lib" "$bun_bin" --version) &>/dev/null 2>&1; then
     TERMUX_BUN_METHOD="proot"
     TERMUX_BUN_PATH="$bun_bin"
     warn "Using proot + glibc linker to execute Bun (slower — bun-termux and grun both failed)"
@@ -273,8 +278,10 @@ ALIASES
 ensure_bun() {
   # ── Try to resolve an existing Bun installation ──────────────────────────
   if _resolve_bun; then
+    # Capture only the first line — bun may dump its full help text to stdout
+    # through some execution methods, and we don't want that in the status line
     local ver
-    ver="$(_bun --version 2>/dev/null || echo 'unknown')"
+    ver="$(_bun --version 2>/dev/null | head -1 || echo 'unknown')"
     case "$TERMUX_BUN_METHOD" in
       grun)  ok "Bun $ver found (via glibc-runner)" ;;
       proot) ok "Bun $ver found (via proot + glibc linker)" ;;
@@ -301,7 +308,7 @@ ensure_bun() {
   # ── Make bun available in this session ──────────────────────────────────
   if _resolve_bun; then
     local ver
-    ver="$(_bun --version 2>/dev/null || echo 'unknown')"
+    ver="$(_bun --version 2>/dev/null | head -1 || echo 'unknown')"
     case "$TERMUX_BUN_METHOD" in
       grun)  ok "Bun $ver installed (via glibc-runner)" ;;
       proot) ok "Bun $ver installed (via proot + glibc linker)" ;;
@@ -466,6 +473,19 @@ start_backend() {
   fi
 }
 
+# ─── Export Termux bun method for child processes ─────────────────────────
+# The Spindle extension manager spawns bun subprocesses and needs to know
+# how to invoke bun on Termux (direct / grun / proot wrapping).
+export_termux_bun_env() {
+  if [[ "$IS_TERMUX" == true ]]; then
+    export LUMIVERSE_IS_TERMUX="true"
+    export LUMIVERSE_BUN_METHOD="$TERMUX_BUN_METHOD"
+    export LUMIVERSE_BUN_PATH="$TERMUX_BUN_PATH"
+  elif [[ "$IS_PROOT" == true ]]; then
+    export LUMIVERSE_IS_PROOT="true"
+  fi
+}
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 echo ""
@@ -480,6 +500,7 @@ fi
 
 setup_proot_aliases
 ensure_bun
+export_termux_bun_env
 
 case "$MODE" in
   all)

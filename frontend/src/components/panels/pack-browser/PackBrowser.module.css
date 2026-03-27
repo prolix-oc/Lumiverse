@@ -4,6 +4,7 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 /* Toolbar */
@@ -100,17 +101,24 @@
   color: var(--lumiverse-primary-muted);
 }
 
-/* Grid */
+/* Grid — single column by default, switches to multi-column when panel is wide enough */
 .grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  align-items: start;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
   min-height: 0;
   overflow-y: auto;
   flex: 1;
+}
+
+@container (min-width: 420px) {
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    align-items: start;
+    align-content: start;
+  }
 }
 
 /* Pack Card */
@@ -717,7 +725,7 @@
   border-radius: 6px;
   border: none;
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 13px;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
@@ -915,7 +923,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   opacity: 0;
   transform: scale(0.8);
   transition: all 0.2s ease;
@@ -1109,7 +1117,7 @@
 
 .importBtn:hover {
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .importBtn:disabled {

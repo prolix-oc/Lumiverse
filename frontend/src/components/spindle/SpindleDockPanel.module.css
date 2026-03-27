@@ -6,7 +6,7 @@
   border: 1px solid var(--lumiverse-border);
   box-shadow: var(--lumiverse-shadow-lg);
   overflow: hidden;
-  contain: layout style;
+  contain: size layout style;
   transition: width 0.2s ease, height 0.2s ease;
 }
 

@@ -65,8 +65,8 @@
   gap: 12px;
 }
 
-.gridColumns2 {
-  grid-template-columns: repeat(2, 1fr);
+.gridColumns1 {
+  grid-template-columns: 1fr;
 }
 
 .gridCard {

@@ -24,6 +24,17 @@ function rowToProfile(row: any): ConnectionProfile {
   };
 }
 
+// Prepared statements for hot-path queries
+let _stmtConnById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtConnDefault: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+
+function getConnStmts() {
+  const db = getDb();
+  if (!_stmtConnById) _stmtConnById = db.query("SELECT * FROM connection_profiles WHERE id = ? AND user_id = ?");
+  if (!_stmtConnDefault) _stmtConnDefault = db.query("SELECT * FROM connection_profiles WHERE is_default = 1 AND user_id = ? LIMIT 1");
+  return { byId: _stmtConnById, byDefault: _stmtConnDefault };
+}
+
 export function listConnections(userId: string, pagination: PaginationParams): PaginatedResult<ConnectionProfile> {
   return paginatedQuery(
     "SELECT * FROM connection_profiles WHERE user_id = ? ORDER BY updated_at DESC",
@@ -35,12 +46,12 @@ export function listConnections(userId: string, pagination: PaginationParams): P
 }
 
 export function getConnection(userId: string, id: string): ConnectionProfile | null {
-  const row = getDb().query("SELECT * FROM connection_profiles WHERE id = ? AND user_id = ?").get(id, userId) as any;
+  const row = getConnStmts().byId.get(id, userId) as any;
   return row ? rowToProfile(row) : null;
 }
 
 export function getDefaultConnection(userId: string): ConnectionProfile | null {
-  const row = getDb().query("SELECT * FROM connection_profiles WHERE is_default = 1 AND user_id = ? LIMIT 1").get(userId) as any;
+  const row = getConnStmts().byDefault.get(userId) as any;
   return row ? rowToProfile(row) : null;
 }
 

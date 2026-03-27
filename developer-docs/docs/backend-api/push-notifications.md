@@ -43,6 +43,9 @@ Send a push notification to a user's registered devices.
 | `input.body` | `string` | Notification body text (max 500 chars) |
 | `input.tag` | `string?` | Dedup key — notifications with the same tag replace each other |
 | `input.url` | `string?` | URL to navigate to when the notification is clicked (default: `/`) |
+| `input.icon` | `string?` | Relative URL path to an icon image (must start with `/`). Falls back to the app icon. |
+| `input.image` | `string?` | Relative URL path to a large image displayed in the notification body (must start with `/`). Works with image gen results: `/api/v1/image-gen/results/{id}?size=lg`. |
+| `input.rawTitle` | `boolean?` | When `true`, the title is used as-is without the extension name prefix. |
 | `userId` | `string?` | Target user (operator-scoped extensions only; user-scoped infers from owner) |
 
 **Returns:** `Promise<{ sent: number }>` — number of devices the notification was delivered to.
@@ -80,6 +83,31 @@ await spindle.push.send({
   title: 'Task Complete',
   body: 'Your analysis is ready',
 })
+```
+
+## Example: Image Generation + Push Notification
+
+```ts
+// Generate an image and send it as a rich push notification
+const result = await spindle.imageGen.generate({
+  prompt: 'A cozy campfire scene under a starry night sky',
+})
+
+if (result.imageUrl) {
+  await spindle.push.send({
+    title: 'Scene Generated',
+    body: 'A new background image is ready',
+    image: result.imageUrl,               // large image in notification body
+    url: '/#/gallery',                     // click navigates to gallery
+    tag: 'scene-gen',
+  })
+}
+```
+
+The `imageUrl` returned from `spindle.imageGen.generate()` is a public (unauthenticated) relative URL like `/api/v1/image-gen/results/{id}`. You can append `?size=sm` or `?size=lg` for thumbnails:
+
+```ts
+image: `${result.imageUrl}?size=lg`   // ~700px thumbnail
 ```
 
 ## Example: Character "Bugging" the User

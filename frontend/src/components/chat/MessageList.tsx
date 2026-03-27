@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
 import { useStore } from '@/store'
 import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById } from '@/lib/avatarUrls'
@@ -27,6 +27,23 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const rafRef = useRef<number>(0)
   const { visibleMessages, hasMore, loadMore, loadingOlder, justPrependedRef } = useChunkedMessages(messages, chatId)
   const lastScrollHeightRef = useRef(0)
+  const [revealed, setRevealed] = useState(false)
+  const prevChatIdRef = useRef(chatId)
+
+  // Fade-in on chat switch: reset revealed when chat changes, reveal once messages arrive
+  useEffect(() => {
+    if (chatId !== prevChatIdRef.current) {
+      prevChatIdRef.current = chatId
+      setRevealed(false)
+    }
+  }, [chatId])
+
+  useEffect(() => {
+    if (!revealed && visibleMessages.length > 0) {
+      // Use rAF to ensure the DOM has rendered before triggering the transition
+      requestAnimationFrame(() => setRevealed(true))
+    }
+  }, [revealed, visibleMessages.length])
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingReasoning = useStore((s) => s.streamingReasoning)
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
@@ -184,7 +201,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [visibleMessages.length, glassEnabled])
 
   return (
-    <div className={styles.list} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
+    <div className={`${styles.list} ${revealed ? styles.listRevealed : styles.listHidden}`} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
       {hasMore && <div ref={sentinelRef} className={styles.sentinel} />}
       {loadingOlder && (

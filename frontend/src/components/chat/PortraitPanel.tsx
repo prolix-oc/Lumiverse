@@ -1,13 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
-import { motion } from 'motion/react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { X } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { charactersApi } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
 import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
 import LazyImage from '@/components/shared/LazyImage'
-import ImageLightbox from './ImageLightbox'
+import ImageLightbox from '@/components/shared/ImageLightbox'
 import AvatarSwitcherPopover from './AvatarSwitcherPopover'
 import type { Character, CharacterGalleryItem } from '@/types/api'
 import styles from './PortraitPanel.module.css'
@@ -62,28 +62,48 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
     return null
   }, [character, activeChatAvatarId])
 
-  if (!activeCharacterId) return null
-
+  // ── Cross-fading avatar ──
   const avatarUrl = activeChatAvatarId
     ? imagesApi.largeUrl(activeChatAvatarId)
     : (getCharacterAvatarLargeUrl(character) ?? '')
+
+  const [displayedSrc, setDisplayedSrc] = useState(avatarUrl)
+  const [prevSrc, setPrevSrc] = useState<string | null>(null)
+  const [frameHeight, setFrameHeight] = useState<number | undefined>(undefined)
+  const [imgLoading, setImgLoading] = useState(true)
+  const newImgRef = useRef<HTMLImageElement>(null)
+
+  // When avatarUrl changes (avatar switch), start cross-fade
+  useEffect(() => {
+    if (avatarUrl === displayedSrc) return
+    setPrevSrc(displayedSrc)
+    setDisplayedSrc(avatarUrl)
+    setImgLoading(true)
+  }, [avatarUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleNewImageLoad = useCallback(() => {
+    // Measure the image's natural aspect ratio and compute frame height
+    const img = newImgRef.current
+    if (img && img.naturalWidth > 0) {
+      const frameWidth = 186 // matches CSS .frame width
+      const ratio = img.naturalHeight / img.naturalWidth
+      setFrameHeight(Math.round(frameWidth * ratio))
+    }
+    setImgLoading(false)
+    // Clear previous image after transition completes
+    const timer = setTimeout(() => setPrevSrc(null), 350)
+    return () => clearTimeout(timer)
+  }, [])
+
+  if (!activeCharacterId) return null
+
   const charName = character?.name || ''
 
   return (
-    <motion.div
+    <div
       className={clsx(styles.panelOuter, side === 'left' ? styles.panelOuterLeft : styles.panelOuterRight)}
-      initial={{ width: 0 }}
-      animate={{ width: 220 }}
-      exit={{ width: 0 }}
-      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
     >
-      <motion.div
-        className={styles.panel}
-        initial={{ opacity: 0, x: side === 'left' ? -12 : 12 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: side === 'left' ? -12 : 12 }}
-        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-      >
+      <div className={styles.panel}>
         <button
           onClick={togglePortraitPanel}
           type="button"
@@ -94,18 +114,40 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
         </button>
 
         <AvatarSwitcherPopover chatId={activeChatId || ''}>
-          <div className={styles.frame} onClick={() => setLightboxSrc(getLightboxUrl())}>
-            <LazyImage
-              src={avatarUrl}
-              alt={charName}
-              containerClassName={styles.portrait}
-              style={{ objectFit: 'contain', width: '100%', height: 'auto' }}
-              fallback={
-                <div className={styles.placeholder}>
-                  {(charName || '?')[0].toUpperCase()}
-                </div>
-              }
-            />
+          <div
+            className={styles.frame}
+            style={frameHeight ? { height: frameHeight } : undefined}
+            onClick={() => setLightboxSrc(getLightboxUrl())}
+          >
+            {/* Previous image — fades out */}
+            {prevSrc && (
+              <img
+                src={prevSrc}
+                alt=""
+                className={clsx(styles.avatarImg, styles.avatarImgOut)}
+              />
+            )}
+            {/* Current image — fades in once loaded */}
+            {displayedSrc ? (
+              <img
+                ref={newImgRef}
+                src={displayedSrc}
+                alt={charName}
+                className={clsx(styles.avatarImg, imgLoading ? styles.avatarImgLoading : styles.avatarImgIn)}
+                onLoad={handleNewImageLoad}
+                onError={() => setImgLoading(false)}
+              />
+            ) : (
+              <div className={styles.placeholder}>
+                {(charName || '?')[0].toUpperCase()}
+              </div>
+            )}
+            {/* Loading spinner during image fetch */}
+            {imgLoading && displayedSrc && (
+              <div className={styles.avatarSpinner}>
+                <Loader2 size={20} strokeWidth={1.5} />
+              </div>
+            )}
           </div>
         </AvatarSwitcherPopover>
 
@@ -142,9 +184,9 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
             })}
           </div>
         )}
-      </motion.div>
+      </div>
 
       <ImageLightbox src={lightboxSrc} onClose={closeLightbox} />
-    </motion.div>
+    </div>
   )
 }

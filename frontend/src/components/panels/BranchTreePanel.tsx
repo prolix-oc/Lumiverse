@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
 import type { ChatTreeNode } from '@/types/api'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import styles from './BranchTreePanel.module.css'
 
 function relativeTime(unixSeconds: number): string {
@@ -154,18 +155,20 @@ export default function BranchTreePanel() {
   }
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.root}>
-        <Node node={tree} currentChatId={activeChatId} />
-      </div>
+    <PanelFadeIn>
+      <div className={styles.panel}>
+        <div className={styles.root}>
+          <Node node={tree} currentChatId={activeChatId} />
+        </div>
 
-      <div className={styles.hint}>
-        <Info size={13} strokeWidth={1.5} />
-        <span>
-          Click any node to jump to that branch.
-          Fork at a message using the <GitBranch size={11} strokeWidth={2} style={{ display: 'inline', verticalAlign: 'middle' }} /> icon in the message actions.
-        </span>
+        <div className={styles.hint}>
+          <Info size={13} strokeWidth={1.5} />
+          <span>
+            Click any node to jump to that branch.
+            Fork at a message using the <GitBranch size={11} strokeWidth={2} style={{ display: 'inline', verticalAlign: 'middle' }} /> icon in the message actions.
+          </span>
+        </div>
       </div>
-    </div>
+    </PanelFadeIn>
   )
 }

@@ -68,7 +68,7 @@
 
 .saveBtn {
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .saveBtn:hover {

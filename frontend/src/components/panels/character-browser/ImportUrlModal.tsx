@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Loader2 } from 'lucide-react'
 import styles from './ImportUrlModal.module.css'
@@ -19,6 +19,7 @@ export default function ImportUrlModal({
   error,
 }: ImportUrlModalProps) {
   const [url, setUrl] = useState('')
+  const mouseDownTargetRef = useRef<EventTarget | null>(null)
 
   if (!isOpen) return null
 
@@ -35,7 +36,7 @@ export default function ImportUrlModal({
   }
 
   return createPortal(
-    <div className={styles.overlay} onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={styles.overlay} onMouseDown={(e) => { mouseDownTargetRef.current = e.target }} onClick={(e) => e.target === e.currentTarget && mouseDownTargetRef.current === e.currentTarget && onClose()}>
       <div className={styles.modal}>
         <div className={styles.header}>
           <h3 className={styles.title}>Import from URL</h3>

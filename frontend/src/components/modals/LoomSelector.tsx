@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X, XCircle, ChevronDown, ChevronUp, BookOpen, Wrench, Zap } from 'lucide-react'
 import type { LoomItem, LoomItemCategory, PackWithItems } from '@/types/api'
@@ -123,8 +123,10 @@ export default function LoomSelector({ category, onClose }: LoomSelectorProps) {
 
   const handleClearAll = useCallback(() => setSelected([]), [setSelected])
 
+  const mouseDownTargetRef = useRef<EventTarget | null>(null)
+
   const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => { if (e.target === e.currentTarget) onClose() },
+    (e: React.MouseEvent) => { if (e.target === e.currentTarget && mouseDownTargetRef.current === e.currentTarget) onClose() },
     [onClose]
   )
 
@@ -146,7 +148,7 @@ export default function LoomSelector({ category, onClose }: LoomSelectorProps) {
   const Icon = config.icon
 
   const content = (
-    <div className={styles.backdrop} onClick={handleBackdropClick}>
+    <div className={styles.backdrop} onMouseDown={(e) => { mouseDownTargetRef.current = e.target }} onClick={handleBackdropClick}>
       <div className={styles.modal}>
         {/* Header */}
         <div className={styles.header}>

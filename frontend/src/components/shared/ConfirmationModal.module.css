@@ -10,8 +10,8 @@
 }
 
 :global([data-glass]) .backdrop {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .modal {
@@ -164,7 +164,7 @@
     var(--confirmation-accent) 0%,
     color-mix(in srgb, var(--confirmation-accent) 82%, black) 100%
   );
-  color: #ffffff;
+  color: #fff;
   cursor: pointer;
   box-shadow: 0 10px 24px color-mix(in srgb, var(--confirmation-accent) 22%, transparent);
   transition:

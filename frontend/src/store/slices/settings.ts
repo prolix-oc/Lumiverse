@@ -1,7 +1,17 @@
 import type { StateCreator } from 'zustand'
-import type { SettingsSlice, ThemeConfig } from '@/types/store'
+import type { SettingsSlice, ThemeConfig, ReasoningSettings } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { BASE_URL } from '@/api/client'
+
+/** Default reasoning settings — used as initial state and for restore-on-unbind. */
+export const REASONING_DEFAULTS: ReasoningSettings = {
+  prefix: '<think>\n',
+  suffix: '\n</think>',
+  autoParse: true,
+  apiReasoning: false,
+  reasoningEffort: 'auto',
+  keepInHistory: 0,
+}
 
 /** Keys that represent persisted data (not functions) */
 const DATA_KEYS: ReadonlySet<string> = new Set([
@@ -150,6 +160,11 @@ export function hasUnsavedSettings(): boolean {
   return dirtyKeys.size > 0 || flushInFlight
 }
 
+/** Remove a key from the pending dirty-keys map so the next flush won't overwrite a direct PUT. */
+export function clearDirtyKey(key: string): void {
+  dirtyKeys.delete(key)
+}
+
 // Flush on page unload so slider drags / rapid changes are never lost
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', flushSettings)
@@ -195,14 +210,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     detailsBlocks: { enabled: false, keepDepth: 3, keepOnly: false },
     loomItems: { enabled: false, keepDepth: 5, keepOnly: false },
   },
-  reasoningSettings: {
-    prefix: '<think>\n',
-    suffix: '\n</think>',
-    autoParse: true,
-    apiReasoning: false,
-    reasoningEffort: 'auto',
-    keepInHistory: 0,
-  },
+  reasoningSettings: { ...REASONING_DEFAULTS },
   regenFeedback: {
     enabled: false,
     position: 'user',

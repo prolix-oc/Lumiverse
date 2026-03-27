@@ -1,0 +1,256 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-modal-backdrop);
+}
+
+.modal {
+  width: clamp(340px, 92vw, 560px);
+  max-height: 85vh;
+  background: var(--lumiverse-gradient-modal);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 14px;
+  box-shadow:
+    var(--lumiverse-shadow-xl),
+    0 0 40px var(--lumiverse-primary-010);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.headerIcon {
+  color: var(--lumiverse-primary);
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px var(--lumiverse-primary-020));
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.closeBtn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+}
+
+.closeBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+/* ── Body ── */
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  text-align: center;
+  padding: 24px 12px;
+}
+
+/* ── Add-on card ── */
+.addonCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.12));
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addonCard:hover {
+  border-color: var(--lumiverse-border-hover);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.addonCardDisabled {
+  opacity: 0.55;
+}
+
+.addonTopRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Toggle checkbox ── */
+.addonToggle {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+  padding: 0;
+}
+
+.addonToggle:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.addonToggleActive {
+  background: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-contrast, #fff);
+  box-shadow: 0 0 8px var(--lumiverse-primary-020);
+}
+
+/* ── Inputs ── */
+.addonLabelInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-text);
+  outline: none;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addonLabelInput:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+.addonDeleteBtn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+  padding: 0;
+}
+
+.addonDeleteBtn:hover {
+  color: var(--lumiverse-error);
+  border-color: var(--lumiverse-error);
+  background: color-mix(in srgb, var(--lumiverse-error) 8%, transparent);
+}
+
+.addonContent {
+  width: 100%;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  resize: vertical;
+  min-height: 48px;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.5;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addonContent:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+/* ── Footer ── */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-top: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.addBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: var(--lumiverse-primary);
+  border: none;
+  color: var(--lumiverse-primary-contrast, #fff);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addBtn:hover {
+  background: var(--lumiverse-primary-hover);
+  box-shadow: 0 2px 10px var(--lumiverse-primary-020);
+}
+
+.addonCount {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { motion } from 'motion/react'
+import { motion, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import { useStore } from '@/store'
 import styles from './LoginPage.module.css'
 import clsx from 'clsx'
@@ -43,6 +43,8 @@ export default function LoginPage() {
   }, [focused])
 
   return (
+    <LazyMotion features={domAnimation} strict={false}>
+    <MotionConfig reducedMotion="user">
     <div className={styles.page}>
       {/* Ambient background */}
       <div className={styles.bg}>
@@ -187,5 +189,7 @@ export default function LoginPage() {
         </motion.p>
       </div>
     </div>
+    </MotionConfig>
+    </LazyMotion>
   )
 }

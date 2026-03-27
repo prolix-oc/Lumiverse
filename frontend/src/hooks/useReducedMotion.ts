@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react'
 
+/**
+ * @deprecated Use `<MotionConfig reducedMotion="user">` at the app root instead.
+ * The global MotionConfig provider in App.tsx now handles reduced motion preferences
+ * automatically for all motion components.
+ */
 export function useReducedMotion() {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() => {
     if (typeof window === 'undefined') return false

@@ -191,6 +191,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "world_books",
   "personas",
   "push_notification",
+  "image_gen",
 ]);
 
 function grantRequestedPermissionsByDefault(
@@ -366,6 +367,76 @@ function applyStorageSeeds(identifier: string, manifest: SpindleManifest): void 
   }
 }
 
+// ─── Termux-aware Bun command builders ───────────────────────────────────
+// On Termux, the bare `bun` binary can't execute natively. start.sh detects
+// the working invocation method and exports it via env vars so we can mirror
+// the same wrapping here when spawning bun subprocesses.
+
+/**
+ * Build a command array for running `bun <args>`.
+ * Mirrors start.sh's `_bun()` wrapper.
+ */
+function bunCmd(...args: string[]): string[] {
+  const method = process.env.LUMIVERSE_BUN_METHOD;
+  const bunPath = process.env.LUMIVERSE_BUN_PATH;
+
+  if (!method || !bunPath) return ["bun", ...args];
+
+  switch (method) {
+    case "direct":
+      return [bunPath, ...args];
+    case "grun":
+      return ["grun", bunPath, ...args];
+    case "proot": {
+      const prefix = process.env.PREFIX || "/data/data/com.termux/files/usr";
+      return [
+        "proot", "--link2symlink", "-0",
+        `${prefix}/glibc/lib/ld-linux-aarch64.so.1`,
+        "--library-path", `${prefix}/glibc/lib`,
+        bunPath, ...args,
+      ];
+    }
+    default:
+      return [bunPath, ...args];
+  }
+}
+
+/**
+ * Build a command array for `bun install`.
+ * On Termux, `bun install` always needs proot wrapping (Android's seccomp
+ * filter blocks certain syscalls) and `--backend=copyfile` (no hardlinks).
+ * Mirrors start.sh's `_proot_bun()` + install_deps().
+ */
+function bunInstallCmd(): string[] {
+  const isTermux = process.env.LUMIVERSE_IS_TERMUX === "true";
+  const isProot = process.env.LUMIVERSE_IS_PROOT === "true";
+
+  if (!isTermux && !isProot) return ["bun", "install"];
+
+  if (isProot) {
+    // Inside proot-distro: proot already intercepts syscalls
+    return ["bun", "install", "--backend=copyfile"];
+  }
+
+  // Native Termux: always wrap bun install in proot
+  const bunPath = process.env.LUMIVERSE_BUN_PATH || "bun";
+  const method = process.env.LUMIVERSE_BUN_METHOD;
+  const prefix = process.env.PREFIX || "/data/data/com.termux/files/usr";
+  const glibcLd = `${prefix}/glibc/lib/ld-linux-aarch64.so.1`;
+
+  if (method === "direct") {
+    // bun-termux wrapper handles linker; proot adds syscall interception
+    return ["proot", "--link2symlink", "-0", bunPath, "install", "--backend=copyfile"];
+  }
+
+  // grun/proot: explicit glibc linker + proot
+  return [
+    "proot", "--link2symlink", "-0",
+    glibcLd, "--library-path", `${prefix}/glibc/lib`,
+    bunPath, "install", "--backend=copyfile",
+  ];
+}
+
 // ─── Build ───────────────────────────────────────────────────────────────
 
 export async function buildExtension(identifier: string): Promise<void> {
@@ -379,7 +450,7 @@ export async function buildExtension(identifier: string): Promise<void> {
   const pkgJson = join(repo, "package.json");
   if (existsSync(pkgJson)) {
     const install = Bun.spawnSync({
-      cmd: ["bun", "install"],
+      cmd: bunInstallCmd(),
       cwd: repo,
     });
     if (install.exitCode !== 0) {
@@ -420,15 +491,7 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Build backend entry if source exists
   if (needsBackendBuild) {
     const proc = Bun.spawnSync({
-      cmd: [
-        "bun",
-        "build",
-        "src/backend.ts",
-        "--outfile",
-        backendEntry,
-        "--target",
-        "bun",
-      ],
+      cmd: bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
       cwd: repo,
     });
     if (proc.exitCode !== 0) {
@@ -441,15 +504,7 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Build frontend entry if source exists
   if (needsFrontendBuild) {
     const proc = Bun.spawnSync({
-      cmd: [
-        "bun",
-        "build",
-        "src/frontend.ts",
-        "--outfile",
-        frontendEntry,
-        "--target",
-        "browser",
-      ],
+      cmd: bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
       cwd: repo,
     });
     if (proc.exitCode !== 0) {

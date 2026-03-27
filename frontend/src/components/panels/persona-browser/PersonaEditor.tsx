@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link } from 'lucide-react'
+import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Puzzle } from 'lucide-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
 import { worldBooksApi } from '@/api/world-books'
@@ -241,6 +241,7 @@ export default function PersonaEditor({
   // Character-persona binding
   const activeCharName = activeCharacterId ? characters.find((c) => c.id === activeCharacterId)?.name : null
   const isBoundToActiveChar = activeCharacterId ? characterPersonaBindings[activeCharacterId] === persona.id : false
+  const addonCount = Array.isArray(persona.metadata?.addons) ? persona.metadata.addons.length : 0
 
   const handleToggleCharacterBinding = useCallback(() => {
     if (!activeCharacterId) return
@@ -392,6 +393,19 @@ export default function PersonaEditor({
             <Pencil size={12} />
           </button>
         </div>
+      </div>
+
+      {/* Add-Ons */}
+      <div className={styles.locksRow}>
+        <button
+          type="button"
+          className={clsx(styles.toggleBtn, addonCount > 0 && styles.addonsBtn)}
+          onClick={() => openModal('personaAddons', { personaId: persona.id, personaName: persona.name })}
+          title="Manage persona add-ons"
+        >
+          <Puzzle size={13} />
+          <span>Add-Ons{addonCount > 0 ? ` (${addonCount})` : ''}</span>
+        </button>
       </div>
 
       {/* Character binding indicator */}

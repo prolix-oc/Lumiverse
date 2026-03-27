@@ -13,7 +13,7 @@ import { useStore } from '@/store'
 import { useDisplayRegex } from '@/hooks/useDisplayRegex'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
-import ImageLightbox from './ImageLightbox'
+import ImageLightbox from '@/components/shared/ImageLightbox'
 import styles from './MessageContent.module.css'
 import clsx from 'clsx'
 

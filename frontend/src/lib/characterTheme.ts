@@ -16,6 +16,12 @@ export interface CharacterThemeOverlay {
     secondary?: string
     background?: string
   }
+  /** Mode-aware base colors for light mode (different lightness targets). */
+  baseColorsLight: {
+    primary?: string
+    secondary?: string
+    background?: string
+  }
 }
 
 /**
@@ -33,20 +39,30 @@ export function deriveCharacterOverlay(palette: ImagePalette): CharacterThemeOve
 
   // Primary accent: derive from dominant
   const domHsl = rgbToHsl(dominant.r, dominant.g, dominant.b)
-  // Ensure accent is vibrant enough to read as a theme color
-  const accentS = Math.max(domHsl.s, 35)
-  const accentL = clamp(domHsl.l, 40, 70)
+  // Clamp saturation to 35-70% — below 35% reads as gray, above 70% is garish
+  // (especially blue/purple at high saturation). Lightness 48-65% keeps the
+  // accent usable as a button/interactive color on both dark and light backgrounds.
+  const accentS = clamp(domHsl.s, 35, 70)
+  const accentL = clamp(domHsl.l, 48, 65)
 
   // Secondary: derived from the center region (the character's "core")
   const centerHsl = rgbToHsl(regions.center.r, regions.center.g, regions.center.b)
-  const secondaryS = Math.max(centerHsl.s, 20)
-  const secondaryL = clamp(centerHsl.l, 30, 60)
+  const secondaryS = clamp(centerHsl.s, 20, 60)
+  const secondaryL = clamp(centerHsl.l, 35, 55)
+
+  // Light mode: lower lightness so colors contrast against bright backgrounds
+  const accentLLight = clamp(domHsl.l, 30, 45)
+  const secondaryLLight = clamp(centerHsl.l, 25, 40)
 
   return {
     accent: { h: domHsl.h, s: accentS, l: accentL },
     baseColors: {
       primary: `hsl(${domHsl.h}, ${accentS}%, ${accentL}%)`,
       secondary: `hsl(${centerHsl.h}, ${secondaryS}%, ${secondaryL}%)`,
+    },
+    baseColorsLight: {
+      primary: `hsl(${domHsl.h}, ${accentS}%, ${accentLLight}%)`,
+      secondary: `hsl(${centerHsl.h}, ${secondaryS}%, ${secondaryLLight}%)`,
     },
   }
 }
@@ -107,26 +123,81 @@ export function deriveHeroTextVars(
  *
  * Unlike the hero treatment (which needs pure white/black for image contrast),
  * chat names sit on glass cards, so we use VIBRANT themed colors derived from
- * the character's dominant hue — bright pastel in dark mode, deep saturated in light.
+ * the character's avatar.
+ *
+ * Strategy: score all palette regions by vibrancy (saturation weighted by distance
+ * from pure gray) and pick the best candidate. This avoids choosing a muddy
+ * near-black dominant when the character has a colorful accent elsewhere in the
+ * image (hair ribbon, eyes, background element, etc.).
+ *
+ * If no region is vibrant enough (monochrome artwork), falls back to the theme's
+ * primary accent hue with forced saturation.
  */
 export function deriveCharacterNameVars(
   palette: ImagePalette
 ): Record<string, string> {
-  const { dominant } = palette
-  const hsl = rgbToHsl(dominant.r, dominant.g, dominant.b)
+  const hsl = pickMostVibrant(palette)
 
   // Dark mode: bright pastel — boosted saturation, high lightness
-  const darkS = clamp(hsl.s + 10, 40, 75)
-  const darkL = clamp(hsl.l, 70, 85)
+  const darkS = clamp(hsl.s + 10, 45, 80)
+  const darkL = clamp(hsl.l, 72, 85)
 
   // Light mode: deep rich — boosted saturation, low lightness
-  const lightS = clamp(hsl.s + 15, 45, 80)
-  const lightL = clamp(hsl.l, 25, 40)
+  const lightS = clamp(hsl.s + 15, 50, 85)
+  const lightL = clamp(hsl.l, 25, 38)
 
   return {
     '--char-name-dark': `hsl(${hsl.h}, ${darkS}%, ${darkL}%)`,
     '--char-name-light': `hsl(${hsl.h}, ${lightS}%, ${lightL}%)`,
   }
+}
+
+/** Minimum saturation to consider a color "vibrant" rather than gray/muddy. */
+const MIN_VIBRANT_SAT = 20
+
+/**
+ * Score palette regions by vibrancy and return the best HSL candidate.
+ *
+ * Vibrancy = saturation × lightness penalty × flatness penalty.
+ * Flat regions (solid backgrounds like white, gray, or single-color fills)
+ * have high pixel concentration in a single bucket and are heavily penalized
+ * to avoid sampling the background instead of the character.
+ */
+function pickMostVibrant(palette: ImagePalette): { h: number; s: number; l: number } {
+  const candidates: Array<{ rgb: RGB; flatness: number }> = [
+    { rgb: palette.dominant, flatness: palette.flatness.full },
+    { rgb: palette.regions.top, flatness: palette.flatness.top },
+    { rgb: palette.regions.center, flatness: palette.flatness.center },
+    { rgb: palette.regions.bottom, flatness: palette.flatness.bottom },
+    { rgb: palette.regions.left, flatness: palette.flatness.left },
+    { rgb: palette.regions.right, flatness: palette.flatness.right },
+    { rgb: palette.average, flatness: 0 }, // average has no meaningful flatness
+  ]
+
+  let best: { h: number; s: number; l: number } | null = null
+  let bestScore = -1
+
+  for (const { rgb, flatness } of candidates) {
+    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b)
+    // Penalize extreme lightness (< 15% or > 85%) — near-black/white
+    const lPenalty = hsl.l < 15 ? 0.3 : hsl.l > 85 ? 0.4 : 1
+    // Penalize flat/monotone regions — >50% concentration is a solid background
+    // Scale: 0.0 flatness → 1.0 (no penalty), 0.5 → 0.5, 0.8 → 0.1
+    const flatPenalty = flatness > 0.5 ? Math.max(0.1, 1 - flatness) : 1
+    const score = hsl.s * lPenalty * flatPenalty
+    if (score > bestScore) {
+      bestScore = score
+      best = hsl
+    }
+  }
+
+  // If the best candidate is still too desaturated, force a usable color
+  if (!best || best.s < MIN_VIBRANT_SAT) {
+    const fallback = rgbToHsl(palette.dominant.r, palette.dominant.g, palette.dominant.b)
+    return { h: fallback.h, s: Math.max(fallback.s, 45), l: 55 }
+  }
+
+  return best
 }
 
 function clamp(v: number, min: number, max: number): number {

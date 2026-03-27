@@ -44,8 +44,25 @@ export function useAppInit() {
       store.setPersonas(res.data)
     }).catch(() => {})
 
-    // Council settings + tools
-    store.loadCouncilSettings()
+    // Regex scripts — load eagerly so display-target scripts apply
+    // without requiring the RegexPanel to be opened first.
+    store.loadRegexScripts().catch(() => {})
+
+    // Council settings + tools, then load pack items for council
+    // member packs so OOC avatars are always available.
+    store.loadCouncilSettings().then(() => {
+      const { councilSettings, packsWithItems, setPackWithItems } = useStore.getState()
+      const memberPackIds = new Set(
+        councilSettings.members.map((m) => m.packId).filter(Boolean),
+      )
+      for (const packId of memberPackIds) {
+        if (!packsWithItems[packId]) {
+          packsApi.get(packId).then((data) => {
+            useStore.getState().setPackWithItems(packId, data)
+          }).catch(() => {})
+        }
+      }
+    })
     store.loadAvailableTools()
   }, [isAuthenticated])
 }

@@ -104,6 +104,55 @@
   -webkit-backdrop-filter: none !important;
 }
 
+/* ── Portrait side wrapper — slides tab + panel as a unit ──
+   Uses absolute positioning by default so the panel overlays the edge
+   without pushing the chat content. When chat is in full-width mode
+   (no max-width constraint), falls back to flex layout to avoid overlap. */
+.portraitSide {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  overflow: visible;
+  width: var(--lumiverse-btn-icon);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+}
+
+.portraitSideRight {
+  flex-direction: row;
+  right: 0;
+}
+
+.portraitSideLeft {
+  flex-direction: row;
+  left: 0;
+}
+
+.portraitSideOpen {
+  width: calc(var(--lumiverse-btn-icon) + 220px);
+}
+
+/* When chat content has no max-width (full mode), the panel must participate
+   in the flex layout to push the chat column — otherwise it overlaps.
+   data-chat-constrained is set by ChatView when a max-width is active. */
+.body:not([data-chat-constrained]) .portraitSide {
+  position: relative;
+  top: auto;
+  bottom: auto;
+  right: auto;
+  left: auto;
+  z-index: auto;
+}
+
+@media (min-width: 601px) and (max-width: 900px) {
+  .portraitSideOpen {
+    width: calc(var(--lumiverse-btn-icon) + 164px);
+  }
+}
+
 /* Portrait side tab — flush, compact tab integrated into the flex layout */
 .portraitTab {
   flex: 0 0 auto;
@@ -150,7 +199,7 @@
 }
 
 @media (max-width: 600px) {
-  .portraitTab {
+  .portraitSide {
     display: none;
   }
 }

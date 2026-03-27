@@ -16,8 +16,8 @@
     box-shadow var(--lcs-transition-fast);
 }
 
-/* Only apply backdrop-filter when glass effects are enabled */
-:global([data-glass]) .card[data-in-viewport] {
+/* Only apply backdrop-filter when glass is enabled AND there's a non-solid background */
+:global([data-glass][data-chat-bg]) .card[data-in-viewport] {
   backdrop-filter: blur(var(--lcs-glass-blur));
   -webkit-backdrop-filter: blur(var(--lcs-glass-blur));
 }

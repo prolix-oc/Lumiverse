@@ -93,6 +93,17 @@ select option:checked {
   to { opacity: 1; }
 }
 
+/* Panel content entrance — applied by <PanelFadeIn> wrapper */
+.lumiverse-panel-enter {
+  animation: lumiverseFadeIn 180ms ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lumiverse-panel-enter {
+    animation: none;
+  }
+}
+
 /* Focus styles — subtle ring for interactive elements only */
 :focus-visible {
   outline: 1.5px solid var(--lumiverse-primary-050);

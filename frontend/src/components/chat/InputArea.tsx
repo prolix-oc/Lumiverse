@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, Puzzle } from 'lucide-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
@@ -12,7 +12,7 @@ import { imagesApi } from '@/api/images'
 import { getPersonaAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
-import type { MessageAttachment } from '@/types/api'
+import type { MessageAttachment, PersonaAddon } from '@/types/api'
 import AuthorsNotePanel from './AuthorsNotePanel'
 import styles from './InputArea.module.css'
 import clsx from 'clsx'
@@ -27,8 +27,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [text, setText] = useState('')
   const [dryRunning, setDryRunning] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
-  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields'>(null)
-  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields'>(null)
+  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons'>(null)
+  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
   const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
@@ -116,6 +116,47 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [chatId, altFieldSelections])
 
+  // Track persona add-ons for the active persona
+  const [personaAddons, setPersonaAddons] = useState<PersonaAddon[]>([])
+  const hasAddons = personaAddons.length > 0
+
+  useEffect(() => {
+    if (!activePersonaId) { setPersonaAddons([]); return }
+    personasApi.get(activePersonaId)
+      .then((p) => {
+        const raw = p.metadata?.addons
+        setPersonaAddons(Array.isArray(raw) ? raw : [])
+      })
+      .catch(() => setPersonaAddons([]))
+  }, [activePersonaId])
+
+  // Listen for persona changes via store to keep addons in sync
+  const storePersonas = useStore((s) => s.personas)
+  useEffect(() => {
+    if (!activePersonaId) return
+    const p = storePersonas.find((x) => x.id === activePersonaId)
+    if (p) {
+      const raw = p.metadata?.addons
+      setPersonaAddons(Array.isArray(raw) ? raw : [])
+    }
+  }, [storePersonas, activePersonaId])
+
+  const handleToggleAddon = useCallback(async (addonId: string) => {
+    if (!activePersonaId) return
+    const next = personaAddons.map((a) => a.id === addonId ? { ...a, enabled: !a.enabled } : a)
+    setPersonaAddons(next)
+    try {
+      const p = await personasApi.get(activePersonaId)
+      const newMeta = { ...(p.metadata || {}), addons: next }
+      const updated = await personasApi.update(activePersonaId, { metadata: newMeta })
+      useStore.getState().updatePersona(activePersonaId, updated)
+    } catch {
+      // Revert on failure
+      setPersonaAddons(personaAddons)
+      toast.error('Failed to toggle add-on')
+    }
+  }, [activePersonaId, personaAddons])
+
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
@@ -183,7 +224,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     const timer = setTimeout(() => {
       setRenderPopover(null)
       setPopoverClosing(false)
-    }, 220)
+    }, 250)
     return () => clearTimeout(timer)
   }, [openPopover, renderPopover])
 
@@ -634,6 +675,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
                 {Object.keys(altFieldSelections).length > 0 && <span className={styles.badge}>{Object.keys(altFieldSelections).length}</span>}
               </button>
             )}
+            {hasAddons && (
+              <button
+                type="button"
+                className={clsx(styles.actionBtn, openPopover === 'addons' && styles.actionBtnActive)}
+                onClick={() => setOpenPopover((p) => (p === 'addons' ? null : 'addons'))}
+                title="Persona add-ons"
+              >
+                <Puzzle size={14} />
+              </button>
+            )}
             <button
               type="button"
               className={clsx(styles.actionBtn, openPopover === 'guides' && styles.actionBtnActive)}
@@ -979,6 +1030,27 @@ export default function InputArea({ chatId }: InputAreaProps) {
               {Object.values(altFieldsData).every((arr) => !arr?.length) && (
                 <div className={styles.popEmpty}>No alternate fields configured.</div>
               )}
+            </div>
+          )}
+
+          {renderPopover === 'addons' && (
+            <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              <div className={styles.quickSetName}>Persona Add-Ons</div>
+              {personaAddons.length === 0 && <div className={styles.popEmpty}>No add-ons configured.</div>}
+              {personaAddons.map((addon) => (
+                <button
+                  key={addon.id}
+                  type="button"
+                  className={clsx(styles.popRowBtn, addon.enabled && styles.popRowBtnActive)}
+                  onClick={() => handleToggleAddon(addon.id)}
+                >
+                  <span className={styles.personaMain}>
+                    <Puzzle size={13} style={{ opacity: addon.enabled ? 1 : 0.4, color: addon.enabled ? 'var(--lumiverse-primary)' : undefined }} />
+                    <span>{addon.label || 'Untitled add-on'}</span>
+                  </span>
+                  <span className={styles.popMeta}>{addon.enabled ? 'ON' : 'OFF'}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>

@@ -173,7 +173,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 999px;
   background: var(--lumiverse-fill-deepest);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   display: inline-flex;
   align-items: center;
   justify-content: center;

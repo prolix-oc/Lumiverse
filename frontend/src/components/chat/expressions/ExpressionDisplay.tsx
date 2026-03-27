@@ -65,13 +65,13 @@ export default function ExpressionDisplay() {
   // Track the last resolved character+config pair to avoid loops
   const lastResolvedKey = useRef<string>('')
 
-  // Clear expression when switching to a different character
+  // Clear expression when the active character changes (e.g. switching chats)
   useEffect(() => {
-    if (resolvedCharId && expressionCharacterId && resolvedCharId !== expressionCharacterId) {
+    if (activeCharacterId && expressionCharacterId && activeCharacterId !== expressionCharacterId) {
       setActiveExpression(null, null, null)
       lastResolvedKey.current = ''
     }
-  }, [resolvedCharId, expressionCharacterId, setActiveExpression])
+  }, [activeCharacterId, expressionCharacterId, setActiveExpression])
 
   const hasExpressions = !!exprConfig?.enabled && Object.keys(exprConfig.mappings || {}).length > 0
 

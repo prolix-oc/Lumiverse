@@ -80,7 +80,6 @@ export async function sendPushToUser(
   if (subs.length === 0) return 0;
 
   const privateJWK = getVapidPrivateJWK();
-  const payload = notification;
   let sent = 0;
 
   const results = await Promise.allSettled(
@@ -94,7 +93,7 @@ export async function sendPushToUser(
             keys: { p256dh: sub.p256dh, auth: sub.auth },
           },
           message: {
-            payload,
+            payload: notification as any,
             adminContact: "mailto:noreply@lumiverse.app",
             options: {
               ttl: 86400,

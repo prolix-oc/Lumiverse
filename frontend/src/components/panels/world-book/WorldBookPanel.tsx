@@ -12,6 +12,7 @@ import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookD
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
 import type { WorldBook, WorldBookEntry, WorldBookVectorSummary, WorldInfoSettings } from '@/types/api'
 import styles from './WorldBookPanel.module.css'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import clsx from 'clsx'
 
 const POSITION_SHORT = ['Before Main', 'After Main', 'Before AN', 'After AN', '@ Depth']
@@ -35,6 +36,7 @@ export default function WorldBookPanel() {
   const [entryTotal, setEntryTotal] = useState(0)
   const [entryOffset, setEntryOffset] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [loadingEntries, setLoadingEntries] = useState(false)
   const [entrySearchFilter, setEntrySearchFilter] = useState('')
 
   // Book editing state
@@ -93,12 +95,14 @@ export default function WorldBookPanel() {
 
   // Load entries when book selected
   const loadEntries = useCallback(async (bookId: string) => {
+    setLoadingEntries(true)
     try {
       const res = await worldBooksApi.listEntries(bookId, { limit: ENTRIES_PAGE_SIZE, offset: 0 })
       setEntries(res.data)
       setEntryTotal(res.total)
       setEntryOffset(res.data.length)
     } catch {}
+    setLoadingEntries(false)
   }, [])
 
   const loadVectorSummary = useCallback(async (bookId: string) => {
@@ -716,6 +720,10 @@ export default function WorldBookPanel() {
           </label>
 
           {/* Entry list */}
+          {loadingEntries ? (
+            <div className={styles.emptyState}>Loading entries...</div>
+          ) : (
+          <PanelFadeIn>
           <div className={styles.entryList}>
             {filteredEntries.map((entry) => (
               <div key={entry.id}>
@@ -792,6 +800,8 @@ export default function WorldBookPanel() {
               </button>
             )}
           </div>
+          </PanelFadeIn>
+          )}
 
         </>
       ) : (

@@ -5,12 +5,17 @@
   max-height: var(--app-shell-height, 100dvh);
   overflow: hidden;
   background: var(--lumiverse-bg-deep);
+  /* Prevent Safari/WebKit backdrop-filter compositing from stacking across
+     layers. Without this, each child with backdrop-filter re-processes the
+     already-filtered content of siblings, causing progressive dimming.
+     Safe for all browsers — the app shell has an opaque background so
+     backdrop-filter children blur against rendered app content as intended. */
+  isolation: isolate;
   /* Safe area insets + Spindle dock panel insets */
   padding-top: calc(env(safe-area-inset-top, 0px) + var(--spindle-dock-top, 0px));
   padding-right: var(--spindle-dock-right, 0px);
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--spindle-dock-bottom, 0px));
   padding-left: var(--spindle-dock-left, 0px);
-  transition: padding 0.2s ease;
 }
 
 /* On iOS PWA, remove bottom safe-area padding from the shell so views can

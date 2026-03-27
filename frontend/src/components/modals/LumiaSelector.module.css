@@ -301,7 +301,7 @@
   height: 20px;
   border-radius: 50%;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -347,7 +347,7 @@
   border-radius: var(--lumiverse-radius);
   border: none;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
 }

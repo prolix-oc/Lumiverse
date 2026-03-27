@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { Outlet } from 'react-router'
+import { LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import { useWebSocket } from '@/ws/useWebSocket'
 import { useStore } from '@/store'
 import { useThemeApplicator } from '@/hooks/useThemeApplicator'
@@ -92,25 +93,29 @@ export default function App() {
 
   return (
     <AuthGuard>
-      <div
-        className={styles.app}
-        style={{
-          '--spindle-dock-left': `${dockInsets.left}px`,
-          '--spindle-dock-right': `${dockInsets.right}px`,
-          '--spindle-dock-top': `${dockInsets.top}px`,
-          '--spindle-dock-bottom': `${dockInsets.bottom}px`,
-        } as React.CSSProperties}
-      >
-        <ErrorBoundary label="App">
-          <main className={styles.main}>
-            <Outlet />
-          </main>
-          <ViewportDrawer />
-          <ModalContainer />
-          <SpindleUIManager />
-          <ToastContainer />
-        </ErrorBoundary>
-      </div>
+      <LazyMotion features={domAnimation} strict={false}>
+        <MotionConfig reducedMotion="user">
+          <div
+            className={styles.app}
+            style={{
+              '--spindle-dock-left': `${dockInsets.left}px`,
+              '--spindle-dock-right': `${dockInsets.right}px`,
+              '--spindle-dock-top': `${dockInsets.top}px`,
+              '--spindle-dock-bottom': `${dockInsets.bottom}px`,
+            } as React.CSSProperties}
+          >
+            <ErrorBoundary label="App">
+              <main className={styles.main}>
+                <Outlet />
+              </main>
+              <ViewportDrawer />
+              <ModalContainer />
+              <SpindleUIManager />
+              <ToastContainer />
+            </ErrorBoundary>
+          </div>
+        </MotionConfig>
+      </LazyMotion>
     </AuthGuard>
   )
 }

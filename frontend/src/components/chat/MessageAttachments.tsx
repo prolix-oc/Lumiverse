@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react'
 import type { MessageAttachment } from '@/types/api'
 import { imagesApi } from '@/api/images'
-import ImageLightbox from './ImageLightbox'
+import ImageLightbox from '@/components/shared/ImageLightbox'
+import LazyImage from '@/components/shared/LazyImage'
 import styles from './MessageAttachments.module.css'
 import clsx from 'clsx'
 
@@ -32,22 +33,28 @@ export default function MessageAttachments({ attachments, isUser }: MessageAttac
               onClick={() => setLightboxSrc(imagesApi.url(att.image_id))}
               title={att.original_filename}
             >
-              <img
+              <LazyImage
                 src={imagesApi.smallUrl(att.image_id)}
                 alt={att.original_filename}
-                loading="lazy"
+                spinnerSize={18}
               />
             </button>
           ) : (
-            <span key={att.image_id} className={styles.inlineImageWrap}>
-              <img
-                src={imagesApi.largeUrl(att.image_id)}
+            <button
+              key={att.image_id}
+              type="button"
+              className={styles.inlineImageBtn}
+              onClick={() => setLightboxSrc(imagesApi.url(att.image_id))}
+            >
+              <LazyImage
+                src={imagesApi.smallUrl(att.image_id)}
                 alt={att.original_filename}
                 className={styles.inlineImage}
-                loading="lazy"
-                onClick={() => setLightboxSrc(imagesApi.url(att.image_id))}
+                style={{ objectFit: 'contain', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '240px' }}
+                containerClassName={styles.inlineImageWrap}
+                spinnerSize={20}
               />
-            </span>
+            </button>
           )
         )}
         {audios.map((att) => (

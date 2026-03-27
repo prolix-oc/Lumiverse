@@ -156,8 +156,12 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
   }));
 }
 
+// Prepared statement for hot-path chat fetch
+let _stmtChatById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+
 export function getChat(userId: string, id: string): Chat | null {
-  const row = getDb().query("SELECT * FROM chats WHERE id = ? AND user_id = ?").get(id, userId) as any;
+  if (!_stmtChatById) _stmtChatById = getDb().query("SELECT * FROM chats WHERE id = ? AND user_id = ?");
+  const row = _stmtChatById.get(id, userId) as any;
   if (!row) return null;
   return rowToChat(row);
 }
@@ -241,6 +245,18 @@ export function updateChat(userId: string, id: string, input: UpdateChatInput): 
   getDb().query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ?`).run(...values);
   const updated = getChat(userId, id)!;
   eventBus.emit(EventType.CHAT_CHANGED, { chat: updated }, userId);
+
+  // Detect avatar switch and emit specific event for theme resampling / extensions
+  const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;
+  const newAvatarId = updated.metadata?.active_avatar_id as string | undefined;
+  if (oldAvatarId !== newAvatarId) {
+    eventBus.emit(EventType.CHARACTER_AVATAR_CHANGED, {
+      chatId: id,
+      characterId: updated.character_id,
+      imageId: newAvatarId || null,
+    }, userId);
+  }
+
   return updated;
 }
 
@@ -399,10 +415,23 @@ export function getLastMessage(userId: string, chatId: string): Message | null {
 
 // --- Message CRUD ---
 
+// Prepared statements for hot-path message queries
+let _stmtMsgAll: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtMsgCount: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtMsgTail: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtMsgById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+
+function getMsgStmts() {
+  const db = getDb();
+  if (!_stmtMsgAll) _stmtMsgAll = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC");
+  if (!_stmtMsgCount) _stmtMsgCount = db.query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?");
+  if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?");
+  if (!_stmtMsgById) _stmtMsgById = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND c.user_id = ?");
+  return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById };
+}
+
 export function getMessages(userId: string, chatId: string): Message[] {
-  const rows = getDb()
-    .query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC")
-    .all(chatId, userId) as any[];
+  const rows = getMsgStmts().all.all(chatId, userId) as any[];
   return rows.map(rowToMessage);
 }
 
@@ -417,16 +446,12 @@ export function listMessages(userId: string, chatId: string, pagination: Paginat
 }
 
 export function listMessagesTail(userId: string, chatId: string, limit: number): PaginatedResult<Message> {
-  const db = getDb();
-  const countRow = db
-    .query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?")
-    .get(chatId, userId) as { count: number } | null;
+  const stmts = getMsgStmts();
+  const countRow = stmts.count.get(chatId, userId) as { count: number } | null;
   const total = countRow?.count ?? 0;
 
   // Fetch the last N messages by scanning the index in reverse, then reverse in memory
-  const rows = db
-    .query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?")
-    .all(chatId, userId, limit) as any[];
+  const rows = stmts.tail.all(chatId, userId, limit) as any[];
   rows.reverse();
 
   const offset = Math.max(0, total - rows.length);
@@ -439,7 +464,7 @@ export function listMessagesTail(userId: string, chatId: string, limit: number):
 }
 
 export function getMessage(userId: string, id: string): Message | null {
-  const row = getDb().query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND c.user_id = ?").get(id, userId) as any;
+  const row = getMsgStmts().byId.get(id, userId) as any;
   if (!row) return null;
   return rowToMessage(row);
 }
@@ -765,7 +790,31 @@ export function getChatTree(userId: string, chatId: string): ChatTreeNode | null
   const chat = getChat(userId, chatId);
   if (!chat) return null;
 
-  // root of the branch family
+  const db = getDb();
+
+  // Fast path: if this chat is not branched and has no children, return a simple leaf node
+  if (!chat.metadata.branched_from) {
+    const childCount = (db.query(
+      "SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND json_extract(metadata, '$.branched_from') = ?"
+    ).get(userId, chatId) as { count: number })?.count ?? 0;
+
+    if (childCount === 0) {
+      const msgCount = (db.query("SELECT COUNT(*) as count FROM messages WHERE chat_id = ?").get(chatId) as { count: number })?.count ?? 0;
+      return {
+        id: chat.id,
+        name: chat.name,
+        created_at: chat.created_at,
+        updated_at: chat.updated_at,
+        message_count: msgCount,
+        branch_at_message: null,
+        branch_message_index: null,
+        branch_message_preview: null,
+        children: [],
+      };
+    }
+  }
+
+  // Full tree build: walk up to root, then recurse down
   let rootId = chatId;
   const ancestorVisited = new Set<string>();
   ancestorVisited.add(chatId);

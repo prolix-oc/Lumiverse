@@ -106,15 +106,48 @@ export function deletePack(userId: string, id: string): boolean {
   return getDb().query("DELETE FROM packs WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
 
-export function getPackWithItems(userId: string, id: string): PackWithItems | null {
-  const pack = getPack(userId, id);
-  if (!pack) return null;
+// Prepared statements for pack item queries (avoid re-compiling on every call)
+let _stmtPackById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtLumiaByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtLoomByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtToolsByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 
-  const lumia_items = (getDb().query("SELECT * FROM lumia_items WHERE pack_id = ? ORDER BY sort_order ASC").all(id) as any[]).map(rowToLumiaItem);
-  const loom_items = (getDb().query("SELECT * FROM loom_items WHERE pack_id = ? ORDER BY sort_order ASC").all(id) as any[]).map(rowToLoomItem);
-  const loom_tools = (getDb().query("SELECT * FROM loom_tools WHERE pack_id = ? ORDER BY sort_order ASC").all(id) as any[]).map(rowToLoomTool);
+function getPackStmts() {
+  const db = getDb();
+  if (!_stmtPackById) _stmtPackById = db.query("SELECT * FROM packs WHERE id = ? AND user_id = ?");
+  if (!_stmtLumiaByPack) _stmtLumiaByPack = db.query("SELECT * FROM lumia_items WHERE pack_id = ? ORDER BY sort_order ASC");
+  if (!_stmtLoomByPack) _stmtLoomByPack = db.query("SELECT * FROM loom_items WHERE pack_id = ? ORDER BY sort_order ASC");
+  if (!_stmtToolsByPack) _stmtToolsByPack = db.query("SELECT * FROM loom_tools WHERE pack_id = ? ORDER BY sort_order ASC");
+  return { packById: _stmtPackById, lumiaByPack: _stmtLumiaByPack, loomByPack: _stmtLoomByPack, toolsByPack: _stmtToolsByPack };
+}
+
+export function getPackWithItems(userId: string, id: string): PackWithItems | null {
+  const stmts = getPackStmts();
+  const row = stmts.packById.get(id, userId) as any;
+  if (!row) return null;
+  const pack = rowToPack(row);
+
+  const lumia_items = (stmts.lumiaByPack.all(id) as any[]).map(rowToLumiaItem);
+  const loom_items = (stmts.loomByPack.all(id) as any[]).map(rowToLoomItem);
+  const loom_tools = (stmts.toolsByPack.all(id) as any[]).map(rowToLoomTool);
 
   return { ...pack, lumia_items, loom_items, loom_tools };
+}
+
+/** List all packs with their items in a single efficient batch. */
+export function listPacksWithItems(userId: string, pagination: PaginationParams): PaginatedResult<PackWithItems> {
+  const result = listPacks(userId, pagination);
+  if (result.data.length === 0) return { ...result, data: [] };
+
+  const stmts = getPackStmts();
+  const packsWithItems: PackWithItems[] = result.data.map((pack) => {
+    const lumia_items = (stmts.lumiaByPack.all(pack.id) as any[]).map(rowToLumiaItem);
+    const loom_items = (stmts.loomByPack.all(pack.id) as any[]).map(rowToLoomItem);
+    const loom_tools = (stmts.toolsByPack.all(pack.id) as any[]).map(rowToLoomTool);
+    return { ...pack, lumia_items, loom_items, loom_tools };
+  });
+
+  return { ...result, data: packsWithItems };
 }
 
 // --- Lumia Item CRUD ---

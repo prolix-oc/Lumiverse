@@ -31,12 +31,24 @@ export function paginatedQuery<TRow, TEntity>(
 ): PaginatedResult<TEntity> {
   const db = getDb();
 
-  const countRow = db.query(countSql).get(...params) as { count: number } | null;
-  const total = countRow?.count ?? 0;
-
+  // Fetch one extra row to detect if there are more results (avoids COUNT query when possible)
   const rows = db
     .query(`${dataSql} LIMIT ? OFFSET ?`)
-    .all(...params, pagination.limit, pagination.offset) as TRow[];
+    .all(...params, pagination.limit + 1, pagination.offset) as TRow[];
+
+  const hasMore = rows.length > pagination.limit;
+  if (hasMore) rows.length = pagination.limit; // trim the extra probe row
+
+  // Only run the COUNT query if we actually need the exact total
+  // (i.e., we're not on page 1 fetching everything, or there are more pages)
+  let total: number;
+  if (pagination.offset === 0 && !hasMore) {
+    // First page and all results fit — total is just the row count
+    total = rows.length;
+  } else {
+    const countRow = db.query(countSql).get(...params) as { count: number } | null;
+    total = countRow?.count ?? 0;
+  }
 
   return {
     data: rows.map(rowMapper),

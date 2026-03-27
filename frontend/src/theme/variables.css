@@ -94,8 +94,8 @@
   --lumiverse-fill-deepest: rgba(0, 0, 0, 0.7);
 
   /* Card backgrounds */
-  --lumiverse-card-bg: linear-gradient(165deg, rgba(28, 24, 38, 0.95) 0%, rgba(24, 20, 34, 0.9) 50%, rgba(20, 17, 30, 0.95) 100%);
-  --lumiverse-card-image-bg: linear-gradient(135deg, rgba(20, 17, 28, 0.8) 0%, rgba(28, 22, 40, 0.6) 100%);
+  --lumiverse-card-bg: linear-gradient(165deg, rgba(28, 24, 38, 1) 0%, rgba(24, 20, 34, 1) 50%, rgba(20, 17, 30, 1) 100%);
+  --lumiverse-card-image-bg: linear-gradient(135deg, rgba(20, 17, 28, 1) 0%, rgba(28, 22, 40, 1) 100%);
 
   /* Neutral borders */
   --lumiverse-border-neutral: rgba(128, 128, 128, 0.15);
@@ -118,9 +118,9 @@
   /* Chat Sheld — glassmorphic tokens */
   --lcs-glass-bg: rgba(18, 16, 28, 0.55);
   --lcs-glass-border: rgba(255, 255, 255, 0.06);
-  --lcs-glass-blur: 14px;
-  --lcs-glass-soft-blur: 8px;
-  --lcs-glass-strong-blur: 40px;
+  --lcs-glass-blur: 8px;
+  --lcs-glass-soft-blur: 6px;
+  --lcs-glass-strong-blur: 12px;
   --lcs-radius: 14px;
   --lcs-radius-sm: 8px;
   --lcs-radius-xs: 5px;

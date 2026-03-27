@@ -1,3 +1,11 @@
+export interface PersonaAddon {
+  id: string;
+  label: string;
+  content: string;
+  enabled: boolean;
+  sort_order: number;
+}
+
 export interface Persona {
   id: string;
   name: string;

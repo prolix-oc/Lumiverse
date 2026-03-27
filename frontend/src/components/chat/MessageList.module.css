@@ -11,6 +11,15 @@
   gap: 8px;
 }
 
+.listHidden {
+  opacity: 0;
+}
+
+.listRevealed {
+  opacity: 1;
+  transition: opacity 0.2s ease-out;
+}
+
 .sentinel {
   height: 1px;
   flex-shrink: 0;

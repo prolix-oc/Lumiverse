@@ -9,6 +9,7 @@ import { User, BookOpen, MessageSquare, Sparkles, FileText, Tags, Pencil } from 
 import { extractPalette } from '@/lib/colorExtraction'
 import { deriveHeroTextVars } from '@/lib/characterTheme'
 import type { Character } from '@/types/api'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import styles from './CharacterProfile.module.css'
 
 export default function CharacterProfile() {
@@ -19,7 +20,7 @@ export default function CharacterProfile() {
   const setDrawerTab = useStore((s) => s.setDrawerTab)
   const charId = params.id || activeCharacterId
   const storedCharacter = charId ? characters.find((entry) => entry.id === charId) ?? null : null
-  const [character, setCharacter] = useState<Character | null>(null)
+  const [character, setCharacter] = useState<Character | null>(storedCharacter)
   const [loading, setLoading] = useState(false)
   const [heroTextVars, setHeroTextVars] = useState<CSSProperties | undefined>(undefined)
 
@@ -29,18 +30,20 @@ export default function CharacterProfile() {
     setDrawerTab('characters')
   }, [charId, setEditingCharacterId, setDrawerTab])
 
+  // Keep in sync with store updates (e.g. from WS events)
   useEffect(() => {
     if (storedCharacter) setCharacter(storedCharacter)
   }, [storedCharacter])
 
+  // Background refresh from API — only show loading if we have nothing to display
   useEffect(() => {
     if (!charId) return
-    setLoading(true)
+    if (!storedCharacter) setLoading(true)
     charactersApi.get(charId)
       .then(setCharacter)
       .catch((err) => console.error('[CharacterProfile] Failed to load:', err))
       .finally(() => setLoading(false))
-  }, [charId])
+  }, [charId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const avatarUrl = getCharacterAvatarLargeUrl(character) ?? ''
 
@@ -87,9 +90,10 @@ export default function CharacterProfile() {
   }
 
   return (
-    <div className={styles.profile}>
-      {/* Hero avatar */}
-      <div className={styles.hero}>
+    <PanelFadeIn>
+      <div className={styles.profile}>
+        {/* Hero avatar */}
+        <div className={styles.hero}>
         <div className={styles.heroImage}>
           <LazyImage
             src={avatarUrl}
@@ -148,7 +152,8 @@ export default function CharacterProfile() {
           {character.system_prompt || <span className={styles.placeholder}>No system prompt</span>}
         </div>
       </EditorSection>
-    </div>
+      </div>
+    </PanelFadeIn>
   )
 }
 

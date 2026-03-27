@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { X, Search, UserPlus, Loader2 } from 'lucide-react'
@@ -102,9 +102,11 @@ export default function AddGroupMemberModal() {
     }
   }, [closeModal])
 
+  const mouseDownTargetRef = useRef<EventTarget | null>(null)
+
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) closeModal()
+      if (e.target === e.currentTarget && mouseDownTargetRef.current === e.currentTarget) closeModal()
     },
     [closeModal]
   )
@@ -119,6 +121,7 @@ export default function AddGroupMemberModal() {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
+        onMouseDown={(e) => { mouseDownTargetRef.current = e.target }}
         onClick={handleBackdropClick}
       >
         <motion.div

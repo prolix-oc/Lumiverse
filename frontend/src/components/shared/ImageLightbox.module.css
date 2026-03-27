@@ -1,0 +1,45 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  z-index: 10003;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.8);
+  cursor: pointer;
+}
+
+.image {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: var(--lcs-radius-sm, 8px);
+  cursor: default;
+  transition: opacity 0.2s ease;
+}
+
+.spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-primary, #9370db);
+  opacity: 0.6;
+  animation: lightbox-spin 1s linear infinite;
+}
+
+@keyframes lightbox-spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+.error {
+  color: var(--lumiverse-text-dim, rgba(255, 255, 255, 0.4));
+  font-size: 14px;
+  cursor: default;
+}

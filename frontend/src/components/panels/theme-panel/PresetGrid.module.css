@@ -34,7 +34,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   border: 1px solid var(--lumiverse-swatch-border);
 }
 

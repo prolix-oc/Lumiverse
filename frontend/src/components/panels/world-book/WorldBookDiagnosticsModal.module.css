@@ -11,8 +11,8 @@
 }
 
 :global([data-glass]) .backdrop {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .modal {
@@ -20,7 +20,7 @@
   max-height: 88vh;
   display: flex;
   flex-direction: column;
-  background: var(--lumiverse-gradient-modal, var(--lumiverse-bg));
+  background: var(--lumiverse-bg);
   border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
   border-radius: 18px;
   box-shadow: var(--lumiverse-shadow-xl, 0 28px 80px rgba(0, 0, 0, 0.42));
@@ -167,21 +167,17 @@
   padding: 18px;
   border-radius: 18px;
   border: 1px solid var(--lumiverse-border);
-  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 82%, transparent);
+  background: var(--lumiverse-fill-subtle);
 }
 
 .herosuccess {
   border-color: color-mix(in srgb, var(--lumiverse-primary) 35%, var(--lumiverse-border));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-primary) 10%, transparent), transparent 55%),
-    color-mix(in srgb, var(--lumiverse-fill-subtle) 82%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-fill-subtle));
 }
 
 .herowarning {
-  border-color: color-mix(in srgb, #d39b32 30%, var(--lumiverse-border));
-  background:
-    linear-gradient(135deg, rgba(211, 155, 50, 0.12), transparent 55%),
-    color-mix(in srgb, var(--lumiverse-fill-subtle) 82%, transparent);
+  border-color: color-mix(in srgb, var(--lumiverse-warning, #d39b32) 30%, var(--lumiverse-border));
+  background: color-mix(in srgb, var(--lumiverse-warning, #d39b32) 8%, var(--lumiverse-fill-subtle));
 }
 
 .heroneutral {
@@ -195,7 +191,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--lumiverse-bg) 82%, transparent);
+  background: var(--lumiverse-fill);
   color: var(--lumiverse-primary);
   flex-shrink: 0;
 }
@@ -234,7 +230,7 @@
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
-  background: color-mix(in srgb, var(--lumiverse-bg) 76%, transparent);
+  background: var(--lumiverse-fill);
   font-size: 11.5px;
   color: var(--lumiverse-text);
 }
@@ -278,7 +274,7 @@
 .hitCard {
   border-radius: 16px;
   border: 1px solid var(--lumiverse-border);
-  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 88%, transparent);
+  background: var(--lumiverse-fill-subtle);
 }
 
 .metricCard {

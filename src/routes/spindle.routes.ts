@@ -13,6 +13,8 @@ import {
   updateEphemeralPoolConfig,
 } from "../spindle/ephemeral-pool.service";
 import { readFileSync, existsSync } from "fs";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 const app = new Hono();
 
@@ -171,10 +173,21 @@ app.post("/install", requireOwner, async (c) => {
     const branch =
       typeof body.branch === "string" && body.branch.trim() ? body.branch.trim() : null;
 
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      operation: "installing",
+      name: body.github_url,
+    });
+
     const ext = await managerSvc.install(body.github_url, {
       installScope,
       installedByUserId,
       branch,
+    });
+
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "installed",
+      name: ext.name,
     });
 
     return c.json(ext, 201);
@@ -200,6 +213,12 @@ app.post("/:id/update", async (c) => {
     if (!ext) return c.json({ error: "Not found" }, 404);
     if (!canManageExtension(c, ext)) return c.json({ error: "Forbidden" }, 403);
 
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "updating",
+      name: ext.name,
+    });
+
     // Stop if running
     if (lifecycle.isRunning(ext.id)) {
       await lifecycle.stopExtension(ext.id);
@@ -211,6 +230,12 @@ app.post("/:id/update", async (c) => {
     if (ext.enabled) {
       await lifecycle.startExtension(ext.id);
     }
+
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "updated",
+      name: ext.name,
+    });
 
     return c.json(updated);
   } catch (err: any) {
@@ -225,12 +250,25 @@ app.delete("/:id", async (c) => {
     if (!ext) return c.json({ error: "Not found" }, 404);
     if (!canManageExtension(c, ext)) return c.json({ error: "Forbidden" }, 403);
 
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "removing",
+      name: ext.name,
+    });
+
     // Stop if running
     if (lifecycle.isRunning(ext.id)) {
       await lifecycle.stopExtension(ext.id);
     }
 
     managerSvc.remove(ext.identifier);
+
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "removed",
+      name: ext.name,
+    });
+
     return c.json({ success: true });
   } catch (err: any) {
     return c.json({ error: err.message }, 400);
@@ -244,8 +282,20 @@ app.post("/:id/enable", requireOwner, async (c) => {
     if (!ext) return c.json({ error: "Not found" }, 404);
     if (!canManageExtension(c, ext)) return c.json({ error: "Forbidden" }, 403);
 
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "enabling",
+      name: ext.name,
+    });
+
     managerSvc.enable(ext.identifier);
     await lifecycle.startExtension(ext.id);
+
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "enabled",
+      name: ext.name,
+    });
 
     return c.json({ success: true });
   } catch (err: any) {
@@ -260,10 +310,22 @@ app.post("/:id/disable", async (c) => {
     if (!ext) return c.json({ error: "Not found" }, 404);
     if (!canManageExtension(c, ext)) return c.json({ error: "Forbidden" }, 403);
 
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "disabling",
+      name: ext.name,
+    });
+
     if (lifecycle.isRunning(ext.id)) {
       await lifecycle.stopExtension(ext.id);
     }
     managerSvc.disable(ext.identifier);
+
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "disabled",
+      name: ext.name,
+    });
 
     return c.json({ success: true });
   } catch (err: any) {
@@ -280,7 +342,19 @@ app.post("/:id/restart", async (c) => {
 
     if (!ext.enabled) return c.json({ error: "Extension is not enabled" }, 400);
 
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "restarting",
+      name: ext.name,
+    });
+
     await lifecycle.restartExtension(ext.id);
+
+    eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
+      extensionId: ext.id,
+      operation: "restarted",
+      name: ext.name,
+    });
 
     return c.json({ success: true });
   } catch (err: any) {
@@ -327,15 +401,26 @@ app.post("/:id/permissions", async (c) => {
       }
     }
 
-    // Restart to apply permission changes if running
+    const updated = managerSvc.getExtension(ext.id);
+    const allGranted = updated?.granted_permissions ?? [];
+
+    // Hot-apply permission changes to the running worker (no restart needed)
     if (lifecycle.isRunning(ext.id)) {
-      await lifecycle.restartExtension(ext.id);
+      if (body.grant) {
+        for (const perm of body.grant) {
+          lifecycle.notifyPermissionChanged(ext.id, perm, true, allGranted);
+        }
+      }
+      if (body.revoke) {
+        for (const perm of body.revoke) {
+          lifecycle.notifyPermissionChanged(ext.id, perm, false, allGranted);
+        }
+      }
     }
 
-    const updated = managerSvc.getExtension(ext.id);
     return c.json({
       requested: updated?.permissions,
-      granted: updated?.granted_permissions,
+      granted: allGranted,
     });
   } catch (err: any) {
     return c.json({ error: err.message }, 400);

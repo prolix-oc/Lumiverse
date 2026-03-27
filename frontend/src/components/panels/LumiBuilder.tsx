@@ -26,6 +26,7 @@ import { useLumiBuilder } from '@/hooks/useLumiBuilder'
 import { useStore } from '@/store'
 import type { LumiPipeline, LumiModule, BlockGroupConfig } from '@/types/api'
 import clsx from 'clsx'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import styles from './LumiBuilder.module.css'
 
 /* ── Sub-components ── */
@@ -762,11 +763,12 @@ export default function LumiBuilder({ compact = true }: { compact?: boolean }) {
   }
 
   return (
-    <div className={styles.layout}>
-      {/* ── Toolbar ── */}
-      <div className={styles.toolbar}>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <select
+    <PanelFadeIn>
+      <div className={styles.layout}>
+        {/* ── Toolbar ── */}
+        <div className={styles.toolbar}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <select
             className={styles.select}
             style={{ width: '100%' }}
             value={activePresetId || ''}
@@ -957,6 +959,7 @@ export default function LumiBuilder({ compact = true }: { compact?: boolean }) {
       </div>
 
       {createDialog}
-    </div>
+      </div>
+    </PanelFadeIn>
   )
 }

@@ -20,8 +20,12 @@ html {
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-text-size-adjust: 100%;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* Let the browser choose optimal font rendering. On macOS Big Sur+,
+     subpixel AA is disabled system-wide so `antialiased` only disables
+     stem darkening — making all text thinner/dimmer on dark backgrounds.
+     `auto` preserves stem darkening for bolder, more readable text. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 body {

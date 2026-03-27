@@ -251,12 +251,12 @@
   max-width: 200px;
   padding: 5px 9px;
   border-radius: 6px;
-  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.97));
+  background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
   font-size: 11px;
   white-space: nowrap;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
   z-index: 200;
   opacity: 0;
   pointer-events: none;
@@ -288,7 +288,7 @@
 .iconBtn:hover {
   background: var(--lumiverse-primary);
   border-color: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 /* ── Book fields toggle ── */
@@ -408,7 +408,7 @@
 .primaryActionBtn {
   background: var(--lumiverse-primary);
   border: 1px solid transparent;
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .primaryActionBtn:hover {
@@ -748,7 +748,7 @@
   border-radius: 6px;
   background: var(--lumiverse-primary);
   border: none;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 11.5px;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
@@ -829,26 +829,26 @@
 }
 
 .badgeConstant {
-  background: rgba(245, 158, 11, 0.14);
-  color: rgba(245, 178, 51, 0.9);
+  background: var(--lumiverse-warning-020, rgba(245, 158, 11, 0.2));
+  color: var(--lumiverse-warning, #f5a623);
 }
 
 .badgeVector {
-  background: rgba(34, 197, 94, 0.14);
-  color: rgba(74, 207, 124, 0.9);
+  background: var(--lumiverse-success-020, rgba(34, 197, 94, 0.2));
+  color: var(--lumiverse-success, #4ade80);
 }
 
 .badgeTrigger {
-  background: var(--lumiverse-fill);
-  color: var(--lumiverse-text-dim);
+  background: var(--lumiverse-fill-medium, var(--lumiverse-fill-strong));
+  color: var(--lumiverse-text-muted);
 }
 
 .entryMetaItem {
   font-size: 10px;
-  color: var(--lumiverse-text-dim);
+  color: var(--lumiverse-text-muted);
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--lumiverse-fill);
+  background: var(--lumiverse-fill-medium, var(--lumiverse-fill-strong));
   line-height: 1.5;
   white-space: nowrap;
 }

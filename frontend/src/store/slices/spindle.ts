@@ -1,11 +1,13 @@
 import type { StateCreator } from 'zustand'
-import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest } from '@/types/store'
+import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride } from '@/types/store'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/loader'
 
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
+  extensionThemeOverrides: {},
+  extensionOperationStatus: null,
   spindlePrivileged: false,
   pendingPermissionRequest: null,
   pendingTextEditor: null,
@@ -160,5 +162,39 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
         detail: { requestId, selectedKey },
       })
     )
+  },
+
+  setExtensionThemeOverride: (override: ExtensionThemeOverride) => {
+    set((state) => ({
+      extensionThemeOverrides: {
+        ...state.extensionThemeOverrides,
+        [override.extensionId]: override,
+      },
+    }))
+  },
+
+  clearExtensionThemeOverride: (extensionId: string) => {
+    set((state) => {
+      const { [extensionId]: _, ...rest } = state.extensionThemeOverrides
+      return { extensionThemeOverrides: rest }
+    })
+  },
+
+  clearAllExtensionThemeOverrides: () => {
+    set({ extensionThemeOverrides: {} })
+  },
+
+  setExtensionOperationStatus: (extensionId: string | null, operation: string, name: string | null) => {
+    // "completed" operations (past tense) auto-clear after a short delay
+    const isCompleted = !operation.endsWith('ing')
+    set({ extensionOperationStatus: { extensionId, operation, name } })
+    if (isCompleted) {
+      setTimeout(() => {
+        const current = get().extensionOperationStatus
+        if (current && current.operation === operation && current.extensionId === extensionId) {
+          set({ extensionOperationStatus: null })
+        }
+      }, 2000)
+    }
   },
 })

@@ -330,8 +330,12 @@ export function listCharactersDiscover(
   };
 }
 
+// Prepared statement for hot-path character fetch
+let _stmtCharById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+
 export function getCharacter(userId: string, id: string): Character | null {
-  const row = getDb().query("SELECT * FROM characters WHERE id = ? AND user_id = ?").get(id, userId) as any;
+  if (!_stmtCharById) _stmtCharById = getDb().query("SELECT * FROM characters WHERE id = ? AND user_id = ?");
+  const row = _stmtCharById.get(id, userId) as any;
   if (!row) return null;
   return rowToCharacter(row);
 }

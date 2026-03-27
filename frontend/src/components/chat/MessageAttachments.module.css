@@ -42,28 +42,43 @@
   max-height: 240px;
 }
 
-/* ── Assistant images — inline prose style (matches greeting images) ── */
-.inlineImageWrap {
+/* ── Assistant images — compact thumbnail that opens in lightbox ── */
+.inlineImageBtn {
   display: block;
-  margin: 8px 0;
+  overflow: hidden;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  cursor: pointer;
+  padding: 0;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--lcs-radius, 14px);
+  max-width: 240px;
+  max-height: 240px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  transition:
+    border-color var(--lcs-transition-fast, 120ms ease),
+    box-shadow var(--lcs-transition-fast, 120ms ease),
+    transform var(--lcs-transition-fast, 120ms ease);
+}
+
+.inlineImageBtn:hover {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  transform: scale(1.02);
+}
+
+.inlineImageWrap {
+  overflow: hidden;
 }
 
 .inlineImage {
-  max-width: 100%;
-  max-height: 400px;
-  object-fit: contain;
+  display: block;
   border-radius: var(--lcs-radius-sm, 8px);
-  cursor: pointer;
-  transition: box-shadow var(--lcs-transition-fast, 120ms ease);
 }
 
-.inlineImage:hover {
-  box-shadow: var(--lumiverse-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.3));
-}
-
-/* ── Mobile: scale user images down ── */
+/* ── Mobile: scale images down ── */
 @media (max-width: 480px) {
-  .imageThumbUser {
+  .imageThumbUser,
+  .inlineImageBtn {
     max-width: 180px;
     max-height: 180px;
   }

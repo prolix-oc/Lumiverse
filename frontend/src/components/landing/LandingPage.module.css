@@ -31,13 +31,14 @@
   overflow: hidden;
 }
 
+/* Static glows — no animation. Three animated compositor layers with large
+   radial gradients were consuming ~50% GPU on high-DPI displays even with
+   transform-only keyframes. Static placement is visually equivalent. */
 .bgGlow {
   position: absolute;
   border-radius: 50%;
   pointer-events: none;
-  opacity: 0.22;
   background: radial-gradient(circle at center, var(--lumiverse-primary-015) 0%, var(--lumiverse-primary-010) 45%, transparent 72%);
-  will-change: transform, opacity;
 }
 
 .bgGlow1 {
@@ -45,7 +46,7 @@
   height: 600px;
   top: -200px;
   left: -100px;
-  animation: landingGlowFloatA 14s ease-in-out infinite;
+  opacity: 0.22;
 }
 
 .bgGlow2 {
@@ -53,7 +54,7 @@
   height: 500px;
   bottom: -150px;
   right: -100px;
-  animation: landingGlowFloatB 16s ease-in-out infinite;
+  opacity: 0.2;
 }
 
 .bgGlow3 {
@@ -61,46 +62,12 @@
   height: 400px;
   left: calc(50% - 200px);
   top: 40%;
-  animation: landingGlowFloatC 18s ease-in-out infinite;
+  opacity: 0.16;
 }
 
-@keyframes landingGlowFloatA {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-    opacity: 0.2;
-  }
-  50% {
-    transform: translate3d(28px, 22px, 0) scale(1.05);
-    opacity: 0.26;
-  }
-}
-
-@keyframes landingGlowFloatB {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-    opacity: 0.18;
-  }
-  50% {
-    transform: translate3d(-26px, -16px, 0) scale(1.06);
-    opacity: 0.24;
-  }
-}
-
-@keyframes landingGlowFloatC {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-    opacity: 0.14;
-  }
-  50% {
-    transform: translate3d(0, -20px, 0) scale(1.08);
-    opacity: 0.2;
-  }
-}
-
-/* Grid pattern */
+/* Grid pattern — uses opacity instead of mask-image. A full-viewport
+   mask-image forces the compositor to maintain a large alpha texture
+   on every frame. A static low-opacity grid is nearly free. */
 .grid {
   position: fixed;
   inset: 0;
@@ -109,7 +76,7 @@
     linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
     linear-gradient(90deg, var(--lumiverse-primary-010) 1px, transparent 1px);
   background-size: 60px 60px;
-  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  opacity: 0.4;
 }
 
 /* Content */
@@ -157,13 +124,8 @@
   inset: -6px;
   border-radius: 18px;
   background: radial-gradient(circle, var(--lumiverse-primary-020) 0%, transparent 70%);
-  animation: logoGlowPulse 4s ease-in-out infinite;
+  opacity: 0.6;
   pointer-events: none;
-}
-
-@keyframes logoGlowPulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 0.8; transform: scale(1.1); }
 }
 
 .logoText h1 {
@@ -183,7 +145,7 @@
   font-size: 13px;
   color: var(--lumiverse-text-muted);
   cursor: pointer;
-  transition: color 0.2s ease, gap 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: color 0.2s ease;
 }
 
 .taglineBtn svg {
@@ -217,19 +179,20 @@
 /* Card tilt wrapper — handles 3D tilt separately from framer-motion entry */
 .cardTilt {
   perspective: 800px;
-  will-change: transform;
   transition: transform 400ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .cardTilt:hover {
   z-index: 10;
+  will-change: transform;
 }
 
 .cardTilt.tilting {
   transition: transform 100ms ease-out;
 }
 
-/* Card */
+/* Card — uses CSS animation for entry (no lingering inline styles that
+   would promote every card to its own compositor layer). */
 .card {
   position: relative;
   border-radius: 16px;
@@ -240,6 +203,14 @@
   transition:
     box-shadow 300ms cubic-bezier(0.22, 1, 0.36, 1),
     border-color 200ms ease;
+  animation: cardEntry 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes cardEntry {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
 }
 
 .card:hover {
@@ -285,7 +256,6 @@
 @media (prefers-reduced-motion: reduce) {
   .cardTilt {
     perspective: none;
-    will-change: auto;
     transform: none !important;
   }
   .cardImage img,
@@ -585,7 +555,7 @@
   border-radius: 10px;
   background: linear-gradient(135deg, var(--lumiverse-primary), var(--lumiverse-primary-hover));
   border: 1px solid var(--lumiverse-primary-050);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-weight: 600;
   font-size: 14px;
   cursor: pointer;

@@ -15,6 +15,10 @@ export const packsApi = {
     return get<PaginatedResult<Pack>>('/packs', params)
   },
 
+  listWithItems(params?: { limit?: number; offset?: number }) {
+    return get<PaginatedResult<PackWithItems>>('/packs', { ...params, include_items: 'true' })
+  },
+
   get(id: string) {
     return get<PackWithItems>(`/packs/${id}`)
   },

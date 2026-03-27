@@ -7,8 +7,31 @@ import './theme/variables.css'
 import './theme/reset.css'
 import './theme/global.css'
 
-// Register service worker for PWA support — autoUpdate reloads on new versions
-registerSW({ immediate: true })
+// Register service worker for PWA support — autoUpdate sends SKIP_WAITING
+// automatically when a new SW is detected.
+registerSW({
+  immediate: true,
+  onRegisteredSW(_swUrl, registration) {
+    // Long-running tabs (especially PWAs) may stay open for days.
+    // Periodically check for a new SW so deploys are picked up without
+    // requiring a navigation or manual refresh.
+    if (registration) {
+      setInterval(() => { registration.update() }, 60 * 60 * 1000)
+    }
+  },
+})
+
+// Auto-reload when a new service worker takes control after a deploy.
+// The new SW calls clients.claim(), firing this event on all open tabs.
+// Guard: skip on first install (no previous controller) to avoid a
+// pointless reload when the user visits for the very first time.
+let reloading = false
+const hadController = !!navigator.serviceWorker?.controller
+navigator.serviceWorker?.addEventListener('controllerchange', () => {
+  if (!hadController || reloading) return
+  reloading = true
+  window.location.reload()
+})
 
 // Navigate when a push notification is clicked (SW posts NAVIGATE message)
 navigator.serviceWorker?.addEventListener('message', (event) => {

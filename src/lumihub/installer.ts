@@ -257,7 +257,7 @@ async function installFromUrl(
         for (const bundled of lumiverseModules.regex_scripts) {
           try {
             regexSvc.createRegexScript(userId, {
-              ...bundled,
+              ...(bundled as import("../types/regex-script").CreateRegexScriptInput),
               scope: "character",
               scope_id: character.id,
               metadata: { ...bundled.metadata, source: "charx_bundle" },

@@ -92,9 +92,11 @@
 
 .progressFill {
   height: 100%;
+  width: 100%;
   background: var(--lumiverse-primary);
   border-radius: 3px;
-  transition: width 0.2s ease;
+  transform-origin: left;
+  transition: transform 0.2s ease;
 }
 
 .currentFile {
@@ -204,7 +206,7 @@
   border-radius: 6px;
   border: none;
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;

@@ -69,6 +69,11 @@
   color: #f5a623;
 }
 
+.reasoningBound {
+  flex-shrink: 0;
+  color: var(--lumiverse-text-dim);
+}
+
 .itemMeta {
   font-size: 11px;
   color: var(--lumiverse-text-dim);

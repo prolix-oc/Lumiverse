@@ -182,7 +182,7 @@
   border-radius: 6px;
   border: none;
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;

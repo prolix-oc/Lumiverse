@@ -98,6 +98,22 @@ export async function restartExtension(id: string): Promise<void> {
   await startExtension(id);
 }
 
+/**
+ * Notify a running extension that a permission was granted or revoked.
+ * The worker updates its internal cache and fires onChanged handlers —
+ * no restart needed.
+ */
+export function notifyPermissionChanged(
+  id: string,
+  permission: string,
+  granted: boolean,
+  allGranted: string[]
+): void {
+  const host = runningExtensions.get(id);
+  if (!host) return;
+  host.notifyPermissionChanged(permission, granted, allGranted);
+}
+
 export function getRunningExtensions(): Map<string, WorkerHost> {
   return runningExtensions;
 }

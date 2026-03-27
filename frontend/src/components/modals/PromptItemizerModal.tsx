@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { X, ChevronRight, Copy, Check, Code } from 'lucide-react'
@@ -69,8 +69,10 @@ export default function PromptItemizerModal() {
     }
   }, [closeModal])
 
+  const mouseDownTargetRef = useRef<EventTarget | null>(null)
+
   const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => { if (e.target === e.currentTarget) closeModal() },
+    (e: React.MouseEvent) => { if (e.target === e.currentTarget && mouseDownTargetRef.current === e.currentTarget) closeModal() },
     [closeModal],
   )
 
@@ -101,6 +103,7 @@ export default function PromptItemizerModal() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
+        onMouseDown={(e) => { mouseDownTargetRef.current = e.target }}
         onClick={handleBackdropClick}
       >
         <motion.div

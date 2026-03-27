@@ -61,17 +61,8 @@ function EmptyState() {
 
 const containerVariants = {
   hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: { staggerChildren: 0.04 },
-  },
+  visible: { opacity: 1 },
   exit: { opacity: 0 },
-}
-
-const cardVariants = {
-  hidden: { opacity: 0, y: 20, scale: 0.95 },
-  visible: { opacity: 1, y: 0, scale: 1 },
-  exit: { opacity: 0, scale: 0.95 },
 }
 
 interface ChatCardProps {
@@ -143,10 +134,9 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
-      <motion.div
+      <div
         ref={cardRef}
         className={styles.card}
-        variants={cardVariants}
       >
         {onDelete && (
           <button
@@ -187,7 +177,7 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
             </div>
           </div>
         </button>
-      </motion.div>
+      </div>
     </div>
   )
 }

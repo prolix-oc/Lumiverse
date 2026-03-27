@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router'
-import { AnimatePresence } from 'motion/react'
 import { UserRound } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
@@ -181,6 +180,18 @@ export default function ChatView() {
   const wallpaperFit = wallpaper.fit ?? 'cover'
   const hasAnyBackground = !!(sceneBackground || wallpaperUrl)
 
+  // Sync data-chat-bg on the root so message card CSS can skip backdrop-filter
+  // when the background is a solid color (blur on solid = pure GPU waste).
+  useEffect(() => {
+    const root = document.documentElement
+    if (hasAnyBackground) {
+      root.setAttribute('data-chat-bg', '')
+    } else {
+      root.removeAttribute('data-chat-bg')
+    }
+    return () => root.removeAttribute('data-chat-bg')
+  }, [hasAnyBackground])
+
   if (!chatId) return null
 
   return (
@@ -235,12 +246,10 @@ export default function ChatView() {
           transitionDuration: `${Math.max(100, imageGeneration.fadeTransitionMs ?? 800)}ms`,
         }}
       />
-      <div className={styles.body}>
+      <div className={styles.body} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
         {portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
-          <>
-            <AnimatePresence>
-              {portraitPanelOpen && <PortraitPanel side="left" />}
-            </AnimatePresence>
+          <div className={clsx(styles.portraitSide, styles.portraitSideLeft, portraitPanelOpen && styles.portraitSideOpen)}>
+            <PortraitPanel side="left" />
             <button
               type="button"
               className={clsx(styles.portraitTab, styles.portraitTabLeft, portraitPanelOpen && styles.portraitTabActive)}
@@ -249,7 +258,7 @@ export default function ChatView() {
             >
               <UserRound size={14} />
             </button>
-          </>
+          </div>
         )}
 
         <div className={styles.chatColumn}>
@@ -263,7 +272,7 @@ export default function ChatView() {
         </div>
 
         {portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
-          <>
+          <div className={clsx(styles.portraitSide, styles.portraitSideRight, portraitPanelOpen && styles.portraitSideOpen)}>
             <button
               type="button"
               className={clsx(styles.portraitTab, styles.portraitTabRight, portraitPanelOpen && styles.portraitTabActive)}
@@ -272,10 +281,8 @@ export default function ChatView() {
             >
               <UserRound size={14} />
             </button>
-            <AnimatePresence>
-              {portraitPanelOpen && <PortraitPanel side="right" />}
-            </AnimatePresence>
-          </>
+            <PortraitPanel side="right" />
+          </div>
         )}
       </div>
       <ExpressionDisplay />

@@ -36,11 +36,48 @@ These are always available:
 | `"chat_mutation"` | Read and modify chat messages (append, update, delete) |
 | `"event_tracking"` | Track, query, and replay extension-level telemetry events |
 | `"ui_panels"` | Create floating widgets and docked edge panels that overlay/consume screen space |
-| `"app_manipulation"` | Mount unrestricted portals into the document body that persist across routes |
+| `"app_manipulation"` | Mount unrestricted portals into the document body that persist across routes. Also grants access to the Theme API for applying CSS variable overrides on top of the user's theme |
 | `"oauth"` | Register an OAuth callback handler to receive authorization redirects from external services |
 | `"push_notification"` | Send OS-level push notifications to users' devices even when the app is closed or backgrounded |
+| `"image_gen"` | Generate images via image gen connection profiles. Also grants access to list providers, connections, and models |
 
 Users grant permissions individually from the Extensions panel. Your extension should degrade gracefully if a permission isn't granted.
+
+## Live Permission Updates
+
+Permission changes take effect **immediately** — the extension does not restart when a user grants or revokes a permission. This means:
+
+- The host enforces permissions on every API call in real time. A revoked permission blocks the very next request.
+- Your extension receives a `permission_changed` notification so it can react instantly (enable/disable features, update UI, re-register tools, etc.).
+- The local permission cache (`spindle.permissions.has()`) is kept in sync automatically.
+
+This makes permission management fast and seamless for users. Your extension should be designed to activate and deactivate features on the fly.
+
+## Checking Permissions
+
+### Synchronous Check (recommended)
+
+Use `spindle.permissions.has()` for instant, zero-cost permission checks. It reads from a local cache that is seeded on startup and kept in sync by `permission_changed` messages:
+
+```ts
+if (spindle.permissions.has('generation')) {
+  // Safe to use spindle.generate.* and spindle.connections.*
+  await initGenerationFeatures()
+}
+```
+
+This is ideal for gating features at startup or inside event handlers.
+
+### Async Check
+
+Use `spindle.permissions.getGranted()` to fetch the full list of granted permissions from the host. This performs an RPC roundtrip but is guaranteed to be authoritative:
+
+```ts
+const granted = await spindle.permissions.getGranted()
+if (granted.includes('generation')) {
+  // ...
+}
+```
 
 ## Handling Permission Denials
 
@@ -76,13 +113,115 @@ spindle.permissions.onDenied(({ permission, operation }) => {
 spindle.registerInterceptor(async (messages, ctx) => { ... })
 ```
 
-### Checking Permissions Upfront
+## Reacting to Permission Changes
 
-You can also check permissions upfront to avoid the denial entirely:
+Use `spindle.permissions.onChanged()` to respond when a user grants or revokes a permission at runtime. This is the core mechanism for building extensions that activate features on the fly:
 
 ```ts
-const granted = await spindle.permissions.getGranted()
-if (granted.includes('generation')) {
-  // Safe to use spindle.generate.* and spindle.connections.*
+spindle.permissions.onChanged(({ permission, granted, allGranted }) => {
+  if (permission === 'generation') {
+    if (granted) {
+      spindle.log.info('Generation permission granted — enabling features')
+      startGenerationFeatures()
+    } else {
+      spindle.log.info('Generation permission revoked — disabling features')
+      stopGenerationFeatures()
+    }
+  }
+})
+```
+
+The handler receives a `PermissionChangedDetail` object:
+
+| Field | Type | Description |
+|---|---|---|
+| `permission` | `string` | The permission that changed |
+| `granted` | `boolean` | `true` if granted, `false` if revoked |
+| `allGranted` | `string[]` | Full list of currently granted permissions after the change |
+
+You can also listen for the `PERMISSION_CHANGED` event via `spindle.on()`:
+
+```ts
+spindle.on('PERMISSION_CHANGED', (detail) => {
+  // detail has the same shape as PermissionChangedDetail
+})
+```
+
+## Patterns
+
+### Gate Features at Startup, Activate on Grant
+
+The recommended pattern is to check permissions at startup, then listen for changes:
+
+```ts
+// ── Startup ──
+if (spindle.permissions.has('generation')) {
+  startGenerationFeatures()
+}
+
+if (spindle.permissions.has('tools')) {
+  registerAllTools()
+}
+
+// ── React to live changes ──
+spindle.permissions.onChanged(({ permission, granted }) => {
+  switch (permission) {
+    case 'generation':
+      granted ? startGenerationFeatures() : stopGenerationFeatures()
+      break
+    case 'tools':
+      granted ? registerAllTools() : unregisterAllTools()
+      break
+  }
+})
+```
+
+### Deferred Registration
+
+If your extension's core feature requires a gated permission, you can defer registration until the permission is granted:
+
+```ts
+let interceptorRegistered = false
+
+function tryRegisterInterceptor() {
+  if (interceptorRegistered) return
+  if (!spindle.permissions.has('interceptor')) return
+
+  spindle.registerInterceptor(async (messages, ctx) => {
+    // Modify the prompt...
+    return messages
+  })
+  interceptorRegistered = true
+  spindle.log.info('Interceptor registered')
+}
+
+// Try immediately
+tryRegisterInterceptor()
+
+// Also try whenever permissions change
+spindle.permissions.onChanged(({ permission, granted }) => {
+  if (permission === 'interceptor' && granted) {
+    tryRegisterInterceptor()
+  }
+})
+```
+
+### Graceful Degradation with User Feedback
+
+Show the user what's missing using toast notifications:
+
+```ts
+async function generateSummary(chatId: string) {
+  if (!spindle.permissions.has('generation')) {
+    spindle.toast.warning(
+      'Enable the "Generation" permission in the Extensions panel to use this feature.'
+    )
+    return null
+  }
+
+  const result = await spindle.generate.quiet({
+    messages: [{ role: 'user', content: 'Summarize this conversation.' }],
+  })
+  return result
 }
 ```

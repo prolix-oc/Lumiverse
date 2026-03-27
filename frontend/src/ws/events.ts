@@ -10,4 +10,5 @@ export type {
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
   SpindleToastPayload,
+  SpindleThemeOverridesPayload,
 } from '@/types/ws-events'

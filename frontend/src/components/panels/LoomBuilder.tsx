@@ -78,6 +78,7 @@ import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { useStore as __contextMeterStore } from '@/store'
 import { groupBreakdownEntries as __groupBreakdownEntries } from '@/lib/prompt-breakdown'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import s from './LoomBuilder.module.css'
 
 // ============================================================================
@@ -1359,10 +1360,11 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
 
   // List view
   return (
-    <div className={clsx(s.layout, compact && s.layoutCompact)}>
-      {/* Preset Selector */}
-      <div className={s.toolbar}>
-        <PresetSelector
+    <PanelFadeIn>
+      <div className={clsx(s.layout, compact && s.layoutCompact)}>
+        {/* Preset Selector */}
+        <div className={s.toolbar}>
+          <PresetSelector
           registry={registry}
           activePresetId={activePresetId}
           onSelect={selectPreset}
@@ -1621,15 +1623,16 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
       <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleFileSelect} />
 
       {/* Confirm delete dialog */}
-      <ConfirmationModal
-        isOpen={!!confirmDelete}
-        title="Delete Block"
-        message="Are you sure you want to delete this block? This action cannot be undone."
-        variant="danger"
-        confirmText="Delete"
-        onConfirm={confirmDeleteBlock}
-        onCancel={() => setConfirmDelete(null)}
-      />
-    </div>
+        <ConfirmationModal
+          isOpen={!!confirmDelete}
+          title="Delete Block"
+          message="Are you sure you want to delete this block? This action cannot be undone."
+          variant="danger"
+          confirmText="Delete"
+          onConfirm={confirmDeleteBlock}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      </div>
+    </PanelFadeIn>
   )
 }

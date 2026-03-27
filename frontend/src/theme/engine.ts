@@ -14,6 +14,99 @@ function rgba(r: number, g: number, b: number, a: number = 1): string {
   return `rgba(${r}, ${g}, ${b}, ${a})`
 }
 
+/**
+ * Ensure a color has sufficient contrast for readability.
+ * Dark mode: enforces minimum lightness (bright enough to read on dark bg).
+ * Light mode: enforces maximum lightness (dark enough to read on light bg).
+ * Accepts hex (#rrggbb), rgb(), rgba(), or hsl() strings.
+ */
+function ensureReadable(color: string, isDark: boolean): string {
+  const rgb = parseColorToRgb(color)
+  if (!rgb) return color
+  const [r, g, b] = rgb
+  // Convert to HSL for lightness clamping
+  const rN = r / 255, gN = g / 255, bN = b / 255
+  const max = Math.max(rN, gN, bN), min = Math.min(rN, gN, bN)
+  let h = 0, s = 0
+  const l = (max + min) / 2
+  if (max !== min) {
+    const d = max - min
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+    if (max === rN) h = ((gN - bN) / d + (gN < bN ? 6 : 0)) / 6
+    else if (max === gN) h = ((bN - rN) / d + 2) / 6
+    else h = ((rN - gN) / d + 4) / 6
+  }
+  const lPct = l * 100
+  const sPct = s * 100
+  // Dark mode: text must be at least 75% lightness to read on dark backgrounds.
+  // Blue/purple hues have low perceptual luminance — 65% HSL lightness still
+  // looks dark. 75% ensures readability across all hues.
+  // Light mode: text must be at most 35% lightness to read on light backgrounds.
+  const clampedL = isDark ? Math.max(lPct, 75) : Math.min(lPct, 35)
+  // Also ensure minimum saturation so the color reads as tinted, not gray
+  const clampedS = Math.max(sPct, 30)
+  if (Math.abs(clampedL - lPct) < 1 && Math.abs(clampedS - sPct) < 1) return color
+  return `hsl(${Math.round(h * 360)}, ${Math.round(clampedS)}%, ${Math.round(clampedL)}%)`
+}
+
+/** Parse any CSS color string to [r, g, b]. */
+function parseColorToRgb(color: string): [number, number, number] | null {
+  if (color.startsWith('#')) return hexToRgb(color)
+  const rgbMatch = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/)
+  if (rgbMatch) return [+rgbMatch[1], +rgbMatch[2], +rgbMatch[3]]
+  const hslMatch = color.match(/hsla?\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%/)
+  if (hslMatch) {
+    // Convert HSL to RGB
+    const hh = +hslMatch[1] / 360, ss = +hslMatch[2] / 100, ll = +hslMatch[3] / 100
+    if (ss === 0) { const v = Math.round(ll * 255); return [v, v, v] }
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1
+      if (t < 1/6) return p + (q - p) * 6 * t
+      if (t < 1/2) return q
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6
+      return p
+    }
+    const q = ll < 0.5 ? ll * (1 + ss) : ll + ss - ll * ss
+    const p = 2 * ll - q
+    return [
+      Math.round(hue2rgb(p, q, hh + 1/3) * 255),
+      Math.round(hue2rgb(p, q, hh) * 255),
+      Math.round(hue2rgb(p, q, hh - 1/3) * 255),
+    ]
+  }
+  return null
+}
+
+/**
+ * Returns an in-theme contrast color for icons/text on a colored background.
+ * Instead of flat white/black, uses the same hue shifted to the opposite
+ * lightness extreme — keeps the character tint while guaranteeing visibility.
+ */
+function contrastFor(color: string): string {
+  const rgb = parseColorToRgb(color)
+  if (!rgb) return '#fff'
+  const [r, g, b] = rgb
+  // Perceived luminance (ITU-R BT.709)
+  const lum = r * 0.2126 + g * 0.7152 + b * 0.0722
+  // Light bg → dark icon (same hue, low lightness)
+  // Dark bg → light icon (same hue, high lightness)
+  const rN = r / 255, gN = g / 255, bN = b / 255
+  const max = Math.max(rN, gN, bN), min = Math.min(rN, gN, bN)
+  let h = 0, s = 0
+  if (max !== min) {
+    const d = max - min
+    const l = (max + min) / 2
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+    if (max === rN) h = ((gN - bN) / d + (gN < bN ? 6 : 0)) / 6
+    else if (max === gN) h = ((bN - rN) / d + 2) / 6
+    else h = ((rN - gN) / d + 4) / 6
+  }
+  const isLight = lum > 140
+  const contrastL = isLight ? 15 : 95
+  const contrastS = Math.min(Math.round(s * 100), 30) // subtle tint, not garish
+  return `hsl(${Math.round(h * 360)}, ${contrastS}%, ${contrastL}%)`
+}
+
 /** Parse a hex color (#rrggbb or #rgb) to [r, g, b] (0-255). */
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = hex.replace('#', '')
@@ -75,6 +168,8 @@ export function generateThemeVariables(
   vars['--lumiverse-primary-015'] = hsla(h, s, pL, 0.15)
   vars['--lumiverse-primary-020'] = hsla(h, s, pL, 0.2)
   vars['--lumiverse-primary-050'] = hsla(h, s, pL, 0.5)
+  // Contrast color for icons/text ON a --lumiverse-primary background
+  vars['--lumiverse-primary-contrast'] = contrastFor(vars['--lumiverse-primary'])
 
   // ── Secondary (neutral gray) ──
   vars['--lumiverse-secondary'] = rgba(128, 128, 128, 0.15)
@@ -200,13 +295,14 @@ export function generateThemeVariables(
   vars['--lumiverse-fill-heavy'] = rgba(0, 0, 0, 0.5 * fillBase)
   vars['--lumiverse-fill-deepest'] = rgba(0, 0, 0, 0.7 * fillBase)
 
-  // ── Card backgrounds ──
+  // ── Card backgrounds (always opaque — cards sit on solid surfaces, not blurred
+  //    backdrops. Chat message cards use --lcs-glass-bg for translucency.) ──
   if (isDark) {
-    vars['--lumiverse-card-bg'] = `linear-gradient(165deg, ${hsla(h, bgSat, 12, bgA)} 0%, ${hsla(h, bgSat, 10, bgElevA)} 50%, ${hsla(h, bgSat, 8, bgA)} 100%)`
-    vars['--lumiverse-card-image-bg'] = `linear-gradient(135deg, ${hsla(h, bgSat, 9, glass ? 0.8 : 1)} 0%, ${hsla(h, bgSat, 13, glass ? 0.6 : 1)} 100%)`
+    vars['--lumiverse-card-bg'] = `linear-gradient(165deg, ${hsla(h, bgSat, 12, 1)} 0%, ${hsla(h, bgSat, 10, 1)} 50%, ${hsla(h, bgSat, 8, 1)} 100%)`
+    vars['--lumiverse-card-image-bg'] = `linear-gradient(135deg, ${hsla(h, bgSat, 9, 1)} 0%, ${hsla(h, bgSat, 13, 1)} 100%)`
   } else {
     vars['--lumiverse-card-bg'] = `linear-gradient(165deg, ${hsla(h, s * 0.15, 99, 1)} 0%, ${hsla(h, s * 0.15, 97, 1)} 50%, ${hsla(h, s * 0.15, 95, 1)} 100%)`
-    vars['--lumiverse-card-image-bg'] = `linear-gradient(135deg, ${hsla(h, s * 0.15, 95, 0.8)} 0%, ${hsla(h, s * 0.15, 97, 0.6)} 100%)`
+    vars['--lumiverse-card-image-bg'] = `linear-gradient(135deg, ${hsla(h, s * 0.15, 95, 1)} 0%, ${hsla(h, s * 0.15, 97, 1)} 100%)`
   }
 
   // ── Transitions (not theme-dependent, but included for completeness) ──
@@ -226,17 +322,17 @@ export function generateThemeVariables(
     vars['--lcs-glass-bg-hover'] = glass ? hsla(h, bgSat, 9, 0.65) : hsla(h, bgSat, 14, 0.99)
     vars['--lcs-glass-border'] = rgba(255, 255, 255, glass ? 0.06 : 0.05)
     vars['--lcs-glass-border-hover'] = rgba(255, 255, 255, glass ? 0.1 : 0.08)
-    vars['--lcs-glass-blur'] = glass ? '14px' : '0px'
-    vars['--lcs-glass-soft-blur'] = glass ? '8px' : '0px'
-    vars['--lcs-glass-strong-blur'] = glass ? '40px' : '0px'
+    vars['--lcs-glass-blur'] = glass ? '8px' : '0px'
+    vars['--lcs-glass-soft-blur'] = glass ? '6px' : '0px'
+    vars['--lcs-glass-strong-blur'] = glass ? '12px' : '0px'
   } else {
     vars['--lcs-glass-bg'] = glass ? hsla(h, s * 0.15, 98, 0.6) : hsla(h, s * 0.15, 97, 0.98)
     vars['--lcs-glass-bg-hover'] = glass ? hsla(h, s * 0.15, 100, 0.72) : hsla(h, s * 0.15, 99, 1)
     vars['--lcs-glass-border'] = rgba(0, 0, 0, glass ? 0.06 : 0.09)
     vars['--lcs-glass-border-hover'] = rgba(0, 0, 0, glass ? 0.08 : 0.12)
-    vars['--lcs-glass-blur'] = glass ? '14px' : '0px'
-    vars['--lcs-glass-soft-blur'] = glass ? '8px' : '0px'
-    vars['--lcs-glass-strong-blur'] = glass ? '40px' : '0px'
+    vars['--lcs-glass-blur'] = glass ? '8px' : '0px'
+    vars['--lcs-glass-soft-blur'] = glass ? '6px' : '0px'
+    vars['--lcs-glass-strong-blur'] = glass ? '12px' : '0px'
   }
   vars['--lcs-radius'] = `${Math.round(14 * rs)}px`
   vars['--lcs-radius-sm'] = `${Math.round(8 * rs)}px`
@@ -259,15 +355,20 @@ export function generateThemeVariables(
   const bc = config.baseColorsByMode?.[mode] ?? config.baseColors
   if (bc) {
     if (bc.primary) {
-      vars['--lumiverse-primary'] = bc.primary
-      vars['--lumiverse-primary-hover'] = adjustHex(bc.primary, 0.08)
-      vars['--lumiverse-primary-light'] = hexRgba(bc.primary, 0.1)
-      vars['--lumiverse-primary-muted'] = hexRgba(bc.primary, 0.6)
-      vars['--lumiverse-primary-text'] = adjustHex(bc.primary, 0.12)
-      vars['--lumiverse-primary-010'] = hexRgba(bc.primary, 0.1)
-      vars['--lumiverse-primary-015'] = hexRgba(bc.primary, 0.15)
-      vars['--lumiverse-primary-020'] = hexRgba(bc.primary, 0.2)
-      vars['--lumiverse-primary-050'] = hexRgba(bc.primary, 0.5)
+      // Ensure the primary accent is mode-appropriate: bright enough for dark
+      // backgrounds (borders, icons, active states), dark enough for light.
+      const primary = ensureReadable(bc.primary, isDark)
+      vars['--lumiverse-primary'] = primary
+      vars['--lumiverse-primary-hover'] = adjustHex(primary, isDark ? 0.08 : -0.06)
+      vars['--lumiverse-primary-light'] = hexRgba(primary, 0.1)
+      vars['--lumiverse-primary-muted'] = hexRgba(primary, 0.6)
+      vars['--lumiverse-primary-text'] = adjustHex(primary, isDark ? 0.1 : -0.08)
+      vars['--lumiverse-primary-010'] = hexRgba(primary, 0.1)
+      vars['--lumiverse-primary-015'] = hexRgba(primary, 0.15)
+      vars['--lumiverse-primary-020'] = hexRgba(primary, 0.2)
+      vars['--lumiverse-primary-050'] = hexRgba(primary, 0.5)
+      vars['--lumiverse-primary-contrast'] = contrastFor(primary)
+      vars['--lumiverse-prose-dialogue'] = ensureReadable(adjustHex(primary, isDark ? 0.1 : -0.08), isDark)
     }
     if (bc.secondary) {
       vars['--lumiverse-secondary'] = hexRgba(bc.secondary, 0.15)
@@ -305,8 +406,12 @@ export function generateThemeVariables(
       vars['--lumiverse-warning-020'] = hexRgba(bc.warning, 0.2)
       vars['--lumiverse-warning-050'] = hexRgba(bc.warning, 0.5)
     }
-    if (bc.speech) vars['--lumiverse-prose-dialogue'] = bc.speech
-    if (bc.thoughts) vars['--lumiverse-prose-italic'] = bc.thoughts
+    if (bc.speech) {
+      vars['--lumiverse-prose-dialogue'] = ensureReadable(bc.speech, isDark)
+    }
+    if (bc.thoughts) {
+      vars['--lumiverse-prose-italic'] = ensureReadable(bc.thoughts, isDark)
+    }
   }
 
   return vars

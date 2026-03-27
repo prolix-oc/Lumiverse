@@ -90,7 +90,7 @@
 
 .categoryTabActive {
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .footer {
@@ -122,7 +122,7 @@
   border-radius: 6px;
   border: none;
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 13px;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);

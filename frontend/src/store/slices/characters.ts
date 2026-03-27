@@ -13,7 +13,7 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set) => ({
   filterTab: 'all',
   sortField: 'name',
   sortDirection: 'asc',
-  viewMode: 'grid',
+  viewMode: typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'single' : 'grid',
   selectedTags: [],
   batchMode: false,
   batchSelected: [],
@@ -93,8 +93,12 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set) => ({
     }),
 
   setViewMode: (mode) => {
-    set({ viewMode: mode })
-    settingsApi.put('viewMode', mode).catch(() => {})
+    // Migrate deprecated 'columns' mode from stored settings
+    const resolved = mode === ('columns' as string)
+      ? (window.matchMedia('(max-width: 767px)').matches ? 'single' : 'grid')
+      : mode
+    set({ viewMode: resolved })
+    settingsApi.put('viewMode', resolved).catch(() => {})
   },
 
   setSelectedTags: (tags) => set({ selectedTags: tags }),

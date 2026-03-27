@@ -7,6 +7,7 @@ import NumberStepper from '@/components/shared/NumberStepper'
 import CouncilMemberItem from './council/CouncilMemberItem'
 import AddMemberDropdown from './council/AddMemberDropdown'
 import QuickAddPackDropdown from './council/QuickAddPackDropdown'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import type { CouncilMember } from 'lumiverse-spindle-types'
 import styles from './CouncilManager.module.css'
 
@@ -130,9 +131,10 @@ export default function CouncilManager() {
   }
 
   return (
-    <div className={styles.container}>
-      {/* Master Toggle */}
-      <div className={styles.masterToggle}>
+    <PanelFadeIn>
+      <div className={styles.container}>
+        {/* Master Toggle */}
+        <div className={styles.masterToggle}>
         <button
           type="button"
           className={councilSettings.councilMode ? styles.toggleActive : styles.toggleInactive}
@@ -346,6 +348,7 @@ export default function CouncilManager() {
           />
         ))}
       </EditorSection>
-    </div>
+      </div>
+    </PanelFadeIn>
   )
 }

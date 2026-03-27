@@ -307,7 +307,7 @@
   composes: labelPromptBtn;
   background: var(--lumiverse-primary);
   border-color: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .labelPromptBtnPrimary:hover {

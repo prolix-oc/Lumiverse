@@ -253,7 +253,7 @@
     var(--lumiverse-primary),
     var(--lumiverse-primary-hover)
   );
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 14px;
   font-weight: 600;
   font-family: inherit;
@@ -288,7 +288,7 @@
   width: 14px;
   height: 14px;
   border: 2px solid var(--lumiverse-text-hint);
-  border-top-color: #fff;
+  border-top-color: var(--lumiverse-primary-contrast, #fff);
   border-radius: 50%;
   animation: loginSpin 0.7s linear infinite;
 }

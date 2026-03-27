@@ -573,9 +573,16 @@ export default function CharacterEditorPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [showExportMenu])
 
+  const mouseDownTargetRef = useRef<EventTarget | null>(null)
+
+  const handleBackdropMouseDown = useCallback(
+    (e: React.MouseEvent) => { mouseDownTargetRef.current = e.target },
+    []
+  )
+
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) close()
+      if (e.target === e.currentTarget && mouseDownTargetRef.current === e.currentTarget) close()
     },
     [close]
   )
@@ -590,6 +597,7 @@ export default function CharacterEditorPage() {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
+          onMouseDown={handleBackdropMouseDown}
           onClick={handleBackdropClick}
         >
           <motion.div

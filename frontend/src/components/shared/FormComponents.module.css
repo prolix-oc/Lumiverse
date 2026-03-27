@@ -161,6 +161,74 @@
   color: var(--lumiverse-text-muted);
 }
 
+/* ── Buttons ── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--lumiverse-radius, 8px);
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast);
+}
+
+.btn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  background: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-contrast, #fff);
+  border-color: var(--lumiverse-primary);
+}
+
+.btnPrimary:hover {
+  background: var(--lumiverse-primary-hover);
+  color: var(--lumiverse-primary-contrast, #fff);
+}
+
+.btnDanger {
+  background: var(--lumiverse-danger);
+  color: #fff;
+  border-color: var(--lumiverse-danger);
+}
+
+.btnDanger:hover {
+  background: var(--lumiverse-danger-hover);
+}
+
+.btnGhost {
+  border-color: transparent;
+}
+
+.btnGhost:hover {
+  background: var(--lumiverse-fill-subtle);
+  border-color: transparent;
+}
+
+.btnSm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .imageInput {}
 
 .imageInputRow {

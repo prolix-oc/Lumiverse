@@ -1,4 +1,4 @@
-import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem, LoomItem } from './api'
+import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -42,7 +42,7 @@ export interface ChatSlice {
 export type CharacterFilterTab = 'all' | 'characters' | 'favorites' | 'groups'
 export type CharacterSortField = 'name' | 'recent' | 'created' | 'shuffle'
 export type CharacterSortDirection = 'asc' | 'desc'
-export type CharacterViewMode = 'grid' | 'columns' | 'list'
+export type CharacterViewMode = 'grid' | 'single' | 'list'
 
 export interface CharactersSlice {
   characters: Character[]
@@ -210,6 +210,11 @@ export interface ReasoningSettings {
   /** How many recent reasoning blocks to keep in assembled prompt history.
    *  0 = strip all, -1 = keep all (unlimited), N = keep last N. */
   keepInHistory: number
+}
+
+/** Reasoning settings snapshot bound to a connection profile. */
+export interface ReasoningBindings {
+  settings: ReasoningSettings
 }
 
 export interface GuidedGeneration {
@@ -426,16 +431,19 @@ export interface GenerationSlice {
 
 export interface ImageGenSettings {
   enabled: boolean
-  provider: string
+  activeImageGenConnectionId?: string | null
   includeCharacters: boolean
-  google: Record<string, any>
-  nanogpt: Record<string, any>
-  novelai: Record<string, any>
+  parameters?: Record<string, any>
   sceneChangeThreshold: number
   autoGenerate: boolean
   forceGeneration: boolean
   backgroundOpacity: number
   fadeTransitionMs: number
+  /** @deprecated Legacy per-provider blocks — kept for auto-migration */
+  provider?: string
+  google?: Record<string, any>
+  nanogpt?: Record<string, any>
+  novelai?: Record<string, any>
 }
 
 // ---- Spindle Slice ----
@@ -473,8 +481,28 @@ export interface PendingContextMenuItem {
   type?: 'item' | 'divider'
 }
 
+export interface ExtensionThemeOverride {
+  extensionId: string
+  extensionName: string
+  variables: Record<string, string>
+  variablesByMode?: {
+    dark?: Record<string, string>
+    light?: Record<string, string>
+  }
+}
+
+export interface ExtensionOperationStatus {
+  extensionId: string | null
+  operation: string
+  name: string | null
+}
+
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
+  /** Active theme overrides from Spindle extensions, keyed by extensionId */
+  extensionThemeOverrides: Record<string, ExtensionThemeOverride>
+  /** Real-time operation status from backend WS events */
+  extensionOperationStatus: ExtensionOperationStatus | null
   spindlePrivileged: boolean
   pendingPermissionRequest: PendingPermissionRequest | null
   pendingTextEditor: PendingTextEditorRequest | null
@@ -495,6 +523,10 @@ export interface SpindleSlice {
   closeTextEditor: (requestId: string, text: string, cancelled: boolean) => void
   openContextMenu: (request: PendingContextMenuRequest) => void
   closeContextMenu: (requestId: string, selectedKey: string | null) => void
+  setExtensionThemeOverride: (override: ExtensionThemeOverride) => void
+  clearExtensionThemeOverride: (extensionId: string) => void
+  clearAllExtensionThemeOverrides: () => void
+  setExtensionOperationStatus: (extensionId: string | null, operation: string, name: string | null) => void
 }
 
 // ---- Summary Slice ----
@@ -695,6 +727,20 @@ export interface ExpressionSlice {
   toggleExpressionMinimized: () => void
 }
 
+// ---- Image Gen Connections Slice ----
+export interface ImageGenConnectionsSlice {
+  imageGenProfiles: ImageGenConnectionProfile[]
+  activeImageGenConnectionId: string | null
+  imageGenProviders: ImageGenProviderInfo[]
+
+  setImageGenProfiles: (profiles: ImageGenConnectionProfile[]) => void
+  setActiveImageGenConnection: (id: string | null) => void
+  addImageGenProfile: (profile: ImageGenConnectionProfile) => void
+  updateImageGenProfile: (id: string, updates: Partial<ImageGenConnectionProfile>) => void
+  removeImageGenProfile: (id: string) => void
+  setImageGenProviders: (providers: ImageGenProviderInfo[]) => void
+}
+
 // ---- Combined Store ----
 export type AppStore = ChatSlice &
   CharactersSlice &
@@ -715,4 +761,5 @@ export type AppStore = ChatSlice &
   SpindlePlacementSlice &
   PromptBreakdownSlice &
   RegexSlice &
-  ExpressionSlice
+  ExpressionSlice &
+  ImageGenConnectionsSlice

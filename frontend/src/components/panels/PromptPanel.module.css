@@ -369,7 +369,7 @@
   padding: 0 5px;
   border-radius: 9px;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 10px;
   font-weight: 600;
   line-height: 1;

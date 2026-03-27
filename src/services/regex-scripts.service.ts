@@ -131,10 +131,12 @@ export function listRegexScripts(
   );
 }
 
+// Prepared statement for hot-path regex fetch
+let _stmtRegexById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+
 export function getRegexScript(userId: string, id: string): RegexScript | null {
-  const row = getDb()
-    .query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?")
-    .get(id, userId) as any;
+  if (!_stmtRegexById) _stmtRegexById = getDb().query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?");
+  const row = _stmtRegexById.get(id, userId) as any;
   return row ? rowToRegexScript(row) : null;
 }
 

@@ -13,6 +13,7 @@ import CharacterProfile from './CharacterProfile'
 import CharacterBrowser from './CharacterBrowser'
 import PersonaManager from './PersonaManager'
 import ConnectionManager from './ConnectionManager'
+import ImageGenConnectionManager from './image-gen-connections/ImageGenConnectionManager'
 import PresetManager from './PresetManager'
 import LoomBuilder from './LoomBuilder'
 import LumiBuilder from './LumiBuilder'
@@ -55,7 +56,15 @@ const TABS: Tab[] = [
   { id: 'presets', icon: Wand2, label: 'Reasoning', component: () => <PresetManager /> },
   { id: 'loom', icon: GitFork, label: 'Loom', component: () => <LoomBuilder compact /> },
   { id: 'lumi', icon: Zap, label: 'Lumi', component: () => <LumiBuilder compact /> },
-  { id: 'connections', icon: Link2, label: 'Connections', component: () => <ConnectionManager /> },
+  { id: 'connections', icon: Link2, label: 'Connections', component: () => (
+    <>
+      <ConnectionManager />
+      <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
+        <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>Image Generation</h3>
+        <ImageGenConnectionManager />
+      </div>
+    </>
+  ) },
   { id: 'browser', icon: Package, label: 'Browser', component: () => <PackBrowser /> },
   { id: 'characters', icon: Users, label: 'Characters', component: () => <CharacterBrowser /> },
   { id: 'personas', icon: Drama, label: 'Personas', component: () => <PersonaManager /> },

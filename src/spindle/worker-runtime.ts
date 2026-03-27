@@ -12,6 +12,7 @@ import type {
   SpindleAPI,
   ConnectionProfileDTO,
   PermissionDeniedDetail,
+  PermissionChangedDetail,
   CharacterDTO,
   CharacterCreateDTO,
   CharacterUpdateDTO,
@@ -50,6 +51,8 @@ let oauthCallbackHandler:
   | null = null;
 const frontendMessageHandlers = new Set<(payload: unknown, userId: string) => void>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
+const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
+const grantedPermissions = new Set<string>();
 const extensionMacroHandlers = new Map<string, (ctx: unknown) => unknown | Promise<unknown>>();
 
 // ─── Messaging ───────────────────────────────────────────────────────────
@@ -592,6 +595,57 @@ const spindleApi: SpindleAPI = {
     },
   },
 
+  imageGen: {
+    async generate(input: any): Promise<any> {
+      const requestId = crypto.randomUUID();
+      return request({ type: "image_gen_generate", requestId, input });
+    },
+    async getProviders(userId?: string): Promise<any[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "image_gen_providers", requestId, userId });
+      return result as any[];
+    },
+    async listConnections(userId?: string): Promise<any[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "image_gen_connections_list", requestId, userId });
+      return result as any[];
+    },
+    async getConnection(connectionId: string, userId?: string): Promise<any> {
+      const requestId = crypto.randomUUID();
+      return request({ type: "image_gen_connections_get", requestId, connectionId, userId });
+    },
+    async getModels(connectionId: string, userId?: string): Promise<Array<{ id: string; label: string }>> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "image_gen_models", requestId, connectionId, userId });
+      return result as Array<{ id: string; label: string }>;
+    },
+  },
+
+  theme: {
+    async apply(overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "theme_apply", requestId, overrides });
+    },
+    async clear(): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "theme_clear", requestId });
+    },
+    async getCurrent(userId?: string): Promise<{
+      id: string; name: string; mode: "light" | "dark";
+      accent: { h: number; s: number; l: number };
+      enableGlass: boolean; radiusScale: number; fontScale: number; characterAware: boolean;
+    }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "theme_get_current", requestId, userId });
+      return result as any;
+    },
+    async extractColors(imageId: string, userId?: string): Promise<any> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "color_extract", requestId, imageId, userId });
+      return result;
+    },
+  },
+
   variables: {
     local: {
       async get(chatId: string, key: string): Promise<string> {
@@ -860,7 +914,14 @@ const spindleApi: SpindleAPI = {
     async getGranted(): Promise<string[]> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "permissions_get_granted", requestId });
-      return result as string[];
+      // Sync local cache with authoritative host response
+      const perms = result as string[];
+      grantedPermissions.clear();
+      for (const p of perms) grantedPermissions.add(p);
+      return perms;
+    },
+    has(permission: string): boolean {
+      return grantedPermissions.has(permission);
     },
     onDenied(handler: (detail: PermissionDeniedDetail) => void): () => void {
       permissionDeniedHandlers.add(handler);
@@ -868,11 +929,17 @@ const spindleApi: SpindleAPI = {
         permissionDeniedHandlers.delete(handler);
       };
     },
+    onChanged(handler: (detail: PermissionChangedDetail) => void): () => void {
+      permissionChangedHandlers.add(handler);
+      return () => {
+        permissionChangedHandlers.delete(handler);
+      };
+    },
   },
 
   push: {
     async send(
-      input: { title: string; body: string; tag?: string; url?: string; icon?: string; rawTitle?: boolean },
+      input: { title: string; body: string; tag?: string; url?: string; icon?: string; rawTitle?: boolean; image?: string },
       userId?: string,
     ): Promise<{ sent: number }> {
       const requestId = crypto.randomUUID();
@@ -885,6 +952,7 @@ const spindleApi: SpindleAPI = {
         url: input.url,
         icon: input.icon,
         rawTitle: input.rawTitle,
+        image: input.image,
         userId,
       } as any);
       return result as { sent: number };
@@ -1044,6 +1112,15 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
 
       // Expose the API globally
       (globalThis as any).spindle = spindleApi;
+
+      // Seed the permission cache so has() works immediately
+      try {
+        const perms = await spindleApi.permissions.getGranted();
+        grantedPermissions.clear();
+        for (const p of perms) grantedPermissions.add(p);
+      } catch {
+        // Non-fatal — cache starts empty, host still enforces
+      }
 
       // Dynamically import the extension's backend entry
       try {
@@ -1227,6 +1304,51 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
             level: "error",
             message: `Permission denied handler error: ${err.message}`,
           });
+        }
+      }
+      break;
+    }
+
+    case "permission_changed": {
+      // Update local cache
+      if (msg.granted) {
+        grantedPermissions.add(msg.permission);
+      } else {
+        grantedPermissions.delete(msg.permission);
+      }
+      // Sync full set from host (authoritative)
+      grantedPermissions.clear();
+      for (const p of msg.allGranted) grantedPermissions.add(p);
+
+      const detail: PermissionChangedDetail = {
+        permission: msg.permission,
+        granted: msg.granted,
+        allGranted: msg.allGranted,
+      };
+      for (const handler of permissionChangedHandlers) {
+        try {
+          handler(detail);
+        } catch (err: any) {
+          post({
+            type: "log",
+            level: "error",
+            message: `Permission changed handler error: ${err.message}`,
+          });
+        }
+      }
+      // Also fire as an event for extensions using spindle.on()
+      const eventSet = eventHandlers.get("PERMISSION_CHANGED");
+      if (eventSet) {
+        for (const handler of eventSet) {
+          try {
+            handler(detail);
+          } catch (err: any) {
+            post({
+              type: "log",
+              level: "error",
+              message: `PERMISSION_CHANGED event handler error: ${err.message}`,
+            });
+          }
         }
       }
       break;

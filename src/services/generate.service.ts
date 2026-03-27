@@ -497,6 +497,15 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     if (character) characterName = character.name;
   }
 
+  // Resolve persona_id from settings if not provided by the frontend, so the
+  // persona's attached world book is always included regardless of UI state.
+  if (!input.persona_id) {
+    const activePersonaSetting = settingsSvc.getSetting(input.userId, "activePersonaId");
+    if (activePersonaSetting?.value && typeof activePersonaSetting.value === "string") {
+      input.persona_id = activePersonaSetting.value;
+    }
+  }
+
   // Resolve target message EARLY (before council) so we can visually clear the
   // message on the frontend before council tools start executing.
   const resolvedPersona = personasSvc.resolvePersonaOrDefault(input.userId, input.persona_id);
@@ -855,6 +864,14 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
  */
 export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResult> {
   const genType = input.generation_type || "normal";
+
+  // Resolve persona_id from settings if not provided (same as startGeneration)
+  if (!input.persona_id) {
+    const activePersonaSetting = settingsSvc.getSetting(input.userId, "activePersonaId");
+    if (activePersonaSetting?.value && typeof activePersonaSetting.value === "string") {
+      input.persona_id = activePersonaSetting.value;
+    }
+  }
 
   const connection = resolveConnection(input.userId, input.connection_id);
   const { provider } = await resolveProviderAndKey(input.userId, connection.id);

@@ -13,8 +13,8 @@
 }
 
 :global([data-glass]) .overlay {
-  backdrop-filter: blur(var(--lcs-glass-blur, 14px)) saturate(1.1);
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px)) saturate(1.1);
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) saturate(1.1);
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px)) saturate(1.1);
 }
 
 /* Palette card */
@@ -36,10 +36,11 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+/* No backdrop-filter on the palette itself — the overlay already blurs the
+   page behind it. Stacking a second blur is pure GPU waste. Instead, use a
+   darker translucent background so the overlay's blur shows through as depth. */
 [data-glass] .palette {
-  background: var(--lcs-glass-bg);
-  backdrop-filter: blur(var(--lcs-glass-strong-blur, 40px)) saturate(1.3);
-  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur, 40px)) saturate(1.3);
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 82%, transparent);
   border-color: var(--lcs-glass-border);
 }
 

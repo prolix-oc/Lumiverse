@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link2, Trash2, Edit3, Zap, Check, Loader, Star } from 'lucide-react'
+import { Link2, Trash2, Edit3, Zap, Check, Loader, Star, BrainCircuit } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
@@ -90,6 +90,7 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
             <span className={styles.itemName}>
               {profile.name}
               {profile.is_default && <Star size={11} className={styles.defaultStar} fill="#f5a623" />}
+              {profile.metadata?.reasoningBindings && <span title="Reasoning settings bound"><BrainCircuit size={11} className={styles.reasoningBound} /></span>}
             </span>
             <span className={styles.itemMeta}>
               {profile.provider}{profile.model ? ` / ${profile.model}` : ''}

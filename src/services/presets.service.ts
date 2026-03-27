@@ -71,8 +71,12 @@ export function listPresetRegistry(
   );
 }
 
+// Prepared statement for hot-path preset fetch (avoids re-compiling for large JSON blobs)
+let _stmtPresetById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+
 export function getPreset(userId: string, id: string): Preset | null {
-  const row = getDb().query("SELECT * FROM presets WHERE id = ? AND user_id = ?").get(id, userId) as any;
+  if (!_stmtPresetById) _stmtPresetById = getDb().query("SELECT * FROM presets WHERE id = ? AND user_id = ?");
+  const row = _stmtPresetById.get(id, userId) as any;
   return row ? rowToPreset(row) : null;
 }
 

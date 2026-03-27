@@ -4,7 +4,7 @@ import {
   Users,
   Star,
   LayoutGrid,
-  Columns2,
+  RectangleVertical,
   List,
   ArrowUpDown,
   ArrowUp,
@@ -193,18 +193,18 @@ export default function CharacterToolbar({
           type="button"
           className={styles.iconBtn}
           onClick={() => {
-            const next = viewMode === 'grid' ? 'columns' : viewMode === 'columns' ? 'list' : 'grid'
+            const next = viewMode === 'grid' ? 'single' : viewMode === 'single' ? 'list' : 'grid'
             onViewModeChange(next)
           }}
           title={
             viewMode === 'grid'
-              ? 'Switch to two-column view'
-              : viewMode === 'columns'
+              ? 'Switch to single card view'
+              : viewMode === 'single'
                 ? 'Switch to list view'
                 : 'Switch to grid view'
           }
         >
-          {viewMode === 'grid' ? <Columns2 size={14} /> : viewMode === 'columns' ? <List size={14} /> : <LayoutGrid size={14} />}
+          {viewMode === 'grid' ? <RectangleVertical size={14} /> : viewMode === 'single' ? <List size={14} /> : <LayoutGrid size={14} />}
         </button>
 
         {onGroupChat && (

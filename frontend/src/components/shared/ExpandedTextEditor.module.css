@@ -231,6 +231,20 @@
   color: #82aaff;
 }
 
+.hlMdDelim {
+  color: var(--lumiverse-text-dim, #666);
+  opacity: 0.55;
+}
+
+.hlMdCode {
+  color: #c3e88d;
+}
+
+.hlMdHeader {
+  color: #f78c6c;
+  font-weight: 700;
+}
+
 /* ── Macro sidebar ── */
 
 .macroSidebar {
@@ -386,12 +400,20 @@
     padding-top: env(safe-area-inset-top, 0);
   }
 
+  .body {
+    flex-direction: column;
+  }
+
   .textarea {
     font-size: 16px; /* Prevent iOS auto-zoom on focus */
   }
 
   .macroSidebar {
-    width: 200px;
+    width: 100%;
+    max-height: 320px;
+    border-right: none;
+    border-bottom: 1px solid var(--lumiverse-border);
+    flex-shrink: 0;
   }
 }
 

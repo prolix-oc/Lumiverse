@@ -1,7 +1,6 @@
 .layout {
   display: flex;
   flex-direction: column;
-  background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
   height: 100%;
   max-height: 100%;
@@ -15,7 +14,7 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--lumiverse-border);
   flex-shrink: 0;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.08));
+  background: var(--lumiverse-fill-medium, rgba(0, 0, 0, 0.15));
   position: relative;
   z-index: 10;
 }
@@ -44,7 +43,7 @@
 }
 
 .sectionHeader:hover {
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.12));
 }
 
 .sectionTitle {
@@ -61,7 +60,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.02));
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.08));
 }
 
 .field {
@@ -124,7 +123,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.05));
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.15));
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
 }
@@ -179,7 +178,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.18));
   border-bottom: 1px solid var(--lumiverse-border);
 }
 
@@ -208,7 +207,7 @@
   padding: 10px 14px;
   font-size: 11px;
   color: var(--lumiverse-text-dim);
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.04));
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.08));
   border-bottom: 1px solid var(--lumiverse-border);
   line-height: 1.5;
 }
@@ -244,7 +243,7 @@
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.15));
   cursor: pointer;
 }
 
@@ -382,7 +381,7 @@
 
 .btnPrimary {
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   border-color: var(--lumiverse-primary);
 }
 
@@ -508,7 +507,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.18));
   border-bottom: 1px solid var(--lumiverse-border);
   cursor: pointer;
 }

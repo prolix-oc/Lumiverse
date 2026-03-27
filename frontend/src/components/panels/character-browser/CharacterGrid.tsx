@@ -10,7 +10,7 @@ interface CharacterGridProps {
   favorites: string[]
   batchMode: boolean
   batchSelected: string[]
-  forcedColumns?: number
+  singleColumn?: boolean
   onOpen: (character: Character | CharacterSummary) => void
   onEdit: (id: string) => void
   onToggleFavorite: (id: string) => void
@@ -26,7 +26,7 @@ export default function CharacterGrid({
   favorites,
   batchMode,
   batchSelected,
-  forcedColumns,
+  singleColumn,
   onOpen,
   onEdit,
   onToggleFavorite,
@@ -34,21 +34,12 @@ export default function CharacterGrid({
 }: CharacterGridProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   useScrollGate(parentRef)
-  const [columns, setColumns] = useState(2)
+  const [columns, setColumns] = useState(singleColumn ? 1 : 2)
   const [containerWidth, setContainerWidth] = useState(400)
 
   // O(1) lookups instead of O(n) includes() per card
   const favSet = useMemo(() => new Set(favorites), [favorites])
   const batchSet = useMemo(() => new Set(batchSelected), [batchSelected])
-
-  // Track whether viewport qualifies as desktop
-  const [isDesktop, setIsDesktop] = useState(() => window.matchMedia('(min-width: 768px)').matches)
-  useEffect(() => {
-    const mql = window.matchMedia('(min-width: 768px)')
-    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches)
-    mql.addEventListener('change', handler)
-    return () => mql.removeEventListener('change', handler)
-  }, [])
 
   // Observe container width to calculate columns
   useEffect(() => {
@@ -57,12 +48,15 @@ export default function CharacterGrid({
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? el.clientWidth
       setContainerWidth(width)
-      const autoColumns = Math.max(1, Math.floor((width + GAP) / (MIN_COL_WIDTH + GAP)))
-      setColumns(forcedColumns && isDesktop ? forcedColumns : autoColumns)
+      if (singleColumn) {
+        setColumns(1)
+      } else {
+        setColumns(Math.max(1, Math.floor((width + GAP) / (MIN_COL_WIDTH + GAP))))
+      }
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [forcedColumns, isDesktop])
+  }, [singleColumn])
 
   // Compute row height from actual column width: image is 3:4 aspect + info section
   const colWidth = (containerWidth - GAP * (columns - 1) - GAP) / columns
@@ -121,7 +115,7 @@ export default function CharacterGrid({
                   isFavorite={favSet.has(character.id)}
                   isSelected={batchSet.has(character.id)}
                   batchMode={batchMode}
-                  useLargeTier={!forcedColumns}
+                  useLargeTier
                   onOpen={onOpen}
                   onEdit={onEdit}
                   onToggleFavorite={onToggleFavorite}

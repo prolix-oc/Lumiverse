@@ -170,8 +170,6 @@ function DisplaySettings() {
   const modalWidthMode = useStore((s) => s.modalWidthMode)
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
-  const charactersPerPage = useStore((s) => s.charactersPerPage)
-  const personasPerPage = useStore((s) => s.personasPerPage)
   const toastPosition = useStore((s) => s.toastPosition)
   const setSetting = useStore((s) => s.setSetting)
 
@@ -359,29 +357,6 @@ function DisplaySettings() {
         />
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>CHARACTERS PER PAGE</label>
-        <input
-          className={styles.numberInput}
-          type="number"
-          min={12}
-          max={200}
-          value={charactersPerPage}
-          onChange={(e) => setSetting('charactersPerPage', parseInt(e.target.value, 10) || 50)}
-        />
-      </div>
-
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>PERSONAS PER PAGE</label>
-        <input
-          className={styles.numberInput}
-          type="number"
-          min={6}
-          max={200}
-          value={personasPerPage}
-          onChange={(e) => setSetting('personasPerPage', parseInt(e.target.value, 10) || 24)}
-        />
-      </div>
     </div>
   )
 }

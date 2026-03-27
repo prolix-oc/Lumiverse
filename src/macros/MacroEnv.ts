@@ -58,7 +58,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       description: character.description || "",
       personality: character.personality || "",
       scenario: character.scenario || "",
-      persona: persona?.description || "",
+      persona: buildPersonaWithAddons(persona),
       mesExamples: character.mes_example || "",
       mesExamplesRaw: character.mes_example || "",
       systemPrompt: character.system_prompt || "",
@@ -131,6 +131,20 @@ export function resolveGroupCharacterNames(
     if (name) names.push(name);
   }
   return names.length > 0 ? names : undefined;
+}
+
+function buildPersonaWithAddons(persona: Persona | null): string {
+  if (!persona) return "";
+  const base = persona.description || "";
+  const addons = persona.metadata?.addons;
+  if (!Array.isArray(addons) || addons.length === 0) return base;
+  const enabledContent = addons
+    .filter((a: any) => a.enabled && a.content)
+    .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    .map((a: any) => a.content.trim())
+    .filter(Boolean);
+  if (enabledContent.length === 0) return base;
+  return base ? `${base}\n${enabledContent.join("\n")}` : enabledContent.join("\n");
 }
 
 function findLast(messages: Message[], predicate: (m: Message) => boolean): Message | null {

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { ChevronLeft, ChevronDown, ChevronRight, Plus, Pencil, Trash2, Settings, Eye, EyeOff } from 'lucide-react'
 import { packsApi } from '@/api/packs'
+import LazyImage from '@/components/shared/LazyImage'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import LumiaEditorModal from './LumiaEditorModal'
 import LoomItemEditorModal from './LoomItemEditorModal'
@@ -57,11 +58,13 @@ function LumiaRow({
   return (
     <div className={styles.lumiaEntry}>
       <div className={styles.lumiaCard}>
-        {item.avatar_url ? (
-          <img className={styles.lumiaAvatar} src={item.avatar_url} alt={item.name} />
-        ) : (
-          <div className={styles.lumiaAvatarFallback}>{item.name.charAt(0)}</div>
-        )}
+        <LazyImage
+          src={item.avatar_url}
+          alt={item.name}
+          containerClassName={styles.lumiaAvatar}
+          spinnerSize={14}
+          fallback={<div className={styles.lumiaAvatarFallback}>{item.name.charAt(0)}</div>}
+        />
         <div className={styles.lumiaInfo}>
           <div className={styles.lumiaName}>{item.name}</div>
           {item.author_name && <div className={styles.lumiaAuthor}>{item.author_name}</div>}

@@ -179,7 +179,7 @@
   border: none;
   border-radius: 5px;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;

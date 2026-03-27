@@ -6,6 +6,8 @@ import {
 import { useStore } from '@/store'
 import { packsApi } from '@/api/packs'
 import { normalizePackJson } from '@/utils/pack-transform'
+import PanelFadeIn from '@/components/shared/PanelFadeIn'
+import LazyImage from '@/components/shared/LazyImage'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import PackEditorModal from '@/components/panels/pack-browser/PackEditorModal'
 import PackDropdown from './PackDropdown'
@@ -39,15 +41,18 @@ export default function ContentWorkshop() {
   const [importing, setImporting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Load packs on mount
+  // Load packs with items in a single request
   useEffect(() => {
     const load = async () => {
       try {
-        const result = await packsApi.list({ limit: 100 })
+        const result = await packsApi.listWithItems({ limit: 100 })
         setPacks(result.data)
-        const customPacks = result.data.filter((p) => p.is_custom)
-        if (customPacks.length > 0) {
-          setSelectedPackId(customPacks[0].id)
+        for (const pack of result.data) {
+          setPackWithItems(pack.id, pack)
+        }
+        const custom = result.data.filter((p) => p.is_custom)
+        if (custom.length > 0) {
+          setSelectedPackId(custom[0].id)
         }
       } catch (err) {
         console.error('Failed to load packs:', err)
@@ -56,7 +61,7 @@ export default function ContentWorkshop() {
       }
     }
     load()
-  }, [setPacks])
+  }, [setPacks, setPackWithItems])
 
   const customPacks = packs.filter((p) => p.is_custom)
 
@@ -219,8 +224,9 @@ export default function ContentWorkshop() {
   }
 
   return (
-    <div className={styles.workshop}>
-      {/* Quick Create */}
+    <PanelFadeIn>
+      <div className={styles.workshop}>
+        {/* Quick Create */}
       <div>
         <div className={styles.sectionTitle}>Quick Create</div>
         {customPacks.length > 1 && (
@@ -317,7 +323,8 @@ export default function ContentWorkshop() {
           onClose={() => setEditingPack(null)}
         />
       )}
-    </div>
+      </div>
+    </PanelFadeIn>
   )
 }
 
@@ -375,11 +382,13 @@ function PackSection({ pack, expanded, loading, packData, onToggle, onEdit, onEx
                 ) : (
                   packData.lumia_items.map((item) => (
                     <div key={item.id} className={styles.itemRow}>
-                      {item.avatar_url ? (
-                        <img className={styles.itemAvatar} src={item.avatar_url} alt="" />
-                      ) : (
-                        <div className={styles.itemAvatarFallback}>{item.name[0]}</div>
-                      )}
+                      <LazyImage
+                        src={item.avatar_url}
+                        alt={item.name}
+                        containerClassName={styles.itemAvatar}
+                        spinnerSize={12}
+                        fallback={<div className={styles.itemAvatarFallback}>{item.name[0]}</div>}
+                      />
                       <span className={styles.itemName}>{item.name}</span>
                       <div className={styles.itemActions}>
                         <button type="button" className={styles.itemActionBtn} onClick={() => onEditItem('lumia', item)} title="Edit">

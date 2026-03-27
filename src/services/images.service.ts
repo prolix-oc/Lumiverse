@@ -118,6 +118,96 @@ export async function uploadImage(userId: string, file: File): Promise<Image> {
   return image;
 }
 
+/**
+ * Save an image from a base64 data URL (e.g. from image generation).
+ * Creates the image record, generates thumbnails, and returns the Image entity.
+ */
+export async function saveImageFromDataUrl(
+  userId: string,
+  dataUrl: string,
+  originalFilename?: string
+): Promise<Image> {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid data URL format");
+
+  const mimeType = match[1];
+  const base64 = match[2];
+  const ext = mimeType === "image/png" ? ".png" : mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/webp" ? ".webp" : ".bin";
+
+  const id = crypto.randomUUID();
+  const filename = `${id}${ext}`;
+  const dir = getImagesDir();
+  const filepath = join(dir, filename);
+
+  const buffer = Buffer.from(base64, "base64");
+  await Bun.write(filepath, buffer);
+
+  let width: number | null = null;
+  let height: number | null = null;
+  let hasThumbnail = false;
+
+  try {
+    const metadata = await sharp(buffer).metadata();
+    width = metadata.width ?? null;
+    height = metadata.height ?? null;
+
+    const sizes = getThumbnailSettings(userId);
+    const [smOk, lgOk] = await Promise.all([
+      generateThumbnail(buffer, join(dir, `${id}${thumbSuffix("sm")}`), sizes.smallSize),
+      generateThumbnail(buffer, join(dir, `${id}${thumbSuffix("lg")}`), sizes.largeSize),
+    ]);
+    hasThumbnail = smOk || lgOk;
+  } catch {
+    // Non-image or sharp failure — skip thumbnails
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query(
+      `INSERT INTO images (id, user_id, filename, original_filename, mime_type, width, height, has_thumbnail, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(id, userId, filename, originalFilename || `image-gen-${id}${ext}`, mimeType, width, height, hasThumbnail ? 1 : 0, now);
+
+  const image = getImage(userId, id)!;
+  eventBus.emit(EventType.IMAGE_UPLOADED, { image }, userId);
+  return image;
+}
+
+/** Prefix used for image gen results — only images with this prefix are publicly accessible. */
+export const IMAGE_GEN_FILENAME_PREFIX = "image-gen-";
+
+/**
+ * Get an image file path without user scoping — for public access routes.
+ * Only serves images whose original_filename starts with the image-gen prefix,
+ * preventing the unauthenticated endpoint from leaking user-uploaded images.
+ */
+export async function getImageFilePathPublic(id: string, tier?: ThumbTier): Promise<string | null> {
+  const row = getDb().query("SELECT * FROM images WHERE id = ?").get(id) as any;
+  if (!row) return null;
+
+  // Only allow public access to image gen results, not arbitrary user uploads
+  if (!row.original_filename || !row.original_filename.startsWith(IMAGE_GEN_FILENAME_PREFIX)) return null;
+
+  const dir = getImagesDir();
+  if (tier) {
+    const thumbPath = join(dir, `${id}${thumbSuffix(tier)}`);
+    if (existsSync(thumbPath)) return thumbPath;
+    // Lazy generate if original exists
+    const originalPath = join(dir, row.filename);
+    if (!existsSync(originalPath)) return null;
+    const buffer = readFileSync(originalPath);
+    const userId = row.user_id;
+    const sizes = getThumbnailSettings(userId);
+    const size = tier === "sm" ? sizes.smallSize : sizes.largeSize;
+    const ok = await generateThumbnail(Buffer.from(buffer), thumbPath, size);
+    return ok ? thumbPath : originalPath;
+  }
+
+  const filepath = join(dir, row.filename);
+  return existsSync(filepath) ? filepath : null;
+}
+
 export function getImage(userId: string, id: string): Image | null {
   const row = getDb().query("SELECT * FROM images WHERE id = ? AND user_id = ?").get(id, userId) as any;
   return row ? rowToImage(row) : null;

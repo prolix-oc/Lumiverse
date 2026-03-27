@@ -148,6 +148,36 @@ export function Select({ value, onChange, options, className, ...props }: Select
   )
 }
 
+/* ── Buttons ── */
+
+type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
+
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant
+  size?: 'sm' | 'md'
+  icon?: ReactNode
+}
+
+export function Button({ variant = 'secondary', size = 'md', icon, children, className, ...props }: ButtonProps) {
+  return (
+    <button
+      type="button"
+      className={clsx(
+        styles.btn,
+        variant === 'primary' && styles.btnPrimary,
+        variant === 'danger' && styles.btnDanger,
+        variant === 'ghost' && styles.btnGhost,
+        size === 'sm' && styles.btnSm,
+        className,
+      )}
+      {...props}
+    >
+      {icon}
+      {children}
+    </button>
+  )
+}
+
 interface ImageInputProps {
   value: string
   onChange: (value: string) => void

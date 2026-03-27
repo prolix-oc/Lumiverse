@@ -14,6 +14,7 @@ import type {
   ActivatedWorldInfoEntryDTO,
   DryRunResultDTO,
   ChatMemoryResultDTO,
+  ThemeOverrideDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
@@ -32,8 +33,12 @@ import * as chatsSvc from "../services/chats.service";
 import * as worldBooksSvc from "../services/world-books.service";
 import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
+import * as colorExtractionSvc from "../services/color-extraction.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
 import * as embeddingsSvc from "../services/embeddings.service";
+import * as imageGenConnSvc from "../services/image-gen-connections.service";
+import { getImageProvider, getImageProviderList } from "../image-gen/registry";
+import "../image-gen/index";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
 import { getDb } from "../db/connection";
 import {
@@ -301,6 +306,9 @@ export class WorkerHost {
     this.macroValueCache.clear();
     this.toastTimestamps = [];
 
+    // Clear theme overrides
+    this.clearThemeOverrides();
+
     // Unregister interceptors and context handlers
     interceptorPipeline.unregisterByExtension(this.extensionId);
     contextHandlerChain.unregisterByExtension(this.extensionId);
@@ -320,6 +328,15 @@ export class WorkerHost {
 
   sendFrontendMessage(payload: unknown, userId: string): void {
     this.postToWorker({ type: "frontend_message", payload, userId });
+  }
+
+  /**
+   * Notify the worker that a permission was granted or revoked at runtime.
+   * The worker updates its internal cache and fires onChanged handlers —
+   * no restart needed.
+   */
+  notifyPermissionChanged(permission: string, granted: boolean, allGranted: string[]): void {
+    this.postToWorker({ type: "permission_changed", permission, granted, allGranted });
   }
 
   /**
@@ -778,7 +795,7 @@ export class WorkerHost {
         break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
       case "push_send":
-        this.handlePushSend(msg.requestId, msg.title, msg.body, msg.tag, msg.url, msg.userId, msg.icon, msg.rawTitle);
+        this.handlePushSend(msg.requestId, msg.title, msg.body, msg.tag, msg.url, msg.userId, msg.icon, msg.rawTitle, msg.image);
         break;
       case "push_get_status":
         this.handlePushGetStatus(msg.requestId, msg.userId);
@@ -794,6 +811,35 @@ export class WorkerHost {
       // ─── Macro Resolution (free tier — no permission needed) ────────────
       case "macros_resolve":
         this.handleMacrosResolve(msg.requestId, msg.template, msg.chatId, msg.characterId, msg.userId);
+        break;
+      // ─── Image Generation (gated: "image_gen") ─────────────────────────
+      case "image_gen_generate":
+        this.handleImageGenGenerate(msg.requestId, msg.input);
+        break;
+      case "image_gen_providers":
+        this.handleImageGenProviders(msg.requestId, msg.userId);
+        break;
+      case "image_gen_connections_list":
+        this.handleImageGenConnectionsList(msg.requestId, msg.userId);
+        break;
+      case "image_gen_connections_get":
+        this.handleImageGenConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      case "image_gen_models":
+        this.handleImageGenModels(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      // ─── Theme (gated: "app_manipulation") ──────────────────────────────
+      case "theme_apply":
+        this.handleThemeApply(msg.requestId, msg.overrides, msg.userId);
+        break;
+      case "theme_clear":
+        this.handleThemeClear(msg.requestId, msg.userId);
+        break;
+      case "theme_get_current":
+        this.handleThemeGetCurrent(msg.requestId, msg.userId);
+        break;
+      case "color_extract":
+        this.handleColorExtract(msg.requestId, msg.imageId, msg.userId);
         break;
     }
   }
@@ -1129,6 +1175,178 @@ export class WorkerHost {
         requestId,
         error: err.message,
       });
+    }
+  }
+
+  // ─── Image Generation (gated by "image_gen" permission) ────────────
+
+  private async handleImageGenGenerate(requestId: string, input: any): Promise<void> {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
+      });
+      return;
+    }
+
+    const resolvedUserId = this.resolveEffectiveUserId(input.userId);
+    if (!resolvedUserId) {
+      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+      return;
+    }
+    this.enforceScopedUser(resolvedUserId);
+
+    try {
+      // Resolve connection
+      const connectionId = input.connection_id || null;
+      let connection = connectionId
+        ? imageGenConnSvc.getConnection(resolvedUserId, connectionId)
+        : imageGenConnSvc.getDefaultConnection(resolvedUserId);
+      if (!connection) throw new Error(connectionId ? "Image gen connection not found" : "No default image gen connection configured");
+
+      const provider = getImageProvider(connection.provider);
+      if (!provider) throw new Error(`Unknown image gen provider: ${connection.provider}`);
+
+      const { getSecret } = await import("../services/secrets.service");
+      const apiKey = await getSecret(resolvedUserId, imageGenConnSvc.imageGenConnectionSecretKey(connection.id));
+      if (!apiKey && provider.capabilities.apiKeyRequired) {
+        throw new Error(`No API key for image gen connection "${connection.name}"`);
+      }
+
+      // Merge connection defaults with request parameters
+      const mergedParams = { ...connection.default_parameters, ...(input.parameters || {}) };
+
+      const response = await provider.generate(apiKey || "", connection.api_url || "", {
+        prompt: input.prompt || "",
+        negativePrompt: input.negativePrompt,
+        model: input.model || connection.model,
+        parameters: mergedParams,
+      });
+
+      // Persist image to the images table
+      let imageId: string | undefined;
+      let imageUrl: string | undefined;
+      if (response.imageDataUrl) {
+        try {
+          const { saveImageFromDataUrl } = await import("../services/images.service");
+          const image = await saveImageFromDataUrl(
+            resolvedUserId,
+            response.imageDataUrl,
+            `image-gen-${connection.provider}-${Date.now()}.png`
+          );
+          imageId = image.id;
+          imageUrl = `/api/v1/image-gen/results/${image.id}`;
+        } catch {
+          // Persistence failure is non-fatal
+        }
+      }
+
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: { ...response, imageId, imageUrl },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleImageGenProviders(requestId: string, userId?: string): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
+      });
+      return;
+    }
+
+    try {
+      const providers = getImageProviderList().map((p) => ({
+        id: p.name,
+        name: p.displayName,
+        capabilities: p.capabilities,
+      }));
+      this.postToWorker({ type: "response", requestId, result: providers });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleImageGenConnectionsList(requestId: string, userId?: string): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
+      });
+      return;
+    }
+
+    const resolvedUserId = this.resolveEffectiveUserId(userId);
+    if (!resolvedUserId) {
+      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+      return;
+    }
+    this.enforceScopedUser(resolvedUserId);
+
+    try {
+      const result = imageGenConnSvc.listConnections(resolvedUserId, { limit: 100, offset: 0 });
+      this.postToWorker({ type: "response", requestId, result: result.data });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleImageGenConnectionsGet(requestId: string, connectionId: string, userId?: string): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
+      });
+      return;
+    }
+
+    const resolvedUserId = this.resolveEffectiveUserId(userId);
+    if (!resolvedUserId) {
+      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+      return;
+    }
+    this.enforceScopedUser(resolvedUserId);
+
+    try {
+      const conn = imageGenConnSvc.getConnection(resolvedUserId, connectionId);
+      this.postToWorker({ type: "response", requestId, result: conn });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleImageGenModels(requestId: string, connectionId: string, userId?: string): Promise<void> {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
+      });
+      return;
+    }
+
+    const resolvedUserId = this.resolveEffectiveUserId(userId);
+    if (!resolvedUserId) {
+      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+      return;
+    }
+    this.enforceScopedUser(resolvedUserId);
+
+    try {
+      const result = await imageGenConnSvc.listConnectionModels(resolvedUserId, connectionId);
+      if (result.error) throw new Error(result.error);
+      this.postToWorker({ type: "response", requestId, result: result.models });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
@@ -3859,6 +4077,7 @@ export class WorkerHost {
     userId?: string,
     icon?: string,
     rawTitle?: boolean,
+    image?: string,
   ): Promise<void> {
     try {
       if (!managerSvc.hasPermission(this.manifest.identifier, "push_notification")) {
@@ -3879,12 +4098,19 @@ export class WorkerHost {
         sanitizedIcon = icon;
       }
 
+      // Validate image URL — must be a relative path (no external URLs)
+      let sanitizedImage: string | undefined;
+      if (image && typeof image === "string" && image.startsWith("/")) {
+        sanitizedImage = image;
+      }
+
       const payload = {
         title: sanitizedTitle,
         body: body || "",
         tag: tag ? `ext-${this.manifest.identifier}-${tag}`.slice(0, 100) : undefined,
         data: { url: url || "/", characterName: this.manifest.name },
         icon: sanitizedIcon,
+        image: sanitizedImage,
       };
 
       // Truncate body if the total payload exceeds PushForge's limit
@@ -4119,6 +4345,197 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result: { text: result.text, diagnostics: result.diagnostics } });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Theme (gated: "app_manipulation") ──────────────────────────────
+
+  /** Active CSS variable overrides for this extension (null = none). */
+  private themeOverrides: ThemeOverrideDTO | null = null;
+
+  private handleThemeApply(requestId: string, overrides: ThemeOverrideDTO, userId?: string): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme manipulation requires the app_manipulation permission`,
+      });
+      return;
+    }
+
+    try {
+      // Validate: variables must be a Record<string, string> if provided
+      if (overrides.variables) {
+        if (typeof overrides.variables !== "object" || Array.isArray(overrides.variables)) {
+          this.postToWorker({ type: "response", requestId, error: "overrides.variables must be an object" });
+          return;
+        }
+        // Only allow CSS custom property keys (--*)
+        for (const key of Object.keys(overrides.variables)) {
+          if (!key.startsWith("--")) {
+            this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key: "${key}" (must start with --)` });
+            return;
+          }
+        }
+        // Limit to 200 variables per extension
+        if (Object.keys(overrides.variables).length > 200) {
+          this.postToWorker({ type: "response", requestId, error: "Too many variables (max 200)" });
+          return;
+        }
+      }
+
+      // Validate variablesByMode if provided
+      if (overrides.variablesByMode) {
+        for (const modeKey of ["dark", "light"] as const) {
+          const modeVars = overrides.variablesByMode[modeKey];
+          if (modeVars) {
+            if (typeof modeVars !== "object" || Array.isArray(modeVars)) {
+              this.postToWorker({ type: "response", requestId, error: `variablesByMode.${modeKey} must be an object` });
+              return;
+            }
+            for (const key of Object.keys(modeVars)) {
+              if (!key.startsWith("--")) {
+                this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key in variablesByMode.${modeKey}: "${key}"` });
+                return;
+              }
+            }
+          }
+        }
+      }
+
+      // Merge with existing overrides
+      const existingByMode = this.themeOverrides?.variablesByMode ?? {};
+      this.themeOverrides = {
+        variables: {
+          ...(this.themeOverrides?.variables ?? {}),
+          ...(overrides.variables ?? {}),
+        },
+        variablesByMode: (overrides.variablesByMode || existingByMode.dark || existingByMode.light) ? {
+          dark: { ...existingByMode.dark, ...overrides.variablesByMode?.dark },
+          light: { ...existingByMode.light, ...overrides.variablesByMode?.light },
+        } : undefined,
+      };
+
+      // Broadcast to frontend
+      eventBus.emit(
+        EventType.SPINDLE_THEME_OVERRIDES,
+        {
+          extensionId: this.extensionId,
+          extensionName: this.manifest.name,
+          overrides: this.themeOverrides,
+        },
+        this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+      );
+
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleThemeClear(requestId: string, userId?: string): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme manipulation requires the app_manipulation permission`,
+      });
+      return;
+    }
+
+    try {
+      this.themeOverrides = null;
+
+      // Broadcast clear to frontend
+      eventBus.emit(
+        EventType.SPINDLE_THEME_OVERRIDES,
+        {
+          extensionId: this.extensionId,
+          extensionName: this.manifest.name,
+          overrides: null,
+        },
+        this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+      );
+
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleThemeGetCurrent(requestId: string, userId?: string): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme access requires the app_manipulation permission`,
+      });
+      return;
+    }
+
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+        return;
+      }
+      this.enforceScopedUser(resolvedUserId);
+
+      const themeSetting = settingsSvc.getSetting(resolvedUserId, "theme");
+      const themeConfig = themeSetting?.value;
+
+      // Return a safe DTO snapshot
+      const mode = themeConfig?.mode === "system" ? "dark" : (themeConfig?.mode ?? "dark");
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          id: themeConfig?.id ?? "lumiverse-purple",
+          name: themeConfig?.name ?? "Lumiverse Purple",
+          mode,
+          accent: themeConfig?.accent ?? { h: 263, s: 55, l: 65 },
+          enableGlass: themeConfig?.enableGlass ?? true,
+          radiusScale: themeConfig?.radiusScale ?? 1,
+          fontScale: themeConfig?.fontScale ?? 1,
+          characterAware: !!themeConfig?.characterAware,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleColorExtract(requestId: string, imageId: string, userId?: string): Promise<void> {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Color extraction requires the app_manipulation permission`,
+      });
+      return;
+    }
+
+    try {
+      const result = await colorExtractionSvc.extractColorsFromImage(imageId);
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message || "Color extraction failed" });
+    }
+  }
+
+  /** Called on worker shutdown to clean up theme overrides. */
+  clearThemeOverrides(): void {
+    if (this.themeOverrides) {
+      this.themeOverrides = null;
+      eventBus.emit(
+        EventType.SPINDLE_THEME_OVERRIDES,
+        {
+          extensionId: this.extensionId,
+          extensionName: this.manifest.name,
+          overrides: null,
+        },
+        this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+      );
     }
   }
 

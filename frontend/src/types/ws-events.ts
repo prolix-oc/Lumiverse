@@ -38,9 +38,13 @@ export enum EventType {
   SPINDLE_EXTENSION_LOADED = 'SPINDLE_EXTENSION_LOADED',
   SPINDLE_EXTENSION_UNLOADED = 'SPINDLE_EXTENSION_UNLOADED',
   SPINDLE_EXTENSION_ERROR = 'SPINDLE_EXTENSION_ERROR',
+  SPINDLE_EXTENSION_STATUS = 'SPINDLE_EXTENSION_STATUS',
   SPINDLE_FRONTEND_MSG = 'SPINDLE_FRONTEND_MSG',
   SPINDLE_TOAST = 'SPINDLE_TOAST',
   MESSAGE_TAG_INTERCEPTED = 'MESSAGE_TAG_INTERCEPTED',
+
+  // Spindle theme overrides
+  SPINDLE_THEME_OVERRIDES = 'SPINDLE_THEME_OVERRIDES',
 
   // Spindle text editor
   SPINDLE_TEXT_EDITOR_OPEN = 'SPINDLE_TEXT_EDITOR_OPEN',
@@ -55,6 +59,9 @@ export enum EventType {
 
   // Expressions
   EXPRESSION_CHANGED = 'EXPRESSION_CHANGED',
+
+  // Avatar
+  CHARACTER_AVATAR_CHANGED = 'CHARACTER_AVATAR_CHANGED',
 
   // Import progress
   IMPORT_GALLERY_PROGRESS = 'IMPORT_GALLERY_PROGRESS',
@@ -149,6 +156,12 @@ export interface LumiPipelineCompletedPayload {
   reason?: string
   totalDurationMs?: number
   totalUsage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+export interface SpindleThemeOverridesPayload {
+  extensionId: string
+  extensionName: string
+  overrides: { variables?: Record<string, string> } | null
 }
 
 export interface SpindleToastPayload {

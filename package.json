@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -26,7 +26,7 @@
     "gpt-tokenizer": "^2.8.1",
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.16",
-    "lumiverse-spindle-types": "0.2.8",
+    "lumiverse-spindle-types": "0.3.4",
     "sharp": "^0.34.5"
   },
   "devDependencies": {

@@ -105,9 +105,11 @@ export default function ManageChatsModal() {
     }
   }, [closeModal, renamingId])
 
+  const mouseDownTargetRef = useRef<EventTarget | null>(null)
+
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) closeModal()
+      if (e.target === e.currentTarget && mouseDownTargetRef.current === e.currentTarget) closeModal()
     },
     [closeModal]
   )
@@ -256,6 +258,7 @@ export default function ManageChatsModal() {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
+        onMouseDown={(e) => { mouseDownTargetRef.current = e.target }}
         onClick={handleBackdropClick}
       >
         <motion.div

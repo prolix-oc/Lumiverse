@@ -5,7 +5,7 @@
 .layout {
   display: flex;
   flex-direction: column;
-  background: var(--lumiverse-bg);
+  background: var(--lumiverse-bg-deep);
   color: var(--lumiverse-text);
   height: 100%;
   max-height: 100%;
@@ -25,7 +25,7 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  background: var(--lumiverse-bg-elevated);
+  background: var(--lumiverse-bg-deep);
   border-bottom: 1px solid var(--lumiverse-border);
   flex-shrink: 0;
 }
@@ -44,7 +44,7 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--lumiverse-border);
   flex-shrink: 0;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.08));
+  background: var(--lumiverse-fill-medium, rgba(0, 0, 0, 0.15));
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
@@ -157,8 +157,8 @@
   display: flex;
   align-items: center;
   padding: 8px 10px;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
-  border: 1px solid var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.12));
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.15));
+  border: 1px solid var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.10));
   border-radius: 10px;
   margin-bottom: 4px;
   transition: all var(--lumiverse-transition-fast);
@@ -166,15 +166,15 @@
 }
 
 .item:hover {
-  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.1));
-  border-color: var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.2));
+  background: var(--lumiverse-fill-medium, rgba(0, 0, 0, 0.2));
+  border-color: var(--lumiverse-border-neutral-hover, rgba(128, 128, 128, 0.2));
 }
 
 .itemDragging {
   opacity: 0.6;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
   border-color: var(--lumiverse-primary-muted);
-  background: var(--lumiverse-bg-elevated);
+  background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.25));
 }
 
 .itemIndented {
@@ -205,8 +205,8 @@
    ============================================================================ */
 
 .categoryHeader {
-  background: var(--lumiverse-fill-subtle);
-  border-color: var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.2));
+  background: var(--lumiverse-fill-medium, rgba(0, 0, 0, 0.2));
+  border-color: var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.15));
   cursor: pointer;
   user-select: none;
   margin-bottom: 3px;
@@ -215,7 +215,7 @@
 }
 
 .categoryHeader:hover {
-  background: var(--lumiverse-fill);
+  background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.25));
 }
 
 .categoryName {
@@ -369,19 +369,19 @@
 
 .btnPrimary {
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   border-color: var(--lumiverse-primary);
 }
 
 .btnPrimary:hover {
   opacity: 0.9;
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .btnDanger {
   background: var(--lumiverse-danger, #ef4444);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   border-color: var(--lumiverse-danger, #ef4444);
 }
 
@@ -583,7 +583,7 @@
 }
 
 .accordionHeader:hover {
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.12));
 }
 
 .accordionHeaderActive {
@@ -609,7 +609,7 @@
   padding: 1px 6px;
   border-radius: 10px;
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   min-width: 14px;
   text-align: center;
 }
@@ -619,7 +619,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.08));
 }
 
 .accordionBodyGen {
@@ -1107,7 +1107,7 @@
   border-top: 1px solid var(--lumiverse-border);
   justify-content: center;
   flex-shrink: 0;
-  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  background: var(--lumiverse-fill-medium, rgba(0, 0, 0, 0.15));
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
@@ -1129,7 +1129,7 @@
   max-width: 320px;
   padding: 6px 10px;
   border-radius: 8px;
-  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.97));
+  background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
   font-size: 12px;
@@ -1137,7 +1137,7 @@
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
   z-index: 200;
   pointer-events: none;
   opacity: 0;

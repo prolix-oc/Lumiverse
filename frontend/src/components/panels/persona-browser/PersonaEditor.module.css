@@ -49,7 +49,7 @@
   align-items: center;
   justify-content: center;
   background: var(--lumiverse-fill-heavy);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   opacity: 0;
   transition: opacity var(--lumiverse-transition-fast);
 }
@@ -241,7 +241,7 @@
   border-radius: 8px;
   background: var(--lumiverse-primary);
   border: none;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -342,4 +342,10 @@
 .deleteBtn:hover {
   color: var(--lumiverse-error);
   border-color: var(--lumiverse-error);
+}
+
+.addonsBtn {
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, var(--lumiverse-bg));
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 40%, var(--lumiverse-border));
+  color: var(--lumiverse-primary);
 }

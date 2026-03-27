@@ -186,8 +186,10 @@
   bottom: 0;
   left: 0;
   right: 0;
+  height: 100%;
   background: var(--lumiverse-primary-020, rgba(140, 130, 255, 0.15));
-  transition: height 0.15s ease;
+  transform-origin: bottom;
+  transition: transform 0.15s ease;
 }
 
 .uploadPercent {

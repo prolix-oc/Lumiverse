@@ -86,6 +86,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         regeneratingMessageId: null,
         streamingGenerationType: null,
       })
+      // Clear expression state so stale expressions from the previous character don't linger
+      ;(get() as any).setActiveExpression?.(null, null, null)
       settingsApi.put('activeChatId', chatId).catch(() => {})
     },
 

@@ -22,9 +22,9 @@
   padding: 0 8px;
 }
 
-.skeletonColumns {
+.skeletonSingle {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
   gap: 16px;
   padding: 0 8px;
 }
@@ -214,7 +214,9 @@
 
 .importProgressFill {
   height: 100%;
+  width: 100%;
   border-radius: 2px;
   background: rgba(100, 160, 255, 0.6);
-  transition: width 0.15s ease-out;
+  transform-origin: left;
+  transition: transform 0.15s ease-out;
 }

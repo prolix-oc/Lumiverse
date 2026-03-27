@@ -41,7 +41,7 @@ function CharacterSkeletons({ viewMode }: { viewMode: CharacterViewMode }) {
   const d = (i: number, offset = 0) => ({ animationDelay: `${i * 0.08 + offset}s` })
 
   return (
-    <div className={viewMode === 'columns' ? styles.skeletonColumns : styles.skeletonGrid}>
+    <div className={viewMode === 'single' ? styles.skeletonSingle : styles.skeletonGrid}>
       {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className={styles.skeletonCard}>
           <div className={`${styles.skeletonCardImage} ${styles.skeletonShimmer}`} style={d(i)} />
@@ -187,11 +187,11 @@ export default function CharacterBrowser() {
               <div
                 className={styles.importProgressFill}
                 style={{
-                  width: browser.importProgress.step === 'uploading'
-                    ? `${browser.importProgress.percent}%`
+                  transform: `scaleX(${browser.importProgress.step === 'uploading'
+                    ? browser.importProgress.percent / 100
                     : browser.importProgress.step === 'gallery' && browser.importProgress.galleryTotal
-                      ? `${Math.round((browser.importProgress.galleryCurrent! / browser.importProgress.galleryTotal) * 100)}%`
-                      : '100%',
+                      ? browser.importProgress.galleryCurrent! / browser.importProgress.galleryTotal
+                      : 1})`,
                 }}
               />
             </div>
@@ -225,13 +225,13 @@ export default function CharacterBrowser() {
             <div className={styles.emptyState}>
               {browser.searchQuery ? 'No characters match your search' : 'No characters yet'}
             </div>
-          ) : browser.viewMode === 'grid' || browser.viewMode === 'columns' ? (
+          ) : browser.viewMode === 'grid' || browser.viewMode === 'single' ? (
             <CharacterGrid
               characters={browser.characters}
               favorites={browser.favorites}
               batchMode={browser.batchMode}
               batchSelected={browser.batchSelected}
-              forcedColumns={browser.viewMode === 'columns' ? 2 : undefined}
+              singleColumn={browser.viewMode === 'single'}
               onOpen={browser.openChat}
               onEdit={setEditingCharacterId}
               onToggleFavorite={browser.toggleFavorite}

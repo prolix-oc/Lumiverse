@@ -207,7 +207,7 @@
   height: var(--lumiverse-btn-icon);
   border-radius: 6px;
   background: var(--lumiverse-primary);
-  color: #fff;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .newChatCard .cardLabel {

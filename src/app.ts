@@ -26,6 +26,7 @@ import { packsRoutes } from "./routes/packs.routes";
 import { councilRoutes } from "./routes/council.routes";
 import { lumiRoutes } from "./routes/lumi.routes";
 import { imageGenRoutes } from "./routes/image-gen.routes";
+import { imageGenConnectionsRoutes } from "./routes/image-gen-connections.routes";
 import { characterGalleryRoutes } from "./routes/character-gallery.routes";
 import { embeddingsRoutes } from "./routes/embeddings.routes";
 import { tokenizersRoutes } from "./routes/tokenizers.routes";
@@ -111,6 +112,19 @@ app.route("/api/spindle-oauth", spindleOAuthRoutes);
 // LumiHub callback — unauthenticated (PKCE code proves authorization)
 app.route("/api/v1/lumihub", lumihubCallbackRoute);
 
+// Image gen results — unauthenticated, public access for push notifications and embeds
+app.get("/api/v1/image-gen/results/:id", async (c) => {
+  const { getImageFilePathPublic } = await import("./services/images.service");
+  const id = c.req.param("id");
+  const size = c.req.query("size") as "sm" | "lg" | undefined;
+  const tier = size === "sm" || size === "lg" ? size : undefined;
+  const filepath = await getImageFilePathPublic(id, tier);
+  if (!filepath) return c.json({ error: "Not found" }, 404);
+  const response = new Response(Bun.file(filepath));
+  response.headers.set("Cache-Control", "public, max-age=86400");
+  return response;
+});
+
 // Auth middleware — AFTER auth handler, BEFORE routes
 app.use("/api/v1/*", requireAuth);
 
@@ -133,6 +147,7 @@ app.route("/api/v1/packs", packsRoutes);
 app.route("/api/v1/council", councilRoutes);
 app.route("/api/v1/lumi", lumiRoutes);
 app.route("/api/v1/image-gen", imageGenRoutes);
+app.route("/api/v1/image-gen-connections", imageGenConnectionsRoutes);
 app.route("/api/v1/characters/:characterId/gallery", characterGalleryRoutes);
 app.route("/api/v1/embeddings", embeddingsRoutes);
 app.route("/api/v1/tokenizers", tokenizersRoutes);

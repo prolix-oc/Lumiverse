@@ -26,16 +26,49 @@ function highlightSyntax(text: string): ReactNode[] {
     return -1
   }
 
-  /** Highlight plain text (no macros): XML/HTML tags. */
+  /** Highlight plain text (no macros): XML/HTML tags + Markdown syntax. */
   function highlightPlain(str: string): ReactNode[] {
     if (!str) return []
     const nodes: ReactNode[] = []
-    const re = /<\/?[a-zA-Z_][\w.-]*(?:\s+[^>]*)?\s*\/?>/g
+    // Combined single-pass regex: XML tags | bold+italic | bold | italic | strikethrough | code | header markers
+    const re = /(<\/?[a-zA-Z_][\w.-]*(?:\s+[^>]*)?\s*\/?>)|\*\*\*(\S[^*]*?\S|\S)\*\*\*|\*\*(\S[^*]*?\S|\S)\*\*(?!\*)|(?<!\*)\*(?!\*|\s)(\S[^*]*?\S|\S)\*(?!\*)|~~(\S[\s\S]*?\S|\S)~~|`([^`\n]+)`|^(#{1,6})\s/gm
     let last = 0
     let m: RegExpExecArray | null
     while ((m = re.exec(str)) !== null) {
       if (m.index > last) nodes.push(str.slice(last, m.index))
-      nodes.push(<span key={k()} className={s.hlXmlTag}>{m[0]}</span>)
+
+      if (m[1] != null) {
+        // XML tag
+        nodes.push(<span key={k()} className={s.hlXmlTag}>{m[0]}</span>)
+      } else if (m[2] != null) {
+        // Bold+italic ***...***
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'***'}</span>)
+        nodes.push(m[2])
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'***'}</span>)
+      } else if (m[3] != null) {
+        // Bold **...**
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'**'}</span>)
+        nodes.push(m[3])
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'**'}</span>)
+      } else if (m[4] != null) {
+        // Italic *...*
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'*'}</span>)
+        nodes.push(m[4])
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'*'}</span>)
+      } else if (m[5] != null) {
+        // Strikethrough ~~...~~
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'~~'}</span>)
+        nodes.push(m[5])
+        nodes.push(<span key={k()} className={s.hlMdDelim}>{'~~'}</span>)
+      } else if (m[6] != null) {
+        // Inline code `...`
+        nodes.push(<span key={k()} className={s.hlMdCode}>{m[0]}</span>)
+      } else if (m[7] != null) {
+        // Header marker (just the hashes)
+        nodes.push(<span key={k()} className={s.hlMdHeader}>{m[7]}</span>)
+        nodes.push(' ')
+      }
+
       last = m.index + m[0].length
     }
     if (last < str.length) nodes.push(str.slice(last))
@@ -137,14 +170,17 @@ export default function ExpandedTextEditor({
 }: ExpandedTextEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
+  const overlayMouseDownRef = useRef<EventTarget | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
   const [showMacros, setShowMacros] = useState(false)
   const [macroSearch, setMacroSearch] = useState('')
-  const [selfLoadedMacros, setSelfLoadedMacros] = useState<MacroGroup[] | null>(null)
+  const [selfLoadedMacros, setSelfLoadedMacros] = useState<MacroGroup[] | null>(
+    () => macros ? null : getAvailableMacros(),
+  )
 
-  // Use caller-provided macros, or self-load on first toggle
+  // Use caller-provided macros, or eagerly-loaded local catalog
   const resolvedMacros = macros ?? selfLoadedMacros ?? []
 
   const loadMacros = useCallback(() => {
@@ -224,7 +260,19 @@ export default function ExpandedTextEditor({
     })
   }, [value, onChange])
 
-  const highlighted = useMemo(() => resolvedMacros.length > 0 ? highlightSyntax(value) : null, [value, resolvedMacros.length])
+  // Debounce syntax highlighting — it's purely visual and expensive to run
+  // synchronously on every keystroke (especially during rapid deletion).
+  const [highlighted, setHighlighted] = useState<ReactNode[] | null>(null)
+  useEffect(() => {
+    if (resolvedMacros.length === 0) {
+      setHighlighted(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      setHighlighted(highlightSyntax(value))
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [value, resolvedMacros.length])
 
   const editorContent = (
     <div className={inline ? s.inlineDialog : s.dialog} onClick={e => e.stopPropagation()}>
@@ -306,7 +354,11 @@ export default function ExpandedTextEditor({
   if (inline) return editorContent
 
   return createPortal(
-    <div className={s.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div
+      className={s.overlay}
+      onMouseDown={(e) => { overlayMouseDownRef.current = e.target }}
+      onClick={(e) => { if (e.target === e.currentTarget && overlayMouseDownRef.current === e.currentTarget) onClose() }}
+    >
       {editorContent}
     </div>,
     document.body

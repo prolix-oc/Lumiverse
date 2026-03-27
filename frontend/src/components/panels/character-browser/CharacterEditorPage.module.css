@@ -93,7 +93,7 @@
   align-items: center;
   justify-content: center;
   background: var(--lumiverse-fill-heavy);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   opacity: 0;
   transition: opacity var(--lumiverse-transition-fast);
 }
@@ -110,7 +110,7 @@
 .avatarProgressText {
   font-size: 12px;
   font-weight: 700;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   font-variant-numeric: tabular-nums;
 }
 
@@ -273,12 +273,12 @@
 .tabActive {
   background: var(--lumiverse-primary);
   border-color: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .tabActive:hover {
   background: var(--lumiverse-primary);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 /* Tab content */
@@ -470,7 +470,7 @@
   border-radius: 5px;
   background: var(--lumiverse-primary);
   border: none;
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
 }
@@ -549,7 +549,7 @@
 
 .galleryRemoveBtn:hover {
   background: var(--lumiverse-error);
-  color: white;
+  color: var(--lumiverse-primary-contrast, #fff);
 }
 
 .galleryAddBtn {

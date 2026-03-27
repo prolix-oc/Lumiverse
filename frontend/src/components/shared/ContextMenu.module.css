@@ -13,9 +13,9 @@
 }
 
 :global([data-glass]) .contextMenu {
-  background: var(--lumiverse-bg-darker);
-  backdrop-filter: blur(var(--lcs-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 @keyframes contextMenuIn {

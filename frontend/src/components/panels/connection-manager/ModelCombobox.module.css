@@ -58,8 +58,8 @@
 }
 
 :global([data-glass]) .dropdown {
-  backdrop-filter: blur(var(--lcs-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 14px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
   border-radius: 8px;
   z-index: 10;
   padding: 4px;
