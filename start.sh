@@ -514,13 +514,6 @@ start_backend() {
     set +a
   fi
 
-  # Disable the Ink TUI runner on Termux/proot — the React/Ink devDependencies
-  # are unreliable on Android's filesystem and the TUI doesn't render well on
-  # mobile terminal emulators.
-  if [[ "$IS_TERMUX" == true || "$IS_PROOT" == true ]]; then
-    USE_RUNNER=false
-  fi
-
   # Decide: visual runner or plain process
   if [[ "$USE_RUNNER" == true ]] && [[ -t 1 ]]; then
     # Interactive terminal — use the visual runner (fall back to plain if it crashes)
