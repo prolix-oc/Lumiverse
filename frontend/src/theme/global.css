@@ -175,7 +175,7 @@ select:focus-visible,
     -webkit-transform: translateZ(0);
     transform: translateZ(0);
     /* Prevent all touch-based viewport manipulation in PWA shell */
-    touch-action: manipulation;
+    touch-action: pan-x pan-y;
   }
 
   #root {

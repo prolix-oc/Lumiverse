@@ -50,3 +50,4 @@ Thumbs.db
 !LICENSE.md
 !README.md
 scripts/release.sh
+scripts/release-main.sh

@@ -172,13 +172,22 @@ export async function seedOwner(): Promise<void> {
     if (!ownerCredentialsExist(credentialsPath)) {
       console.error("");
       console.error("[Auth] No owner credentials found and no users exist.");
+      console.error(`[Auth] Expected credentials at: ${credentialsPath}`);
+      console.error(`[Auth] DATA_DIR: ${env.dataDir}`);
       console.error("[Auth] Run the setup wizard first:  bun run setup");
-      console.error("[Auth] Or reset the password:       bun run reset-password");
+      console.error("[Auth] Or set OWNER_PASSWORD in your environment (Docker/Termux).");
       console.error("");
       process.exit(1);
     }
 
-    const creds = readOwnerCredentials(credentialsPath);
+    let creds;
+    try {
+      creds = readOwnerCredentials(credentialsPath);
+    } catch (err) {
+      console.error(`[Auth] Credentials file exists but could not be read: ${err}`);
+      console.error("[Auth] The file may be corrupted. Run: bun run reset-password");
+      process.exit(1);
+    }
     console.log(`[Auth] Seeding owner account: ${creds.username}`);
 
     try {

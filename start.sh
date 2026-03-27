@@ -397,14 +397,26 @@ ensure_bun() {
 
 run_setup_if_needed() {
   local identity_file="$BACKEND_DIR/data/lumiverse.identity"
+  local credentials_file="$BACKEND_DIR/data/owner.credentials"
   local env_file="$BACKEND_DIR/.env"
 
-  # Run wizard if identity file or .env doesn't exist
-  if [[ ! -f "$identity_file" || ! -f "$env_file" ]]; then
+  # Run wizard if any required setup file is missing.
+  # The credentials file is the critical one — without it seedOwner()
+  # will exit(1) because there's no owner account to create.
+  if [[ ! -f "$identity_file" || ! -f "$credentials_file" || ! -f "$env_file" ]]; then
     info "First run detected — launching setup wizard..."
     echo ""
     install_deps "$BACKEND_DIR" "backend"
     (cd "$BACKEND_DIR" && _bun run scripts/setup-wizard.ts)
+
+    # Verify the wizard actually created the credentials file.
+    # On some platforms (Termux) the interactive prompts can fail silently.
+    if [[ ! -f "$credentials_file" ]]; then
+      err "Setup wizard did not create owner credentials."
+      err "File expected at: $credentials_file"
+      err "Try running the wizard manually:  bun run setup"
+      exit 1
+    fi
   fi
 }
 

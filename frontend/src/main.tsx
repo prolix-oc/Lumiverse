@@ -160,6 +160,16 @@ document.addEventListener('touchmove', (e) => {
   if (e.touches.length > 1) e.preventDefault()
 }, { passive: false })
 
+// Prevent desktop trackpad/touchpad pinch-to-zoom. On Windows and macOS,
+// Chrome/Edge/Firefox translate trackpad pinch gestures into wheel events
+// with ctrlKey=true. Without this, the gesture bypasses all other zoom
+// prevention (viewport meta, touch-action, gesture events) and causes
+// layout issues — the input area grows disproportionately while the chat
+// shrinks, and absolute-positioned elements can drift out of place.
+document.addEventListener('wheel', (e) => {
+  if (e.ctrlKey) e.preventDefault()
+}, { passive: false })
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <RouterProvider router={router} />

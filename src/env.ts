@@ -1,4 +1,5 @@
 import { networkInterfaces } from "os";
+import { resolve } from "path";
 
 /** Returns all non-internal IPv4 addresses on the machine's LAN interfaces. */
 function getLanIPs(): string[] {
@@ -71,7 +72,9 @@ export function loadEnv(): EnvConfig {
 
   const encryptionKey = process.env.ENCRYPTION_KEY || "";
 
-  const dataDir = process.env.DATA_DIR || "./data";
+  // Resolve to absolute path at startup so file operations are immune to
+  // CWD changes — critical on Termux where proot/grun wrappers can shift CWD.
+  const dataDir = resolve(process.env.DATA_DIR || "./data");
 
   const frontendDir = process.env.FRONTEND_DIR || "";
 
