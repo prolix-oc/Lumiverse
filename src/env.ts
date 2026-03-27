@@ -31,6 +31,16 @@ export interface EnvConfig {
   spindleEphemeralExtensionDefaultMaxBytes: number;
   spindleEphemeralExtensionMaxOverrides: Record<string, number>;
   spindleEphemeralReservationTtlMs: number;
+  /** Enable one-time SillyTavern migration at startup (Docker). */
+  stMigrate: boolean;
+  /** Path to SillyTavern data root inside the container. */
+  stPath: string;
+  /** SillyTavern user directory name. */
+  stTargetUser: string;
+  /** What to import: 1=chars, 2=world books, 3=personas, 4=chars+chats, 5=everything. */
+  stMigrationTarget: number;
+  /** Re-trigger migration even if one already completed. */
+  stForceNewMigration: boolean;
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -104,6 +114,13 @@ export function loadEnv(): EnvConfig {
     process.env.SPINDLE_EPHEMERAL_EXTENSION_MAX_OVERRIDES
   );
 
+  // SillyTavern migration (Docker one-time import)
+  const stMigrate = process.env.LUMIVERSE_ST_MIGRATE === "true";
+  const stPath = process.env.SILLYTAVERN_PATH || "./data/SillyTavern";
+  const stTargetUser = process.env.SILLYTAVERN_TARGET_USER || "default-user";
+  const stMigrationTarget = Math.min(5, Math.max(1, parseInt(process.env.SILLYTAVERN_MIGRATION_TARGET || "5", 10) || 5));
+  const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
+
   return {
     port,
     encryptionKey,
@@ -119,6 +136,11 @@ export function loadEnv(): EnvConfig {
     spindleEphemeralExtensionDefaultMaxBytes,
     spindleEphemeralExtensionMaxOverrides,
     spindleEphemeralReservationTtlMs,
+    stMigrate,
+    stPath,
+    stTargetUser,
+    stMigrationTarget,
+    stForceNewMigration,
   };
 }
 

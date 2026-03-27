@@ -21,6 +21,12 @@ const { seedOwner, backfillUserIds } = await import("./auth/seed");
 await seedOwner();
 backfillUserIds();
 
+// One-time SillyTavern migration for Docker environments
+if (env.stMigrate) {
+  const { runDockerSTMigration } = await import("./migration/docker-st-migrate");
+  await runDockerSTMigration();
+}
+
 // Seed built-in tokenizers after migrations are applied
 const { seedTokenizers } = await import("./services/tokenizer-seed");
 seedTokenizers();

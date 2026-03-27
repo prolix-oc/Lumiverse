@@ -193,7 +193,7 @@
   outline: none;
   resize: none;
   background: transparent;
-  color: var(--lumiverse-text);
+  color: transparent;
   caret-color: var(--lumiverse-text);
   font-family: var(--lumiverse-font-mono, monospace);
   font-size: 13px;
@@ -207,6 +207,7 @@
 }
 
 .textareaHighlighted::placeholder {
+  color: var(--lumiverse-text-dim);
   -webkit-text-fill-color: var(--lumiverse-text-dim);
 }
 
@@ -417,9 +418,12 @@
   }
 }
 
-/* Touch devices: disable highlight overlay (fixes cursor tracking),
-   always show expand button since there's no hover */
-@media (hover: none) {
+/* Touch-only devices: disable highlight overlay (fixes cursor tracking),
+   always show expand button since there's no hover.
+   Uses `any-hover: none` so it only matches when NO input device supports hover
+   (true phones/tablets). `hover: none` incorrectly matches on Windows touchscreen
+   laptops in Firefox/Edge, disabling syntax highlighting even though a mouse is present. */
+@media (any-hover: none) {
   .expandBtn {
     opacity: 0.7;
   }

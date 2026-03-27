@@ -188,17 +188,80 @@ _resolve_bun() {
 _install_bun_termux() {
   info "Termux detected — installing Bun with glibc compatibility layer..."
 
-  # Ensure pkg is up to date and install glibc prerequisites
   if ! command -v pkg &>/dev/null; then
     err "Termux 'pkg' package manager not found."
     exit 1
   fi
 
-  # proot is needed for bun install — Android's seccomp filter blocks
-  # certain syscalls, and proot intercepts them via ptrace.
-  info "Installing Termux prerequisites (glibc-repo, glibc-runner, proot, build-essential)..."
+  # ── Step 1: Base packages ────────────────────────────────────────────────
+  info "Installing base Termux prerequisites..."
   pkg update -y
-  pkg install -y git curl build-essential glibc-repo glibc-runner proot
+  pkg install -y git curl build-essential proot
+
+  # ── Step 2: Set up the glibc repository ──────────────────────────────────
+  # glibc-runner lives in a separate repo (termux-glibc), NOT the default
+  # termux-main repo. The glibc-repo package registers this repo source.
+  info "Setting up glibc package repository..."
+  local glibc_runner_installed=false
+  local glibc_sources_dir="${PREFIX}/etc/apt/sources.list.d"
+
+  # Try installing glibc-repo (the repo enabler package)
+  if pkg install -y glibc-repo 2>/dev/null; then
+    # Verify the glibc repo source was actually registered
+    if ls "${glibc_sources_dir}/"*glibc* &>/dev/null 2>&1; then
+      info "glibc repository registered, refreshing package lists..."
+    else
+      warn "glibc-repo installed but repo source not found — adding manually..."
+      mkdir -p "$glibc_sources_dir"
+      echo "deb https://packages-cf.termux.dev/apt/termux-glibc stable main" \
+        > "${glibc_sources_dir}/glibc.list"
+    fi
+  else
+    warn "glibc-repo package not available — adding glibc repository manually..."
+    mkdir -p "$glibc_sources_dir"
+    echo "deb https://packages-cf.termux.dev/apt/termux-glibc stable main" \
+      > "${glibc_sources_dir}/glibc.list"
+  fi
+
+  # Refresh package lists to pick up the glibc repo
+  pkg update -y 2>/dev/null || apt-get update -y 2>/dev/null || true
+
+  # ── Step 3: Install glibc-runner ─────────────────────────────────────────
+  if pkg install -y glibc-runner 2>/dev/null; then
+    glibc_runner_installed=true
+    ok "glibc-runner installed via apt"
+  else
+    warn "glibc-runner not found via apt — trying alternate mirror..."
+    # Some mirrors don't serve termux-glibc; try the primary mirror directly
+    mkdir -p "$glibc_sources_dir"
+    echo "deb https://packages.termux.dev/apt/termux-glibc stable main" \
+      > "${glibc_sources_dir}/glibc.list"
+    if apt-get update -y 2>/dev/null && pkg install -y glibc-runner 2>/dev/null; then
+      glibc_runner_installed=true
+      ok "glibc-runner installed via apt (alternate mirror)"
+    fi
+  fi
+
+  # ── Step 4: Pacman fallback ──────────────────────────────────────────────
+  if [[ "$glibc_runner_installed" != true ]]; then
+    warn "apt-based glibc-runner install failed — trying pacman fallback..."
+    if pkg install -y pacman 2>/dev/null; then
+      pacman-key --init 2>/dev/null || true
+      pacman-key --populate 2>/dev/null || true
+      if pacman -Sy --noconfirm glibc-runner 2>/dev/null; then
+        glibc_runner_installed=true
+        ok "glibc-runner installed via pacman"
+      fi
+    fi
+  fi
+
+  if [[ "$glibc_runner_installed" != true ]]; then
+    warn "Could not install glibc-runner through any method."
+    warn "Bun may still work via proot fallback, or consider using proot-distro:"
+    warn "  pkg install proot-distro && proot-distro install ubuntu"
+    warn "  proot-distro login ubuntu"
+    warn "  # Then re-run this script inside the Ubuntu environment"
+  fi
 
   # The official Bun installer downloads the linux-aarch64 glibc binary,
   # which is exactly what we need — glibc-runner will execute it.

@@ -25,8 +25,19 @@ services:
       # Spindle extension storage limits
       # - SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES=524288000
       # - SPINDLE_EPHEMERAL_EXTENSION_DEFAULT_MAX_BYTES=52428800
+
+      # ── SillyTavern Migration (uncomment to enable) ─────────────────
+      # One-time automated import at startup. Bind-mount your ST folder
+      # read-only (see volumes below) and set LUMIVERSE_ST_MIGRATE=true.
+      # - LUMIVERSE_ST_MIGRATE=true
+      # - SILLYTAVERN_PATH=/app/data/SillyTavern
+      # - SILLYTAVERN_TARGET_USER=default-user
+      # - SILLYTAVERN_MIGRATION_TARGET=5   # 1=chars, 2=world books, 3=personas, 4=chars+chats, 5=everything
+      # - LUMIVERSE_FORCE_NEW_MIGRATION=false  # set true to re-run after a completed migration
     volumes:
       - lumiverse-data:/app/data
+      # SillyTavern migration: bind your ST folder read-only
+      # - /path/to/SillyTavern:/app/data/SillyTavern:ro
     restart: unless-stopped
 
 volumes:
