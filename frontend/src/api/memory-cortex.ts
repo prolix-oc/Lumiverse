@@ -15,6 +15,8 @@ export interface CortexConfig {
     temperature: number;
     topP: number;
     maxTokens: number;
+    chunkBatchSize: number;
+    rebuildConcurrency: number;
   };
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
   contextTokenBudget: number;
@@ -125,5 +127,7 @@ export const memoryCortexApi = {
 
   // Rebuild
   rebuild: (chatId: string) =>
-    post<{ chunksProcessed: number; entitiesFound: number; relationsFound: number }>(`${BASE}/chats/${chatId}/rebuild`),
+    post<{ status: string; chatId: string }>(`${BASE}/chats/${chatId}/rebuild`),
+  getRebuildStatus: (chatId: string) =>
+    get<{ status: string; current?: number; total?: number; percent?: number; result?: any; error?: string }>(`${BASE}/chats/${chatId}/rebuild-status`),
 };

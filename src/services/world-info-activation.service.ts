@@ -62,6 +62,7 @@ export interface ActivationStats {
   keywordActivated: number;
   vectorActivated: number;
   totalActivated: number;
+  deduplicated: number;
   queryPreview: string;
 }
 
@@ -272,6 +273,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     keywordActivated: finalized.activatedEntries.length,
     vectorActivated: 0,
     totalActivated: finalized.activatedEntries.length,
+    deduplicated: 0,
     queryPreview: "",
   };
 

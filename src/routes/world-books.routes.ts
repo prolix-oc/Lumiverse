@@ -240,6 +240,11 @@ app.post("/:id/diagnostics", async (c) => {
     blockerMessages.push("Semantic matches were found, but the top vector hits were already activated by keyword, so the final list still counts them as keyword entries.");
   }
 
+  if (mergedWorldInfo.deduplicationDetails.some(d => d.removedEntryBookId === bookId)) {
+    const dedupCount = mergedWorldInfo.deduplicationDetails.filter(d => d.removedEntryBookId === bookId).length;
+    blockerMessages.push(`${dedupCount} entry/entries from this book were removed as content duplicates of entries from other books.`);
+  }
+
   return c.json({
     book_id: bookId,
     chat_id: chat.id,
@@ -279,6 +284,17 @@ app.post("/:id/diagnostics", async (c) => {
       search_text_preview: item.searchTextPreview,
     })),
     blocker_messages: Array.from(new Set(blockerMessages)),
+    deduplication: mergedWorldInfo.deduplicated > 0 ? {
+      removed_count: mergedWorldInfo.deduplicated,
+      removed: mergedWorldInfo.deduplicationDetails.map(d => ({
+        removed_entry_id: d.removedEntryId,
+        removed_entry_comment: d.removedEntryComment,
+        kept_entry_id: d.keptEntryId,
+        kept_entry_comment: d.keptEntryComment,
+        tier: d.tier,
+        similarity: d.similarity,
+      })),
+    } : undefined,
     stats: {
       ...wiResult.stats,
       activatedBeforeBudget: mergedWorldInfo.activatedBeforeBudget,
@@ -288,6 +304,7 @@ app.post("/:id/diagnostics", async (c) => {
       keywordActivated: mergedWorldInfo.keywordActivated,
       vectorActivated: mergedWorldInfo.vectorActivated,
       totalActivated: mergedWorldInfo.totalActivated,
+      deduplicated: mergedWorldInfo.deduplicated,
       queryPreview: vectorDetail.queryPreview || queryPreview,
     },
   });

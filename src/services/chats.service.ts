@@ -1261,24 +1261,34 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       }
 
       // Resolve sidecar connection for Tier 2 features (LLM-assisted extraction).
-      // Uses the cortex's own sidecar config — connection profile, model, temp, topP.
       const cortexConfig = memoryCortex.getCortexConfig(userId);
       const sidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
 
-      // Build a generateRaw adapter that matches the cortex's expected signature.
-      // Merges the cortex sidecar's temp/topP/maxTokens with per-call parameters.
-      // Lazy-import generate.service to avoid circular dependency (generate → chats → generate).
+      // Resolve the provider from the connection profile for structured output injection
+      let sidecarProvider: string | null = null;
+      if (sidecarConnectionId) {
+        const { getConnection } = require("./connections.service");
+        const conn = getConnection(userId, sidecarConnectionId);
+        sidecarProvider = conn?.provider ?? null;
+      }
+
+      // Build a generateRaw adapter. Injects structured output params (response_format /
+      // responseMimeType + responseSchema) based on the provider so the LLM returns
+      // valid JSON natively instead of relying on prompt engineering.
       const generateRawFn = sidecarConnectionId
-        ? async (opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any> }) => {
+        ? async (opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any>; tools?: any[] }) => {
             const { quietGenerate } = await import("./generate.service");
+            // Inject tool_choice to force the model to use tools
+            const toolChoiceParams = sidecarProvider
+              ? memoryCortex.getToolChoiceParams(sidecarProvider)
+              : {};
             const sidecarParams: Record<string, any> = {
               temperature: cortexConfig.sidecar.temperature,
               top_p: cortexConfig.sidecar.topP,
               max_tokens: cortexConfig.sidecar.maxTokens,
-              ...opts.parameters, // Per-call overrides (e.g., salience-sidecar sets temperature: 0.1)
+              ...toolChoiceParams,
+              ...opts.parameters,
             };
-            // Model override: if cortex has a specific model set, inject it into parameters
-            // so the provider uses it instead of the connection profile's default
             if (cortexConfig.sidecar.model) {
               sidecarParams.model = cortexConfig.sidecar.model;
             }
@@ -1286,8 +1296,12 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
               connection_id: opts.connectionId,
               messages: opts.messages as any,
               parameters: sidecarParams,
+              tools: opts.tools,
             });
-            return { content: typeof result.content === "string" ? result.content : "" };
+            return {
+              content: typeof result.content === "string" ? result.content : "",
+              tool_calls: result.tool_calls,
+            };
           }
         : undefined;
 

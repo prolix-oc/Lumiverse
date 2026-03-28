@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Brain,
   Sparkles,
@@ -21,6 +21,8 @@ import { Select } from "@/components/shared/FormComponents";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexConfig, type CortexUsageStats } from "@/api/memory-cortex";
 import { connectionsApi } from "@/api/connections";
+import { wsClient } from "@/ws/client";
+import { EventType } from "@/ws/events";
 import styles from "./MemoryCortexSettings.module.css";
 import clsx from "clsx";
 
@@ -57,6 +59,7 @@ export default function MemoryCortexSettings() {
   const [stats, setStats] = useState<CortexUsageStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number; percent: number } | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [whitelistInput, setWhitelistInput] = useState("");
 
@@ -106,6 +109,50 @@ export default function MemoryCortexSettings() {
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
   useEffect(() => { loadStats(); }, [loadStats]);
+
+  // On mount: check if a rebuild is already running (survives browser close)
+  useEffect(() => {
+    if (!activeChatId) return;
+    memoryCortexApi.getRebuildStatus(activeChatId).then((status) => {
+      if (status.status === "processing") {
+        setRebuilding(true);
+        setRebuildProgress({
+          current: status.current ?? 0,
+          total: status.total ?? 0,
+          percent: status.percent ?? 0,
+        });
+      } else if (status.status === "complete" && status.result) {
+        addToast({
+          type: "success",
+          message: `Rebuild finished while away: ${status.result.chunksProcessed} chunks, ${status.result.entitiesFound} entities, ${status.result.relationsFound} relations`,
+        });
+        loadStats();
+      }
+    }).catch(() => { /* non-fatal */ });
+  }, [activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for rebuild progress via WebSocket
+  useEffect(() => {
+    const unsub = wsClient.on(EventType.CORTEX_REBUILD_PROGRESS, (payload: any) => {
+      if (!payload || payload.chatId !== activeChatId) return;
+      if (payload.status === "processing") {
+        setRebuildProgress({ current: payload.current, total: payload.total, percent: payload.percent });
+      } else if (payload.status === "complete") {
+        setRebuilding(false);
+        setRebuildProgress(null);
+        addToast({
+          type: "success",
+          message: `Rebuilt: ${payload.chunksProcessed} chunks, ${payload.entitiesFound} entities, ${payload.relationsFound} relations`,
+        });
+        loadStats();
+      } else if (payload.status === "error") {
+        setRebuilding(false);
+        setRebuildProgress(null);
+        addToast({ type: "error", message: payload.error || "Rebuild failed" });
+      }
+    });
+    return () => unsub();
+  }, [activeChatId, addToast, loadStats]);
   useEffect(() => {
     if (config?.sidecar?.connectionProfileId) {
       fetchModels(config.sidecar.connectionProfileId);
@@ -142,17 +189,13 @@ export default function MemoryCortexSettings() {
       return;
     }
     setRebuilding(true);
+    setRebuildProgress(null);
     try {
-      const result = await memoryCortexApi.rebuild(activeChatId);
-      addToast({
-        type: "success",
-        message: `Rebuilt: ${result.chunksProcessed} chunks, ${result.entitiesFound} entities, ${result.relationsFound} relations`,
-      });
-      loadStats();
+      await memoryCortexApi.rebuild(activeChatId);
+      // Response is immediate ({ status: "started" }). Progress comes via WS.
     } catch (err: any) {
-      addToast({ type: "error", message: err.message || "Rebuild failed" });
-    } finally {
       setRebuilding(false);
+      addToast({ type: "error", message: err.message || "Failed to start rebuild" });
     }
   };
 
@@ -269,7 +312,14 @@ export default function MemoryCortexSettings() {
                 value={config.sidecar.connectionProfileId || ""}
                 onChange={(e) => {
                   const id = e.target.value || null;
-                  updateConfig({ sidecar: { ...config.sidecar, connectionProfileId: id, model: null } });
+                  // When selecting a connection, auto-switch modes to sidecar.
+                  // When clearing, switch back to heuristic.
+                  updateConfig({
+                    sidecar: { ...config.sidecar, connectionProfileId: id, model: null },
+                    entityExtractionMode: id ? "sidecar" : "heuristic",
+                    salienceScoringMode: id ? "sidecar" : "heuristic",
+                    consolidation: { ...config.consolidation, useSidecar: !!id },
+                  });
                   fetchModels(id);
                 }}
               >
@@ -337,6 +387,18 @@ export default function MemoryCortexSettings() {
                     label="AI-written memory summaries"
                     hint="Consolidation summaries written by AI instead of extractive selection"
                   />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Chunks per request</span>
+                  <input type="number" className={styles.numberInput} value={config.sidecar.chunkBatchSize ?? 5} min={1} max={20} step={1} onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, chunkBatchSize: parseInt(e.target.value) || 5 } })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Parallel requests</span>
+                  <input type="number" className={styles.numberInput} value={config.sidecar.rebuildConcurrency ?? 3} min={1} max={10} step={1} onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, rebuildConcurrency: parseInt(e.target.value) || 3 } })} />
+                </div>
+                <div className={styles.hintText}>
+                  Chunks per request: how many memory chunks to analyze in a single LLM call. Higher = fewer API calls but larger prompts.
+                  Parallel requests: how many LLM calls to run simultaneously during rebuild.
                 </div>
               </>
             )}
@@ -454,7 +516,11 @@ export default function MemoryCortexSettings() {
                 <div className={styles.sectionHeaderActions}>
                   <button className={styles.actionBtn} onClick={handleRebuild} disabled={rebuilding}>
                     <RefreshCw size={12} className={rebuilding ? styles.spinning : ""} />
-                    {rebuilding ? "Rebuilding..." : "Rebuild"}
+                    {rebuilding
+                      ? rebuildProgress
+                        ? `${rebuildProgress.percent}% (${rebuildProgress.current}/${rebuildProgress.total})`
+                        : "Starting..."
+                      : "Rebuild"}
                   </button>
                 </div>
               </div>

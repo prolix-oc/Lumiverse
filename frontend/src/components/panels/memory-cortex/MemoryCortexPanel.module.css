@@ -671,3 +671,84 @@
   padding: 6px 12px 8px;
   border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 50%, transparent);
 }
+
+/* ── Consolidation sections (arcs vs scenes) ──────────────── */
+
+.drillSectionHeader {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--lumiverse-text-dim);
+  padding: 8px 2px 4px;
+  margin-top: 4px;
+}
+
+.drillSectionHeader:first-child {
+  margin-top: 0;
+}
+
+.arcRecord {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 25%, var(--lumiverse-border));
+  border-radius: 8px;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--lumiverse-primary) 3%, transparent);
+}
+
+.arcHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, transparent);
+}
+
+.arcBadge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 25%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--lumiverse-primary);
+  flex-shrink: 0;
+}
+
+.arcTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arcSummary {
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--lumiverse-text-secondary);
+  word-break: break-word;
+}
+
+.arcMeta {
+  display: flex;
+  gap: 12px;
+  padding: 6px 12px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 50%, transparent);
+}
+
+.arcMetaItem {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+}
+
+.arcMetaItem strong {
+  color: var(--lumiverse-text-muted);
+  font-weight: 600;
+}

@@ -35,6 +35,7 @@ import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
 import * as imagesSvc from "./images.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
+import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import { getCouncilSettings } from "./council/council-settings.service";
 import { getDb } from "../db/connection";
@@ -337,6 +338,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     keywordActivated: mergedWorldInfo.keywordActivated,
     vectorActivated: mergedWorldInfo.vectorActivated,
     totalActivated: mergedWorldInfo.totalActivated,
+    deduplicated: mergedWorldInfo.deduplicated,
     queryPreview: vectorQueryPreview,
   };
 
@@ -1310,6 +1312,8 @@ export interface MergedWorldInfoEntriesResult {
   activatedBeforeBudget: number;
   activatedAfterBudget: number;
   evictedByBudget: number;
+  deduplicated: number;
+  deduplicationDetails: import("./world-info-dedup.service").DedupRemovalRecord[];
 }
 
 const WORLD_INFO_VECTOR_STOPWORDS = new Set([
@@ -2199,6 +2203,19 @@ export function mergeActivatedWorldInfoEntries(
     finalized = nextFinalized;
   }
 
+  // Content-level deduplication: remove exact, near-exact, and fuzzy
+  // duplicate content across entries from different books/sources.
+  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
+  for (const r of dedupResult.removed) sources.delete(r.removedEntryId);
+
+  // Re-finalize with deduplicated set so budget is recalculated
+  if (dedupResult.removed.length > 0) {
+    finalized = finalizeActivatedWorldInfoEntries(dedupResult.entries, settings, {
+      skipGroupLogic: true,
+      preserveOrder: true,
+    });
+  }
+
   const activatedWorldInfo: ActivatedWorldInfoEntry[] = finalized.activatedEntries.map((entry) => {
     const source = sources.get(entry.id);
     return {
@@ -2226,6 +2243,8 @@ export function mergeActivatedWorldInfoEntries(
     activatedBeforeBudget: finalized.activatedBeforeBudget,
     activatedAfterBudget: finalized.activatedAfterBudget,
     evictedByBudget: finalized.evictedByBudget,
+    deduplicated: dedupResult.removed.length,
+    deduplicationDetails: dedupResult.removed,
   };
 }
 

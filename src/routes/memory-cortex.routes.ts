@@ -13,6 +13,8 @@ import { Hono } from "hono";
 import * as memoryCortex from "../services/memory-cortex";
 import { getCharacter } from "../services/characters.service";
 import { getChat } from "../services/chats.service";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 const app = new Hono();
 
@@ -331,7 +333,17 @@ app.get("/chats/:chatId/cortex-stats", (c) => {
 
 // ─── Rebuild ───────────────────────────────────────────────────
 
-/** POST /chats/:chatId/rebuild — Rebuild cortex from canonical chunks */
+/** GET /chats/:chatId/rebuild-status — Check if a rebuild is running (survives browser close) */
+app.get("/chats/:chatId/rebuild-status", (c) => {
+  const chatId = c.req.param("chatId");
+  const status = memoryCortex.getRebuildStatus(chatId);
+  if (!status) return c.json({ status: "idle" });
+  return c.json(status);
+});
+
+/** POST /chats/:chatId/rebuild — Rebuild cortex from canonical chunks.
+ *  Returns immediately with { status: "started" }. Progress is streamed via
+ *  CORTEX_REBUILD_PROGRESS WebSocket events. Final result sent as status: "complete". */
 app.post("/chats/:chatId/rebuild", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
@@ -349,7 +361,6 @@ app.post("/chats/:chatId/rebuild", async (c) => {
       if (ch && !characterNames.includes(ch.name)) characterNames.push(ch.name);
     }
   }
-  // Include user's persona name
   try {
     const { resolvePersonaOrDefault } = require("../services/personas.service");
     const persona = resolvePersonaOrDefault(userId);
@@ -358,8 +369,73 @@ app.post("/chats/:chatId/rebuild", async (c) => {
     }
   } catch { /* non-fatal */ }
 
-  const result = await memoryCortex.rebuildCortex(userId, chatId, characterNames);
-  return c.json(result);
+  // Build sidecar adapter if Tier 2 is configured
+  const cortexConfig = memoryCortex.getCortexConfig(userId);
+  const sidecarConnectionId = cortexConfig.sidecar?.connectionProfileId || undefined;
+
+  let generateRawFn: ((opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any> }) => Promise<{ content: string }>) | undefined;
+
+  if (sidecarConnectionId) {
+    // Resolve provider for structured output injection
+    const { getConnection } = require("../services/connections.service");
+    const sidecarConn = getConnection(userId, sidecarConnectionId);
+    const sidecarProvider = sidecarConn?.provider ?? null;
+
+    generateRawFn = async (opts: any) => {
+      const { quietGenerate } = await import("../services/generate.service");
+      const toolChoiceParams = sidecarProvider
+        ? memoryCortex.getToolChoiceParams(sidecarProvider)
+        : {};
+      const sidecarParams: Record<string, any> = {
+        temperature: cortexConfig.sidecar?.temperature ?? 0.1,
+        top_p: cortexConfig.sidecar?.topP ?? 1.0,
+        max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
+        ...toolChoiceParams,
+        ...opts.parameters,
+      };
+      if (cortexConfig.sidecar?.model) sidecarParams.model = cortexConfig.sidecar.model;
+      const result = await quietGenerate(userId, {
+        connection_id: opts.connectionId,
+        messages: opts.messages as any,
+        parameters: sidecarParams,
+        tools: opts.tools,
+      });
+      return {
+        content: typeof result.content === "string" ? result.content : "",
+        tool_calls: result.tool_calls,
+      };
+    };
+  }
+
+  // Run rebuild in the background — return immediately so Bun doesn't timeout
+  memoryCortex.rebuildCortex(
+    userId, chatId, characterNames, generateRawFn, sidecarConnectionId,
+    // Progress callback: streams WS events to the client
+    (current, total) => {
+      eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+        chatId,
+        status: "processing",
+        current,
+        total,
+        percent: Math.round((current / total) * 100),
+      }, userId);
+    },
+  ).then((result) => {
+    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+      chatId,
+      status: "complete",
+      ...result,
+    }, userId);
+  }).catch((err) => {
+    console.error("[memory-cortex] Rebuild failed:", err);
+    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+      chatId,
+      status: "error",
+      error: err?.message || "Rebuild failed",
+    }, userId);
+  });
+
+  return c.json({ status: "started", chatId });
 });
 
 export { app as memoryCortexRoutes };

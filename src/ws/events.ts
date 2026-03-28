@@ -112,6 +112,9 @@ export enum EventType {
   OPERATOR_LOG = "OPERATOR_LOG",
   OPERATOR_STATUS = "OPERATOR_STATUS",
   OPERATOR_PROGRESS = "OPERATOR_PROGRESS",
+
+  // Memory Cortex
+  CORTEX_REBUILD_PROGRESS = "CORTEX_REBUILD_PROGRESS",
 }
 
 export interface EventMessage {

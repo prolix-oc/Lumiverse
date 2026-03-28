@@ -478,15 +478,53 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
                 { label: "Evidence", value: `${(r.evidenceChunkIds || []).length} chunks` },
               ]} />
             ))}
-            {drill === "consolidations" && drillData.map((c: any) => (
-              <DrillRecord key={c.id} lines={[
-                { label: c.title || `Tier ${c.tier} summary`, value: "" },
-                { label: "Summary", value: (c.summary || "").slice(0, 250) + ((c.summary || "").length > 250 ? "..." : "") },
-                { label: "Messages", value: `${c.messageRangeStart ?? "?"}–${c.messageRangeEnd ?? "?"}` },
-                { label: "Entities", value: `${(c.entityIds || []).length}` },
-                { label: "Salience", value: c.salienceAvg != null ? `${(c.salienceAvg * 100).toFixed(0)}%` : "—" },
-              ]} tags={c.emotionalTags || []} />
-            ))}
+            {drill === "consolidations" && (() => {
+              const arcs = drillData.filter((c: any) => c.tier === 2);
+              const scenes = drillData.filter((c: any) => c.tier !== 2);
+              return (
+                <>
+                  {arcs.length > 0 && (
+                    <>
+                      <div className={styles.drillSectionHeader}>Story Arcs</div>
+                      {arcs.map((c: any) => (
+                        <div key={c.id} className={styles.arcRecord}>
+                          <div className={styles.arcHeader}>
+                            <span className={styles.arcBadge}>Arc</span>
+                            <span className={styles.arcTitle}>{c.title || "Arc Summary"}</span>
+                          </div>
+                          <div className={styles.arcSummary}>{c.summary || ""}</div>
+                          <div className={styles.arcMeta}>
+                            <span className={styles.arcMetaItem}><strong>Messages</strong> {c.messageRangeStart ?? "?"}–{c.messageRangeEnd ?? "?"}</span>
+                            <span className={styles.arcMetaItem}><strong>Entities</strong> {(c.entityIds || []).length}</span>
+                            <span className={styles.arcMetaItem}><strong>Salience</strong> {c.salienceAvg != null ? `${(c.salienceAvg * 100).toFixed(0)}%` : "—"}</span>
+                          </div>
+                          {(c.emotionalTags || []).length > 0 && (
+                            <div className={styles.drillTags}>
+                              {(c.emotionalTags || []).map((t: string) => (
+                                <span key={t} className={styles.emotionTag}>{t}</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {scenes.length > 0 && (
+                    <>
+                      {arcs.length > 0 && <div className={styles.drillSectionHeader}>Scene Summaries</div>}
+                      {scenes.map((c: any) => (
+                        <DrillRecord key={c.id} lines={[
+                          { label: c.title || "Scene Summary", value: "" },
+                          { label: "Summary", value: (c.summary || "").slice(0, 250) + ((c.summary || "").length > 250 ? "..." : "") },
+                          { label: "Messages", value: `${c.messageRangeStart ?? "?"}–${c.messageRangeEnd ?? "?"}` },
+                          { label: "Salience", value: c.salienceAvg != null ? `${(c.salienceAvg * 100).toFixed(0)}%` : "—" },
+                        ]} tags={c.emotionalTags || []} />
+                      ))}
+                    </>
+                  )}
+                </>
+              );
+            })()}
             {drill === "salience" && drillData.map((s: any) => (
               <DrillRecord key={s.id} lines={[
                 { label: "Score", value: `${(s.score * 100).toFixed(0)}%` },

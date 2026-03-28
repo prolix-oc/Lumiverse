@@ -18,7 +18,7 @@
 import { getDb } from "../../db/connection";
 import { getCortexConfig, putCortexConfig, type MemoryCortexConfig } from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
-import { extractWithSidecar } from "./salience-sidecar";
+import { extractWithSidecar, extractBatchWithSidecar, getToolChoiceParams, getExtractionStructuredParams } from "./salience-sidecar";
 import { extractEntitiesHeuristic, extractMentionExcerpt } from "./entity-extractor";
 import * as entityGraph from "./entity-graph";
 import * as entityContext from "./entity-context";
@@ -27,7 +27,7 @@ import { buildEmotionalContext } from "./emotional-context";
 import { queryCortex as queryCortexImpl } from "./retrieval";
 import { formatShadowPrompt, type FormatterMode, type ShadowPromptResult } from "./shadow-formatter";
 import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
-import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap } from "./font-attribution";
+import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution } from "./font-attribution";
 import { extractRelationshipsHeuristic } from "./relationship-extractor";
 import type {
   ChunkIngestionData,
@@ -48,6 +48,7 @@ export type { FormatterMode, ShadowPromptResult } from "./shadow-formatter";
 export { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 export type { CortexUsageStats } from "./gc";
 export { formatColorMapForPrompt, getColorMap } from "./font-attribution";
+export { getExtractionStructuredParams, getToolChoiceParams } from "./salience-sidecar";
 export type { FontColorMapping, ColorAttribution } from "./font-attribution";
 export type {
   CortexQuery,
@@ -133,19 +134,47 @@ export async function processChunk(
   let sidecarRelationships: Array<{ source: string; target: string; type: string; label: string; sentiment: number }> = [];
   let sidecarFacts: string[] = [];
 
+  // ── Font Color Extraction (runs before everything else) ──
+  // Must run first so the sidecar and heuristics both get clean content.
+
+  const knownEntities = entityGraph.getActiveEntities(data.chatId);
+  const entityIdByName = new Map<string, string>();
+  for (const e of knownEntities) {
+    entityIdByName.set(e.name.toLowerCase(), e.id);
+    for (const alias of e.aliases) entityIdByName.set(alias.toLowerCase(), e.id);
+  }
+
+  // Build entity context with aliases for the sidecar (canonical names + known aliases)
+  const entityContext = knownEntities.map((e) => ({
+    name: e.name,
+    type: e.entityType,
+    aliases: e.aliases,
+  }));
+
+  const fontResult = processChunkFontColors(
+    data.chatId,
+    data.content,
+    [...new Set([...characterNames, ...knownEntities.map((e) => e.name)])],
+    entityIdByName,
+  );
+  const cleanContent = fontResult.strippedContent;
+
   // ── Salience Scoring ──
 
   if (config.salienceScoring) {
-    if (
-      config.salienceScoringMode === "sidecar" &&
-      generateRawFn &&
-      sidecarConnectionId
-    ) {
-      // Sidecar mode: gets salience, entities, and relationships in one call
+    // Use sidecar if a sidecar adapter was provided. The caller (ingestion hook or
+    // rebuild route) already decided the sidecar should be used — we honor that
+    // regardless of the config mode setting. This prevents the config mode from
+    // silently overriding an explicit sidecar rebuild.
+    if (generateRawFn && sidecarConnectionId) {
+      // Sidecar mode: send RAW content (with font tags) so the LLM can
+      // also attribute colors. The LLM handles HTML tags gracefully.
+      // Pass known entities with aliases so the LLM uses canonical names.
       const extraction = await extractWithSidecar(
         data.content,
         generateRawFn,
         sidecarConnectionId,
+        { characterNames, knownEntities: entityContext },
       );
 
       if (extraction) {
@@ -163,11 +192,25 @@ export async function processChunk(
         sidecarEntities = extraction.entitiesPresent;
         sidecarRelationships = extraction.relationshipsShown;
         sidecarFacts = extraction.keyFacts;
+
+        // LLM font color attributions override/supplement heuristic
+        if (extraction.fontColors.length > 0) {
+          for (const fc of extraction.fontColors) {
+            const entityId = entityIdByName.get(fc.characterName.toLowerCase()) || null;
+            recordColorAttribution(
+              data.chatId,
+              fc.hexColor,
+              entityId,
+              fc.usageType as any,
+              null,
+            );
+          }
+        }
       } else {
-        salienceResult = scoreChunkHeuristic(data.content);
+        salienceResult = scoreChunkHeuristic(cleanContent);
       }
     } else {
-      salienceResult = scoreChunkHeuristic(data.content);
+      salienceResult = scoreChunkHeuristic(cleanContent);
     }
 
     // Insert salience record
@@ -207,29 +250,8 @@ export async function processChunk(
     );
   } else {
     // No salience scoring — use neutral defaults
-    salienceResult = scoreChunkHeuristic(data.content);
+    salienceResult = scoreChunkHeuristic(cleanContent);
   }
-
-  // ── Font Color Extraction (runs before entity extraction) ──
-  // Harvests font/span color tags, attributes them to characters,
-  // then strips the tags so entity heuristics see clean text.
-
-  const knownEntities = entityGraph.getActiveEntities(data.chatId);
-  const entityIdByName = new Map<string, string>();
-  for (const e of knownEntities) {
-    entityIdByName.set(e.name.toLowerCase(), e.id);
-    for (const alias of e.aliases) entityIdByName.set(alias.toLowerCase(), e.id);
-  }
-
-  const fontResult = processChunkFontColors(
-    data.chatId,
-    data.content,
-    [...new Set([...characterNames, ...knownEntities.map((e) => e.name)])],
-    entityIdByName,
-  );
-
-  // Use stripped content for all downstream processing
-  const cleanContent = fontResult.strippedContent;
 
   // ── Entity Extraction & Graph Update ──
 
@@ -349,15 +371,45 @@ export async function processChunk(
  *
  * This wipes and reconstructs: entities, mentions, relations, salience, consolidations.
  */
+// ─── Rebuild State (in-memory, survives browser close) ─────────
+
+interface RebuildState {
+  chatId: string;
+  status: "processing" | "complete" | "error";
+  current: number;
+  total: number;
+  percent: number;
+  result?: { chunksProcessed: number; entitiesFound: number; relationsFound: number };
+  error?: string;
+  startedAt: number;
+}
+
+const activeRebuilds = new Map<string, RebuildState>();
+
+/** Get the current rebuild state for a chat (if any). Used by the status endpoint. */
+export function getRebuildStatus(chatId: string): RebuildState | null {
+  return activeRebuilds.get(chatId) ?? null;
+}
+
+/** Default concurrency for sidecar calls during rebuild */
+const REBUILD_CONCURRENCY = 5;
+
 export async function rebuildCortex(
   userId: string,
   chatId: string,
   characterNames: string[],
+  generateRawFn?: (opts: {
+    connectionId: string;
+    messages: Array<{ role: string; content: string }>;
+    parameters: Record<string, any>;
+  }) => Promise<{ content: string }>,
+  sidecarConnectionId?: string,
+  onProgress?: (current: number, total: number) => void,
 ): Promise<{ chunksProcessed: number; entitiesFound: number; relationsFound: number }> {
   const config = getCortexConfig(userId);
   const db = getDb();
 
-  console.info(`[memory-cortex] Rebuilding cortex for chat ${chatId}`);
+  console.info(`[memory-cortex] Rebuilding cortex for chat ${chatId} (sidecar: ${sidecarConnectionId ? "yes" : "heuristic only"})`);
 
   // Clear all derived data
   entityGraph.deleteEntitiesForChat(chatId);
@@ -368,39 +420,203 @@ export async function rebuildCortex(
   db.query("DELETE FROM memory_salience WHERE chat_id = ?").run(chatId);
   db.query("UPDATE chat_chunks SET salience_score = NULL, emotional_tags = NULL, entity_ids = NULL, consolidation_id = NULL WHERE chat_id = ?").run(chatId);
 
-  // Re-process all chunks
   const chunks = db
     .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at ASC")
     .all(chatId) as any[];
 
-  for (const chunk of chunks) {
-    await processChunk(
-      {
-        chunkId: chunk.id,
-        chatId: chunk.chat_id,
-        userId,
-        content: chunk.content,
-        messageIds: safeJsonArray(chunk.message_ids),
-        startMessageIndex: 0,
-        endMessageIndex: 0,
-        createdAt: chunk.created_at,
-      },
-      characterNames,
-    );
-  }
-
-  const entities = entityGraph.getEntities(chatId);
-  const relations = entityGraph.getRelations(chatId);
-
-  console.info(
-    `[memory-cortex] Rebuild complete: ${chunks.length} chunks, ${entities.length} entities, ${relations.length} relations`,
-  );
-
-  return {
-    chunksProcessed: chunks.length,
-    entitiesFound: entities.length,
-    relationsFound: relations.length,
+  // Track state so the frontend can reconnect and see progress
+  const state: RebuildState = {
+    chatId,
+    status: "processing",
+    current: 0,
+    total: chunks.length,
+    percent: 0,
+    startedAt: Date.now(),
   };
+  activeRebuilds.set(chatId, state);
+
+  try {
+    const concurrency = config.sidecar?.rebuildConcurrency ?? 3;
+
+    if (!generateRawFn || !sidecarConnectionId) {
+      // Heuristic-only: sequential, ~1-2ms per chunk — no concurrency needed
+      for (let i = 0; i < chunks.length; i++) {
+        await processChunkFromRaw(chunks[i], chatId, userId, characterNames);
+        state.current = i + 1;
+        state.percent = Math.round(((i + 1) / chunks.length) * 100);
+        if (onProgress) onProgress(i + 1, chunks.length);
+      }
+    } else {
+      // Sidecar path: bounded concurrency queue.
+      // Each slot processes ONE chunk at a time: sends the request, waits for ALL
+      // tool calls to resolve, ingests the result, then takes the next chunk.
+      // At most `concurrency` slots are active simultaneously.
+      //
+      // This avoids spamming the provider — behaves like N sequential pipelines.
+
+      let nextChunkIdx = 0;
+      let completed = 0;
+
+      async function processNextChunk(): Promise<void> {
+        while (nextChunkIdx < chunks.length) {
+          const idx = nextChunkIdx++;
+          const chunk = chunks[idx];
+
+          try {
+            // Single request per chunk — sends tools, waits for ALL tool_calls to resolve
+            const sidecarResult = await extractWithSidecar(
+              chunk.content,
+              generateRawFn!,
+              sidecarConnectionId!,
+              { characterNames },
+            );
+
+            if (sidecarResult) {
+              await processChunkWithPrecomputedSidecar(chunk, chatId, userId, characterNames, sidecarResult);
+            } else {
+              await processChunkFromRaw(chunk, chatId, userId, characterNames);
+            }
+          } catch {
+            // Sidecar failed — fall back to heuristic for this chunk
+            await processChunkFromRaw(chunk, chatId, userId, characterNames);
+          }
+
+          completed++;
+          state.current = completed;
+          state.percent = Math.round((completed / chunks.length) * 100);
+          if (onProgress) onProgress(completed, chunks.length);
+        }
+      }
+
+      // Launch `concurrency` worker slots — each one pulls chunks sequentially
+      const workers = Array.from({ length: Math.min(concurrency, chunks.length) }, () => processNextChunk());
+      await Promise.all(workers);
+    }
+
+    const entities = entityGraph.getEntities(chatId);
+    const relations = entityGraph.getRelations(chatId);
+
+    const result = {
+      chunksProcessed: chunks.length,
+      entitiesFound: entities.length,
+      relationsFound: relations.length,
+    };
+
+    state.status = "complete";
+    state.result = result;
+    // Keep state around for 5 minutes so reconnecting clients can see the result
+    setTimeout(() => activeRebuilds.delete(chatId), 5 * 60 * 1000);
+
+    console.info(
+      `[memory-cortex] Rebuild complete: ${chunks.length} chunks, ${entities.length} entities, ${relations.length} relations`,
+    );
+
+    return result;
+  } catch (err: any) {
+    state.status = "error";
+    state.error = err?.message || "Rebuild failed";
+    setTimeout(() => activeRebuilds.delete(chatId), 60 * 1000);
+    throw err;
+  }
+}
+
+/** Helper: convert a raw DB chunk row into processChunk input */
+async function processChunkFromRaw(
+  chunk: any,
+  chatId: string,
+  userId: string,
+  characterNames: string[],
+  generateRawFn?: any,
+  sidecarConnectionId?: string,
+): Promise<void> {
+  await processChunk(
+    {
+      chunkId: chunk.id,
+      chatId: chunk.chat_id || chatId,
+      userId,
+      content: chunk.content,
+      messageIds: safeJsonArray(chunk.message_ids),
+      startMessageIndex: 0,
+      endMessageIndex: 0,
+      createdAt: chunk.created_at,
+    },
+    characterNames,
+    generateRawFn,
+    sidecarConnectionId,
+  );
+}
+
+/**
+ * Process a chunk with a pre-computed sidecar result (from batched extraction).
+ * Skips the LLM call inside processChunk by providing a generateRawFn that
+ * returns the already-computed result as if the LLM had produced it.
+ */
+async function processChunkWithPrecomputedSidecar(
+  chunk: any,
+  chatId: string,
+  userId: string,
+  characterNames: string[],
+  sidecarResult: import("./types").SidecarExtractionResult,
+): Promise<void> {
+  // Build a fake generateRawFn that returns pre-computed tool_calls so processChunk's
+  // sidecar branch gets structured data without making an actual API call.
+  const fakeToolCalls = [
+    {
+      name: "score_salience",
+      args: {
+        importance: Math.round(sidecarResult.score * 10),
+        emotional_tones: sidecarResult.emotionalTags,
+        narrative_flags: sidecarResult.narrativeFlags,
+        key_facts: sidecarResult.keyFacts,
+      },
+    },
+    {
+      name: "extract_entities",
+      args: {
+        entities: sidecarResult.entitiesPresent.map((e) => ({
+          name: e.name, type: e.type, role: e.role ?? "present",
+        })),
+        status_changes: sidecarResult.statusChanges,
+      },
+    },
+    {
+      name: "extract_relationships",
+      args: {
+        relationships: sidecarResult.relationshipsShown,
+      },
+    },
+    {
+      name: "extract_font_colors",
+      args: {
+        color_attributions: (sidecarResult.fontColors || []).map((fc) => ({
+          hex_color: fc.hexColor,
+          character_name: fc.characterName,
+          usage_type: fc.usageType,
+        })),
+      },
+    },
+  ];
+
+  const fakeGenerateRaw = async () => ({
+    content: "",
+    tool_calls: fakeToolCalls,
+  });
+
+  await processChunk(
+    {
+      chunkId: chunk.id,
+      chatId: chunk.chat_id || chatId,
+      userId,
+      content: chunk.content,
+      messageIds: safeJsonArray(chunk.message_ids),
+      startMessageIndex: 0,
+      endMessageIndex: 0,
+      createdAt: chunk.created_at,
+    },
+    characterNames,
+    fakeGenerateRaw as any,
+    "precomputed",
+  );
 }
 
 // ─── Backwards Compatibility Adapter ───────────────────────────

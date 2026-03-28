@@ -269,6 +269,12 @@ export interface ExtractedRelationship {
   sentiment: number;
 }
 
+export interface SidecarFontColor {
+  hexColor: string;
+  characterName: string;
+  usageType: "speech" | "thought" | "narration";
+}
+
 export interface SidecarExtractionResult {
   score: number;
   emotionalTags: EmotionalTag[];
@@ -277,6 +283,7 @@ export interface SidecarExtractionResult {
   keyFacts: string[];
   entitiesPresent: ExtractedEntity[];
   relationshipsShown: ExtractedRelationship[];
+  fontColors: SidecarFontColor[];
 }
 
 // ─── Retrieval Types ───────────────────────────────────────────

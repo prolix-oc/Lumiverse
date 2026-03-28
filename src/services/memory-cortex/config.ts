@@ -76,6 +76,10 @@ export interface MemoryCortexConfig {
     topP: number;
     /** Max tokens per sidecar call (auto-set by preset, user can override) */
     maxTokens: number;
+    /** Chunks to analyze per LLM call (batched into a single prompt) */
+    chunkBatchSize: number;
+    /** Max parallel LLM requests during rebuild */
+    rebuildConcurrency: number;
   };
 
   /** How cortex data is formatted for LLM injection */
@@ -152,7 +156,9 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     model: null,
     temperature: 0.1,
     topP: 1.0,
-    maxTokens: 1024,
+    maxTokens: 4096,
+    chunkBatchSize: 5,
+    rebuildConcurrency: 3,
   },
   formatterMode: "shadow",
   contextTokenBudget: 600,
@@ -188,7 +194,7 @@ function applySimplePreset(config: MemoryCortexConfig): MemoryCortexConfig {
   return {
     ...config,
     presetMode: "simple",
-    sidecar: { ...config.sidecar, maxTokens: 512 },
+    sidecar: { ...config.sidecar, maxTokens: 2048, chunkBatchSize: 3, rebuildConcurrency: 2 },
     entityTracking: true,
     entityExtractionMode: "heuristic",
     salienceScoring: true,
@@ -212,7 +218,7 @@ function applyStandardPreset(config: MemoryCortexConfig): MemoryCortexConfig {
   return {
     ...config,
     presetMode: "standard",
-    sidecar: { ...config.sidecar, maxTokens: 1024 },
+    sidecar: { ...config.sidecar, maxTokens: 4096, chunkBatchSize: 5, rebuildConcurrency: 3 },
     entityTracking: true,
     entityExtractionMode: "heuristic",
     salienceScoring: true,
@@ -309,6 +315,8 @@ export function normalizeCortexConfig(
       temperature: input.sidecar?.temperature ?? defaults.sidecar.temperature,
       topP: input.sidecar?.topP ?? defaults.sidecar.topP,
       maxTokens: input.sidecar?.maxTokens ?? defaults.sidecar.maxTokens,
+      chunkBatchSize: input.sidecar?.chunkBatchSize ?? defaults.sidecar.chunkBatchSize,
+      rebuildConcurrency: input.sidecar?.rebuildConcurrency ?? defaults.sidecar.rebuildConcurrency,
     },
     formatterMode: input.formatterMode ?? defaults.formatterMode,
     contextTokenBudget: input.contextTokenBudget ?? defaults.contextTokenBudget,

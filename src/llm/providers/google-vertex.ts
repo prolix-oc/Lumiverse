@@ -321,11 +321,11 @@ export class GoogleVertexProvider implements LlmProvider {
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
-      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      const base = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
-      // Test with a lightweight models list call
-      const url = `${base}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
+      // Use regional publisher models endpoint for lightweight auth validation
+      const host = `https://${location}-aiplatform.googleapis.com`;
+      const url = `${host}/v1/publishers/google/models?pageSize=1`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -337,24 +337,37 @@ export class GoogleVertexProvider implements LlmProvider {
 
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
     try {
-      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      const base = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
-      const url = `${base}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!res.ok) return [];
-      const data = (await res.json()) as any;
-      return (data.models || [])
-        .map((m: any) => {
+      // Publisher model listing uses /v1/publishers/google/models on a regional endpoint
+      // (no project/location path segments — that pattern is for individual model access)
+      const host = `https://${location}-aiplatform.googleapis.com`;
+      const allModels: string[] = [];
+      let pageToken: string | undefined;
+
+      do {
+        const params = new URLSearchParams();
+        if (pageToken) params.set("pageToken", pageToken);
+        const url = `${host}/v1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) break;
+        const data = (await res.json()) as any;
+        const models = data.publisherModels || data.models || [];
+        for (const m of models) {
           // Vertex returns full resource names like "publishers/google/models/gemini-2.5-flash"
           const name: string = m.name || "";
-          const shortName = name.replace(/^publishers\/google\/models\//, "").replace(/^models\//, "");
-          return shortName || name;
-        })
-        .filter((n: string) => n.includes("gemini"))
-        .sort();
+          const shortName = name
+            .replace(/^publishers\/google\/models\//, "")
+            .replace(/^models\//, "");
+          const id = shortName || name;
+          if (id.includes("gemini")) allModels.push(id);
+        }
+        pageToken = data.nextPageToken;
+      } while (pageToken);
+
+      return allModels.sort();
     } catch {
       return [];
     }
@@ -436,13 +449,13 @@ export class GoogleVertexProvider implements LlmProvider {
 
     // Default safety settings: disable all content filters unless the user
     // has already provided their own safetySettings via passthrough.
+    // Vertex AI uses "OFF" (not "BLOCK_NONE" which is the AI Studio value).
     if (!body.safetySettings) {
       body.safetySettings = [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
       ];
     }
 
@@ -454,16 +467,6 @@ export class GoogleVertexProvider implements LlmProvider {
           parameters: t.parameters,
         })),
       }];
-    } else {
-      // Insert dummy thought signature on model parts when tools are NOT in use.
-      // This bypasses Google's thought signature validator for non-tool contexts.
-      for (const entry of body.contents) {
-        if (entry.role === "model") {
-          for (const part of entry.parts) {
-            part.thoughtSignature = "context_engineering_is_the_way_to_go";
-          }
-        }
-      }
     }
 
     return body;

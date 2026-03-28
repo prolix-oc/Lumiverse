@@ -189,6 +189,7 @@ export interface AssemblyResult {
     keywordActivated: number;
     vectorActivated: number;
     totalActivated: number;
+    deduplicated: number;
     queryPreview: string;
   };
   /** Statistics from long-term memory retrieval. */

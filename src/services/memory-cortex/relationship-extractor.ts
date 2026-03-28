@@ -49,6 +49,17 @@ const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
   { pattern: /\b(helped|aided|assisted|supported|backed|covered|joined|accompanied|followed)\b/i, signal: { type: "ally", sentiment: 0.4, label: "cooperative" } },
   { pattern: /\b(trusted|relied\s+on|counted\s+on|believed\s+in)\b/i, signal: { type: "ally", sentiment: 0.5, label: "trust" } },
 
+  // Shared experience / companionship
+  { pattern: /\b(walked\s+(?:with|beside|alongside)|traveled\s+with|sat\s+(?:beside|next\s+to|with)|ate\s+with|drank\s+with|shared\s+(?:a\s+)?(?:meal|drink|fire|camp|tent|room|bed))\b/i, signal: { type: "ally", sentiment: 0.3, label: "companionship" } },
+  { pattern: /\b(waited\s+for|watched\s+over|stayed\s+(?:with|by|beside)|kept\s+(?:company|watch|vigil))\b/i, signal: { type: "ally", sentiment: 0.4, label: "devotion" } },
+
+  // Conversational reciprocity
+  { pattern: /\b(told|explained\s+to|confided\s+in|warned|informed|assured|reassured|convinced)\b/i, signal: { type: "ally", sentiment: 0.3, label: "communication" } },
+  { pattern: /\b(asked|questioned|interrogated|demanded\s+(?:of|from)|confronted)\b/i, signal: { type: "custom", sentiment: 0.0, label: "inquiry" } },
+
+  // Forgiveness/reconciliation
+  { pattern: /\b(forgave|forgiven|apologized\s+to|made\s+(?:amends|peace)\s+with|reconciled\s+with)\b/i, signal: { type: "ally", sentiment: 0.5, label: "reconciliation" } },
+
   // Hostile/violent
   { pattern: /\b(attacked|struck|hit|punched|kicked|stabbed|shot|slashed|tackled|shoved)\b/i, signal: { type: "enemy", sentiment: -0.8, label: "violent" } },
   { pattern: /\b(killed|murdered|slain|executed|assassinated|destroyed)\b/i, signal: { type: "enemy", sentiment: -1.0, label: "lethal" } },
@@ -180,7 +191,21 @@ export function extractRelationshipsHeuristic(
     }
   }
 
-  // 5. Emotional co-occurrence fallback
+  // 5. Physical proximity / shared space
+  for (let i = 0; i < entityNames.length; i++) {
+    for (let j = i + 1; j < entityNames.length; j++) {
+      const proxRel = detectPhysicalProximity(entityNames[i], entityNames[j], content);
+      if (proxRel) {
+        const key = `${proxRel.source}→${proxRel.target}:${proxRel.type}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          relationships.push(proxRel);
+        }
+      }
+    }
+  }
+
+  // 6. Emotional co-occurrence fallback
   // If two entities appear together and we have strong emotional tags but no
   // explicit verb pattern, infer a weak relationship from the emotional context
   if (relationships.length === 0 && entityNames.length >= 2 && emotionalTags.length > 0) {
@@ -378,6 +403,58 @@ function detectTermsOfAddress(
         type: "enemy", label: "hostile address", sentiment: -0.5, confidence: 0.45,
       };
     }
+  }
+
+  return null;
+}
+
+/** Detect physical proximity and shared-space patterns between two entities */
+function detectPhysicalProximity(
+  name1: string,
+  name2: string,
+  content: string,
+): HeuristicRelationship | null {
+  const esc1 = name1.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const esc2 = name2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // "Name1 ... beside/next to/near ... Name2" (within 80 chars)
+  const proximityPattern = new RegExp(
+    `${esc1}.{0,60}\\b(?:beside|next\\s+to|near|across\\s+from|facing|opposite|behind|alongside)\\b.{0,20}${esc2}`,
+    "i",
+  );
+  if (proximityPattern.test(content)) {
+    // Check if the proximity context has positive or negative tone
+    const matchIdx = content.search(proximityPattern);
+    const window = content.slice(matchIdx, matchIdx + 150);
+    const hasPositive = /\b(smile|laugh|warm|gentle|soft|comfort|peace|quiet|calm)\b/i.test(window);
+    const hasNegative = /\b(tense|glare|cold|hostile|anger|avoid|wary|stiff)\b/i.test(window);
+
+    return {
+      source: name1, target: name2,
+      type: hasNegative ? "rival" : "ally",
+      label: "proximity",
+      sentiment: hasNegative ? -0.2 : hasPositive ? 0.3 : 0.1,
+      confidence: 0.35,
+    };
+  }
+
+  // Both names in a dialogue exchange (one speaks, other responds within 200 chars)
+  const dialogueExchange = new RegExp(
+    `[""\u201C][^""\u201D]+[""\u201D][^""\u201C]{0,60}${esc1}.{0,120}[""\u201C][^""\u201D]+[""\u201D][^""\u201C]{0,60}${esc2}`,
+    "i",
+  );
+  const reverseExchange = new RegExp(
+    `[""\u201C][^""\u201D]+[""\u201D][^""\u201C]{0,60}${esc2}.{0,120}[""\u201C][^""\u201D]+[""\u201D][^""\u201C]{0,60}${esc1}`,
+    "i",
+  );
+  if (dialogueExchange.test(content) || reverseExchange.test(content)) {
+    return {
+      source: name1, target: name2,
+      type: "custom",
+      label: "conversation",
+      sentiment: 0.1,
+      confidence: 0.3,
+    };
   }
 
   return null;

@@ -134,6 +134,17 @@ export interface WorldBookDiagnostics {
     search_text_preview: string;
   }>;
   blocker_messages: string[];
+  deduplication?: {
+    removed_count: number;
+    removed: Array<{
+      removed_entry_id: string;
+      removed_entry_comment: string;
+      kept_entry_id: string;
+      kept_entry_comment: string;
+      tier: "exact" | "near-exact" | "fuzzy";
+      similarity?: number;
+    }>;
+  };
   stats: {
     keywordActivated: number;
     vectorActivated: number;
@@ -145,6 +156,7 @@ export interface WorldBookDiagnostics {
     evictedByMinPriority: number;
     estimatedTokens: number;
     recursionPassesUsed: number;
+    deduplicated: number;
     queryPreview: string;
   };
 }

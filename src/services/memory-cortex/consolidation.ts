@@ -284,27 +284,43 @@ async function maybeConsolidateArcs(
 /**
  * Extractive summarization: no sidecar needed.
  * Selects the highest-salience sentences from source chunks,
- * preserving chronological order.
+ * preserving chronological order with diversity across chunks.
  */
 function extractiveConsolidation(chunks: any[]): string {
-  const sentences: Array<{ text: string; salience: number; chunkIdx: number }> = [];
+  const sentences: Array<{ text: string; salience: number; chunkIdx: number; sentIdx: number }> = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    const content = chunks[i].content || "";
+    let content = chunks[i].content || "";
+    // Strip chunk format prefix: [CHARACTER | Name]: or [USER | Name]:
+    content = content.replace(/^\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/gi, "").trim();
     const chunkSalience = chunks[i].salience_score ?? 0.3;
+    const sents = splitSentences(content);
 
-    for (const sent of splitSentences(content)) {
-      if (sent.length < 15) continue; // Skip very short fragments
-      const sentSalience = scoreChunkHeuristic(sent).score * chunkSalience;
-      sentences.push({ text: sent.trim(), salience: sentSalience, chunkIdx: i });
+    for (let j = 0; j < sents.length; j++) {
+      const sent = sents[j].trim();
+      if (sent.length < 20) continue;
+      let sentScore = scoreChunkHeuristic(sent).score * chunkSalience;
+      // Slight boost for topic sentences (first in chunk)
+      if (j === 0) sentScore *= 1.15;
+      sentences.push({ text: sent, salience: sentScore, chunkIdx: i, sentIdx: j });
     }
   }
 
-  // Select top sentences, preserving chronological order
-  const selected = sentences
-    .sort((a, b) => b.salience - a.salience)
-    .slice(0, 8)
-    .sort((a, b) => a.chunkIdx - b.chunkIdx);
+  // Select top sentences with per-chunk diversity cap
+  const selected: typeof sentences = [];
+  const chunkCounts = new Map<number, number>();
+  const ranked = [...sentences].sort((a, b) => b.salience - a.salience);
+
+  for (const sent of ranked) {
+    if (selected.length >= 8) break;
+    const count = chunkCounts.get(sent.chunkIdx) || 0;
+    if (count >= 3) continue; // Max 3 sentences per source chunk
+    selected.push(sent);
+    chunkCounts.set(sent.chunkIdx, count + 1);
+  }
+
+  // Re-sort chronologically
+  selected.sort((a, b) => a.chunkIdx - b.chunkIdx || a.sentIdx - b.sentIdx);
 
   return selected.map((s) => s.text).join(" ");
 }
@@ -313,25 +329,42 @@ function extractiveConsolidation(chunks: any[]): string {
  * Infer a title from the chunks using the highest-salience content.
  */
 function inferTitle(chunks: any[]): string | null {
-  // Try to find a distinctive proper noun or location
-  for (const chunk of chunks) {
-    const content = chunk.content || "";
-    const match = content.match(/(?:the\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/);
-    if (match) return match[0];
+  // Extract message range for a fallback title
+  const firstTime = chunks[0]?.created_at;
+  const lastTime = chunks[chunks.length - 1]?.created_at;
+
+  // Try to find a distinctive proper noun or location from the highest-salience chunk
+  const sorted = [...chunks].sort((a, b) => (b.salience_score ?? 0) - (a.salience_score ?? 0));
+  for (const chunk of sorted.slice(0, 3)) {
+    let content = chunk.content || "";
+    content = content.replace(/^\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/gi, "");
+    const match = content.match(/(?:the\s+)?([A-Z][a-z]+(?:\s+(?:of\s+)?[A-Z][a-z]+){0,2})/);
+    if (match && match[0].length > 3) return match[0];
+  }
+
+  if (firstTime && lastTime) {
+    return `Scene ${new Date(firstTime * 1000).toLocaleDateString()}`;
   }
   return null;
 }
 
 // ─── Generative Consolidation (Sidecar) ────────────────────────
 
-const CONSOLIDATION_PROMPT = `Summarize this sequence of roleplay passages into a single, concise narrative summary. Preserve key facts, character actions, emotional beats, and plot developments. Write in past tense, third person.
+const CONSOLIDATION_PROMPT = `Compress these roleplay passages into a dense narrative summary for a memory system. This summary replaces the original text for long-term recall.
+
+RULES:
+- Past tense, third person
+- Preserve: character names, key actions, decisions, emotional shifts, locations visited, items gained/lost, promises made, status changes
+- Omit: atmospheric filler, redundant descriptions, routine greetings, scenery that doesn't matter later
+- Every sentence must carry a plot fact, character action, or relationship change
+- Do NOT add interpretation, meta-commentary, or analysis
 
 <passages>
 {{CONTENT}}
 </passages>
 
-Respond in JSON:
-{"title": "<brief 3-6 word title for this segment>", "summary": "<narrative summary, max {{MAX_TOKENS}} tokens>"}`;
+Respond in JSON only:
+{"title": "<3-6 word title capturing the key event or scene>", "summary": "<factual narrative summary>"}`;
 
 async function generateConsolidationSummary(
   chunks: any[],
@@ -368,14 +401,21 @@ async function generateConsolidationSummary(
   return { summary: extractiveConsolidation(chunks), title: inferTitle(chunks) };
 }
 
-const ARC_PROMPT = `These are sequential narrative summaries from a long roleplay. Create a single high-level arc summary that captures the overarching plot, character development, and thematic threads.
+const ARC_PROMPT = `These are sequential scene summaries from a long roleplay. Compress them into ONE arc-level summary that tracks what changed across the entire sequence.
+
+RULES:
+- Past tense, third person
+- Track: who did what, how relationships shifted, what was gained/lost/discovered, where the story moved
+- Focus on CHANGE: what was different at the end vs the beginning of this arc
+- Omit details that don't affect anything later
+- Dense and factual — this single summary replaces all the individual scene summaries
 
 <summaries>
 {{CONTENT}}
 </summaries>
 
-Respond in JSON:
-{"title": "<arc title, 3-8 words>", "summary": "<arc-level summary, max {{MAX_TOKENS}} tokens>"}`;
+Respond in JSON only:
+{"title": "<3-8 word arc title>", "summary": "<arc-level summary tracking key changes>"}`;
 
 async function generateArcSummary(
   combinedSummaries: string,
@@ -426,6 +466,11 @@ function estimateTokens(text: string): number {
 function extractJson(text: string): any | null {
   try {
     let cleaned = text.trim();
+    // Strip reasoning/thinking tags that some models emit
+    cleaned = cleaned.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "");
+    cleaned = cleaned.replace(/<(think|thinking|reasoning)>[\s\S]*$/gi, "");
+    // Strip markdown fences
+    cleaned = cleaned.trim();
     if (cleaned.startsWith("```")) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
