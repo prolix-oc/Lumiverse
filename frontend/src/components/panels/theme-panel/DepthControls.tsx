@@ -10,6 +10,13 @@ interface DepthControlsProps {
   onFontScaleChange: (v: number) => void
 }
 
+function trackFill(value: number, min: number, max: number) {
+  const pct = ((value - min) / (max - min)) * 100
+  return {
+    background: `linear-gradient(to right, var(--lumiverse-primary) ${pct}%, var(--lumiverse-fill-medium) ${pct}%)`,
+  }
+}
+
 export default function DepthControls({
   radiusScale,
   enableGlass,
@@ -31,6 +38,7 @@ export default function DepthControls({
           value={radiusScale}
           onChange={(e) => onRadiusChange(Number(e.target.value))}
           className={styles.slider}
+          style={trackFill(radiusScale, 0.5, 2)}
         />
         <span className={styles.value}>{radiusScale.toFixed(1)}x</span>
       </label>
@@ -46,6 +54,7 @@ export default function DepthControls({
           value={fontScale}
           onChange={(e) => onFontScaleChange(Number(e.target.value))}
           className={styles.slider}
+          style={trackFill(fontScale, 0.85, 1.15)}
         />
         <span className={styles.value}>{fontScale.toFixed(2)}x</span>
       </label>

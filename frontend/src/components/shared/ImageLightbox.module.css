@@ -7,8 +7,13 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.8);
+  background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.8));
   cursor: pointer;
+}
+
+:global([data-glass]) .backdrop {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .image {

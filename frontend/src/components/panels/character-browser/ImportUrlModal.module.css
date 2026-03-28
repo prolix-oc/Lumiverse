@@ -10,6 +10,11 @@
   z-index: 10002;
 }
 
+:global([data-glass]) .overlay {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+}
+
 .modal {
   width: clamp(340px, 94vw, 420px);
   background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));

@@ -55,6 +55,13 @@ export async function installCharacter(
     // Stamp install source metadata for manifest tracking
     if (result.success && result.characterId) {
       stampInstallSource(userId, result.characterId, payload);
+
+      // Download and import gallery images (best-effort, non-blocking)
+      if (payload.galleryImageUrls && payload.galleryImageUrls.length > 0) {
+        importGalleryFromUrls(userId, result.characterId, payload.galleryImageUrls).catch((err) => {
+          console.warn("[LumiHub Installer] Gallery import failed:", err);
+        });
+      }
     }
 
     return result;
@@ -76,15 +83,61 @@ function stampInstallSource(userId: string, characterId: string, payload: Instal
     if (!character) return;
     const { buildCharacterSlug } = require("./manifest") as typeof import("./manifest");
     const slug = buildCharacterSlug(character.creator, character.name);
-    svc.updateCharacter(userId, characterId, {
-      extensions: {
-        ...(character.extensions || {}),
-        _lumiverse_install_source: payload.source,
-        _lumiverse_install_slug: slug,
-      },
-    });
+
+    const ext: Record<string, any> = {
+      ...(character.extensions || {}),
+      _lumiverse_install_source: payload.source,
+      _lumiverse_install_slug: slug,
+    };
+
+    // Store canonical Chub slug so manifest matches LumiHub's fullPath-based lookup.
+    // Prefer the explicit chubSlug from the payload (sent by LumiHub on install/update),
+    // fall back to extracting from the import URL.
+    if (payload.source === "chub") {
+      if (payload.chubSlug) {
+        ext._lumiverse_chub_slug = payload.chubSlug;
+      } else if (payload.importUrl) {
+        const match = payload.importUrl.match(/chub\.ai\/characters\/(.+?)(?:\?|$)/);
+        if (match?.[1]) {
+          ext._lumiverse_chub_slug = match[1].toLowerCase();
+        }
+      }
+    }
+
+    svc.updateCharacter(userId, characterId, { extensions: ext });
   } catch {
     // Non-critical — manifest will still work via creator/name derivation
+  }
+}
+
+/**
+ * Download gallery images from URLs and add them to the character's gallery.
+ * Each image gets full-size + thumbnail storage via the gallery service.
+ */
+async function importGalleryFromUrls(userId: string, characterId: string, urls: string[]): Promise<void> {
+  const files: File[] = [];
+  for (const url of urls) {
+    try {
+      const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      const contentType = res.headers.get("content-type") || "image/webp";
+      const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "webp";
+      const filename = `gallery_${crypto.randomUUID()}.${ext}`;
+      files.push(new File([buf], filename, { type: contentType }));
+    } catch {
+      // Skip individual failures
+    }
+  }
+
+  if (files.length === 0) return;
+
+  if (files.length > 3) {
+    await gallerySvc.uploadBulkToGallery(userId, characterId, files);
+  } else {
+    for (const file of files) {
+      try { await gallerySvc.uploadToGallery(userId, characterId, file); } catch { /* skip */ }
+    }
   }
 }
 

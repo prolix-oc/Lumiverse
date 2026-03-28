@@ -8,6 +8,11 @@
   background: var(--lumiverse-modal-backdrop);
 }
 
+:global([data-glass]) .overlay {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+}
+
 .modal {
   width: clamp(340px, 94vw, min(1200px, var(--lumiverse-content-max-width, 1200px)));
   height: clamp(400px, 88vh, 860px);
@@ -757,6 +762,41 @@
   border-color: var(--lumiverse-primary);
 }
 
+/* ── Image Optimization ── */
+
+.imgOptSliderHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.imgOptSliderValue {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--lumiverse-primary);
+}
+
+.imgOptSlider {
+  width: 100%;
+  accent-color: var(--lumiverse-primary);
+}
+
+.imgOptRebuild {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+/* ── Chat Memory grid ── */
+
+.memoryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
 .inlineHeader {
   display: flex;
   align-items: center;
@@ -790,24 +830,18 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
   background: var(--lumiverse-fill-subtle);
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.cardEnabled {
+  border-color: var(--lumiverse-primary-020);
 }
 
 .cardRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px;
-}
-
-.iconToggle {
-  border: 1px solid var(--lumiverse-border);
-  background: var(--lumiverse-fill-subtle);
-  color: var(--lumiverse-text-dim);
-  border-radius: 6px;
-  font-size: 11px;
-  min-width: 38px;
-  padding: 3px 6px;
-  cursor: pointer;
+  gap: 10px;
+  padding: 10px 12px;
 }
 
 .cardTitleWrap {
@@ -832,7 +866,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 0 10px 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill);
+  border-radius: 0 0 10px 10px;
 }
 
 .textarea {
@@ -852,7 +889,8 @@
   gap: 6px;
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
-  padding: 8px;
+  padding: 10px;
+  background: var(--lumiverse-fill-subtle);
 }
 
 /* ── LumiHub link ── */

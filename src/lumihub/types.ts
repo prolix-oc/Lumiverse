@@ -21,6 +21,10 @@ export interface InstallCharacterPayload {
   importUrl?: string;
   /** When true, extract the embedded character_book as a standalone worldbook and associate it. */
   importEmbeddedWorldbook?: boolean;
+  /** Canonical Chub fullPath slug for manifest matching (e.g. "creator/card-name"). */
+  chubSlug?: string;
+  /** Gallery image URLs to download and store alongside the character. */
+  galleryImageUrls?: string[];
 }
 
 export interface InstallResultPayload {

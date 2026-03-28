@@ -16,6 +16,7 @@ import { useEnvConfig } from "./hooks/useEnvConfig.js";
 import { useSelfWatcher } from "./hooks/useSelfWatcher.js";
 import { openBrowser } from "./lib/browser.js";
 import { PROJECT_ROOT } from "./lib/constants.js";
+import { terminalEnv } from "./lib/terminal.js";
 
 interface AppProps {
   isDev: boolean;
@@ -32,11 +33,11 @@ export function App({ isDev, leaveAltScreen }: AppProps): React.ReactElement {
   // which bypasses incrementalRendering and does a full clearTerminal + redraw on
   // every frame — causing visible flicker, especially over SSH. See Ink issue #450.
   //
-  // Exception: in Tmux, incremental rendering's cursor-repositioning sequences
-  // don't work reliably, causing the header bar to duplicate. Use exact rows
-  // there so Ink falls back to full-screen clear-and-redraw mode.
-  const isTmux = !!process.env["TMUX"];
-  const termHeight = isTmux ? rows : rows - 1;
+  // Exception: terminals where incremental rendering's cursor-repositioning
+  // sequences don't work reliably (tmux: header duplication, Windows Terminal
+  // and conhost: eraseLines() cursor math breaks, Termux: limited VT support).
+  // Use exact rows there so Ink falls back to full-screen clear-and-redraw mode.
+  const termHeight = terminalEnv.useFullRedraw ? rows : rows - 1;
 
   // --- Hooks ---
   const logBuffer = useLogBuffer();

@@ -24,6 +24,7 @@ import React from "react";
 import { render } from "ink";
 import { App } from "./runner/App.js";
 import { killServerProcess } from "./runner/hooks/useServerProcess.js";
+import { terminalEnv } from "./runner/lib/terminal.js";
 
 // ─── Parse args ──────────────────────────────────────────────────────────────
 
@@ -34,12 +35,16 @@ const isDev = process.argv.includes("--dev");
 function enterAltScreen(): void {
   // Clear main buffer scrollback — prevents macOS Terminal.app from
   // letting the user scroll up past the TUI into old shell history.
-  process.stdout.write("\x1b[3J");
+  // Skip on terminals that don't support ED3 (conhost, Termux, tmux).
+  if (terminalEnv.supportsClearScrollback) {
+    process.stdout.write("\x1b[3J");
+  }
   // Switch to alternate screen buffer
   process.stdout.write("\x1b[?1049h");
   // Clear and park cursor
   process.stdout.write("\x1b[2J\x1b[H");
-  // Hide cursor for the TUI
+  // Hide cursor for the TUI (always use ANSI — .NET Console API is
+  // unreliable in the alternate buffer on some Windows builds)
   process.stdout.write("\x1b[?25l");
 }
 

@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text, useStdout } from "ink";
 import { LogLine } from "./LogLine.js";
 import type { LogEntry } from "../hooks/useLogBuffer.js";
+import { terminalEnv } from "../lib/terminal.js";
 
 interface LogViewProps {
   logs: LogEntry[];
@@ -20,7 +21,10 @@ export const LogView = React.memo(function LogView({
   chromeRows = 2,
 }: LogViewProps): React.ReactElement {
   const { stdout } = useStdout();
-  const rows = (stdout?.rows ?? 24) - 1; // -1 to match App's termHeight (avoids Ink fullscreen path)
+  const rawRows = stdout?.rows ?? 24;
+  // Must match App's termHeight logic: full-redraw terminals use exact rows
+  // (triggers Ink fullscreen path), others use rows - 1 (incremental rendering).
+  const rows = terminalEnv.useFullRedraw ? rawRows : rawRows - 1;
   const cols = stdout?.columns ?? 80;
 
   // 2 for the border top/bottom

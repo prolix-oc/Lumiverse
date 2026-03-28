@@ -47,8 +47,10 @@ export function buildInstallManifest(userId: string): ManifestEntry[] {
   // Characters
   const characters = charactersSvc.listCharactersForManifest(userId);
   for (const char of characters) {
-    const slug = buildSlug(char.creator, char.name);
     const source = char.extensions?._lumiverse_install_source as string | undefined;
+    // Prefer canonical Chub slug (fullPath) so it matches LumiHub's card.id lookup
+    const chubSlug = char.extensions?._lumiverse_chub_slug as string | undefined;
+    const slug = (source === "chub" && chubSlug) ? chubSlug : buildSlug(char.creator, char.name);
     entries.push({
       slug,
       type: "character",

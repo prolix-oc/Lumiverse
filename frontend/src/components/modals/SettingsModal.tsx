@@ -691,15 +691,15 @@ function GuidedGenerationSettings() {
 
       {guides.map((g) => {
         const editing = editingId === g.id
+        const positionLabel = { system: 'System', user_prefix: 'Before message', user_suffix: 'After message' }[g.position] ?? g.position
+        const modeLabel = g.mode === 'oneshot' ? 'One-shot' : 'Persistent'
         return (
-          <div key={g.id} className={styles.card}>
+          <div key={g.id} className={clsx(styles.card, g.enabled && styles.cardEnabled)}>
             <div className={styles.cardRow}>
-              <button type="button" className={styles.iconToggle} onClick={() => updateGuide(g.id, { enabled: !g.enabled })}>
-                {g.enabled ? 'ON' : 'OFF'}
-              </button>
+              <Toggle.Switch checked={g.enabled} onChange={(v) => updateGuide(g.id, { enabled: v })} size="sm" />
               <div className={styles.cardTitleWrap}>
                 <div className={styles.cardTitle}>{g.name || 'Untitled Guide'}</div>
-                <div className={styles.cardMeta}>{g.mode} • {g.position}</div>
+                <div className={styles.cardMeta}>{modeLabel} · {positionLabel}</div>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setEditingId(editing ? null : g.id)}>{editing ? 'Done' : 'Edit'}</Button>
               <Button variant="danger-ghost" size="sm" onClick={() => removeGuide(g.id)}>Delete</Button>
@@ -809,14 +809,12 @@ function QuickRepliesSettings() {
       {sets.map((set) => {
         const editing = editingSetId === set.id
         return (
-          <div key={set.id} className={styles.card}>
+          <div key={set.id} className={clsx(styles.card, set.enabled && styles.cardEnabled)}>
             <div className={styles.cardRow}>
-              <button type="button" className={styles.iconToggle} onClick={() => updateSet(set.id, { enabled: !set.enabled })}>
-                {set.enabled ? 'ON' : 'OFF'}
-              </button>
+              <Toggle.Switch checked={set.enabled} onChange={(v) => updateSet(set.id, { enabled: v })} size="sm" />
               <div className={styles.cardTitleWrap}>
                 <div className={styles.cardTitle}>{set.name || 'Untitled Set'}</div>
-                <div className={styles.cardMeta}>{set.replies.length} replies</div>
+                <div className={styles.cardMeta}>{set.replies.length} {set.replies.length === 1 ? 'reply' : 'replies'}</div>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setEditingSetId(editing ? null : set.id)}>{editing ? 'Done' : 'Edit'}</Button>
               <Button variant="danger-ghost" size="sm" onClick={() => removeSet(set.id)}>Delete</Button>
@@ -1765,60 +1763,67 @@ function ImageOptimizationSettings() {
         Control the resolution of generated thumbnail tiers. Smaller values reduce bandwidth; larger values improve visual quality.
       </p>
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Small Tier — {smallSize}px</label>
-          <input
-            type="range"
-            min={100} max={500} step={50}
-            value={smallSize}
-            onChange={(e) => update({ smallSize: Number(e.target.value) })}
-            style={{ width: '100%' }}
-          />
-          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
-            Used for cards, message avatars, and small UI elements. Default: 300px
-          </span>
+      <div className={styles.field}>
+        <div className={styles.imgOptSliderHeader}>
+          <label className={styles.fieldLabel}>Small Tier</label>
+          <span className={styles.imgOptSliderValue}>{smallSize}px</span>
         </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Large Tier — {largeSize}px</label>
-          <input
-            type="range"
-            min={400} max={1200} step={50}
-            value={largeSize}
-            onChange={(e) => update({ largeSize: Number(e.target.value) })}
-            style={{ width: '100%' }}
-          />
-          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
-            Used for portrait panel, character editor, and profile views. Default: 700px
-          </span>
-        </div>
+        <input
+          type="range"
+          className={styles.imgOptSlider}
+          min={100} max={500} step={50}
+          value={smallSize}
+          onChange={(e) => update({ smallSize: Number(e.target.value) })}
+        />
+        <span className={styles.placeholder} style={{ fontSize: 11 }}>
+          Cards, message avatars, and small UI elements. Default: 300px
+        </span>
       </div>
 
-      <div className={styles.field} style={{ marginTop: 8 }}>
-        <label className={styles.fieldLabel}>Rebuild Thumbnail Cache</label>
+      <div className={styles.field}>
+        <div className={styles.imgOptSliderHeader}>
+          <label className={styles.fieldLabel}>Large Tier</label>
+          <span className={styles.imgOptSliderValue}>{largeSize}px</span>
+        </div>
+        <input
+          type="range"
+          className={styles.imgOptSlider}
+          min={400} max={1200} step={50}
+          value={largeSize}
+          onChange={(e) => update({ largeSize: Number(e.target.value) })}
+        />
         <span className={styles.placeholder} style={{ fontSize: 11 }}>
-          Deletes all existing thumbnails and regenerates them at the current tier sizes. This is fast — typically a few seconds for hundreds of images.
+          Portrait panel, character editor, and profile views. Default: 700px
         </span>
+      </div>
+
+      <div className={styles.imgOptRebuild}>
+        <div className={styles.field} style={{ flex: 1 }}>
+          <label className={styles.fieldLabel}>Rebuild Thumbnail Cache</label>
+          <span className={styles.placeholder} style={{ fontSize: 11 }}>
+            Regenerate all thumbnails at the current tier sizes.
+          </span>
+        </div>
         <button
           type="button"
           className={clsx(styles.segmentedBtn, styles.segmentedBtnActive)}
-          style={{ alignSelf: 'flex-start', marginTop: 4, padding: '6px 16px' }}
+          style={{ padding: '6px 16px', whiteSpace: 'nowrap' }}
           disabled={rebuilding}
           onClick={handleRebuild}
         >
           {rebuilding ? 'Rebuilding...' : 'Rebuild Thumbnails'}
         </button>
-        {rebuilding && rebuildProgress && rebuildProgress.total > 0 && (
-          <div style={{ marginTop: 6, width: '100%', height: 4, borderRadius: 2, background: 'var(--lumiverse-fill-subtle)', overflow: 'hidden' }}>
-            <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: 'var(--lumiverse-primary)', transition: 'width 0.2s ease' }} />
-          </div>
-        )}
-        {rebuildStatus && (
-          <span className={styles.placeholder} style={{ marginTop: 4, fontSize: 11 }}>
-            {rebuildStatus}
-          </span>
-        )}
       </div>
+      {rebuilding && rebuildProgress && rebuildProgress.total > 0 && (
+        <div style={{ width: '100%', height: 4, borderRadius: 2, background: 'var(--lumiverse-fill-subtle)', overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: 'var(--lumiverse-primary)', transition: 'width 0.2s ease' }} />
+        </div>
+      )}
+      {rebuildStatus && (
+        <span className={styles.placeholder} style={{ fontSize: 11 }}>
+          {rebuildStatus}
+        </span>
+      )}
     </>
   )
 }
@@ -1928,187 +1933,185 @@ function AdvancedSettings() {
             </div>
 
             {/* Section: Chunking */}
-            <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Chunking</h4>
+            <CollapsibleSection title="Chunking" defaultExpanded={false}>
+              <div className={styles.memoryGrid}>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Target Tokens</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={200} max={2000}
+                    value={cfg.chunkTargetTokens}
+                    disabled={cfg.quickMode !== null}
+                    onChange={(e) => update({ chunkTargetTokens: Number(e.target.value) || 800 })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Max Tokens</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={400} max={4000}
+                    value={cfg.chunkMaxTokens}
+                    disabled={cfg.quickMode !== null}
+                    onChange={(e) => update({ chunkMaxTokens: Number(e.target.value) || 1600 })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Overlap Tokens</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={0} max={500}
+                    value={cfg.chunkOverlapTokens}
+                    disabled={cfg.quickMode !== null}
+                    onChange={(e) => update({ chunkOverlapTokens: Number(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Max Messages / Chunk</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={0} max={100}
+                    value={cfg.maxMessagesPerChunk}
+                    onChange={(e) => update({ maxMessagesPerChunk: Number(e.target.value) || 0 })}
+                  />
+                  <span className={styles.placeholder} style={{ fontSize: 11 }}>0 = unlimited</span>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Time Gap Split (min)</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={0} max={1440}
+                    value={cfg.splitOnTimeGapMinutes}
+                    onChange={(e) => update({ splitOnTimeGapMinutes: Number(e.target.value) || 0 })}
+                  />
+                  <span className={styles.placeholder} style={{ fontSize: 11 }}>0 = disabled</span>
+                </div>
+              </div>
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Target Tokens</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={200} max={2000}
-            value={cfg.chunkTargetTokens}
-            disabled={cfg.quickMode !== null}
-            onChange={(e) => update({ chunkTargetTokens: Number(e.target.value) || 800 })}
-          />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Max Tokens</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={400} max={4000}
-            value={cfg.chunkMaxTokens}
-            disabled={cfg.quickMode !== null}
-            onChange={(e) => update({ chunkMaxTokens: Number(e.target.value) || 1600 })}
-          />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Overlap Tokens</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={0} max={500}
-            value={cfg.chunkOverlapTokens}
-            disabled={cfg.quickMode !== null}
-            onChange={(e) => update({ chunkOverlapTokens: Number(e.target.value) || 0 })}
-          />
-        </div>
-      </div>
+              <Toggle.Checkbox
+                checked={cfg.splitOnSceneBreaks}
+                onChange={(checked) => update({ splitOnSceneBreaks: checked })}
+                label="Split on scene breaks (---, ***, ===)"
+              />
+            </CollapsibleSection>
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Max Messages / Chunk</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={0} max={100}
-            value={cfg.maxMessagesPerChunk}
-            onChange={(e) => update({ maxMessagesPerChunk: Number(e.target.value) || 0 })}
-          />
-          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = unlimited</span>
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Time Gap Split (min)</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={0} max={1440}
-            value={cfg.splitOnTimeGapMinutes}
-            onChange={(e) => update({ splitOnTimeGapMinutes: Number(e.target.value) || 0 })}
-          />
-          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>0 = disabled</span>
-        </div>
-      </div>
+            {/* Section: Retrieval */}
+            <CollapsibleSection title="Retrieval" defaultExpanded={false}>
+              <div className={styles.memoryGrid}>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Top-K Results</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={1}
+                    value={cfg.retrievalTopK}
+                    onChange={(e) => update({ retrievalTopK: Number(e.target.value) || 4 })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Exclusion Window</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={5} max={100}
+                    value={cfg.exclusionWindow}
+                    disabled={cfg.quickMode !== null}
+                    onChange={(e) => update({ exclusionWindow: Number(e.target.value) || 20 })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Similarity Threshold</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={0} max={2} step={0.05}
+                    value={cfg.similarityThreshold}
+                    onChange={(e) => update({ similarityThreshold: Math.max(0, Math.min(2, Number(e.target.value) || 0)) })}
+                  />
+                  <span className={styles.placeholder} style={{ fontSize: 11 }}>
+                    0 = no filtering. Cosine distance can exceed 1, so useful cutoffs are not limited to 0–1.
+                  </span>
+                </div>
+              </div>
+            </CollapsibleSection>
 
-      <Toggle.Checkbox
-        checked={cfg.splitOnSceneBreaks}
-        onChange={(checked) => update({ splitOnSceneBreaks: checked })}
-        label="Split on scene breaks (---, ***, ===)"
-      />
+            {/* Section: Query */}
+            <CollapsibleSection title="Query" defaultExpanded={false}>
+              <div className={styles.memoryGrid}>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Query Strategy</label>
+                  <select
+                    className={styles.select}
+                    value={cfg.queryStrategy}
+                    onChange={(e) => update({ queryStrategy: e.target.value as ChatMemorySettings['queryStrategy'] })}
+                  >
+                    <option value="recent_messages">Recent Messages</option>
+                    <option value="last_user_message">Last User Message</option>
+                    <option value="weighted_recent">Weighted Recent</option>
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Query Context Size</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={1} max={64}
+                    value={cfg.queryContextSize}
+                    onChange={(e) => update({ queryContextSize: Number(e.target.value) || 6 })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Query Max Tokens</label>
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    min={1000} max={32000}
+                    value={cfg.queryMaxTokens}
+                    onChange={(e) => update({ queryMaxTokens: Number(e.target.value) || 8000 })}
+                  />
+                </div>
+              </div>
+            </CollapsibleSection>
 
-      {/* Section: Retrieval */}
-      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Retrieval</h4>
+            {/* Section: Formatting */}
+            <CollapsibleSection title="Formatting" defaultExpanded={false}>
+              <span className={styles.placeholder} style={{ fontSize: 11, marginBottom: 4 }}>
+                Templates control how retrieved memories appear in the prompt. Available placeholders: {'{{memories}}'}, {'{{content}}'}, {'{{score}}'}, {'{{startIndex}}'}, {'{{endIndex}}'}.
+              </span>
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Top-K Results</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={1}
-            value={cfg.retrievalTopK}
-            onChange={(e) => update({ retrievalTopK: Number(e.target.value) || 4 })}
-          />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Exclusion Window</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={5} max={100}
-            value={cfg.exclusionWindow}
-            disabled={cfg.quickMode !== null}
-            onChange={(e) => update({ exclusionWindow: Number(e.target.value) || 20 })}
-          />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Similarity Threshold</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={0} max={2} step={0.05}
-            value={cfg.similarityThreshold}
-            onChange={(e) => update({ similarityThreshold: Math.max(0, Math.min(2, Number(e.target.value) || 0)) })}
-          />
-          <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
-            0 = no filtering. Cosine distance can exceed 1, so useful cutoffs are not limited to 0–1.
-          </span>
-        </div>
-      </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Header Template</label>
+                <textarea
+                  className={styles.textarea}
+                  rows={2}
+                  value={cfg.memoryHeaderTemplate}
+                  onChange={(e) => update({ memoryHeaderTemplate: e.target.value })}
+                />
+              </div>
 
-      {/* Section: Query */}
-      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Query</h4>
-
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Query Strategy</label>
-          <select
-            className={styles.select}
-            value={cfg.queryStrategy}
-            onChange={(e) => update({ queryStrategy: e.target.value as ChatMemorySettings['queryStrategy'] })}
-          >
-            <option value="recent_messages">Recent Messages</option>
-            <option value="last_user_message">Last User Message</option>
-            <option value="weighted_recent">Weighted Recent</option>
-          </select>
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Query Context Size</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={1} max={64}
-            value={cfg.queryContextSize}
-            onChange={(e) => update({ queryContextSize: Number(e.target.value) || 6 })}
-          />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Query Max Tokens</label>
-          <input
-            className={styles.numberInput}
-            type="number"
-            min={1000} max={32000}
-            value={cfg.queryMaxTokens}
-            onChange={(e) => update({ queryMaxTokens: Number(e.target.value) || 8000 })}
-          />
-        </div>
-      </div>
-
-      {/* Section: Formatting */}
-      <h4 className={styles.subsectionTitle} style={{ marginTop: 8 }}>Formatting</h4>
-      <span className={styles.placeholder} style={{ fontSize: 11 }}>
-        Templates control how retrieved memories appear in the prompt. Available placeholders: {'{{memories}}'}, {'{{content}}'}, {'{{score}}'}, {'{{startIndex}}'}, {'{{endIndex}}'}.
-      </span>
-
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>Header Template</label>
-        <textarea
-          className={styles.textarea}
-          rows={2}
-          value={cfg.memoryHeaderTemplate}
-          onChange={(e) => update({ memoryHeaderTemplate: e.target.value })}
-        />
-      </div>
-
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Chunk Template</label>
-          <input
-            className={styles.select}
-            value={cfg.chunkTemplate}
-            onChange={(e) => update({ chunkTemplate: e.target.value })}
-          />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>Chunk Separator</label>
-          <input
-            className={styles.select}
-            value={cfg.chunkSeparator}
-            onChange={(e) => update({ chunkSeparator: e.target.value })}
-          />
-        </div>
-      </div>
+              <div className={styles.drawerRow}>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Chunk Template</label>
+                  <input
+                    className={styles.select}
+                    value={cfg.chunkTemplate}
+                    onChange={(e) => update({ chunkTemplate: e.target.value })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Chunk Separator</label>
+                  <input
+                    className={styles.select}
+                    value={cfg.chunkSeparator}
+                    onChange={(e) => update({ chunkSeparator: e.target.value })}
+                  />
+                </div>
+              </div>
+            </CollapsibleSection>
 
             {saving && <p className={styles.placeholder} style={{ marginTop: 8, fontSize: 11 }}>Saving...</p>}
           </>
