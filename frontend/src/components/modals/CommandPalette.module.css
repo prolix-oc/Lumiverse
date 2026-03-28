@@ -14,7 +14,6 @@
 
 :global([data-glass]) .overlay {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px)) saturate(1.1);
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px)) saturate(1.1);
 }
 
 /* Palette card */

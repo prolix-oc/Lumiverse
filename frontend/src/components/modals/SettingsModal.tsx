@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
-import { Settings, Shield, Palette, Sliders, MessageSquare, Users, PanelRight, Compass, Reply, HardDrive, RefreshCw, Puzzle, Database, Hash, Activity, Globe, Bell, Import } from 'lucide-react'
+import { Shield, Palette, Sliders, MessageSquare, Users, PanelRight, Compass, Reply, HardDrive, RefreshCw, Puzzle, Database, Hash, Activity, Globe, Bell, Import, Brain, Terminal } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -19,6 +19,8 @@ import MigrationSettings from '@/components/settings/MigrationSettings'
 import TokenizerManager from '@/components/settings/TokenizerManager'
 import Diagnostics from '@/components/settings/Diagnostics'
 import NotificationSettings from '@/components/settings/NotificationSettings'
+import MemoryCortexSettings from '@/components/settings/MemoryCortexSettings'
+import OperatorPanel from '@/components/settings/OperatorPanel'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import styles from './SettingsModal.module.css'
 import clsx from 'clsx'
@@ -28,7 +30,6 @@ interface SettingsModalProps {
 }
 
 const BASE_VIEWS = [
-  { id: 'general', icon: Settings, label: 'General' },
   { id: 'display', icon: PanelRight, label: 'Display' },
   { id: 'chat', icon: MessageSquare, label: 'Chat' },
   { id: 'extensions', icon: Puzzle, label: 'Extensions' },
@@ -36,6 +37,7 @@ const BASE_VIEWS = [
   { id: 'quickReplies', icon: Reply, label: 'Quick Replies' },
   { id: 'extensionPools', icon: HardDrive, label: 'Extension Pools' },
   { id: 'embeddings', icon: Database, label: 'Embeddings' },
+  { id: 'memoryCortex', icon: Brain, label: 'Memory Cortex' },
   { id: 'appearance', icon: Palette, label: 'Appearance' },
   { id: 'notifications', icon: Bell, label: 'Notifications' },
   { id: 'advanced', icon: Sliders, label: 'Advanced' },
@@ -47,11 +49,18 @@ const BASE_VIEWS = [
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const settingsActiveView = useStore((s) => s.settingsActiveView)
   const user = useStore((s) => s.user)
-  const [activeView, setActiveView] = useState(settingsActiveView || 'general')
+  const [activeView, setActiveView] = useState(settingsActiveView || 'display')
 
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin'
+  const isOwner = user?.role === 'owner'
+  const isAdmin = isOwner || user?.role === 'admin'
   const VIEWS = isAdmin
-    ? [...BASE_VIEWS, { id: 'tokenizers' as const, icon: Hash, label: 'Tokenizers' }, { id: 'users' as const, icon: Users, label: 'Users' }, { id: 'migration' as const, icon: Import, label: 'Migration' }]
+    ? [
+        ...BASE_VIEWS,
+        ...(isOwner ? [{ id: 'operator' as const, icon: Terminal, label: 'Operator' }] : []),
+        { id: 'tokenizers' as const, icon: Hash, label: 'Tokenizers' },
+        { id: 'users' as const, icon: Users, label: 'Users' },
+        { id: 'migration' as const, icon: Import, label: 'Migration' },
+      ]
     : [...BASE_VIEWS]
 
   return createPortal(
@@ -107,8 +116,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
 function SettingsView({ view }: { view: string }) {
   switch (view) {
-    case 'general':
-      return <GeneralSettings />
     case 'display':
       return <DisplaySettings />
     case 'chat':
@@ -135,12 +142,16 @@ function SettingsView({ view }: { view: string }) {
       return <TokenizerManager />
     case 'users':
       return <UserManagement />
+    case 'memoryCortex':
+      return <MemoryCortexSettings />
     case 'notifications':
       return <NotificationSettings />
     case 'diagnostics':
       return <Diagnostics />
     case 'migration':
       return <MigrationSettings />
+    case 'operator':
+      return <OperatorPanel />
     default:
       return <div className={styles.placeholder}>Select a settings category</div>
   }
@@ -148,23 +159,6 @@ function SettingsView({ view }: { view: string }) {
 
 function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
-function GeneralSettings() {
-  const enableLandingPage = useStore((s) => s.enableLandingPage)
-  const setSetting = useStore((s) => s.setSetting)
-
-  return (
-    <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>General</h3>
-
-      <Toggle.Checkbox
-        checked={enableLandingPage}
-        onChange={(checked) => setSetting('enableLandingPage', checked)}
-        label="Enable landing page"
-      />
-    </div>
-  )
 }
 
 function DisplaySettings() {

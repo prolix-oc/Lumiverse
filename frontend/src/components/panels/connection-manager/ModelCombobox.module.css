@@ -54,7 +54,6 @@
 
 :global([data-glass]) .dropdown {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 .dropdownItem {

@@ -279,7 +279,7 @@ export default function WorldBookEditorModal() {
 
   return (
     <>
-    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 92vw, min(1160px, var(--lumiverse-content-max-width, 1160px)))" zIndex={10000} className={styles.modal}>
+    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 92vw, min(1160px, var(--lumiverse-content-max-width, 1160px)))" zIndex={10001} className={styles.modal}>
         <div className={styles.header}>
           <h2 className={styles.title}>World Book Editor</h2>
           <CloseButton onClick={closeModal} />

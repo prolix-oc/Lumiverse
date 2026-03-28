@@ -13,7 +13,6 @@
 
 :global([data-glass]) .backdrop {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 /* Modal */
@@ -708,7 +707,6 @@
 
 .charWbPopover {
   position: fixed;
-  transform: translateX(-100%);
   min-width: 200px;
   max-height: 240px;
   overflow-y: auto;
@@ -716,7 +714,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   box-shadow: var(--lumiverse-shadow-lg);
-  z-index: 9995;
+  z-index: 10002;
   display: flex;
   flex-direction: column;
   padding: 4px;

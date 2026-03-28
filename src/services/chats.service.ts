@@ -8,6 +8,7 @@ import type { BulkMessageInput } from "../types/migrate";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
+import * as memoryCortex from "./memory-cortex";
 import { sanitizeForVectorization } from "../utils/content-sanitizer";
 
 // --- Chat helpers ---
@@ -1219,13 +1220,98 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
   if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
 
   const lastChunk = getLastChatChunk(chatId);
+  let chunkId: string;
 
   if (!lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId))) {
     const newChunk = createChatChunk(chatId, [newMessage]);
+    chunkId = newChunk.id;
     vectorizationQueue.queueChunkVectorization(userId, chatId, newChunk.id, 5);
   } else {
     appendToChunk(lastChunk.id, newMessage);
+    chunkId = lastChunk.id;
     vectorizationQueue.queueChunkVectorization(userId, chatId, lastChunk.id, 5);
+  }
+
+  // Memory Cortex: process chunk for entity extraction, salience scoring, etc.
+  // Runs async and never blocks the main flow.
+  try {
+    const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
+    if (chunk) {
+      const chat = getChat(userId, chatId);
+      const characterNames: string[] = [];
+      if (chat) {
+        const character = getCharacter(userId, chat.character_id);
+        if (character) characterNames.push(character.name);
+        // Group chat: add all character names
+        if (chat.metadata?.character_ids) {
+          for (const cid of chat.metadata.character_ids as string[]) {
+            const c = getCharacter(userId, cid);
+            if (c && !characterNames.includes(c.name)) characterNames.push(c.name);
+          }
+        }
+        // User's persona: the player character. Critical for entity detection —
+        // without this, the user's name (e.g., "Prolix") won't get auto-tagged as character.
+        try {
+          const { resolvePersonaOrDefault } = require("./personas.service");
+          const persona = resolvePersonaOrDefault(userId);
+          if (persona?.name && !characterNames.includes(persona.name)) {
+            characterNames.push(persona.name);
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Resolve sidecar connection for Tier 2 features (LLM-assisted extraction).
+      // Uses the cortex's own sidecar config — connection profile, model, temp, topP.
+      const cortexConfig = memoryCortex.getCortexConfig(userId);
+      const sidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
+
+      // Build a generateRaw adapter that matches the cortex's expected signature.
+      // Merges the cortex sidecar's temp/topP/maxTokens with per-call parameters.
+      // Lazy-import generate.service to avoid circular dependency (generate → chats → generate).
+      const generateRawFn = sidecarConnectionId
+        ? async (opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any> }) => {
+            const { quietGenerate } = await import("./generate.service");
+            const sidecarParams: Record<string, any> = {
+              temperature: cortexConfig.sidecar.temperature,
+              top_p: cortexConfig.sidecar.topP,
+              max_tokens: cortexConfig.sidecar.maxTokens,
+              ...opts.parameters, // Per-call overrides (e.g., salience-sidecar sets temperature: 0.1)
+            };
+            // Model override: if cortex has a specific model set, inject it into parameters
+            // so the provider uses it instead of the connection profile's default
+            if (cortexConfig.sidecar.model) {
+              sidecarParams.model = cortexConfig.sidecar.model;
+            }
+            const result = await quietGenerate(userId, {
+              connection_id: opts.connectionId,
+              messages: opts.messages as any,
+              parameters: sidecarParams,
+            });
+            return { content: typeof result.content === "string" ? result.content : "" };
+          }
+        : undefined;
+
+      memoryCortex.processChunk(
+        {
+          chunkId: chunk.id,
+          chatId,
+          userId,
+          content: chunk.content,
+          messageIds: JSON.parse(chunk.message_ids || "[]"),
+          startMessageIndex: 0,
+          endMessageIndex: 0,
+          createdAt: chunk.created_at,
+        },
+        characterNames,
+        generateRawFn,
+        sidecarConnectionId,
+      ).catch(err => {
+        console.warn("[chats] Memory cortex processing failed:", err);
+      });
+    }
+  } catch (err) {
+    // Non-fatal: cortex processing should never break chunk creation
+    console.warn("[chats] Memory cortex hook error:", err);
   }
 }
 

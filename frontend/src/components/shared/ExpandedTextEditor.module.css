@@ -15,7 +15,6 @@
 :global([data-glass]) .overlay {
   background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .dialog {

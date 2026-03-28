@@ -279,7 +279,6 @@ export interface WallpaperSettings {
 
 // ---- Settings Slice ----
 export interface SettingsSlice {
-  enableLandingPage: boolean
   landingPageChatsDisplayed: number
   charactersPerPage: number
   personasPerPage: number
@@ -830,6 +829,19 @@ export interface MigrationSlice {
   resetMigration: () => void
 }
 
+// ---- Operator Slice ----
+import type { OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
+
+export interface OperatorSlice {
+  operatorLogs: OperatorLogEntry[]
+  operatorStatus: OperatorStatusPayload | null
+  operatorBusy: string | null
+  appendOperatorLogs: (entries: OperatorLogEntry[]) => void
+  setOperatorStatus: (status: OperatorStatusPayload) => void
+  setOperatorBusy: (operation: string | null) => void
+  clearOperatorLogs: () => void
+}
+
 // ---- Combined Store ----
 export type AppStore = ChatSlice &
   CharactersSlice &
@@ -853,4 +865,5 @@ export type AppStore = ChatSlice &
   ExpressionSlice &
   ImageGenConnectionsSlice &
   LoadoutsSlice &
-  MigrationSlice
+  MigrationSlice &
+  OperatorSlice

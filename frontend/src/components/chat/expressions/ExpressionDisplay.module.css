@@ -140,7 +140,6 @@
 
 :global([data-glass]) .labelBadge {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .container:hover .labelBadge {
@@ -271,7 +270,6 @@
 
 :global([data-glass]) .groupNameTag {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .groupSlotActive .groupNameTag,

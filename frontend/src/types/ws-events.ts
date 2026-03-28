@@ -83,6 +83,42 @@ export enum EventType {
   MIGRATION_LOG = 'MIGRATION_LOG',
   MIGRATION_COMPLETED = 'MIGRATION_COMPLETED',
   MIGRATION_FAILED = 'MIGRATION_FAILED',
+
+  // Operator panel
+  OPERATOR_LOG = 'OPERATOR_LOG',
+  OPERATOR_STATUS = 'OPERATOR_STATUS',
+  OPERATOR_PROGRESS = 'OPERATOR_PROGRESS',
+}
+
+// ---- Operator ----
+export interface OperatorLogEntry {
+  timestamp: number
+  source: 'stdout' | 'stderr'
+  text: string
+}
+
+export interface OperatorLogPayload {
+  entries: OperatorLogEntry[]
+}
+
+export interface OperatorStatusPayload {
+  port: number
+  pid: number
+  uptime: number
+  branch: string
+  version: string
+  commit: string
+  remoteMode: boolean
+  ipcAvailable: boolean
+  updateAvailable: boolean
+  commitsBehind: number
+  latestUpdateMessage: string
+}
+
+export interface OperatorProgressPayload {
+  operation: string
+  status: 'in_progress' | 'complete' | 'error'
+  message: string
 }
 
 export interface WSEvent<T = any> {

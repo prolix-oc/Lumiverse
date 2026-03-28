@@ -209,7 +209,6 @@
   border: none;
   background: none;
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   overflow: visible;
   border-radius: 0;
 }

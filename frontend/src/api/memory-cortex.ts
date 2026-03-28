@@ -1,0 +1,129 @@
+import { get, put, post, del } from "./client";
+
+// ─── Types ─────────────────────────────────────────────────────
+
+export interface CortexConfig {
+  enabled: boolean;
+  presetMode: "simple" | "standard" | "advanced" | null;
+  entityTracking: boolean;
+  entityExtractionMode: "heuristic" | "sidecar" | "off";
+  salienceScoring: boolean;
+  salienceScoringMode: "heuristic" | "sidecar";
+  sidecar: {
+    connectionProfileId: string | null;
+    model: string | null;
+    temperature: number;
+    topP: number;
+    maxTokens: number;
+  };
+  formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
+  contextTokenBudget: number;
+  consolidation: {
+    enabled: boolean;
+    chunkThreshold: number;
+    chunksPerConsolidation: number;
+    arcThreshold: number;
+    useSidecar: boolean;
+    maxTokensPerSummary: number;
+  };
+  retrieval: {
+    useFusedScoring: boolean;
+    emotionalResonance: boolean;
+    diversitySelection: boolean;
+    entityContextInjection: boolean;
+    relationshipInjection: boolean;
+    arcInjection: boolean;
+    maxEntitySnapshots: number;
+    maxRelationships: number;
+  };
+  decay: {
+    halfLifeTurns: number;
+    reinforcementWeight: number;
+    coreMemoryThreshold: number;
+    coreMemoryFlags: string[];
+  };
+  entityPruning: {
+    enabled: boolean;
+    staleAfterMessages: number;
+    minConfidence: number;
+  };
+  entityWhitelist: string[];
+}
+
+export interface CortexEntity {
+  id: string;
+  chatId: string;
+  name: string;
+  entityType: string;
+  aliases: string[];
+  description: string;
+  firstSeenAt: number | null;
+  lastSeenAt: number | null;
+  mentionCount: number;
+  salienceAvg: number;
+  status: string;
+  facts: string[];
+  emotionalValence: Record<string, number>;
+}
+
+export interface CortexUsageStats {
+  chunkCount: number;
+  vectorizedChunkCount: number;
+  entityCount: number;
+  activeEntityCount: number;
+  consolidationCount: number;
+  salienceRecordCount: number;
+  mentionCount: number;
+  relationCount: number;
+  estimatedEmbeddingCalls: number;
+}
+
+// ─── API ───────────────────────────────────────────────────────
+
+const BASE = "/memory-cortex";
+
+export const memoryCortexApi = {
+  // Config
+  getConfig: () => get<CortexConfig>(`${BASE}/config`),
+  updateConfig: (data: Partial<CortexConfig>) => put<CortexConfig>(`${BASE}/config`, data),
+  applyPreset: (mode: string) => post<CortexConfig>(`${BASE}/config/preset`, { mode }),
+
+  // Entities
+  getEntities: (chatId: string, status?: string) =>
+    get<{ data: CortexEntity[]; total: number }>(`${BASE}/chats/${chatId}/entities`, status ? { status } : undefined),
+  updateEntity: (chatId: string, entityId: string, data: Partial<CortexEntity>) =>
+    put<CortexEntity>(`${BASE}/chats/${chatId}/entities/${entityId}`, data),
+  deleteEntity: (chatId: string, entityId: string) =>
+    del<{ success: boolean }>(`${BASE}/chats/${chatId}/entities/${entityId}`),
+  mergeEntities: (chatId: string, sourceId: string, targetId: string) =>
+    post<CortexEntity>(`${BASE}/chats/${chatId}/entities/merge`, { sourceId, targetId }),
+
+  // Font Colors
+  getColors: (chatId: string) =>
+    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/colors`),
+  deleteColor: (chatId: string, colorId: string) =>
+    del<{ success: boolean }>(`${BASE}/chats/${chatId}/colors/${colorId}`),
+
+  // Relations
+  getRelations: (chatId: string) =>
+    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/relations`),
+
+  // Consolidations
+  getConsolidations: (chatId: string, tier?: number) =>
+    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/consolidations`, tier != null ? { tier } : undefined),
+
+  // Chunks
+  getChunks: (chatId: string, limit = 50, offset = 0) =>
+    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/chunks`, { limit, offset }),
+
+  // Salience
+  getSalience: (chatId: string, limit = 50, offset = 0) =>
+    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/salience`, { limit, offset }),
+
+  // Stats
+  getStats: (chatId: string) => get<CortexUsageStats>(`${BASE}/chats/${chatId}/cortex-stats`),
+
+  // Rebuild
+  rebuild: (chatId: string) =>
+    post<{ chunksProcessed: number; entitiesFound: number; relationsFound: number }>(`${BASE}/chats/${chatId}/rebuild`),
+};

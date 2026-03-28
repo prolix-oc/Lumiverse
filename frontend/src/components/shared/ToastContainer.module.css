@@ -70,7 +70,6 @@
 
 :global([data-glass]) .toast {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
   max-width: 400px;
   cursor: default;
 }

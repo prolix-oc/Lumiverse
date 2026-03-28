@@ -491,7 +491,7 @@ export default function CharacterEditorPage() {
       const next = !prev
       if (next && wbAddBtnRef.current) {
         const rect = wbAddBtnRef.current.getBoundingClientRect()
-        setWbPopoverPos({ top: rect.bottom + 4, left: rect.right })
+        setWbPopoverPos({ top: rect.bottom + 4, left: rect.left })
       }
       return next
     })

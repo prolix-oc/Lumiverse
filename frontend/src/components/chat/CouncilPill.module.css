@@ -43,7 +43,6 @@
 
 :global([data-glass]) .indicator {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 /* Shimmer sweep */

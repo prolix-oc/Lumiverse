@@ -217,15 +217,13 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented }: Sort
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? 'Disable' : 'Enable'}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
+      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title="Edit">
+        <Edit2 size={14} />
+      </Button>
       {!block.isLocked && (
-        <>
-          <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title="Edit">
-            <Edit2 size={14} />
-          </Button>
-          <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title="Delete">
-            <Trash2 size={14} />
-          </Button>
-        </>
+        <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title="Delete">
+          <Trash2 size={14} />
+        </Button>
       )}
     </div>
   )
@@ -261,6 +259,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
   const [showExpandedEditor, setShowExpandedEditor] = useState(false)
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const activeChatId = __contextMeterStore((s) => s.activeChatId)
 
   // Debounced macro preview resolution
   useEffect(() => {
@@ -272,7 +271,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
     previewTimerRef.current = setTimeout(() => {
       setPreviewLoading(true)
-      resolveMacrosApi({ template: content })
+      resolveMacrosApi({ template: content, ...(activeChatId ? { chat_id: activeChatId } : {}) })
         .then((res) => {
           setPreviewText(res.text)
           setPreviewDiagnostics(res.diagnostics)
@@ -284,7 +283,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
         .finally(() => setPreviewLoading(false))
     }, 500)
     return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
-  }, [content, showPreview])
+  }, [content, showPreview, activeChatId])
 
   const handlePositionChange = (newPosition: string) => {
     const pos = newPosition as PromptBlock['position']

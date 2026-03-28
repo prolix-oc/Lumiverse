@@ -79,7 +79,7 @@ export default function PromptItemizerModal() {
   const mainGroups = groups.filter((g) => g.label !== 'Sidecar (Lumi Pipeline)')
 
   return (
-    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)))" zIndex={1000} className={styles.modal}>
+    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)))" zIndex={10001} className={styles.modal}>
           <div className={styles.header}>
             <h2 className={styles.title}>Prompt Breakdown</h2>
             {data && (

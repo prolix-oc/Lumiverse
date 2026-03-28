@@ -33,6 +33,7 @@ import ImageGenPanel from './ImageGenPanel'
 import WallpaperPanel from './WallpaperPanel'
 import BranchTreePanel from './BranchTreePanel'
 import RegexPanel from './RegexPanel'
+import MemoryCortexPanel from './memory-cortex/MemoryCortexPanel'
 import styles from './ViewportDrawer.module.css'
 import clsx from 'clsx'
 
@@ -70,6 +71,7 @@ const TABS: Tab[] = [
   { id: 'characters', icon: Users, label: 'Characters', component: () => <CharacterBrowser /> },
   { id: 'personas', icon: Drama, label: 'Personas', component: () => <PersonaManager /> },
   { id: 'lorebook', icon: Library, label: 'Lorebook', component: () => <WorldBookPanel /> },
+  { id: 'cortex', icon: Sparkles, label: 'Memory', component: () => <MemoryCortexPanel /> },
   { id: 'create', icon: PenTool, label: 'Create', component: () => <ContentWorkshop /> },
   { id: 'ooc', icon: MessageCircle, label: 'OOC', component: () => <OOCPanel /> },
   { id: 'prompt', icon: FileText, label: 'Prompt', component: () => <PromptPanel /> },

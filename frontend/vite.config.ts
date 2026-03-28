@@ -29,6 +29,14 @@ export default defineConfig({
     },
   },
   css: {
+    lightningcss: {
+      // Safari 14 still requires -webkit-backdrop-filter. Setting this target
+      // tells Lightning CSS to emit both prefixed and unprefixed forms
+      // automatically — manual -webkit- prefixes are removed from source.
+      targets: {
+        safari: (14 << 16),
+      },
+    },
     modules: {
       localsConvention: 'camelCaseOnly',
     },

@@ -39,6 +39,9 @@ import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import { getCouncilSettings } from "./council/council-settings.service";
 import { getDb } from "../db/connection";
 import { readFileSync } from "fs";
+import * as memoryCortex from "./memory-cortex";
+import { buildEmotionalContext } from "./memory-cortex";
+import { getSidecarSettings } from "./sidecar-settings.service";
 
 // ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
@@ -437,9 +440,78 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     : null;
   const perChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
 
-  const memoryResult = await collectChatVectorMemory(
-    ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides,
-  );
+  // Memory Cortex: enhanced retrieval with entity graph, salience, and emotional resonance
+  const cortexConfig = memoryCortex.getCortexConfig(ctx.userId);
+  let cortexResult: memoryCortex.CortexResult | null = null;
+
+  let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
+
+  if (cortexConfig.enabled) {
+    // Build emotional context from recent messages for associative recall
+    const recentContent = messages.slice(-6).map(m => m.content).join(" ");
+    const emotionalContext = buildEmotionalContext(recentContent);
+
+    const effectiveSettings = chatMemSettings
+      ? embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemSettings, await embeddingsSvc.getEmbeddingConfig(ctx.userId))
+      : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+
+    cortexResult = await memoryCortex.queryCortex({
+      chatId: ctx.chatId,
+      userId: ctx.userId,
+      queryText: buildQueryText(messages, effectiveSettings),
+      emotionalContext,
+      generationType: ctx.generationType,
+      topK: perChatOverrides?.retrievalTopK ?? effectiveSettings.retrievalTopK,
+      includeConsolidations: cortexConfig.consolidation.enabled,
+      includeRelationships: cortexConfig.retrieval.relationshipInjection,
+      excludeMessageIds: ctx.excludeMessageId ? [ctx.excludeMessageId] : undefined,
+    }, cortexConfig);
+
+    // Format cortex data using shadow prompt formatter
+    const shadowResult = memoryCortex.formatShadowPrompt(
+      cortexResult.memories,
+      cortexResult.entityContext,
+      cortexResult.activeRelationships,
+      cortexResult.arcContext,
+      {
+        mode: cortexConfig.formatterMode as any,
+        tokenBudget: cortexConfig.contextTokenBudget,
+        currentSpeakerName: character?.name,
+      },
+    );
+
+    // Map to existing MemoryRetrievalResult for backwards compat
+    memoryResult = {
+      chunks: cortexResult.memories.map((m) => ({
+        content: m.content,
+        score: m.finalScore,
+        metadata: { components: m.components, entityNames: m.entityNames },
+      })),
+      formatted: shadowResult.text,
+      count: cortexResult.memories.length,
+      enabled: true,
+      queryPreview: "",
+      settingsSource: "global" as const,
+      chunksAvailable: 0,
+      chunksPending: 0,
+    };
+
+    // Populate macro env with cortex data (including character color map)
+    const colorMapText = memoryCortex.formatColorMapForPrompt(ctx.chatId);
+    macroEnv.extra.cortex = {
+      memories: cortexResult.memories,
+      entityContext: cortexResult.entityContext,
+      activeRelationships: cortexResult.activeRelationships,
+      arcContext: cortexResult.arcContext,
+      formatted: colorMapText ? shadowResult.text + "\n\n" + colorMapText : shadowResult.text,
+      colorMap: colorMapText,
+    };
+  } else {
+    // Existing path: pure vector retrieval
+    memoryResult = await collectChatVectorMemory(
+      ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides, ctx.excludeMessageId,
+    );
+  }
 
   // Store in macroEnv for {{memories}} macro access
   macroEnv.extra.memory = {
@@ -599,11 +671,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     // Content-bearing markers and regular blocks → resolve block.content
     const content = block.content || "";
     const rawResolved = (await evaluate(content, macroEnv, registry)).text;
-    const resolved = rawResolved.trim();
-    if (resolved) {
-      // Append roles: collect for deferred application after full assembly
-      // Preserve original whitespace (especially leading newlines) for formatting
-      if (isAppendRole(block.role)) {
+
+    // Append roles: collect for deferred application after full assembly.
+    // Check BEFORE the trim gate so whitespace-only appends (e.g. lone
+    // newlines the user deliberately placed between other appends) are kept.
+    if (isAppendRole(block.role)) {
+      if (rawResolved) {
         pendingAppends.push({
           baseRole: appendBaseRole(block.role),
           depth: block.depth || 0,
@@ -611,8 +684,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
           blockName: block.name,
           blockId: block.id,
         });
-        continue;
       }
+      continue;
+    }
+
+    const resolved = rawResolved.trim();
+    if (resolved) {
       const role: LlmMessage["role"] = block.position === "post_history" ? "assistant" : (block.role as LlmMessage["role"] || "system");
       result.push({ role, content: resolved });
       breakdown.push({
@@ -832,8 +909,21 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   applyCompletionSettings(result, completionSettings, character, persona, ctx.generationType);
 
   // ---- Apply pending append blocks ----
+  // Group appends by target (baseRole + depth) so every append for the same
+  // target message is applied in a single atomic operation, preserving relative
+  // order from the preset's prompt_order and all intermediate whitespace.
+  const appendGroups = new Map<string, PendingAppend[]>();
   for (const append of pendingAppends) {
-    applyAppendBlock(result, breakdown, append);
+    const key = `${append.baseRole}:${append.depth}`;
+    let group = appendGroups.get(key);
+    if (!group) {
+      group = [];
+      appendGroups.set(key, group);
+    }
+    group.push(append);
+  }
+  for (const group of appendGroups.values()) {
+    applyAppendGroup(result, breakdown, group);
   }
 
   // ---- Collapse all messages into a single user message (if enabled) ----
@@ -2452,6 +2542,7 @@ export async function collectChatVectorMemory(
   messages: Message[],
   chatMemorySettings?: import("./embeddings.service").ChatMemorySettings | null,
   perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null,
+  _excludeMessageId?: string,
 ): Promise<MemoryRetrievalResult> {
   const emptyResult: MemoryRetrievalResult = {
     chunks: [], formatted: "", count: 0, enabled: false,
@@ -2507,12 +2598,20 @@ export async function collectChatVectorMemory(
       await cacheQueryVector(chatId, queryHash, queryText, queryVector);
     }
 
-    // Build exclusion set
+    // Build exclusion set — recent messages PLUS the regeneration target.
+    // The regeneration target was already filtered out of `messages` at the top
+    // of assemblePrompt, so it won't appear in the window. We must add it
+    // explicitly to prevent its chunk from being retrieved as a "memory",
+    // which causes verbatim reproduction on regenerate/swipe.
     const excludeIds = new Set<string>();
     const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
     const recentMessages = visibleMessages.slice(-effectiveExclusionWindow);
     for (const m of recentMessages) {
       excludeIds.add(m.id);
+    }
+    // Also exclude the regeneration/swipe target if provided via closure
+    if (_excludeMessageId) {
+      excludeIds.add(_excludeMessageId);
     }
 
     const hits = await embeddingsSvc.searchChatChunks(userId, chatId, queryVector, excludeIds, effectiveTopK, queryText, cfg.hybrid_weight_mode);
@@ -2630,36 +2729,53 @@ function injectWorldInfoAt(
   return entries.length;
 }
 
-function applyAppendBlock(
+/**
+ * Apply a group of appends that share the same target (baseRole + depth)
+ * in a single pass. Contents are concatenated in prompt_order sequence
+ * with no extra separator — each rawResolved already carries whatever
+ * whitespace the user placed around it.
+ */
+function applyAppendGroup(
   result: LlmMessage[],
   breakdown: AssemblyBreakdownEntry[],
-  append: PendingAppend,
+  group: PendingAppend[],
 ): void {
+  if (group.length === 0) return;
+  const { baseRole, depth } = group[0];
+
+  // Join all raw contents in order — the first gets a "\n" separator from the
+  // base message, subsequent appends are separated from each other directly
+  // so user-controlled whitespace (leading/trailing newlines) is the only
+  // thing between them.
+  const combinedContent = group.map(a => a.content).join("");
+
   let roleCount = 0;
   for (let i = result.length - 1; i >= 0; i--) {
-    if (result[i].role === append.baseRole) {
-      if (roleCount === append.depth) {
+    if (result[i].role === baseRole) {
+      if (roleCount === depth) {
         if (typeof result[i].content === "string") {
-          result[i] = { ...result[i], content: result[i].content + "\n" + append.content };
+          result[i] = { ...result[i], content: result[i].content + "\n" + combinedContent };
         } else {
           // Multipart: append to the text part
           const parts = [...result[i].content as import("../llm/types").LlmMessagePart[]];
           const textIdx = parts.findIndex((p) => p.type === "text");
           if (textIdx >= 0) {
             const tp = parts[textIdx] as import("../llm/types").LlmTextPart;
-            parts[textIdx] = { type: "text", text: tp.text + "\n" + append.content };
+            parts[textIdx] = { type: "text", text: tp.text + "\n" + combinedContent };
           } else {
-            parts.unshift({ type: "text", text: append.content });
+            parts.unshift({ type: "text", text: combinedContent });
           }
           result[i] = { ...result[i], content: parts };
         }
-        breakdown.push({
-          type: "append",
-          name: `${append.blockName} → ${append.baseRole}@${append.depth}`,
-          role: append.baseRole,
-          content: append.content,
-          blockId: append.blockId,
-        });
+        for (const append of group) {
+          breakdown.push({
+            type: "append",
+            name: `${append.blockName} → ${baseRole}@${depth}`,
+            role: baseRole,
+            content: append.content,
+            blockId: append.blockId,
+          });
+        }
         return;
       }
       roleCount++;

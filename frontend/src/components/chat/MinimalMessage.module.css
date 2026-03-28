@@ -8,7 +8,6 @@
   background: var(--lcs-glass-bg);
   border: 1px solid var(--lcs-glass-border);
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   position: relative;
   transition:
     background var(--lcs-transition-fast),
@@ -19,7 +18,6 @@
 /* Only apply backdrop-filter when glass is enabled AND there's a non-solid background */
 :global([data-glass][data-chat-bg]) .card[data-in-viewport] {
   backdrop-filter: blur(var(--lcs-glass-blur));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur));
 }
 
 /* Accent bar — positioned via ::before */
@@ -94,7 +92,6 @@
 .streaming {
   will-change: opacity, transform;
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 /* ── Layout ── */

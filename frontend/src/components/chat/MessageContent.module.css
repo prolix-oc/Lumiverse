@@ -94,7 +94,6 @@
 
 :global([data-glass]) .codeBlock {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .codeHeader {

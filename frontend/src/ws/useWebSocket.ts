@@ -508,6 +508,25 @@ export function useWebSocket() {
       wsClient.on(EventType.MIGRATION_FAILED, (payload: any) => {
         store.getState().setMigrationFailed(payload)
       }),
+      // Operator panel
+      wsClient.on(EventType.OPERATOR_LOG, (payload: any) => {
+        if (payload?.entries) {
+          store.getState().appendOperatorLogs(payload.entries)
+        }
+      }),
+      wsClient.on(EventType.OPERATOR_STATUS, (payload: any) => {
+        if (payload) {
+          store.getState().setOperatorStatus(payload)
+        }
+      }),
+      wsClient.on(EventType.OPERATOR_PROGRESS, (payload: any) => {
+        if (payload) {
+          const status = payload.status
+          store.getState().setOperatorBusy(
+            status === 'complete' || status === 'error' ? null : payload.operation
+          )
+        }
+      }),
     ]
 
     return () => {

@@ -23,6 +23,7 @@ import { createExpressionSlice } from './slices/expressions'
 import { createImageGenConnectionsSlice } from './slices/image-gen-connections'
 import { createLoadoutsSlice } from './slices/loadouts'
 import { createMigrationSlice } from './slices/migration'
+import { createOperatorSlice } from './slices/operator'
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -48,4 +49,5 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createImageGenConnectionsSlice(...a),
   ...createLoadoutsSlice(...a),
   ...createMigrationSlice(...a),
+  ...createOperatorSlice(...a),
 }))

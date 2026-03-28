@@ -60,6 +60,11 @@ eventBus.setServer(server);
 
 console.log(`Lumiverse Backend listening on ${server.hostname}:${server.port}`);
 
+// Notify runner (if present) that the server is ready
+if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "function") {
+  process.send({ type: "ready", payload: { port: env.port, pid: process.pid } });
+}
+
 // Auto-connect to LumiHub if linked
 import("./lumihub/client").then(({ autoConnect }) => {
   autoConnect().catch((err) => console.error("[LumiHub] Auto-connect failed:", err));
@@ -116,7 +121,11 @@ async function gracefulShutdown(signal: string) {
   const { clearStmtCache } = await import("./services/pagination");
   clearStmtCache();
 
-  // 7. Close database (triggers WAL checkpoint)
+  // 7. Cleanup operator service
+  const { operatorService } = await import("./services/operator.service");
+  operatorService.cleanup();
+
+  // 8. Close database (triggers WAL checkpoint)
   const { closeDatabase } = await import("./db/connection");
   closeDatabase();
 

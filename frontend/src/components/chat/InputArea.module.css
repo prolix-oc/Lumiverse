@@ -43,7 +43,6 @@
 
 :global([data-glass]) .container {
   backdrop-filter: blur(var(--lcs-glass-blur));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur));
   will-change: backdrop-filter;
 }
 
