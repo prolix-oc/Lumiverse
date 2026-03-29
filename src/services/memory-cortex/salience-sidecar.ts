@@ -35,14 +35,26 @@ const ENTITY_BLOCKLIST = new Set([
 const EXTRACTION_SYSTEM_PROMPT = `You are a narrative data extractor for a roleplay memory system. Extract structured facts from the passage with precision.
 
 STRICT RULES — violations corrupt the memory database:
-1. ONLY extract entities with explicit proper names in the passage (e.g. "Melina", "Dustwell", "Sixth Street"). Proper nouns only.
-2. NEVER extract meta-references: User, You, AI, Player, Narrator, Character, Assistant, System, Bot, Human, NPC, OOC, or any pronoun.
-3. NEVER invent entities. If a character is referred to only by pronoun ("she", "he"), do NOT create an entity for them.
-4. CANONICAL NAMES: When known entities are listed below with aliases, ALWAYS output the canonical (primary) name, never a nickname or shorthand. "Pul" → use "Pulchra Fellini". For NEW entities not in the known list, use the exact name from the passage.
-5. Relationships require TWO DIFFERENT named entities that BOTH appear in the passage. Never create relationships between aliases of the same entity. No relationships with pronouns or meta-references.
-6. Score importance by lasting narrative consequence (deaths, promises, discoveries) — NOT by dramatic prose style or emotional intensity of the writing.
-7. Key facts must be concrete and verifiable from the text: names learned, items acquired, locations visited, promises made. Not impressions or moods.
-8. For font color tags: if the passage contains <font color=...> or <span style="color:..."> HTML, identify which named character owns each color.
+
+WHAT TO EXTRACT:
+1. ONLY extract entities with explicit proper names — unique identifiers for specific people, places, things, or groups (e.g. "Melina", "Dustwell", "Sixth Street", "Dark Brotherhood").
+2. CANONICAL NAMES: When known entities are listed below with aliases, ALWAYS output the canonical (primary) name, never a nickname or shorthand. "Pul" → use "Pulchra Fellini". For NEW entities not in the known list, use the exact name from the passage.
+
+WHAT TO NEVER EXTRACT:
+3. NEVER extract common English words as entities, even if capitalized. Words are often capitalized at sentence starts, after em-dashes, or in dialogue — that does NOT make them proper nouns.
+   BAD: "Barely", "Personal", "Cost", "Strange", "Silence", "Perhaps", "Several", "Enough"
+   GOOD: "Melina", "Thornhaven", "Sixth Street", "PubSec"
+4. NEVER extract verbs, adjectives, adverbs, or sentence fragments: "Having climbed", "Slurred", "I'll go", "Turned away" are NOT entities.
+5. NEVER extract ALL-CAPS words — these are emphasis/shouting in roleplay, not proper nouns: "STOP", "HELP", "COST".
+6. NEVER extract meta-references: User, You, AI, Player, Narrator, Character, Assistant, System, Bot, Human, NPC, OOC, or any pronoun.
+7. NEVER invent entities. If a character is referred to only by pronoun ("she", "he"), do NOT create an entity for them.
+
+OTHER RULES:
+8. Relationships require TWO DIFFERENT named entities that BOTH appear in the passage. Never create relationships between aliases of the same entity. No relationships with pronouns or meta-references.
+9. Score importance by lasting narrative consequence (deaths, promises, discoveries) — NOT by dramatic prose style or emotional intensity of the writing.
+10. Key facts must be concrete and verifiable from the text: names learned, items acquired, locations visited, promises made. Not impressions or moods.
+11. For font color tags: if the passage contains <font color=...> or <span style="color:..."> HTML, identify which named character owns each color.
+12. When uncertain whether something is a proper noun, DO NOT extract it. Missing an entity is acceptable; extracting garbage corrupts the database.
 
 Call ALL provided tools with data extracted strictly from the passage text.`;
 
@@ -65,7 +77,7 @@ const TOOL_SALIENCE: ToolDefinition = {
 
 const TOOL_ENTITIES: ToolDefinition = {
   name: "extract_entities",
-  description: "Extract ONLY entities with proper names written in the passage. A proper name is a capitalized noun used as a specific identifier (person, place, thing, group). Do NOT include pronouns, generic references, or meta-terms. Return empty array if no proper names appear.",
+  description: "Extract ONLY entities with unique proper names from the passage. A proper name is a SPECIFIC IDENTIFIER for a person, place, thing, or group (e.g. 'Melina', 'New York', 'Dark Brotherhood'). Do NOT extract common words (even if capitalized), verbs, adjectives, adverbs, pronouns, sentence fragments, ALL-CAPS emphasis, or meta-terms. When uncertain, prefer an empty array over dubious entities.",
   parameters: {
     type: "object",
     properties: {
@@ -74,13 +86,13 @@ const TOOL_ENTITIES: ToolDefinition = {
         items: {
           type: "object",
           properties: {
-            name: { type: "string", description: "Exact proper name from the text. Must be a specific name, never a pronoun or generic word." },
-            type: { type: "string", description: "character (named person/creature), location (named place), item (named object/weapon), faction (named group/org), concept (named abstract), or event (named occurrence)" },
+            name: { type: "string", description: "Exact proper name from the text. Must be a unique identifier, not a common word. WRONG: 'Barely', 'Personal', 'COST', 'Having climbed', 'Slurred'. RIGHT: 'Melina', 'Thornhaven', 'Excalibur', 'PubSec'." },
+            type: { type: "string", description: "character = named person or creature (e.g. 'Melina', 'the Captain'). location = named place, geographic feature, or address (e.g. 'New York', 'Sixth Street', 'Dustwell'). item = named specific object, weapon, or vehicle (e.g. 'Excalibur', 'The Black Pearl'). faction = named group, organization, or company (e.g. 'Dark Brotherhood', 'PubSec'). event = named historical occurrence (e.g. 'The Great War'). concept = named doctrine, theory, or prophecy ONLY — this is the RAREST type. If uncertain between concept and another type, choose the other type." },
             role: { type: "string", description: "subject (acts), object (acted upon), present (in scene), or referenced (mentioned but absent)" },
           },
           required: ["name", "type"],
         },
-        description: "Named entities found. Empty array [] if no proper nouns appear.",
+        description: "Named entities found. Empty array [] if no proper nouns appear. Prefer empty over garbage.",
       },
       status_changes: {
         type: "array",
@@ -571,26 +583,82 @@ const PRONOUN_STARTS = new Set([
   "it", "its", "itself", "it's",
 ]);
 
-/** Single words that LLMs extract as "entities" but are clearly not proper nouns */
+/** Common English words that LLMs extract as "entities" but are not proper nouns.
+ *  Covers verbs, adjectives, adverbs, common nouns, expletives. */
 const SIDECAR_SINGLE_REJECT = new Set([
-  // Verb forms
+  // Verbs (gerunds, past tense, base forms)
   "having", "being", "going", "coming", "getting", "making", "taking",
   "seeing", "looking", "saying", "doing", "running", "walking", "talking",
   "trying", "asking", "telling", "leaving", "sitting", "standing",
+  "feeling", "thinking", "waiting", "watching", "holding", "fighting",
   "turned", "walked", "looked", "started", "stopped", "opened", "closed",
   "moved", "pulled", "pushed", "dropped", "picked", "placed", "reached",
   "stepped", "climbed", "slurred", "mumbled", "whispered", "shouted",
   "screamed", "laughed", "smiled", "frowned", "nodded", "shrugged",
   "grabbed", "slammed", "stumbled", "collapsed", "continued", "replied",
   "answered", "noticed", "realized", "decided", "appeared", "remained",
+  "managed", "happened", "covered", "created", "entered", "escaped",
+  "followed", "gathered", "ignored", "imagined", "included", "offered",
+  "provided", "received", "refused", "released", "removed", "revealed",
+  "settled", "survived", "trusted",
   "set", "sets", "put", "puts", "run", "ran", "saw", "seen",
   "go", "goes", "gone", "leave", "leaves", "give", "gave",
   "take", "took", "come", "came", "find", "found",
   "said", "went", "got", "made", "knew", "thought", "felt",
   "told", "asked", "let", "began", "kept", "left",
+  "cut", "hit", "hurt", "cost", "shut", "beat", "cast", "bear",
+  "catch", "draw", "drive", "earn", "fight", "grow", "hang", "hide",
+  "join", "kick", "lack", "lead", "lift", "lose", "mark", "miss",
+  "note", "pass", "plan", "pray", "pull", "push", "read", "rest",
+  "rush", "save", "seek", "sell", "send", "sign", "sort", "test",
+  "warn", "wear", "wish", "wrap",
   // Expletives / interjections
   "fuck", "shit", "damn", "hell", "crap", "bloody", "bastard", "bitch",
-  "god", "christ", "jesus", "ugh", "hmm", "huh", "wow",
+  "god", "christ", "jesus", "ugh", "hmm", "huh", "wow", "oh", "ah",
+  "okay", "yeah", "nope",
+  // Adjectives commonly hallucinated as entities
+  "personal", "strange", "certain", "different", "enough", "entire",
+  "familiar", "final", "important", "impossible", "incredible", "obvious",
+  "perfect", "possible", "serious", "silent", "simple", "single",
+  "specific", "sudden", "terrible", "total", "unique", "wrong",
+  "dangerous", "desperate", "difficult", "enormous", "essential",
+  "former", "genuine", "honest", "human", "initial", "inner",
+  "internal", "natural", "normal", "original", "physical", "private",
+  "proper", "public", "secret", "separate", "steady", "subtle",
+  "alive", "angry", "aware", "bare", "blind", "bold", "brave",
+  "broad", "calm", "clean", "cold", "dark", "dead", "deep",
+  "eager", "empty", "evil", "false", "fierce", "flat", "free",
+  "full", "grand", "great", "guilty", "harsh", "heavy", "hidden",
+  "huge", "keen", "large", "late", "lonely", "loose", "loud",
+  "main", "major", "mere", "mild", "minor", "mutual", "narrow",
+  "new", "noble", "odd", "old", "open", "pale", "plain", "poor",
+  "proud", "pure", "quick", "quiet", "rare", "raw", "ready", "real",
+  "rich", "rough", "round", "royal", "rude", "safe", "scared",
+  "sharp", "short", "sick", "slim", "slow", "small", "smooth",
+  "soft", "solid", "spare", "stable", "steep", "stiff", "straight",
+  "strict", "strong", "sure", "sweet", "swift", "tall", "thick",
+  "thin", "tight", "tiny", "tired", "tough", "true", "ugly",
+  "vague", "vast", "vivid", "warm", "weak", "weird", "whole",
+  "wide", "wild", "wise", "young",
+  // Adverbs
+  "barely", "almost", "anyway", "certainly", "clearly", "completely",
+  "currently", "definitely", "directly", "entirely", "especially",
+  "eventually", "exactly", "extremely", "finally", "honestly",
+  "immediately", "instead", "literally", "merely", "mostly",
+  "naturally", "obviously", "particularly", "perhaps", "possibly",
+  "precisely", "probably", "properly", "purely", "quickly", "quietly",
+  "recently", "seriously", "shortly", "simply", "slightly", "slowly",
+  "somehow", "specifically", "suddenly", "supposedly", "surely",
+  "together", "typically", "ultimately", "unfortunately", "usually",
+  // Common nouns
+  "cost", "deal", "fact", "kind", "sort", "type", "part", "form",
+  "level", "amount", "manner", "reason", "result", "sense", "state",
+  "rest", "half", "stuff", "lot", "case", "point", "side", "line",
+  "way", "end", "act", "age", "air", "arm", "art", "bed", "bit",
+  "care", "door", "edge", "face", "fire", "game", "goal", "hand",
+  "head", "hope", "idea", "life", "light", "mind", "mood", "pain",
+  "peace", "price", "role", "room", "rule", "soul", "spot", "step",
+  "time", "top", "truth", "turn", "use", "view", "wall", "word",
 ]);
 
 /**
@@ -623,11 +691,17 @@ function isValidEntityName(name: string): boolean {
   // Multi-word: must have at least one word starting with uppercase (proper noun evidence)
   if (words.length > 1 && !words.some((w) => /^[A-Z]/.test(w))) return false;
 
-  // Single-word: reject known verbs, expletives, adjectives
+  // ALL-CAPS single words are emphasis/shouting, not proper nouns
+  // (proper nouns are title-cased: "Melina", not "MELINA")
+  if (words.length === 1 && trimmed.length > 1 && /^[A-Z]+$/.test(trimmed)) return false;
+
+  // Single-word: reject known verbs, expletives, adjectives, common nouns
   if (words.length === 1) {
     if (SIDECAR_SINGLE_REJECT.has(trimmed.toLowerCase())) return false;
-    // Lowercase single word with verb suffix — likely not a proper noun
-    if (/^[a-z]/.test(trimmed) && /(?:ing|ed|tion|ment|ness)$/.test(trimmed)) return false;
+    // Suffix patterns that strongly indicate non-entity (adverbs, abstract nouns, adjectives)
+    // Only for words ≥6 chars to avoid rejecting short names
+    const lower = trimmed.toLowerCase();
+    if (trimmed.length >= 6 && /(?:ly|ness|ment|ful|less|ously|ively|ably|ibly|ally)$/.test(lower)) return false;
   }
 
   return true;
