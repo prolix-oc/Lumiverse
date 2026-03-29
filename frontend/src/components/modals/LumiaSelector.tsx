@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { Search, XCircle, ChevronDown, ChevronUp, Check, User, Wrench, Sparkles } from 'lucide-react'
+import { Search, XCircle, ChevronDown, ChevronUp, Check, User, Sparkles } from 'lucide-react'
+import { IconAdjustments } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { ModalShell } from '@/components/shared/ModalShell'
 import type { LumiaItem, PackWithItems } from '@/types/api'
@@ -26,7 +27,7 @@ const MODE_CONFIG = {
   behavior: {
     title: 'Select Behaviors',
     subtitle: 'Choose behavioral traits for your Lumia',
-    icon: Wrench,
+    icon: IconAdjustments,
     field: 'behavior' as const,
   },
   personality: {

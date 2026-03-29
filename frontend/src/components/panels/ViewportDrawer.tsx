@@ -2,10 +2,11 @@ import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   User, Drama, Wand2, Link2, Package, Zap,
-  Users, PenTool, Sparkles, FileText, Brain, ScrollText,
+  Users, PenTool, Sparkles, Brain, FileText, ScrollText,
   MessageCircle, Image, Palette, Settings, Library, Puzzle,
   GitFork, Globe, MessageSquareReply, GitBranch, Wallpaper, Replace
 } from 'lucide-react'
+import { IconUsersGroup } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
@@ -71,11 +72,11 @@ const TABS: Tab[] = [
   { id: 'characters', icon: Users, label: 'Characters', component: () => <CharacterBrowser /> },
   { id: 'personas', icon: Drama, label: 'Personas', component: () => <PersonaManager /> },
   { id: 'lorebook', icon: Library, label: 'Lorebook', component: () => <WorldBookPanel /> },
-  { id: 'cortex', icon: Sparkles, label: 'Memory', component: () => <MemoryCortexPanel /> },
+  { id: 'cortex', icon: Brain, label: 'Memory', component: () => <MemoryCortexPanel /> },
   { id: 'create', icon: PenTool, label: 'Create', component: () => <ContentWorkshop /> },
   { id: 'ooc', icon: MessageCircle, label: 'OOC', component: () => <OOCPanel /> },
   { id: 'prompt', icon: FileText, label: 'Prompt', component: () => <PromptPanel /> },
-  { id: 'council', icon: Brain, label: 'Council', component: () => <CouncilManager /> },
+  { id: 'council', icon: IconUsersGroup, label: 'Council', component: () => <CouncilManager /> },
   { id: 'summary', icon: ScrollText, label: 'Summary', component: () => <SummaryEditor /> },
 { id: 'feedback', icon: MessageSquareReply, label: 'Feedback', component: () => <CouncilFeedback /> },
   { id: 'worldinfo', icon: Globe, label: 'World Info', component: () => <WorldInfoFeedback /> },

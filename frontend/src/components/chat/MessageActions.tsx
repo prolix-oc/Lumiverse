@@ -1,4 +1,5 @@
-import { Pencil, Trash2, Copy, Check, BarChart3, EyeOff, Eye, GitBranch } from 'lucide-react'
+import { Pencil, Trash2, Copy, Check, BarChart3, EyeOff, Eye } from 'lucide-react'
+import { IconGitFork } from '@tabler/icons-react'
 import { useState, useCallback } from 'react'
 import { Button } from '@/components/shared/FormComponents'
 import styles from './MessageActions.module.css'
@@ -41,7 +42,7 @@ export default function MessageActions({ onEdit, onDelete, onToggleHidden, onFor
         {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
       </Button>
       <Button size="icon-sm" variant="ghost" onClick={onFork} title="Fork chat here" aria-label="Fork chat">
-        <GitBranch size={13} />
+        <IconGitFork size={13} />
       </Button>
       {onPromptBreakdown && (
         <Button size="icon-sm" variant="ghost" onClick={onPromptBreakdown} title="Prompt Breakdown" aria-label="Prompt Breakdown">

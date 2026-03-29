@@ -18,7 +18,7 @@ import {
 import { executeLumiPipeline } from "./lumi/lumi-pipeline.service";
 import type { LumiPresetMetadata, LumiPipelineResult } from "../types/lumi-engine";
 import * as charactersSvc from "./characters.service";
-import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationResponse, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
+import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationResponse, type StreamChunk, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
 import { contextHandlerChain } from "../spindle/context-handler";
 import { executeCouncil, collectWorldInfoForCouncil, type CouncilEnrichment } from "./council/council-execution.service";
@@ -818,6 +818,11 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     mergedParams.use_responses_api = true;
   }
 
+  // Inject OpenRouter-specific settings from connection metadata
+  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+    mergedParams._openrouter = connection.metadata.openrouter;
+  }
+
   // Resolve preset name for breakdown display
   const presetId = input.preset_id || connection.preset_id;
   if (presetId) {
@@ -1055,8 +1060,24 @@ async function runGeneration(
     cotPhase = "content";
   }
 
+  // Determine streaming mode from _streaming parameter (defaults to true)
+  const useStreaming = parameters._streaming !== false;
+  delete parameters._streaming;
+
   try {
-    const stream = provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools });
+    // Non-streaming path: call generate() once, then synthesize a single-chunk stream
+    const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
+      ? provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools })
+      : (async function* () {
+          const result = await provider.generate(apiKey, apiUrl, { messages, model, parameters, stream: false, tools });
+          yield {
+            token: result.content,
+            reasoning: result.reasoning,
+            finish_reason: result.finish_reason,
+            tool_calls: result.tool_calls,
+            usage: result.usage,
+          };
+        })();
 
     for await (const chunk of stream) {
       if (signal.aborted) {
@@ -1449,6 +1470,11 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
   // Inject connection-level metadata flags into parameters (e.g. use_responses_api)
   if (connection.metadata?.use_responses_api) {
     mergedParams.use_responses_api = true;
+  }
+
+  // Inject OpenRouter-specific settings from connection metadata
+  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+    mergedParams._openrouter = connection.metadata.openrouter;
   }
 
   return provider.generate(apiKey, apiUrl, {

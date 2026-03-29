@@ -132,6 +132,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
       // Internal
       "max_context_length",
       "_include_usage",
+      "_streaming",
     ]);
 
     for (const key of Object.keys(params)) {

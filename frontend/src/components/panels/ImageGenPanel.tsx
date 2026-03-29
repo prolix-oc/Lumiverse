@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { Image as ImageIcon, Sparkles, Settings2, Trash2, Plus, X } from 'lucide-react'
+import { Image as ImageIcon, Settings2, Trash2, Plus, X } from 'lucide-react'
+import { IconBrush } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { imageGenApi, type SceneData } from '@/api/image-gen'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
@@ -307,7 +308,7 @@ export default function ImageGenPanel() {
 
               {/* Director References — provider-specific, only for NovelAI and NanoGPT */}
               {supportsRefs && (
-                <EditorSection title="Director References" Icon={Sparkles} defaultExpanded={false}>
+                <EditorSection title="Director References" Icon={IconBrush} defaultExpanded={false}>
                   {providerName === 'novelai' && (
                     <>
                       <ToggleRow
@@ -380,7 +381,7 @@ export default function ImageGenPanel() {
 
               {/* References group parameters from schema (if any future provider declares them) */}
               {paramGroups.references.length > 0 && !supportsRefs && (
-                <EditorSection title="References" Icon={Sparkles} defaultExpanded={false}>
+                <EditorSection title="References" Icon={IconBrush} defaultExpanded={false}>
                   {paramGroups.references.map(([key, schema]) => (
                     <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} />
                   ))}
@@ -391,7 +392,7 @@ export default function ImageGenPanel() {
 
           <input ref={refInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onRefFiles} />
 
-          <EditorSection title="Scene Settings" Icon={Sparkles}>
+          <EditorSection title="Scene Settings" Icon={IconBrush}>
             <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label="Include Characters" />
             <ToggleRow checked={imageGeneration.autoGenerate !== false} onChange={(checked) => updateTop({ autoGenerate: checked })} label="Auto-Generate On Reply" />
             <ToggleRow checked={!!imageGeneration.forceGeneration} onChange={(checked) => updateTop({ forceGeneration: checked })} label="Ignore Scene Change Detection" />
@@ -414,7 +415,7 @@ export default function ImageGenPanel() {
 
           <div className={styles.actions}>
             <Button variant="primary" size="sm" icon={<ImageIcon size={14} />} onClick={() => handleGenerate(false)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>{sceneGenerating ? 'Generating...' : 'Generate Now'}</Button>
-            <Button variant="secondary" size="sm" icon={<Sparkles size={14} />} onClick={() => handleGenerate(true)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>Force Generate</Button>
+            <Button variant="secondary" size="sm" icon={<IconBrush size={14} />} onClick={() => handleGenerate(true)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>Force Generate</Button>
             {sceneBackground && <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => setSceneBackground(null)}>Clear</Button>}
           </div>
 

@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react'
-import { Brain, Zap } from 'lucide-react'
+import { Brain } from 'lucide-react'
+import { IconBolt } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import { Toggle } from '@/components/shared/Toggle'
@@ -217,7 +218,7 @@ export default function PresetManager() {
       </CollapsibleSection>
 
       {/* ── Prompt Behavior ── */}
-      <CollapsibleSection title="Prompt Behavior" icon={<Zap size={14} />} defaultExpanded>
+      <CollapsibleSection title="Prompt Behavior" icon={<IconBolt size={14} />} defaultExpanded>
         {/* Start Reply With */}
         <div className={styles.fieldGroup}>
           <span className={styles.label}>Start Reply With</span>

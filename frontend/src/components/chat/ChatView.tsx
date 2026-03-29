@@ -209,6 +209,21 @@ export default function ChatView() {
     return () => root.removeAttribute('data-chat-bg')
   }, [hasAnyBackground])
 
+  // Sync bubble opt-out attributes so CSS can suppress effects.
+  const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
+  const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
+  useEffect(() => {
+    const root = document.documentElement
+    if (bubbleDisableHover) root.setAttribute('data-no-bubble-hover', '')
+    else root.removeAttribute('data-no-bubble-hover')
+    if (bubbleHideAvatarBg) root.setAttribute('data-no-bubble-avatar-bg', '')
+    else root.removeAttribute('data-no-bubble-avatar-bg')
+    return () => {
+      root.removeAttribute('data-no-bubble-hover')
+      root.removeAttribute('data-no-bubble-avatar-bg')
+    }
+  }, [bubbleDisableHover, bubbleHideAvatarBg])
+
   if (!chatId) return null
 
   return (

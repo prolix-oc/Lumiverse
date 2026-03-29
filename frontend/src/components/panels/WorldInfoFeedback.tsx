@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
-import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle, User, Globe, MessageSquare, Sparkles } from 'lucide-react'
+import { useMemo, useState, type ComponentType } from 'react'
+import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle, User, Globe, MessageSquare } from 'lucide-react'
+import { IconUserStar } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import type { ActivatedWorldInfoEntry } from '@/types/api'
 import styles from './WorldInfoFeedback.module.css'
@@ -11,8 +12,8 @@ const SCOPE_LABELS: Record<string, string> = {
   chat: 'This Chat',
   global: 'Global',
 }
-const SCOPE_ICONS: Record<string, typeof BookOpen> = {
-  character: Sparkles,
+const SCOPE_ICONS: Record<string, ComponentType<{ size?: number | string; className?: string }>> = {
+  character: IconUserStar,
   persona: User,
   chat: MessageSquare,
   global: Globe,

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Plus, X, Pencil, Check } from 'lucide-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import { uuidv7 } from '@/lib/uuid'
 import styles from './AlternateFieldEditor.module.css'
 import editorStyles from './CharacterEditorPage.module.css'
 
@@ -82,7 +83,7 @@ export default function AlternateFieldEditor({
 
   const handleAddVariant = useCallback(() => {
     const newVariant: AlternateFieldVariant = {
-      id: crypto.randomUUID(),
+      id: uuidv7(),
       label: `Variant ${(alternates?.length ?? 0) + 1}`,
       content: '',
     }

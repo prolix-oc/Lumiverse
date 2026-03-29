@@ -57,7 +57,9 @@
 }
 
 .dropdownItem {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   width: 100%;
   padding: 6px 8px;
   border-radius: 4px;
@@ -72,6 +74,19 @@
 
 .dropdownItem:hover {
   background: var(--lumiverse-primary-010);
+}
+
+.modelLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lumiverse-text);
+  line-height: 1.3;
+}
+
+.modelId {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  line-height: 1.2;
 }
 
 .dropdownEmpty {

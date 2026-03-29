@@ -338,6 +338,85 @@ function inferMentionRole(name: string, content: string): MentionRole {
   return "present";
 }
 
+// ─── Alias Resolution (Tier 1) ────────────────────────────────
+// Prevents duplicate entities from nicknames, first names, honorific titles,
+// and pet names. Builds a lookup from known entities + character names.
+
+/** Honorific/title prefixes that can wrap a known entity name */
+const HONORIFIC_PREFIX_RE = /^(?:the\s+)?(?:Captain|General|Admiral|Commander|Lieutenant|Sergeant|Doctor|Professor|Chancellor|Governor|Senator|President|Director|Chief|Sheriff|Marshal|Inspector|Detective|Judge|Priest|Bishop|Pope|King|Queen|Prince|Princess|Emperor|Empress|Duke|Duchess|Baron|Baroness|Count|Countess|Lord|Lady|Sir|Dame|Elder|Warden|Keeper|Master|Mistress|Father|Mother|Brother|Sister|Uncle|Aunt|Grandma|Grandpa|Granny|Grandmother|Grandfather|Old|Young|Little|Big|Mister|Mr|Mrs|Ms|Miss|Madame|Madam)\s+/i;
+
+/**
+ * Build a lookup map: lowercase alias/variant → canonical entity name.
+ * Includes:
+ *   - Explicit entity aliases from the graph
+ *   - Implicit first-name aliases for multi-word names ("Pulchra" → "Pulchra Fellini")
+ *   - Character participant names
+ */
+function buildAliasLookup(
+  knownEntities: MemoryEntity[],
+  characterNames: string[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+
+  // Character names as canonical
+  for (const name of characterNames) {
+    if (name.length < 2) continue;
+    map.set(name.toLowerCase(), name);
+    // Multi-word: first word is an implicit alias (if ≥3 chars to avoid "Al" for "Al Capone")
+    const parts = name.split(/\s+/);
+    if (parts.length > 1 && parts[0].length >= 3 && !map.has(parts[0].toLowerCase())) {
+      map.set(parts[0].toLowerCase(), name);
+    }
+    // Also last name as implicit alias (covers surname references)
+    const lastName = parts[parts.length - 1];
+    if (parts.length > 1 && lastName.length >= 3 && !map.has(lastName.toLowerCase())) {
+      map.set(lastName.toLowerCase(), name);
+    }
+  }
+
+  // Known graph entities: canonical + explicit aliases + implicit first/last name
+  for (const entity of knownEntities) {
+    map.set(entity.name.toLowerCase(), entity.name);
+    for (const alias of entity.aliases) {
+      map.set(alias.toLowerCase(), entity.name);
+    }
+    const parts = entity.name.split(/\s+/);
+    if (parts.length > 1 && parts[0].length >= 3 && !map.has(parts[0].toLowerCase())) {
+      map.set(parts[0].toLowerCase(), entity.name);
+    }
+    const lastName = parts[parts.length - 1];
+    if (parts.length > 1 && lastName.length >= 3 && !map.has(lastName.toLowerCase())) {
+      map.set(lastName.toLowerCase(), entity.name);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Try to resolve a discovered name to an existing canonical entity.
+ * Returns the canonical name if the input is an alias, or null if
+ * the input is already canonical / unknown.
+ *
+ * Checks: direct alias match, then honorific-stripped match.
+ */
+function resolveToCanonical(name: string, aliasLookup: Map<string, string>): string | null {
+  const lower = name.toLowerCase();
+
+  // Direct alias match (but not if it maps to itself — already canonical)
+  const canonical = aliasLookup.get(lower);
+  if (canonical && canonical.toLowerCase() !== lower) return canonical;
+
+  // Honorific/title prefix strip: "Captain Melina" → "Melina" → lookup
+  const stripped = name.replace(HONORIFIC_PREFIX_RE, "").trim();
+  if (stripped.length >= 2 && stripped.toLowerCase() !== lower) {
+    const strippedCanonical = aliasLookup.get(stripped.toLowerCase());
+    if (strippedCanonical) return strippedCanonical;
+  }
+
+  return null;
+}
+
 // ─── Main Extraction ───────────────────────────────────────────
 
 /**
@@ -364,11 +443,14 @@ export function extractEntitiesHeuristic(
   }
   const found = new Map<string, ExtractedEntity & { mentionRole: MentionRole }>();
 
+  // Build alias → canonical name lookup for deduplication across all stages
+  const aliasLookup = buildAliasLookup(knownEntities, characterNames);
+
   // 1. Match known character names from chat participants (highest confidence)
   for (const name of characterNames) {
     if (name.length < 2) continue;
+    const key = name.toLowerCase();
     if (content.includes(name)) {
-      const key = name.toLowerCase();
       if (!found.has(key)) {
         found.set(key, {
           name,
@@ -377,6 +459,22 @@ export function extractEntitiesHeuristic(
           confidence: 1.0,
           mentionRole: inferMentionRole(name, content),
         });
+      }
+    } else {
+      // Multi-word names: also check first name / last name as implicit alias
+      // "Pulchra Fellini" not in text, but "Pulchra" is → still counts as this character
+      const parts = name.split(/\s+/);
+      for (const part of parts) {
+        if (part.length >= 3 && content.includes(part) && !found.has(key)) {
+          found.set(key, {
+            name, // canonical full name
+            type: "character",
+            aliases: [],
+            confidence: 0.85,
+            mentionRole: inferMentionRole(part, content),
+          });
+          break;
+        }
       }
     }
   }
@@ -547,11 +645,46 @@ export function extractEntitiesHeuristic(
     }
   }
 
-  // Apply minimum confidence filter
-  if (minConfidence > 0) {
-    return [...found.values()].filter((e) => e.confidence >= minConfidence);
+  // ── Final pass: alias resolution ──
+  // Merge any entities from stages 3-4 that are actually aliases of known entities.
+  // "Pulchra" discovered in stage 3 → resolves to "Pulchra Fellini" from stage 1/2.
+  // "Captain Melina" → strip honorific → "Melina" → resolves to known entity.
+  const resolved = new Map<string, ExtractedEntity & { mentionRole: MentionRole }>();
+
+  for (const [key, entity] of found) {
+    const canonical = resolveToCanonical(entity.name, aliasLookup);
+    const finalKey = canonical ? canonical.toLowerCase() : key;
+    const finalName = canonical || entity.name;
+
+    if (!resolved.has(finalKey)) {
+      // Use the canonical name but keep the discovered entity's type if it was from a stage 1/2 match,
+      // or look up the known entity type for alias-resolved entries
+      const knownEntity = canonical ? knownEntities.find((e) => e.name.toLowerCase() === finalKey) : null;
+      resolved.set(finalKey, {
+        ...entity,
+        name: finalName,
+        type: knownEntity ? knownEntity.entityType : entity.type,
+        aliases: knownEntity ? knownEntity.aliases : entity.aliases,
+        confidence: canonical ? Math.max(entity.confidence, 0.85) : entity.confidence,
+      });
+    } else {
+      // Merge into existing: keep the higher confidence entry, prefer subject role
+      const existing = resolved.get(finalKey)!;
+      if (entity.confidence > existing.confidence) {
+        resolved.set(finalKey, { ...entity, name: finalName, confidence: entity.confidence });
+      }
+      if (entity.mentionRole === "subject" && existing.mentionRole !== "subject") {
+        existing.mentionRole = "subject";
+      }
+    }
   }
-  return [...found.values()];
+
+  // Apply minimum confidence filter
+  const results = [...resolved.values()];
+  if (minConfidence > 0) {
+    return results.filter((e) => e.confidence >= minConfidence);
+  }
+  return results;
 }
 
 /**

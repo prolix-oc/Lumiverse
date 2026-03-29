@@ -169,6 +169,45 @@ function clampFloat(v: unknown, min: number, max: number, fallback: number): num
   return Math.min(max, Math.max(min, v));
 }
 
+// ─── LTCM Config Hash ─────────────────────────────────────────
+// Detects when chunking settings or compilation logic change so stale
+// chunks can be lazily rebuilt per-chat at the next generation.
+
+/**
+ * Bump this when the chunk compilation logic changes in a breaking way.
+ * Any chat whose stored hash doesn't match the current hash will get
+ * its chunks rebuilt on the next generation.
+ */
+export const LTCM_FORMAT_VERSION = 2;
+
+/**
+ * Compute a deterministic hash from the settings that affect how chunks
+ * are compiled. Changes to retrieval-only settings (topK, exclusionWindow,
+ * templates) do NOT trigger a rebuild — only structural chunking params.
+ */
+export function computeChatMemoryHash(
+  settings: ChatMemorySettings,
+  embeddingModel?: string,
+): string {
+  const input = JSON.stringify({
+    v: LTCM_FORMAT_VERSION,
+    ct: settings.chunkTargetTokens,
+    cm: settings.chunkMaxTokens,
+    co: settings.chunkOverlapTokens,
+    sb: settings.splitOnSceneBreaks,
+    tg: settings.splitOnTimeGapMinutes,
+    mm: settings.maxMessagesPerChunk,
+    em: embeddingModel || "",
+  });
+  // FNV-1a 32-bit — fast, deterministic, good enough for config comparison
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
 /**
  * Resolve effective chat memory parameters. When quickMode is active,
  * the preset map values override the fine-grained fields (backward compat).

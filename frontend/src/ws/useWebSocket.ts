@@ -200,36 +200,41 @@ export function useWebSocket() {
 
             // End streaming immediately, then reconcile the full message list
             // from backend source-of-truth to avoid id/index race conditions.
+            // Image gen is deferred until AFTER reconciliation completes so its
+            // backend work (sidecar LLM scene analysis, DB reads) cannot delay
+            // message delivery and cause a perceived UI stall.
             state.endStreaming()
             fetchLatestMessages(payload.chatId).then((res) => {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
               }
-            }).catch(() => { /* ignore */ })
-
-            const latest = store.getState()
-            // Only trigger image gen when not in the middle of a group nudge loop
-            if (
-              !latest.isNudgeLoopActive &&
-              latest.imageGeneration.enabled &&
-              latest.imageGeneration.autoGenerate !== false &&
-              !latest.sceneGenerating
-            ) {
-              latest.setSceneGenerating(true)
-              imageGenApi.generate({
-                chatId: payload.chatId,
-                forceGeneration: !!latest.imageGeneration.forceGeneration,
-              }).then((res) => {
-                if (res.generated && res.imageDataUrl) {
-                  store.getState().setSceneBackground(res.imageDataUrl)
-                }
-              }).catch((err) => {
-                console.warn('[ImageGen] Auto-generate failed:', err)
-              }).finally(() => {
-                store.getState().setSceneGenerating(false)
-              })
-            }
+            }).catch(() => { /* ignore */ }).finally(() => {
+              const latest = store.getState()
+              // Don't trigger image gen if a new generation already started,
+              // or if we're in the middle of a group nudge loop.
+              if (
+                !latest.isStreaming &&
+                !latest.isNudgeLoopActive &&
+                latest.imageGeneration.enabled &&
+                latest.imageGeneration.autoGenerate !== false &&
+                !latest.sceneGenerating
+              ) {
+                latest.setSceneGenerating(true)
+                imageGenApi.generate({
+                  chatId: payload.chatId,
+                  forceGeneration: !!latest.imageGeneration.forceGeneration,
+                }).then((res) => {
+                  if (res.generated && res.imageDataUrl) {
+                    store.getState().setSceneBackground(res.imageDataUrl)
+                  }
+                }).catch((err) => {
+                  console.warn('[ImageGen] Auto-generate failed:', err)
+                }).finally(() => {
+                  store.getState().setSceneGenerating(false)
+                })
+              }
+            })
           }
         }
       }),

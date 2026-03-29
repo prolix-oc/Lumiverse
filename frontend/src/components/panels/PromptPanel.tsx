@@ -1,5 +1,6 @@
 import { useState, useCallback, type ReactNode } from 'react'
-import { Layers, Hand, Filter, Info, Edit2, Check, X, User, Wrench, Sparkles, BookOpen, Zap, ChevronRight } from 'lucide-react'
+import { Hand, Filter, Info, Edit2, Check, X, User, Sparkles, ChevronRight } from 'lucide-react'
+import { IconAdjustments, IconAdjustmentsHorizontal, IconScript, IconTool, IconTransform } from '@tabler/icons-react'
 import LoadoutSelector from './LoadoutSelector'
 import { useStore } from '@/store'
 import { Button, EditorSection } from '@/components/shared/FormComponents'
@@ -253,7 +254,7 @@ export default function PromptPanel() {
             disabled={isCouncilActive}
           />
           <SelectionBtn
-            icon={Wrench}
+            icon={IconAdjustments}
             label="Behaviors"
             count={behaviorCount}
             onClick={() => setLumiaModal('behavior')}
@@ -276,7 +277,7 @@ export default function PromptPanel() {
       </EditorSection>
 
       {/* ── Lumia Modes ── */}
-      <EditorSection Icon={Layers} title="Lumia Modes" defaultExpanded>
+      <EditorSection Icon={IconAdjustmentsHorizontal} title="Lumia Modes" defaultExpanded>
         <p className={styles.desc}>
           Configure special Lumia modes for unique character setups. These modes are mutually exclusive.
         </p>
@@ -387,7 +388,7 @@ export default function PromptPanel() {
       </EditorSection>
 
       {/* ── Loom Content ── */}
-      <EditorSection Icon={BookOpen} title="Loom Content" defaultExpanded={false}>
+      <EditorSection Icon={IconScript} title="Loom Content" defaultExpanded={false}>
         <p className={styles.desc}>
           Select narrative styles, utilities, and retrofits from your loaded packs. These are injected
           via <code>{'{{loomStyle}}'}</code>, <code>{'{{loomUtils}}'}</code>, and <code>{'{{loomRetrofits}}'}</code> macros.
@@ -395,19 +396,19 @@ export default function PromptPanel() {
 
         <div className={styles.selectionGroup}>
           <SelectionBtn
-            icon={BookOpen}
+            icon={IconScript}
             label="Narrative Styles"
             count={styleCount}
             onClick={() => setLoomModal('narrative_style')}
           />
           <SelectionBtn
-            icon={Wrench}
+            icon={IconTool}
             label="Loom Utilities"
             count={utilCount}
             onClick={() => setLoomModal('loom_utility')}
           />
           <SelectionBtn
-            icon={Zap}
+            icon={IconTransform}
             label="Retrofits"
             count={retrofitCount}
             onClick={() => setLoomModal('retrofit')}

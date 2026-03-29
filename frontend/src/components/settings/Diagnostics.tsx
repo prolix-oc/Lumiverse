@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Copy, Check, RefreshCw, Server, Monitor, Puzzle, Bell, Send, Wrench, Users } from 'lucide-react'
+import { Copy, Check, RefreshCw, Server, Monitor, Bell, Send, Users } from 'lucide-react'
+import { IconPlugConnected, IconStethoscope } from '@tabler/icons-react'
 import { spinClass } from '@/components/shared/Spinner'
 import { useStore } from '@/store'
 import { systemApi, type SystemInfo } from '@/api/system'
@@ -256,7 +257,7 @@ export default function Diagnostics() {
       {/* Extensions Section */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
-          <Puzzle size={14} />
+          <IconPlugConnected size={14} />
           <span>Extensions ({extensions.length})</span>
         </div>
         {extensions.length === 0 ? (
@@ -310,7 +311,7 @@ function DataMaintenanceSection() {
   return (
     <div className={styles.section}>
       <div className={styles.sectionHeader}>
-        <Wrench size={14} />
+        <IconStethoscope size={14} />
         <span>Data Maintenance</span>
       </div>
       <div className={styles.grid}>

@@ -25,6 +25,7 @@ export interface SamplerOverrides {
   frequencyPenalty: number | null
   presencePenalty: number | null
   repetitionPenalty: number | null
+  streaming: boolean
 }
 
 export interface CustomBody {

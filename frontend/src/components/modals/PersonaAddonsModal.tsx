@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Puzzle, Plus, Check, Trash2 } from 'lucide-react'
+import { Plus, Check, Trash2 } from 'lucide-react'
+import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
@@ -9,6 +10,7 @@ import { toast } from '@/lib/toast'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import type { PersonaAddon } from '@/types/api'
 import styles from './PersonaAddonsModal.module.css'
+import { uuidv7 } from '@/lib/uuid'
 import clsx from 'clsx'
 
 export default function PersonaAddonsModal() {
@@ -54,7 +56,7 @@ export default function PersonaAddonsModal() {
 
   const handleAdd = useCallback(() => {
     const newAddon: PersonaAddon = {
-      id: crypto.randomUUID(),
+      id: uuidv7(),
       label: '',
       content: '',
       enabled: true,
@@ -96,7 +98,7 @@ export default function PersonaAddonsModal() {
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <Puzzle size={16} className={styles.headerIcon} />
+          <IconPlaylistAdd size={16} className={styles.headerIcon} />
           <span className={styles.title}>
             {personaName ? `${personaName} — Add-Ons` : 'Persona Add-Ons'}
           </span>

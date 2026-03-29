@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal, GitBranch } from 'lucide-react'
+import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal } from 'lucide-react'
+import { IconVersions } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
@@ -365,7 +366,7 @@ export default function SpindlePanel() {
                     {scopeLabel}
                     {isNonDefaultBranch && (
                       <span className={styles.branchBadge}>
-                        <GitBranch size={10} /> {extBranch}
+                        <IconVersions size={10} /> {extBranch}
                       </span>
                     )}
                   </span>
@@ -470,7 +471,7 @@ export default function SpindlePanel() {
                     onClick={() => handleOpenBranchMenu(ext)}
                     disabled={loadingAction === ext.id}
                     title="Switch branch"
-                    icon={<GitBranch size={14} />}
+                    icon={<IconVersions size={14} />}
                   />
                 )}
                 <Button
@@ -507,7 +508,7 @@ export default function SpindlePanel() {
                         onClick={() => b !== branchMenuCurrent && handleSwitchBranch(ext, b)}
                         disabled={b === branchMenuCurrent || loadingAction === ext.id}
                       >
-                        <GitBranch size={12} />
+                        <IconVersions size={12} />
                         {b}
                         {b === branchMenuCurrent && <span className={styles.branchCurrentLabel}>current</span>}
                       </button>
@@ -560,7 +561,7 @@ export default function SpindlePanel() {
         {!fetchingBranches && installBranches.length > 1 && (
           <div className={styles.branchSelect}>
             <label className={styles.branchSelectLabel}>
-              <GitBranch size={11} /> Branch
+              <IconVersions size={11} /> Branch
             </label>
             <select
               className={styles.branchSelectInput}

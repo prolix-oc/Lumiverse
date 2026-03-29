@@ -287,8 +287,7 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
                           <div className={styles.checkMessage}>{check.message}</div>
                         </div>
                       ))}
-                      <div className={styles.scrollSpacer} aria-hidden="true" />
-                    </div>
+                      </div>
                   </div>
                 )}
               </div>
@@ -339,8 +338,7 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
                       <div className={styles.metaRow}><span>Relations</span><strong>{report.chat.relationCount}</strong></div>
                       <div className={styles.metaRow}><span>Consolidations</span><strong>{report.chat.consolidationCount}</strong></div>
                       <div className={styles.metaRow}><span>Rebuild status</span><strong>{report.chat.rebuildStatus.status}</strong></div>
-                      <div className={styles.scrollSpacer} aria-hidden="true" />
-                    </div>
+                      </div>
                   </div>
                 )}
               </div>

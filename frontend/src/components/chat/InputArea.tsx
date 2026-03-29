@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, Puzzle } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers } from 'lucide-react'
+import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
@@ -687,7 +688,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
                 onClick={() => setOpenPopover((p) => (p === 'addons' ? null : 'addons'))}
                 title="Persona add-ons"
               >
-                <Puzzle size={14} />
+                <IconPlaylistAdd size={14} />
               </button>
             )}
             <button
@@ -1085,7 +1086,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   onClick={() => handleToggleAddon(addon.id)}
                 >
                   <span className={styles.personaMain}>
-                    <Puzzle size={13} style={{ opacity: addon.enabled ? 1 : 0.4, color: addon.enabled ? 'var(--lumiverse-primary)' : undefined }} />
+                    <IconPlaylistAdd size={13} style={{ opacity: addon.enabled ? 1 : 0.4, color: addon.enabled ? 'var(--lumiverse-primary)' : undefined }} />
                     <span>{addon.label || 'Untitled add-on'}</span>
                   </span>
                   <span className={styles.popMeta}>{addon.enabled ? 'ON' : 'OFF'}</span>

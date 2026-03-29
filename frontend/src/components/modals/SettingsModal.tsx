@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
-import { Shield, Palette, Sliders, MessageSquare, Users, PanelRight, Compass, Reply, HardDrive, RefreshCw, Puzzle, Database, Hash, Activity, Globe, Bell, Import, Brain, Terminal } from 'lucide-react'
+import { Shield, Sliders, MessageSquare, Users, PanelRight, Compass, Reply, HardDrive, RefreshCw, Puzzle, Database, Hash, Activity, Globe, Bell, Import, Brain, Terminal } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -10,10 +10,8 @@ import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import { embeddingsApi } from '@/api/embeddings'
 import { imagesApi } from '@/api/images'
-import { PRESETS, DEFAULT_THEME } from '@/theme/presets'
 import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
-import ModeSelector from '@/components/panels/theme-panel/ModeSelector'
 import UserManagement from '@/components/settings/UserManagement'
 import MigrationSettings from '@/components/settings/MigrationSettings'
 import TokenizerManager from '@/components/settings/TokenizerManager'
@@ -38,7 +36,6 @@ const BASE_VIEWS = [
   { id: 'extensionPools', icon: HardDrive, label: 'Extension Pools' },
   { id: 'embeddings', icon: Database, label: 'Embeddings' },
   { id: 'memoryCortex', icon: Brain, label: 'Memory Cortex' },
-  { id: 'appearance', icon: Palette, label: 'Appearance' },
   { id: 'notifications', icon: Bell, label: 'Notifications' },
   { id: 'advanced', icon: Sliders, label: 'Advanced' },
   { id: 'lumihub', icon: Globe, label: 'LumiHub' },
@@ -122,8 +119,6 @@ function SettingsView({ view }: { view: string }) {
       return <ChatSettings />
     case 'extensions':
       return <ExtensionSettingsView />
-    case 'appearance':
-      return <AppearanceSettings />
     case 'guided':
       return <GuidedGenerationSettings />
     case 'quickReplies':
@@ -360,6 +355,8 @@ function DisplaySettings() {
 function ChatSettings() {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
+  const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
+  const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
@@ -455,21 +452,35 @@ function ChatSettings() {
       </div>
 
       {displayMode === 'bubble' && (
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>User message alignment</label>
-          <div className={styles.segmented}>
-            {(['left', 'right'] as const).map((align) => (
-              <button
-                key={align}
-                type="button"
-                className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
-                onClick={() => setSetting('bubbleUserAlign', align)}
-              >
-                {align === 'left' ? 'Left' : 'Right'}
-              </button>
-            ))}
+        <>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>User message alignment</label>
+            <div className={styles.segmented}>
+              {(['left', 'right'] as const).map((align) => (
+                <button
+                  key={align}
+                  type="button"
+                  className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
+                  onClick={() => setSetting('bubbleUserAlign', align)}
+                >
+                  {align === 'left' ? 'Left' : 'Right'}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+          <Toggle.Checkbox
+            checked={bubbleDisableHover}
+            onChange={(checked) => setSetting('bubbleDisableHover', checked)}
+            label="Disable bubble hover effect"
+            hint="Prevents bubbles from brightening or changing shadow on hover"
+          />
+          <Toggle.Checkbox
+            checked={bubbleHideAvatarBg}
+            onChange={(checked) => setSetting('bubbleHideAvatarBg', checked)}
+            label="Hide bubble portrait background"
+            hint="Removes the dissolving character image behind bubble content for a clean, flat look"
+          />
+        </>
       )}
 
       <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Chat Width</h3>
@@ -1264,75 +1275,6 @@ function ExtensionPoolSettings() {
           )}
         </>
       )}
-    </div>
-  )
-}
-
-function AppearanceSettings() {
-  const theme = useStore((s) => s.theme) as import('@/types/theme').ThemeConfig | null
-  const setTheme = useStore((s) => s.setTheme)
-  const openDrawer = useStore((s) => s.openDrawer)
-  const closeSettings = useStore((s) => s.closeSettings)
-
-  const current = theme ?? DEFAULT_THEME
-  const presetName = PRESETS.find((p) => p.id === current.id)?.name ?? 'Custom'
-
-  return (
-    <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>Appearance</h3>
-
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>Mode</label>
-        <ModeSelector value={current.mode} onChange={(mode) => {
-          const next = { ...current, mode }
-          if (!next.characterAware) next.id = 'custom'
-          setTheme(next)
-        }} />
-      </div>
-
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>Preset</label>
-        <select
-          className={styles.select}
-          value={current.id}
-          onChange={(e) => {
-            const preset = PRESETS.find((p) => p.id === e.target.value)
-            if (preset) setTheme(preset)
-          }}
-        >
-          {PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-          {!PRESETS.some((p) => p.id === current.id) && (
-            <option value={current.id}>Custom</option>
-          )}
-        </select>
-      </div>
-
-      <div className={styles.field}>
-        <button
-          type="button"
-          className={styles.select}
-          style={{ cursor: 'pointer', textAlign: 'left' }}
-          onClick={() => {
-            closeSettings()
-            openDrawer('theme')
-          }}
-        >
-          Open Theme Panel
-        </button>
-      </div>
-
-      <div className={styles.field}>
-        <button
-          type="button"
-          className={styles.select}
-          style={{ cursor: 'pointer', textAlign: 'left' }}
-          onClick={() => setTheme(null)}
-        >
-          Reset to Default
-        </button>
-      </div>
     </div>
   )
 }

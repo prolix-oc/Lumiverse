@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, Plus, BookOpen, ImagePlus, Download, Code2, ChevronDown } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, Plus, ImagePlus, Download, Code2, ChevronDown } from 'lucide-react'
+import { IconNotebook } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -13,6 +14,7 @@ import { chatsApi } from '@/api/chats'
 import { regexApi } from '@/api/regex'
 import { useStore } from '@/store'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
+import { uuidv7 } from '@/lib/uuid'
 import useImageCropFlow from '@/hooks/useImageCropFlow'
 import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import ImageCropModal from '@/components/shared/ImageCropModal'
@@ -527,7 +529,7 @@ export default function CharacterEditorPage() {
         const originalImage = await imagesApi.upload(originalFile, (p) => setAltAvatarUploadProgress(Math.round(p * 0.4)))
         // Upload cropped for display
         const image = await imagesApi.upload(croppedFile, (p) => setAltAvatarUploadProgress(40 + Math.round(p * 0.6)))
-        const newId = crypto.randomUUID()
+        const newId = uuidv7()
         const entry: AlternateAvatarEntry = {
           id: newId,
           image_id: image.id,
@@ -1084,7 +1086,7 @@ export default function CharacterEditorPage() {
 
                       {character.extensions?.character_book?.entries?.length > 0 && (
                         <div className={styles.lorebookImportSection}>
-                          <BookOpen size={14} />
+                          <IconNotebook size={14} />
                           <div className={styles.lorebookImportInfo}>
                             <span className={styles.fieldLabel}>Embedded Lorebook</span>
                             <span className={styles.fieldHelper}>

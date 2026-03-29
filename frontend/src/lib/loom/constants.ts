@@ -93,6 +93,7 @@ export const DEFAULT_SAMPLER_OVERRIDES: SamplerOverrides = {
   frequencyPenalty: null,
   presencePenalty: null,
   repetitionPenalty: null,
+  streaming: true,
 }
 
 export const DEFAULT_CUSTOM_BODY: CustomBody = {
@@ -220,6 +221,14 @@ export const PROMPT_TEMPLATES: PromptTemplateItem[] = [
   { name: 'Council Instructions', content: '{{lumiaCouncilInst}}', role: 'system', description: 'Council mode instructions' },
   { name: 'Council Deliberation', content: '{{lumiaCouncilDeliberation}}', role: 'system', description: 'Tool execution results' },
   { name: 'State Synthesis', content: '{{lumiaStateSynthesis}}', role: 'system', description: 'Member state synthesis' },
+  { section: 'Long-Term Memory' },
+  { name: 'Chat Memories', content: '{{memories}}', role: 'system', description: 'Retrieved memory chunks with header' },
+  { name: 'Chat Memories (Raw)', content: '{{memoriesRaw}}', role: 'system', description: 'Memory chunks without header wrapper' },
+  { section: 'Memory Cortex' },
+  { name: 'Entity Snapshots', content: '{{entities}}', role: 'system', description: 'Active entities with facts and relationships' },
+  { name: 'Relationships', content: '{{relationships}}', role: 'system', description: 'Active relationship edges between entities' },
+  { name: 'Story Arc', content: '{{arc}}', role: 'system', description: 'Current narrative arc summary' },
+  { name: 'Top Salience Memory', content: '{{memorySalience}}', role: 'system', description: 'Highest-importance memory from retrieval' },
   { section: 'Character Card' },
   { name: 'Scenario', content: '{{scenario}}', role: 'system', description: 'Character scenario' },
   { name: 'Character Description', content: '{{description}}', role: 'system', description: 'Physical description' },

@@ -808,7 +808,16 @@ app.post("/chats/:chatId/rebuild", async (c) => {
     };
   }
 
-  // Run rebuild in the background — return immediately so Bun doesn't timeout
+  // First rebuild the underlying LTCM chunks (re-chunk from messages, re-vectorize)
+  // so the cortex processes fresh data instead of potentially stale chunks.
+  try {
+    const { rebuildChatChunks } = require("../services/chats.service");
+    await rebuildChatChunks(userId, chatId);
+  } catch (err: any) {
+    console.warn("[memory-cortex] LTCM chunk rebuild failed (proceeding with existing chunks):", err?.message);
+  }
+
+  // Run cortex rebuild in the background — return immediately so Bun doesn't timeout
   memoryCortex.rebuildCortex(
     userId, chatId, characterNames, generateRawFn, sidecarConnectionId,
     // Progress callback: streams WS events to the client

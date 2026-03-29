@@ -127,11 +127,9 @@ export default function MemoryCortexSettings() {
           total: status.total ?? 0,
           percent: status.percent ?? 0,
         });
-      } else if (status.status === "complete" && status.result) {
-        addToast({
-          type: "success",
-          message: `Rebuild finished while away: ${status.result.chunksProcessed} chunks, ${status.result.entitiesFound} entities, ${status.result.relationsFound} relations`,
-        });
+      } else if (status.status === "complete") {
+        // Silently refresh stats — the WS event handles the live toast notification.
+        // Showing a toast here would fire every time the panel opens (stale "complete" state).
         loadStats();
       }
     }).catch(() => { /* non-fatal */ });

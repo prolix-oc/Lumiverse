@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Puzzle } from 'lucide-react'
+import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link } from 'lucide-react'
+import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
 import { worldBooksApi } from '@/api/world-books'
@@ -402,7 +403,7 @@ export default function PersonaEditor({
           onClick={() => openModal('personaAddons', { personaId: persona.id, personaName: persona.name })}
           title="Manage persona add-ons"
         >
-          <Puzzle size={13} />
+          <IconPlaylistAdd size={13} />
           <span>Add-Ons{addonCount > 0 ? ` (${addonCount})` : ''}</span>
         </button>
       </div>

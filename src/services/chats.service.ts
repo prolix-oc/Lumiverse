@@ -1360,6 +1360,58 @@ export function getVectorizationStatus(userId: string, chatId: string): {
   };
 }
 
+// ─── LTCM Config Hash — Stale Chunk Detection ────────────────
+
+/**
+ * Stamp the current LTCM config hash onto a chat's metadata.
+ * Called after chunks are built/rebuilt so we can detect staleness later.
+ */
+async function stampChatMemoryHash(userId: string, chatId: string): Promise<void> {
+  try {
+    const cfg = embeddingsSvc.loadChatMemorySettings(userId);
+    const embCfg = await embeddingsSvc.getEmbeddingConfig(userId);
+    const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cfg, embCfg);
+    const hash = embeddingsSvc.computeChatMemoryHash(effective, embCfg.model);
+
+    const chat = getChat(userId, chatId);
+    if (!chat) return;
+    const metadata = { ...chat.metadata, ltcm_config_hash: hash };
+    getDb().query("UPDATE chats SET metadata = ? WHERE id = ?").run(JSON.stringify(metadata), chatId);
+  } catch { /* non-fatal */ }
+}
+
+/**
+ * Check if a chat's chunks are stale (compiled under different settings or code version).
+ * If stale, triggers a synchronous rebuild so the current generation uses fresh data.
+ *
+ * Returns true if a rebuild was triggered.
+ */
+export async function ensureChatMemoryFresh(userId: string, chatId: string): Promise<boolean> {
+  try {
+    const chat = getChat(userId, chatId);
+    if (!chat) return false;
+
+    const storedHash = (chat.metadata as any)?.ltcm_config_hash;
+
+    const cfg = embeddingsSvc.loadChatMemorySettings(userId);
+    const embCfg = await embeddingsSvc.getEmbeddingConfig(userId);
+    if (!embCfg.enabled || !embCfg.vectorize_chat_messages) return false;
+
+    const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cfg, embCfg);
+    const currentHash = embeddingsSvc.computeChatMemoryHash(effective, embCfg.model);
+
+    if (storedHash === currentHash) return false;
+
+    // Hash mismatch — chunks are stale. Rebuild.
+    console.info(`[chats] LTCM config hash mismatch for chat ${chatId} (stored: ${storedHash ?? "none"}, current: ${currentHash}). Rebuilding chunks.`);
+    await rebuildChatChunks(userId, chatId);
+    return true;
+  } catch (err) {
+    console.warn("[chats] LTCM freshness check failed:", err);
+    return false;
+  }
+}
+
 /**
  * Rebuild all chunks for a chat from scratch.
  * Used for migration or when chunk structure needs to be reset.
@@ -1438,6 +1490,9 @@ export async function rebuildChatChunks(userId: string, chatId: string): Promise
     const chunk = createChatChunk(chatId, currentChunk);
     vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
   }
+
+  // Stamp the config hash so we can detect staleness later
+  stampChatMemoryHash(userId, chatId);
 
   console.info(`[chats] Rebuilt chunks for chat ${chatId}`);
 }

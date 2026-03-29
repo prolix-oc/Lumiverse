@@ -22,8 +22,8 @@ export default function SpindleDockPanel({ panel }: Props) {
 
   const isHorizontal = panel.edge === 'left' || panel.edge === 'right'
 
-  // On mobile, left/right panels become bottom sheets
-  const effectiveEdge = isMobile && isHorizontal ? 'bottom' : panel.edge
+  // On mobile, left/right panels become top sheets (bottom conflicts with input area)
+  const effectiveEdge = isMobile && isHorizontal ? 'top' : panel.edge
   const effectiveHorizontal = effectiveEdge === 'left' || effectiveEdge === 'right'
 
   const handleToggle = useCallback(() => {

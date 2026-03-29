@@ -8,17 +8,25 @@ interface ModelComboboxProps {
   value: string
   onChange: (value: string) => void
   models: string[]
+  /** Optional map of model ID → human-readable label. */
+  modelLabels?: Record<string, string>
   loading: boolean
   onRefresh?: () => void
   disabled?: boolean
   placeholder?: string
 }
 
-export default function ModelCombobox({ value, onChange, models, loading, onRefresh, disabled, placeholder }: ModelComboboxProps) {
+export default function ModelCombobox({ value, onChange, models, modelLabels, loading, onRefresh, disabled, placeholder }: ModelComboboxProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const hasLabels = modelLabels && Object.keys(modelLabels).length > 0
 
-  const filtered = models.filter((m) => m.toLowerCase().includes(value.toLowerCase()))
+  const filtered = models.filter((m) => {
+    const q = value.toLowerCase()
+    if (m.toLowerCase().includes(q)) return true
+    if (hasLabels && modelLabels[m]?.toLowerCase().includes(q)) return true
+    return false
+  })
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -52,7 +60,14 @@ export default function ModelCombobox({ value, onChange, models, loading, onRefr
         <div className={styles.dropdown}>
           {filtered.map((model) => (
             <button key={model} type="button" className={styles.dropdownItem} onClick={() => handleSelect(model)}>
-              {model}
+              {hasLabels && modelLabels[model] ? (
+                <>
+                  <span className={styles.modelLabel}>{modelLabels[model]}</span>
+                  <span className={styles.modelId}>{model}</span>
+                </>
+              ) : (
+                model
+              )}
             </button>
           ))}
         </div>

@@ -42,6 +42,7 @@ import { expressionsRoutes } from "./routes/expressions.routes";
 import { pushRoutes } from "./routes/push.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
+import { openrouterRoutes } from "./routes/openrouter.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 
@@ -116,6 +117,31 @@ app.route("/api/spindle-oauth", spindleOAuthRoutes);
 // LumiHub callback — unauthenticated (PKCE code proves authorization)
 app.route("/api/v1/lumihub", lumihubCallbackRoute);
 
+// OpenRouter OAuth landing — unauthenticated (popup redirect from OpenRouter)
+// OpenRouter redirects here with ?code=<auth_code>. We relay the code back
+// to the opener window via postMessage so it can call our exchange endpoint.
+app.get("/api/v1/openrouter/oauth-landing", async (c) => {
+  const code = c.req.query("code") || "";
+  return c.html(`<!DOCTYPE html>
+<html><head><title>OpenRouter Authorization</title>
+<style>body{background:#1c1826;color:rgba(255,255,255,.8);font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:14px}</style></head>
+<body>
+<div id="s">Completing authorization...</div>
+<script>
+var code = ${JSON.stringify(code)};
+if (code && window.opener) {
+  window.opener.postMessage({ type: 'openrouter_oauth_code', code: code }, '*');
+  document.getElementById('s').textContent = 'Authorized! Closing...';
+  setTimeout(function(){ window.close(); }, 500);
+} else if (!code) {
+  document.getElementById('s').textContent = 'No authorization code received.';
+} else {
+  document.getElementById('s').textContent = 'Could not reach parent window. Copy this code: ' + code;
+}
+</script>
+</body></html>`);
+});
+
 // Image gen results — unauthenticated, public access for push notifications and embeds
 app.get("/api/v1/image-gen/results/:id", async (c) => {
   const { getImageFilePathPublic } = await import("./services/images.service");
@@ -140,6 +166,7 @@ app.route("/api/v1/world-books", worldBooksRoutes);
 app.route("/api/v1/secrets", secretsRoutes);
 app.route("/api/v1/presets", presetsRoutes);
 app.route("/api/v1/connections", connectionsRoutes);
+app.route("/api/v1/openrouter", openrouterRoutes);
 app.route("/api/v1/files", filesRoutes);
 app.route("/api/v1/images", imagesRoutes);
 app.route("/api/v1/generate", generateRoutes);

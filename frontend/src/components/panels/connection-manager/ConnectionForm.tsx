@@ -4,7 +4,9 @@ import { Toggle } from '@/components/shared/Toggle'
 import { connectionsApi } from '@/api/connections'
 import { useStore } from '@/store'
 import ModelCombobox from './ModelCombobox'
+import OpenRouterSettings from './OpenRouterSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
+import type { OpenRouterConnectionSettings } from '@/api/openrouter'
 import styles from '../ConnectionManager.module.css'
 
 interface ConnectionFormProps {
@@ -40,12 +42,18 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
   const [bindReasoning, setBindReasoning] = useState(!!profile?.metadata?.reasoningBindings)
   const reasoningSettings = useStore((s) => s.reasoningSettings)
   const [models, setModels] = useState<string[]>([])
+  const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
 
   // Vertex AI specific state
   const [vertexRegion, setVertexRegion] = useState(profile?.metadata?.vertex_region || 'us-central1')
   const [saFileName, setSaFileName] = useState<string | null>(profile?.metadata?.sa_file_name || null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // OpenRouter specific state
+  const [openrouterSettings, setOpenrouterSettings] = useState<OpenRouterConnectionSettings>(
+    profile?.metadata?.openrouter || {}
+  )
 
   const providerOptions = providers.length > 0
     ? providers.map((p) => ({ value: p.id, label: p.name }))
@@ -61,8 +69,10 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
     try {
       const result = await connectionsApi.models(profile.id)
       setModels(result.models)
+      setModelLabels(result.model_labels || {})
     } catch {
       setModels([])
+      setModelLabels({})
     } finally {
       setModelsLoading(false)
     }
@@ -74,6 +84,8 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
 
   const showResponsesApiToggle = provider === 'openai'
   const showSubscriptionApiToggle = provider === 'nanogpt'
+  const isOpenRouter = provider === 'openrouter'
+  const hideApiUrl = isOpenRouter || provider === 'nanogpt'
 
   // Handle service account JSON file upload
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -123,6 +135,20 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
       metadata.vertex_region = vertexRegion
       if (saFileName) metadata.sa_file_name = saFileName
     }
+    if (isOpenRouter) {
+      // Only persist non-empty settings
+      const hasRouting = openrouterSettings.provider_routing && Object.values(openrouterSettings.provider_routing).some((v) =>
+        Array.isArray(v) ? v.length > 0 : v !== undefined && v !== ''
+      )
+      const hasPlugins = openrouterSettings.plugins && openrouterSettings.plugins.some((p) => p.enabled)
+      if (hasRouting || hasPlugins) {
+        metadata.openrouter = openrouterSettings
+      } else {
+        delete metadata.openrouter
+      }
+    } else {
+      delete metadata.openrouter
+    }
 
     // For Vertex AI, encode the region into the API URL so the backend can extract it
     let resolvedApiUrl = apiUrl.trim() || undefined
@@ -139,7 +165,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, bindReasoning, reasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, bindReasoning, reasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
 
   return (
     <div className={styles.form}>
@@ -196,14 +222,17 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
         </FormField>
       )}
 
-      <FormField label="API URL" hint={isVertexAI ? 'Leave empty to use default Vertex AI endpoint with selected region' : 'Leave empty for default provider URL'}>
-        <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
-      </FormField>
+      {!hideApiUrl && (
+        <FormField label="API URL" hint={isVertexAI ? 'Leave empty to use default Vertex AI endpoint with selected region' : 'Leave empty for default provider URL'}>
+          <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
+        </FormField>
+      )}
       <FormField label="Model" hint={!profile?.id ? 'Save connection first to fetch model list' : undefined}>
         <ModelCombobox
           value={model}
           onChange={setModel}
           models={models}
+          modelLabels={modelLabels}
           loading={modelsLoading}
           onRefresh={fetchModels}
           disabled={!profile?.id}
@@ -222,6 +251,18 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
         <FormField label="">
           <Toggle.Checkbox checked={useSubscriptionApi} onChange={setUseSubscriptionApi} label="Use Subscription API" hint="Use /api/subscription/v1 to only use models from your NanoGPT subscription" />
         </FormField>
+      )}
+      {isOpenRouter && (
+        <OpenRouterSettings
+          connectionId={profile?.id}
+          hasApiKey={!!profile?.has_api_key || !!apiKey}
+          settings={openrouterSettings}
+          onChange={setOpenrouterSettings}
+          onApiKeySet={() => {
+            // Clear the manual key input since OAuth set it
+            setApiKey('')
+          }}
+        />
       )}
       <FormField label="">
         <Toggle.Checkbox checked={bindReasoning} onChange={setBindReasoning} label="Bind reasoning settings" hint="Save current reasoning settings and auto-apply when this connection is selected" />

@@ -321,38 +321,51 @@ export class GoogleVertexProvider implements LlmProvider {
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
-      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      // Use regional publisher models endpoint for lightweight auth validation
       const host = `https://${location}-aiplatform.googleapis.com`;
-      const url = `${host}/v1/publishers/google/models?pageSize=1`;
+      const url = `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models?pageSize=1`;
       const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "x-goog-user-project": projectId,
+        },
       });
+      if (!res.ok) {
+        const err = await res.text();
+        console.error(`[Vertex AI] validateKey failed (${res.status}): ${err}`);
+      }
       return res.ok;
-    } catch {
+    } catch (e) {
+      console.error("[Vertex AI] validateKey error:", e);
       return false;
     }
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
     try {
-      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      // Publisher model listing uses /v1/publishers/google/models on a regional endpoint
-      // (no project/location path segments — that pattern is for individual model access)
       const host = `https://${location}-aiplatform.googleapis.com`;
+      const basePath = `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
       const allModels: string[] = [];
       let pageToken: string | undefined;
 
       do {
         const params = new URLSearchParams();
         if (pageToken) params.set("pageToken", pageToken);
-        const url = `${host}/v1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
+        const url = `${basePath}${params.toString() ? `?${params}` : ""}`;
         const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "x-goog-user-project": projectId,
+          },
         });
-        if (!res.ok) break;
+        if (!res.ok) {
+          const err = await res.text();
+          console.error(`[Vertex AI] listModels failed (${res.status}): ${err}`);
+          break;
+        }
         const data = (await res.json()) as any;
         const models = data.publisherModels || data.models || [];
         for (const m of models) {
@@ -360,6 +373,7 @@ export class GoogleVertexProvider implements LlmProvider {
           const name: string = m.name || "";
           const shortName = name
             .replace(/^publishers\/google\/models\//, "")
+            .replace(/^projects\/[^/]+\/locations\/[^/]+\/publishers\/google\/models\//, "")
             .replace(/^models\//, "");
           const id = shortName || name;
           if (id.includes("gemini")) allModels.push(id);
@@ -368,7 +382,8 @@ export class GoogleVertexProvider implements LlmProvider {
       } while (pageToken);
 
       return allModels.sort();
-    } catch {
+    } catch (e) {
+      console.error("[Vertex AI] listModels error:", e);
       return [];
     }
   }
@@ -390,7 +405,7 @@ export class GoogleVertexProvider implements LlmProvider {
     });
   }
 
-  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage"]);
+  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming"]);
 
   private static readonly HANDLED_PARAMS = new Set([
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",

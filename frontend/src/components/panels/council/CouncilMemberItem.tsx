@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Pencil, Trash2, Wrench, ChevronDown, ChevronRight, Users2, X } from 'lucide-react'
+import { Pencil, Trash2, ChevronDown, ChevronRight, Users2, X } from 'lucide-react'
+import { IconSettingsCog } from '@tabler/icons-react'
 import type { CouncilMember, CouncilToolDefinition } from 'lumiverse-spindle-types'
 import type { PackWithItems } from '@/types/api'
 import { useStore } from '@/store'
@@ -62,7 +63,7 @@ export default function CouncilMemberItem({ member, availableTools, onUpdate, on
           <div className={styles.memberName}>{member.itemName}</div>
           <div className={styles.memberStats}>
             <span className={styles.statBadge} title="Tools assigned">
-              <Wrench size={10} /> {member.tools.length}
+              <IconSettingsCog size={10} /> {member.tools.length}
             </span>
             <span className={styles.statBadge} title="Chance">
               {member.chance}%
@@ -129,7 +130,7 @@ export default function CouncilMemberItem({ member, availableTools, onUpdate, on
           <div className={styles.toolsSection}>
             <div className={styles.toolsSectionHeader}>
               <span className={styles.inlineLabel}>
-                <Wrench size={12} /> Tools:
+                <IconSettingsCog size={12} /> Tools:
               </span>
               <button
                 type="button"

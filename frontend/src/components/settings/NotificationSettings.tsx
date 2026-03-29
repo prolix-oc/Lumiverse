@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Bell, BellOff, Smartphone, Trash2, Send, Shield, Zap } from 'lucide-react'
+import { Bell, BellOff, Smartphone, Trash2, Send, Shield } from 'lucide-react'
+import { IconBellRinging } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
 import { Toggle } from '@/components/shared/Toggle'
@@ -102,7 +103,7 @@ export default function NotificationSettings() {
                 onClick={handleSubscribe}
                 disabled={subscribing}
               >
-                <Zap size={12} />
+                <IconBellRinging size={12} />
                 {subscribing ? 'Subscribing...' : 'Enable'}
               </button>
             ) : (

@@ -69,10 +69,30 @@
   flex: 1 1 auto;
   gap: 18px;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 18px 24px 24px;
   background: var(--lumiverse-bg-deep);
+  scrollbar-width: thin;
+  scrollbar-color: var(--lumiverse-fill-subtle) transparent;
+}
+
+.body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.body::-webkit-scrollbar-thumb {
+  background: var(--lumiverse-fill-subtle);
+  border-radius: 4px;
+}
+
+.body::-webkit-scrollbar-thumb:hover {
+  background: var(--lumiverse-fill);
 }
 
 .actionBtn {
@@ -110,6 +130,7 @@
 }
 
 .overview {
+  flex-shrink: 0;
   border-radius: 14px;
   border: 1px solid var(--lumiverse-border);
   padding: 16px 18px;
@@ -189,6 +210,7 @@
 }
 
 .section {
+  flex-shrink: 0;
   border: 1px solid var(--lumiverse-border);
   border-radius: 12px;
   overflow: hidden;
@@ -210,10 +232,6 @@
 }
 
 .checkListWrap {
-  max-height: 340px;
-  overflow: auto;
-  scrollbar-gutter: stable;
-  overscroll-behavior: contain;
   box-sizing: border-box;
 }
 
@@ -286,6 +304,7 @@
 }
 
 .detailGrid {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
@@ -297,16 +316,7 @@
 }
 
 .selectedChatWrap {
-  max-height: 260px;
-  overflow: auto;
-  scrollbar-gutter: stable;
-  overscroll-behavior: contain;
   box-sizing: border-box;
-}
-
-.scrollSpacer {
-  height: 16px;
-  flex-shrink: 0;
 }
 
 .metaRow {

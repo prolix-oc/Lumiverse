@@ -442,6 +442,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     : null;
   const perChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
 
+  // LTCM freshness check: if settings or code changed since chunks were built, rebuild lazily
+  try {
+    const { ensureChatMemoryFresh } = require("./chats.service");
+    await ensureChatMemoryFresh(ctx.userId, ctx.chatId);
+  } catch { /* non-fatal — first generation after update may use stale data */ }
+
   // Memory Cortex: enhanced retrieval with entity graph, salience, and emotional resonance
   const cortexConfig = memoryCortex.getCortexConfig(ctx.userId);
   let cortexResult: memoryCortex.CortexResult | null = null;
@@ -3169,6 +3175,11 @@ function buildParameters(
     if (effort !== "auto" || isToggleOnly) {
       injectReasoningParams(params, providerName, effort, modelName || undefined);
     }
+  }
+
+  // Streaming toggle from sampler overrides
+  if (overrides?.enabled && typeof (overrides as any).streaming === "boolean") {
+    params._streaming = (overrides as any).streaming;
   }
 
   // Custom body from preset.parameters.customBody

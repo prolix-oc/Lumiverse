@@ -231,6 +231,8 @@ export interface ConnectionTestResult {
 
 export interface ConnectionModelsResult {
   models: string[]
+  /** Map of model ID → human-readable display name (when available). */
+  model_labels?: Record<string, string>
   provider: string
   error?: string
 }

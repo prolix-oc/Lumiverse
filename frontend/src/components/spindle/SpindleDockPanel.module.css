@@ -178,16 +178,21 @@
 @media (max-width: 600px) {
   .left,
   .right {
-    top: auto !important;
-    bottom: 0 !important;
+    top: 0 !important;
+    bottom: auto !important;
     left: 0 !important;
     right: 0 !important;
     width: auto !important;
-    flex-direction: column-reverse;
-    border-radius: 12px 12px 0 0;
+    flex-direction: column;
+    border-radius: 0 0 12px 12px;
     border: 1px solid var(--lumiverse-border);
-    border-bottom: none;
+    border-top: none;
     max-height: 60vh;
+  }
+
+  :global(html[data-ios-pwa]) .left,
+  :global(html[data-ios-pwa]) .right {
+    top: env(safe-area-inset-top, 0px) !important;
   }
 
   .collapsed.left,

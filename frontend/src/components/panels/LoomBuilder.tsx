@@ -782,6 +782,15 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
             </div>
           )}
           <hr className={s.menuDivider} style={{ margin: '8px 0 4px' }} />
+          <div style={{ padding: '2px 0 4px' }}>
+            <Toggle.Checkbox
+              checked={overrides.streaming !== false}
+              onChange={(v) => onSaveSamplers({ ...overrides, enabled: true, streaming: v })}
+              label="Stream response"
+              hint="Disable to receive the full response at once instead of token-by-token"
+            />
+          </div>
+          <hr className={s.menuDivider} style={{ margin: '4px 0 4px' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0 4px' }}>
             <span className={s.samplerLabel}>Custom Body</span>
             <Toggle.Checkbox checked={!!body.enabled} onChange={handleToggleCustomBody} label="Enabled" />

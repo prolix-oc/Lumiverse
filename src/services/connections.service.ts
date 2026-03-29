@@ -225,7 +225,7 @@ export async function testConnection(userId: string, id: string): Promise<{ succ
   }
 }
 
-export async function listConnectionModels(userId: string, id: string): Promise<{ models: string[]; provider: string; error?: string }> {
+export async function listConnectionModels(userId: string, id: string): Promise<{ models: string[]; model_labels?: Record<string, string>; provider: string; error?: string }> {
   const profile = getConnection(userId, id);
   if (!profile) return { models: [], provider: "", error: "Connection not found" };
 
@@ -238,8 +238,23 @@ export async function listConnectionModels(userId: string, id: string): Promise<
   }
 
   try {
-    const models = await provider.listModels(apiKey || "", resolveEffectiveApiUrl(profile));
-    return { models, provider: profile.provider };
+    const apiUrl = resolveEffectiveApiUrl(profile);
+    const models = await provider.listModels(apiKey || "", apiUrl);
+
+    // For providers that expose human-readable names, build a label map
+    let model_labels: Record<string, string> | undefined;
+    if (profile.provider === "openrouter") {
+      const { OpenRouterProvider } = await import("../llm/providers/openrouter");
+      if (provider instanceof OpenRouterProvider) {
+        const richModels = await provider.fetchModelsWithMetadata(apiKey || "", apiUrl);
+        model_labels = {};
+        for (const m of richModels) {
+          if (m.name && m.name !== m.id) model_labels[m.id] = m.name;
+        }
+      }
+    }
+
+    return { models, model_labels, provider: profile.provider };
   } catch (err: any) {
     return { models: [], provider: profile.provider, error: err.message || "Failed to fetch models" };
   }

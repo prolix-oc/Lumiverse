@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
-import { Copy, Check, Pencil, Trash2, EyeOff, Eye, GitBranch, BarChart3 } from 'lucide-react'
+import { Copy, Check, Pencil, Trash2, EyeOff, Eye, BarChart3 } from 'lucide-react'
+import { IconGitFork } from '@tabler/icons-react'
 import styles from './BubbleActions.module.css'
 
 interface BubbleActionsProps {
@@ -39,7 +40,7 @@ export default function BubbleActions({ onEdit, onDelete, onToggleHidden, onFork
         {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
       </button>
       <button type="button" onClick={onFork} title="Fork chat here" aria-label="Fork chat">
-        <GitBranch size={13} />
+        <IconGitFork size={13} />
       </button>
       {onPromptBreakdown && (
         <button type="button" onClick={onPromptBreakdown} title="Prompt breakdown" aria-label="Prompt breakdown">

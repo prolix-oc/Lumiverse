@@ -285,6 +285,8 @@ export interface SettingsSlice {
   messagesPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
   bubbleUserAlign: 'left' | 'right'
+  bubbleDisableHover: boolean
+  bubbleHideAvatarBg: boolean
   chatSheldEnterToSend: boolean
   saveDraftInput: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'

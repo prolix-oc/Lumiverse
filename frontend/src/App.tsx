@@ -32,8 +32,8 @@ export default function App() {
     for (const p of dockPanels) {
       if (hiddenPlacements.includes(p.id)) continue
       const size = p.collapsed ? 36 : p.size
-      // On mobile, left/right docks render as bottom sheets
-      const edge = isMobile && (p.edge === 'left' || p.edge === 'right') ? 'bottom' : p.edge
+      // On mobile, left/right docks render as top sheets (bottom conflicts with input area)
+      const edge = isMobile && (p.edge === 'left' || p.edge === 'right') ? 'top' : p.edge
       switch (edge) {
         case 'left': left = Math.max(left, size); break
         case 'right': right = Math.max(right, size); break
