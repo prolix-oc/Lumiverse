@@ -5,6 +5,7 @@ import { useWebSocket } from '@/ws/useWebSocket'
 import { useStore } from '@/store'
 import { useThemeApplicator } from '@/hooks/useThemeApplicator'
 import { useCharacterTheme } from '@/hooks/useCharacterTheme'
+import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
@@ -20,6 +21,7 @@ export default function App() {
   useWebSocket()
   useThemeApplicator()
   useCharacterTheme()
+  useCustomCSSApplicator()
   useAppInit()
   useBadging()
 

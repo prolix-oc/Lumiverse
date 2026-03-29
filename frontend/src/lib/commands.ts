@@ -1,17 +1,16 @@
 import type { NavigateFunction } from 'react-router'
 import type { ComponentType } from 'react'
 import {
-  User, Wand2, GitFork, Link2, Package, Users, Drama, Library,
-  PenTool, MessageCircle, FileText, Brain, ScrollText, MessageSquareReply,
-  Globe, Image, GitBranch, Palette, Puzzle, Wallpaper, Replace,
   Settings, PanelRight, MessageSquare, Compass, Reply, Sliders,
   Plus, RotateCw, CornerDownLeft, Trash2, Edit3, Copy,
-  Eye, EyeOff, Columns, FolderOpen, ClipboardCopy, Upload, Search
+  Eye, EyeOff, Columns, FolderOpen, ClipboardCopy, Upload, Search,
+  GitBranch, Palette,
 } from 'lucide-react'
 import { useStore } from '@/store'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { generateApi } from '@/api/generate'
 import { charactersApi } from '@/api/characters'
+import { DRAWER_TABS, registryToCommands } from '@/lib/drawer-tab-registry'
 
 export type CommandScope = 'global' | 'chat' | 'chat-idle' | 'landing' | 'character'
 
@@ -27,10 +26,6 @@ export interface Command {
 }
 
 export const GROUP_ORDER: Command['group'][] = ['Actions', 'Panels', 'Settings', 'Extensions']
-
-function openPanel(tabId: string) {
-  useStore.getState().openDrawer(tabId)
-}
 
 function openSettingsView(view: string) {
   useStore.getState().openSettings(view)
@@ -375,195 +370,8 @@ export const COMMANDS: Command[] = [
     },
   },
 
-  {
-    id: 'panel-profile',
-    label: 'Profile',
-    description: 'View and edit the active character',
-    icon: User,
-    keywords: ['character', 'avatar', 'info', 'edit'],
-    group: 'Panels',
-    run: () => openPanel('profile'),
-  },
-  {
-    id: 'panel-presets',
-    label: 'Reasoning',
-    description: 'Manage generation presets and parameters',
-    icon: Wand2,
-    keywords: ['presets', 'parameters', 'temperature', 'sampler', 'generation', 'reasoning'],
-    group: 'Panels',
-    run: () => openPanel('presets'),
-  },
-  {
-    id: 'panel-loom',
-    label: 'Loom',
-    description: 'Configure narrative structure and story beats',
-    icon: GitFork,
-    keywords: ['narrative', 'story', 'lore', 'structure', 'beats'],
-    group: 'Panels',
-    run: () => openPanel('loom'),
-  },
-  {
-    id: 'panel-connections',
-    label: 'Connections',
-    description: 'Manage API connections and providers',
-    icon: Link2,
-    keywords: ['api', 'provider', 'key', 'openai', 'anthropic', 'model', 'endpoint'],
-    group: 'Panels',
-    run: () => openPanel('connections'),
-  },
-  {
-    id: 'panel-browser',
-    label: 'Pack Browser',
-    description: 'Browse and manage content packs',
-    icon: Package,
-    keywords: ['packs', 'content', 'download', 'browse', 'browser'],
-    group: 'Panels',
-    run: () => openPanel('browser'),
-  },
-  {
-    id: 'panel-characters',
-    label: 'Characters',
-    description: 'Browse and manage your character cards',
-    icon: Users,
-    keywords: ['character', 'list', 'import', 'card', 'browse'],
-    group: 'Panels',
-    run: () => openPanel('characters'),
-  },
-  {
-    id: 'panel-personas',
-    label: 'Personas',
-    description: 'Manage your user personas',
-    icon: Drama,
-    keywords: ['persona', 'identity', 'user', 'avatar'],
-    group: 'Panels',
-    run: () => openPanel('personas'),
-  },
-  {
-    id: 'panel-lorebook',
-    label: 'Lorebook',
-    description: 'Edit world book and lorebook entries',
-    icon: Library,
-    keywords: ['lorebook', 'world', 'lore', 'book', 'entries', 'worldbook'],
-    group: 'Panels',
-    run: () => openPanel('lorebook'),
-  },
-  {
-    id: 'panel-create',
-    label: 'Creator Workshop',
-    description: 'Create and edit Lumia items and Loom presets',
-    icon: PenTool,
-    keywords: ['create', 'workshop', 'editor', 'build', 'new', 'lumia', 'loom'],
-    group: 'Panels',
-    run: () => openPanel('create'),
-  },
-  {
-    id: 'panel-ooc',
-    label: 'OOC',
-    description: 'Out-of-character comment display settings',
-    icon: MessageCircle,
-    keywords: ['ooc', 'out of character', 'comments', 'irc', 'social'],
-    group: 'Panels',
-    run: () => openPanel('ooc'),
-  },
-  {
-    id: 'panel-prompt',
-    label: 'Prompt Inspector',
-    description: 'View the assembled prompt and token breakdown',
-    icon: FileText,
-    keywords: ['prompt', 'context', 'tokens', 'breakdown', 'inspect', 'debug'],
-    group: 'Panels',
-    run: () => openPanel('prompt'),
-  },
-  {
-    id: 'panel-council',
-    label: 'Council',
-    description: 'Configure the Lumia Council and tool functions',
-    icon: Brain,
-    keywords: ['council', 'tools', 'agents', 'lumia', 'functions', 'tool use'],
-    group: 'Panels',
-    run: () => openPanel('council'),
-  },
-  {
-    id: 'panel-summary',
-    label: 'Summary',
-    description: 'Configure context summarization and truncation',
-    icon: ScrollText,
-    keywords: ['summary', 'context', 'truncation', 'compress', 'summarize'],
-    group: 'Panels',
-    run: () => openPanel('summary'),
-  },
-  {
-    id: 'panel-feedback',
-    label: 'Council Feedback',
-    description: 'View the latest council execution results',
-    icon: MessageSquareReply,
-    keywords: ['feedback', 'council', 'results', 'tools', 'output', 'debug'],
-    group: 'Panels',
-    run: () => openPanel('feedback'),
-  },
-  {
-    id: 'panel-worldinfo',
-    label: 'World Info',
-    description: 'View currently activated world info entries',
-    icon: Globe,
-    keywords: ['world info', 'activation', 'lorebook', 'active', 'entries'],
-    group: 'Panels',
-    run: () => openPanel('worldinfo'),
-  },
-  {
-    id: 'panel-imagegen',
-    label: 'Image Generation',
-    description: 'Configure and control AI scene generation',
-    icon: Image,
-    keywords: ['image', 'generation', 'scene', 'art', 'picture', 'ai', 'background'],
-    group: 'Panels',
-    run: () => openPanel('imagegen'),
-  },
-  {
-    id: 'panel-wallpaper',
-    label: 'Wallpaper',
-    description: 'Set global or per-chat background wallpapers',
-    icon: Wallpaper,
-    keywords: ['wallpaper', 'background', 'backdrop', 'image', 'video', 'animated', 'mp4', 'webm'],
-    group: 'Panels',
-    run: () => openPanel('wallpaper'),
-  },
-  {
-    id: 'panel-regex',
-    label: 'Regex Scripts',
-    description: 'Create and manage regex find/replace scripts',
-    icon: Replace,
-    keywords: ['regex', 'find', 'replace', 'script', 'transform', 'filter', 'pattern', 'substitution'],
-    group: 'Panels',
-    run: () => openPanel('regex'),
-  },
-  {
-    id: 'panel-branches',
-    label: 'Branch Tree',
-    description: 'View and navigate the chat branch history',
-    icon: GitBranch,
-    keywords: ['branch', 'fork', 'history', 'tree', 'navigate', 'alternate'],
-    group: 'Panels',
-    run: () => openPanel('branches'),
-  },
-  {
-    id: 'panel-theme',
-    label: 'Theme',
-    description: 'Customize colors, accent, and visual style',
-    icon: Palette,
-    keywords: ['theme', 'colors', 'accent', 'appearance', 'dark', 'light', 'glass', 'radius'],
-    group: 'Panels',
-    run: () => openPanel('theme'),
-  },
-  {
-    id: 'panel-spindle',
-    label: 'Extensions',
-    description: 'Manage Spindle extensions',
-    icon: Puzzle,
-    keywords: ['extensions', 'spindle', 'plugins', 'addons', 'install'],
-    group: 'Panels',
-    run: () => openPanel('spindle'),
-  },
+  // Panels — auto-generated from the drawer tab registry
+  ...registryToCommands(DRAWER_TABS),
 
   // Settings
   {

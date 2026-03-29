@@ -108,7 +108,7 @@ export default function SwipeControls({ message, chatId, variant = 'default' }: 
   const disableRight = isStreaming || (message.swipe_id >= total - 1 && !isLastAssistantMessage)
 
   return (
-    <div className={clsx(styles.controls, variant === 'bubble' && styles.bubble)}>
+    <div data-component="SwipeControls" className={clsx(styles.controls, variant === 'bubble' && styles.bubble)}>
       <button
         type="button"
         className={styles.btn}

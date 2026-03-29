@@ -632,6 +632,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   return (
     <div
+      data-component="InputArea"
       ref={containerRef}
       className={styles.container}
       style={screenCornerRadius ? {

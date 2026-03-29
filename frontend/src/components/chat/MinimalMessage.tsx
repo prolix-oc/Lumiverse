@@ -55,6 +55,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
 
   return (
     <div
+      data-component="MinimalMessage"
+      data-part={isUser ? 'user' : 'character'}
       className={clsx(
         styles.card,
         isUser ? styles.user : styles.character,

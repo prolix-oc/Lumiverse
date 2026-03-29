@@ -24,7 +24,7 @@ export default function BubbleActions({ onEdit, onDelete, onToggleHidden, onFork
   }, [content])
 
   return (
-    <div className={className ? `${styles.pill} ${className}` : styles.pill}>
+    <div data-component="BubbleActions" className={className ? `${styles.pill} ${className}` : styles.pill}>
       <button type="button" onClick={handleCopy} title="Copy" aria-label="Copy">
         {copied ? <Check size={13} /> : <Copy size={13} />}
       </button>

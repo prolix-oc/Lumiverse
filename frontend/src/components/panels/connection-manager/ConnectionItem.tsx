@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link2, Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw } from 'lucide-react'
+import { Link2, Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
 import { openrouterApi, type OpenRouterCreditsInfo } from '@/api/openrouter'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
+import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import styles from './ConnectionItem.module.css'
 import clsx from 'clsx'
 
@@ -35,6 +36,7 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
   const [oauthLoading, setOauthLoading] = useState(false)
   const [credits, setCredits] = useState<OpenRouterCreditsInfo | null>(null)
   const [creditsLoading, setCreditsLoading] = useState(false)
+  const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
 
   const isOpenRouter = profile.provider === 'openrouter'
   const showCredits = isOpenRouter && isActive && profile.has_api_key && !editing
@@ -190,17 +192,26 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
               icon={oauthLoading ? <Spinner size={13} /> : <LogIn size={13} />}
             />
           )}
+          <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Edit" icon={<Edit3 size={13} />} />
           <Button
             size="icon-sm" variant="ghost"
-            className={clsx(testResult && (testResult.success ? styles.testSuccess : styles.testFail))}
-            onClick={handleTest}
-            title="Test connection"
-            disabled={testing}
-            icon={testing ? <Spinner size={13} /> : <Zap size={13} />}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              setMenuPos({ x: rect.right, y: rect.bottom + 4 })
+            }}
+            title="More actions"
+            icon={<MoreVertical size={13} />}
           />
-          <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Edit" icon={<Edit3 size={13} />} />
-          <Button size="icon-sm" variant="ghost" onClick={onDuplicate} title="Duplicate" icon={<Copy size={13} />} />
-          <Button size="icon-sm" variant="danger-ghost" onClick={onDelete} title="Delete" icon={<Trash2 size={13} />} />
+          <ContextMenu
+            position={menuPos}
+            onClose={() => setMenuPos(null)}
+            items={[
+              { key: 'test', label: testing ? 'Testing...' : 'Test connection', icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
+              { key: 'duplicate', label: 'Duplicate', icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
+              { key: 'div', type: 'divider' as const },
+              { key: 'delete', label: 'Delete', icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
+            ] satisfies ContextMenuEntry[]}
+          />
         </div>
       </div>
       {isOpenRouter && !profile.has_api_key && !editing && (

@@ -128,6 +128,45 @@ app.post("/restart", async (c) => {
   }
 });
 
+app.post("/cache/clear", async (c) => {
+  const ipcErr = requireIPC(c);
+  if (ipcErr) return ipcErr;
+
+  try {
+    const result = await operatorService.clearCache();
+    return c.json(result);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 502);
+  }
+});
+
+app.post("/rebuild", async (c) => {
+  const ipcErr = requireIPC(c);
+  if (ipcErr) return ipcErr;
+
+  try {
+    const result = await operatorService.rebuildFrontend();
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof OperationConflictError) {
+      return c.json({ error: err.message }, 409);
+    }
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 502);
+  }
+});
+
+app.post("/deps", async (c) => {
+  const ipcErr = requireIPC(c);
+  if (ipcErr) return ipcErr;
+
+  try {
+    const result = await operatorService.ensureDependencies();
+    return c.json(result);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 502);
+  }
+});
+
 app.post("/shutdown", async (c) => {
   const ipcErr = requireIPC(c);
   if (ipcErr) return ipcErr;

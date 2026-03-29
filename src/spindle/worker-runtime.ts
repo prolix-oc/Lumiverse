@@ -50,6 +50,7 @@ let oauthCallbackHandler:
   | ((params: Record<string, string>) => Promise<{ html?: string } | void>)
   | null = null;
 const frontendMessageHandlers = new Set<(payload: unknown, userId: string) => void>();
+const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
 const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
 const grantedPermissions = new Set<string>();
@@ -1140,6 +1141,21 @@ const spindleApi: SpindleAPI = {
     },
   },
 
+  commands: {
+    register(commands: any[]) {
+      post({ type: "commands_register", commands } as any);
+    },
+    unregister(commandIds?: string[]) {
+      post({ type: "commands_unregister", commandIds: commandIds ?? [] } as any);
+    },
+    onInvoked(handler: (commandId: string, context: any) => void | Promise<void>) {
+      commandInvokedHandlers.add(handler);
+      return () => {
+        commandInvokedHandlers.delete(handler);
+      };
+    },
+  },
+
   get manifest() {
     return manifest;
   },
@@ -1437,6 +1453,21 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
           requestId: msg.requestId,
           error: "No OAuth callback handler registered",
         });
+      }
+      break;
+    }
+
+    case "command_invoked": {
+      for (const handler of commandInvokedHandlers) {
+        try {
+          handler(msg.commandId, msg.context);
+        } catch (err: any) {
+          post({
+            type: "log",
+            level: "error",
+            message: `Command handler error (${msg.commandId}): ${err?.message ?? err}`,
+          } as any);
+        }
       }
       break;
     }

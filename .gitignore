@@ -47,6 +47,8 @@ Thumbs.db
 
 *.md
 !developer-docs/**/*.md
+!user-docs/**/*.md
+
 !LICENSE.md
 !README.md
 scripts/release.sh

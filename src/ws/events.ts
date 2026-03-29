@@ -93,6 +93,9 @@ export enum EventType {
   // Spindle permission changes (broadcast with extensionId so frontends can scope)
   SPINDLE_PERMISSION_CHANGED = "SPINDLE_PERMISSION_CHANGED",
 
+  // Spindle command palette commands
+  SPINDLE_COMMANDS_CHANGED = "SPINDLE_COMMANDS_CHANGED",
+
   // Import progress
   IMPORT_GALLERY_PROGRESS = "IMPORT_GALLERY_PROGRESS",
 

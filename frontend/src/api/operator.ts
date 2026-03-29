@@ -33,4 +33,7 @@ export const operatorApi = {
   toggleRemote: (enable: boolean) => post<RemoteToggleResult>('/operator/remote', { enable }),
   restart: () => post<OperationResult>('/operator/restart'),
   shutdown: () => post<OperationResult>('/operator/shutdown'),
+  clearCache: () => post<OperationResult>('/operator/cache/clear'),
+  rebuildFrontend: () => post<OperationResult>('/operator/rebuild'),
+  ensureDependencies: () => post<OperationResult>('/operator/deps'),
 }

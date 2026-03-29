@@ -163,6 +163,20 @@ export const wsHandler = upgradeWebSocket((c) => {
 
           host.sendFrontendMessage(data.payload, userId!);
         }
+
+        if (data.type === "SPINDLE_COMMAND_INVOKE") {
+          const extensionId = typeof data.extensionId === "string" ? data.extensionId : null;
+          const commandId = typeof data.commandId === "string" ? data.commandId : null;
+          if (!extensionId || !commandId || !userId) return;
+
+          const ext = managerSvc.getExtensionForUser(extensionId, userId, userRole);
+          if (!ext) return;
+
+          const host = getWorkerHost(extensionId);
+          if (!host) return;
+
+          host.invokeCommand(commandId, data.context ?? {}, userId);
+        }
       } catch {
         // Ignore malformed messages
       }

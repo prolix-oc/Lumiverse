@@ -9,6 +9,9 @@ import {
   WifiOff,
   Trash2,
   Loader2,
+  HardDrive,
+  PackageCheck,
+  Hammer,
 } from 'lucide-react'
 import { Toggle } from '@/components/shared/Toggle'
 import { spinClass } from '@/components/shared/Spinner'
@@ -21,7 +24,7 @@ import styles from './OperatorPanel.module.css'
 import clsx from 'clsx'
 
 /** Operations that cause the server to restart and require reconnection handling. */
-const RESTART_OPERATIONS = new Set(['updating', 'switching branch', 'restarting', 'toggling remote'])
+const RESTART_OPERATIONS = new Set(['updating', 'switching branch', 'restarting', 'toggling remote', 'rebuilding frontend'])
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -340,6 +343,38 @@ export default function OperatorPanel() {
     }
   }, [startRestartOperation])
 
+  const handleClearCache = useCallback(async () => {
+    setBusy('clearing cache')
+    try {
+      await operatorApi.clearCache()
+    } catch { /* handled by UI */ }
+    setBusy(null)
+  }, [])
+
+  const handleEnsureDeps = useCallback(async () => {
+    setBusy('installing dependencies')
+    try {
+      await operatorApi.ensureDependencies()
+    } catch { /* handled by UI */ }
+    setBusy(null)
+  }, [])
+
+  const handleRebuildFrontend = useCallback(() => {
+    setConfirm({
+      title: 'Rebuild Frontend',
+      message: 'This will delete the frontend build, rebuild it from source, and restart the server. Your browser will temporarily disconnect.',
+      variant: 'warning',
+      confirmText: 'Rebuild & Restart',
+      onConfirm: async () => {
+        setConfirm(null)
+        startRestartOperation('rebuilding frontend')
+        try {
+          await operatorApi.rebuildFrontend()
+        } catch { /* server will restart */ }
+      },
+    })
+  }, [startRestartOperation])
+
   // ── Render ──────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -435,6 +470,9 @@ export default function OperatorPanel() {
            effectiveBusy === 'restarting' ? 'Restarting server...' :
            effectiveBusy === 'shutting down' ? 'Shutting down...' :
            effectiveBusy === 'toggling remote' ? 'Toggling remote mode... Server will restart.' :
+           effectiveBusy === 'clearing cache' ? 'Clearing package cache...' :
+           effectiveBusy === 'installing dependencies' ? 'Installing dependencies...' :
+           effectiveBusy === 'rebuilding frontend' ? 'Rebuilding frontend... Server will restart.' :
            `${effectiveBusy}...`}
         </div>
       )}
@@ -492,6 +530,46 @@ export default function OperatorPanel() {
             >
               <PowerOff size={14} />
               Shut Down
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Maintenance */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Maintenance</span>
+        </div>
+        <div className={styles.sectionBody}>
+          {!ipcAvailable && (
+            <div className={styles.disabledHint}>
+              Runner IPC not available. Start Lumiverse with ./start.sh or bun run runner to enable maintenance tools.
+            </div>
+          )}
+          <div className={styles.controls}>
+            <button
+              className={styles.controlBtn}
+              disabled={!ipcAvailable || !!effectiveBusy}
+              onClick={handleClearCache}
+            >
+              <HardDrive size={14} />
+              Clear Package Cache
+            </button>
+            <button
+              className={styles.controlBtn}
+              disabled={!ipcAvailable || !!effectiveBusy}
+              onClick={handleEnsureDeps}
+            >
+              <PackageCheck size={14} />
+              Ensure Dependencies
+            </button>
+            <button
+              className={styles.controlBtn}
+              disabled={!ipcAvailable || !!effectiveBusy}
+              onClick={handleRebuildFrontend}
+            >
+              <Hammer size={14} />
+              Rebuild Frontend
             </button>
           </div>
         </div>

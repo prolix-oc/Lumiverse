@@ -616,6 +616,7 @@ export default function MessageContent({
   return (
     <>
       <div
+        data-component="MessageContent"
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}
       >

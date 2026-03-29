@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ImageIcon, Trash2, Edit3, Zap, Check, Loader, Star, Copy } from 'lucide-react'
+import { ImageIcon, Trash2, Edit3, Zap, Check, Loader, Star, Copy, MoreVertical } from 'lucide-react'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import type { ImageGenConnectionProfile, ImageGenProviderInfo, CreateImageGenConnectionInput } from '@/types/api'
 import ImageGenConnectionForm from './ImageGenConnectionForm'
+import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
 
@@ -26,6 +27,7 @@ export default function ImageGenConnectionItem({ profile, isActive, providers, o
   const [editing, setEditing] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
 
   useEffect(() => {
     if (!testResult) return
@@ -96,24 +98,30 @@ export default function ImageGenConnectionItem({ profile, isActive, providers, o
           {isActive && <Check size={14} className={styles.activeCheck} />}
         </button>
         <div className={styles.itemActions}>
-          <button
-            type="button"
-            className={clsx(styles.actionBtn, testResult && (testResult.success ? styles.testSuccess : styles.testFail))}
-            onClick={handleTest}
-            title="Test connection"
-            disabled={testing}
-          >
-            {testing ? <Loader size={13} className={styles.spinner} /> : <Zap size={13} />}
-          </button>
           <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title="Edit">
             <Edit3 size={13} />
           </button>
-          <button type="button" className={styles.actionBtn} onClick={onDuplicate} title="Duplicate">
-            <Copy size={13} />
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              setMenuPos({ x: rect.right, y: rect.bottom + 4 })
+            }}
+            title="More actions"
+          >
+            <MoreVertical size={13} />
           </button>
-          <button type="button" className={clsx(styles.actionBtn, styles.deleteBtn)} onClick={onDelete} title="Delete">
-            <Trash2 size={13} />
-          </button>
+          <ContextMenu
+            position={menuPos}
+            onClose={() => setMenuPos(null)}
+            items={[
+              { key: 'test', label: testing ? 'Testing...' : 'Test connection', icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
+              { key: 'duplicate', label: 'Duplicate', icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
+              { key: 'div', type: 'divider' as const },
+              { key: 'delete', label: 'Delete', icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
+            ] satisfies ContextMenuEntry[]}
+          />
         </div>
       </div>
       {testResult && (

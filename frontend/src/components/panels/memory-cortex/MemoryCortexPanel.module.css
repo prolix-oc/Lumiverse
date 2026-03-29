@@ -752,3 +752,177 @@
   color: var(--lumiverse-text-muted);
   font-weight: 600;
 }
+
+/* ── Heuristics Engine — Entity indicators ─────────────────── */
+
+.provisionalBadge {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--lumiverse-text-dim) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-text-dim) 20%, transparent);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--lumiverse-text-dim);
+}
+
+.entityCardProvisional {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+.factStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 500;
+}
+
+.factStatusNever {
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 25%, transparent);
+  color: #d97706;
+}
+
+.factStatusEmpty {
+  background: color-mix(in srgb, var(--lumiverse-danger, #e53e3e) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #e53e3e) 20%, transparent);
+  color: var(--lumiverse-danger, #e53e3e);
+}
+
+/* Salience breakdown — tiny 3-segment bar */
+
+.salienceBar {
+  display: flex;
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--lumiverse-border) 50%, transparent);
+  flex-shrink: 0;
+}
+
+.salienceBarSegment {
+  height: 100%;
+  min-width: 1px;
+  transition: width 0.2s ease;
+}
+
+.salienceBarMention {
+  background: var(--lumiverse-primary);
+}
+
+.salienceBarArc {
+  background: #8b5cf6;
+}
+
+.salienceBarGraph {
+  background: #06b6d4;
+}
+
+.salienceBarTooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--lumiverse-text-muted);
+}
+
+.lastSeen {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+}
+
+/* ── Heuristics Engine — Relation indicators ───────────────── */
+
+.contradictionBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.contradictionComplex {
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 25%, transparent);
+  color: #d97706;
+}
+
+.contradictionSuspect {
+  background: color-mix(in srgb, var(--lumiverse-danger, #e53e3e) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #e53e3e) 20%, transparent);
+  color: var(--lumiverse-danger, #e53e3e);
+}
+
+.contradictionTemporal {
+  background: color-mix(in srgb, var(--lumiverse-text-dim) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-text-dim) 20%, transparent);
+  color: var(--lumiverse-text-dim);
+  text-decoration: line-through;
+}
+
+.edgeSalienceBar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.edgeSalienceTrack {
+  width: 40px;
+  height: 3px;
+  border-radius: 1.5px;
+  background: color-mix(in srgb, var(--lumiverse-border) 60%, transparent);
+  overflow: hidden;
+}
+
+.edgeSalienceFill {
+  height: 100%;
+  border-radius: 1.5px;
+  background: var(--lumiverse-primary);
+  transition: width 0.2s ease;
+}
+
+.edgeSalienceLabel {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  min-width: 28px;
+  text-align: right;
+}
+
+.sentimentRangeLabel {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+  font-family: monospace;
+}
+
+.labelAliasList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.labelAlias {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--lumiverse-fill-subtle);
+  font-size: 9.5px;
+  color: var(--lumiverse-text-dim);
+}
+
+.relationMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px 6px;
+  border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 40%, transparent);
+}

@@ -26,6 +26,9 @@ export type RelationType =
   | "serves"
   | "custom";
 export type RelationStatus = "active" | "broken" | "dormant" | "former";
+export type ContradictionFlag = "none" | "temporal" | "complex" | "suspect";
+export type FactExtractionStatus = "never" | "attempted_empty" | "ok";
+export type EntityConfidence = "confirmed" | "provisional";
 
 /** SQLite row shape for memory_entities */
 export interface MemoryEntityRow {
@@ -48,6 +51,21 @@ export interface MemoryEntityRow {
   metadata: string; // JSON object
   created_at: number;
   updated_at: number;
+  // Heuristics engine additions
+  fact_extraction_status: string; // FactExtractionStatus
+  fact_extraction_last_attempt: number | null;
+  salience_breakdown: string; // JSON: SalienceBreakdown
+  last_mention_timestamp: number | null;
+  recent_mention_count: number;
+  confidence: string; // EntityConfidence
+}
+
+/** Salience breakdown — decomposed salience inputs for transparent scoring */
+export interface SalienceBreakdown {
+  mentionComponent: number;
+  arcComponent: number;
+  graphComponent: number;
+  total: number;
 }
 
 /** Service-layer entity DTO */
@@ -71,6 +89,13 @@ export interface MemoryEntity {
   metadata: Record<string, any>;
   createdAt: number;
   updatedAt: number;
+  // Heuristics engine additions
+  factExtractionStatus: FactExtractionStatus;
+  factExtractionLastAttempt: number | null;
+  salienceBreakdown: SalienceBreakdown;
+  lastMentionTimestamp: number | null;
+  recentMentionCount: number;
+  confidence: EntityConfidence;
 }
 
 /** SQLite row shape for memory_mentions */
@@ -114,6 +139,20 @@ export interface MemoryRelationRow {
   metadata: string; // JSON object
   created_at: number;
   updated_at: number;
+  // Heuristics engine additions
+  contradiction_flag: string; // ContradictionFlag
+  contradiction_peer_id: string | null;
+  sentiment_range: string | null; // JSON: [float, float]
+  superseded_by: string | null;
+  arc_ids: string; // JSON array
+  first_seen_arc_id: string | null;
+  last_seen_arc_id: string | null;
+  last_evidence_timestamp: number | null;
+  decay_rate: number;
+  edge_salience: number;
+  label_aliases: string; // JSON array
+  canonical_edge_id: string | null;
+  merged_into: string | null;
 }
 
 /** Service-layer relation DTO */
@@ -133,6 +172,20 @@ export interface MemoryRelation {
   metadata: Record<string, any>;
   createdAt: number;
   updatedAt: number;
+  // Heuristics engine additions
+  contradictionFlag: ContradictionFlag;
+  contradictionPeerId: string | null;
+  sentimentRange: [number, number] | null;
+  supersededBy: string | null;
+  arcIds: string[];
+  firstSeenArcId: string | null;
+  lastSeenArcId: string | null;
+  lastEvidenceTimestamp: number | null;
+  decayRate: number;
+  edgeSalience: number;
+  labelAliases: string[];
+  canonicalEdgeId: string | null;
+  mergedInto: string | null;
 }
 
 // ─── Salience Types ────────────────────────────────────────────
@@ -259,6 +312,14 @@ export interface ExtractedEntity {
   aliases: string[];
   confidence: number;
   role?: MentionRole;
+  /** Provisional entities from NP chunker need corroboration before promotion */
+  provisional?: boolean;
+}
+
+/** Result from the NP chunker (Phase 1 only) */
+export interface NPCandidate {
+  text: string;
+  isSubjectPosition: boolean;
 }
 
 export interface ExtractedRelationship {

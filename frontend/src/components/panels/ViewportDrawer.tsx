@@ -1,92 +1,13 @@
-import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import {
-  User, Drama, Wand2, Link2, Package, Zap,
-  Users, PenTool, Sparkles, Brain, FileText, ScrollText,
-  MessageCircle, Image, Palette, Settings, Library, Puzzle,
-  GitFork, Globe, MessageSquareReply, GitBranch, Wallpaper, Replace
-} from 'lucide-react'
-import { IconUsersGroup } from '@tabler/icons-react'
+import { Sparkles, Settings, Puzzle } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import { CloseButton } from '@/components/shared/CloseButton'
-import CharacterProfile from './CharacterProfile'
-import CharacterBrowser from './CharacterBrowser'
-import PersonaManager from './PersonaManager'
-import ConnectionManager from './ConnectionManager'
-import ImageGenConnectionManager from './image-gen-connections/ImageGenConnectionManager'
-import PresetManager from './PresetManager'
-import LoomBuilder from './LoomBuilder'
-import LumiBuilder from './LumiBuilder'
-import SummaryEditor from './SummaryEditor'
-import ThemePanel from './ThemePanel'
-import WorldBookPanel from './world-book/WorldBookPanel'
-import SpindlePanel from './SpindlePanel'
-import PackBrowser from './pack-browser/PackBrowser'
-import ContentWorkshop from './creator-workshop/ContentWorkshop'
-import CouncilManager from './CouncilManager'
-import CouncilFeedback from './CouncilFeedback'
-import WorldInfoFeedback from './WorldInfoFeedback'
-import OOCPanel from './OOCPanel'
-import PromptPanel from './PromptPanel'
-import ImageGenPanel from './ImageGenPanel'
-import WallpaperPanel from './WallpaperPanel'
-import BranchTreePanel from './BranchTreePanel'
-import RegexPanel from './RegexPanel'
-import MemoryCortexPanel from './memory-cortex/MemoryCortexPanel'
+import { DRAWER_TABS, adaptExtensionTabs } from '@/lib/drawer-tab-registry'
 import styles from './ViewportDrawer.module.css'
 import clsx from 'clsx'
-
-interface Tab {
-  id: string
-  icon: any
-  label: string
-  component: () => ReactNode
-}
-
-function StubPanel({ title }: { title: string }) {
-  return (
-    <div className={styles.stubPanel}>
-      <p>{title}</p>
-      <span>Coming soon</span>
-    </div>
-  )
-}
-
-const TABS: Tab[] = [
-  { id: 'profile', icon: User, label: 'Profile', component: () => <CharacterProfile /> },
-  { id: 'presets', icon: Wand2, label: 'Reasoning', component: () => <PresetManager /> },
-  { id: 'loom', icon: GitFork, label: 'Loom', component: () => <LoomBuilder compact /> },
-  { id: 'lumi', icon: Zap, label: 'Lumi', component: () => <LumiBuilder compact /> },
-  { id: 'connections', icon: Link2, label: 'Connections', component: () => (
-    <>
-      <ConnectionManager />
-      <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
-        <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>Image Generation</h3>
-        <ImageGenConnectionManager />
-      </div>
-    </>
-  ) },
-  { id: 'browser', icon: Package, label: 'Browser', component: () => <PackBrowser /> },
-  { id: 'characters', icon: Users, label: 'Characters', component: () => <CharacterBrowser /> },
-  { id: 'personas', icon: Drama, label: 'Personas', component: () => <PersonaManager /> },
-  { id: 'lorebook', icon: Library, label: 'Lorebook', component: () => <WorldBookPanel /> },
-  { id: 'cortex', icon: Brain, label: 'Memory', component: () => <MemoryCortexPanel /> },
-  { id: 'create', icon: PenTool, label: 'Create', component: () => <ContentWorkshop /> },
-  { id: 'ooc', icon: MessageCircle, label: 'OOC', component: () => <OOCPanel /> },
-  { id: 'prompt', icon: FileText, label: 'Prompt', component: () => <PromptPanel /> },
-  { id: 'council', icon: IconUsersGroup, label: 'Council', component: () => <CouncilManager /> },
-  { id: 'summary', icon: ScrollText, label: 'Summary', component: () => <SummaryEditor /> },
-{ id: 'feedback', icon: MessageSquareReply, label: 'Feedback', component: () => <CouncilFeedback /> },
-  { id: 'worldinfo', icon: Globe, label: 'World Info', component: () => <WorldInfoFeedback /> },
-  { id: 'imagegen', icon: Image, label: 'Image Gen', component: () => <ImageGenPanel /> },
-  { id: 'wallpaper', icon: Wallpaper, label: 'Wallpaper', component: () => <WallpaperPanel /> },
-  { id: 'regex', icon: Replace, label: 'Regex', component: () => <RegexPanel /> },
-  { id: 'branches', icon: GitBranch, label: 'Branches', component: () => <BranchTreePanel /> },
-  { id: 'theme', icon: Palette, label: 'Theme', component: () => <ThemePanel /> },
-  { id: 'spindle', icon: Puzzle, label: 'Extensions', component: () => <SpindlePanel /> },
-]
 
 function ExtensionTabContent({ tabId }: { tabId: string }) {
   const drawerTabs = useStore((s) => s.drawerTabs)
@@ -141,17 +62,16 @@ export default function ViewportDrawer() {
     }
   }, [updateTabListScroll])
 
-  // Merge built-in tabs with dynamic extension tabs
-  const extensionTabs: Tab[] = drawerTabs.map((dt) => ({
-    id: dt.id,
-    icon: Puzzle, // fallback; we render custom icons separately
-    label: dt.title,
-    component: () => <ExtensionTabContent tabId={dt.id} />,
-  }))
+  const showTabLabels = drawerSettings.showTabLabels ?? false
 
+  // Merge built-in tabs with dynamic extension tabs
+  const extensionEntries = adaptExtensionTabs(drawerTabs).map((entry) => ({
+    ...entry,
+    component: () => <ExtensionTabContent tabId={entry.id} />,
+  }))
   const activeTab = drawerTab || 'profile'
-  const allTabs = [...TABS, ...extensionTabs]
-  const activeTabConfig = allTabs.find((t) => t.id === activeTab) || TABS.find((t) => t.id === activeTab)
+  const allTabs = [...DRAWER_TABS, ...extensionEntries]
+  const activeTabConfig = allTabs.find((t) => t.id === activeTab) || DRAWER_TABS[0]
 
   const handleTabClick = useCallback(
     (tabId: string) => {
@@ -219,17 +139,18 @@ export default function ViewportDrawer() {
               tabListScroll.down && styles.tabListScrollDown,
             )}>
               <div className={styles.tabList} ref={tabListRef}>
-                {TABS.map((tab) => {
-                  const Icon = tab.icon
+                {DRAWER_TABS.map((tab) => {
+                  const Icon = tab.tabIcon
                   return (
                     <button
                       key={tab.id}
                       type="button"
-                      className={clsx(styles.tabBtn, activeTab === tab.id && styles.tabBtnActive)}
+                      className={clsx(styles.tabBtn, showTabLabels && styles.tabBtnLabeled, activeTab === tab.id && styles.tabBtnActive)}
                       onClick={() => handleTabClick(tab.id)}
-                      title={tab.label}
+                      title={tab.tabName}
                     >
                       <Icon size={20} strokeWidth={1.5} />
+                      {showTabLabels && <span className={styles.tabLabel}>{tab.shortName}</span>}
                     </button>
                   )
                 })}
@@ -237,27 +158,31 @@ export default function ViewportDrawer() {
                 {drawerTabs.length > 0 && (
                   <>
                     <div className={styles.tabDivider} />
-                    {drawerTabs.map((dt) => (
-                      <button
-                        key={dt.id}
-                        type="button"
-                        className={clsx(styles.tabBtn, styles.tabBtnExtension, activeTab === dt.id && styles.tabBtnActive)}
-                        onClick={() => handleTabClick(dt.id)}
-                        title={dt.title}
-                      >
-                        {dt.iconSvg ? (
-                          <span
-                            className={styles.extIconSvg}
-                            dangerouslySetInnerHTML={{ __html: dt.iconSvg }}
-                          />
-                        ) : dt.iconUrl ? (
-                          <img src={dt.iconUrl} alt="" width={20} height={20} className={styles.extIconImg} />
-                        ) : (
-                          <Puzzle size={20} strokeWidth={1.5} />
-                        )}
-                        {dt.badge && <span className={styles.tabBadge}>{dt.badge}</span>}
-                      </button>
-                    ))}
+                    {drawerTabs.map((dt) => {
+                      const extEntry = extensionEntries.find((e) => e.id === dt.id)
+                      return (
+                        <button
+                          key={dt.id}
+                          type="button"
+                          className={clsx(styles.tabBtn, styles.tabBtnExtension, showTabLabels && styles.tabBtnLabeled, activeTab === dt.id && styles.tabBtnActive)}
+                          onClick={() => handleTabClick(dt.id)}
+                          title={dt.title}
+                        >
+                          {dt.iconSvg ? (
+                            <span
+                              className={styles.extIconSvg}
+                              dangerouslySetInnerHTML={{ __html: dt.iconSvg }}
+                            />
+                          ) : dt.iconUrl ? (
+                            <img src={dt.iconUrl} alt="" width={20} height={20} className={styles.extIconImg} />
+                          ) : (
+                            <Puzzle size={20} strokeWidth={1.5} />
+                          )}
+                          {showTabLabels && extEntry && <span className={styles.tabLabel}>{extEntry.shortName}</span>}
+                          {dt.badge && <span className={styles.tabBadge}>{dt.badge}</span>}
+                        </button>
+                      )
+                    })}
                   </>
                 )}
               </div>
@@ -278,12 +203,12 @@ export default function ViewportDrawer() {
           <div className={styles.panel}>
             <div className={styles.panelHeader}>
               <h2 className={styles.panelTitle}>
-                {activeTab === 'profile' && isGroupChat ? 'Group' : (activeTabConfig?.label || 'Panel')}
+                {activeTab === 'profile' && isGroupChat ? 'Group' : (activeTabConfig?.tabHeaderTitle ?? activeTabConfig?.tabName ?? 'Panel')}
               </h2>
               <CloseButton onClick={closeDrawer} />
             </div>
             <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)}>
-              <ErrorBoundary label={activeTabConfig?.label}>
+              <ErrorBoundary label={activeTabConfig?.tabName}>
                 {activeTabConfig?.component()}
               </ErrorBoundary>
             </div>

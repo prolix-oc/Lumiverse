@@ -1,6 +1,9 @@
+import { join } from "path";
+import { existsSync, rmSync } from "fs";
 import { sendToServer, stopServer, startServer, restartServer } from "./server-manager.js";
 import { checkForUpdates, applyUpdate, switchBranch } from "./git-ops.js";
 import { readEnvConfig, writeTrustAnyOrigin } from "./env-config.js";
+import { PROJECT_ROOT } from "./lib/constants.js";
 
 /** Cached update state from the last check. */
 let lastUpdateState = { available: false, commitsBehind: 0, latestMessage: "" };
@@ -154,6 +157,96 @@ export async function handleIPCMessage(msg: any): Promise<void> {
       await new Promise((r) => setTimeout(r, 100));
       await stopServer();
       process.exit(0);
+    }
+
+    case "clear-cache": {
+      try {
+        progress(id, "clear-cache", "Clearing package cache...");
+        const proc = Bun.spawn(["bun", "pm", "cache", "rm"], {
+          cwd: PROJECT_ROOT,
+          stdout: "ignore",
+          stderr: "pipe",
+        });
+        const stderr = await new Response(proc.stderr).text();
+        const code = await proc.exited;
+        if (code !== 0) {
+          respond(id, false, undefined, stderr.trim() || "Cache clear failed");
+        } else {
+          respond(id, true, { message: "Package cache cleared" });
+        }
+      } catch (err) {
+        respond(id, false, undefined, err instanceof Error ? err.message : "Cache clear failed");
+      }
+      break;
+    }
+
+    case "ensure-deps": {
+      try {
+        progress(id, "ensure-deps", "Installing backend dependencies...");
+        const backendInstall = Bun.spawn(["bun", "install"], {
+          cwd: PROJECT_ROOT,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await new Response(backendInstall.stdout).text();
+        await backendInstall.exited;
+
+        progress(id, "ensure-deps", "Installing frontend dependencies...");
+        const frontendDir = join(PROJECT_ROOT, "frontend");
+        const frontendInstall = Bun.spawn(["bun", "install"], {
+          cwd: frontendDir,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await new Response(frontendInstall.stdout).text();
+        await frontendInstall.exited;
+
+        respond(id, true, { message: "Dependencies installed successfully" });
+      } catch (err) {
+        respond(id, false, undefined, err instanceof Error ? err.message : "Install failed");
+      }
+      break;
+    }
+
+    case "rebuild-frontend": {
+      if (operationInProgress) {
+        respond(id, false, undefined, `Operation '${operationInProgress}' already in progress`);
+        break;
+      }
+      operationInProgress = "rebuild";
+      try {
+        const frontendDir = join(PROJECT_ROOT, "frontend");
+        const distDir = join(frontendDir, "dist");
+
+        progress(id, "rebuild", "Rebuilding frontend...");
+        await stopServer();
+
+        if (existsSync(distDir)) {
+          rmSync(distDir, { recursive: true, force: true });
+        }
+
+        const buildProc = Bun.spawn(["bun", "run", "build"], {
+          cwd: frontendDir,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const buildOut = await new Response(buildProc.stdout).text();
+        const buildErr = await new Response(buildProc.stderr).text();
+        const buildCode = await buildProc.exited;
+
+        if (buildCode !== 0) {
+          console.error(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`);
+        }
+
+        startServer(isDev);
+        // Response goes to new server process after restart
+      } catch (err) {
+        // Try to restart anyway
+        try { startServer(isDev); } catch {}
+      } finally {
+        operationInProgress = null;
+      }
+      break;
     }
 
     default:

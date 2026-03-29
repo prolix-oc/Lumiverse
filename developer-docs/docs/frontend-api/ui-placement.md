@@ -6,11 +6,17 @@ Beyond the basic `ctx.ui.mount()` for fixed mount points, extensions can request
 
 Register a tab in the ViewportDrawer sidebar. Max 4 per extension, 8 global.
 
+Drawer tabs are managed by Lumiverse's central tab registry. When you register a tab, it automatically appears in the sidebar **and** the command palette (`Ctrl+K`). The metadata you provide controls how the tab looks and how users find it.
+
 ```ts
 const tab = ctx.ui.registerDrawerTab({
-  id: 'stats',           // unique within your extension
-  title: 'My Stats',
-  iconSvg: '<svg>...</svg>',  // 20x20 inline SVG
+  id: 'stats',
+  title: 'Character Stats',
+  shortName: 'Stats',                        // sidebar icon label (max ~8 chars)
+  description: 'View character performance metrics and trends',  // command palette subtitle
+  keywords: ['analytics', 'metrics', 'data', 'charts'],         // fuzzy search terms
+  headerTitle: 'Stats',                       // panel header (shorter than full title)
+  iconSvg: '<svg>...</svg>',                  // 20x20 inline SVG
 })
 
 // Render into the tab's content area
@@ -20,6 +26,9 @@ tab.root.appendChild(h2)
 
 // Update badge
 tab.setBadge('3')
+
+// Update the sidebar label at runtime
+tab.setShortName('Stats!')
 
 // Programmatically switch to this tab
 tab.activate()
@@ -32,6 +41,43 @@ const unsub = tab.onActivate(() => {
 // Cleanup
 tab.destroy()
 ```
+
+### SpindleDrawerTabOptions
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `id` | `string` | *required* | Unique identifier within your extension |
+| `title` | `string` | *required* | Full display title. Shown in the panel header and command palette listing. |
+| `shortName` | `string` | truncated `title` | Short label rendered beneath the sidebar icon. Keep to ~8 characters. Longer values are truncated with an ellipsis. |
+| `description` | `string` | `"Open {title} extension tab"` | One-line description shown below the title in the command palette. |
+| `keywords` | `string[]` | `[]` | Additional terms for command palette fuzzy search. Your extension name is always included automatically. |
+| `headerTitle` | `string` | `title` | Title shown in the panel header navbar. Useful when the header should be shorter than the full command palette entry. |
+| `iconSvg` | `string` | — | Inline SVG string for the tab icon. Rendered at 20x20. Sanitized via DOMPurify. |
+| `iconUrl` | `string` | — | URL to an icon image (16x16 or 24x24). Mutually exclusive with `iconSvg`. |
+
+### SpindleDrawerTabHandle
+
+| Method / Property | Returns | Description |
+|---|---|---|
+| `root` | `HTMLElement` | The tab's content container. Render your UI into this element. |
+| `tabId` | `string` | The scoped tab ID assigned by the host. |
+| `setTitle(title)` | `void` | Update the full title (affects command palette and panel header). |
+| `setShortName(shortName)` | `void` | Update the sidebar icon label. |
+| `setBadge(text)` | `void` | Show a badge next to the tab icon. Pass `null` to clear. |
+| `activate()` | `void` | Programmatically switch the drawer to this tab. |
+| `destroy()` | `void` | Remove the tab and all event listeners. |
+| `onActivate(handler)` | `() => void` | Register a callback fired when the user switches to this tab. Returns an unsubscribe function. |
+
+### Command Palette Integration
+
+Every registered drawer tab is automatically available in the command palette. Users can open your tab by pressing `Ctrl+K` (or `Cmd+K`) and typing any of these:
+
+- The tab `title` or `shortName`
+- Any word from `description`
+- Any entry in `keywords`
+- Your extension's identifier
+
+No extra code needed. The registry handles the wiring.
 
 ## Float Widgets (requires `ui_panels`)
 

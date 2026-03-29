@@ -231,6 +231,7 @@ export interface ConnectionTestResult {
 
 export interface ConnectionModelsResult {
   models: string[]
+  model_labels?: Record<string, string>
   provider: string
   error?: string
 }

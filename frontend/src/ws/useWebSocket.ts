@@ -462,6 +462,14 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.SPINDLE_COMMANDS_CHANGED, (payload: { extensionId: string; extensionName: string; commands: Array<{ id: string; label: string; description: string; keywords?: string[]; scope?: 'global' | 'chat' | 'chat-idle' | 'landing' | 'character' }> }) => {
+        store.getState().setExtensionCommands({
+          extensionId: payload.extensionId,
+          extensionName: payload.extensionName,
+          commands: payload.commands,
+        })
+      }),
+
       // Legacy/event-bus bridge for message tag intercept notifications.
       // Some extensions emit MESSAGE_TAG_INTERCEPTED over WS and expect it
       // on the backend-message channel (ctx.onBackendMessage).

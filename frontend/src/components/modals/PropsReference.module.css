@@ -1,0 +1,95 @@
+.panel {
+  border-top: 1px solid var(--lumiverse-border);
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--lumiverse-bg);
+  flex-shrink: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  background: var(--lumiverse-bg);
+  z-index: 1;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.headerLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--lumiverse-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chevron {
+  transition: transform var(--lumiverse-transition-fast);
+  color: var(--lumiverse-text-dim);
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.list {
+  padding: 4px 12px 8px;
+}
+
+.group {
+  margin-bottom: 2px;
+}
+
+.propRow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.propName {
+  font-family: var(--lumiverse-font-mono);
+  font-weight: 500;
+  color: var(--lumiverse-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.propType {
+  font-family: var(--lumiverse-font-mono);
+  font-size: 10px;
+  color: var(--lumiverse-text-hint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.propDesc {
+  color: var(--lumiverse-text-dim);
+  font-size: 10px;
+}
+
+.childRow {
+  padding-left: 14px;
+}
+
+.childRow .propName {
+  color: var(--lumiverse-text-muted);
+  font-weight: 400;
+}
+
+.emptyNote {
+  padding: 8px 0;
+  font-size: 11px;
+  color: var(--lumiverse-text-hint);
+  font-style: italic;
+}

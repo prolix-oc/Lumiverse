@@ -228,6 +228,7 @@ export default function ChatView() {
 
   return (
     <div
+      data-component="ChatView"
       className={clsx(
         styles.container,
         isStreaming && styles.streaming,

@@ -277,6 +277,13 @@ export interface WallpaperSettings {
   fit: 'cover' | 'contain' | 'fill'
 }
 
+// ---- Custom CSS ----
+export interface CustomCSSSettings {
+  css: string
+  enabled: boolean
+  revision: number
+}
+
 // ---- Settings Slice ----
 export interface SettingsSlice {
   landingPageChatsDisplayed: number
@@ -316,9 +323,18 @@ export interface SettingsSlice {
   wallpaper: WallpaperSettings
   thumbnailSettings: { smallSize: number, largeSize: number }
   pushNotificationPreferences: { enabled: boolean, events: { generation_ended: boolean, generation_error: boolean } }
+  customCSS: CustomCSSSettings
+  componentOverrides: Record<string, import('@/lib/componentOverrides').ComponentOverride>
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
   setTheme: (theme: ThemeConfig | null) => void
+  setCustomCSS: (css: string) => void
+  toggleCustomCSS: (enabled: boolean) => void
+  setComponentCSS: (componentName: string, css: string) => void
+  setComponentTSX: (componentName: string, tsx: string) => void
+  toggleComponentOverride: (componentName: string, enabled: boolean) => void
+  resetAllOverrides: () => void
+  applyThemePack: (pack: import('@/lib/themePack').ThemePack) => void
   loadSettings: () => Promise<void>
 }
 
@@ -331,6 +347,7 @@ export interface DrawerSettings {
   tabSize: 'large' | 'compact'
   panelWidthMode: 'default' | 'stChat' | 'custom'
   customPanelWidth: number
+  showTabLabels: boolean
 }
 
 // ---- Loom Registry Entry ----
@@ -690,6 +707,7 @@ import type {
   DockPanelState,
   AppMountState,
   InputBarActionState,
+  ExtensionCommandState,
 } from '@/store/slices/spindle-placement'
 
 export interface SpindlePlacementSlice {
@@ -698,11 +716,12 @@ export interface SpindlePlacementSlice {
   dockPanels: DockPanelState[]
   appMounts: AppMountState[]
   inputBarActions: InputBarActionState[]
+  extensionCommands: ExtensionCommandState[]
   hiddenPlacements: string[]
 
   registerDrawerTab: (tab: DrawerTabState) => void
   unregisterDrawerTab: (tabId: string) => void
-  updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'badge'>>) => void
+  updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => void
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void
@@ -719,6 +738,9 @@ export interface SpindlePlacementSlice {
   registerInputBarAction: (action: InputBarActionState) => void
   unregisterInputBarAction: (actionId: string) => void
   updateInputBarAction: (actionId: string, updates: Partial<Pick<InputBarActionState, 'label' | 'enabled'>>) => void
+
+  setExtensionCommands: (entry: ExtensionCommandState) => void
+  clearExtensionCommands: (extensionId: string) => void
 
   removeAllByExtension: (extensionId: string) => void
   togglePlacementVisibility: (placementId: string) => void

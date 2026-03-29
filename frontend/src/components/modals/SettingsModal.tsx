@@ -273,6 +273,13 @@ function DisplaySettings() {
         </div>
       </div>
 
+      <Toggle.Checkbox
+        checked={drawerSettings.showTabLabels ?? false}
+        onChange={(checked) => updateDrawer({ showTabLabels: checked })}
+        label="Show tab labels"
+        hint="Display short names below each tab icon in the sidebar"
+      />
+
       <div className={styles.field}>
         <label className={styles.fieldLabel}>PANEL WIDTH</label>
         <div className={styles.segmented}>

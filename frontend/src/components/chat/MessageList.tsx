@@ -201,7 +201,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [visibleMessages.length, glassEnabled])
 
   return (
-    <div className={`${styles.list} ${revealed ? styles.listRevealed : styles.listHidden}`} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
+    <div data-component="MessageList" className={`${styles.list} ${revealed ? styles.listRevealed : styles.listHidden}`} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
       {hasMore && <div ref={sentinelRef} className={styles.sentinel} />}
       {loadingOlder && (

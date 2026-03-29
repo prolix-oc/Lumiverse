@@ -3,10 +3,10 @@ import {
   Brain, Users, Network, ChevronDown, ChevronRight, ChevronLeft, RefreshCw,
   MapPin, Swords, Package, Landmark, Lightbulb, Calendar,
   Heart, Shield, Zap, BookOpen, BarChart3, Search, ArrowRight,
-  Palette, Trash2,
+  Palette, Trash2, AlertTriangle, FileQuestion, Clock,
 } from "lucide-react";
 import { useStore } from "@/store";
-import { memoryCortexApi, type CortexEntity, type CortexUsageStats } from "@/api/memory-cortex";
+import { memoryCortexApi, type CortexEntity, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
 import styles from "./MemoryCortexPanel.module.css";
 import clsx from "clsx";
 
@@ -207,6 +207,16 @@ export default function MemoryCortexPanel() {
 
 // ─── Entity Card ───────────────────────────────────────────────
 
+/** Format a timestamp as relative time ("2m ago", "3h ago", "5d ago") */
+function relativeTime(timestamp: number | null): string | null {
+  if (!timestamp) return null;
+  const diff = Math.floor(Date.now() / 1000) - timestamp;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 function EntityCard({
   entity,
   expanded,
@@ -220,15 +230,30 @@ function EntityCard({
 }) {
   const Icon = ENTITY_ICONS[entity.entityType] || Lightbulb;
   const statusColor = STATUS_COLORS[entity.status] || STATUS_COLORS.unknown;
+  const isProvisional = entity.confidence === "provisional";
 
   // Top emotional tags
-  const topEmotions = Object.entries(entity.emotionalValence)
+  const topEmotions = Object.entries(entity.emotionalValence || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 3)
     .map(([tag]) => tag);
 
+  // Salience breakdown for mini bar
+  const bd = entity.salienceBreakdown;
+  const bdTotal = bd ? (bd.mentionComponent + bd.arcComponent + bd.graphComponent) || 1 : 0;
+
+  // Fact extraction status indicator
+  const needsFacts = entity.factExtractionStatus !== "ok" && entity.salienceAvg > 0.45;
+
+  // Last seen
+  const lastSeen = relativeTime(entity.lastMentionTimestamp ?? entity.lastSeenAt);
+
   return (
-    <div className={clsx(styles.entityCard, entity.status === "inactive" && styles.entityCardArchived)}>
+    <div className={clsx(
+      styles.entityCard,
+      entity.status === "inactive" && styles.entityCardArchived,
+      isProvisional && styles.entityCardProvisional,
+    )}>
       <div className={styles.entityHeader} role="button" tabIndex={0} onClick={onToggle}>
         <div className={styles.entityIcon}>
           <Icon size={14} />
@@ -237,14 +262,29 @@ function EntityCard({
           <div className={styles.entityName}>
             {entity.name}
             <span className={styles.entityStatus} style={{ background: statusColor }} />
+            {isProvisional && <span className={styles.provisionalBadge}>provisional</span>}
+            {needsFacts && (
+              <span className={clsx(styles.factStatusBadge, entity.factExtractionStatus === "never" ? styles.factStatusNever : styles.factStatusEmpty)} title={entity.factExtractionStatus === "never" ? "No facts extracted yet" : "Fact extraction found nothing — will retry"}>
+                <FileQuestion size={9} />
+                {entity.factExtractionStatus === "never" ? "no facts" : "retry"}
+              </span>
+            )}
           </div>
           <div className={styles.entityMeta}>
             {entity.entityType} &middot; {entity.mentionCount} mentions
+            {lastSeen && <span className={styles.lastSeen}> &middot; {lastSeen}</span>}
             {entity.salienceAvg > 0 && (
               <span className={styles.salienceBadge} style={{
                 opacity: 0.4 + entity.salienceAvg * 0.6,
               }}>
                 {(entity.salienceAvg * 100).toFixed(0)}%
+              </span>
+            )}
+            {bd && bdTotal > 0 && (
+              <span className={styles.salienceBar} title={`Mention: ${(bd.mentionComponent * 100).toFixed(0)}% · Arc: ${(bd.arcComponent * 100).toFixed(0)}% · Graph: ${(bd.graphComponent * 100).toFixed(0)}%`}>
+                <span className={clsx(styles.salienceBarSegment, styles.salienceBarMention)} style={{ width: `${(bd.mentionComponent / bdTotal) * 100}%` }} />
+                <span className={clsx(styles.salienceBarSegment, styles.salienceBarArc)} style={{ width: `${(bd.arcComponent / bdTotal) * 100}%` }} />
+                <span className={clsx(styles.salienceBarSegment, styles.salienceBarGraph)} style={{ width: `${(bd.graphComponent / bdTotal) * 100}%` }} />
               </span>
             )}
           </div>
@@ -296,6 +336,24 @@ function EntityCard({
                 {topEmotions.map((tag) => (
                   <span key={tag} className={styles.emotionTag}>{tag}</span>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Salience breakdown detail when expanded */}
+          {bd && bd.total > 0 && (
+            <div className={styles.entityField}>
+              <span className={styles.fieldLabel}>Salience breakdown</span>
+              <div className={styles.tagRow}>
+                <span className={styles.miniTag} style={{ borderColor: "color-mix(in srgb, var(--lumiverse-primary) 30%, transparent)" }}>
+                  Mention {(bd.mentionComponent * 100).toFixed(0)}%
+                </span>
+                <span className={styles.miniTag} style={{ borderColor: "color-mix(in srgb, #8b5cf6 30%, transparent)" }}>
+                  Arc {(bd.arcComponent * 100).toFixed(0)}%
+                </span>
+                <span className={styles.miniTag} style={{ borderColor: "color-mix(in srgb, #06b6d4 30%, transparent)" }}>
+                  Graph {(bd.graphComponent * 100).toFixed(0)}%
+                </span>
               </div>
             </div>
           )}
@@ -468,15 +526,8 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
                 { label: "Vectorized", value: c.vectorized_at ? "yes" : "pending" },
               ]} tags={c.emotional_tags ? JSON.parse(c.emotional_tags) : []} />
             ))}
-            {drill === "relations" && drillData.map((r: any) => (
-              <DrillRecord key={r.id} lines={[
-                { label: "Edge", value: `${r.sourceName || r.sourceEntityId?.slice(0, 8)} → ${r.targetName || r.targetEntityId?.slice(0, 8)}` },
-                { label: "Type", value: r.relationType },
-                { label: "Label", value: r.relationLabel || "—" },
-                { label: "Strength", value: `${((r.strength ?? 0) * 100).toFixed(0)}%` },
-                { label: "Sentiment", value: (r.sentiment ?? 0) > 0 ? `+${(r.sentiment ?? 0).toFixed(2)}` : (r.sentiment ?? 0).toFixed(2) },
-                { label: "Evidence", value: `${(r.evidenceChunkIds || []).length} chunks` },
-              ]} />
+            {drill === "relations" && drillData.map((r: CortexRelation) => (
+              <RelationDrillRecord key={r.id} relation={r} />
             ))}
             {drill === "consolidations" && (() => {
               const arcs = drillData.filter((c: any) => c.tier === 2);
@@ -535,14 +586,15 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
                 { label: "Words", value: s.word_count },
               ]} tags={(() => { try { return JSON.parse(s.emotional_tags || "[]"); } catch { return []; } })()} />
             ))}
-            {drill === "entities" && drillData.map((e: any) => (
+            {drill === "entities" && drillData.map((e: CortexEntity) => (
               <DrillRecord key={e.id} lines={[
-                { label: "Name", value: e.name },
+                { label: "Name", value: `${e.name}${e.confidence === "provisional" ? " (provisional)" : ""}` },
                 { label: "Type", value: e.entityType },
                 { label: "Status", value: e.status },
                 { label: "Mentions", value: e.mentionCount },
-                { label: "Salience", value: `${(e.salienceAvg * 100).toFixed(0)}%` },
-                { label: "Facts", value: `${(e.facts || []).length}` },
+                { label: "Salience", value: `${((e.salienceAvg ?? 0) * 100).toFixed(0)}%` },
+                { label: "Facts", value: `${(e.facts || []).length}${e.factExtractionStatus === "never" ? " (needs extraction)" : e.factExtractionStatus === "attempted_empty" ? " (retry pending)" : ""}` },
+                ...(e.lastMentionTimestamp ? [{ label: "Last seen", value: relativeTime(e.lastMentionTimestamp) || "—" }] : []),
               ]} />
             ))}
           </div>
@@ -600,6 +652,86 @@ function StatCard({
         {onClick && <ArrowRight size={13} className={styles.statArrow} />}
       </div>
       {desc && <div className={styles.statDesc}>{desc}</div>}
+    </div>
+  );
+}
+
+// ─── Relation Drill Record ────────────────────────────────────
+
+function RelationDrillRecord({ relation: r }: { relation: CortexRelation }) {
+  const contradictionFlag = r.contradictionFlag ?? "none";
+  const hasContradiction = contradictionFlag !== "none";
+  const edgeSalience = r.edgeSalience ?? r.strength ?? 0;
+  const sentimentRange = r.sentimentRange;
+  const aliases = r.labelAliases ?? [];
+
+  return (
+    <div className={styles.drillRecord}>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Edge</span>
+        <span className={styles.drillLineValue}>
+          {r.sourceName || (r.sourceEntityId ?? "").slice(0, 8)} → {r.targetName || (r.targetEntityId ?? "").slice(0, 8)}
+        </span>
+      </div>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Type</span>
+        <span className={styles.drillLineValue}>{r.relationType}</span>
+      </div>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Label</span>
+        <span className={styles.drillLineValue}>{r.relationLabel || "—"}</span>
+      </div>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Strength</span>
+        <span className={styles.drillLineValue}>{((r.strength ?? 0) * 100).toFixed(0)}%</span>
+      </div>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Edge salience</span>
+        <span className={styles.edgeSalienceBar}>
+          <span className={styles.edgeSalienceTrack}>
+            <span className={styles.edgeSalienceFill} style={{ width: `${Math.min(100, edgeSalience * 100)}%` }} />
+          </span>
+          <span className={styles.edgeSalienceLabel}>{(edgeSalience * 100).toFixed(0)}%</span>
+        </span>
+      </div>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Sentiment</span>
+        <span className={styles.drillLineValue}>
+          {(r.sentiment ?? 0) > 0 ? `+${(r.sentiment ?? 0).toFixed(2)}` : (r.sentiment ?? 0).toFixed(2)}
+          {sentimentRange && (
+            <span className={styles.sentimentRangeLabel}>
+              {" "}[{sentimentRange[0].toFixed(1)}..{sentimentRange[1].toFixed(1)}]
+            </span>
+          )}
+        </span>
+      </div>
+      <div className={styles.drillLine}>
+        <span className={styles.drillLineLabel}>Evidence</span>
+        <span className={styles.drillLineValue}>{(r.evidenceChunkIds || []).length} chunks</span>
+      </div>
+      {hasContradiction && (
+        <div className={styles.relationMeta}>
+          <span className={clsx(
+            styles.contradictionBadge,
+            contradictionFlag === "complex" && styles.contradictionComplex,
+            contradictionFlag === "suspect" && styles.contradictionSuspect,
+            contradictionFlag === "temporal" && styles.contradictionTemporal,
+          )}>
+            <AlertTriangle size={9} />
+            {contradictionFlag}
+          </span>
+        </div>
+      )}
+      {aliases.length > 0 && (
+        <div className={styles.relationMeta}>
+          <span className={styles.drillLineLabel}>Also called</span>
+          <div className={styles.labelAliasList}>
+            {aliases.map((a, i) => (
+              <span key={i} className={styles.labelAlias}>{a}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

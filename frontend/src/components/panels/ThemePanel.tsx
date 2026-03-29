@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Download, Upload } from 'lucide-react'
+import { Download, Upload, Code2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { DEFAULT_THEME } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
@@ -16,6 +16,7 @@ export default function ThemePanel() {
   const theme = useStore((s) => s.theme) as ThemeConfig | null
   const setTheme = useStore((s) => s.setTheme)
 
+  const openModal = useStore((s) => s.openModal)
   const current = theme ?? DEFAULT_THEME
 
   // Always read the latest theme from the store to avoid stale closures
@@ -156,6 +157,17 @@ export default function ThemePanel() {
           onGlassToggle={handleGlassToggle}
           onFontScaleChange={handleFontScaleChange}
         />
+      </section>
+
+      <section className={styles.section}>
+        <h4 className={styles.sectionLabel}>Advanced</h4>
+        <button
+          type="button"
+          className={styles.actionBtn}
+          onClick={() => openModal('customCSS')}
+        >
+          <Code2 size={12} /> Custom CSS Editor
+        </button>
       </section>
 
       <div className={styles.themeActions}>

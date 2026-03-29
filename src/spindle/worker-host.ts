@@ -15,6 +15,8 @@ import type {
   DryRunResultDTO,
   ChatMemoryResultDTO,
   ThemeOverrideDTO,
+  SpindleCommandDTO,
+  SpindleCommandContextDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
@@ -138,6 +140,9 @@ export class WorkerHost {
   private toastTimestamps: number[] = [];
   private static readonly TOAST_RATE_LIMIT = 5;
   private static readonly TOAST_RATE_WINDOW_MS = 10_000;
+  private registeredCommands: SpindleCommandDTO[] = [];
+  private static readonly MAX_COMMANDS_PER_EXTENSION = 20;
+  private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
   private onWorkerReady: (() => void) | null = null;
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
@@ -305,6 +310,12 @@ export class WorkerHost {
     this.registeredMacroNames.clear();
     this.macroValueCache.clear();
     this.toastTimestamps = [];
+
+    // Clear commands and broadcast removal
+    if (this.registeredCommands.length > 0) {
+      this.registeredCommands = [];
+      this.broadcastCommandsChanged();
+    }
 
     // Clear theme overrides
     this.clearThemeOverrides();
@@ -792,6 +803,13 @@ export class WorkerHost {
         break;
       case "log":
         this.handleLog(msg.level, msg.message);
+        break;
+      // ─── Commands (free tier) ─────────────────────────────────────────
+      case "commands_register":
+        this.handleCommandsRegister(msg.commands);
+        break;
+      case "commands_unregister":
+        this.handleCommandsUnregister(msg.commandIds);
         break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
       case "push_send":
@@ -4047,6 +4065,92 @@ export class WorkerHost {
       },
       this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
     );
+  }
+
+  // ─── Commands (free tier) ─────────────────────────────────────────────
+
+  private handleCommandsRegister(commands: SpindleCommandDTO[]): void {
+    if (!Array.isArray(commands)) {
+      console.warn(`[Spindle:${this.manifest.identifier}] commands_register: expected array`);
+      return;
+    }
+
+    if (commands.length > WorkerHost.MAX_COMMANDS_PER_EXTENSION) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Command limit exceeded (${commands.length}/${WorkerHost.MAX_COMMANDS_PER_EXTENSION}), truncating`,
+      );
+      commands = commands.slice(0, WorkerHost.MAX_COMMANDS_PER_EXTENSION);
+    }
+
+    // Validate and sanitize each command
+    const validated: SpindleCommandDTO[] = [];
+    const seenIds = new Set<string>();
+    const validScopes = ["global", "chat", "chat-idle", "landing", "character"];
+
+    for (const cmd of commands) {
+      if (!cmd || typeof cmd.id !== "string" || !cmd.id.trim()) continue;
+      if (!cmd.label || typeof cmd.label !== "string") continue;
+      if (seenIds.has(cmd.id)) continue;
+      seenIds.add(cmd.id);
+
+      validated.push({
+        id: cmd.id.slice(0, 100),
+        label: (cmd.label || "").slice(0, 80),
+        description: (cmd.description || "").slice(0, 200),
+        keywords: Array.isArray(cmd.keywords)
+          ? cmd.keywords.filter((k): k is string => typeof k === "string").slice(0, 10).map((k) => k.slice(0, 30))
+          : undefined,
+        scope: validScopes.includes(cmd.scope as string) ? cmd.scope : undefined,
+      });
+    }
+
+    this.registeredCommands = validated;
+    this.broadcastCommandsChanged();
+  }
+
+  private handleCommandsUnregister(commandIds: string[]): void {
+    if (!Array.isArray(commandIds) || commandIds.length === 0) {
+      // Remove all commands
+      this.registeredCommands = [];
+    } else {
+      const idsToRemove = new Set(commandIds.filter((id) => typeof id === "string"));
+      this.registeredCommands = this.registeredCommands.filter((c) => !idsToRemove.has(c.id));
+    }
+    this.broadcastCommandsChanged();
+  }
+
+  private broadcastCommandsChanged(): void {
+    eventBus.emit(
+      EventType.SPINDLE_COMMANDS_CHANGED,
+      {
+        extensionId: this.extensionId,
+        extensionName: this.manifest.name,
+        commands: this.registeredCommands,
+      },
+      this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+    );
+  }
+
+  /** Called by the WS handler when the frontend invokes a command. */
+  invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string): void {
+    if (!this.worker) return;
+    if (!this.registeredCommands.some((c) => c.id === commandId)) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Command "${commandId}" not registered`,
+      );
+      return;
+    }
+    this.postToWorker({
+      type: "command_invoked",
+      commandId,
+      context,
+      userId,
+    });
+  }
+
+  /** Expose registered commands for lookup from the WS handler. */
+  getRegisteredCommands(): SpindleCommandDTO[] {
+    return this.registeredCommands;
   }
 
   // ─── Logging ─────────────────────────────────────────────────────────

@@ -38,3 +38,4 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Modal](modal.md) | Free | Open a system-themed modal overlay with structured content |
 | [Push Notifications](push-notifications.md) | `push_notification` | Send OS-level push notifications to user devices |
 | [Frontend Communication](frontend-communication.md) | Free | Message passing to/from frontend |
+| [Commands](commands.md) | Free | Register custom commands in the command palette (Cmd/Ctrl+K) |

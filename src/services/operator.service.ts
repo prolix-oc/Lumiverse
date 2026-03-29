@@ -291,6 +291,20 @@ class OperatorService {
     return this.sendToRunner("quit", undefined, 10_000);
   }
 
+  async clearCache(): Promise<{ message: string }> {
+    return this.sendToRunner("clear-cache", undefined, 60_000);
+  }
+
+  async ensureDependencies(): Promise<{ message: string }> {
+    return this.sendToRunner("ensure-deps", undefined, 120_000);
+  }
+
+  async rebuildFrontend(): Promise<{ message: string }> {
+    return this.runOperation("rebuild", () =>
+      this.sendToRunner("rebuild-frontend", undefined, 300_000)
+    );
+  }
+
   // ── Cleanup ───────────────────────────────────────────────────────────
 
   cleanup(): void {

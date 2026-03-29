@@ -16,7 +16,10 @@ export type IPCRequestType =
   | "switch-branch"
   | "toggle-remote"
   | "restart"
-  | "quit";
+  | "quit"
+  | "clear-cache"
+  | "ensure-deps"
+  | "rebuild-frontend";
 
 export interface IPCRequest extends IPCMessage {
   type: IPCRequestType;

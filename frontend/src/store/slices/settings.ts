@@ -95,6 +95,8 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'thumbnailSettings',
   // Push notification preferences
   'pushNotificationPreferences',
+  'customCSS',
+  'componentOverrides',
 ])
 
 // ── Debounced batch persistence ──────────────────────────────────────────
@@ -194,6 +196,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     tabSize: 'large',
     panelWidthMode: 'default',
     customPanelWidth: 35,
+    showTabLabels: false,
   },
   oocEnabled: true,
   lumiaOOCStyle: 'social',
@@ -237,6 +240,8 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
 
   thumbnailSettings: { smallSize: 300, largeSize: 700 },
   pushNotificationPreferences: { enabled: true, events: { generation_ended: true, generation_error: false } },
+  customCSS: { css: '', enabled: false, revision: 0 },
+  componentOverrides: {},
 
   setWallpaper: (partial) =>
     set((state) => {
@@ -255,6 +260,87 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   setTheme: (theme) => {
     set({ theme })
     persistKey('theme', theme)
+  },
+
+  setCustomCSS: (css) =>
+    set((state) => {
+      const customCSS = { ...state.customCSS, css, revision: state.customCSS.revision + 1 }
+      persistKey('customCSS', customCSS)
+      return { customCSS }
+    }),
+
+  toggleCustomCSS: (enabled) =>
+    set((state) => {
+      const customCSS = { ...state.customCSS, enabled }
+      persistKey('customCSS', customCSS)
+      return { customCSS }
+    }),
+
+  setComponentCSS: (componentName, css) =>
+    set((state) => {
+      const prev = state.componentOverrides[componentName]
+      const componentOverrides = {
+        ...state.componentOverrides,
+        [componentName]: { css, tsx: prev?.tsx ?? '', enabled: prev?.enabled ?? true },
+      }
+      persistKey('componentOverrides', componentOverrides)
+      return { componentOverrides }
+    }),
+
+  setComponentTSX: (componentName, tsx) =>
+    set((state) => {
+      const prev = state.componentOverrides[componentName]
+      const componentOverrides = {
+        ...state.componentOverrides,
+        [componentName]: { tsx, css: prev?.css ?? '', enabled: prev?.enabled ?? true },
+      }
+      persistKey('componentOverrides', componentOverrides)
+      return { componentOverrides }
+    }),
+
+  toggleComponentOverride: (componentName, enabled) =>
+    set((state) => {
+      const existing = state.componentOverrides[componentName]
+      if (!existing) return {}
+      const componentOverrides = {
+        ...state.componentOverrides,
+        [componentName]: { ...existing, enabled },
+      }
+      persistKey('componentOverrides', componentOverrides)
+      return { componentOverrides }
+    }),
+
+  resetAllOverrides: () => {
+    const componentOverrides = {}
+    const customCSS = { css: '', enabled: false, revision: 0 }
+    persistKey('componentOverrides', componentOverrides)
+    persistKey('customCSS', customCSS)
+    set({ componentOverrides, customCSS })
+  },
+
+  applyThemePack: (pack) => {
+    const patch: Record<string, any> = {}
+
+    // Layer 1: Theme config
+    if (pack.theme) {
+      patch.theme = pack.theme
+      persistKey('theme', pack.theme)
+    }
+
+    // Layer 2: Global CSS
+    const customCSS = { css: pack.globalCSS || '', enabled: !!pack.globalCSS.trim(), revision: Date.now() }
+    patch.customCSS = customCSS
+    persistKey('customCSS', customCSS)
+
+    // Layer 3: Component overrides
+    const componentOverrides: Record<string, any> = {}
+    for (const [name, comp] of Object.entries(pack.components)) {
+      componentOverrides[name] = { css: comp.css || '', tsx: comp.tsx || '', enabled: comp.enabled }
+    }
+    patch.componentOverrides = componentOverrides
+    persistKey('componentOverrides', componentOverrides)
+
+    set(patch as any)
   },
 
   loadSettings: async () => {

@@ -138,13 +138,11 @@ export class GoogleVertexProvider implements LlmProvider {
     modelListStyle: "none", // Vertex model list requires project/location — handled in listModels()
   };
 
-  /** Build the Vertex AI base URL (global endpoint). */
-  private endpointBase(apiUrl: string, projectId: string, location: string): string {
-    let base = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
-    // Strip any path the user may have appended
-    base = base.replace(/\/v1(beta1)?\/projects(\/.*)?$/, "");
-    base = base.replace(/\/v1(beta1)?$/, "");
-    return `${base}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
+  /** Build the Vertex AI base URL using the regional endpoint. */
+  private endpointBase(_apiUrl: string, projectId: string, location: string): string {
+    // Always use the regional endpoint to avoid malformed URLs when apiUrl contains query params
+    const host = `https://${location}-aiplatform.googleapis.com`;
+    return `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
   }
 
   /** Extract project_id and location from the connection metadata stored alongside the service account. */
@@ -166,6 +164,12 @@ export class GoogleVertexProvider implements LlmProvider {
       const locParam = u.searchParams.get("location");
       if (locParam) location = locParam;
     } catch { /* not a valid URL, use default */ }
+
+    // "global" is not a valid Vertex AI region for API calls — fall back to default
+    if (location === "global") {
+      console.warn("[Vertex AI] 'global' is not a valid region, falling back to us-central1");
+      location = "us-central1";
+    }
 
     return { sa, projectId: sa.project_id, location };
   }
@@ -346,8 +350,7 @@ export class GoogleVertexProvider implements LlmProvider {
     try {
       const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      const host = `https://${location}-aiplatform.googleapis.com`;
-      const basePath = `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
+      const basePath = this.endpointBase(apiUrl, projectId, location);
       const allModels: string[] = [];
       let pageToken: string | undefined;
 

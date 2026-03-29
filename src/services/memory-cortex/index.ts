@@ -29,6 +29,7 @@ import { formatShadowPrompt, type FormatterMode, type ShadowPromptResult } from 
 import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution } from "./font-attribution";
 import { extractRelationshipsHeuristic } from "./relationship-extractor";
+import { extractNPsFromChunk } from "./np-chunker";
 import type {
   ChunkIngestionData,
   CortexQuery,
@@ -64,6 +65,23 @@ export type {
 } from "./types";
 export { buildEmotionalContext } from "./emotional-context";
 export { formatEntitySnapshots, formatRelationships } from "./entity-context";
+export { extractNPsFromChunk } from "./np-chunker";
+export {
+  resolveCanonicalId,
+  normalizeEntityName,
+  computeStrength,
+  computeEdgeSalience,
+  computeEdgeDecayRate,
+  computeGraphCentrality,
+  consolidateEdgeTypes,
+  runHeuristicsMigration,
+  getEntitiesNeedingFactExtraction,
+  updateFactExtractionStatus,
+  updateSalienceBreakdown,
+  processProvisionalEntities,
+  getAllRelationsUnfiltered,
+} from "./entity-graph";
+export type { MigrationResult } from "./entity-graph";
 
 // ─── Retrieval ─────────────────────────────────────────────────
 
@@ -340,6 +358,48 @@ export async function processChunk(
           }
           // Add the status change as a fact
           entityGraph.addEntityFacts(entity.id, [`${change.change}: ${change.detail}`]);
+        }
+      }
+    }
+
+    // ── NP Chunker — Phase 1 entity discovery (IMP 4) ──
+    // Only runs server-side during sidecar mode (amortized cost acceptable).
+    // Does NOT run in heuristic-only mode to protect mobile latency.
+    if (generateRawFn && sidecarConnectionId) {
+      const npCandidates = extractNPsFromChunk(cleanContent);
+      for (const np of npCandidates) {
+        // Check if this NP resolves to a known entity
+        const resolved = entityGraph.resolveCanonicalId(np.text, data.chatId);
+        if (resolved) {
+          // Known entity — update mention count
+          entityGraph.updateEntityMentionTimestamp(resolved, data.createdAt);
+          continue;
+        }
+        // Unknown entity — create as provisional
+        if (np.text.length >= 2 && np.text.length <= 50) {
+          entityGraph.upsertEntity(data.chatId, {
+            name: np.text,
+            type: "concept",
+            aliases: [],
+            confidence: 0.5,
+            provisional: true,
+          }, data.chunkId, data.createdAt);
+        }
+      }
+      // Promote/decay provisional entities periodically
+      entityGraph.processProvisionalEntities(data.chatId);
+    }
+
+    // ── BUG 4: Fact extraction gating ──
+    // Check for high-salience entities that lack facts
+    if (generateRawFn && sidecarConnectionId && salienceResult.score >= 0.5) {
+      const needsFacts = entityGraph.getEntitiesNeedingFactExtraction(data.chatId, 0.45, 3);
+      for (const entity of needsFacts) {
+        // Mark as attempted — actual extraction happens via sidecar on next rebuild
+        // or when the entity appears in a chunk with sidecar enabled
+        const existingEntity = entityGraph.findEntityByName(data.chatId, entity.name);
+        if (existingEntity && sidecarFacts.length === 0) {
+          entityGraph.updateFactExtractionStatus(existingEntity.id, "attempted_empty");
         }
       }
     }

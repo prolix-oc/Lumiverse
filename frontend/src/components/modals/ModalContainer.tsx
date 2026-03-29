@@ -21,6 +21,7 @@ import RegexImportModal from './RegexImportModal'
 import RegenFeedbackModal from './RegenFeedbackModal'
 import PersonaAddonsModal from './PersonaAddonsModal'
 import GroupSettingsModal from './GroupSettingsModal'
+import CustomCSSModal from './CustomCSSModal'
 
 export default function ModalContainer() {
   const settingsModalOpen = useStore((s) => s.settingsModalOpen)
@@ -119,6 +120,8 @@ export default function ModalContainer() {
           onCancel={closeModal}
         />
       )}
+
+      {activeModal === 'customCSS' && <CustomCSSModal />}
 
       <PermissionRequestModal />
       <CommandPalette />

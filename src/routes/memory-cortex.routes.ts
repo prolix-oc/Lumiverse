@@ -839,4 +839,60 @@ app.post("/chats/:chatId/rebuild", async (c) => {
   return c.json({ status: "started", chatId });
 });
 
+// ─── Heuristics Engine Migration ──────────────────────────────
+
+/**
+ * POST /chats/:chatId/migrate-heuristics — Run the heuristics engine data migration.
+ * Rekeys edges through canonical resolver, recomputes strength, detects contradictions,
+ * consolidates edge types, and computes salience breakdowns.
+ */
+app.post("/chats/:chatId/migrate-heuristics", async (c) => {
+  const chatId = c.req.param("chatId");
+  const chat = getChat(c.get("userId"), chatId);
+  if (!chat) return c.json({ error: "Chat not found" }, 404);
+
+  const result = memoryCortex.runHeuristicsMigration(chatId, (step, count) => {
+    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+      chatId,
+      status: "processing",
+      step,
+      count,
+    }, c.get("userId"));
+  });
+
+  return c.json({ status: "complete", ...result });
+});
+
+/** GET /chats/:chatId/relations/all — List ALL relations including superseded/suspect/merged (diagnostics) */
+app.get("/chats/:chatId/relations/all", (c) => {
+  const chatId = c.req.param("chatId");
+  const relations = memoryCortex.getAllRelationsUnfiltered(chatId);
+
+  const db = getDb();
+  const nameCache = new Map<string, string>();
+  const resolveName = (id: string) => {
+    if (nameCache.has(id)) return nameCache.get(id)!;
+    const row = db.query("SELECT name FROM memory_entities WHERE id = ?").get(id) as any;
+    const name = row?.name ?? id.slice(0, 8);
+    nameCache.set(id, name);
+    return name;
+  };
+
+  const enriched = relations.map((r) => ({
+    ...r,
+    sourceName: resolveName(r.sourceEntityId),
+    targetName: resolveName(r.targetEntityId),
+  }));
+
+  return c.json({ data: enriched, total: enriched.length });
+});
+
+/** GET /chats/:chatId/entities/needs-facts — Get entities needing fact extraction */
+app.get("/chats/:chatId/entities/needs-facts", (c) => {
+  const chatId = c.req.param("chatId");
+  const threshold = parseFloat(c.req.query("threshold") || "0.45");
+  const entities = memoryCortex.getEntitiesNeedingFactExtraction(chatId, threshold, 20);
+  return c.json({ data: entities, total: entities.length });
+});
+
 export { app as memoryCortexRoutes };

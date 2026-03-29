@@ -52,6 +52,13 @@ export interface CortexConfig {
   entityWhitelist: string[];
 }
 
+export interface SalienceBreakdown {
+  mentionComponent: number;
+  arcComponent: number;
+  graphComponent: number;
+  total: number;
+}
+
 export interface CortexEntity {
   id: string;
   chatId: string;
@@ -66,6 +73,40 @@ export interface CortexEntity {
   status: string;
   facts: string[];
   emotionalValence: Record<string, number>;
+  // Heuristics engine fields
+  factExtractionStatus: "never" | "attempted_empty" | "ok";
+  factExtractionLastAttempt: number | null;
+  salienceBreakdown: SalienceBreakdown;
+  lastMentionTimestamp: number | null;
+  recentMentionCount: number;
+  confidence: "confirmed" | "provisional";
+}
+
+export interface CortexRelation {
+  id: string;
+  chatId: string;
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationType: string;
+  relationLabel: string | null;
+  strength: number;
+  sentiment: number;
+  evidenceChunkIds: string[];
+  firstEstablishedAt: number | null;
+  lastReinforcedAt: number | null;
+  status: string;
+  // Heuristics engine fields
+  contradictionFlag: "none" | "temporal" | "complex" | "suspect";
+  contradictionPeerId: string | null;
+  sentimentRange: [number, number] | null;
+  supersededBy: string | null;
+  edgeSalience: number;
+  decayRate: number;
+  labelAliases: string[];
+  mergedInto: string | null;
+  // Enriched by route
+  sourceName?: string;
+  targetName?: string;
 }
 
 export interface CortexUsageStats {
@@ -190,7 +231,15 @@ export const memoryCortexApi = {
 
   // Relations
   getRelations: (chatId: string) =>
-    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/relations`),
+    get<{ data: CortexRelation[]; total: number }>(`${BASE}/chats/${chatId}/relations`),
+  getAllRelations: (chatId: string) =>
+    get<{ data: CortexRelation[]; total: number }>(`${BASE}/chats/${chatId}/relations/all`),
+
+  // Heuristics engine
+  migrateHeuristics: (chatId: string) =>
+    post<{ status: string; edgesRekeyed: number; strengthsRecomputed: number; contradictionsDetected: number; edgesConsolidated: number; salienceBreakdownsComputed: number }>(`${BASE}/chats/${chatId}/migrate-heuristics`),
+  getEntitiesNeedingFacts: (chatId: string) =>
+    get<{ data: CortexEntity[]; total: number }>(`${BASE}/chats/${chatId}/entities/needs-facts`),
 
   // Consolidations
   getConsolidations: (chatId: string, tier?: number) =>
