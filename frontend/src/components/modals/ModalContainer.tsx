@@ -13,6 +13,7 @@ import GroupChatCreatorModal from './GroupChatCreatorModal'
 import AddGroupMemberModal from '@/components/chat/AddGroupMemberModal'
 import ManageChatsModal from './ManageChatsModal'
 import ChatPickerModal from './ChatPickerModal'
+import MemoryCortexDiagnosticsModal from './MemoryCortexDiagnosticsModal'
 import PermissionRequestModal from './PermissionRequestModal'
 import CommandPalette from './CommandPalette'
 import RegexEditorModal from './RegexEditorModal'
@@ -98,6 +99,12 @@ export default function ModalContainer() {
       {activeModal === 'regexImport' && <RegexImportModal />}
       {activeModal === 'personaAddons' && <PersonaAddonsModal />}
       {activeModal === 'groupSettings' && <GroupSettingsModal />}
+      {activeModal === 'memoryCortexDiagnostics' && (
+        <MemoryCortexDiagnosticsModal
+          chatId={modalProps.chatId}
+          onClose={closeModal}
+        />
+      )}
 
       {activeModal === 'regenFeedback' && (
         <RegenFeedbackModal

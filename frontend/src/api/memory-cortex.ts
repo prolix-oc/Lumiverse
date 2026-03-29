@@ -80,6 +80,83 @@ export interface CortexUsageStats {
   estimatedEmbeddingCalls: number;
 }
 
+export interface CortexHealthCheck {
+  key: string;
+  label: string;
+  status: "pass" | "warn" | "fail" | "info";
+  message: string;
+}
+
+export interface CortexHealthReport {
+  generatedAt: string;
+  healthy: boolean;
+  summary: {
+    failures: number;
+    warnings: number;
+    passes: number;
+    info: number;
+  };
+  config: {
+    enabled: boolean;
+    presetMode: "simple" | "standard" | "advanced" | null;
+    formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
+    entityExtractionMode: "heuristic" | "sidecar" | "off";
+    salienceScoringMode: "heuristic" | "sidecar";
+    sidecarConnectionProfileId: string | null;
+  };
+  embeddings: {
+    enabled: boolean;
+    hasApiKey: boolean;
+    vectorizeChatMessages: boolean;
+    provider: string;
+    model: string;
+    dimensions: number | null;
+    ready: boolean;
+    connectivity: {
+      attempted: boolean;
+      success: boolean | null;
+      message: string;
+      dimension: number | null;
+    };
+  };
+  sidecar: {
+    required: boolean;
+    configured: boolean;
+    connectionProfileId: string | null;
+    connectionName: string | null;
+    provider: string | null;
+    model: string | null;
+    hasApiKey: boolean;
+    ready: boolean;
+    connectivity: {
+      attempted: boolean;
+      success: boolean | null;
+      message: string;
+    };
+  };
+  chat: {
+    id: string;
+    name: string | null;
+    exists: boolean;
+    messageCount: number;
+    chunkCount: number;
+    vectorizedChunkCount: number;
+    pendingChunkCount: number;
+    entityCount: number;
+    activeEntityCount: number;
+    relationCount: number;
+    consolidationCount: number;
+    rebuildStatus: {
+      status: string;
+      current?: number;
+      total?: number;
+      percent?: number;
+      error?: string;
+    };
+  } | null;
+  checks: CortexHealthCheck[];
+}
+
 // ─── API ───────────────────────────────────────────────────────
 
 const BASE = "/memory-cortex";
@@ -89,6 +166,11 @@ export const memoryCortexApi = {
   getConfig: () => get<CortexConfig>(`${BASE}/config`),
   updateConfig: (data: Partial<CortexConfig>) => put<CortexConfig>(`${BASE}/config`, data),
   applyPreset: (mode: string) => post<CortexConfig>(`${BASE}/config/preset`, { mode }),
+  getHealth: (options?: { chatId?: string; probeConnectivity?: boolean }) =>
+    get<CortexHealthReport>(`${BASE}/health`, {
+      chatId: options?.chatId,
+      probeConnectivity: options?.probeConnectivity ? "1" : undefined,
+    }),
 
   // Entities
   getEntities: (chatId: string, status?: string) =>

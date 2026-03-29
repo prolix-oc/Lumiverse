@@ -409,6 +409,18 @@
 
 /* ── Spinner ────────────────────────────────────────────────────── */
 
+@media (max-width: 680px) {
+  .sectionHeader {
+    flex-wrap: wrap;
+  }
+
+  .sectionHeaderActions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

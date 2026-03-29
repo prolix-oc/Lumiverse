@@ -4,6 +4,7 @@ import {
   Sparkles,
   Users,
   Network,
+  Activity,
   BarChart3,
   RefreshCw,
   ChevronDown,
@@ -55,6 +56,7 @@ const FORMATTER_OPTIONS = [
 
 export default function MemoryCortexSettings() {
   const addToast = useStore((s) => s.addToast);
+  const openModal = useStore((s) => s.openModal);
   const [config, setConfig] = useState<CortexConfig | null>(null);
   const [stats, setStats] = useState<CortexUsageStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,6 +72,10 @@ export default function MemoryCortexSettings() {
 
   // Active chat for stats (if available)
   const activeChatId = useStore((s) => s.activeChatId);
+
+  const handleOpenDiagnostics = useCallback(() => {
+    openModal("memoryCortexDiagnostics", { chatId: activeChatId || null });
+  }, [activeChatId, openModal]);
 
   // Fetch models when sidecar connection changes
   const fetchModels = useCallback(async (connectionId: string | null) => {
@@ -229,6 +235,10 @@ export default function MemoryCortexSettings() {
           <Brain size={14} />
           <span>Memory Cortex</span>
           <div className={styles.sectionHeaderActions}>
+            <button type="button" className={styles.actionBtn} onClick={handleOpenDiagnostics}>
+              <Activity size={12} />
+              Diagnostics
+            </button>
             <span className={clsx(styles.statusDot, config.enabled ? styles.statusActive : styles.statusInactive)} />
             <span className={styles.statusLabel}>{config.enabled ? "Active" : "Off"}</span>
           </div>
