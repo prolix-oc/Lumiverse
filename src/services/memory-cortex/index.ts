@@ -30,6 +30,7 @@ import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution } from "./font-attribution";
 import { extractRelationshipsHeuristic } from "./relationship-extractor";
 import { extractNPsFromChunk } from "./np-chunker";
+import { stripLoomTags, stripDetailsBlocks } from "../../utils/content-sanitizer";
 import type {
   ChunkIngestionData,
   CortexQuery,
@@ -366,7 +367,12 @@ export async function processChunk(
     // Only runs server-side during sidecar mode (amortized cost acceptable).
     // Does NOT run in heuristic-only mode to protect mobile latency.
     if (generateRawFn && sidecarConnectionId) {
-      const npCandidates = extractNPsFromChunk(cleanContent);
+      // Deeper sanitization for NP chunking — strip loom tag content and details
+      // blocks that font-stripping alone doesn't handle, preventing meta-content
+      // (summaries, structured data inside loom tags) from producing garbage NPs.
+      let npContent = stripLoomTags(cleanContent);
+      npContent = stripDetailsBlocks(npContent);
+      const npCandidates = extractNPsFromChunk(npContent);
       for (const np of npCandidates) {
         // Check if this NP resolves to a known entity
         const resolved = entityGraph.resolveCanonicalId(np.text, data.chatId);
@@ -784,8 +790,13 @@ function mergeExtractedEntities(
     const key = e.name.toLowerCase();
     const existing = merged.get(key);
     if (existing) {
-      // Sidecar overrides type and role if present
-      existing.type = e.type || existing.type;
+      // Sidecar overrides type — UNLESS sidecar defaulted to "concept" and
+      // heuristic inferred a more specific type (location, faction, etc.).
+      // Heuristic type inference uses structural signals (suffixes, verb adjacency)
+      // that are more reliable than an LLM defaulting to "concept".
+      if (e.type && e.type !== "concept") {
+        existing.type = e.type;
+      }
       existing.role = e.role || existing.role;
       existing.confidence = Math.max(existing.confidence, 0.9);
     } else {

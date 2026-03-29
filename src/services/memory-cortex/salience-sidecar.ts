@@ -557,15 +557,91 @@ function validateStatusChanges(raw: any): StatusChange[] {
   }));
 }
 
+// ─── Entity Name Validation ───────────────────────────────────
+// Structural filters to reject garbage that LLMs hallucinate as entities.
+
+/** Pronouns and pronoun contractions — entities must not start with these */
+const PRONOUN_STARTS = new Set([
+  "i", "i'm", "i've", "i'll", "i'd", "me", "my", "myself",
+  "we", "us", "our", "ourselves",
+  "you", "your", "yourself", "yourselves", "you're", "you've", "you'll", "you'd",
+  "he", "him", "his", "himself", "he's", "he'd", "he'll",
+  "she", "her", "herself", "she's", "she'd", "she'll",
+  "they", "them", "their", "themselves", "they're", "they've", "they'll", "they'd",
+  "it", "its", "itself", "it's",
+]);
+
+/** Single words that LLMs extract as "entities" but are clearly not proper nouns */
+const SIDECAR_SINGLE_REJECT = new Set([
+  // Verb forms
+  "having", "being", "going", "coming", "getting", "making", "taking",
+  "seeing", "looking", "saying", "doing", "running", "walking", "talking",
+  "trying", "asking", "telling", "leaving", "sitting", "standing",
+  "turned", "walked", "looked", "started", "stopped", "opened", "closed",
+  "moved", "pulled", "pushed", "dropped", "picked", "placed", "reached",
+  "stepped", "climbed", "slurred", "mumbled", "whispered", "shouted",
+  "screamed", "laughed", "smiled", "frowned", "nodded", "shrugged",
+  "grabbed", "slammed", "stumbled", "collapsed", "continued", "replied",
+  "answered", "noticed", "realized", "decided", "appeared", "remained",
+  "set", "sets", "put", "puts", "run", "ran", "saw", "seen",
+  "go", "goes", "gone", "leave", "leaves", "give", "gave",
+  "take", "took", "come", "came", "find", "found",
+  "said", "went", "got", "made", "knew", "thought", "felt",
+  "told", "asked", "let", "began", "kept", "left",
+  // Expletives / interjections
+  "fuck", "shit", "damn", "hell", "crap", "bloody", "bastard", "bitch",
+  "god", "christ", "jesus", "ugh", "hmm", "huh", "wow",
+]);
+
+/**
+ * Validate that an entity name from sidecar output is structurally plausible.
+ * Rejects verb phrases, pronoun phrases, bracket garbage, and other non-entities.
+ */
+function isValidEntityName(name: string): boolean {
+  const trimmed = name.trim();
+
+  // Too short or too long
+  if (trimmed.length < 2 || trimmed.length > 80) return false;
+
+  // Must contain at least one letter
+  if (!/[a-zA-Z]/.test(trimmed)) return false;
+
+  // Reject bracket/special char garbage (e.g., "E B[2 M[1 ---")
+  if (/[\[\]{}|<>#@\\~`]/.test(trimmed)) return false;
+
+  // Reject dash/special-only sequences
+  if (/^[-—–\s_.=]+$/.test(trimmed)) return false;
+
+  // Reject if too many words (likely a sentence, not a name)
+  const words = trimmed.split(/\s+/);
+  if (words.length > 6) return false;
+
+  // Reject if starts with a pronoun or pronoun contraction
+  const firstWord = words[0].toLowerCase().replace(/[\u2018\u2019\u02BC'']/g, "'");
+  if (PRONOUN_STARTS.has(firstWord)) return false;
+
+  // Multi-word: must have at least one word starting with uppercase (proper noun evidence)
+  if (words.length > 1 && !words.some((w) => /^[A-Z]/.test(w))) return false;
+
+  // Single-word: reject known verbs, expletives, adjectives
+  if (words.length === 1) {
+    if (SIDECAR_SINGLE_REJECT.has(trimmed.toLowerCase())) return false;
+    // Lowercase single word with verb suffix — likely not a proper noun
+    if (/^[a-z]/.test(trimmed) && /(?:ing|ed|tion|ment|ness)$/.test(trimmed)) return false;
+  }
+
+  return true;
+}
+
 function validateEntities(raw: any): ExtractedEntity[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter(
       (e: any) =>
-        e && typeof e.name === "string" && e.name.length > 0,
+        e && typeof e.name === "string" && e.name.length > 0 && isValidEntityName(e.name),
     )
     .map((e: any) => ({
-      name: e.name,
+      name: e.name.trim(),
       type: VALID_ENTITY_TYPES.has(e.type) ? e.type : "concept",
       aliases: [],
       confidence: 0.9,

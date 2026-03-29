@@ -145,6 +145,14 @@ export class GoogleVertexProvider implements LlmProvider {
     return `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
   }
 
+  /** Strip resource-name prefixes so only the bare model ID hits the URL path. */
+  private sanitizeModelId(model: string): string {
+    return model
+      .replace(/^publishers\/google\/models\//, "")
+      .replace(/^projects\/[^/]+\/locations\/[^/]+\/publishers\/google\/models\//, "")
+      .replace(/^models\//, "");
+  }
+
   /** Extract project_id and location from the connection metadata stored alongside the service account. */
   private resolveProjectConfig(apiKey: string, apiUrl: string): { sa: ServiceAccountCredentials; projectId: string; location: string } {
     const sa = parseServiceAccount(apiKey);
@@ -178,7 +186,8 @@ export class GoogleVertexProvider implements LlmProvider {
     const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
     const accessToken = await getAccessToken(sa);
     const base = this.endpointBase(apiUrl, projectId, location);
-    const url = `${base}/${request.model}:generateContent`;
+    const model = this.sanitizeModelId(request.model);
+    const url = `${base}/${model}:generateContent`;
     const body = this.buildBody(request);
 
     const res = await fetch(url, {
@@ -238,7 +247,8 @@ export class GoogleVertexProvider implements LlmProvider {
     const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
     const accessToken = await getAccessToken(sa);
     const base = this.endpointBase(apiUrl, projectId, location);
-    const url = `${base}/${request.model}:streamGenerateContent?alt=sse`;
+    const model = this.sanitizeModelId(request.model);
+    const url = `${base}/${model}:streamGenerateContent?alt=sse`;
     const body = this.buildBody(request);
 
     const res = await fetch(url, {
@@ -328,7 +338,10 @@ export class GoogleVertexProvider implements LlmProvider {
       const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
       const host = `https://${location}-aiplatform.googleapis.com`;
-      const url = `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models?pageSize=1`;
+      // The project-scoped path (.../projects/.../publishers/google/models) does NOT
+      // support LIST — only per-model operations like generateContent.
+      // Use the publisher-level endpoint for validation.
+      const url = `${host}/v1/publishers/google/models?pageSize=1`;
       const res = await fetch(url, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -350,14 +363,15 @@ export class GoogleVertexProvider implements LlmProvider {
     try {
       const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      const basePath = this.endpointBase(apiUrl, projectId, location);
+      const host = `https://${location}-aiplatform.googleapis.com`;
       const allModels: string[] = [];
       let pageToken: string | undefined;
 
       do {
         const params = new URLSearchParams();
         if (pageToken) params.set("pageToken", pageToken);
-        const url = `${basePath}${params.toString() ? `?${params}` : ""}`;
+        // The project-scoped path does NOT support LIST — use the publisher-level endpoint.
+        const url = `${host}/v1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
         const res = await fetch(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
