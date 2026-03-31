@@ -297,9 +297,17 @@ Database migrations run automatically on startup — your data is preserved acro
 
 ## Migrating from SillyTavern
 
-If you're coming from SillyTavern, Lumiverse includes an interactive migration tool that imports your characters, chat history, world books, and personas.
+If you're coming from SillyTavern, Lumiverse includes a migration tool that imports your characters, chat history, world books, and personas. You can migrate from a local directory, or connect to a remote machine over **SFTP** or **SMB** if your SillyTavern installation lives on another device.
 
 ### Running the Migration
+
+There are two ways to run the migration:
+
+#### Web UI (recommended)
+
+Open Lumiverse, go to **Settings > Migration**, and follow the wizard. This is the easiest approach and supports all three connection methods (Local, SFTP, SMB).
+
+#### CLI
 
 === "macOS / Linux"
 
@@ -319,13 +327,82 @@ If you're coming from SillyTavern, Lumiverse includes an interactive migration t
     bun run migrate:st
     ```
 
+!!! note
+    The CLI migration only supports local directories. For SFTP or SMB sources, use the web UI.
+
+### Connection Methods
+
+The web migration wizard lets you choose how to access your SillyTavern data:
+
+#### Local
+
+Browse directories on the machine running Lumiverse. This is the default and requires no extra setup.
+
+#### SFTP (SSH File Transfer)
+
+Connect to a remote machine over SSH. Useful when SillyTavern is on a VPS, home server, or any machine you can SSH into.
+
+- **Authentication**: Password or private key (upload a `.pem`/`.key` file or paste it directly)
+- **Requirements**: An SSH server running on the remote machine (standard on Linux/macOS)
+
+#### SMB (Samba / Windows Shares)
+
+Connect to a network share. Useful when SillyTavern data is on a NAS (Synology, TrueNAS, QNAP, etc.), a Windows PC, or any Samba share.
+
+- **Authentication**: Username/password, with optional domain
+- **Requirements**: The `smbclient` package must be installed on the machine running Lumiverse
+
+!!! info "SMB availability"
+    The SMB option only appears in the UI if `smbclient` is detected on your system. If you don't see it, install the appropriate package for your OS (see below).
+
+##### Installing smbclient
+
+=== "Debian / Ubuntu"
+
+    ```bash
+    sudo apt install smbclient
+    ```
+
+=== "Fedora / RHEL"
+
+    ```bash
+    sudo dnf install samba-client
+    ```
+
+=== "Arch Linux"
+
+    ```bash
+    sudo pacman -S smbclient
+    ```
+
+=== "Alpine"
+
+    ```bash
+    sudo apk add samba-client
+    ```
+
+=== "macOS (Homebrew)"
+
+    ```bash
+    brew install samba
+    ```
+
+=== "Termux (Android)"
+
+    ```bash
+    pkg install samba
+    ```
+
+!!! tip "Windows users"
+    You don't need SMB support on Windows — network shares like `\\server\share` are native filesystem paths. Just use the **Local** connection mode and type the UNC path directly.
+
 ### Migration Walkthrough
 
-The tool walks you through these steps:
+The web UI wizard walks you through these steps:
 
-1. **Authenticate** — Enter your Lumiverse URL, username, and password
-2. **Locate SillyTavern** — Point to your SillyTavern directory and user folder (default: `~/SillyTavern`, user `default-user`)
-3. **Pre-flight scan** — The tool scans your ST data and reports what it found (characters, chats, world books, personas). If a previous import was interrupted, it offers to resume from a checkpoint.
+1. **Choose connection** — Select Local, SFTP, or SMB and enter credentials if needed. For remote connections, click **Test Connection** to verify before proceeding.
+2. **Browse & validate** — Navigate to your SillyTavern root directory (the folder containing the `data/` subfolder) and click **Validate**.
+3. **Select ST user** — If your SillyTavern has multiple user profiles, choose which one to migrate.
 4. **Select scope** — Choose what to import:
     - Characters only
     - World Books only
@@ -333,9 +410,9 @@ The tool walks you through these steps:
     - Characters + Chat History (including group chats)
     - Everything (recommended)
     - Custom selection
-5. **Import** — Progress bars show the status of each category. Failed uploads are retried automatically (up to 3 attempts).
-6. **Summary** — Shows counts of imported, skipped, and failed items with details
-7. **Cleanup** — Removes the checkpoint file (or keeps it for debugging)
+5. **Select target** — Choose which Lumiverse account receives the data.
+6. **Confirm & import** — Review the summary and start the migration. Progress and logs stream in real time.
+7. **Results** — See counts of imported, skipped, and failed items.
 
 ### What Gets Imported
 
@@ -350,8 +427,11 @@ The tool walks you through these steps:
 !!! tip "Run Lumiverse first"
     The migration tool connects to a running Lumiverse instance via API. Make sure Lumiverse is running before starting the migration.
 
-!!! tip "Checkpoint resume"
-    If the import is interrupted (network issue, crash), run it again. The tool detects the checkpoint file and offers to resume where it left off instead of starting over.
+!!! tip "Checkpoint resume (CLI)"
+    If the CLI import is interrupted (network issue, crash), run it again. The tool detects the checkpoint file and offers to resume where it left off instead of starting over.
+
+!!! tip "Duplicate detection"
+    Previously imported characters are automatically skipped, so it's safe to run the migration more than once.
 
 ---
 

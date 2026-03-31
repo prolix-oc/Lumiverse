@@ -1,0 +1,267 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ─── Tab selector ───────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--lumiverse-text-muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tabActive {
+  composes: tab;
+  background: var(--lumiverse-bg-elevated);
+  color: var(--lumiverse-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.tabIcon {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.tabActive .tabIcon {
+  opacity: 1;
+}
+
+/* ─── Config form ────────────────────────────────────────────────────────── */
+
+.configForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.fieldRow {
+  display: flex;
+  gap: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.fieldSmall {
+  composes: field;
+  flex: 0 0 100px;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--lumiverse-text-dim);
+  letter-spacing: 0.01em;
+}
+
+.input {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  font-family: inherit;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--lumiverse-accent);
+}
+
+.input::placeholder {
+  color: var(--lumiverse-text-hint);
+}
+
+.inputMono {
+  composes: input;
+  font-family: var(--lumiverse-font-mono, monospace);
+  font-size: 11px;
+}
+
+.textarea {
+  composes: inputMono;
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.5;
+}
+
+/* ─── Auth toggle ────────────────────────────────────────────────────────── */
+
+.authTabs {
+  display: flex;
+  gap: 1px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--lumiverse-border);
+  width: fit-content;
+}
+
+.authTab {
+  padding: 4px 12px;
+  border: none;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-dim);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.authTab:hover {
+  color: var(--lumiverse-text-muted);
+}
+
+.authTabActive {
+  composes: authTab;
+  background: var(--lumiverse-accent);
+  color: white;
+}
+
+/* ─── Test connection ────────────────────────────────────────────────────── */
+
+.testRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.testBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  white-space: nowrap;
+}
+
+.testBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.testBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.testResult {
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.testOk {
+  composes: testResult;
+  color: rgb(16, 185, 129);
+}
+
+.testFail {
+  composes: testResult;
+  color: var(--lumiverse-error, #ef4444);
+}
+
+/* ─── Key file upload ────────────────────────────────────────────────────── */
+
+.fileUploadRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fileUploadBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px dashed var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.fileUploadBtn:hover {
+  border-color: var(--lumiverse-accent);
+  color: var(--lumiverse-text);
+}
+
+.fileUploaded {
+  font-size: 11px;
+  color: rgb(16, 185, 129);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fileClear {
+  border: none;
+  background: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  display: flex;
+}
+
+.fileClear:hover {
+  color: var(--lumiverse-error, #ef4444);
+}
+
+/* ─── Hint text ──────────────────────────────────────────────────────────── */
+
+.hint {
+  font-size: 11px;
+  color: var(--lumiverse-text-hint);
+  line-height: 1.4;
+}
