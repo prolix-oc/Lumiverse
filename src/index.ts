@@ -49,6 +49,9 @@ if (env.stMigrate) {
 const { seedTokenizers } = await import("./services/tokenizer-seed");
 seedTokenizers();
 
+// Pre-warm tokenizers for configured connection models (fire-and-forget)
+import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
+
 // Import app after database is ready (auth config needs getDb())
 const { default: app, websocket } = await import("./app");
 

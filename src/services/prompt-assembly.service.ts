@@ -630,6 +630,24 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       // Insert chat messages — evaluate macros in each message's content
       // Skip messages marked as hidden drafts (extra.hidden === true)
       // (excludeMessageId is already filtered out at the top of assemblePrompt)
+      // Pre-resolve all attachment files in parallel so the per-message loop
+      // doesn't pay sequential file I/O costs per attachment.
+      const attachmentImageIds = new Set<string>();
+      for (const msg of effectiveMessages) {
+        if (msg.extra?.hidden === true) continue;
+        const atts = Array.isArray(msg.extra?.attachments) ? msg.extra.attachments : [];
+        for (const att of atts) {
+          if (att.image_id) attachmentImageIds.add(att.image_id);
+        }
+      }
+      const attachmentCache = new Map<string, string | null>();
+      if (attachmentImageIds.size > 0) {
+        const entries = await Promise.all(
+          [...attachmentImageIds].map(async (id) => [id, await resolveAttachmentBase64(ctx.userId, id)] as const)
+        );
+        for (const [id, b64] of entries) attachmentCache.set(id, b64);
+      }
+
       let historyCount = 0;
       const historyParts: string[] = [];
       for (const msg of effectiveMessages) {
@@ -642,7 +660,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
           // Build multipart content: text + attachment parts
           const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolvedContent }];
           for (const att of attachments) {
-            const b64 = await resolveAttachmentBase64(ctx.userId, att.image_id);
+            const b64 = attachmentCache.get(att.image_id) ?? null;
             if (!b64) continue;
             if (att.type === "image") {
               parts.push({ type: "image", data: b64, mime_type: att.mime_type });
@@ -3564,6 +3582,23 @@ async function legacyAssembly(
 
   // Chat history — evaluate macros in each message
   // Skip messages marked as hidden drafts (extra.hidden === true)
+  // Pre-resolve all attachment files in parallel (same pattern as main assembly)
+  const legacyAttachmentIds = new Set<string>();
+  for (const m of messages) {
+    if (m.extra?.hidden === true) continue;
+    const atts = Array.isArray(m.extra?.attachments) ? m.extra.attachments : [];
+    for (const att of atts) {
+      if (att.image_id) legacyAttachmentIds.add(att.image_id as string);
+    }
+  }
+  const legacyAttachmentCache = new Map<string, string | null>();
+  if (legacyAttachmentIds.size > 0 && userId) {
+    const entries = await Promise.all(
+      [...legacyAttachmentIds].map(async (id) => [id, await resolveAttachmentBase64(userId, id)] as const)
+    );
+    for (const [id, b64] of entries) legacyAttachmentCache.set(id, b64);
+  }
+
   const legacyFirstChatIdx = llmMessages.length;
   let legacyHistoryCount = 0;
   const legacyHistoryParts: string[] = [];
@@ -3576,7 +3611,7 @@ async function legacyAssembly(
       const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolved }];
       for (const att of attachments) {
         if (!att.image_id || !userId) continue;
-        const b64 = await resolveAttachmentBase64(userId, att.image_id as string);
+        const b64 = legacyAttachmentCache.get(att.image_id as string) ?? null;
         if (!b64) continue;
         if (att.type === "image") {
           parts.push({ type: "image", data: b64, mime_type: att.mime_type });

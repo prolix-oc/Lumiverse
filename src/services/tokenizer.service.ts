@@ -270,11 +270,13 @@ export async function countBreakdown(
     if (entry.preCountedTokens != null) {
       tokens = entry.preCountedTokens;
     } else if (entry.type === "chat_history" && chatHistoryMessages && chatHistoryMessages.length > 0) {
-      for (const msg of chatHistoryMessages) {
-        const text = getTextContent(msg);
-        // Count role + content together to capture the full message footprint
-        tokens += countText(`${msg.role}\n${text}`);
-      }
+      // Concatenate all messages into a single string and tokenize once.
+      // Per-message encode() calls have significant per-call overhead (regex
+      // preprocessing, BPE merges, array alloc) that compounds on slower runtimes.
+      const bulk = chatHistoryMessages
+        .map(msg => `${msg.role}\n${getTextContent(msg)}`)
+        .join("\n");
+      tokens = countText(bulk);
     } else {
       tokens = countText(entry.content || "");
     }
@@ -307,4 +309,37 @@ export function invalidate(tokenizerId: string): void {
 
 export function invalidatePatterns(): void {
   patternCache = null;
+}
+
+/**
+ * Pre-warm tokenizer instances for all models referenced by existing connection
+ * profiles. Resolves each unique model to its tokenizer ID and eagerly loads the
+ * instance so the first dry-run / generation doesn't pay the cold-start import
+ * cost (2+ MB module parse for gpt-tokenizer / @lenml/tokenizer-claude).
+ *
+ * Intended to be called fire-and-forget at startup — failures are non-fatal.
+ */
+export async function prewarm(): Promise<void> {
+  const db = getDb();
+  const rows = db.query("SELECT DISTINCT model FROM connection_profiles WHERE model IS NOT NULL AND model != ''").all() as { model: string }[];
+
+  const tokenizerIds = new Set<string>();
+  for (const { model } of rows) {
+    const id = getTokenizerIdForModel(model);
+    if (id) tokenizerIds.add(id);
+  }
+
+  if (tokenizerIds.size === 0) return;
+
+  const labels: string[] = [];
+  await Promise.allSettled(
+    [...tokenizerIds].map(async (id) => {
+      await getInstance(id);
+      labels.push(id);
+    })
+  );
+
+  if (labels.length > 0) {
+    console.log("[Tokenizer] Pre-warmed: %s", labels.join(", "));
+  }
 }
