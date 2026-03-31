@@ -12,10 +12,12 @@ export interface ChatSlice {
   streamingContent: string
   streamingReasoning: string
   streamingReasoningDuration: number | null
+  streamingReasoningStartedAt: number | null
   streamingError: string | null
   activeGenerationId: string | null
   regeneratingMessageId: string | null
   streamingGenerationType: string | null
+  lastPooledSeq: number | null
   totalChatLength: number
   setActiveChat: (chatId: string | null, characterId?: string | null) => void
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
@@ -29,6 +31,10 @@ export interface ChatSlice {
   startStreaming: (generationId: string, regeneratingMessageId?: string) => void
   appendStreamToken: (token: string) => void
   appendStreamReasoning: (token: string) => void
+  replaceStreamContent: (content: string) => void
+  replaceStreamReasoning: (reasoning: string) => void
+  setStreamingReasoningStartedAt: (ts: number | null) => void
+  setLastPooledSeq: (seq: number) => void
   endStreaming: () => void
   stopStreaming: () => void
   setStreamingError: (error: string | null) => void
@@ -323,6 +329,10 @@ export interface SettingsSlice {
   wallpaper: WallpaperSettings
   thumbnailSettings: { smallSize: number, largeSize: number }
   pushNotificationPreferences: { enabled: boolean, events: { generation_ended: boolean, generation_error: boolean } }
+  chatHeadsEnabled: boolean
+  chatHeadsSize: number
+  chatHeadsDirection: 'column' | 'row'
+  chatHeadsOpacity: number
   customCSS: CustomCSSSettings
   componentOverrides: Record<string, import('@/lib/componentOverrides').ComponentOverride>
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
@@ -435,6 +445,20 @@ import type {
   CouncilToolsSettings,
 } from 'lumiverse-spindle-types'
 
+export interface CouncilToolsFailedInfo {
+  generationId: string
+  chatId: string
+  failedTools: {
+    memberId: string
+    memberName: string
+    toolName: string
+    toolDisplayName: string
+    error?: string
+  }[]
+  successCount: number
+  failedCount: number
+}
+
 export interface CouncilSlice {
   councilSettings: CouncilSettings
   councilToolResults: CouncilToolResult[]
@@ -442,6 +466,7 @@ export interface CouncilSlice {
   availableCouncilTools: CouncilToolDefinition[]
   councilLoading: boolean
   councilExecuting: boolean
+  councilToolsFailure: CouncilToolsFailedInfo | null
 
   setCouncilSettings: (settings: CouncilSettings) => void
   setCouncilToolResults: (results: CouncilToolResult[]) => void
@@ -449,6 +474,7 @@ export interface CouncilSlice {
   setAvailableCouncilTools: (tools: CouncilToolDefinition[]) => void
   setCouncilLoading: (loading: boolean) => void
   setCouncilExecuting: (executing: boolean) => void
+  setCouncilToolsFailure: (failure: CouncilToolsFailedInfo | null) => void
 
   loadCouncilSettings: () => Promise<void>
   saveCouncilSettings: (partial: Partial<CouncilSettings>) => Promise<void>
@@ -883,6 +909,33 @@ export interface FloatingAvatarSlice {
   closeFloatingAvatar: () => void
 }
 
+// ---- Chat Heads (floating generation status) ----
+
+export type ChatHeadStatus = 'assembling' | 'council' | 'council_failed' | 'reasoning' | 'streaming' | 'completed' | 'stopped' | 'error'
+
+export interface ChatHeadEntry {
+  generationId: string
+  chatId: string
+  characterName: string
+  characterId?: string
+  avatarUrl: string | null
+  status: ChatHeadStatus
+  model: string
+  startedAt: number
+}
+
+export interface ChatHeadsSlice {
+  chatHeads: ChatHeadEntry[]
+  /** Position stored as percentage of viewport (0-1) for responsive persistence */
+  chatHeadsPosition: { xPct: number; yPct: number }
+  addChatHead: (head: ChatHeadEntry) => void
+  updateChatHead: (generationId: string, updates: Partial<ChatHeadEntry>) => void
+  removeChatHead: (chatId: string) => void
+  setChatHeadsPosition: (pos: { xPct: number; yPct: number }) => void
+  /** Re-sync persisted heads against the backend's active generation list */
+  reconcileChatHeads: () => Promise<void>
+}
+
 // ---- Combined Store ----
 export type AppStore = ChatSlice &
   CharactersSlice &
@@ -908,4 +961,5 @@ export type AppStore = ChatSlice &
   LoadoutsSlice &
   MigrationSlice &
   OperatorSlice &
-  FloatingAvatarSlice
+  FloatingAvatarSlice &
+  ChatHeadsSlice

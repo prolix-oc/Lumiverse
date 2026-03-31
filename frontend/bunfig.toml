@@ -1,5 +1,2 @@
-[run]
-smol = true
-
 [install]
 peer = false

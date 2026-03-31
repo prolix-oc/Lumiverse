@@ -18,6 +18,7 @@ import AuthorsNotePanel from './AuthorsNotePanel'
 import styles from './InputArea.module.css'
 import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
+import { unlockNotificationAudio } from '@/lib/notificationAudio'
 
 interface InputAreaProps {
   chatId: string
@@ -686,6 +687,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   // Send button: ctrl+click queues, normal click sends
   const handleSendClick = useCallback((e: React.MouseEvent) => {
+    unlockNotificationAudio()
     if (queueLockRef.current) {
       queueLockRef.current = false
       return
@@ -744,8 +746,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
         onClose={() => setAuthorsNoteOpen(false)}
       />
 
-      {/* Action bar — hidden during streaming */}
+      {/* Action bar — home button always visible, rest hidden during streaming */}
       <div data-spindle-mount="chat_toolbar">
+        {isStreaming && (
+          <div className={styles.actionBar}>
+            <button type="button" className={styles.actionBtn} onClick={() => navigate('/')} title="Back to home">
+              <Home size={14} />
+            </button>
+          </div>
+        )}
         {!isStreaming && (
           <div className={styles.actionBar}>
             <button type="button" className={styles.actionBtn} onClick={() => navigate('/')} title="Back to home">

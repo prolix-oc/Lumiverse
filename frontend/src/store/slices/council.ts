@@ -24,6 +24,7 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
   availableCouncilTools: [],
   councilLoading: false,
   councilExecuting: false,
+  councilToolsFailure: null,
 
   setCouncilSettings: (settings) => set({ councilSettings: settings }),
   setCouncilToolResults: (results) => set({ councilToolResults: results }),
@@ -31,6 +32,7 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
   setAvailableCouncilTools: (tools) => set({ availableCouncilTools: tools }),
   setCouncilLoading: (loading) => set({ councilLoading: loading }),
   setCouncilExecuting: (executing) => set({ councilExecuting: executing }),
+  setCouncilToolsFailure: (failure) => set({ councilToolsFailure: failure }),
 
   loadCouncilSettings: async () => {
     set({ councilLoading: true })

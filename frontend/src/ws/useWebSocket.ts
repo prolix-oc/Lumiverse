@@ -22,6 +22,7 @@ import type {
 } from '@/types/ws-events'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
+import { playNotificationPing } from '@/lib/notificationAudio'
 
 /**
  * Fetch the latest messages using the tail endpoint (single request).
@@ -140,16 +141,37 @@ export function useWebSocket() {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
         }
+        // Track as a chat head so it appears if user navigates away
+        state.addChatHead({
+          generationId: payload.generationId,
+          chatId: payload.chatId,
+          characterName: payload.characterName || 'Assistant',
+          characterId: payload.characterId,
+          avatarUrl: null, // resolved by the component via characterId
+          status: 'assembling',
+          model: '',
+          startedAt: Date.now(),
+        })
       }),
 
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
+          // Skip tokens already included in the pooled recovery content
+          if (state.lastPooledSeq != null && (payload as any).seq != null && (payload as any).seq <= state.lastPooledSeq) return
+          // Clear the watermark after the first new token arrives
+          if (state.lastPooledSeq != null) state.setLastPooledSeq(null as any)
           if (payload.type === 'reasoning') {
             state.appendStreamReasoning(payload.token)
           } else {
             state.appendStreamToken(payload.token)
           }
+        }
+        // Update chat head status to distinguish reasoning from content streaming
+        if (payload.generationId) {
+          state.updateChatHead(payload.generationId, {
+            status: payload.type === 'reasoning' ? 'reasoning' : 'streaming',
+          })
         }
       }),
 
@@ -248,6 +270,16 @@ export function useWebSocket() {
             })
           }
         }
+        // Transition chat head to terminal state (it auto-dismisses after a delay)
+        if (payload.chatId && payload.generationId) {
+          state.updateChatHead(payload.generationId, {
+            status: payload.error ? 'error' : 'completed',
+          })
+          // Ping when a backgrounded chat finishes successfully
+          if (!payload.error && payload.chatId !== state.activeChatId) {
+            playNotificationPing()
+          }
+        }
       }),
 
       wsClient.on(EventType.GENERATION_STOPPED, (payload: { generationId?: string; chatId?: string }) => {
@@ -282,6 +314,10 @@ export function useWebSocket() {
           })
         } else {
           state.stopStreaming()
+        }
+        // Transition chat head to stopped state (auto-dismisses after a delay)
+        if (payload.chatId && payload.generationId) {
+          state.updateChatHead(payload.generationId, { status: 'stopped' })
         }
       }),
 
@@ -357,11 +393,17 @@ export function useWebSocket() {
       }),
 
       // Council events
-      wsClient.on(EventType.COUNCIL_STARTED, () => {
+      wsClient.on(EventType.COUNCIL_STARTED, (payload: { chatId?: string }) => {
         const state = store.getState()
         state.setCouncilExecuting(true)
         state.setCouncilToolResults([])
         state.setCouncilExecutionResult(null)
+        state.setCouncilToolsFailure(null)
+        // Transition the chat head from assembling → council
+        if (payload?.chatId) {
+          const head = state.chatHeads.find((h) => h.chatId === payload.chatId)
+          if (head) state.updateChatHead(head.generationId, { status: 'council' })
+        }
       }),
 
       wsClient.on(EventType.COUNCIL_MEMBER_DONE, (payload: { results: CouncilToolResult[] }) => {

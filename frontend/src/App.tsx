@@ -13,6 +13,7 @@ import ViewportDrawer from '@/components/panels/ViewportDrawer'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
+import ChatHeads from '@/components/chat-heads/ChatHeads'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
 import styles from './App.module.css'
@@ -114,6 +115,7 @@ export default function App() {
               <ModalContainer />
               <SpindleUIManager />
               <ToastContainer />
+              <ChatHeads />
             </ErrorBoundary>
           </div>
         </MotionConfig>

@@ -56,6 +56,16 @@ export function useThemeApplicator() {
     applyVariables(vars)
     root.setAttribute('data-theme-mode', mode)
 
+    // Immediately recompute --app-shell-height for the new UI scale so the
+    // app shell fills the viewport correctly inside the zoomed body. Also
+    // dispatch resize so syncViewportVars stays in sync for future events.
+    if (!root.hasAttribute('data-pwa')) {
+      const us = parseFloat(vars['--lumiverse-ui-scale'] ?? '1') || 1
+      const vh = window.visualViewport?.height ?? window.innerHeight
+      root.style.setProperty('--app-shell-height', `${Math.round(vh / us)}px`)
+    }
+    window.dispatchEvent(new Event('resize'))
+
     // Toggle glass attribute so CSS can skip backdrop-filter entirely when disabled.
     // Suppress glass when the user prefers reduced motion — backdrop-filter is GPU-heavy.
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches

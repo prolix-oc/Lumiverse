@@ -64,10 +64,12 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     streamingContent: '',
     streamingReasoning: '',
     streamingReasoningDuration: null,
+    streamingReasoningStartedAt: null,
     streamingError: null,
     activeGenerationId: null,
     regeneratingMessageId: null,
     streamingGenerationType: null,
+    lastPooledSeq: null,
     totalChatLength: 0,
 
     setActiveChat: (chatId, characterId = null) => {
@@ -85,6 +87,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         activeGenerationId: null,
         regeneratingMessageId: null,
         streamingGenerationType: null,
+    lastPooledSeq: null,
         messageSelectMode: false,
         selectedMessageIds: [],
       })
@@ -207,6 +210,27 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       })
     },
 
+    replaceStreamContent: (content) => {
+      rawStreamContent = content
+      set({ streamingContent: content })
+    },
+
+    replaceStreamReasoning: (reasoning) => {
+      rawStreamReasoning = reasoning
+      set({ streamingReasoning: reasoning })
+    },
+
+    setLastPooledSeq: (seq) => {
+      set({ lastPooledSeq: seq })
+    },
+
+    setStreamingReasoningStartedAt: (ts) => {
+      // Also restore the closure variable so appendStreamToken can finalize
+      // the duration when the first content token arrives after recovery.
+      if (ts) reasoningStartedAt = ts
+      set({ streamingReasoningStartedAt: ts })
+    },
+
     appendStreamToken: (token) => {
       // CoT detection (reasoning prefix/suffix separation) is now handled
       // server-side in generate.service.ts. The backend emits pre-separated
@@ -237,7 +261,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
-      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null })
+      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null, lastPooledSeq: null })
     },
 
     stopStreaming: () => {
@@ -247,7 +271,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
-      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null })
+      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null, lastPooledSeq: null })
     },
 
     setStreamingError: (error) => {
@@ -257,7 +281,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
-      set({ streamingError: error, isStreaming: false, streamingReasoningDuration: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null })
+      set({ streamingError: error, isStreaming: false, streamingReasoningDuration: null, streamingReasoningStartedAt: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null, lastPooledSeq: null })
     },
 
     markGenerationEnded: (generationId) => {

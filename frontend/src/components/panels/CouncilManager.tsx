@@ -295,6 +295,11 @@ export default function CouncilManager() {
             onChange={(checked) => setCouncilToolsSettings({ allowUserControl: checked })}
             label="Allow User Control"
           />
+          <Toggle.Checkbox
+            checked={ts.retainResultsForRegens ?? false}
+            onChange={(checked) => setCouncilToolsSettings({ retainResultsForRegens: checked })}
+            label="Retain Results for Regens/Swipes"
+          />
         </div>
       </EditorSection>
 

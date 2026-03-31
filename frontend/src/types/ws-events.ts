@@ -21,6 +21,7 @@ export enum EventType {
   COUNCIL_STARTED = 'COUNCIL_STARTED',
   COUNCIL_MEMBER_DONE = 'COUNCIL_MEMBER_DONE',
   COUNCIL_COMPLETED = 'COUNCIL_COMPLETED',
+  COUNCIL_TOOLS_FAILED = 'COUNCIL_TOOLS_FAILED',
 
   // Lumi Pipeline
   LUMI_PIPELINE_STARTED = 'LUMI_PIPELINE_STARTED',
@@ -251,4 +252,19 @@ export interface MigrationCompletedPayload {
 export interface MigrationFailedPayload {
   migrationId: string
   error: string
+}
+
+// ---- Council Tool Failure ----
+export interface CouncilToolsFailedPayload {
+  generationId: string
+  chatId: string
+  failedTools: {
+    memberId: string
+    memberName: string
+    toolName: string
+    toolDisplayName: string
+    error?: string
+  }[]
+  successCount: number
+  failedCount: number
 }

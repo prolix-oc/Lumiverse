@@ -54,7 +54,10 @@ export default function ModalContainer() {
             modalProps.onConfirm?.()
             closeModal()
           }}
-          onCancel={closeModal}
+          onCancel={() => {
+            modalProps.onCancel?.()
+            closeModal()
+          }}
           secondaryText={modalProps.secondaryText}
           onSecondary={modalProps.onSecondary ? () => {
             modalProps.onSecondary?.()

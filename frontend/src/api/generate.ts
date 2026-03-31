@@ -105,6 +105,38 @@ export interface BreakdownResponse {
   tokenizer_name: string | null
 }
 
+export interface GenerationStatusResponse {
+  active: boolean
+  generationId?: string
+  status?: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  content?: string
+  reasoning?: string
+  tokenSeq?: number
+  generationType?: string
+  targetMessageId?: string
+  characterName?: string
+  characterId?: string
+  model?: string
+  startedAt?: number
+  reasoningStartedAt?: number
+  reasoningDurationMs?: number
+  completedMessageId?: string
+  completedAt?: number
+  error?: string
+}
+
+export interface ActiveGenerationEntry {
+  generationId: string
+  chatId: string
+  status: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  generationType: string
+  characterName: string
+  characterId?: string
+  model: string
+  startedAt: number
+  councilRetryPending: boolean
+}
+
 export const generateApi = {
   start(request: GenerateRequest) {
     return post<GenerateResponse>('/generate', request)
@@ -136,5 +168,21 @@ export const generateApi = {
 
   getBreakdown(messageId: string) {
     return get<BreakdownResponse>(`/generate/breakdown/${messageId}`)
+  },
+
+  getStatus(chatId: string) {
+    return get<GenerationStatusResponse>(`/generate/status/${chatId}`)
+  },
+
+  getActive() {
+    return get<ActiveGenerationEntry[]>('/generate/active')
+  },
+
+  acknowledge(chatId: string) {
+    return post<{ acknowledged: boolean }>('/generate/acknowledge', { chatId })
+  },
+
+  councilRetry(generationId: string, decision: 'continue' | 'retry') {
+    return post<{ resolved: boolean }>('/generate/council-retry', { generation_id: generationId, decision })
   },
 }

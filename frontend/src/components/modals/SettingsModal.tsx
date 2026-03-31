@@ -167,6 +167,10 @@ function DisplaySettings() {
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const toastPosition = useStore((s) => s.toastPosition)
+  const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
+  const chatHeadsSize = useStore((s) => s.chatHeadsSize)
+  const chatHeadsDirection = useStore((s) => s.chatHeadsDirection)
+  const chatHeadsOpacity = useStore((s) => s.chatHeadsOpacity)
   const setSetting = useStore((s) => s.setSetting)
 
   const updateDrawer = (patch: Partial<DrawerSettings>) => {
@@ -345,6 +349,65 @@ function DisplaySettings() {
           ))}
         </div>
       </div>
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>Chat Heads</h3>
+
+      <Toggle.Checkbox
+        checked={chatHeadsEnabled}
+        onChange={(checked) => setSetting('chatHeadsEnabled', checked)}
+        label="Show chat heads"
+        hint="Display floating indicators for background generations"
+      />
+
+      {chatHeadsEnabled && (
+        <>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>SIZE ({chatHeadsSize}px)</label>
+            <div className={styles.rangeRow}>
+              <input
+                type="range"
+                className={styles.rangeSlider}
+                min={32}
+                max={64}
+                step={4}
+                value={chatHeadsSize}
+                onChange={(e) => setSetting('chatHeadsSize', parseInt(e.target.value, 10))}
+              />
+            </div>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>LAYOUT</label>
+            <div className={styles.segmented}>
+              {(['column', 'row'] as const).map((dir) => (
+                <button
+                  key={dir}
+                  type="button"
+                  className={`${styles.segmentedBtn} ${chatHeadsDirection === dir ? styles.segmentedBtnActive : ''}`}
+                  onClick={() => setSetting('chatHeadsDirection', dir)}
+                >
+                  {dir === 'column' ? 'Vertical' : 'Horizontal'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>OPACITY ({Math.round(chatHeadsOpacity * 100)}%)</label>
+            <div className={styles.rangeRow}>
+              <input
+                type="range"
+                className={styles.rangeSlider}
+                min={20}
+                max={100}
+                step={5}
+                value={Math.round(chatHeadsOpacity * 100)}
+                onChange={(e) => setSetting('chatHeadsOpacity', parseInt(e.target.value, 10) / 100)}
+              />
+            </div>
+          </div>
+        </>
+      )}
 
       <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>Pagination</h3>
 

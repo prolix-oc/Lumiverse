@@ -1,0 +1,410 @@
+/* ─── Chat Heads: Floating generation status overlay ─── */
+
+.container {
+  position: fixed;
+  z-index: 9960;
+  touch-action: none;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 28px;
+  background: rgba(20, 17, 28, 0.55);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  border: 1px solid rgba(147, 112, 219, 0.08);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.35),
+    0 0 0 0.5px rgba(255, 255, 255, 0.04) inset;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  cursor: grab;
+}
+
+.containerDragging {
+  cursor: grabbing;
+  transform: scale(1.04);
+  transition: none;
+}
+
+/* ─── Individual head ─── */
+
+.head {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  animation: headEnter 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.headExiting {
+  animation: headExit 240ms cubic-bezier(0.55, 0, 1, 0.45) forwards;
+}
+
+@keyframes headEnter {
+  from { opacity: 0; transform: scale(0.3); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes headExit {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.3); }
+}
+
+/* Ambient glow ring around active heads */
+.head::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--lumiverse-primary-020);
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+
+.headActive::before {
+  opacity: 1;
+  animation: glowPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes glowPulse {
+  0%, 100% { border-color: rgba(147, 112, 219, 0.15); }
+  50% { border-color: rgba(147, 112, 219, 0.35); }
+}
+
+/* Avatar image */
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center top;
+  pointer-events: none;
+  display: block;
+  border: 1.5px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: border-color 200ms ease, opacity 200ms ease;
+}
+
+.head:hover .avatar {
+  border-color: var(--lumiverse-primary-050);
+}
+
+.avatarDimmed {
+  opacity: 0.4;
+}
+
+/* Fallback when no avatar image */
+.avatarFallback {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-bg-elevated);
+  border: 1.5px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  color: var(--lumiverse-text-muted);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  pointer-events: none;
+  transition: border-color 200ms ease, opacity 200ms ease;
+}
+
+.head:hover .avatarFallback {
+  border-color: var(--lumiverse-primary-050);
+}
+
+/* ─── Online badge (bottom-right, small circle) ─── */
+
+.badge {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(20, 17, 28, 0.85);
+  font-size: 0;
+  line-height: 0;
+}
+
+.badgeAssembling {
+  background: var(--lumiverse-warning);
+  animation: badgePulse 1.4s ease-in-out infinite;
+}
+
+.badgeActive {
+  background: var(--lumiverse-success);
+}
+
+.badgeCompleted {
+  background: var(--lumiverse-success);
+}
+
+.badgeError {
+  background: var(--lumiverse-danger);
+}
+
+.badgeIcon {
+  width: 7px;
+  height: 7px;
+  color: white;
+  stroke-width: 3;
+}
+
+@keyframes badgePulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* ─── Assembly ring (spinning border around avatar) ─── */
+
+.assemblyRing {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2.5px solid transparent;
+  border-top-color: var(--lumiverse-warning);
+  border-right-color: rgba(245, 158, 11, 0.3);
+  animation: spin 0.9s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Wrench icon inside council bubble ─── */
+
+.wrenchIcon {
+  position: relative;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  color: white;
+  stroke-width: 2.5;
+}
+
+/* ─── Notification pip (completed generation) ─── */
+
+.notifPip {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--lumiverse-primary);
+  border: 2px solid rgba(20, 17, 28, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pipEnter 300ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.notifPipUnread {
+  background: var(--lumiverse-danger);
+}
+
+.notifPipIcon {
+  width: 8px;
+  height: 8px;
+  color: white;
+  stroke-width: 3;
+}
+
+@keyframes pipEnter {
+  from { opacity: 0; transform: scale(0); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ─── Thought cloud (reasoning indicator, top-right) ─── */
+
+.thoughtCloud {
+  position: absolute;
+  top: -8px;
+  right: -10px;
+  width: 28px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.3));
+  animation: bubbleEnter 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  pointer-events: none;
+}
+
+.thoughtCloudSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ─── Speech bubble (streaming indicator, top-left) ─── */
+
+.speechBubble {
+  position: absolute;
+  top: -8px;
+  left: -10px;
+  width: 28px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.3));
+  animation: bubbleEnter 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  pointer-events: none;
+}
+
+.speechBubbleSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes bubbleEnter {
+  from { opacity: 0; transform: scale(0.3) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ─── Dots shared by thought cloud and speech bubble ─── */
+
+.bubbleDots {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+}
+
+.bubbleDot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: white;
+  animation: dotWave 1s ease-in-out infinite;
+}
+
+.bubbleDot:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.bubbleDot:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+@keyframes dotWave {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.7);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+/* ─── Tooltip ─── */
+
+.tooltip {
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 50%;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(28, 24, 38, 0.85);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  border: 1px solid rgba(147, 112, 219, 0.12);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  color: var(--lumiverse-text);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%) translateX(4px);
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Tooltip arrow */
+.tooltip::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%) rotate(45deg);
+  width: 7px;
+  height: 7px;
+  background: rgba(28, 24, 38, 0.85);
+  border-right: 1px solid rgba(147, 112, 219, 0.12);
+  border-top: 1px solid rgba(147, 112, 219, 0.12);
+}
+
+.head:hover .tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* Don't show tooltips while dragging */
+.containerDragging .tooltip {
+  opacity: 0 !important;
+  transition: none;
+}
+
+/* ─── Responsive ─── */
+
+@media (max-width: 600px) {
+  .container {
+    padding: 5px;
+    gap: 6px;
+    border-radius: 24px;
+  }
+
+  .head {
+    width: 42px;
+    height: 42px;
+  }
+
+  .avatar,
+  .avatarFallback {
+    width: 42px;
+    height: 42px;
+  }
+
+  .tooltip {
+    display: none;
+  }
+}
+
+@media (max-width: 400px) {
+  .container {
+    padding: 4px;
+    gap: 5px;
+    border-radius: 22px;
+  }
+
+  .head {
+    width: 38px;
+    height: 38px;
+  }
+
+  .avatar,
+  .avatarFallback {
+    width: 38px;
+    height: 38px;
+  }
+}

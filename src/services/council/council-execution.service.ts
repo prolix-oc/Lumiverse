@@ -53,6 +53,10 @@ interface ExecuteInput {
   /** Pre-computed enrichment from the generation chain. When provided, council tools
    *  use this data instead of independently loading character/persona/WI. */
   enrichment?: CouncilEnrichment;
+  /** When set, only re-execute these specific tool names (retry mode).
+   *  Members are filtered to only include those with matching failed tools.
+   *  Dice rolls are skipped — all matching members participate. */
+  retryToolNames?: string[];
 }
 
 /**
@@ -101,13 +105,30 @@ export async function executeCouncil(
     availableTools.set(t.name, t);
   }
 
-  // Roll dice for each member
-  const activeMembers = settings.members.filter((m) => {
-    if (m.tools.length === 0) return false;
-    if (m.chance >= 100) return true;
-    if (m.chance <= 0) return false;
-    return Math.random() * 100 < m.chance;
-  });
+  // In retry mode, skip dice rolls and only include members with failed tools
+  const retrySet = input.retryToolNames ? new Set(input.retryToolNames) : null;
+
+  let activeMembers: CouncilMember[];
+  if (retrySet) {
+    // Retry mode: filter members to only those with matching failed tools,
+    // and narrow their tool lists to just the failed ones
+    activeMembers = settings.members
+      .map((m) => ({
+        ...m,
+        tools: m.tools.filter((t) => retrySet.has(t)),
+      }))
+      .filter((m) => m.tools.length > 0);
+    console.debug("[council] Retry mode: %d members with %d failed tools to re-execute",
+      activeMembers.length, retrySet.size);
+  } else {
+    // Normal mode: roll dice for each member
+    activeMembers = settings.members.filter((m) => {
+      if (m.tools.length === 0) return false;
+      if (m.chance >= 100) return true;
+      if (m.chance <= 0) return false;
+      return Math.random() * 100 < m.chance;
+    });
+  }
 
   if (activeMembers.length === 0) {
     console.debug("[council] Skipped: no members survived dice roll (total=%d)", settings.members.length);
@@ -495,7 +516,7 @@ function buildMemberIdentity(userId: string, member: CouncilMember): string {
 }
 
 /** Format tool results into the Markdown deliberation block. */
-function formatDeliberation(
+export function formatDeliberation(
   results: CouncilToolResult[],
   tools: Map<string, CouncilToolDefinition>
 ): string {

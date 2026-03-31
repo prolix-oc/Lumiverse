@@ -170,9 +170,6 @@ select:focus-visible,
     touch-action: pan-x pan-y;
   }
 
-  #root {
-    height: 100%;
-  }
 }
 
 /* ── iOS PWA viewport compensation ──

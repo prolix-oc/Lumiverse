@@ -21,13 +21,14 @@ import * as charactersSvc from "./characters.service";
 import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationResponse, type StreamChunk, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
 import { contextHandlerChain } from "../spindle/context-handler";
-import { executeCouncil, collectWorldInfoForCouncil, type CouncilEnrichment } from "./council/council-execution.service";
+import { executeCouncil, collectWorldInfoForCouncil, formatDeliberation, type CouncilEnrichment } from "./council/council-execution.service";
 import { activateWorldInfo } from "./world-info-activation.service";
-import type { CouncilExecutionResult } from "lumiverse-spindle-types";
+import type { CouncilExecutionResult, CachedCouncilResult } from "lumiverse-spindle-types";
 import { getCouncilSettings, getAvailableTools } from "./council/council-settings.service";
 import * as tokenizerSvc from "./tokenizer.service";
 import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
+import * as pool from "./generation-pool.service";
 import { detectExpression, getExpressionDetectionSettings } from "./expression-detection.service";
 import { hasExpressions, getExpressionConfig } from "./expressions.service";
 import { getSidecarSettings } from "./sidecar-settings.service";
@@ -215,6 +216,30 @@ const activeGenerations = new Map<string, { controller: AbortController; userId:
 // a second request for the same chat will abort the in-flight one (including its council tools).
 const activeChatGenerations = new Map<string, string>();
 
+// Pending council retry decisions: when council tools partially fail, the generation
+// pauses and waits for the user to decide whether to continue or retry. Keyed by
+// generationId → { resolve, timeout }. The user responds via POST /generate/council-retry.
+/** Safety cap: auto-continue after 10 minutes to prevent permanent resource hangs */
+const COUNCIL_RETRY_SAFETY_CAP_MS = 10 * 60 * 1000;
+
+const pendingCouncilRetries = new Map<string, {
+  resolve: (decision: "continue" | "retry") => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
+
+/** Called from the council-retry route to resolve a pending decision. */
+export function resolveCouncilRetry(generationId: string, decision: "continue" | "retry"): boolean {
+  const pending = pendingCouncilRetries.get(generationId);
+  if (!pending) return false;
+  clearTimeout(pending.timeout);
+  pendingCouncilRetries.delete(generationId);
+  // Clear the pool flag
+  const poolEntry = pool.getPoolEntry(generationId);
+  if (poolEntry) poolEntry.councilRetryPending = false;
+  pending.resolve(decision);
+  return true;
+}
+
 /** Resolve connection profile by ID or fall back to the user's default. */
 function resolveConnection(userId: string, connectionId?: string) {
   const connection = connectionId
@@ -299,6 +324,20 @@ async function runPromptPipeline(opts: {
   if (opts.inputMessages) {
     messages = opts.inputMessages;
   } else {
+    // Batch-prefetch all data the assembly pipeline needs in ~7 queries
+    // instead of the ~35-40 scattered individual calls inside assemblePrompt
+    const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
+    const prefetched = await prefetchAssemblyData({
+      userId: opts.userId,
+      chatId: opts.chatId,
+      connectionId: opts.connectionId,
+      presetId: opts.presetId,
+      personaId: opts.personaId,
+      generationType: opts.generationType as GenerationType,
+      excludeMessageId: opts.excludeMessageId,
+      targetCharacterId: opts.targetCharacterId,
+    });
+
     // All presets (classic and lumi) go through the same assembly path
     const assemblyResult = await assemblePrompt({
       userId: opts.userId,
@@ -317,6 +356,7 @@ async function runPromptPipeline(opts: {
       lumiPipelinePromise: opts.lumiPipelinePromise,
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
+      prefetched,
     });
 
     messages = assemblyResult.messages;
@@ -518,7 +558,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     generationType: genType,
     personaId: resolvedPersona?.id,
     personaName: resolvedPersona?.name || "User",
-    targetCharacterId: input.target_character_id,
+    targetCharacterId: targetCharId,
   };
 
   let excludeMessageId: string | undefined;
@@ -548,6 +588,18 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     }
   }
 
+  // Register pool entry for recovery — at this point we have all the metadata
+  pool.createPoolEntry({
+    generationId,
+    userId: input.userId,
+    chatId: input.chat_id,
+    generationType: genType,
+    characterName,
+    characterId: targetCharId,
+    model: connection.model,
+    targetMessageId: lifecycle.targetMessageId,
+  });
+
   // Execute council if enabled (before prompt assembly so it doesn't slow the critical path visibly)
   const councilSettings = getCouncilSettings(input.userId);
   let councilResult: CouncilExecutionResult | null = null;
@@ -561,6 +613,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     && councilSettings.members.some((m) => m.tools.length > 0);
 
   if (councilHasTools) {
+    pool.setPoolStatus(generationId, "council");
     if (councilSettings.toolsSettings.mode === "inline") {
       // Inline mode requires enableFunctionCalling in the preset's completion
       // settings — the tools are registered as native function calls with the
@@ -588,91 +641,194 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         if (inlineTools.length === 0) inlineTools = undefined;
       }
     } else {
-      // Sidecar mode: stage an empty assistant message BEFORE council execution
-      // so the frontend has a real message bubble to stream tokens into. Without
-      // this, the HTTP response (and thus startStreaming) arrives after council
-      // completes, racing with WS events that may have already finished.
-      if (genType === "normal" || genType === "swipe") {
-        const extra: Record<string, any> = {};
-        if (input.target_character_id) extra.character_id = input.target_character_id;
-        const stagedMsg = chatsSvc.createMessage(input.chat_id, {
-          is_user: false,
-          name: characterName,
-          content: "",
-          extra: Object.keys(extra).length > 0 ? extra : undefined,
-        }, input.userId);
-        // Park the staged message ID so runGeneration updates it instead of
-        // creating a second message. targetMessageId without targetSwipeIdx
-        // signals a staged-message update (as opposed to regeneration).
-        stagedMessageId = stagedMsg.id;
+      // Check if we can reuse cached council results for regens/swipes
+      const shouldRetain = councilSettings.toolsSettings.retainResultsForRegens
+        && (genType === "regenerate" || genType === "swipe");
+      const cached = shouldRetain
+        ? (chat?.metadata?.last_council_results as CachedCouncilResult | undefined)
+        : undefined;
+
+      if (cached?.results?.length) {
+        // Reuse cached council results — skip execution entirely
+        console.debug(
+          "[council] Reusing cached results for %s (cachedAt=%d, results=%d)",
+          genType,
+          cached.cachedAt,
+          cached.results.length,
+        );
+        councilResult = {
+          results: cached.results,
+          deliberationBlock: cached.deliberationBlock,
+          totalDurationMs: 0,
+        };
+      } else {
+        // Sidecar mode: stage an empty assistant message BEFORE council execution
+        // so the frontend has a real message bubble to stream tokens into. Without
+        // this, the HTTP response (and thus startStreaming) arrives after council
+        // completes, racing with WS events that may have already finished.
+        if (genType === "normal" || genType === "swipe") {
+          const extra: Record<string, any> = {};
+          if (input.target_character_id) extra.character_id = input.target_character_id;
+          const stagedMsg = chatsSvc.createMessage(input.chat_id, {
+            is_user: false,
+            name: characterName,
+            content: "",
+            extra: Object.keys(extra).length > 0 ? extra : undefined,
+          }, input.userId);
+          // Park the staged message ID so runGeneration updates it instead of
+          // creating a second message. targetMessageId without targetSwipeIdx
+          // signals a staged-message update (as opposed to regeneration).
+          stagedMessageId = stagedMsg.id;
+        }
+
+        checkAborted();
+
+        // Pre-compute enrichment for council tools — resolve world info at the
+        // top of the generation chain so tools receive proper world book context.
+        // Also filters out the staged empty message and excluded (regenerated)
+        // message so council doesn't see blank assistant turns.
+        const fullCharacter = chat
+          ? charactersSvc.getCharacter(input.userId, targetCharId || chat.character_id)
+          : null;
+        const councilMessages = chatsSvc.getMessages(input.userId, input.chat_id)
+          .filter(m => m.id !== excludeMessageId && m.id !== stagedMessageId);
+        const { entries: wiEntries, worldBookIds: wiBookIds } = collectWorldInfoForCouncil(input.userId, fullCharacter, resolvedPersona, input.chat_id);
+        let councilWiActivated = wiEntries.length > 0
+          ? activateWorldInfo({
+              entries: wiEntries,
+              messages: councilMessages,
+              chatTurn: councilMessages.length,
+              wiState: {},
+            }).activatedEntries
+          : [];
+
+        // Run vector retrieval so council also sees vectorized world info entries.
+        // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
+        const vectorActivated = await collectVectorActivatedWorldInfo(
+          input.userId,
+          wiBookIds,
+          wiEntries,
+          councilMessages,
+        );
+        councilWiActivated = mergeActivatedWorldInfoEntries(
+          councilWiActivated,
+          vectorActivated,
+        ).activatedEntries;
+
+        // Cache for assembly to reuse
+        precomputedVectorEntries = vectorActivated;
+
+        console.debug(
+          "[generate] Council enrichment: char=%s, persona=%s, messages=%d, wi=%d/%d, vector=%d",
+          fullCharacter?.name ?? "none",
+          resolvedPersona?.name ?? "none",
+          councilMessages.length,
+          councilWiActivated.length,
+          wiEntries.length,
+          vectorActivated.length,
+        );
+
+        const councilEnrichment: CouncilEnrichment = {
+          character: fullCharacter,
+          persona: resolvedPersona,
+          messages: councilMessages,
+          activatedWorldInfoEntries: councilWiActivated,
+        };
+
+        // Execute pre-generation tool calls (abort-aware)
+        councilResult = await executeCouncil({
+          userId: input.userId,
+          chatId: input.chat_id,
+          personaId: input.persona_id,
+          connectionId: input.connection_id,
+          settings: councilSettings,
+          signal: abortController.signal,
+          enrichment: councilEnrichment,
+        });
+
+        checkAborted();
+
+        // Check for partial failures — if some tools failed, ask the user whether
+        // to continue with partial results or retry the broken tools.
+        if (councilResult) {
+          const failedResults = councilResult.results.filter((r) => !r.success);
+          if (failedResults.length > 0 && failedResults.length < councilResult.results.length) {
+            // Partial failure — emit event and wait for user decision
+            eventBus.emit(EventType.COUNCIL_TOOLS_FAILED, {
+              generationId,
+              chatId: input.chat_id,
+              failedTools: failedResults.map((r) => ({
+                memberId: r.memberId,
+                memberName: r.memberName,
+                toolName: r.toolName,
+                toolDisplayName: r.toolDisplayName,
+                error: r.error,
+              })),
+              successCount: councilResult.results.length - failedResults.length,
+              failedCount: failedResults.length,
+            }, input.userId);
+
+            // Mark pool entry so the active endpoint surfaces the pending state to chat heads
+            const poolEntry = pool.getPoolEntry(generationId);
+            if (poolEntry) poolEntry.councilRetryPending = true;
+
+            // Pause indefinitely — no short timer. The frontend controls when to
+            // show the modal (only when the user navigates to this chat). A 10-minute
+            // safety cap prevents permanent resource hangs if the user never responds.
+            const decision = await new Promise<"continue" | "retry">((resolve) => {
+              const timeout = setTimeout(() => {
+                console.debug("[council] Safety cap reached for %s — auto-continuing", generationId);
+                pendingCouncilRetries.delete(generationId);
+                if (poolEntry) poolEntry.councilRetryPending = false;
+                resolve("continue");
+              }, COUNCIL_RETRY_SAFETY_CAP_MS);
+              pendingCouncilRetries.set(generationId, { resolve, timeout });
+            });
+
+            checkAborted();
+
+            if (decision === "retry") {
+              console.debug("[council] User chose retry — re-executing %d failed tools", failedResults.length);
+              // Re-execute only the failed tools by creating a retry run
+              const retryResult = await executeCouncil({
+                userId: input.userId,
+                chatId: input.chat_id,
+                personaId: input.persona_id,
+                connectionId: input.connection_id,
+                settings: councilSettings,
+                signal: abortController.signal,
+                enrichment: councilEnrichment,
+                retryToolNames: failedResults.map((r) => r.toolName),
+              });
+
+              checkAborted();
+
+              if (retryResult) {
+                // Merge: replace failed results with retry results, keep original successes
+                const retryResultMap = new Map(retryResult.results.map((r) => [`${r.memberId}:${r.toolName}`, r]));
+                const mergedResults = councilResult.results.map((r) => {
+                  if (!r.success) {
+                    const retried = retryResultMap.get(`${r.memberId}:${r.toolName}`);
+                    return retried ?? r;
+                  }
+                  return r;
+                });
+
+                // Rebuild the deliberation block from the full merged result set
+                const allTools = await getAvailableTools(input.userId);
+                const toolsMap = new Map(allTools.map((t) => [t.name, t]));
+                councilResult = {
+                  results: mergedResults,
+                  deliberationBlock: formatDeliberation(mergedResults, toolsMap),
+                  totalDurationMs: councilResult.totalDurationMs + retryResult.totalDurationMs,
+                };
+              }
+            } else {
+              console.debug("[council] User chose continue — proceeding with %d successful results", councilResult.results.length - failedResults.length);
+            }
+          }
+        }
       }
-
-      checkAborted();
-
-      // Pre-compute enrichment for council tools — resolve world info at the
-      // top of the generation chain so tools receive proper world book context.
-      // Also filters out the staged empty message and excluded (regenerated)
-      // message so council doesn't see blank assistant turns.
-      const fullCharacter = chat
-        ? charactersSvc.getCharacter(input.userId, targetCharId || chat.character_id)
-        : null;
-      const councilMessages = chatsSvc.getMessages(input.userId, input.chat_id)
-        .filter(m => m.id !== excludeMessageId && m.id !== stagedMessageId);
-      const { entries: wiEntries, worldBookIds: wiBookIds } = collectWorldInfoForCouncil(input.userId, fullCharacter, resolvedPersona, input.chat_id);
-      let councilWiActivated = wiEntries.length > 0
-        ? activateWorldInfo({
-            entries: wiEntries,
-            messages: councilMessages,
-            chatTurn: councilMessages.length,
-            wiState: {},
-          }).activatedEntries
-        : [];
-
-      // Run vector retrieval so council also sees vectorized world info entries.
-      // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
-      const vectorActivated = await collectVectorActivatedWorldInfo(
-        input.userId,
-        wiBookIds,
-        wiEntries,
-        councilMessages,
-      );
-      councilWiActivated = mergeActivatedWorldInfoEntries(
-        councilWiActivated,
-        vectorActivated,
-      ).activatedEntries;
-
-      // Cache for assembly to reuse
-      precomputedVectorEntries = vectorActivated;
-
-      console.debug(
-        "[generate] Council enrichment: char=%s, persona=%s, messages=%d, wi=%d/%d, vector=%d",
-        fullCharacter?.name ?? "none",
-        resolvedPersona?.name ?? "none",
-        councilMessages.length,
-        councilWiActivated.length,
-        wiEntries.length,
-        vectorActivated.length,
-      );
-
-      const councilEnrichment: CouncilEnrichment = {
-        character: fullCharacter,
-        persona: resolvedPersona,
-        messages: councilMessages,
-        activatedWorldInfoEntries: councilWiActivated,
-      };
-
-      // Execute pre-generation tool calls (abort-aware)
-      councilResult = await executeCouncil({
-        userId: input.userId,
-        chatId: input.chat_id,
-        personaId: input.persona_id,
-        connectionId: input.connection_id,
-        settings: councilSettings,
-        signal: abortController.signal,
-        enrichment: councilEnrichment,
-      });
-
-      checkAborted();
     }
   }
 
@@ -695,6 +851,26 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     for (const r of councilResult.results) {
       if (r.success && (r as any).resultVariable) {
         councilNamedResults[(r as any).resultVariable] = r.content;
+      }
+    }
+
+    // Persist council results to chat metadata for potential reuse on regens/swipes.
+    // Only cache when results were freshly executed (totalDurationMs > 0 distinguishes
+    // a live execution from a cache hit which sets totalDurationMs to 0).
+    if (councilResult.totalDurationMs > 0) {
+      const cachedResult: CachedCouncilResult = {
+        results: councilResult.results,
+        deliberationBlock: councilResult.deliberationBlock,
+        namedResults: councilNamedResults,
+        cachedAt: Date.now(),
+      };
+      try {
+        const currentMeta = chat?.metadata ?? {};
+        chatsSvc.updateChat(input.userId, input.chat_id, {
+          metadata: { ...currentMeta, last_council_results: cachedResult },
+        });
+      } catch (err) {
+        console.warn("[council] Failed to cache results to chat metadata:", err);
       }
     }
   }
@@ -854,6 +1030,13 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     activeGenerations.delete(generationId);
     activeChatGenerations.delete(chatKey);
 
+    // Clean up any pending council retry decision
+    const pendingRetry = pendingCouncilRetries.get(generationId);
+    if (pendingRetry) {
+      clearTimeout(pendingRetry.timeout);
+      pendingCouncilRetries.delete(generationId);
+    }
+
     // If this was a user-initiated abort (stop request), emit proper events so the
     // frontend can reset its streaming state and clean up.
     if (abortController.signal.aborted) {
@@ -863,6 +1046,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
           chatsSvc.deleteMessage(input.userId, stagedMessageId);
         } catch { /* best-effort cleanup */ }
       }
+      pool.stopPool(generationId);
       eventBus.emit(EventType.GENERATION_STOPPED, {
         generationId,
         chatId: input.chat_id,
@@ -872,6 +1056,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       return { generationId, status: "stopped" };
     }
 
+    pool.errorPool(generationId, err.message);
     throw err;
   }
 }
@@ -956,6 +1141,7 @@ async function runGeneration(
   tools?: ToolDefinition[],
   assistantPrefill?: string,
 ): Promise<void> {
+  pool.setPoolStatus(generationId, "streaming");
   eventBus.emit(EventType.GENERATION_STARTED, {
     generationId, chatId, model,
     breakdown: lifecycle.breakdown,
@@ -972,8 +1158,9 @@ async function runGeneration(
   // content token so the frontend sees it, and include it in the saved content.
   if (assistantPrefill) {
     fullContent = assistantPrefill;
+    const seq = pool.appendPoolContent(generationId, assistantPrefill);
     eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: assistantPrefill,
+      generationId, chatId, token: assistantPrefill, seq,
     }, userId);
   }
 
@@ -1005,8 +1192,9 @@ async function runGeneration(
       reasoningDurationMs = Date.now() - reasoningStartedAt;
     }
     fullContent += text;
+    const seq = pool.appendPoolContent(generationId, text);
     eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: text,
+      generationId, chatId, token: text, seq,
     }, userId);
   }
 
@@ -1014,8 +1202,9 @@ async function runGeneration(
     if (!text) return;
     if (!reasoningStartedAt) reasoningStartedAt = Date.now();
     fullReasoning += text;
+    const seq = pool.appendPoolReasoning(generationId, text);
     eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: text, type: "reasoning",
+      generationId, chatId, token: text, type: "reasoning", seq,
     }, userId);
   }
 
@@ -1150,6 +1339,7 @@ async function runGeneration(
             extra: Object.keys(extra).length > 0 ? extra : undefined,
           }, userId);
         }
+        pool.stopPool(generationId);
         eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: closedContent }, userId);
         break;
       }
@@ -1158,11 +1348,13 @@ async function runGeneration(
       if (chunk.reasoning) {
         if (!reasoningStartedAt) reasoningStartedAt = Date.now();
         fullReasoning += chunk.reasoning;
+        const seq = pool.appendPoolReasoning(generationId, chunk.reasoning);
         eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
           generationId,
           chatId,
           token: chunk.reasoning,
           type: "reasoning",
+          seq,
         }, userId);
       }
 
@@ -1279,6 +1471,7 @@ async function runGeneration(
         }
       }
 
+      pool.completePool(generationId, messageId);
       eventBus.emit(EventType.GENERATION_ENDED, {
         generationId,
         chatId,
@@ -1292,6 +1485,7 @@ async function runGeneration(
       fireExpressionDetection(userId, chatId, lifecycle).catch(() => {});
     }
   } catch (err: any) {
+    pool.errorPool(generationId, err.message);
     eventBus.emit(EventType.GENERATION_ENDED, {
       generationId,
       chatId,
@@ -1424,6 +1618,11 @@ export function stopAllGenerations(): void {
   }
   activeGenerations.clear();
   activeChatGenerations.clear();
+}
+
+/** Returns the active generationId for a chat, if any. */
+export function getActiveChatGeneration(userId: string, chatId: string): string | undefined {
+  return activeChatGenerations.get(`${userId}:${chatId}`);
 }
 
 // Periodically abort generations that have been running too long (provider hung, broken stream)

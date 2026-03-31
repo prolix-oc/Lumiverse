@@ -236,11 +236,13 @@ interface PendingAppend {
  * Falls back to legacy simple message mapping if no preset/blocks are found.
  */
 export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResult> {
-  // ---- Load data ----
-  const chat = chatsSvc.getChat(ctx.userId, ctx.chatId);
+  const pf = ctx.prefetched; // shorthand for prefetched data
+
+  // ---- Load data (use prefetched when available, fallback to DB) ----
+  const chat = pf?.chat ?? chatsSvc.getChat(ctx.userId, ctx.chatId);
   if (!chat) throw new Error("Chat not found");
 
-  const allMessages = chatsSvc.getMessages(ctx.userId, ctx.chatId);
+  const allMessages = pf?.messages ?? chatsSvc.getMessages(ctx.userId, ctx.chatId);
   // Filter out the excluded message (e.g. regenerate/swipe target with a blank swipe)
   // so it doesn't appear in macros, WI scanning, or any assembly path.
   const messages = ctx.excludeMessageId
@@ -248,20 +250,20 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     : allMessages;
   // For group chats, resolve the target character; fall back to the chat's primary character
   const characterId = ctx.targetCharacterId || chat.character_id;
-  const character = charactersSvc.getCharacter(ctx.userId, characterId);
+  const character = pf?.character ?? charactersSvc.getCharacter(ctx.userId, characterId);
   if (!character) throw new Error("Character not found");
 
-  const persona = personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
+  const persona = pf?.persona !== undefined ? pf.persona : personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
 
   // Resolve connection
-  const connection = ctx.connectionId
+  const connection = pf?.connection !== undefined ? pf.connection : (ctx.connectionId
     ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
-    : connectionsSvc.getDefaultConnection(ctx.userId);
+    : connectionsSvc.getDefaultConnection(ctx.userId));
 
   // Resolve preset: request presetId takes priority, then connection's preset_id
   const resolvedPresetId = ctx.presetId || connection?.preset_id;
-  let preset: Preset | null = null;
-  if (resolvedPresetId) {
+  let preset: Preset | null = pf?.preset !== undefined ? pf.preset : null;
+  if (!pf && resolvedPresetId) {
     preset = presetsSvc.getPreset(ctx.userId, resolvedPresetId);
   }
 
@@ -295,20 +297,20 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // Start memory cortex as a non-blocking promise so it runs in parallel with
   // WI activation and macro setup below. By the time we need the result, cortex
   // has had several hundred milliseconds of concurrent execution time.
-  const cortexConfig = memoryCortex.getCortexConfig(ctx.userId);
+  const cortexConfig = pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
   let cortexPromise: Promise<memoryCortex.CortexResult | null> | null = null;
   let cortexChatMemSettings: import("./embeddings.service").ChatMemorySettings | null = null;
   let cortexPerChatOverrides: import("./embeddings.service").PerChatMemoryOverrides | null = null;
 
   if (cortexConfig.enabled) {
-    const cmRaw = settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ?? null;
+    const cmRaw = pf?.allSettings.get("chatMemorySettings") ?? settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ?? null;
     cortexChatMemSettings = cmRaw ? embeddingsSvc.normalizeChatMemorySettings(cmRaw) : null;
     cortexPerChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
 
     // Fire immediately — the async IIFE resolves settings then queries cortex.
     // .catch() ensures failures never propagate; we fall back to vector search.
     cortexPromise = (async () => {
-      const embCfg = await embeddingsSvc.getEmbeddingConfig(ctx.userId);
+      const embCfg = pf?.embeddingConfig ?? await embeddingsSvc.getEmbeddingConfig(ctx.userId);
       const effective = cortexChatMemSettings
         ? embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg)
         : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
@@ -334,12 +336,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   }
 
   // ---- World Info activation ----
-  const globalWorldBooks = (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as string[] | undefined) ?? [];
+  const globalWorldBooks = (pf?.allSettings.get("globalWorldBooks") ?? settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as string[] | undefined) ?? [];
   const chatWorldBookIds = (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
-  const wiSources = collectWorldInfoSources(ctx.userId, character, persona, globalWorldBooks, chatWorldBookIds);
+  const wiSources = pf?.worldInfoSources ?? collectWorldInfoSources(ctx.userId, character, persona, globalWorldBooks, chatWorldBookIds);
   const wiEntries = wiSources.entries;
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
-  const worldInfoSettings = (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
+  const worldInfoSettings = (pf?.allSettings.get("worldInfoSettings") ?? settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
   const wiResult = activateWorldInfo({
     entries: wiEntries,
     messages,
@@ -391,12 +393,14 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // ---- Macro engine ----
   initMacros();
-  const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) =>
-    charactersSvc.getCharacter(ctx.userId, cid)?.name);
+  const groupCharsMap = pf?.groupCharacters;
+  const resolveCharName = (cid: string) =>
+    groupCharsMap?.get(cid)?.name ?? charactersSvc.getCharacter(ctx.userId, cid)?.name;
+  const groupCharacterNames = resolveGroupCharacterNames(chat, resolveCharName);
   const mutedIds = chatsSvc.getGroupMutedIds(chat);
   const groupNotMutedNames = groupCharacterNames && mutedIds.length > 0
     ? resolveGroupCharacterNames(chat, (cid) =>
-        mutedIds.includes(cid) ? undefined : charactersSvc.getCharacter(ctx.userId, cid)?.name)
+        mutedIds.includes(cid) ? undefined : resolveCharName(cid))
     : undefined;
   // Resolve alternate field overrides from per-chat bindings, then group scenario override
   const effectiveCharacter = resolveGroupScenarioOverride(
@@ -418,8 +422,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     targetCharacterName: ctx.targetCharacterId ? effectiveCharacter.name : undefined,
   });
 
-  // Batch-load all settings needed for assembly in a single query
-  const settingsKeys = [
+  // Use prefetched settings or batch-load all needed settings in a single query
+  const settingsMap = pf?.allSettings ?? settingsSvc.getSettingsByKeys(ctx.userId, [
     "reasoningSettings",
     "selectedDefinition", "selectedBehaviors", "selectedPersonalities",
     "chimeraMode", "lumiaQuirks", "lumiaQuirksEnabled",
@@ -431,8 +435,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     "contextFilters",
     "summarization",
     "chatMemorySettings",
-  ];
-  const settingsMap = settingsSvc.getSettingsByKeys(ctx.userId, settingsKeys);
+    "council_settings",
+  ]);
 
   // Populate reasoning macros from user settings
   const reasoningVal = settingsMap.get("reasoningSettings");

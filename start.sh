@@ -11,6 +11,7 @@ set -euo pipefail
 #   ./start.sh --setup          Run setup wizard only
 #   ./start.sh --reset-password  Reset owner account password
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
+#   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
 #
 # Environment overrides:
@@ -91,7 +92,7 @@ _proot_bun() {
 
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 
-MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | migrate-st
+MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | migrate-st | kill-pkgs
 USE_RUNNER=true
 FORCE_BUILD=false
 for arg in "$@"; do
@@ -103,6 +104,7 @@ for arg in "$@"; do
     --setup)        MODE="setup" ;;
     --reset-password) MODE="reset-password" ;;
     --migrate-st|-m) MODE="migrate-st" ;;
+    --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
     --help|-h)
       sed -n '3,15p' "$0" | sed 's/^# \?//'
@@ -437,6 +439,22 @@ run_migrate_st() {
   (cd "$BACKEND_DIR" && _bun run migrate:st)
 }
 
+# ─── Kill packages (nuke + reinstall) ──────────────────────────────────────
+
+kill_pkgs() {
+  warn "Removing lockfiles and node_modules..."
+
+  rm -f "$BACKEND_DIR/bun.lock"
+  rm -f "$FRONTEND_DIR/bun.lock"
+  rm -rf "$BACKEND_DIR/node_modules"
+  rm -rf "$FRONTEND_DIR/node_modules"
+
+  ok "Cleaned lockfiles and node_modules from backend and frontend"
+
+  install_deps "$BACKEND_DIR" "backend"
+  ok "Backend dependencies reinstalled (frontend deps will install on next build)"
+}
+
 # ─── Install dependencies ───────────────────────────────────────────────────
 
 install_deps() {
@@ -603,5 +621,8 @@ case "$MODE" in
     ;;
   migrate-st)
     run_migrate_st
+    ;;
+  kill-pkgs)
+    kill_pkgs
     ;;
 esac

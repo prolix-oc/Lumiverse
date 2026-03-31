@@ -97,6 +97,10 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'pushNotificationPreferences',
   'customCSS',
   'componentOverrides',
+  'chatHeadsEnabled',
+  'chatHeadsSize',
+  'chatHeadsDirection',
+  'chatHeadsOpacity',
 ])
 
 // ── Debounced batch persistence ──────────────────────────────────────────
@@ -240,6 +244,10 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
 
   thumbnailSettings: { smallSize: 300, largeSize: 700 },
   pushNotificationPreferences: { enabled: true, events: { generation_ended: true, generation_error: false } },
+  chatHeadsEnabled: true,
+  chatHeadsSize: 48,
+  chatHeadsDirection: 'column' as const,
+  chatHeadsOpacity: 1,
   customCSS: { css: '', enabled: false, revision: 0 },
   componentOverrides: {},
 

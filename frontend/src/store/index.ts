@@ -25,6 +25,7 @@ import { createLoadoutsSlice } from './slices/loadouts'
 import { createMigrationSlice } from './slices/migration'
 import { createOperatorSlice } from './slices/operator'
 import { createFloatingAvatarSlice } from './slices/floating-avatar'
+import { createChatHeadsSlice } from './slices/chat-heads'
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -52,4 +53,5 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createMigrationSlice(...a),
   ...createOperatorSlice(...a),
   ...createFloatingAvatarSlice(...a),
+  ...createChatHeadsSlice(...a),
 }))

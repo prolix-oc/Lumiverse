@@ -66,6 +66,16 @@ function syncViewportVars() {
   root.style.setProperty('--app-viewport-offset-left', `${offsetLeft}px`)
   root.style.setProperty('--app-keyboard-inset-bottom', `${keyboardInsetBottom}px`)
   root.style.setProperty('--app-screen-height', `${Math.round(window.innerHeight)}px`)
+
+  // Compensate --app-shell-height for CSS zoom on body. Inside the zoomed
+  // coordinate system, the available space is viewport_size / zoom_factor.
+  // Raw --app-viewport-height is kept unmodified for body/PWA CSS rules that
+  // do their own division. Skip on PWA — those modes define --app-shell-height
+  // via CSS (percentage or viewport-unit based) and the body rule compensates.
+  if (!root.hasAttribute('data-pwa')) {
+    const uiScale = parseFloat(root.style.getPropertyValue('--lumiverse-ui-scale')) || 1
+    root.style.setProperty('--app-shell-height', `${Math.round(height / uiScale)}px`)
+  }
 }
 
 let viewportSyncFrame = 0

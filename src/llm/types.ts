@@ -129,6 +129,36 @@ export interface AssemblyContext {
   regenFeedback?: string;
   /** Where to inject regen feedback: 'system' (last system msg) or 'user' (last user msg). */
   regenFeedbackPosition?: "system" | "user";
+  /** Pre-fetched data to avoid redundant DB calls during assembly.
+   *  When provided, assembly reads from this instead of querying DB. */
+  prefetched?: PrefetchedData;
+}
+
+/**
+ * Batch-prefetched data for the assembly pipeline. Every field here replaces
+ * one or more individual DB queries inside `assemblePrompt()`.
+ */
+export interface PrefetchedData {
+  chat: import("../types/chat").Chat;
+  messages: import("../types/message").Message[];
+  character: import("../types/character").Character;
+  persona: import("../types/persona").Persona | null;
+  connection: import("../types/connection-profile").ConnectionProfile | null;
+  preset: import("../types/preset").Preset | null;
+  /** All settings keys the pipeline needs, in one batch. */
+  allSettings: Map<string, any>;
+  /** Embedding config resolved once (includes secret validation). */
+  embeddingConfig: import("../services/embeddings.service").EmbeddingConfigWithStatus;
+  /** World info entries from all attached books, batch-loaded. */
+  worldInfoSources: {
+    entries: import("../types/world-book").WorldBookEntry[];
+    worldBookIds: string[];
+    bookSourceMap: Map<string, import("../services/prompt-assembly.service").BookSource>;
+  };
+  /** Group chat members, batch-loaded. */
+  groupCharacters?: Map<string, import("../types/character").Character>;
+  /** Memory cortex config (derived from allSettings). */
+  cortexConfig: import("../services/memory-cortex").MemoryCortexConfig;
 }
 
 /** Lightweight summary of a council tool result for macro access (avoids importing spindle-types). */
