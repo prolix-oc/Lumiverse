@@ -43,8 +43,8 @@ export async function generateSummary(opts: GenerateSummaryOpts): Promise<string
   )
   if (!prompt) return null
 
-  // Send to backend via quiet generation
-  const result = await generateApi.quiet({
+  // Send to backend via summarize endpoint (sidecar-aware, not localhost-restricted)
+  const result = await generateApi.summarize({
     connection_id: connectionId,
     messages: [
       { role: 'system', content: prompt.systemPrompt },

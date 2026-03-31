@@ -4,6 +4,7 @@ import { Spinner } from '@/components/shared/Spinner'
 import { Toggle } from '@/components/shared/Toggle'
 import { useStore } from '@/store'
 import { stMigrationApi, type ValidateResult, type ScanResult, type MigrationScope } from '@/api/st-migration'
+import type { MigrationProgressPayload } from '@/types/ws-events'
 import type { AuthUser } from '@/types/store'
 import DirectoryBrowser from './DirectoryBrowser'
 import styles from './MigrationSettings.module.css'
@@ -60,13 +61,13 @@ export default function MigrationSettings() {
         if (status.status === 'completed' && status.results) {
           useStore.getState().setMigrationCompleted({ migrationId: status.migrationId!, durationMs: 0, results: status.results })
         } else if (status.status === 'failed' && status.error) {
-          useStore.getState().setMigrationFailed({ error: status.error })
+          useStore.getState().setMigrationFailed({ migrationId: status.migrationId ?? '', error: status.error })
         } else if (status.status === 'running' && status.phase) {
           // Only update phase if the backend is ahead of our current state
           const current = useStore.getState().migrationPhase
           if (current === 'starting' || current === 'scanning') {
             if (status.phase !== 'starting' && status.phase !== 'scanning') {
-              useStore.getState().setMigrationProgress({ phase: status.phase, label: status.phase, current: 0, total: 0 })
+              useStore.getState().setMigrationProgress({ migrationId: status.migrationId ?? '', phase: status.phase as MigrationProgressPayload['phase'], label: status.phase, current: 0, total: 0 })
             }
           }
         }

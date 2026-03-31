@@ -57,6 +57,24 @@ app.get("/breakdown/:messageId", async (c) => {
   return c.json(data);
 });
 
+// --- Summarize endpoint (browser-accessible, uses sidecar connection fallback) ---
+
+app.post("/summarize", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+    return c.json({ error: "messages array is required" }, 400);
+  }
+
+  try {
+    const result = await svc.summarizeGenerate(userId, body);
+    return c.json(result);
+  } catch (err: any) {
+    const status = err.message.includes("No connection") || err.message.includes("Unknown provider") || err.message.includes("No API key") ? 400 : 502;
+    return c.json({ error: err.message }, status);
+  }
+});
+
 // --- Extension endpoints (localhost-only, synchronous, stateless) ---
 
 app.post("/raw", localhostOnly, async (c) => {

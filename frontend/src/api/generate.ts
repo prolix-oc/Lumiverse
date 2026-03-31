@@ -126,6 +126,10 @@ export const generateApi = {
     return post<QuietGenerateResponse>('/generate/quiet', request)
   },
 
+  summarize(request: QuietGenerateRequest) {
+    return post<QuietGenerateResponse>('/generate/summarize', request)
+  },
+
   dryRun(request: GenerateRequest) {
     return post<DryRunResponse>('/generate/dry-run', request)
   },

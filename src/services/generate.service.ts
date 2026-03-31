@@ -30,6 +30,7 @@ import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
 import { detectExpression, getExpressionDetectionSettings } from "./expression-detection.service";
 import { hasExpressions, getExpressionConfig } from "./expressions.service";
+import { getSidecarSettings } from "./sidecar-settings.service";
 
 interface GenerateInput {
   userId: string;
@@ -1493,6 +1494,60 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
   return provider.generate(apiKey, apiUrl, {
     messages: input.messages,
     model: connection.model,
+    parameters: mergedParams,
+    tools: input.tools,
+    stream: false,
+  });
+}
+
+/**
+ * Summarize generation — used by the Loom Summary feature.
+ * Resolves connection via: explicit connection_id → sidecar settings → default.
+ * When using sidecar, applies sidecar model/temperature/maxTokens overrides.
+ */
+export async function summarizeGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
+  let connectionId = input.connection_id;
+  let sidecarModel: string | undefined;
+  let sidecarParams: Record<string, unknown> = {};
+
+  // If no explicit connection, resolve via shared sidecar settings
+  if (!connectionId) {
+    const sidecar = getSidecarSettings(userId);
+    if (sidecar.connectionProfileId) {
+      connectionId = sidecar.connectionProfileId;
+      if (sidecar.model) sidecarModel = sidecar.model;
+      sidecarParams = {
+        temperature: sidecar.temperature,
+        top_p: sidecar.topP,
+        max_tokens: sidecar.maxTokens,
+      };
+    }
+  }
+
+  const connection = resolveConnection(userId, connectionId);
+  const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
+
+  // Merge: preset defaults < sidecar overrides < request overrides
+  let mergedParams: GenerationParameters = {};
+  if (connection.preset_id) {
+    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    if (preset) {
+      mergedParams = { ...preset.parameters };
+    }
+  }
+  mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
+
+  // Inject connection-level metadata flags
+  if (connection.metadata?.use_responses_api) {
+    mergedParams.use_responses_api = true;
+  }
+  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+    mergedParams._openrouter = connection.metadata.openrouter;
+  }
+
+  return provider.generate(apiKey, apiUrl, {
+    messages: input.messages,
+    model: sidecarModel || connection.model,
     parameters: mergedParams,
     tools: input.tools,
     stream: false,

@@ -257,6 +257,12 @@ function SummarizationConfig() {
         <Section icon={<Cloud size={16} />} title="API Source">
           <div className={styles.radioGroup}>
             <RadioOption
+              name="sum-source" value="sidecar"
+              checked={apiSource === 'sidecar'}
+              onChange={(v) => setSummarization({ apiSource: v as SummaryApiSource })}
+              label="Sidecar Connection"
+            />
+            <RadioOption
               name="sum-source" value="active"
               checked={apiSource === 'active'}
               onChange={(v) => setSummarization({ apiSource: v as SummaryApiSource })}
@@ -270,9 +276,11 @@ function SummarizationConfig() {
             />
           </div>
           <p className={styles.desc}>
-            {apiSource === 'active'
-              ? 'Uses whichever connection profile is currently active.'
-              : 'Uses a specific connection profile for all summarization.'}
+            {apiSource === 'sidecar'
+              ? 'Uses the shared Sidecar connection configured in your settings.'
+              : apiSource === 'active'
+                ? 'Uses whichever connection profile is currently active.'
+                : 'Uses a specific connection profile for all summarization.'}
           </p>
         </Section>
       )}
