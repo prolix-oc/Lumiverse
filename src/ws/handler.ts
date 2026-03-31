@@ -136,6 +136,16 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (data.type === "SPINDLE_CONFIRM_RESULT") {
+          if (userId && data.requestId) {
+            eventBus.emit(EventType.SPINDLE_CONFIRM_RESULT, {
+              requestId: data.requestId,
+              confirmed: !!data.confirmed,
+            }, userId);
+          }
+          return;
+        }
+
         if (data.type === "SPINDLE_BACKEND_MSG") {
           const extensionId = typeof data.extensionId === "string" ? data.extensionId : null;
           if (!extensionId) return;
