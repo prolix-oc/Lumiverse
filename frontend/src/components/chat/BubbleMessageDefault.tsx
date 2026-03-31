@@ -35,6 +35,7 @@ export interface BubbleMessageDefaultProps {
   displayContent: string
   reasoning: string | undefined
   reasoningDuration: number | undefined
+  reasoningStartedAt: number | undefined
   tokenCount: number | undefined
   avatarUrl: string | null
   fullAvatarUrl: string | null
@@ -62,7 +63,7 @@ function formatMetaDate(timestamp: number) {
 export default function BubbleMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
-  isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration,
+  isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
   tokenCount, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden, userLeft,
   handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
   handleFork, handlePromptBreakdown,
@@ -145,6 +146,7 @@ export default function BubbleMessageDefault({
           <ReasoningBlock
             reasoning={reasoning}
             reasoningDuration={reasoningDuration}
+            reasoningStartedAt={reasoningStartedAt}
             isStreaming={isActivelyStreaming}
             variant="bubble"
             align={isUser && !userLeft ? 'right' : undefined}

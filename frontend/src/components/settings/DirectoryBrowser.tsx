@@ -1,36 +1,40 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Folder, ArrowUp, ChevronRight } from 'lucide-react'
-import { stMigrationApi, type BrowseResult } from '@/api/st-migration'
+import { stMigrationApi, type BrowseResult, type FileConnectionConfig } from '@/api/st-migration'
 import styles from './DirectoryBrowser.module.css'
 
 interface DirectoryBrowserProps {
   onNavigate?: (path: string) => void
   initialPath?: string
+  connection?: FileConnectionConfig
 }
 
-export default function DirectoryBrowser({ onNavigate, initialPath }: DirectoryBrowserProps) {
+export default function DirectoryBrowser({ onNavigate, initialPath, connection }: DirectoryBrowserProps) {
   const [data, setData] = useState<BrowseResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [manualPath, setManualPath] = useState('')
 
+  const isRemote = connection && connection.type !== 'local'
+
   const navigate = useCallback(async (path?: string) => {
     setLoading(true)
     setError(null)
     try {
-      const result = await stMigrationApi.browse(path)
+      const result = await stMigrationApi.browse(path, connection)
       setData(result)
       setManualPath(result.path)
       onNavigate?.(result.path)
     } catch (err: any) {
-      setError(err?.message || 'Failed to browse directory')
+      setError(err?.body?.error || err?.message || 'Failed to browse directory')
     } finally {
       setLoading(false)
     }
-  }, [onNavigate])
+  }, [onNavigate, connection])
 
   useEffect(() => {
-    navigate(initialPath)
+    // For remote connections, start at root. For local, use default (home dir).
+    navigate(initialPath || (isRemote ? '/' : undefined))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleManualSubmit = (e: React.KeyboardEvent) => {
@@ -100,7 +104,7 @@ export default function DirectoryBrowser({ onNavigate, initialPath }: DirectoryB
           value={manualPath}
           onChange={(e) => setManualPath(e.target.value)}
           onKeyDown={handleManualSubmit}
-          placeholder="Enter path and press Enter"
+          placeholder={isRemote ? 'Enter remote path and press Enter' : 'Enter path and press Enter'}
         />
       </div>
     </div>

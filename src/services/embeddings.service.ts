@@ -830,14 +830,47 @@ function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
 }
 
 /**
+ * In-flight dedup: prevents concurrent requestEmbeddings() calls for the
+ * same text. Key = cache key (model-aware), Value = pending promise.
+ */
+const inflightEmbeddings = new Map<string, Promise<number[]>>();
+
+/**
  * Cache-aware embedding. Checks in-memory LRU cache first, batches only
  * uncached texts to the upstream API, then stores results.
+ *
+ * Single-text calls are deduped: if another caller is already fetching the
+ * same text, we share its promise instead of making a second API call.
  */
 export async function cachedEmbedTexts(userId: string, texts: string[]): Promise<number[][]> {
   if (!texts.length) return [];
   const cfg = await getEmbeddingConfig(userId);
   const fingerprint = getModelFingerprint(cfg);
 
+  // Fast path for single-text calls (the common case for cortex + chat memory retrieval)
+  if (texts.length === 1) {
+    const key = computeCacheKey(texts[0], fingerprint);
+    const cached = embeddingCache.get(key);
+    if (cached) return [cached];
+
+    // Join an in-flight request for the same text instead of making a duplicate API call
+    const inflight = inflightEmbeddings.get(key);
+    if (inflight) return [await inflight];
+
+    const promise = requestEmbeddings(userId, texts).then(vecs => {
+      const vec = vecs[0];
+      embeddingCache.set(key, vec);
+      inflightEmbeddings.delete(key);
+      return vec;
+    }, err => {
+      inflightEmbeddings.delete(key);
+      throw err;
+    });
+    inflightEmbeddings.set(key, promise);
+    return [await promise];
+  }
+
+  // Multi-text path: LRU cache check, batch uncached
   const results: (number[] | null)[] = new Array(texts.length).fill(null);
   const uncachedIndices: number[] = [];
 

@@ -54,10 +54,13 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
       return
     }
 
-    if (!startTimeRef.current) {
-      // Use the server-side timestamp if available (e.g. after navigation recovery)
-      // so the timer reflects the true elapsed time, not time-since-remount
-      startTimeRef.current = reasoningStartedAt || Date.now()
+    // Prefer the server-side timestamp (e.g. after navigation recovery) so the
+    // timer reflects the true elapsed time, not time-since-remount. If the prop
+    // arrives after mount (Zustand updates may not batch), override the fallback.
+    if (reasoningStartedAt) {
+      startTimeRef.current = reasoningStartedAt
+    } else if (!startTimeRef.current) {
+      startTimeRef.current = Date.now()
     }
 
     setLiveElapsed(Date.now() - startTimeRef.current)
@@ -73,7 +76,7 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
       if (timerRef.current) window.clearInterval(timerRef.current)
       timerRef.current = null
     }
-  }, [isStreaming, reasoningDuration])
+  }, [isStreaming, reasoningDuration, reasoningStartedAt])
 
   const label = reasoningDuration
     ? `Thought for ${formatDuration(reasoningDuration)}`

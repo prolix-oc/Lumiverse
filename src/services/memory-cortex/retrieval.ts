@@ -121,9 +121,12 @@ export async function queryCortex(
   const now = Math.floor(Date.now() / 1000);
   const lambda = Math.LN2 / config.decay.halfLifeTurns;
 
+  // Batch-load chunk metadata for all vector results (replaces N+1 individual queries)
+  const chunkMetaMap = batchLoadChunkMeta(db, vectorResults.map(vr => vr.chunkId));
+
   const scoredMemories: CortexMemory[] = vectorResults.map((vr) => {
     const salience = salienceMap.get(vr.chunkId);
-    const chunkMeta = loadChunkMeta(db, vr.chunkId);
+    const chunkMeta = chunkMetaMap.get(vr.chunkId) ?? null;
 
     // Semantic similarity (cosine distance → similarity)
     const semanticScore = Math.max(0, 1 - vr.distance);
@@ -431,6 +434,31 @@ function loadChunkMeta(db: any, chunkId: string): ChunkMeta | null {
     )
     .get(chunkId) as ChunkMeta | null;
   return row;
+}
+
+/** Batch-load chunk metadata in a single query (replaces N individual loadChunkMeta calls). */
+function batchLoadChunkMeta(db: any, chunkIds: string[]): Map<string, ChunkMeta> {
+  const map = new Map<string, ChunkMeta>();
+  if (chunkIds.length === 0) return map;
+
+  for (let i = 0; i < chunkIds.length; i += 500) {
+    const batch = chunkIds.slice(i, i + 500);
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = db
+      .query(
+        `SELECT id, created_at, updated_at, retrieval_count, entity_ids,
+                COALESCE(message_range_start, 0) as message_range_start,
+                COALESCE(message_range_end, 0) as message_range_end
+         FROM chat_chunks WHERE id IN (${placeholders})`,
+      )
+      .all(...batch) as (ChunkMeta & { id: string })[];
+
+    for (const row of rows) {
+      map.set(row.id, row);
+    }
+  }
+
+  return map;
 }
 
 function resolveEntityNames(db: any, entityIdsJson: string | null): string[] {

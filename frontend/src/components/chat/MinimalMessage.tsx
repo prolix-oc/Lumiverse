@@ -36,6 +36,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     displayContent,
     reasoning,
     reasoningDuration,
+    reasoningStartedAt,
     avatarUrl,
     fullAvatarUrl,
     displayName,
@@ -100,6 +101,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
           <ReasoningBlock
             reasoning={reasoning}
             reasoningDuration={reasoningDuration}
+            reasoningStartedAt={reasoningStartedAt}
             isStreaming={isActivelyStreaming}
           />
         )}

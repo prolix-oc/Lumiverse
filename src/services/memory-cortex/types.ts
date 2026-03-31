@@ -418,6 +418,7 @@ export interface CortexStats {
   scoreFusionApplied: boolean;
   topScore: number;
   retrievalTimeMs: number;
+  timedOut?: boolean;
 }
 
 export interface CortexResult {

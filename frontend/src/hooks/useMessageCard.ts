@@ -58,6 +58,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingReasoning = useStore((s) => s.streamingReasoning)
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
+  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
 
@@ -95,6 +96,9 @@ export function useMessageCard(message: Message, chatId: string) {
   const reasoningDuration = isActivelyStreaming
     ? (streamingReasoningDuration ?? undefined)
     : (message.extra?.reasoningDuration as number | undefined)
+  const reasoningStartedAt = isActivelyStreaming
+    ? (streamingReasoningStartedAt ?? undefined)
+    : undefined
   const tokenCount = message.extra?.tokenCount as number | undefined
 
   const isGroupChat = useStore((s) => s.isGroupChat)
@@ -302,6 +306,7 @@ export function useMessageCard(message: Message, chatId: string) {
     displayContent,
     reasoning,
     reasoningDuration,
+    reasoningStartedAt,
     tokenCount,
     avatarUrl,
     fullAvatarUrl,

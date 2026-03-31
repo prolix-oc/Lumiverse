@@ -1,6 +1,5 @@
 import { Hono } from "hono";
-import { resolve, dirname, basename } from "path";
-import { existsSync, readdirSync, statSync } from "fs";
+import { resolve, dirname } from "path";
 import { homedir } from "os";
 import { requireOwner } from "../auth/middleware";
 import { getDb } from "../db/connection";
@@ -11,53 +10,133 @@ import {
   getActiveMigration,
   getLastMigration,
 } from "../migration/st-migration.service";
+import type { FileConnectionConfig, FileSystem } from "../file-connections/types";
+import { LocalFileSystem } from "../file-connections/providers/local";
+import { createFileSystem, withFileSystem, getAvailableConnectionTypes } from "../file-connections/factory";
 
 const app = new Hono();
 
 // All routes require owner or admin role
 app.use("/*", requireOwner);
 
-// ─── GET /browse — filesystem directory browser ─────────────────────────────
+// ─── GET /connection-types — available file connection providers ─────────────
 
-app.get("/browse", (c) => {
-  const rawPath = c.req.query("path") || homedir();
-  const resolved = resolve(rawPath);
+app.get("/connection-types", async (c) => {
+  const types = await getAvailableConnectionTypes();
+  return c.json({ types });
+});
 
-  try {
-    const stat = statSync(resolved);
-    if (!stat.isDirectory()) {
-      return c.json({ error: "Not a directory" }, 400);
-    }
-  } catch (err: any) {
-    if (err.code === "ENOENT") return c.json({ error: "Directory not found" }, 404);
-    if (err.code === "EACCES") return c.json({ error: "Permission denied" }, 403);
-    return c.json({ error: "Cannot access path" }, 500);
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+const localFs = new LocalFileSystem();
+
+function parseConnectionConfig(body: any): FileConnectionConfig {
+  if (!body.connection || body.connection.type === "local") {
+    return { type: "local" };
+  }
+  return body.connection as FileConnectionConfig;
+}
+
+// ─── POST /test-connection — test a remote file connection ──────────────────
+
+app.post("/test-connection", async (c) => {
+  const body = await c.req.json();
+  const config = body.connection as FileConnectionConfig | undefined;
+
+  if (!config || config.type === "local") {
+    return c.json({ success: true, type: "local" });
   }
 
+  let fs: FileSystem | null = null;
   try {
-    const rawEntries = readdirSync(resolved);
-    const entries: { name: string }[] = [];
+    fs = await createFileSystem(config);
+    await fs.connect();
 
-    for (const name of rawEntries) {
-      if (name.startsWith(".")) continue; // skip hidden
-      try {
-        const fullPath = resolve(resolved, name);
-        if (statSync(fullPath).isDirectory()) {
-          entries.push({ name });
-        }
-      } catch {
-        // skip inaccessible entries
+    // Verify we can list the root / share
+    const testPath = body.path || (config.type === "smb" ? "/" : "/");
+    const canList = await fs.exists(testPath);
+
+    return c.json({
+      success: true,
+      type: config.type,
+      canAccess: canList,
+    });
+  } catch (err: any) {
+    return c.json({
+      success: false,
+      type: config.type,
+      error: err.message,
+    }, 400);
+  } finally {
+    if (fs) {
+      try { await fs.disconnect(); } catch { /* ignore */ }
+    }
+  }
+});
+
+// ─── GET /browse — filesystem directory browser ─────────────────────────────
+
+app.get("/browse", async (c) => {
+  const rawPath = c.req.query("path") || homedir();
+  const connectionJson = c.req.query("connection");
+
+  let config: FileConnectionConfig = { type: "local" };
+  if (connectionJson) {
+    try {
+      config = JSON.parse(connectionJson);
+    } catch {
+      return c.json({ error: "Invalid connection JSON" }, 400);
+    }
+  }
+
+  if (config.type === "local") {
+    // Local browsing — same logic as before
+    const resolved = resolve(rawPath);
+    try {
+      const stat = await localFs.stat(resolved);
+      if (!stat.isDirectory) {
+        return c.json({ error: "Not a directory" }, 400);
       }
+    } catch (err: any) {
+      return c.json({ error: "Cannot access path" }, 500);
     }
 
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+    try {
+      const allEntries = await localFs.readdir(resolved);
+      const entries = allEntries
+        .filter((e) => e.isDirectory && !e.name.startsWith("."))
+        .map((e) => ({ name: e.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-    const parent = resolved === "/" ? null : dirname(resolved);
+      const parent = resolved === "/" ? null : dirname(resolved);
+      return c.json({ path: resolved, parent, entries });
+    } catch {
+      return c.json({ error: "Failed to read directory" }, 500);
+    }
+  }
 
-    return c.json({ path: resolved, parent, entries });
+  // Remote browsing
+  let fs: FileSystem | null = null;
+  try {
+    fs = await createFileSystem(config);
+    await fs.connect();
+
+    const targetPath = rawPath || "/";
+
+    const allEntries = await fs.readdir(targetPath);
+    const entries = allEntries
+      .filter((e) => e.isDirectory && !e.name.startsWith("."))
+      .map((e) => ({ name: e.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const parent = targetPath === "/" ? null : fs.dirname(targetPath);
+    return c.json({ path: targetPath, parent, entries });
   } catch (err: any) {
-    if (err.code === "EACCES") return c.json({ error: "Permission denied" }, 403);
-    return c.json({ error: "Failed to read directory" }, 500);
+    return c.json({ error: err.message || "Failed to browse remote directory" }, 500);
+  } finally {
+    if (fs) {
+      try { await fs.disconnect(); } catch { /* ignore */ }
+    }
   }
 });
 
@@ -66,56 +145,72 @@ app.get("/browse", (c) => {
 app.post("/validate", async (c) => {
   const body = await c.req.json();
   const rawPath = body.path;
+  const config = parseConnectionConfig(body);
 
   if (!rawPath || typeof rawPath !== "string") {
     return c.json({ error: "path is required" }, 400);
   }
 
-  const resolved = resolve(rawPath);
+  const doValidation = async (fs: FileSystem) => {
+    const resolved = config.type === "local" ? resolve(rawPath) : rawPath;
 
-  if (!existsSync(resolved)) {
-    return c.json({ valid: false, error: "Directory does not exist" });
-  }
-
-  // Check for multi-user layout: data/{user}/characters/
-  const dataDir = resolve(resolved, "data");
-  if (existsSync(dataDir)) {
-    try {
-      const userDirs = readdirSync(dataDir).filter((name) => {
-        if (name.startsWith(".")) return false;
-        try {
-          const userPath = resolve(dataDir, name);
-          return statSync(userPath).isDirectory() && existsSync(resolve(userPath, "characters"));
-        } catch {
-          return false;
-        }
-      });
-
-      if (userDirs.length > 0) {
-        return c.json({
-          valid: true,
-          basePath: resolved,
-          stUsers: userDirs,
-          layout: "multi-user",
-        });
-      }
-    } catch {
-      // fall through to legacy check
+    if (!(await fs.exists(resolved))) {
+      return { valid: false, error: "Directory does not exist" };
     }
+
+    // Check for multi-user layout: data/{user}/characters/
+    const dataDir = fs.join(resolved, "data");
+    if (await fs.exists(dataDir)) {
+      try {
+        const entries = await fs.readdir(dataDir);
+        const userDirs: string[] = [];
+
+        for (const entry of entries) {
+          if (entry.name.startsWith(".") || !entry.isDirectory) continue;
+          const charsDir = fs.join(dataDir, entry.name, "characters");
+          if (await fs.exists(charsDir)) {
+            userDirs.push(entry.name);
+          }
+        }
+
+        if (userDirs.length > 0) {
+          return {
+            valid: true,
+            basePath: resolved,
+            stUsers: userDirs,
+            layout: "multi-user",
+          };
+        }
+      } catch {
+        // fall through to legacy check
+      }
+    }
+
+    // Check for legacy layout: public/characters/
+    const legacyChars = fs.join(resolved, "public", "characters");
+    if (await fs.exists(legacyChars)) {
+      return {
+        valid: true,
+        basePath: resolved,
+        stUsers: [],
+        layout: "legacy",
+      };
+    }
+
+    return { valid: false, error: "No SillyTavern data found at this path" };
+  };
+
+  if (config.type === "local") {
+    const result = await doValidation(localFs);
+    return c.json(result, result.valid === false && result.error ? 200 : 200);
   }
 
-  // Check for legacy layout: public/characters/
-  const legacyChars = resolve(resolved, "public", "characters");
-  if (existsSync(legacyChars)) {
-    return c.json({
-      valid: true,
-      basePath: resolved,
-      stUsers: [],
-      layout: "legacy",
-    });
+  try {
+    const result = await withFileSystem(config, doValidation);
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ valid: false, error: err.message }, 200);
   }
-
-  return c.json({ valid: false, error: "No SillyTavern data found at this path" });
 });
 
 // ─── POST /scan — preview available data ────────────────────────────────────
@@ -123,18 +218,32 @@ app.post("/validate", async (c) => {
 app.post("/scan", async (c) => {
   const body = await c.req.json();
   const dataDir = body.dataDir;
+  const config = parseConnectionConfig(body);
 
   if (!dataDir || typeof dataDir !== "string") {
     return c.json({ error: "dataDir is required" }, 400);
   }
 
-  const resolved = resolve(dataDir);
-  if (!existsSync(resolved)) {
-    return c.json({ error: "Directory does not exist" }, 404);
+  if (config.type === "local") {
+    const resolved = resolve(dataDir);
+    if (!(await localFs.exists(resolved))) {
+      return c.json({ error: "Directory does not exist" }, 404);
+    }
+    const counts = await scanSTData(resolved, localFs);
+    return c.json(counts);
   }
 
-  const counts = await scanSTData(resolved);
-  return c.json(counts);
+  try {
+    const counts = await withFileSystem(config, async (fs) => {
+      if (!(await fs.exists(dataDir))) {
+        throw new Error("Directory does not exist");
+      }
+      return scanSTData(dataDir, fs);
+    });
+    return c.json(counts);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 });
 
 // ─── POST /execute — start migration ────────────────────────────────────────
@@ -146,6 +255,7 @@ app.post("/execute", async (c) => {
 
   const body = await c.req.json();
   const { dataDir, targetUserId, scope } = body;
+  const config = parseConnectionConfig(body);
 
   if (!dataDir || typeof dataDir !== "string") {
     return c.json({ error: "dataDir is required" }, 400);
@@ -157,8 +267,10 @@ app.post("/execute", async (c) => {
     return c.json({ error: "scope is required" }, 400);
   }
 
-  const resolved = resolve(dataDir);
-  if (!existsSync(resolved)) {
+  // For local, resolve and verify path
+  const effectiveDataDir = config.type === "local" ? resolve(dataDir) : dataDir;
+
+  if (config.type === "local" && !(await localFs.exists(effectiveDataDir))) {
     return c.json({ error: "Data directory does not exist" }, 404);
   }
 
@@ -189,14 +301,27 @@ app.post("/execute", async (c) => {
 
   const migrationId = crypto.randomUUID();
 
+  // For remote connections, create and connect the FileSystem before handing
+  // it off to the async migration. The migration service will disconnect it
+  // when done (in the finally block).
+  let fs: FileSystem = localFs;
+  if (config.type !== "local") {
+    try {
+      fs = await createFileSystem(config);
+      await fs.connect();
+    } catch (err: any) {
+      return c.json({ error: `Failed to connect: ${err.message}` }, 400);
+    }
+  }
+
   // Run migration asynchronously — return immediately
-  executeMigration(migrationId, callerUserId, targetUserId, resolved, {
+  executeMigration(migrationId, callerUserId, targetUserId, effectiveDataDir, {
     characters: !!scope.characters,
     worldBooks: !!scope.worldBooks,
     personas: !!scope.personas,
     chats: !!scope.chats,
     groupChats: !!scope.groupChats,
-  });
+  }, fs);
 
   return c.json({ migrationId }, 202);
 });

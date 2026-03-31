@@ -20,7 +20,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
-    isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration,
+    isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden,
     handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleFork,
   } = useMessageCard(message, chatId)
@@ -98,7 +98,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
   const defaultProps: BubbleMessageDefaultProps = {
     message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
-    isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration,
+    isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden, userLeft,
     handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
     handleFork, handlePromptBreakdown,

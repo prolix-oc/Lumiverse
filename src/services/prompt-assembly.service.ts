@@ -294,23 +294,26 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     return await legacyAssembly(messages, ctx.generationType, character, persona, chat, connection, ctx.userId);
   }
 
-  // ---- Pre-flight: kick off background cortex cache refresh ----
-  // Memory cortex runs as a true sidecar — it never blocks generation.
-  // We fire a background query to warm the cache for the *next* generation,
-  // and read the cached result (from a previous query) for the current one.
+  // ---- Pre-flight: kick off cortex query ----
+  // The cortex query runs concurrently with world info activation and macro
+  // setup below. At the consumption point we check the warm cache first
+  // (instant); on cache miss we await this promise instead of falling back
+  // to a redundant embedding API call.
   const cortexConfig = pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
   let cortexChatMemSettings: import("./embeddings.service").ChatMemorySettings | null = null;
   let cortexPerChatOverrides: import("./embeddings.service").PerChatMemoryOverrides | null = null;
+  let cortexPromise: Promise<memoryCortex.CortexResult> | undefined;
 
   if (cortexConfig.enabled) {
     const cmRaw = pf?.allSettings.get("chatMemorySettings") ?? settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ?? null;
     cortexChatMemSettings = cmRaw ? embeddingsSvc.normalizeChatMemorySettings(cmRaw) : null;
     cortexPerChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
 
-    // Fire-and-forget: query cortex in the background. The result auto-caches
-    // inside queryCortex() so future generations can read it non-blockingly.
-    // The .catch() ensures failures never propagate.
-    (async () => {
+    // Capture the promise so the consumption point can await it on cache miss.
+    // queryCortex() internally applies Promise.race with an 8s timeout, so
+    // awaiting this is always bounded. The result auto-caches inside
+    // queryCortex() for future generations' warm-cache fast path.
+    cortexPromise = (async () => {
       const embCfg = pf?.embeddingConfig ?? await embeddingsSvc.getEmbeddingConfig(ctx.userId);
       const effective = cortexChatMemSettings
         ? embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg)
@@ -330,8 +333,11 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         includeRelationships: cortexConfig.retrieval.relationshipInjection,
         excludeMessageIds: ctx.excludeMessageId ? [ctx.excludeMessageId] : undefined,
       }, cortexConfig);
-    })().catch(err => {
-      console.warn("[prompt-assembly] Background cortex refresh failed:", err);
+    })();
+
+    // Log failures but keep the promise awaitable (separate .catch chain)
+    cortexPromise.catch(err => {
+      console.warn("[prompt-assembly] Background cortex query failed:", err);
     });
   }
 
@@ -475,60 +481,39 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     : null);
   const perChatOverrides = cortexPerChatOverrides ?? ((chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null);
 
-  // Memory Cortex: read from the warm cache — fully non-blocking.
-  // The background query fired above will update the cache for the next generation.
-  // On the very first generation there's no cached result, so we fall back to
-  // pure vector retrieval (which is also the correct behavior since no chunks
-  // have been processed yet).
+  // Memory Cortex: check warm cache first (instant), then await the in-flight
+  // cortex promise on miss — avoids a redundant embedding API call.
   let cortexResult: memoryCortex.CortexResult | null = null;
 
   let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
 
   if (cortexConfig.enabled) {
+    // Fast path: warm cache from a previous generation (synchronous, no I/O)
     cortexResult = memoryCortex.getCachedCortexResult(ctx.chatId);
 
+    // If cache miss or timed-out empty result, await the in-flight cortex query
+    // that was kicked off at pre-flight. This is bounded by queryCortex()'s
+    // internal 8s timeout, so it won't hang indefinitely.
+    if ((!cortexResult || cortexResult.memories.length === 0) && cortexPromise) {
+      try {
+        cortexResult = await cortexPromise;
+      } catch {
+        // Already logged by the .catch() attached at pre-flight
+        cortexResult = null;
+      }
+
+      // If cortex timed out, check if there's a stale cache entry we can use
+      // (timeout doesn't overwrite the cache, so a previous good result may survive)
+      if (cortexResult?.stats.timedOut) {
+        const staleResult = memoryCortex.getCachedCortexResult(ctx.chatId);
+        cortexResult = (staleResult && staleResult.memories.length > 0) ? staleResult : null;
+      }
+    }
+
     if (cortexResult && cortexResult.memories.length > 0) {
-      // Format cortex data using shadow prompt formatter
-      const shadowResult = memoryCortex.formatShadowPrompt(
-        cortexResult.memories,
-        cortexResult.entityContext,
-        cortexResult.activeRelationships,
-        cortexResult.arcContext,
-        {
-          mode: cortexConfig.formatterMode as any,
-          tokenBudget: cortexConfig.contextTokenBudget,
-          currentSpeakerName: character?.name,
-        },
-      );
-
-      // Map to existing MemoryRetrievalResult for backwards compat
-      memoryResult = {
-        chunks: cortexResult.memories.map((m) => ({
-          content: m.content,
-          score: m.finalScore,
-          metadata: { components: m.components, entityNames: m.entityNames },
-        })),
-        formatted: shadowResult.text,
-        count: cortexResult.memories.length,
-        enabled: true,
-        queryPreview: "",
-        settingsSource: "global" as const,
-        chunksAvailable: 0,
-        chunksPending: 0,
-      };
-
-      // Populate macro env with cortex data (including character color map)
-      const colorMapText = memoryCortex.formatColorMapForPrompt(ctx.chatId);
-      macroEnv.extra.cortex = {
-        memories: cortexResult.memories,
-        entityContext: cortexResult.entityContext,
-        activeRelationships: cortexResult.activeRelationships,
-        arcContext: cortexResult.arcContext,
-        formatted: colorMapText ? shadowResult.text + "\n\n" + colorMapText : shadowResult.text,
-        colorMap: colorMapText,
-      };
+      memoryResult = formatCortexForAssembly(cortexResult, cortexConfig, character, macroEnv, ctx.chatId);
     } else {
-      // Cortex returned no results or failed — fall back to pure vector retrieval
+      // Genuinely no memories (new chat, no chunks, etc.) — fall back to vector retrieval
       memoryResult = await safeCollectChatVectorMemory(
         ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides, ctx.excludeMessageId,
       );
@@ -2648,6 +2633,55 @@ function formatMemoryOutput(
 
   const joined = renderedChunks.join(settings.chunkSeparator);
   return settings.memoryHeaderTemplate.replace(/\{\{memories\}\}/g, joined);
+}
+
+/**
+ * Format a CortexResult into a MemoryRetrievalResult and populate the macro
+ * environment. Used by both the warm-cache and await-cortex branches.
+ */
+function formatCortexForAssembly(
+  cortexResult: memoryCortex.CortexResult,
+  cortexConfig: memoryCortex.MemoryCortexConfig,
+  character: Character | null,
+  macroEnv: MacroEnv,
+  chatId: string,
+): Awaited<ReturnType<typeof collectChatVectorMemory>> {
+  const shadowResult = memoryCortex.formatShadowPrompt(
+    cortexResult.memories,
+    cortexResult.entityContext,
+    cortexResult.activeRelationships,
+    cortexResult.arcContext,
+    {
+      mode: cortexConfig.formatterMode as any,
+      tokenBudget: cortexConfig.contextTokenBudget,
+      currentSpeakerName: character?.name,
+    },
+  );
+
+  const colorMapText = memoryCortex.formatColorMapForPrompt(chatId);
+  macroEnv.extra.cortex = {
+    memories: cortexResult.memories,
+    entityContext: cortexResult.entityContext,
+    activeRelationships: cortexResult.activeRelationships,
+    arcContext: cortexResult.arcContext,
+    formatted: colorMapText ? shadowResult.text + "\n\n" + colorMapText : shadowResult.text,
+    colorMap: colorMapText,
+  };
+
+  return {
+    chunks: cortexResult.memories.map((m) => ({
+      content: m.content,
+      score: m.finalScore,
+      metadata: { components: m.components, entityNames: m.entityNames },
+    })),
+    formatted: shadowResult.text,
+    count: cortexResult.memories.length,
+    enabled: true,
+    queryPreview: "",
+    settingsSource: "global" as const,
+    chunksAvailable: 0,
+    chunksPending: 0,
+  };
 }
 
 /** Fault-tolerant wrapper: embedding timeouts or failures should never kill generation. */

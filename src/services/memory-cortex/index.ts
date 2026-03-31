@@ -154,21 +154,35 @@ export async function queryCortex(
   let result: CortexResult;
 
   if (timeoutMs > 0) {
+    const TIMEOUT = Symbol("cortex-timeout");
     const raced = await Promise.race([
       queryCortexImpl(query, cfg),
-      new Promise<null>((resolve) =>
+      new Promise<typeof TIMEOUT>((resolve) =>
         setTimeout(() => {
           console.warn(`[memory-cortex] Retrieval timed out after ${timeoutMs}ms`);
-          resolve(null);
+          resolve(TIMEOUT);
         }, timeoutMs),
       ),
     ]);
-    result = raced ?? EMPTY_CORTEX_RESULT;
+
+    if (raced === TIMEOUT) {
+      // Do NOT cache timeouts — leave any existing cache entry intact so
+      // future generations can still use stale-but-real results instead of
+      // falling through to the slow vector retrieval fallback.
+      return {
+        ...EMPTY_CORTEX_RESULT,
+        stats: { ...EMPTY_CORTEX_RESULT.stats, timedOut: true },
+      };
+    }
+
+    result = raced as CortexResult;
   } else {
     result = await queryCortexImpl(query, cfg);
   }
 
-  // Auto-populate warm cache for non-blocking reads in future generations
+  // Auto-populate warm cache for non-blocking reads in future generations.
+  // Only genuine completions (success or "no memories") reach here — timeouts
+  // are returned early above without touching the cache.
   cortexResultCache.set(query.chatId, { result, queriedAt: Date.now() });
 
   return result;

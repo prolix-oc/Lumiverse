@@ -4,11 +4,14 @@
  * These extract data from a SillyTavern data directory without writing
  * anything. Designed for reuse by both the interactive CLI migration script
  * and the automated Docker migration.
+ *
+ * All functions accept an optional FileSystem parameter. When omitted,
+ * the default LocalFileSystem is used (backwards-compatible).
  */
 
-import { existsSync, readdirSync, statSync } from "fs";
 import { inflateSync } from "zlib";
-import { join, basename, extname } from "path";
+import type { FileSystem } from "../file-connections/types";
+import { LocalFileSystem } from "../file-connections/providers/local";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -82,14 +85,18 @@ export interface GroupDefinition {
   createDate?: string;
 }
 
+// ─── Default filesystem singleton ──────────────────────────────────────────
+
+const defaultFs = new LocalFileSystem();
+
 // ─── PNG chunk parsing ──────────────────────────────────────────────────────
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const CHARA_KEYWORDS = new Set(["chara", "ccv3"]);
 
-export async function readPNGCharaName(filePath: string): Promise<PNGCharaInfo> {
+export async function readPNGCharaName(filePath: string, fs: FileSystem = defaultFs): Promise<PNGCharaInfo> {
   try {
-    const buf = Buffer.from(await Bun.file(filePath).arrayBuffer());
+    const buf = await fs.readFile(filePath);
 
     if (buf.length < 8 || !PNG_SIGNATURE.every((b, i) => buf[i] === b)) {
       return { embeddedName: null, hasCharaData: false, parseError: "not a valid PNG" };
@@ -206,7 +213,7 @@ export function parseMessageDate(msg: any): number {
 
 // ─── Directory scanners ─────────────────────────────────────────────────────
 
-export async function scanSTData(stDataDir: string): Promise<STDataCounts> {
+export async function scanSTData(stDataDir: string, fs: FileSystem = defaultFs): Promise<STDataCounts> {
   const counts: STDataCounts = {
     characters: 0,
     chatDirs: 0,
@@ -217,50 +224,54 @@ export async function scanSTData(stDataDir: string): Promise<STDataCounts> {
     personas: 0,
   };
 
-  const charsDir = join(stDataDir, "characters");
-  if (existsSync(charsDir)) {
-    counts.characters = readdirSync(charsDir).filter(
-      (f) => extname(f).toLowerCase() === ".png"
+  const charsDir = fs.join(stDataDir, "characters");
+  if (await fs.exists(charsDir)) {
+    const entries = await fs.readdir(charsDir);
+    counts.characters = entries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".png"
     ).length;
   }
 
-  const chatsDir = join(stDataDir, "chats");
-  if (existsSync(chatsDir)) {
-    const charDirs = readdirSync(chatsDir).filter((f) => {
-      try { return statSync(join(chatsDir, f)).isDirectory(); } catch { return false; }
-    });
+  const chatsDir = fs.join(stDataDir, "chats");
+  if (await fs.exists(chatsDir)) {
+    const entries = await fs.readdir(chatsDir);
+    const charDirs = entries.filter((e) => e.isDirectory);
     counts.chatDirs = charDirs.length;
     for (const dir of charDirs) {
-      counts.totalChatFiles += readdirSync(join(chatsDir, dir)).filter(
-        (f) => extname(f).toLowerCase() === ".jsonl"
+      const chatEntries = await fs.readdir(fs.join(chatsDir, dir.name));
+      counts.totalChatFiles += chatEntries.filter(
+        (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
       ).length;
     }
   }
 
-  const groupsDir = join(stDataDir, "groups");
-  if (existsSync(groupsDir)) {
-    counts.groupChats = readdirSync(groupsDir).filter(
-      (f) => extname(f).toLowerCase() === ".json"
+  const groupsDir = fs.join(stDataDir, "groups");
+  if (await fs.exists(groupsDir)) {
+    const entries = await fs.readdir(groupsDir);
+    counts.groupChats = entries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".json"
     ).length;
   }
-  const groupChatsDir = join(stDataDir, "group chats");
-  if (existsSync(groupChatsDir)) {
-    counts.groupChatFiles = readdirSync(groupChatsDir).filter(
-      (f) => extname(f).toLowerCase() === ".jsonl"
-    ).length;
-  }
-
-  const worldsDir = join(stDataDir, "worlds");
-  if (existsSync(worldsDir)) {
-    counts.worldBooks = readdirSync(worldsDir).filter(
-      (f) => extname(f).toLowerCase() === ".json"
+  const groupChatsDir = fs.join(stDataDir, "group chats");
+  if (await fs.exists(groupChatsDir)) {
+    const entries = await fs.readdir(groupChatsDir);
+    counts.groupChatFiles = entries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
     ).length;
   }
 
-  const settingsPath = join(stDataDir, "settings.json");
-  if (existsSync(settingsPath)) {
+  const worldsDir = fs.join(stDataDir, "worlds");
+  if (await fs.exists(worldsDir)) {
+    const entries = await fs.readdir(worldsDir);
+    counts.worldBooks = entries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".json"
+    ).length;
+  }
+
+  const settingsPath = fs.join(stDataDir, "settings.json");
+  if (await fs.exists(settingsPath)) {
     try {
-      const settings = JSON.parse(await Bun.file(settingsPath).text());
+      const settings = JSON.parse(await fs.readText(settingsPath));
       const pu = settings.power_user || {};
       const allKeys = new Set([
         ...Object.keys(pu.personas || {}),
@@ -273,32 +284,31 @@ export async function scanSTData(stDataDir: string): Promise<STDataCounts> {
   return counts;
 }
 
-export async function scanCharacterPNGs(charsDir: string, logger?: MigrationLogger): Promise<ScanEntry[]> {
-  const pngFiles = readdirSync(charsDir).filter((f) => {
-    if (extname(f).toLowerCase() !== ".png") return false;
-    try { return statSync(join(charsDir, f)).isFile(); } catch { return false; }
-  });
+export async function scanCharacterPNGs(charsDir: string, logger?: MigrationLogger, fs: FileSystem = defaultFs): Promise<ScanEntry[]> {
+  const entries = await fs.readdir(charsDir);
+  const pngFiles = entries.filter(
+    (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".png"
+  );
 
   const results: ScanEntry[] = [];
   for (let i = 0; i < pngFiles.length; i++) {
-    const filename = pngFiles[i];
-    const filePath = join(charsDir, filename);
+    const entry = pngFiles[i];
+    const filePath = fs.join(charsDir, entry.name);
     logger?.progress("Scanning character files", i + 1, pngFiles.length);
     try {
-      const sizeBytes = statSync(filePath).size;
-      const info = await readPNGCharaName(filePath);
+      const info = await readPNGCharaName(filePath, fs);
       results.push({
-        filename,
-        stem: basename(filename, ".png"),
+        filename: entry.name,
+        stem: fs.basename(entry.name, ".png"),
         embeddedName: info.embeddedName,
         hasData: info.hasCharaData,
         parseError: info.parseError,
-        sizeBytes,
+        sizeBytes: entry.size,
       });
     } catch {
       results.push({
-        filename,
-        stem: basename(filename, ".png"),
+        filename: entry.name,
+        stem: fs.basename(entry.name, ".png"),
         embeddedName: null,
         hasData: false,
         sizeBytes: 0,
@@ -310,41 +320,42 @@ export async function scanCharacterPNGs(charsDir: string, logger?: MigrationLogg
 
 // ─── Data readers ───────────────────────────────────────────────────────────
 
-export async function readWorldBooksFromDisk(stDataDir: string, logger?: MigrationLogger): Promise<WorldBookPayload[]> {
-  const worldsDir = join(stDataDir, "worlds");
-  if (!existsSync(worldsDir)) return [];
+export async function readWorldBooksFromDisk(stDataDir: string, logger?: MigrationLogger, fs: FileSystem = defaultFs): Promise<WorldBookPayload[]> {
+  const worldsDir = fs.join(stDataDir, "worlds");
+  if (!(await fs.exists(worldsDir))) return [];
 
-  const jsonFiles = readdirSync(worldsDir).filter(
-    (f) => extname(f).toLowerCase() === ".json"
+  const entries = await fs.readdir(worldsDir);
+  const jsonFiles = entries.filter(
+    (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".json"
   );
   const results: WorldBookPayload[] = [];
 
   for (let i = 0; i < jsonFiles.length; i++) {
-    const filePath = join(worldsDir, jsonFiles[i]);
+    const filePath = fs.join(worldsDir, jsonFiles[i].name);
     logger?.progress("Reading world books", i + 1, jsonFiles.length);
     try {
-      const data = JSON.parse(await Bun.file(filePath).text());
+      const data = JSON.parse(await fs.readText(filePath));
       results.push({
-        name: data.name || data.originalName || basename(jsonFiles[i], ".json"),
+        name: data.name || data.originalName || fs.basename(jsonFiles[i].name, ".json"),
         description: data.description || "",
         entries: data.entries || [],
       });
     } catch {
-      logger?.warn(`Could not parse ${jsonFiles[i]}, skipping`);
+      logger?.warn(`Could not parse ${jsonFiles[i].name}, skipping`);
     }
   }
 
   return results;
 }
 
-export async function readPersonasFromDisk(stDataDir: string): Promise<PersonaPayload[]> {
-  const settingsPath = join(stDataDir, "settings.json");
-  if (!existsSync(settingsPath)) return [];
+export async function readPersonasFromDisk(stDataDir: string, fs: FileSystem = defaultFs): Promise<PersonaPayload[]> {
+  const settingsPath = fs.join(stDataDir, "settings.json");
+  if (!(await fs.exists(settingsPath))) return [];
 
   let personaNames: Record<string, string>;
   let personaDescriptions: Record<string, any>;
   try {
-    const settings = JSON.parse(await Bun.file(settingsPath).text());
+    const settings = JSON.parse(await fs.readText(settingsPath));
     const pu = settings.power_user || {};
     personaNames = pu.personas || {};
     personaDescriptions = pu.persona_descriptions || {};
@@ -356,7 +367,7 @@ export async function readPersonasFromDisk(stDataDir: string): Promise<PersonaPa
   if (allKeys.size === 0) return [];
 
   return Array.from(allKeys).map((avatarKey) => {
-    const name = personaNames[avatarKey] || basename(avatarKey, extname(avatarKey));
+    const name = personaNames[avatarKey] || fs.basename(avatarKey, fs.extname(avatarKey));
     const meta = personaDescriptions[avatarKey];
     const description = typeof meta === "string" ? meta : meta?.description || "";
     const title = typeof meta === "object" ? meta?.title || "" : "";
@@ -374,23 +385,25 @@ export async function readChatsForCharacter(
   charDirName: string,
   personaNameToId: Map<string, string>,
   logger?: MigrationLogger,
+  fs: FileSystem = defaultFs,
 ): Promise<ChatPayload[]> {
-  const chatsDir = join(stDataDir, "chats", charDirName);
-  if (!existsSync(chatsDir)) return [];
+  const chatsDir = fs.join(stDataDir, "chats", charDirName);
+  if (!(await fs.exists(chatsDir))) return [];
 
-  const chatFiles = readdirSync(chatsDir).filter(
-    (f) => extname(f).toLowerCase() === ".jsonl"
+  const entries = await fs.readdir(chatsDir);
+  const chatFiles = entries.filter(
+    (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
   );
   const results: ChatPayload[] = [];
 
-  for (const chatFile of chatFiles) {
-    const filePath = join(chatsDir, chatFile);
+  for (const chatFileEntry of chatFiles) {
+    const filePath = fs.join(chatsDir, chatFileEntry.name);
     try {
-      const raw = await Bun.file(filePath).text();
+      const raw = await fs.readText(filePath);
       const lines = raw.split("\n").filter((l) => l.trim());
       if (lines.length === 0) continue;
 
-      let chatName = basename(chatFile, ".jsonl");
+      let chatName = fs.basename(chatFileEntry.name, ".jsonl");
       let chatCreatedAt: number | undefined;
       let chatUserName: string | undefined;
 
@@ -449,25 +462,26 @@ export async function readChatsForCharacter(
         results.push({ name: chatName, created_at: chatCreatedAt, messages });
       }
     } catch {
-      logger?.warn(`Could not read ${chatFile}, skipping`);
+      logger?.warn(`Could not read ${chatFileEntry.name}, skipping`);
     }
   }
 
   return results;
 }
 
-export async function readGroupDefinitions(stDataDir: string): Promise<GroupDefinition[]> {
-  const groupsDir = join(stDataDir, "groups");
-  if (!existsSync(groupsDir)) return [];
+export async function readGroupDefinitions(stDataDir: string, fs: FileSystem = defaultFs): Promise<GroupDefinition[]> {
+  const groupsDir = fs.join(stDataDir, "groups");
+  if (!(await fs.exists(groupsDir))) return [];
 
-  const groupFiles = readdirSync(groupsDir).filter(
-    (f) => extname(f).toLowerCase() === ".json"
+  const entries = await fs.readdir(groupsDir);
+  const groupFiles = entries.filter(
+    (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".json"
   );
   const results: GroupDefinition[] = [];
 
-  for (const groupFile of groupFiles) {
+  for (const groupFileEntry of groupFiles) {
     try {
-      const group = JSON.parse(await Bun.file(join(groupsDir, groupFile)).text());
+      const group = JSON.parse(await fs.readText(fs.join(groupsDir, groupFileEntry.name)));
       results.push({
         name: group.name || "Imported Group Chat",
         members: group.members || [],
@@ -487,12 +501,13 @@ export async function readGroupChatFile(
   stDataDir: string,
   chatId: string,
   personaNameToId: Map<string, string>,
+  fs: FileSystem = defaultFs,
 ): Promise<{ messages: ChatMessage[]; createdAt?: number } | null> {
-  const chatFilePath = join(stDataDir, "group chats", `${chatId}.jsonl`);
-  if (!existsSync(chatFilePath)) return null;
+  const chatFilePath = fs.join(stDataDir, "group chats", `${chatId}.jsonl`);
+  if (!(await fs.exists(chatFilePath))) return null;
 
   try {
-    const raw = await Bun.file(chatFilePath).text();
+    const raw = await fs.readText(chatFilePath);
     const lines = raw.split("\n").filter((l) => l.trim());
     if (lines.length === 0) return null;
 
