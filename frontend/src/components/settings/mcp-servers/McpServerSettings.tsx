@@ -155,10 +155,11 @@ export default function McpServerSettings() {
         <ConfirmationModal
           title="Delete MCP Server"
           message={`Are you sure you want to delete "${deleteTarget.name}"? This will disconnect and remove the server configuration.`}
-          confirmLabel="Delete"
+          isOpen={true}
+          variant="danger"
+          confirmText="Delete"
           onConfirm={confirmDelete}
           onCancel={() => setDeleteTarget(null)}
-          danger
         />
       )}
     </div>

@@ -94,19 +94,13 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
       <FormField label="Name">
         <TextInput
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={setName}
           placeholder="My MCP Server"
         />
       </FormField>
 
       <FormField label="Transport">
-        <Select value={transportType} onChange={(e) => setTransportType(e.target.value)}>
-          {TRANSPORT_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </Select>
+        <Select value={transportType} onChange={setTransportType} options={TRANSPORT_OPTIONS} />
       </FormField>
 
       {isHttp && (
@@ -114,7 +108,7 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
           <FormField label="URL" hint="The MCP server endpoint URL">
             <TextInput
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={setUrl}
               placeholder="https://example.com/mcp"
             />
           </FormField>
@@ -125,13 +119,13 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
                 <div key={idx} className={formStyles.kvRow}>
                   <TextInput
                     value={row.key}
-                    onChange={(e) => updateHeader(idx, 'key', e.target.value)}
+                    onChange={(value) => updateHeader(idx, 'key', value)}
                     placeholder="Header name"
                   />
                   <TextInput
                     type="password"
                     value={row.value}
-                    onChange={(e) => updateHeader(idx, 'value', e.target.value)}
+                    onChange={(value) => updateHeader(idx, 'value', value)}
                     placeholder="Value"
                   />
                   <button
@@ -156,7 +150,7 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
           <FormField label="Command" hint="The executable to run (e.g. node, python3, npx)">
             <TextInput
               value={command}
-              onChange={(e) => setCommand(e.target.value)}
+              onChange={setCommand}
               placeholder="npx"
             />
           </FormField>
@@ -164,7 +158,7 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
           <FormField label="Arguments" hint="Comma-separated command arguments">
             <TextInput
               value={args}
-              onChange={(e) => setArgs(e.target.value)}
+              onChange={setArgs}
               placeholder="-y, @modelcontextprotocol/server-filesystem, /path"
             />
           </FormField>
@@ -175,13 +169,13 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
                 <div key={idx} className={formStyles.kvRow}>
                   <TextInput
                     value={row.key}
-                    onChange={(e) => updateEnvVar(idx, 'key', e.target.value)}
+                    onChange={(value) => updateEnvVar(idx, 'key', value)}
                     placeholder="Variable name"
                   />
                   <TextInput
                     type="password"
                     value={row.value}
-                    onChange={(e) => updateEnvVar(idx, 'value', e.target.value)}
+                    onChange={(value) => updateEnvVar(idx, 'value', value)}
                     placeholder="Value"
                   />
                   <button
