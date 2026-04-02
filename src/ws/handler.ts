@@ -146,6 +146,16 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (data.type === "SPINDLE_MODAL_RESULT") {
+          if (userId && data.requestId) {
+            eventBus.emit(EventType.SPINDLE_MODAL_RESULT, {
+              requestId: data.requestId,
+              dismissedBy: data.dismissedBy,
+            }, userId);
+          }
+          return;
+        }
+
         if (data.type === "SPINDLE_INPUT_PROMPT_RESULT") {
           if (userId && data.requestId) {
             eventBus.emit(EventType.SPINDLE_INPUT_PROMPT_RESULT, {
