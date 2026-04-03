@@ -168,6 +168,16 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     })
   },
 
+  dismissSpindleModal: (requestId: string) => {
+    set((state) => {
+      // Only clear if the requestId matches to avoid stale dismissals.
+      // Unlike closeSpindleModal, this does NOT send a WS message back —
+      // preventing an echo loop when the server initiates the close.
+      if (state.pendingModal?.requestId !== requestId) return state
+      return { ...state, pendingModal: null }
+    })
+  },
+
   openSpindleConfirm: (request) => {
     set({ pendingConfirm: request })
   },

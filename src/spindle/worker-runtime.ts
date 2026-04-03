@@ -1136,12 +1136,15 @@ const spindleApi: SpindleAPI = {
       width?: number;
       maxHeight?: number;
       persistent?: boolean;
+      modalRequestId?: string;
       userId?: string;
-    }): Promise<{ dismissedBy: "user" | "extension" | "cleanup" }> {
+    }): Promise<{ openRequestId: string; dismissedBy: "user" | "extension" | "cleanup" }> {
       const requestId = crypto.randomUUID();
+      const modalRequestId = options.modalRequestId ?? requestId;
       const result = await request({
         type: "modal_open",
         requestId,
+        modalRequestId,
         title: options.title,
         items: options.items,
         width: options.width,
@@ -1149,7 +1152,7 @@ const spindleApi: SpindleAPI = {
         persistent: options.persistent,
         userId: options.userId,
       } as any);
-      return { openRequestId: requestId, ...(result as { dismissedBy: "user" | "extension" | "cleanup" }) };
+      return { openRequestId: modalRequestId, ...(result as { dismissedBy: "user" | "extension" | "cleanup" }) };
     },
     async close(openRequestId: string, userId?: string): Promise<void> {
       const requestId = crypto.randomUUID();

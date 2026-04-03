@@ -645,6 +645,7 @@ export interface SpindleSlice {
   closeTextEditor: (requestId: string, text: string, cancelled: boolean) => void
   openSpindleModal: (request: PendingModalRequest) => void
   closeSpindleModal: (requestId: string, dismissedBy: 'user' | 'extension' | 'cleanup') => void
+  dismissSpindleModal: (requestId: string) => void
   openSpindleConfirm: (request: PendingConfirmRequest) => void
   closeSpindleConfirm: (requestId: string, confirmed: boolean) => void
   openInputPrompt: (request: PendingInputPromptRequest) => void

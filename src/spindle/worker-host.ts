@@ -874,7 +874,7 @@ export class WorkerHost {
         break;
       // ─── Modal (free tier — no permission needed) ─────────────────────
       case "modal_open":
-        this.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId);
+        this.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId, (msg as any).modalRequestId);
         break;
       case "modal_close":
         this.handleModalClose(msg.requestId, msg.openRequestId, msg.userId);
@@ -4436,12 +4436,15 @@ export class WorkerHost {
     maxHeight?: number,
     persistent?: boolean,
     userId?: string,
+    callerModalRequestId?: string,
   ): void {
     try {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
 
-      const modalRequestId = `spindle-modal:${this.extensionId}:${requestId}`;
+      const modalRequestId = callerModalRequestId
+        ? `spindle-modal:${this.extensionId}:${callerModalRequestId}`
+        : `spindle-modal:${this.extensionId}:${requestId}`;
 
       const unsub = eventBus.on(EventType.SPINDLE_MODAL_RESULT, (msg) => {
         if (msg.payload?.requestId !== modalRequestId) return;
@@ -4471,7 +4474,7 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
-  
+
   private handleModalClose(
     requestId: string,
     openRequestId: string,

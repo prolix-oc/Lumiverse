@@ -486,6 +486,12 @@ export function useWebSocket() {
         store.getState().openSpindleModal(payload)
       }),
 
+      wsClient.on(EventType.SPINDLE_MODAL_RESULT, (payload: any) => {
+        // Server-initiated close (programmatic dismiss via handleModalClose).
+        // Use dismissSpindleModal (no WS echo) rather than closeSpindleModal.
+        store.getState().dismissSpindleModal(payload.requestId)
+      }),
+
       wsClient.on(EventType.SPINDLE_CONFIRM_OPEN, (payload: any) => {
         store.getState().openSpindleConfirm(payload)
       }),
