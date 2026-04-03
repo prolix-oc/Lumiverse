@@ -563,6 +563,115 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
 }
 
 
+/**
+ * Export a Loom preset to SillyTavern-compatible JSON format.
+ * Reverse of importFromSTPreset — maps blocks back to ST prompts/prompt_order
+ * and flattens behavior/sampler settings to ST root-level fields.
+ */
+export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
+  const prompts: STPrompt[] = []
+  const orderEntries: Array<{ identifier: string; enabled: boolean }> = []
+  let customIndex = 0
+
+  for (const block of loom.blocks) {
+    // Determine ST identifier
+    let identifier: string
+    let isMarker = false
+
+    if (block.marker && block.marker !== 'category' && MARKER_TO_ST_IDENTIFIER[block.marker]) {
+      identifier = MARKER_TO_ST_IDENTIFIER[block.marker]
+      isMarker = STRUCTURAL_MARKERS.has(block.marker)
+    } else if (block.marker === 'category') {
+      identifier = `custom_${customIndex++}`
+    } else {
+      identifier = `custom_${customIndex++}`
+    }
+
+    // Map position → injection_position / injection_depth
+    let injection_position = 0
+    let injection_depth = 4
+    if (block.position === 'in_history') {
+      injection_position = 1
+      injection_depth = block.depth
+    } else if (block.position === 'post_history') {
+      injection_position = 1
+      injection_depth = 0
+    }
+
+    // Map role (user_append/assistant_append → base role for ST)
+    const role = block.role === 'user_append' ? 'user'
+      : block.role === 'assistant_append' ? 'assistant'
+      : block.role
+
+    // Build ST prompt entry
+    const stPrompt: STPrompt = {
+      identifier,
+      name: block.marker === 'category' && !block.name.startsWith(CATEGORY_MARKER)
+        ? `${CATEGORY_MARKER}${block.name}`
+        : block.name,
+      system_prompt: role === 'system',
+      role,
+      content: block.content || '',
+      enabled: block.enabled,
+      marker: isMarker,
+      injection_position,
+      injection_depth,
+    }
+
+    prompts.push(stPrompt)
+    orderEntries.push({ identifier, enabled: block.enabled })
+  }
+
+  // Build root-level sampler values
+  const samplers = loom.samplerOverrides ?? DEFAULT_SAMPLER_OVERRIDES
+  const behavior = loom.promptBehavior ?? DEFAULT_PROMPT_BEHAVIOR
+  const completion = loom.completionSettings ?? DEFAULT_COMPLETION_SETTINGS
+  const advanced = loom.advancedSettings ?? DEFAULT_ADVANCED_SETTINGS
+
+  return {
+    name: loom.name,
+    prompts,
+    prompt_order: {
+      '100': { order: orderEntries },
+    },
+
+    // Sampler overrides → ST root-level params
+    ...(samplers.temperature != null && { temperature: samplers.temperature }),
+    ...(samplers.topP != null && { top_p: samplers.topP }),
+    ...(samplers.topK != null && { top_k: samplers.topK }),
+    ...(samplers.minP != null && { min_p: samplers.minP }),
+    ...(samplers.maxTokens != null && { max_tokens: samplers.maxTokens, openai_max_tokens: samplers.maxTokens }),
+    ...(samplers.contextSize != null && { openai_max_context: samplers.contextSize }),
+    ...(samplers.frequencyPenalty != null && { frequency_penalty: samplers.frequencyPenalty }),
+    ...(samplers.presencePenalty != null && { presence_penalty: samplers.presencePenalty }),
+    ...(samplers.repetitionPenalty != null && { repetition_penalty: samplers.repetitionPenalty }),
+
+    // Prompt behavior → ST root-level
+    continue_nudge_prompt: behavior.continueNudge ?? '',
+    impersonation_prompt: behavior.impersonationPrompt ?? '',
+    group_nudge_prompt: behavior.groupNudge ?? '',
+    new_chat_prompt: behavior.newChatPrompt ?? '',
+    new_group_chat_prompt: behavior.newGroupChatPrompt ?? '',
+    send_if_empty: behavior.sendIfEmpty ?? '',
+
+    // Completion settings → ST root-level
+    assistant_prefill: completion.assistantPrefill ?? '',
+    assistant_impersonation: completion.assistantImpersonation ?? '',
+    continue_prefill: completion.continuePrefill ?? false,
+    continue_postfix: completion.continuePostfix ?? ' ',
+    squash_system_messages: completion.squashSystemMessages ?? false,
+    names_behavior: completion.namesBehavior ?? 0,
+
+    // Advanced settings
+    seed: advanced.seed ?? -1,
+    ...(advanced.customStopStrings?.length && {
+      custom_stopping_strings: JSON.stringify(advanced.customStopStrings),
+    }),
+
+    stream_openai: true,
+  }
+}
+
 // ============================================================================
 // NEW PRESET FACTORY
 // ============================================================================

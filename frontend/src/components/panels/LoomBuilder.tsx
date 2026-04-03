@@ -524,9 +524,10 @@ interface PresetSelectorProps {
   onDelete: () => void
   onImport: (type: string) => void
   onExport: () => void
+  onExportLegacy: () => void
 }
 
-function PresetSelector({ registry, activePresetId, activePresetName, onSelect, onCreate, onRename, onDuplicate, onDelete, onImport, onExport }: PresetSelectorProps) {
+function PresetSelector({ registry, activePresetId, activePresetName, onSelect, onCreate, onRename, onDuplicate, onDelete, onImport, onExport, onExportLegacy }: PresetSelectorProps) {
   const [showMenu, setShowMenu] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [showRename, setShowRename] = useState(false)
@@ -569,6 +570,7 @@ function PresetSelector({ registry, activePresetId, activePresetName, onSelect, 
                 <MenuButton icon={<Edit2 size={14} />} label="Rename" onClick={() => { setRenameName(activePresetName || ''); setShowRename(true); setShowMenu(false) }} />
                 <MenuButton icon={<Copy size={14} />} label="Duplicate" onClick={() => { onDuplicate(); setShowMenu(false) }} />
                 <MenuButton icon={<Download size={14} />} label="Export Loom JSON" onClick={() => { onExport(); setShowMenu(false) }} />
+                <MenuButton icon={<Download size={14} />} label="Export Legacy Preset" onClick={() => { onExportLegacy(); setShowMenu(false) }} />
                 <hr className={s.menuDivider} />
                 <MenuButton icon={<Trash2 size={14} />} label="Delete" danger onClick={() => { onDelete(); setShowMenu(false) }} />
               </>
@@ -1174,6 +1176,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     importFromFile,
     importFromST,
     exportInternal,
+    exportLegacy,
   } = useLoomBuilder()
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
@@ -1206,6 +1209,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importTypeRef = useRef<string>('json')
@@ -1359,6 +1363,19 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     URL.revokeObjectURL(url)
   }, [exportInternal])
 
+  const handleExportLegacy = useCallback(() => {
+    const data = exportLegacy()
+    if (!data) return
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${(data as any).name || 'preset'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setShowLegacyExportConfirm(false)
+  }, [exportLegacy])
+
   const handleImport = useCallback((type: string) => {
     importTypeRef.current = type
     fileInputRef.current?.click()
@@ -1412,6 +1429,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
           onDelete={handleDeletePreset}
           onImport={handleImport}
           onExport={handleExport}
+          onExportLegacy={() => setShowLegacyExportConfirm(true)}
         />
       </div>
 
@@ -1660,6 +1678,17 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
 
       {/* Hidden file input for import */}
       <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleFileSelect} />
+
+      {/* Confirm legacy export */}
+        <ConfirmationModal
+          isOpen={showLegacyExportConfirm}
+          title="Export Legacy Preset"
+          message="Lumiverse-specific macros (e.g. {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) will not resolve in SillyTavern. Only standard macros like {{char}}, {{user}}, and {{persona}} are portable. Blocks using Lumiverse macros will be exported as-is with their raw macro text."
+          variant="warning"
+          confirmText="Export Anyway"
+          onConfirm={handleExportLegacy}
+          onCancel={() => setShowLegacyExportConfirm(false)}
+        />
 
       {/* Confirm delete dialog */}
         <ConfirmationModal
