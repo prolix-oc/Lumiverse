@@ -1151,6 +1151,15 @@ const spindleApi: SpindleAPI = {
       } as any);
       return result as { dismissedBy: "user" | "extension" | "cleanup" };
     },
+    async close(openRequestId: string, userId?: string): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "modal_close",
+        requestId,
+        openRequestId,
+        userId,
+      } as any);
+    },
     async confirm(options: {
       title: string;
       message: string;

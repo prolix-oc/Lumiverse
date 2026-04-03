@@ -876,6 +876,9 @@ export class WorkerHost {
       case "modal_open":
         this.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId);
         break;
+      case "modal_close":
+        this.handleModalClose(msg.requestId, msg.openRequestId, msg.userId);
+        break;
       case "confirm_open":
         this.handleConfirmOpen(msg.requestId, msg.title, msg.message, msg.variant, msg.confirmLabel, msg.cancelLabel, msg.userId);
         break;
@@ -4465,6 +4468,29 @@ export class WorkerHost {
         resolvedUserId,
       );
     } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+  
+  private handleModalClose(
+    requestId: string,
+    openRequestId: string,
+    userId?: string,
+  ): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+
+      const modalRequestId = `spindle-modal:${this.extensionId}:${openRequestId}`;
+
+      eventBus.emit(
+        EventType.SPINDLE_MODAL_RESULT,
+        { requestId: modalRequestId, dismissedBy: "extension" },
+        resolvedUserId,
+      );
+
+      this.postToWorker({ type: "response", requestId, result: undefined });
+      } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
