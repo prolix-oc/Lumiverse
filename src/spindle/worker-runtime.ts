@@ -1149,7 +1149,7 @@ const spindleApi: SpindleAPI = {
         persistent: options.persistent,
         userId: options.userId,
       } as any);
-      return result as { dismissedBy: "user" | "extension" | "cleanup" };
+      return { openRequestId: requestId, ...(result as { dismissedBy: "user" | "extension" | "cleanup" }) };
     },
     async close(openRequestId: string, userId?: string): Promise<void> {
       const requestId = crypto.randomUUID();
