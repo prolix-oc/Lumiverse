@@ -22,6 +22,7 @@ import {
   detectSupportedParams,
   getAvailableMacros,
   importFromSTPreset,
+  exportToSTPreset,
   normalizeCategoryBlockState,
   toggleBlockWithCategoryRules,
 } from '@/lib/loom/service'
@@ -375,6 +376,12 @@ export function useLoomBuilder() {
     return activePreset
   }, [activePreset])
 
+  // Export as legacy (SillyTavern) JSON
+  const exportLegacy = useCallback(() => {
+    if (!activePreset) return null
+    return exportToSTPreset(activePreset)
+  }, [activePreset])
+
   // Available macros for the inserter — fetched from API, with local fallback
   const [availableMacros, setAvailableMacros] = useState<MacroGroup[]>(() => getAvailableMacros())
 
@@ -477,5 +484,6 @@ export function useLoomBuilder() {
     importFromFile,
     importFromST,
     exportInternal,
+    exportLegacy,
   }
 }

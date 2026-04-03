@@ -42,12 +42,13 @@ function seedOwnerDirectly(db: ReturnType<typeof getDb>, username: string, passw
   const userId = crypto.randomUUID();
   const accountId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-  const email = `${username}@lumiverse.local`;
+  const normalizedUsername = username.toLowerCase();
+  const email = `${normalizedUsername}@lumiverse.local`;
 
   db.run(
     `INSERT INTO "user" (id, name, email, emailVerified, username, displayUsername, role, createdAt, updatedAt)
      VALUES (?, ?, ?, 1, ?, ?, 'owner', ?, ?)`,
-    [userId, username, email, username, username, now, now]
+    [userId, username, email, normalizedUsername, username, now, now]
   );
 
   db.run(
@@ -216,9 +217,10 @@ export async function seedOwner(): Promise<void> {
 
   let owner: UserRow | null = db
     .query('SELECT id, role, username FROM "user" WHERE username = ?')
-    .get(ownerUsername) as UserRow | null;
+    .get(ownerUsername.toLowerCase()) as UserRow | null;
 
   if (!owner) {
+    // Fallback: case-insensitive match for pre-normalization accounts
     owner = db
       .query('SELECT id, role, username FROM "user" WHERE LOWER(username) = LOWER(?)')
       .get(ownerUsername) as UserRow | null;

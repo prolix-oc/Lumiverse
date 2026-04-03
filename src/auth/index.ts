@@ -46,7 +46,9 @@ export const auth = betterAuth({
     maxPasswordLength: 128,
   },
   plugins: [
-    username(),
+    username({
+      usernameNormalization: (u) => u.toLowerCase(),
+    }),
     admin({
       defaultRole: "user",
       adminRoles: ["admin", "owner"],
