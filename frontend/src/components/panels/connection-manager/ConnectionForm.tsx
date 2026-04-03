@@ -14,6 +14,8 @@ interface ConnectionFormProps {
   profile?: ConnectionProfile
   onSave: (input: CreateConnectionProfileInput) => void
   onCancel: () => void
+  /** Called when OAuth auto-creates the connection during creation flow. */
+  onOAuthCreated?: (profile: ConnectionProfile) => void
 }
 
 const FALLBACK_PROVIDERS = [
@@ -30,7 +32,7 @@ const VERTEX_REGIONS = [
   'northamerica-northeast1', 'australia-southeast1', 'global',
 ]
 
-export default function ConnectionForm({ providers, profile, onSave, onCancel }: ConnectionFormProps) {
+export default function ConnectionForm({ providers, profile, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || 'openai')
   const [apiKey, setApiKey] = useState('')
@@ -255,6 +257,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
       {isOpenRouter && (
         <OpenRouterSettings
           connectionId={profile?.id}
+          connectionName={!profile ? name : undefined}
           hasApiKey={!!profile?.has_api_key || !!apiKey}
           settings={openrouterSettings}
           onChange={setOpenrouterSettings}
@@ -262,6 +265,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel }:
             // Clear the manual key input since OAuth set it
             setApiKey('')
           }}
+          onConnectionCreated={onOAuthCreated}
         />
       )}
       <FormField label="">

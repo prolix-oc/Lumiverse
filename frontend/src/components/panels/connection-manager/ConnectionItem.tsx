@@ -96,7 +96,7 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
       const baseUrl = import.meta.env.VITE_API_BASE || '/api/v1'
       const apiOrigin = baseUrl.startsWith('http') ? new URL(baseUrl).origin : window.location.origin
       const callbackUrl = `${apiOrigin}/api/v1/openrouter/oauth-landing`
-      const { auth_url, session_token } = await openrouterApi.initiateAuth(profile.id, callbackUrl)
+      const { auth_url, session_token } = await openrouterApi.initiateAuth(callbackUrl, { connectionId: profile.id })
 
       const popup = window.open(auth_url, 'openrouter_auth', 'width=600,height=700,scrollbars=yes')
 

@@ -1,5 +1,10 @@
 import type { LlmMessageDTO } from "lumiverse-spindle-types";
 
+export interface InterceptorResult {
+  messages: LlmMessageDTO[];
+  parameters?: Record<string, unknown>;
+}
+
 export interface Interceptor {
   extensionId: string;
   userId?: string | null;
@@ -7,7 +12,7 @@ export interface Interceptor {
   handler: (
     messages: LlmMessageDTO[],
     context: unknown
-  ) => Promise<LlmMessageDTO[]>;
+  ) => Promise<InterceptorResult>;
 }
 
 class InterceptorPipeline {
@@ -33,15 +38,16 @@ class InterceptorPipeline {
     messages: LlmMessageDTO[],
     context: unknown,
     userId?: string | null
-  ): Promise<LlmMessageDTO[]> {
+  ): Promise<InterceptorResult> {
     let result = messages;
+    let mergedParameters: Record<string, unknown> | undefined;
 
     for (const interceptor of this.interceptors) {
       if (interceptor.userId && interceptor.userId !== userId) {
         continue;
       }
       try {
-        result = await Promise.race([
+        const output = await Promise.race([
           interceptor.handler(result, context),
           new Promise<never>((_, reject) =>
             setTimeout(
@@ -55,6 +61,10 @@ class InterceptorPipeline {
             )
           ),
         ]);
+        result = output.messages;
+        if (output.parameters && Object.keys(output.parameters).length > 0) {
+          mergedParameters = { ...mergedParameters, ...output.parameters };
+        }
       } catch (err) {
         console.error(
           `[Spindle] Interceptor error from ${interceptor.extensionId}:`,
@@ -64,7 +74,7 @@ class InterceptorPipeline {
       }
     }
 
-    return result;
+    return { messages: result, parameters: mergedParameters };
   }
 
   get count(): number {

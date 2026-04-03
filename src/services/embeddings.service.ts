@@ -818,6 +818,7 @@ export async function runStartupVectorMaintenance(): Promise<void> {
   // index files referencing deleted data versions (causes "Object not found" errors).
   await ensureScalarIndexes(table, true);
   await ensureFtsIndex(table, true);
+  await ensureVectorIndex(table);
   startIndexHealthMonitor(table);
 }
 
@@ -1234,7 +1235,7 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
   const searchText = buildWorldBookEntrySearchText(entry);
   if (!cfg.enabled || !cfg.vectorize_world_books || entry.disabled || !content) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
-    updateWorldBookEntryVectorState(entry.id, "pending", null, null);
+    updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
     return;
   }
 
@@ -1339,7 +1340,7 @@ export async function reindexWorldBookEntries(
 
   for (const entry of disabledOrEmpty) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
-    updateWorldBookEntryVectorState(entry.id, "pending", null, null);
+    updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
     progress.removed += 1;
     progress.current += 1;
     emitProgress();
@@ -1349,7 +1350,7 @@ export async function reindexWorldBookEntries(
   if (!cfg.enabled || !cfg.vectorize_world_books) {
     for (const entry of toIndex) {
       await deleteWorldBookEntryEmbeddings(userId, entry.id);
-      updateWorldBookEntryVectorState(entry.id, "pending", null, null);
+      updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
       progress.removed += 1;
       progress.current += 1;
       emitProgress();

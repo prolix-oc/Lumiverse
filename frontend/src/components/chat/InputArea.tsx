@@ -239,17 +239,49 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (!el) return
     const parent = el.parentElement
     if (!parent) return
+    const isIOSPwa = document.documentElement.hasAttribute('data-ios-pwa')
 
     const update = () => {
       const h = el.offsetHeight
-      const bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
+      // On iOS PWA, read --app-keyboard-inset-bottom directly instead of
+      // getComputedStyle(el).bottom. The CSS `bottom` property transitions,
+      // so the computed value may be mid-animation when the ResizeObserver
+      // fires (triggered by the instant padding-bottom change). The CSS
+      // variable is set synchronously by JS and always reflects the final value.
+      let bottomOffset: number
+      if (isIOSPwa) {
+        const rootStyle = getComputedStyle(document.documentElement)
+        bottomOffset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
+      } else {
+        bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
+      }
       parent.style.setProperty('--lcs-input-safe-zone', `${h + bottomOffset + 16}px`)
     }
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
     update()
-    return () => ro.disconnect()
+
+    // On iOS PWA, the virtual keyboard changes `bottom` via CSS variable but
+    // doesn't change the element's size — ResizeObserver alone won't catch it.
+    // Listen to visualViewport resize (keyboard open/close) and re-compute.
+    let vpFrame = 0
+    const onViewportResize = () => {
+      // Run after main.tsx's syncViewportVars (also uses requestAnimationFrame)
+      cancelAnimationFrame(vpFrame)
+      vpFrame = requestAnimationFrame(update)
+    }
+    if (isIOSPwa) {
+      window.visualViewport?.addEventListener('resize', onViewportResize)
+    }
+
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(vpFrame)
+      if (isIOSPwa) {
+        window.visualViewport?.removeEventListener('resize', onViewportResize)
+      }
+    }
   }, [])
 
   // Document-level Escape to stop generation

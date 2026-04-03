@@ -388,12 +388,15 @@ async function runPromptPipeline(opts: {
   // Run Spindle interceptor pipeline on assembled messages
   // The pipeline uses LlmMessageDTO (string-only content) — at this stage
   // multimodal parts have already been serialised so the cast is safe.
+  let interceptorParameters: Record<string, unknown> | undefined;
   if (interceptorPipeline.count > 0) {
-    messages = await interceptorPipeline.run(
+    const interceptorResult = await interceptorPipeline.run(
       messages as import("lumiverse-spindle-types").LlmMessageDTO[],
       spindleContext,
       opts.userId
-    ) as unknown as LlmMessage[];
+    );
+    messages = interceptorResult.messages as unknown as LlmMessage[];
+    interceptorParameters = interceptorResult.parameters;
   }
 
   // Apply promptPostProcessing
@@ -439,8 +442,8 @@ async function runPromptPipeline(opts: {
     }
   }
 
-  // Merge parameters: assembled (from preset) < request overrides
-  const parameters: GenerationParameters = { ...assembledParams, ...opts.inputParameters };
+  // Merge parameters: assembled (from preset) < interceptor overrides < request overrides
+  const parameters: GenerationParameters = { ...assembledParams, ...interceptorParameters, ...opts.inputParameters };
 
   return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro };
 }

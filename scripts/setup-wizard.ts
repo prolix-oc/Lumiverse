@@ -25,6 +25,7 @@ import {
   inputHint,
   theme,
 } from "./ui";
+import { askSecret } from "./input";
 
 // ─── Input helpers ──────────────────────────────────────────────────────────
 
@@ -39,41 +40,7 @@ function ask(question: string, defaultValue?: string): Promise<string> {
   });
 }
 
-function askSecret(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(`${promptLabel(question)} `);
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-
-    if (stdin.isTTY) {
-      stdin.setRawMode(true);
-    }
-
-    let input = "";
-    const onData = (char: Buffer) => {
-      const c = char.toString();
-      if (c === "\n" || c === "\r") {
-        if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
-        stdin.removeListener("data", onData);
-        process.stdout.write("\n");
-        resolve(input);
-      } else if (c === "\u007F" || c === "\b") {
-        if (input.length > 0) {
-          input = input.slice(0, -1);
-          process.stdout.write("\b \b");
-        }
-      } else if (c === "\u0003") {
-        process.stdout.write("\n");
-        process.exit(1);
-      } else {
-        input += c;
-        process.stdout.write(`${theme.muted}*${theme.reset}`);
-      }
-    };
-    stdin.resume();
-    stdin.on("data", onData);
-  });
-}
+// askSecret imported from ./input — byte-level processing, NFC normalization
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;

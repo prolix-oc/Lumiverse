@@ -350,9 +350,18 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   padding: 12px;
   position: relative;
+}
+
+/* iOS PWA: the drawer doesn't resize when the keyboard opens (layout viewport
+   stays full-screen). Keyboard-height padding at the bottom creates scroll room
+   so the focusin handler can scroll inputs above the keyboard even when the
+   panel's actual content is shorter than the container. */
+:global(html[data-ios-pwa]) .panelContent {
+  padding-bottom: calc(12px + var(--app-keyboard-inset-bottom, 0px));
 }
 
 .panelContentFull {

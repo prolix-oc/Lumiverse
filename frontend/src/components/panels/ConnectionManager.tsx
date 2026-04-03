@@ -126,6 +126,10 @@ export default function ConnectionManager() {
           providers={providers}
           onSave={handleCreate}
           onCancel={() => setCreating(false)}
+          onOAuthCreated={(profile) => {
+            addProfile(profile)
+            setCreating(false)
+          }}
         />
       )}
 

@@ -1,12 +1,14 @@
 import { getProvider } from "../llm/registry";
 import { OpenRouterProvider, type OpenRouterCreditsInfo, type OpenRouterModelInfo, type OpenRouterProviderEntry } from "../llm/providers/openrouter";
+import type { ConnectionProfile } from "../types/connection-profile";
 import * as connSvc from "./connections.service";
 import * as secretsSvc from "./secrets.service";
 
 // ── PKCE OAuth ───────────────────────────────────────────────────────────────
 
 interface PendingOAuth {
-  connectionId: string;
+  connectionId?: string;
+  connectionName?: string;
   codeVerifier: string;
   callbackUrl: string;
   createdAt: number;
@@ -44,8 +46,14 @@ async function computeCodeChallenge(verifier: string): Promise<string> {
 /**
  * Initiate the PKCE OAuth flow. Generates code_verifier/challenge,
  * stores verifier server-side, returns the authorization URL + session token.
+ *
+ * Either `connectionId` (existing profile) or `connectionName` (auto-create on
+ * callback) must be provided.
  */
-export async function initiateOAuthAsync(connectionId: string, callbackUrl: string): Promise<{ auth_url: string; session_token: string }> {
+export async function initiateOAuthAsync(
+  callbackUrl: string,
+  opts: { connectionId?: string; connectionName?: string },
+): Promise<{ auth_url: string; session_token: string }> {
   cleanupExpiredSessions();
 
   const codeVerifier = generateCodeVerifier();
@@ -53,7 +61,8 @@ export async function initiateOAuthAsync(connectionId: string, callbackUrl: stri
   const codeChallenge = await computeCodeChallenge(codeVerifier);
 
   pendingOAuth.set(sessionToken, {
-    connectionId,
+    connectionId: opts.connectionId,
+    connectionName: opts.connectionName,
     codeVerifier,
     callbackUrl,
     createdAt: Date.now(),
@@ -74,8 +83,16 @@ export async function initiateOAuthAsync(connectionId: string, callbackUrl: stri
 /**
  * Complete the PKCE OAuth flow: exchange the authorization code for an API key,
  * then store it as the connection's encrypted API key.
+ *
+ * If the session was initiated without an existing connection (creation flow),
+ * the connection is auto-created here so orphaned profiles are avoided when the
+ * user cancels the popup.
  */
-export async function completeOAuth(userId: string, sessionToken: string, code: string): Promise<{ success: boolean; connection_id: string }> {
+export async function completeOAuth(
+  userId: string,
+  sessionToken: string,
+  code: string,
+): Promise<{ success: boolean; connection_id: string; created?: boolean; profile?: ConnectionProfile }> {
   const session = pendingOAuth.get(sessionToken);
   if (!session) throw new Error("Invalid or expired session token");
 
@@ -85,10 +102,15 @@ export async function completeOAuth(userId: string, sessionToken: string, code: 
     throw new Error("OAuth session has expired");
   }
 
-  // Verify the connection exists and belongs to this user
-  const conn = connSvc.getConnection(userId, session.connectionId);
-  if (!conn) throw new Error("Connection not found");
-  if (conn.provider !== "openrouter") throw new Error("Connection is not an OpenRouter profile");
+  let connectionId = session.connectionId;
+  let created = false;
+
+  if (connectionId) {
+    // Existing connection — verify it belongs to this user
+    const conn = connSvc.getConnection(userId, connectionId);
+    if (!conn) throw new Error("Connection not found");
+    if (conn.provider !== "openrouter") throw new Error("Connection is not an OpenRouter profile");
+  }
 
   // Exchange code for API key
   const res = await fetch("https://openrouter.ai/api/v1/auth/keys", {
@@ -113,13 +135,24 @@ export async function completeOAuth(userId: string, sessionToken: string, code: 
     throw new Error("OpenRouter did not return an API key");
   }
 
+  // Auto-create connection if this was a creation-time OAuth flow
+  if (!connectionId) {
+    const profile = await connSvc.createConnection(userId, {
+      name: session.connectionName || "OpenRouter",
+      provider: "openrouter",
+    });
+    connectionId = profile.id;
+    created = true;
+  }
+
   // Store the key as the connection's API key
-  await connSvc.setConnectionApiKey(userId, session.connectionId, data.key);
+  await connSvc.setConnectionApiKey(userId, connectionId, data.key);
 
   // Clean up
   pendingOAuth.delete(sessionToken);
 
-  return { success: true, connection_id: session.connectionId };
+  const profile = connSvc.getConnection(userId, connectionId)!;
+  return { success: true, connection_id: connectionId, created, profile };
 }
 
 // ── Credits & Usage ──────────────────────────────────────────────────────────

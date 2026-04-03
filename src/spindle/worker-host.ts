@@ -24,7 +24,7 @@ import { createOAuthState } from "./oauth-state";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
-import { interceptorPipeline } from "./interceptor-pipeline";
+import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
 import { contextHandlerChain } from "./context-handler";
 import { toolRegistry } from "./tool-registry";
 import * as managerSvc from "./manager.service";
@@ -490,9 +490,20 @@ export class WorkerHost {
       case "register_interceptor":
         this.handleRegisterInterceptor(msg.priority);
         break;
-      case "intercept_result":
-        this.resolveRequest(msg.requestId, msg.messages);
+      case "intercept_result": {
+        // Strip parameters if the extension lacks the generation_parameters permission
+        let interceptParams = msg.parameters;
+        if (interceptParams && Object.keys(interceptParams).length > 0) {
+          if (!managerSvc.hasPermission(this.manifest.identifier, "generation_parameters")) {
+            console.warn(
+              `[Spindle:${this.manifest.identifier}] Stripping interceptor parameters — generation_parameters permission not granted`
+            );
+            interceptParams = undefined;
+          }
+        }
+        this.resolveRequest(msg.requestId, { messages: msg.messages, parameters: interceptParams });
         break;
+      }
       case "register_tool":
         this.handleRegisterTool(msg.tool);
         break;
@@ -1145,7 +1156,7 @@ export class WorkerHost {
           context,
         });
 
-        return new Promise<LlmMessageDTO[]>((resolve, reject) => {
+        return new Promise<InterceptorResult>((resolve, reject) => {
           const timeout = setTimeout(() => {
             this.pendingRequests.delete(requestId);
             reject(
@@ -1158,7 +1169,7 @@ export class WorkerHost {
           this.pendingRequests.set(requestId, {
             resolve: (val) => {
               clearTimeout(timeout);
-              resolve(val as LlmMessageDTO[]);
+              resolve(val as InterceptorResult);
             },
             reject: (err) => {
               clearTimeout(timeout);

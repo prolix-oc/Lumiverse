@@ -15,7 +15,7 @@
     "gpt-tokenizer": "^2.8.1",
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.16",
-    "lumiverse-spindle-types": "0.4.3",
+    "lumiverse-spindle-types": "0.4.4",
     "sharp": "^0.34.5",
     "ssh2-sftp-client": "^12.1.1"
   },

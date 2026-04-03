@@ -11,21 +11,25 @@ const app = new Hono();
  * token used to correlate the callback. The code_verifier is stored server-side
  * and never exposed to the client.
  *
- * Query: ?connection_id=<id>&callback_url=<url>
+ * Query: ?callback_url=<url>&connection_id=<id> (existing profile)
+ *    OR: ?callback_url=<url>&connection_name=<name> (auto-create on success)
  */
 app.get("/auth", async (c) => {
   const userId = c.get("userId");
   const connectionId = c.req.query("connection_id");
+  const connectionName = c.req.query("connection_name");
   const callbackUrl = c.req.query("callback_url");
 
-  if (!connectionId) return c.json({ error: "connection_id is required" }, 400);
+  if (!connectionId && !connectionName) return c.json({ error: "connection_id or connection_name is required" }, 400);
   if (!callbackUrl) return c.json({ error: "callback_url is required" }, 400);
 
-  const conn = connSvc.getConnection(userId, connectionId);
-  if (!conn) return c.json({ error: "Connection not found" }, 404);
-  if (conn.provider !== "openrouter") return c.json({ error: "Connection is not an OpenRouter profile" }, 400);
+  if (connectionId) {
+    const conn = connSvc.getConnection(userId, connectionId);
+    if (!conn) return c.json({ error: "Connection not found" }, 404);
+    if (conn.provider !== "openrouter") return c.json({ error: "Connection is not an OpenRouter profile" }, 400);
+  }
 
-  const result = await svc.initiateOAuthAsync(connectionId, callbackUrl);
+  const result = await svc.initiateOAuthAsync(callbackUrl, { connectionId, connectionName });
   return c.json(result);
 });
 

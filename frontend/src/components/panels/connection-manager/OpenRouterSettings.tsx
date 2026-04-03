@@ -4,15 +4,20 @@ import { FormField, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
 import { openrouterApi, type OpenRouterCreditsInfo, type OpenRouterConnectionSettings, type OpenRouterProviderEntry } from '@/api/openrouter'
 import { Spinner } from '@/components/shared/Spinner'
+import type { ConnectionProfile } from '@/types/api'
 import MultiChipSelect from './MultiChipSelect'
 import styles from './OpenRouterSettings.module.css'
 
 interface OpenRouterSettingsProps {
   connectionId?: string
+  /** Name to use when auto-creating the connection during OAuth (creation flow). */
+  connectionName?: string
   hasApiKey: boolean
   settings: OpenRouterConnectionSettings
   onChange: (settings: OpenRouterConnectionSettings) => void
   onApiKeySet?: () => void
+  /** Called when the connection was auto-created during OAuth (creation flow). */
+  onConnectionCreated?: (profile: ConnectionProfile) => void
 }
 
 const SORT_OPTIONS = [
@@ -32,7 +37,7 @@ const QUANTIZATION_OPTIONS = [
   'int4', 'int8', 'fp4', 'fp6', 'fp8', 'fp16', 'bf16', 'fp32', 'unknown',
 ]
 
-export default function OpenRouterSettings({ connectionId, hasApiKey, settings, onChange, onApiKeySet }: OpenRouterSettingsProps) {
+export default function OpenRouterSettings({ connectionId, connectionName, hasApiKey, settings, onChange, onApiKeySet, onConnectionCreated }: OpenRouterSettingsProps) {
   const [credits, setCredits] = useState<OpenRouterCreditsInfo | null>(null)
   const [creditsLoading, setCreditsLoading] = useState(false)
   const [oauthLoading, setOauthLoading] = useState(false)
@@ -103,13 +108,16 @@ export default function OpenRouterSettings({ connectionId, hasApiKey, settings, 
   const isPluginEnabled = (id: string) => plugins.find((p) => p.id === id)?.enabled ?? false
 
   const handleOAuthLogin = useCallback(async () => {
-    if (!connectionId) return
+    if (!connectionId && !connectionName?.trim()) return
     setOauthLoading(true)
     try {
       const baseUrl = import.meta.env.VITE_API_BASE || '/api/v1'
       const apiOrigin = baseUrl.startsWith('http') ? new URL(baseUrl).origin : window.location.origin
       const callbackUrl = `${apiOrigin}/api/v1/openrouter/oauth-landing`
-      const { auth_url, session_token } = await openrouterApi.initiateAuth(connectionId, callbackUrl)
+      const { auth_url, session_token } = await openrouterApi.initiateAuth(callbackUrl, connectionId
+        ? { connectionId }
+        : { connectionName: connectionName!.trim() }
+      )
 
       const popup = window.open(auth_url, 'openrouter_auth', 'width=600,height=700,scrollbars=yes')
 
@@ -128,9 +136,13 @@ export default function OpenRouterSettings({ connectionId, hasApiKey, settings, 
         clearInterval(checkClosed)
 
         try {
-          await openrouterApi.completeAuth(session_token, event.data.code)
-          onApiKeySet?.()
-          fetchCredits()
+          const result = await openrouterApi.completeAuth(session_token, event.data.code)
+          if (result.created && result.profile) {
+            onConnectionCreated?.(result.profile)
+          } else {
+            onApiKeySet?.()
+            fetchCredits()
+          }
         } catch (err) {
           console.error('[OpenRouter] OAuth exchange failed:', err)
         }
@@ -151,7 +163,7 @@ export default function OpenRouterSettings({ connectionId, hasApiKey, settings, 
       console.error('[OpenRouter] OAuth init failed:', err)
       setOauthLoading(false)
     }
-  }, [connectionId, onApiKeySet, fetchCredits])
+  }, [connectionId, connectionName, onApiKeySet, onConnectionCreated, fetchCredits])
 
   return (
     <div className={styles.container}>
@@ -161,7 +173,7 @@ export default function OpenRouterSettings({ connectionId, hasApiKey, settings, 
       </div>
 
       {/* OAuth Login */}
-      {connectionId && !hasApiKey && (
+      {(connectionId || connectionName?.trim()) && !hasApiKey && (
         <div className={styles.oauthSection}>
           <Button
             variant="primary"
@@ -173,7 +185,7 @@ export default function OpenRouterSettings({ connectionId, hasApiKey, settings, 
             Sign in with OpenRouter
           </Button>
           <span className={styles.oauthHint}>
-            Authorize to get an API key automatically
+            {connectionId ? 'Authorize to get an API key automatically' : 'Sign in to create this connection with your OpenRouter account'}
           </span>
         </div>
       )}

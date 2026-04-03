@@ -9,6 +9,7 @@ import type {
   WorkerToHost,
   HostToWorker,
   LlmMessageDTO,
+  InterceptorResultDTO,
   SpindleAPI,
   ConnectionProfileDTO,
   PermissionDeniedDetail,
@@ -43,7 +44,7 @@ let interceptHandler:
   | ((
       messages: LlmMessageDTO[],
       context: unknown
-    ) => Promise<LlmMessageDTO[]>)
+    ) => Promise<LlmMessageDTO[] | InterceptorResultDTO>)
   | null = null;
 let contextHandlerFn: ((context: unknown) => Promise<unknown>) | null = null;
 let oauthCallbackHandler:
@@ -1319,10 +1320,15 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       if (interceptHandler) {
         try {
           const result = await interceptHandler(msg.messages, msg.context);
+          // Normalize: handler may return LlmMessageDTO[] or { messages, parameters? }
+          const normalized: InterceptorResultDTO = Array.isArray(result)
+            ? { messages: result }
+            : result;
           post({
             type: "intercept_result",
             requestId: msg.requestId,
-            messages: result,
+            messages: normalized.messages,
+            ...(normalized.parameters ? { parameters: normalized.parameters } : {}),
           });
         } catch (err: any) {
           post({

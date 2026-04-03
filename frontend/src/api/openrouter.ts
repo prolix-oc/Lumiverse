@@ -69,15 +69,25 @@ export interface OpenRouterProviderEntry {
   slug: string
 }
 
+export interface OpenRouterCompleteAuthResult {
+  success: boolean
+  connection_id: string
+  created?: boolean
+  profile?: import('@/types/api').ConnectionProfile
+}
+
 export const openrouterApi = {
-  /** Initiate PKCE OAuth flow. Returns authorization URL + session token. */
-  initiateAuth(connectionId: string, callbackUrl: string) {
-    return get<OpenRouterAuthResult>('/openrouter/auth', { connection_id: connectionId, callback_url: callbackUrl })
+  /** Initiate PKCE OAuth flow. Pass `connectionId` for existing profiles, or `connectionName` to auto-create on success. */
+  initiateAuth(callbackUrl: string, opts: { connectionId?: string; connectionName?: string }) {
+    const params: Record<string, string> = { callback_url: callbackUrl }
+    if (opts.connectionId) params.connection_id = opts.connectionId
+    else if (opts.connectionName) params.connection_name = opts.connectionName
+    return get<OpenRouterAuthResult>('/openrouter/auth', params)
   },
 
   /** Complete PKCE OAuth flow. Exchange code for API key. */
   completeAuth(sessionToken: string, code: string) {
-    return post<{ success: boolean; connection_id: string }>('/openrouter/auth/callback', {
+    return post<OpenRouterCompleteAuthResult>('/openrouter/auth/callback', {
       session_token: sessionToken,
       code,
     })
