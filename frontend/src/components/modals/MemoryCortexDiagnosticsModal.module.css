@@ -351,13 +351,35 @@
 
 .errorState {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 14px 16px;
   border-radius: 12px;
   border: 1px solid rgba(255, 107, 107, 0.25);
   background: rgba(255, 107, 107, 0.08);
   color: #ff6b6b;
+}
+
+.errorCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.errorTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ff8c8c;
+}
+
+.errorDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 214, 214, 0.95);
 }
 
 .spinning {

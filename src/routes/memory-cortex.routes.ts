@@ -79,6 +79,12 @@ app.get("/health", async (c) => {
     checks.push({ key, label, status, message });
   };
 
+  const getProbeErrorMessage = (err: unknown, fallback: string) => {
+    if (err instanceof Error && err.message.trim()) return err.message;
+    if (typeof err === "string" && err.trim()) return err;
+    return fallback;
+  };
+
   pushCheck(
     "cortex_enabled",
     "Memory Cortex enabled",
@@ -129,44 +135,49 @@ app.get("/health", async (c) => {
     success: boolean | null;
     message: string;
     dimension: number | null;
+    durationMs: number | null;
+    timedOut: boolean;
+    error: string | null;
   } = {
     attempted: false,
     success: null,
     message: "Live embedding probe not run.",
     dimension: embeddings.dimensions,
+    durationMs: null,
+    timedOut: false,
+    error: null,
   };
+  const embeddingProbePromise = (async () => {
+    if (!(probeConnectivity && embeddings.enabled && embeddings.has_api_key)) {
+      return embeddingConnectivity;
+    }
 
-  if (probeConnectivity && embeddings.enabled && embeddings.has_api_key) {
+    const startedAt = Date.now();
     try {
       const result = await embeddingsSvc.testEmbeddingConfig(userId, "Memory Cortex health check.");
-      embeddingConnectivity = {
+      const durationMs = Date.now() - startedAt;
+      return {
         attempted: true,
         success: true,
         message: `Embedding request succeeded (${result.dimension} dimensions).`,
         dimension: result.dimension,
+        durationMs,
+        timedOut: false,
+        error: null,
       };
-      pushCheck(
-        "embedding_probe",
-        "Embedding connectivity",
-        "pass",
-        embeddingConnectivity.message,
-      );
-    } catch (err: any) {
-      const message = err?.message || "Embedding probe failed.";
-      embeddingConnectivity = {
+    } catch (err: unknown) {
+      const message = getProbeErrorMessage(err, "Embedding probe failed.");
+      return {
         attempted: true,
         success: false,
         message,
         dimension: embeddings.dimensions,
+        durationMs: Date.now() - startedAt,
+        timedOut: err instanceof Error && err.name === "TimeoutError",
+        error: message,
       };
-      pushCheck(
-        "embedding_probe",
-        "Embedding connectivity",
-        "fail",
-        message,
-      );
     }
-  }
+  })();
 
   const sidecarConnectionId = config.sidecar?.connectionProfileId || null;
   const sidecarRequired =
@@ -187,51 +198,51 @@ app.get("/health", async (c) => {
   if (sidecarRequired && !sidecarConnectionId) {
     pushCheck(
       "sidecar_required",
-      "Sidecard connection",
+      "Sidecar connection",
       "fail",
-      "Sidecard-assisted cortex features are enabled, but no sidecard connection is selected.",
+      "Sidecar-assisted cortex features are enabled, but no sidecar connection is selected.",
     );
   } else if (sidecarConnectionId && !sidecarProfile) {
     pushCheck(
       "sidecar_exists",
-      "Sidecard connection",
+      "Sidecar connection",
       sidecarRequired ? "fail" : "warn",
-      "The selected sidecard connection profile no longer exists.",
+      "The selected sidecar connection profile no longer exists.",
     );
   } else if (sidecarConnectionId && !sidecarProvider) {
     pushCheck(
       "sidecar_provider",
-      "Sidecard provider",
+      "Sidecar provider",
       sidecarRequired ? "fail" : "warn",
       `The selected provider "${sidecarProfile?.provider}" is not available.`,
     );
   } else if (sidecarConnectionId && !sidecarHasApiKey) {
     pushCheck(
       "sidecar_api_key",
-      "Sidecard API key",
+      "Sidecar API key",
       sidecarRequired ? "fail" : "warn",
-      "The selected sidecard connection is missing its API key.",
+      "The selected sidecar connection is missing its API key.",
     );
   } else if (sidecarRequired) {
     pushCheck(
       "sidecar_ready",
-      "Sidecard readiness",
+      "Sidecar readiness",
       "pass",
-      "A valid sidecard connection is configured for cortex features that require it.",
+      "A valid sidecar connection is configured for cortex features that require it.",
     );
   } else if (sidecarConnectionId) {
     pushCheck(
       "sidecar_optional",
-      "Sidecard connection",
+      "Sidecar connection",
       "info",
-      "A sidecard connection is configured, but current cortex modes can still run in heuristic mode.",
+      "A sidecar connection is configured, but current cortex modes can still run in heuristic mode.",
     );
   } else {
     pushCheck(
       "sidecar_optional",
-      "Sidecard connection",
+      "Sidecar connection",
       "info",
-      "No sidecard connection is configured. Heuristic cortex mode can still run without it.",
+      "No sidecar connection is configured. Heuristic cortex mode can still run without it.",
     );
   }
 
@@ -239,24 +250,65 @@ app.get("/health", async (c) => {
     attempted: boolean;
     success: boolean | null;
     message: string;
+    durationMs: number | null;
+    timedOut: boolean;
+    error: string | null;
   } = {
     attempted: false,
     success: null,
-    message: "Live sidecard probe not run.",
+    message: "Live sidecar probe not run.",
+    durationMs: null,
+    timedOut: false,
+    error: null,
   };
+  const sidecarProbePromise = (async () => {
+    if (!(probeConnectivity && sidecarConnectionId && sidecarProfile)) {
+      return sidecarConnectivity;
+    }
 
-  if (probeConnectivity && sidecarConnectionId && sidecarProfile) {
-    const result = await connectionsSvc.testConnection(userId, sidecarConnectionId);
-    sidecarConnectivity = {
-      attempted: true,
-      success: result.success,
-      message: result.message,
-    };
+    try {
+      const result = await connectionsSvc.testConnection(userId, sidecarConnectionId);
+      return {
+        attempted: true,
+        success: result.success,
+        message: result.message,
+        durationMs: result.durationMs,
+        timedOut: result.timedOut,
+        error: result.error,
+      };
+    } catch (err: unknown) {
+      const message = getProbeErrorMessage(err, "Sidecar probe failed.");
+      return {
+        attempted: true,
+        success: false,
+        message,
+        durationMs: null,
+        timedOut: err instanceof Error && err.name === "TimeoutError",
+        error: message,
+      };
+    }
+  })();
+
+  [embeddingConnectivity, sidecarConnectivity] = await Promise.all([
+    embeddingProbePromise,
+    sidecarProbePromise,
+  ]);
+
+  if (embeddingConnectivity.attempted) {
+    pushCheck(
+      "embedding_probe",
+      "Embedding connectivity",
+      embeddingConnectivity.success ? "pass" : "fail",
+      embeddingConnectivity.message,
+    );
+  }
+
+  if (sidecarConnectivity.attempted) {
     pushCheck(
       "sidecar_probe",
-      "Sidecard connectivity",
-      result.success ? "pass" : "fail",
-      result.message,
+      "Sidecar connectivity",
+      sidecarConnectivity.success ? "pass" : "fail",
+      sidecarConnectivity.message,
     );
   }
 

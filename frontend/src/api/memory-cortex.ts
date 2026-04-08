@@ -130,6 +130,15 @@ export interface CortexHealthCheck {
   message: string;
 }
 
+export interface CortexProbeStatus {
+  attempted: boolean;
+  success: boolean | null;
+  message: string;
+  durationMs?: number | null;
+  timedOut?: boolean;
+  error?: string | null;
+}
+
 export interface CortexHealthReport {
   generatedAt: string;
   healthy: boolean;
@@ -155,10 +164,7 @@ export interface CortexHealthReport {
     model: string;
     dimensions: number | null;
     ready: boolean;
-    connectivity: {
-      attempted: boolean;
-      success: boolean | null;
-      message: string;
+    connectivity: CortexProbeStatus & {
       dimension: number | null;
     };
   };
@@ -171,11 +177,7 @@ export interface CortexHealthReport {
     model: string | null;
     hasApiKey: boolean;
     ready: boolean;
-    connectivity: {
-      attempted: boolean;
-      success: boolean | null;
-      message: string;
-    };
+    connectivity: CortexProbeStatus;
   };
   chat: {
     id: string;

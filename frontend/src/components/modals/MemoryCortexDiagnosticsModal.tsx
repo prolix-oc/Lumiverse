@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, CheckCircle2, Copy, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
-import { memoryCortexApi, type CortexHealthCheck, type CortexHealthReport } from '@/api/memory-cortex'
+import { ApiError, RequestTimeoutError } from '@/api/client'
+import { memoryCortexApi, type CortexHealthCheck, type CortexHealthReport, type CortexProbeStatus } from '@/api/memory-cortex'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import styles from './MemoryCortexDiagnosticsModal.module.css'
@@ -16,6 +17,80 @@ function formatCheckLabel(status: CortexHealthCheck['status']) {
       return 'Fail'
     default:
       return 'Info'
+  }
+}
+
+interface DiagnosticsErrorState {
+  summary: string
+  details: string[]
+}
+
+function formatProbeDuration(durationMs?: number | null): string | null {
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) return null
+  return `${Math.max(0, Math.round(durationMs))}ms`
+}
+
+function formatProbeSummary(probe: CortexProbeStatus, fallback = 'Not run'): string {
+  if (!probe.attempted) return fallback
+  const parts = [probe.message]
+  const duration = formatProbeDuration(probe.durationMs)
+  if (duration) parts.push(duration)
+  if (probe.timedOut) parts.push('timed out')
+  return parts.join(' | ')
+}
+
+function stringifyBody(body: unknown): string | null {
+  if (!body) return null
+  if (typeof body === 'string') return body
+  if (typeof body === 'object') {
+    try {
+      return JSON.stringify(body)
+    } catch {
+      return null
+    }
+  }
+  return String(body)
+}
+
+function describeDiagnosticsError(error: unknown, chatId?: string | null): DiagnosticsErrorState {
+  if (error instanceof RequestTimeoutError) {
+    return {
+      summary: 'Diagnostics request timed out before the server finished the live health checks.',
+      details: [
+        `Request: ${error.url}`,
+        `Timeout: ${error.timeoutMs}ms`,
+        chatId ? `Chat: ${chatId}` : 'Chat: none',
+        'The backend health endpoint was still waiting on one or more live provider probes.',
+      ],
+    }
+  }
+
+  if (error instanceof ApiError) {
+    const bodyText = stringifyBody(error.body)
+    const bodyError = typeof error.body?.error === 'string' ? error.body.error : null
+    return {
+      summary: bodyError || 'Memory Cortex diagnostics request failed.',
+      details: [
+        `HTTP: ${error.status} ${error.statusText}`,
+        chatId ? `Chat: ${chatId}` : 'Chat: none',
+        ...(bodyText && bodyText !== bodyError ? [`Body: ${bodyText}`] : []),
+      ],
+    }
+  }
+
+  if (error instanceof Error) {
+    return {
+      summary: error.message || 'Failed to load Memory Cortex diagnostics.',
+      details: [
+        `Error type: ${error.name || 'Error'}`,
+        chatId ? `Chat: ${chatId}` : 'Chat: none',
+      ],
+    }
+  }
+
+  return {
+    summary: 'Failed to load Memory Cortex diagnostics.',
+    details: [chatId ? `Chat: ${chatId}` : 'Chat: none'],
   }
 }
 
@@ -80,16 +155,22 @@ function buildReportText(report: CortexHealthReport): string {
   lines.push(`- Vectorize chat messages: ${report.embeddings.vectorizeChatMessages ? 'Yes' : 'No'}`)
   lines.push(`- Provider/model: ${report.embeddings.provider || 'N/A'} / ${report.embeddings.model || 'N/A'}`)
   lines.push(`- Dimensions: ${report.embeddings.dimensions ?? 'Unknown'}`)
-  lines.push(`- Connectivity: ${report.embeddings.connectivity.message}`)
+  lines.push(`- Connectivity: ${formatProbeSummary(report.embeddings.connectivity, 'Not run')}`)
+  if (report.embeddings.connectivity.error && report.embeddings.connectivity.error !== report.embeddings.connectivity.message) {
+    lines.push(`- Probe error: ${report.embeddings.connectivity.error}`)
+  }
   lines.push('')
 
-  lines.push('Sidecard')
+  lines.push('Sidecar')
   lines.push(`- Required: ${report.sidecar.required ? 'Yes' : 'No'}`)
   lines.push(`- Configured: ${report.sidecar.configured ? 'Yes' : 'No'}`)
   lines.push(`- Connection: ${report.sidecar.connectionName ?? 'None'}`)
   lines.push(`- Provider/model: ${report.sidecar.provider ?? 'N/A'} / ${report.sidecar.model ?? 'Default'}`)
   lines.push(`- API key: ${report.sidecar.hasApiKey ? 'Ready' : 'Missing or not required'}`)
-  lines.push(`- Connectivity: ${report.sidecar.connectivity.message}`)
+  lines.push(`- Connectivity: ${formatProbeSummary(report.sidecar.connectivity, 'Not run')}`)
+  if (report.sidecar.connectivity.error && report.sidecar.connectivity.error !== report.sidecar.connectivity.message) {
+    lines.push(`- Probe error: ${report.sidecar.connectivity.error}`)
+  }
   lines.push('')
 
   lines.push('Chat')
@@ -136,21 +217,21 @@ interface Props {
 export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props) {
   const [report, setReport] = useState<CortexHealthReport | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<DiagnosticsErrorState | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
 
   const loadReport = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setReport((current) => ((current?.chat?.id ?? null) === (chatId ?? null) ? current : null))
     try {
       const nextReport = await memoryCortexApi.getHealth({
         chatId: chatId || undefined,
         probeConnectivity: true,
       })
       setReport(nextReport)
-    } catch (err: any) {
-      setReport(null)
-      setError(err?.body?.error || err?.message || 'Failed to load Memory Cortex diagnostics.')
+    } catch (err: unknown) {
+      setError(describeDiagnosticsError(err, chatId))
     } finally {
       setLoading(false)
     }
@@ -180,6 +261,8 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
     return 'pass'
   }, [report])
 
+  const waitingForInitialReport = loading && !report
+
   return (
     <ModalShell
       isOpen={true}
@@ -194,7 +277,7 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
             <div className={styles.eyebrow}>Popup Diagnostics</div>
             <h2 className={styles.title}>Memory Cortex Diagnostics</h2>
             <p className={styles.subtitle}>
-              Focused health checks for cortex setup, embeddings, sidecard readiness, and the selected chat.
+              Focused health checks for cortex setup, embeddings, sidecar readiness, and the selected chat.
               {chatId ? ` Chat: ${chatId}` : ' Open this from an active chat for chat-specific checks.'}
             </p>
           </div>
@@ -224,12 +307,23 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
         </div>
 
         <div className={styles.body}>
-          {error ? (
+          {error && (
             <div className={styles.errorState}>
               <AlertTriangle size={18} />
-              <span>{error}</span>
+              <div className={styles.errorCopy}>
+                <div className={styles.errorTitle}>{error.summary}</div>
+                {error.details.length > 0 && (
+                  <div className={styles.errorDetails}>
+                    {error.details.map((detail) => (
+                      <div key={detail}>{detail}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          ) : (
+          )}
+
+          {error && !report ? null : (
             <>
               <div
                 className={clsx(
@@ -273,7 +367,7 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
 
               <div className={styles.section}>
                 <div className={styles.sectionHeader}>Checks</div>
-                {loading && !report ? (
+                {waitingForInitialReport ? (
                   <div className={styles.loadingRow}>Running diagnostics...</div>
                 ) : (
                   <div className={styles.checkListWrap}>
@@ -296,34 +390,50 @@ export default function MemoryCortexDiagnosticsModal({ chatId, onClose }: Props)
               <div className={styles.detailGrid}>
                 <div className={styles.section}>
                   <div className={styles.sectionHeader}>Embeddings</div>
-                  <div className={styles.metaList}>
-                    <div className={styles.metaRow}><span>Enabled</span><strong>{report?.embeddings.enabled ? 'Yes' : 'No'}</strong></div>
-                    <div className={styles.metaRow}><span>API key</span><strong>{report?.embeddings.hasApiKey ? 'Present' : 'Missing'}</strong></div>
-                    <div className={styles.metaRow}><span>Vectorize chat messages</span><strong>{report?.embeddings.vectorizeChatMessages ? 'Yes' : 'No'}</strong></div>
-                    <div className={styles.metaRow}><span>Provider</span><strong>{report?.embeddings.provider ?? 'N/A'}</strong></div>
-                    <div className={styles.metaRow}><span>Model</span><strong>{report?.embeddings.model ?? 'N/A'}</strong></div>
-                    <div className={styles.metaRow}><span>Dimensions</span><strong>{report?.embeddings.dimensions ?? 'Unknown'}</strong></div>
-                    <div className={styles.metaRow}><span>Live probe</span><strong>{report?.embeddings.connectivity.message ?? 'N/A'}</strong></div>
-                  </div>
+                  {!report ? (
+                    <div className={styles.loadingRow}>Waiting for diagnostics report...</div>
+                  ) : (
+                    <div className={styles.metaList}>
+                      <div className={styles.metaRow}><span>Enabled</span><strong>{report.embeddings.enabled ? 'Yes' : 'No'}</strong></div>
+                      <div className={styles.metaRow}><span>API key</span><strong>{report.embeddings.hasApiKey ? 'Present' : 'Missing'}</strong></div>
+                      <div className={styles.metaRow}><span>Vectorize chat messages</span><strong>{report.embeddings.vectorizeChatMessages ? 'Yes' : 'No'}</strong></div>
+                      <div className={styles.metaRow}><span>Provider</span><strong>{report.embeddings.provider || 'N/A'}</strong></div>
+                      <div className={styles.metaRow}><span>Model</span><strong>{report.embeddings.model || 'N/A'}</strong></div>
+                      <div className={styles.metaRow}><span>Dimensions</span><strong>{report.embeddings.dimensions ?? 'Unknown'}</strong></div>
+                      <div className={styles.metaRow}><span>Live probe</span><strong>{formatProbeSummary(report.embeddings.connectivity, 'Not run')}</strong></div>
+                      {report.embeddings.connectivity.error && report.embeddings.connectivity.error !== report.embeddings.connectivity.message && (
+                        <div className={styles.metaRow}><span>Probe error</span><strong>{report.embeddings.connectivity.error}</strong></div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className={styles.section}>
-                  <div className={styles.sectionHeader}>Sidecard</div>
-                  <div className={styles.metaList}>
-                    <div className={styles.metaRow}><span>Required</span><strong>{report?.sidecar.required ? 'Yes' : 'No'}</strong></div>
-                    <div className={styles.metaRow}><span>Configured</span><strong>{report?.sidecar.configured ? 'Yes' : 'No'}</strong></div>
-                    <div className={styles.metaRow}><span>Connection</span><strong>{report?.sidecar.connectionName ?? 'None'}</strong></div>
-                    <div className={styles.metaRow}><span>Provider</span><strong>{report?.sidecar.provider ?? 'N/A'}</strong></div>
-                    <div className={styles.metaRow}><span>Model</span><strong>{report?.sidecar.model ?? 'Default'}</strong></div>
-                    <div className={styles.metaRow}><span>API key</span><strong>{report?.sidecar.hasApiKey ? 'Ready' : 'Missing / not required'}</strong></div>
-                    <div className={styles.metaRow}><span>Live probe</span><strong>{report?.sidecar.connectivity.message ?? 'N/A'}</strong></div>
-                  </div>
+                  <div className={styles.sectionHeader}>Sidecar</div>
+                  {!report ? (
+                    <div className={styles.loadingRow}>Waiting for diagnostics report...</div>
+                  ) : (
+                    <div className={styles.metaList}>
+                      <div className={styles.metaRow}><span>Required</span><strong>{report.sidecar.required ? 'Yes' : 'No'}</strong></div>
+                      <div className={styles.metaRow}><span>Configured</span><strong>{report.sidecar.configured ? 'Yes' : 'No'}</strong></div>
+                      <div className={styles.metaRow}><span>Connection</span><strong>{report.sidecar.connectionName ?? 'None'}</strong></div>
+                      <div className={styles.metaRow}><span>Provider</span><strong>{report.sidecar.provider ?? 'N/A'}</strong></div>
+                      <div className={styles.metaRow}><span>Model</span><strong>{report.sidecar.model ?? 'Default'}</strong></div>
+                      <div className={styles.metaRow}><span>API key</span><strong>{report.sidecar.hasApiKey ? 'Ready' : 'Missing / not required'}</strong></div>
+                      <div className={styles.metaRow}><span>Live probe</span><strong>{formatProbeSummary(report.sidecar.connectivity, 'Not run')}</strong></div>
+                      {report.sidecar.connectivity.error && report.sidecar.connectivity.error !== report.sidecar.connectivity.message && (
+                        <div className={styles.metaRow}><span>Probe error</span><strong>{report.sidecar.connectivity.error}</strong></div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className={styles.section}>
                 <div className={styles.sectionHeader}>Selected Chat</div>
-                {!report?.chat ? (
+                {!report ? (
+                  <div className={styles.loadingRow}>Waiting for diagnostics report...</div>
+                ) : !report.chat ? (
                   <div className={styles.emptyRow}>No chat was selected when this popup was opened.</div>
                 ) : !report.chat.exists ? (
                   <div className={styles.emptyRow}>The requested chat could not be found.</div>
