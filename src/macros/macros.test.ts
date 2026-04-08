@@ -953,4 +953,16 @@ describe("Edge cases", () => {
   test("switch with no args returns empty", async () => {
     expect(await ev("{{switch::value}}")).toBe("");
   });
+
+  test("if with unresolved macro condition is falsy", async () => {
+    expect(await ev("{{if::{{thisMacroDoesNotExist}}}}True{{/if}}")).toBe("");
+  });
+
+  test("if with unresolved macro in comparison is falsy", async () => {
+    expect(await ev("{{if::{{thisMacroDoesNotExist}} == hello}}True{{/if}}")).toBe("");
+  });
+
+  test("if with unresolved macro selects else branch", async () => {
+    expect(await ev("{{if::{{thisMacroDoesNotExist}}}}True{{else}}False{{/if}}")).toBe("False");
+  });
 });

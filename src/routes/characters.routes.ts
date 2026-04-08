@@ -568,6 +568,7 @@ app.post("/import-bulk", async (c) => {
         let cardInput;
         let avatarFile: File | null = null;
         let charxGalleryFiles: File[] = [];
+        let charxAssetFiles: Map<string, File> | null = null;
         let risuModule: cardSvc.RisuModule | null = null;
         let expressionAssets: cardSvc.CharxExpressionAsset[] = [];
 
@@ -579,6 +580,7 @@ app.post("/import-bulk", async (c) => {
           cardInput = charxResult.card;
           avatarFile = charxResult.avatarFile;
           charxGalleryFiles = charxResult.galleryFiles;
+          charxAssetFiles = charxResult.assetFiles;
           risuModule = charxResult.risuModule;
           expressionAssets = charxResult.expressionAssets;
         } else {
@@ -620,11 +622,36 @@ app.post("/import-bulk", async (c) => {
           svc.setCharacterAvatar(userId, character.id, image.filename);
         }
 
-        if (charxGalleryFiles.length > 3) {
-          await gallerySvc.uploadBulkToGallery(userId, character.id, charxGalleryFiles);
+        // Upload gallery images, tracking archive path → image ID for inline asset resolution
+        const bulkAssetImageMap = new Map<string, string>();
+        if (charxAssetFiles) {
+          for (const [path, gf] of charxAssetFiles) {
+            if (avatarFile && gf.name === avatarFile.name) continue;
+            if (!/^assets\/(icon|other)\//i.test(path)) continue;
+            try {
+              const img = await images.uploadImage(userId, gf);
+              gallerySvc.addToGallery(userId, character.id, img.id);
+              bulkAssetImageMap.set(path, img.id);
+            } catch { /* skip */ }
+          }
         } else {
           for (const gf of charxGalleryFiles) {
             try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
+          }
+        }
+
+        // Resolve inline asset references in character text fields
+        if (bulkAssetImageMap.size > 0) {
+          const resolvedFields = cardSvc.resolveInlineAssetReferences(
+            {
+              first_mes: character.first_mes,
+              description: character.description,
+              alternate_greetings: character.alternate_greetings,
+            },
+            bulkAssetImageMap,
+          );
+          if (Object.keys(resolvedFields).length > 0) {
+            svc.updateCharacter(userId, character.id, resolvedFields);
           }
         }
 
@@ -693,6 +720,8 @@ app.post("/import", async (c) => {
         const charxResult = await cardSvc.extractCardFromCharx(file);
         const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles } = charxResult;
         const character = svc.createCharacter(userId, cardInput);
+        // Track archive-path → image-id for resolving inline asset references in text fields
+        const assetImageMap = new Map<string, string>();
         if (avatarFile) {
           const image = await images.uploadImage(userId, avatarFile);
           svc.setCharacterImage(userId, character.id, image.id);
@@ -715,6 +744,7 @@ app.post("/import", async (c) => {
                 const img = await images.uploadImage(userId, assetFile);
                 exprMappings[label] = img.id;
                 consumedPaths.add(archivePath);
+                assetImageMap.set(archivePath, img.id);
               }
             }
             if (Object.keys(exprMappings).length > 0) {
@@ -740,6 +770,7 @@ app.post("/import", async (c) => {
                 const img = await images.uploadImage(userId, assetFile);
                 altAvatars.push({ id: av.id || crypto.randomUUID(), image_id: img.id, label: av.label });
                 consumedPaths.add(av.path);
+                assetImageMap.set(av.path, img.id);
               }
             }
             if (altAvatars.length > 0) {
@@ -783,20 +814,50 @@ app.post("/import", async (c) => {
           };
         }
 
-        // Upload remaining unconsumed asset images to gallery
-        const remainingGalleryFiles: File[] = [];
+        // Upload remaining unconsumed asset images to gallery, tracking archive path → image ID
+        const remainingGalleryEntries: Array<{ path: string; file: File }> = [];
         for (const [path, assetFile] of assetFiles) {
           if (consumedPaths.has(path)) continue;
           if (avatarFile && assetFile.name === avatarFile.name) continue;
           if (/^assets\/(icon|other)\//i.test(path)) {
-            remainingGalleryFiles.push(assetFile);
+            remainingGalleryEntries.push({ path, file: assetFile });
           }
         }
-        if (remainingGalleryFiles.length > 3) {
-          await gallerySvc.uploadBulkToGallery(userId, character.id, remainingGalleryFiles);
-        } else {
-          for (const gf of remainingGalleryFiles) {
-            try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
+        const galleryTotal = remainingGalleryEntries.length;
+        for (let i = 0; i < galleryTotal; i++) {
+          const { path, file: gf } = remainingGalleryEntries[i];
+          if (galleryTotal > 3) {
+            eventBus.emit(
+              EventType.IMPORT_GALLERY_PROGRESS,
+              { characterId: character.id, current: i + 1, total: galleryTotal, filename: gf.name },
+              userId,
+            );
+          }
+          try {
+            const img = await images.uploadImage(userId, gf);
+            gallerySvc.addToGallery(userId, character.id, img.id);
+            assetImageMap.set(path, img.id);
+          } catch { /* skip individual failures */ }
+        }
+
+        // Resolve inline asset references (embeded://, relative filenames) in character text fields
+        if (assetImageMap.size > 0) {
+          const resolvedFields = cardSvc.resolveInlineAssetReferences(
+            {
+              first_mes: character.first_mes,
+              description: character.description,
+              personality: character.personality,
+              scenario: character.scenario,
+              mes_example: character.mes_example,
+              system_prompt: character.system_prompt,
+              post_history_instructions: character.post_history_instructions,
+              creator_notes: character.creator_notes,
+              alternate_greetings: character.alternate_greetings,
+            },
+            assetImageMap,
+          );
+          if (Object.keys(resolvedFields).length > 0) {
+            svc.updateCharacter(userId, character.id, resolvedFields);
           }
         }
 

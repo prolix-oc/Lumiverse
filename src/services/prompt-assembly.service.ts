@@ -637,6 +637,18 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     }
   }
 
+  // ---- Resolve macros in world info entries ----
+  // WI entry content may contain macros (e.g. {{user}}, {{char}}, {{time}}).
+  // Resolve them before injection so all positions get macro-evaluated content.
+  for (const bucket of [wiCache.before, wiCache.after, wiCache.anBefore, wiCache.anAfter, wiCache.emBefore, wiCache.emAfter] as Array<Array<{ content: string }>>) {
+    for (const entry of bucket) {
+      entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
+    }
+  }
+  for (const entry of wiCache.depth) {
+    entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
+  }
+
   // ---- Assembly loop ----
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];

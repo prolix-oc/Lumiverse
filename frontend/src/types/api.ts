@@ -752,6 +752,7 @@ export interface EmbeddingConfig {
   vectorize_chat_messages: boolean;
   vectorize_chat_documents: boolean;
   chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
+  request_timeout: number;
   has_api_key: boolean;
 }
 

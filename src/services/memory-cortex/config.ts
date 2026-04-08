@@ -89,7 +89,7 @@ export interface MemoryCortexConfig {
 
   /** Max milliseconds to wait for cortex retrieval during prompt assembly.
    *  If exceeded, generation falls back to plain vector search instead of stalling.
-   *  0 = no timeout (not recommended). Default: 8000 (8s). */
+   *  0 = no timeout (not recommended). Default: 60000 (60s). */
   retrievalTimeoutMs: number;
   /** Max milliseconds to wait for a sidecar LLM call (chunk ingestion,
    *  consolidation). Prevents fire-and-forget promises from hanging indefinitely.
@@ -172,7 +172,7 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
   },
   formatterMode: "shadow",
   contextTokenBudget: 600,
-  retrievalTimeoutMs: 8000,
+  retrievalTimeoutMs: 60000,
   sidecarTimeoutMs: 60000,
   consolidation: { ...DEFAULT_CONSOLIDATION_CONFIG },
   retrieval: {

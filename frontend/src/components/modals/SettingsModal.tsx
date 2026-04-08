@@ -1365,6 +1365,7 @@ function EmbeddingsSettings() {
         vectorize_chat_messages: cfg.vectorize_chat_messages,
         vectorize_chat_documents: cfg.vectorize_chat_documents,
         chat_memory_mode: cfg.chat_memory_mode,
+        request_timeout: cfg.request_timeout,
         api_key: apiKey.trim() ? apiKey.trim() : undefined,
       })
       setCfg(saved)
@@ -1636,6 +1637,22 @@ function EmbeddingsSettings() {
           </span>
         </div>
       )}
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Request Timeout (seconds)</label>
+        <input
+          className={styles.numberInput}
+          type="number"
+          min={0}
+          max={300}
+          step={5}
+          value={cfg.request_timeout ?? 60}
+          onChange={(e) => update({ request_timeout: Math.max(0, Math.min(300, Number(e.target.value || 60))) })}
+        />
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          Max seconds to wait for an embedding API response. Increase for slow providers or large batches. 0 = no timeout.
+        </span>
+      </div>
+
       <div className={styles.field}>
         <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
         <input

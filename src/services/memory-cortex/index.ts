@@ -295,7 +295,7 @@ export async function queryCortex(
   const runQuery = (async (): Promise<CortexResult> => {
     // Time-bound the retrieval to prevent hanging promises from accumulating
     // when embedding APIs or vector search are unresponsive.
-    const timeoutMs = cfg.retrievalTimeoutMs ?? 8000;
+    const timeoutMs = cfg.retrievalTimeoutMs ?? 60000;
     let result: CortexResult;
 
     if (timeoutMs > 0) {

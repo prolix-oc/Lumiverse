@@ -178,6 +178,12 @@ function resolveInlineShorthands(
 }
 
 function evaluateCondition(value: string): boolean {
+  // Unresolved macros (reconstructed as {{name}} by the evaluator) mean the
+  // value couldn't be determined — treat the entire condition as falsy.
+  if (value.includes("{{") && value.includes("}}")) {
+    return false;
+  }
+
   // Handle comparison operators
   const compMatch = value.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
   if (compMatch) {

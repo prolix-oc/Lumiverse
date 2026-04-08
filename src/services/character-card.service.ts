@@ -5,7 +5,7 @@ import type { CreateRegexScriptInput, RegexTarget } from "../types/regex-script"
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024; // 100 MB (PNG text chunks)
-const MAX_CHARX_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_CHARX_SIZE = 1000 * 1024 * 1024; // 1000 MB
 
 /**
  * Reads PNG chunks and extracts the text value for a given keyword.
@@ -523,4 +523,98 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
   }
 
   return { card, avatarFile, galleryFiles, risuModule, expressionAssets, lumiverseModules, assetFiles };
+}
+
+// ── Inline asset reference resolution ────────────────────────────────────────
+
+const INLINE_IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["']/gi;
+const INLINE_MD_IMG_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
+
+/** Extracts the stem (filename without extension) from a path or filename. */
+function fileStem(pathOrName: string): string {
+  const base = pathOrName.split("/").pop() || pathOrName;
+  const dotIdx = base.lastIndexOf(".");
+  return dotIdx > 0 ? base.slice(0, dotIdx) : base;
+}
+
+/**
+ * Resolves inline asset references (`embeded://`, relative filenames) in
+ * character text fields to `/api/v1/images/{id}` URLs.
+ *
+ * Called at CharX import time after all archive images have been uploaded.
+ * Builds a multi-level lookup (exact path → basename → stem) to match
+ * references that may differ in path prefix or file extension.
+ *
+ * @param fields Text fields to scan (string or string[] values)
+ * @param assetImageMap Archive path → uploaded image ID
+ * @returns Object with only the fields that were modified (empty if none changed)
+ */
+export function resolveInlineAssetReferences(
+  fields: Record<string, string | string[] | undefined>,
+  assetImageMap: Map<string, string>,
+): Record<string, string | string[]> {
+  if (assetImageMap.size === 0) return {};
+
+  // Build tiered lookup tables — higher priority first
+  const exactLookup = new Map<string, string>();   // full path / embeded:// URI
+  const baseLookup = new Map<string, string>();     // basename (with extension)
+  const stemLookup = new Map<string, string>();     // stem (without extension)
+
+  for (const [archivePath, imageId] of assetImageMap) {
+    const apiUrl = `/api/v1/images/${imageId}`;
+    exactLookup.set(archivePath, apiUrl);
+    exactLookup.set(`embeded://${archivePath}`, apiUrl);
+
+    const basename = archivePath.split("/").pop()!;
+    if (!baseLookup.has(basename)) baseLookup.set(basename, apiUrl);
+
+    const stem = fileStem(basename);
+    if (!stemLookup.has(stem)) stemLookup.set(stem, apiUrl);
+  }
+
+  function resolve(src: string): string | undefined {
+    return exactLookup.get(src)
+      ?? baseLookup.get(src)
+      ?? stemLookup.get(fileStem(src));
+  }
+
+  function resolveText(text: string): string {
+    let result = text;
+
+    // Resolve <img ... src="..."> tags
+    INLINE_IMG_SRC_RE.lastIndex = 0;
+    result = result.replace(INLINE_IMG_SRC_RE, (match, src) => {
+      const resolved = resolve(src);
+      return resolved ? match.replace(src, resolved) : match;
+    });
+
+    // Resolve ![alt](src) markdown images
+    INLINE_MD_IMG_RE.lastIndex = 0;
+    result = result.replace(INLINE_MD_IMG_RE, (match, src) => {
+      const resolved = resolve(src);
+      return resolved ? match.replace(src, resolved) : match;
+    });
+
+    return result;
+  }
+
+  const changes: Record<string, string | string[]> = {};
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (!value) continue;
+    if (typeof value === "string") {
+      const resolved = resolveText(value);
+      if (resolved !== value) changes[key] = resolved;
+    } else if (Array.isArray(value)) {
+      let changed = false;
+      const resolved = value.map((v) => {
+        const r = resolveText(v);
+        if (r !== v) changed = true;
+        return r;
+      });
+      if (changed) changes[key] = resolved;
+    }
+  }
+
+  return changes;
 }

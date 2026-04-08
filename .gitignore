@@ -55,3 +55,4 @@ scripts/release.sh
 scripts/release-main.sh
 scripts/release-rc.sh
 scripts/push-staging.sh
+src/macros/macros.test.ts

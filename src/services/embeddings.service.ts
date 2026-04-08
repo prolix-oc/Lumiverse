@@ -19,9 +19,10 @@ const LANCEDB_PATH = join(env.dataDir, "lancedb");
 const EMBEDDINGS_TABLE = "embeddings";
 const WORLD_BOOK_VECTOR_VERSION = 2;
 const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
-/** Safety timeout for embedding API requests. Prevents a hanging upstream
- *  server from stalling the entire generation pipeline. */
-const EMBEDDING_REQUEST_TIMEOUT_MS = 15_000; // 15 seconds
+/** Default safety timeout for embedding API requests. Prevents a hanging
+ *  upstream server from stalling the entire generation pipeline.
+ *  User-configurable via EmbeddingConfig.request_timeout (seconds). */
+const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 60_000; // 60 seconds
 
 export type EmbeddingProvider =
   | "openai-compatible"
@@ -47,6 +48,9 @@ export interface EmbeddingConfig {
   vectorize_chat_messages: boolean;
   vectorize_chat_documents: boolean;
   chat_memory_mode: "conservative" | "balanced" | "aggressive";
+  /** Timeout in seconds for individual embedding API requests.
+   *  0 = no timeout. Default: 60. */
+  request_timeout: number;
 }
 
 export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
@@ -378,6 +382,7 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
     vectorize_chat_messages: false,
     vectorize_chat_documents: true,
     chat_memory_mode: "balanced",
+    request_timeout: 60,
   };
 }
 
@@ -429,6 +434,10 @@ function normalizeConfig(input: any): EmbeddingConfig {
       input?.chat_memory_mode === "aggressive"
         ? input.chat_memory_mode
         : base.chat_memory_mode,
+    request_timeout:
+      Number.isFinite(input?.request_timeout) && input.request_timeout >= 0
+        ? Math.min(300, input.request_timeout)
+        : base.request_timeout,
   };
 }
 
@@ -1123,8 +1132,11 @@ async function requestEmbeddings(
   if (!options?.omitDimensions && cfg.send_dimensions && cfg.dimensions) body.dimensions = cfg.dimensions;
 
   const url = resolveEmbeddingUrl(cfg.api_url);
+  const timeoutMs = cfg.request_timeout > 0
+    ? cfg.request_timeout * 1000
+    : DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EMBEDDING_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -1138,7 +1150,7 @@ async function requestEmbeddings(
     });
   } catch (err: any) {
     if (err?.name === "AbortError") {
-      throw new Error(`Embedding request timed out after ${EMBEDDING_REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new Error(`Embedding request timed out after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
