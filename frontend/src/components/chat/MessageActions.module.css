@@ -14,3 +14,10 @@
   opacity: 1;
 }
 
+/* Touch devices: keep actions visible for deliberate tapping */
+@media (hover: none) {
+  .actions {
+    opacity: 0.5;
+  }
+}
+

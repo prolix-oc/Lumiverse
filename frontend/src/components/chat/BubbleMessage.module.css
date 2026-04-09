@@ -201,10 +201,12 @@
   align-items: center;
   gap: 14px;
   min-width: 0;
+  max-width: calc(100% - 180px);
 }
 
 .user .headerLeft {
   flex-direction: row-reverse;
+  max-width: calc(100% - 155px);
 }
 
 .userLeft.user .headerLeft {
@@ -249,6 +251,9 @@
   line-height: 1.2;
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :global([data-theme-mode='dark']) .nameChar {
@@ -436,6 +441,13 @@
 
 .card:hover .actionsPill {
   opacity: 1;
+}
+
+/* Touch devices: keep actions visible for deliberate tapping */
+@media (hover: none) {
+  .actionsPill {
+    opacity: 0.5;
+  }
 }
 
 .user .actionsPill {
