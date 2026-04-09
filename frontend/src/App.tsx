@@ -52,6 +52,19 @@ export default function App() {
     }
   }, [isAuthenticated, loadSettings])
 
+  // Capture BYOP API key returned in URL hash globally so it can be consumed
+  // later when the relevant connection form is opened.
+  useEffect(() => {
+    const hash = window.location.hash
+    if (!hash) return
+    const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+    const byopApiKey = params.get('api_key')
+    if (!byopApiKey) return
+
+    sessionStorage.setItem('pollinations_byop_returned_api_key', byopApiKey)
+    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
+  }, [])
+
   // Global Cmd+K / Ctrl+K shortcut to open the command palette
   const openCommandPalette = useStore((s) => s.openCommandPalette)
   const closeCommandPalette = useStore((s) => s.closeCommandPalette)

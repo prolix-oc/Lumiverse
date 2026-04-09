@@ -24,6 +24,22 @@ export default function ImageGenConnectionManager() {
   const [deleteTarget, setDeleteTarget] = useState<ImageGenConnectionProfile | null>(null)
 
   useEffect(() => {
+    const returnedKey = sessionStorage.getItem('pollinations_byop_returned_api_key')
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    if (!returnedKey || !pendingRaw) return
+
+    try {
+      const pending = JSON.parse(pendingRaw) as { target?: string; provider?: string; connectionId?: string | null }
+      if (pending.target !== 'image-gen-connections') return
+      if (pending.provider !== 'pollinations') return
+      if (pending.connectionId) return
+      setCreating(true)
+    } catch {
+      // ignore malformed pending state
+    }
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
 
     async function init() {
