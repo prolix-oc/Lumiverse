@@ -14,6 +14,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   google: '#4285f4',
   google_vertex: '#34a853',
   openrouter: '#6366f1',
+  pollinations: '#ff6b35',
   custom: 'var(--lumiverse-text-dim)',
 }
 

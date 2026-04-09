@@ -27,10 +27,13 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
 
   const [models, setModels] = useState<Array<{ id: string; label: string }>>([])
   const [modelsLoading, setModelsLoading] = useState(false)
+  const [byopLoading, setByopLoading] = useState(false)
+  const [byopStatus, setByopStatus] = useState<string | null>(null)
 
   const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }))
   const selectedProvider = providers.find((p) => p.id === provider)
   const capabilities = selectedProvider?.capabilities
+  const isPollinations = provider === 'pollinations'
 
   // Build model options from static list or fetched models
   const modelOptions = useMemo(() => {
@@ -57,6 +60,86 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
     }
   }, [profile?.id, capabilities?.modelListStyle, fetchModels])
 
+  useEffect(() => {
+    if (!isPollinations) return
+
+    const hash = window.location.hash
+    if (!hash) return
+    const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+    const returnedApiKey = params.get('api_key')
+    if (!returnedApiKey) return
+
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    let pendingConnectionId: string | null = null
+    let pendingTarget: string | null = null
+    if (pendingRaw) {
+      try {
+        const parsed = JSON.parse(pendingRaw) as { connectionId?: string | null; target?: string | null }
+        pendingConnectionId = parsed.connectionId || null
+        pendingTarget = parsed.target || null
+      } catch {
+        pendingConnectionId = null
+        pendingTarget = null
+      }
+    }
+
+    if (pendingTarget && pendingTarget !== 'image-gen-connections') return
+
+    const activeConnectionId = profile?.id || null
+    if (pendingConnectionId && activeConnectionId && pendingConnectionId !== activeConnectionId) return
+
+    const clearRedirectArtifacts = () => {
+      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
+      sessionStorage.removeItem('pollinations_byop_pending')
+    }
+
+    let cancelled = false
+    const applyReturnedKey = async () => {
+      setApiKey(returnedApiKey)
+
+      if (activeConnectionId) {
+        try {
+          await imageGenConnectionsApi.setApiKey(activeConnectionId, returnedApiKey)
+          if (!cancelled) setByopStatus('Signed in with Pollinations. API key saved automatically.')
+        } catch {
+          if (!cancelled) {
+            setByopStatus('Pollinations sign-in succeeded, but auto-save failed. Click Save to persist manually.')
+          }
+        }
+      } else if (!cancelled) {
+        setByopStatus('Signed in with Pollinations. API key captured. Click Create to save this connection.')
+      }
+
+      clearRedirectArtifacts()
+    }
+
+    void applyReturnedKey()
+    return () => {
+      cancelled = true
+    }
+  }, [isPollinations, profile?.id])
+
+  const handlePollinationsSignIn = useCallback(async () => {
+    setByopStatus(null)
+    setByopLoading(true)
+    try {
+      const redirect_url = `${window.location.origin}${window.location.pathname}${window.location.search}`
+      const result = await imageGenConnectionsApi.pollinationsAuthUrl({
+        redirect_url,
+        models: model.trim() || undefined,
+      })
+      sessionStorage.setItem(
+        'pollinations_byop_pending',
+        JSON.stringify({ connectionId: profile?.id || null, provider: 'pollinations', target: 'image-gen-connections' })
+      )
+      window.location.href = result.auth_url
+    } catch (err: any) {
+      const msg = String(err?.message || 'Failed to start Pollinations sign-in')
+      setByopStatus(msg)
+      setByopLoading(false)
+    }
+  }, [model, profile?.id])
+
   const handleSubmit = useCallback(() => {
     if (!name.trim()) return
     onSave({
@@ -78,6 +161,22 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
       <FormField label="Provider">
         <Select value={provider} onChange={setProvider} options={providerOptions} />
       </FormField>
+
+      {isPollinations && (
+        <FormField label="Pollinations BYOP" hint="Use Sign in with Pollinations to fetch a BYOP key automatically, or paste a key manually below.">
+          <div className={styles.byopRow}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handlePollinationsSignIn}
+              disabled={byopLoading}
+            >
+              {byopLoading ? 'Redirecting...' : 'Sign in with Pollinations'}
+            </Button>
+            {byopStatus && <span className={styles.byopStatus}>{byopStatus}</span>}
+          </div>
+        </FormField>
+      )}
 
       <FormField label="API Key" hint={profile?.has_api_key ? 'Key is set. Enter a new value to replace it.' : undefined}>
         <TextInput

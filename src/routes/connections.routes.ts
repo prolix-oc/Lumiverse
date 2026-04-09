@@ -76,4 +76,33 @@ app.post("/:id/duplicate", async (c) => {
   return c.json(conn, 201);
 });
 
+app.post("/pollinations/auth-url", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+
+  const redirectUrl = String(body?.redirect_url || "").trim();
+  if (!redirectUrl) return c.json({ error: "redirect_url is required" }, 400);
+
+  let parsed: URL;
+  try {
+    parsed = new URL(redirectUrl);
+  } catch {
+    return c.json({ error: "redirect_url must be a valid URL" }, 400);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return c.json({ error: "redirect_url must use http or https" }, 400);
+  }
+
+  const auth_url = svc.buildPollinationsAuthorizeUrl(userId, {
+    redirect_url: redirectUrl,
+    models: body?.models ? String(body.models) : undefined,
+    budget: typeof body?.budget === "number" ? body.budget : undefined,
+    expiry: typeof body?.expiry === "number" ? body.expiry : undefined,
+    permissions: body?.permissions ? String(body.permissions) : undefined,
+  });
+
+  return c.json({ auth_url });
+});
+
 export { app as connectionsRoutes };

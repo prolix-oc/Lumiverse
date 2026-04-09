@@ -12,6 +12,7 @@ const FALLBACK_PROVIDERS = [
   { id: 'openai', name: 'OpenAI', default_url: 'https://api.openai.com/v1' },
   { id: 'anthropic', name: 'Anthropic', default_url: 'https://api.anthropic.com' },
   { id: 'google', name: 'Google Gemini', default_url: 'https://generativelanguage.googleapis.com' },
+  { id: 'pollinations', name: 'Pollinations', default_url: 'https://gen.pollinations.ai/v1' },
 ]
 
 export default function ConnectionManager() {

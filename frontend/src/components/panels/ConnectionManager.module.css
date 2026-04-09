@@ -63,6 +63,18 @@
   max-width: 200px;
 }
 
+.byopRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.byopStatus {
+  font-size: 12px;
+  color: var(--lumiverse-text-muted);
+}
+
 .list {
   display: flex;
   flex-direction: column;

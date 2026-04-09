@@ -42,6 +42,8 @@ export interface EnvConfig {
   stMigrationTarget: number;
   /** Re-trigger migration even if one already completed. */
   stForceNewMigration: boolean;
+  /** Optional Pollinations BYOP app key (publishable pk_...) */
+  pollinationsAppKey: string;
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -123,6 +125,7 @@ export function loadEnv(): EnvConfig {
   const stTargetUser = process.env.SILLYTAVERN_TARGET_USER || "default-user";
   const stMigrationTarget = Math.min(5, Math.max(1, parseInt(process.env.SILLYTAVERN_MIGRATION_TARGET || "5", 10) || 5));
   const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
+  const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "";
 
   return {
     port,
@@ -144,6 +147,7 @@ export function loadEnv(): EnvConfig {
     stTargetUser,
     stMigrationTarget,
     stForceNewMigration,
+    pollinationsAppKey,
   };
 }
 
