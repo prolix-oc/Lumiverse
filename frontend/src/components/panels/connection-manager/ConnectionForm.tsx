@@ -90,13 +90,13 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   }, [profile?.id, fetchModels])
 
   useEffect(() => {
-    const hash = window.location.hash
-    if (!hash) return
-    const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
-    if (!params.get('api_key')) return
-
     const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
     if (!pendingRaw) return
+
+    const hash = window.location.hash
+    const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+    const hasReturnedKey = !!hashParams.get('api_key') || !!sessionStorage.getItem('pollinations_byop_returned_api_key')
+    if (!hasReturnedKey) return
 
     try {
       const pending = JSON.parse(pendingRaw) as { provider?: string }
@@ -111,13 +111,14 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   useEffect(() => {
     if (!isPollinations) return
 
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    if (!pendingRaw) return
+
     const hash = window.location.hash
-    if (!hash) return
     const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
-    const returnedApiKey = params.get('api_key')
+    const returnedApiKey = params.get('api_key') || sessionStorage.getItem('pollinations_byop_returned_api_key')
     if (!returnedApiKey) return
 
-    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
     let pendingConnectionId: string | null = null
     let pendingTarget: string | null = null
     if (pendingRaw) {
@@ -141,6 +142,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     const clearRedirectArtifacts = () => {
       window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
       sessionStorage.removeItem('pollinations_byop_pending')
+      sessionStorage.removeItem('pollinations_byop_returned_api_key')
     }
 
     let cancelled = false
