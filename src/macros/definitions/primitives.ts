@@ -185,7 +185,7 @@ function evaluateCondition(value: string): boolean {
   }
 
   // Handle comparison operators
-  const compMatch = value.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  const compMatch = value.match(/^(.*?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
   if (compMatch) {
     const [, left, op, right] = compMatch;
     const lv = left.trim();
