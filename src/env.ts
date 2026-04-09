@@ -125,7 +125,8 @@ export function loadEnv(): EnvConfig {
   const stTargetUser = process.env.SILLYTAVERN_TARGET_USER || "default-user";
   const stMigrationTarget = Math.min(5, Math.max(1, parseInt(process.env.SILLYTAVERN_MIGRATION_TARGET || "5", 10) || 5));
   const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
-  const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "";
+  // Publishable BYOP app key default used when no per-instance override is set.
+  const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "pk_Y3z2ooD6zSWfLdL3";
 
   return {
     port,
