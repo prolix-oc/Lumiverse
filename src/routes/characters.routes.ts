@@ -653,6 +653,21 @@ app.post("/import-bulk", async (c) => {
           if (Object.keys(resolvedFields).length > 0) {
             svc.updateCharacter(userId, character.id, resolvedFields);
           }
+
+          // Store Risu asset name → image ID mapping for display-time resolution
+          const risuAssetMap: Record<string, string> = {};
+          for (const [archivePath, imageId] of bulkAssetImageMap) {
+            const stem = cardSvc.fileStem(archivePath);
+            if (!risuAssetMap[stem]) risuAssetMap[stem] = imageId;
+          }
+          if (Object.keys(risuAssetMap).length > 0) {
+            const char = svc.getCharacter(userId, character.id);
+            if (char) {
+              svc.updateCharacter(userId, character.id, {
+                extensions: { ...(char.extensions || {}), risu_asset_map: risuAssetMap },
+              });
+            }
+          }
         }
 
         importRisuModuleRegexScripts(userId, character.id, risuModule);
@@ -840,7 +855,7 @@ app.post("/import", async (c) => {
           } catch { /* skip individual failures */ }
         }
 
-        // Resolve inline asset references (embeded://, relative filenames) in character text fields
+        // Resolve inline asset references (embeded://, relative filenames, Risu <img="...">) in character text fields
         if (assetImageMap.size > 0) {
           const resolvedFields = cardSvc.resolveInlineAssetReferences(
             {
@@ -858,6 +873,22 @@ app.post("/import", async (c) => {
           );
           if (Object.keys(resolvedFields).length > 0) {
             svc.updateCharacter(userId, character.id, resolvedFields);
+          }
+
+          // Store Risu asset name → image ID mapping for display-time resolution of
+          // AI-generated <img="AssetName"> tags (mirrors RisuAI's display-time asset lookup)
+          const risuAssetMap: Record<string, string> = {};
+          for (const [archivePath, imageId] of assetImageMap) {
+            const stem = cardSvc.fileStem(archivePath);
+            if (!risuAssetMap[stem]) risuAssetMap[stem] = imageId;
+          }
+          if (Object.keys(risuAssetMap).length > 0) {
+            const char = svc.getCharacter(userId, character.id);
+            if (char) {
+              svc.updateCharacter(userId, character.id, {
+                extensions: { ...(char.extensions || {}), risu_asset_map: risuAssetMap },
+              });
+            }
           }
         }
 

@@ -454,6 +454,20 @@ function IsolatedHtml({ html }: { html: string }) {
   return <div ref={ref} className={styles.htmlIsland} />
 }
 
+// Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
+const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
+
+/** Resolve Risu <img="AssetName"> tags to rendered image markdown using the character's stored asset map. */
+function resolveRisuAssetTags(text: string, assetMap: Record<string, string>): string {
+  if (!text.includes('<img="')) return text
+  RISU_IMG_TAG_RE.lastIndex = 0
+  return text.replace(RISU_IMG_TAG_RE, (match, assetName: string) => {
+    const imageId = assetMap[assetName]
+    if (imageId) return `\n\n![${assetName.replace(/[[\]]/g, '')}](/api/v1/images/${imageId})\n\n`
+    return match
+  })
+}
+
 export default function MessageContent({
   content,
   isUser,
@@ -465,11 +479,30 @@ export default function MessageContent({
 }: MessageContentProps) {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
+  const isGroupChat = useStore((s) => s.isGroupChat)
+  const groupCharacterIds = useStore((s) => s.groupCharacterIds)
 
   const charName = useMemo(
     () => characters.find((c) => c.id === activeCharacterId)?.name ?? 'Assistant',
     [characters, activeCharacterId],
   )
+
+  // Merge Risu asset maps from active character (and all group members in group chats)
+  const risuAssetMap = useMemo(() => {
+    const charIds = isGroupChat && groupCharacterIds.length > 0
+      ? groupCharacterIds
+      : activeCharacterId ? [activeCharacterId] : []
+    let merged: Record<string, string> | null = null
+    for (const id of charIds) {
+      const map = characters.find((c) => c.id === id)?.extensions?.risu_asset_map
+      if (map && typeof map === 'object') {
+        if (!merged) merged = { ...map }
+        else Object.assign(merged, map)
+      }
+    }
+    return merged
+  }, [characters, activeCharacterId, isGroupChat, groupCharacterIds])
+
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
     getTagInterceptorRegistryVersion,
@@ -479,10 +512,18 @@ export default function MessageContent({
     () => stripAndDispatchMessageTags(content, { messageId, chatId, isUser, isStreaming }),
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
   )
+
+  // Resolve Risu <img="AssetName"> tags before regex/macro processing
+  const risuResolvedContent = useMemo(
+    () => risuAssetMap ? resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap) : interceptorCleanedContent,
+    [interceptorCleanedContent, risuAssetMap],
+  )
+
   const applyRegex = useDisplayRegex()
+  const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
   const regexAppliedContent = useMemo(
-    () => applyRegex(interceptorCleanedContent, isUser, depth),
-    [applyRegex, interceptorCleanedContent, isUser, depth],
+    () => applyRegex(risuResolvedContent, isUser, depth, macroCtx),
+    [applyRegex, risuResolvedContent, isUser, depth, macroCtx],
   )
   const resolvedContent = useMemo(
     () => resolveDisplayMacros(regexAppliedContent, { charName, userName }),

@@ -529,9 +529,10 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
 
 const INLINE_IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["']/gi;
 const INLINE_MD_IMG_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
+const INLINE_RISU_IMG_RE = /<img="([^"]+)">/gi;
 
 /** Extracts the stem (filename without extension) from a path or filename. */
-function fileStem(pathOrName: string): string {
+export function fileStem(pathOrName: string): string {
   const base = pathOrName.split("/").pop() || pathOrName;
   const dotIdx = base.lastIndexOf(".");
   return dotIdx > 0 ? base.slice(0, dotIdx) : base;
@@ -593,6 +594,13 @@ export function resolveInlineAssetReferences(
     result = result.replace(INLINE_MD_IMG_RE, (match, src) => {
       const resolved = resolve(src);
       return resolved ? match.replace(src, resolved) : match;
+    });
+
+    // Resolve Risu-style <img="AssetName"> tags → <img src="/api/v1/images/{id}">
+    INLINE_RISU_IMG_RE.lastIndex = 0;
+    result = result.replace(INLINE_RISU_IMG_RE, (match, assetName) => {
+      const resolved = resolve(assetName);
+      return resolved ? `<img src="${resolved}">` : match;
     });
 
     return result;

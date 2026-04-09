@@ -38,6 +38,53 @@ app.post("/resolve", async (c) => {
 });
 
 /**
+ * POST /resolve-batch
+ * Resolve multiple macro templates in a single call with a shared environment.
+ * Accepts { templates: Record<string, string>, ...context }.
+ * Returns { resolved: Record<string, string> }.
+ */
+app.post("/resolve-batch", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{
+    templates: Record<string, string>;
+    chat_id?: string;
+    character_id?: string;
+    persona_id?: string;
+    connection_id?: string;
+    dynamic_macros?: Record<string, string>;
+  }>();
+
+  if (!body.templates || typeof body.templates !== "object") {
+    return c.json({ resolved: {} });
+  }
+
+  const entries = Object.entries(body.templates);
+  if (entries.length === 0) {
+    return c.json({ resolved: {} });
+  }
+
+  // Cap at 100 templates per request
+  if (entries.length > 100) {
+    return c.json({ error: "Too many templates (max 100)" }, 400);
+  }
+
+  // Build environment once and reuse for all templates
+  const env = buildEnvFromIds(userId, body);
+  const resolved: Record<string, string> = {};
+
+  for (const [key, template] of entries) {
+    if (!template) {
+      resolved[key] = "";
+      continue;
+    }
+    const result = await evaluate(template, env, registry);
+    resolved[key] = result.text;
+  }
+
+  return c.json({ resolved });
+});
+
+/**
  * GET /
  * Return the full macro catalog grouped by category.
  */

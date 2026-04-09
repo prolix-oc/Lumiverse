@@ -181,6 +181,8 @@ interface PromptPipelineResult {
   spindleContext: SpindleContext;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
   deliberationHandledByMacro?: boolean;
+  /** The macro environment built during assembly — used for regex script macro substitution. */
+  macroEnv?: import("../macros/types").MacroEnv;
 }
 
 /**
@@ -317,6 +319,7 @@ async function runPromptPipeline(opts: {
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
   let deferredWiState: { chatId: string; metadata: any } | undefined;
+  let macroEnv: import("../macros/types").MacroEnv | undefined;
 
   let deliberationHandledByMacro = false;
 
@@ -365,6 +368,7 @@ async function runPromptPipeline(opts: {
     memoryStats = assemblyResult.memoryStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
+    macroEnv = assemblyResult.macroEnv;
   }
 
   // Snapshot chat history messages BEFORE interceptors/post-processing can
@@ -428,16 +432,16 @@ async function runPromptPipeline(opts: {
         const depth = isChatHistory ? (chatHistoryStart + chatHistoryCount - 1 - i) : undefined;
 
         if (typeof msg.content === "string") {
-          messages[i] = { ...msg, content: regexScriptsSvc.applyRegexScripts(msg.content, promptScripts, placement, depth) };
+          messages[i] = { ...msg, content: await regexScriptsSvc.applyRegexScripts(msg.content, promptScripts, placement, depth, macroEnv) };
         } else if (Array.isArray(msg.content)) {
-          messages[i] = {
-            ...msg,
-            content: msg.content.map((part: any) =>
+          const resolvedParts = await Promise.all(
+            msg.content.map(async (part: any) =>
               part.type === "text"
-                ? { ...part, text: regexScriptsSvc.applyRegexScripts(part.text, promptScripts, placement, depth) }
+                ? { ...part, text: await regexScriptsSvc.applyRegexScripts(part.text, promptScripts, placement, depth, macroEnv) }
                 : part
             ),
-          };
+          );
+          messages[i] = { ...msg, content: resolvedParts };
         }
       }
     }
@@ -446,7 +450,7 @@ async function runPromptPipeline(opts: {
   // Merge parameters: assembled (from preset) < interceptor overrides < request overrides
   const parameters: GenerationParameters = { ...assembledParams, ...interceptorParameters, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro };
+  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -968,7 +972,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   }
 
   // Run generation in the background
-  runGeneration(generationId, provider, apiKey, apiUrl, connection.model, messages, mergedParams, input.userId, input.chat_id, lifecycle, abortController.signal, inlineTools, pipeline.assistantPrefill);
+  runGeneration(generationId, provider, apiKey, apiUrl, connection.model, messages, mergedParams, input.userId, input.chat_id, lifecycle, abortController.signal, inlineTools, pipeline.assistantPrefill, pipeline.macroEnv);
 
   return { generationId, status: "streaming" };
 
@@ -1087,6 +1091,7 @@ async function runGeneration(
   signal: AbortSignal,
   tools?: ToolDefinition[],
   assistantPrefill?: string,
+  macroEnv?: import("../macros/types").MacroEnv,
 ): Promise<void> {
   // GENERATION_STARTED was already emitted when the pool entry was created
   // (before assembly). Now update to streaming status and push breakdown data.
@@ -1219,9 +1224,9 @@ async function runGeneration(
   try {
     // Non-streaming path: call generate() once, then synthesize a single-chunk stream
     const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
-      ? provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools })
+      ? provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools, signal })
       : (async function* () {
-          const result = await provider.generate(apiKey, apiUrl, { messages, model, parameters, stream: false, tools });
+          const result = await provider.generate(apiKey, apiUrl, { messages, model, parameters, stream: false, tools, signal });
           yield {
             token: result.content,
             reasoning: result.reasoning,
@@ -1246,9 +1251,9 @@ async function runGeneration(
             target: "response",
           });
           if (responseScripts.length > 0) {
-            closedContent = regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0);
+            closedContent = await regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0, macroEnv);
             if (fullReasoning) {
-              fullReasoning = regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0);
+              fullReasoning = await regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0, macroEnv);
             }
           }
         }
@@ -1333,9 +1338,9 @@ async function runGeneration(
           target: "response",
         });
         if (responseScripts.length > 0) {
-          fullContent = regexScriptsSvc.applyRegexScripts(fullContent, responseScripts, "ai_output", 0);
+          fullContent = await regexScriptsSvc.applyRegexScripts(fullContent, responseScripts, "ai_output", 0, macroEnv);
           if (fullReasoning) {
-            fullReasoning = regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0);
+            fullReasoning = await regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0, macroEnv);
           }
         }
       }

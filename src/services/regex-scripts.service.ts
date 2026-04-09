@@ -12,6 +12,9 @@ import type {
   RegexScope,
   RegexTarget,
 } from "../types/regex-script";
+import type { MacroEnv } from "../macros/types";
+import { evaluate } from "../macros/MacroEvaluator";
+import { registry } from "../macros/MacroRegistry";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -400,15 +403,43 @@ export function getActiveScripts(
 }
 
 /**
+ * Resolve macros in a regex replacement string based on the substitute_macros mode.
+ * - "none": return as-is
+ * - "raw": resolve macros, result may contain regex back-references ($1, etc.)
+ * - "escaped": resolve macros, then escape $ so no back-references are interpreted
+ */
+async function resolveReplacementMacros(
+  replaceString: string,
+  mode: RegexScript["substitute_macros"],
+  macroEnv: MacroEnv,
+): Promise<string> {
+  if (mode === "none") return replaceString;
+
+  const resolved = (await evaluate(replaceString, macroEnv, registry)).text;
+
+  if (mode === "escaped") {
+    // Escape $ so regex replacement doesn't interpret $1, $&, etc.
+    return resolved.replace(/\$/g, "$$$$");
+  }
+
+  return resolved;
+}
+
+/**
  * Apply regex scripts to content string.
  * Returns the transformed content.
+ *
+ * When `macroEnv` is provided, scripts with `substitute_macros` set to "raw" or
+ * "escaped" will have their replacement strings resolved through the macro engine
+ * before being applied.
  */
-export function applyRegexScripts(
+export async function applyRegexScripts(
   content: string,
   scripts: RegexScript[],
   placement: RegexPlacement,
-  depth?: number
-): string {
+  depth?: number,
+  macroEnv?: MacroEnv,
+): Promise<string> {
   let result = content;
 
   for (const script of scripts) {
@@ -424,7 +455,14 @@ export function applyRegexScripts(
     try {
       const startTime = Date.now();
       const regex = new RegExp(script.find_regex, script.flags);
-      result = result.replace(regex, script.replace_string);
+
+      // Resolve macros in replacement string if configured and env is available
+      let replaceString = script.replace_string;
+      if (macroEnv && script.substitute_macros !== "none") {
+        replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
+      }
+
+      result = result.replace(regex, replaceString);
 
       // Apply trim_strings
       if (script.trim_strings.length > 0) {

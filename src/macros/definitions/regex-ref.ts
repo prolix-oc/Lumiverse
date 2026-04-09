@@ -1,4 +1,5 @@
 import { registry } from "../MacroRegistry";
+import { evaluate } from "../MacroEvaluator";
 import {
   getRegexScriptByScriptId,
 } from "../../services/regex-scripts.service";
@@ -22,7 +23,7 @@ export function registerRegexRefMacros(): void {
       { name: "text", optional: true, description: "Text to apply the regex to (or use scoped body)" },
     ],
     aliases: ["regex_installed", "hasRegex", "has_regex"],
-    handler: (ctx) => {
+    handler: async (ctx) => {
       const scriptId = normalizeScriptId((ctx.args[0] ?? "").trim());
       if (!scriptId) return "";
 
@@ -45,7 +46,17 @@ export function registerRegexRefMacros(): void {
 
       try {
         const regex = new RegExp(script.find_regex, script.flags);
-        let result = text.replace(regex, script.replace_string);
+
+        // Resolve macros in replacement string if configured
+        let replaceString = script.replace_string;
+        if (script.substitute_macros !== "none") {
+          const resolved = (await evaluate(replaceString, ctx.env, registry)).text;
+          replaceString = script.substitute_macros === "escaped"
+            ? resolved.replace(/\$/g, "$$$$")
+            : resolved;
+        }
+
+        let result = text.replace(regex, replaceString);
 
         // Apply trim_strings
         if (script.trim_strings.length > 0) {

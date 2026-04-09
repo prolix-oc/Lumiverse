@@ -1,3 +1,5 @@
+import type { MacroEnv } from "../macros/types";
+
 // --- Multi-part content types (for multimodal messages) ---
 
 export interface LlmTextPart {
@@ -226,6 +228,8 @@ export interface AssemblyResult {
   deferredWiState?: { chatId: string; metadata: Record<string, any> };
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
   deliberationHandledByMacro?: boolean;
+  /** The macro environment built during assembly — used downstream for regex script macro substitution. */
+  macroEnv?: MacroEnv;
 }
 
 export interface AssemblyBreakdownEntry {

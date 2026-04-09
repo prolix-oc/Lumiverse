@@ -659,6 +659,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   let hasWiBefore = false;
   let hasWiAfter = false;
   let firstChatIdx = -1;
+  let jailbreakBlockResolved = false;
 
   for (const block of blocks) {
     // Skip disabled blocks
@@ -854,6 +855,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
     const resolved = rawResolved.trim();
     if (resolved) {
+      if (block.marker === "jailbreak") jailbreakBlockResolved = true;
+
       const role: LlmMessage["role"] = block.position === "post_history" ? "assistant" : (block.role as LlmMessage["role"] || "system");
 
       // Blocks with position "in_history" and depth > 0 are deferred for
@@ -870,6 +873,23 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
           content: resolved, blockId: block.id, marker: block.marker ?? undefined,
         });
       }
+    }
+  }
+
+  // ---- Post-history instructions fallback ----
+  // If the character has post_history_instructions but no jailbreak block resolved
+  // it (e.g. the preset's jailbreak block is empty or missing the {{jailbreak}} macro),
+  // inject the character's post_history_instructions as a system message at the end.
+  // This ensures imported cards (especially Risu cards with image command rules in
+  // post_history_instructions) work out of the box without manual preset configuration.
+  if (!jailbreakBlockResolved && effectiveCharacter.post_history_instructions) {
+    const resolved = (await evaluate(effectiveCharacter.post_history_instructions, macroEnv, registry)).text.trim();
+    if (resolved) {
+      result.push({ role: "system", content: resolved });
+      breakdown.push({
+        type: "block", name: "Post-History Instructions (auto)", role: "system",
+        content: resolved, marker: "jailbreak",
+      });
     }
   }
 
@@ -1154,6 +1174,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     memoryStats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,
+    macroEnv,
   };
 }
 
@@ -3530,7 +3551,7 @@ async function onelinerImpersonation(
   // Build parameters from sampler overrides + reasoning settings
   const parameters = buildParameters(samplerOverrides, preset, reasoningSettings, connection?.provider, connection?.model);
 
-  return { messages: result, breakdown, parameters, assistantPrefill };
+  return { messages: result, breakdown, parameters, assistantPrefill, macroEnv };
 }
 
 /**
@@ -3713,5 +3734,5 @@ async function legacyAssembly(
   // Build parameters with reasoning settings so API-level reasoning is injected
   const parameters = buildParameters(null, null, reasoningVal, connection?.provider, connection?.model);
 
-  return { messages: llmMessages, breakdown, parameters };
+  return { messages: llmMessages, breakdown, parameters, macroEnv: macroEnv ?? undefined };
 }
