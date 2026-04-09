@@ -7,6 +7,8 @@ import type {
   ImageGenConnectionTestResult,
   ImageGenConnectionModelsResult,
   ImageGenProviderInfo,
+  PollinationsAuthUrlRequest,
+  PollinationsAuthUrlResponse,
 } from '@/types/api'
 
 export const imageGenConnectionsApi = {
@@ -48,6 +50,10 @@ export const imageGenConnectionsApi = {
 
   clearApiKey(id: string) {
     return del<{ success: boolean }>(`/image-gen-connections/${id}/api-key`)
+  },
+
+  pollinationsAuthUrl(input: PollinationsAuthUrlRequest) {
+    return post<PollinationsAuthUrlResponse>('/connections/pollinations/auth-url', input)
   },
 
   providers() {

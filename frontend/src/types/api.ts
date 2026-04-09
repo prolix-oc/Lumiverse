@@ -236,6 +236,18 @@ export interface ConnectionModelsResult {
   error?: string
 }
 
+export interface PollinationsAuthUrlRequest {
+  redirect_url: string;
+  models?: string;
+  budget?: number;
+  expiry?: number;
+  permissions?: string;
+}
+
+export interface PollinationsAuthUrlResponse {
+  auth_url: string;
+}
+
 // ---- Image Gen Connection Profile ----
 export interface ImageGenConnectionProfile {
   id: string;

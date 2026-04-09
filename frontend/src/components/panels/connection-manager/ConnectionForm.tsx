@@ -21,6 +21,8 @@ interface ConnectionFormProps {
 const FALLBACK_PROVIDERS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'pollinations_text', label: 'Pollinations (Text)' },
+  { value: 'pollinations', label: 'Pollinations (Gen)' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'custom', label: 'Custom (OpenAI-compatible)' },
 ]
@@ -46,6 +48,8 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [models, setModels] = useState<string[]>([])
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
+  const [byopLoading, setByopLoading] = useState(false)
+  const [byopStatus, setByopStatus] = useState<string | null>(null)
 
   // Vertex AI specific state
   const [vertexRegion, setVertexRegion] = useState(profile?.metadata?.vertex_region || 'us-central1')
@@ -64,6 +68,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const selectedProvider = providers.find((p) => p.id === provider)
   const urlPlaceholder = selectedProvider?.default_url || 'https://api.openai.com/v1'
   const isVertexAI = provider === 'google_vertex'
+  const isPollinations = provider === 'pollinations'
 
   const fetchModels = useCallback(async () => {
     if (!profile?.id) return
@@ -84,10 +89,117 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     if (profile?.id) fetchModels()
   }, [profile?.id, fetchModels])
 
+  useEffect(() => {
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    if (!pendingRaw) return
+
+    const hash = window.location.hash
+    const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+    const hasReturnedKey = !!hashParams.get('api_key') || !!sessionStorage.getItem('pollinations_byop_returned_api_key')
+    if (!hasReturnedKey) return
+
+    try {
+      const pending = JSON.parse(pendingRaw) as { provider?: string }
+      if (pending.provider === 'pollinations' && provider !== 'pollinations') {
+        setProvider('pollinations')
+      }
+    } catch {
+      // ignore malformed pending state
+    }
+  }, [provider])
+
+  useEffect(() => {
+    if (!isPollinations) return
+
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    if (!pendingRaw) return
+
+    const hash = window.location.hash
+    const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+    const returnedApiKey = params.get('api_key') || sessionStorage.getItem('pollinations_byop_returned_api_key')
+    if (!returnedApiKey) return
+
+    let pendingConnectionId: string | null = null
+    let pendingTarget: string | null = null
+    if (pendingRaw) {
+      try {
+        const parsed = JSON.parse(pendingRaw) as { connectionId?: string | null; target?: string | null }
+        pendingConnectionId = parsed.connectionId || null
+        pendingTarget = parsed.target || null
+      } catch {
+        pendingConnectionId = null
+        pendingTarget = null
+      }
+    }
+
+    if (pendingTarget && pendingTarget !== 'connections') return
+
+    const activeConnectionId = profile?.id || null
+    if (pendingConnectionId && activeConnectionId && pendingConnectionId !== activeConnectionId) {
+      return
+    }
+
+    const clearRedirectArtifacts = () => {
+      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
+      sessionStorage.removeItem('pollinations_byop_pending')
+      sessionStorage.removeItem('pollinations_byop_returned_api_key')
+    }
+
+    let cancelled = false
+    const applyReturnedKey = async () => {
+      setApiKey(returnedApiKey)
+
+      if (activeConnectionId) {
+        try {
+          await connectionsApi.update(activeConnectionId, { api_key: returnedApiKey })
+          if (!cancelled) {
+            setByopStatus('Signed in with Pollinations. API key saved automatically.')
+          }
+        } catch {
+          if (!cancelled) {
+            setByopStatus('Pollinations sign-in succeeded, but auto-save failed. Click Save to persist manually.')
+          }
+        }
+      } else if (!cancelled) {
+        setByopStatus('Signed in with Pollinations. API key captured. Click Create to save this connection.')
+      }
+
+      clearRedirectArtifacts()
+    }
+
+    void applyReturnedKey()
+    return () => {
+      cancelled = true
+    }
+  }, [isPollinations, profile?.id])
+
   const showResponsesApiToggle = provider === 'openai'
   const showSubscriptionApiToggle = provider === 'nanogpt'
   const isOpenRouter = provider === 'openrouter'
   const hideApiUrl = isOpenRouter || provider === 'nanogpt'
+
+  const handlePollinationsSignIn = useCallback(async () => {
+    setByopStatus(null)
+    setByopLoading(true)
+    try {
+      const redirect_url = `${window.location.origin}${window.location.pathname}${window.location.search}`
+      const result = await connectionsApi.pollinationsAuthUrl({
+        redirect_url,
+        models: model.trim() || undefined,
+      })
+
+      sessionStorage.setItem(
+        'pollinations_byop_pending',
+        JSON.stringify({ connectionId: profile?.id || null, provider: 'pollinations', target: 'connections' })
+      )
+
+      window.location.href = result.auth_url
+    } catch (err: any) {
+      const msg = String(err?.message || 'Failed to start Pollinations sign-in')
+      setByopStatus(msg)
+      setByopLoading(false)
+    }
+  }, [model, profile?.id])
 
   // Handle service account JSON file upload
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -219,9 +331,26 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           </FormField>
         </>
       ) : (
-        <FormField label="API Key" hint={profile?.has_api_key ? 'Key is set. Enter a new value to replace it.' : undefined}>
-          <TextInput value={apiKey} onChange={setApiKey} placeholder={profile?.has_api_key ? '••••••••' : 'Enter API key'} type="password" />
-        </FormField>
+        <>
+          {isPollinations && (
+            <FormField label="Pollinations BYOP" hint="Use Sign in with Pollinations to fetch a BYOP key automatically, or paste a key manually below.">
+              <div className={styles.byopRow}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handlePollinationsSignIn}
+                  disabled={byopLoading}
+                >
+                  {byopLoading ? 'Redirecting...' : 'Sign in with Pollinations'}
+                </Button>
+                {byopStatus && <span className={styles.byopStatus}>{byopStatus}</span>}
+              </div>
+            </FormField>
+          )}
+          <FormField label="API Key" hint={profile?.has_api_key ? 'Key is set. Enter a new value to replace it.' : undefined}>
+            <TextInput value={apiKey} onChange={setApiKey} placeholder={profile?.has_api_key ? '••••••••' : 'Enter API key'} type="password" />
+          </FormField>
+        </>
       )}
 
       {!hideApiUrl && (

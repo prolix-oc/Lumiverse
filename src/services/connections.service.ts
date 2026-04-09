@@ -2,6 +2,8 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getProvider } from "../llm/registry";
+import { env } from "../env";
+import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import type {
   ConnectionProfile, CreateConnectionProfileInput, UpdateConnectionProfileInput,
@@ -71,6 +73,42 @@ export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: st
     return `https://${region}-aiplatform.googleapis.com`;
   }
   return url;
+}
+
+export function resolvePollinationsAppKey(userId: string): string {
+  const envKey = env.pollinationsAppKey.trim();
+  if (envKey) return envKey;
+
+  const setting = settingsSvc.getSetting(userId, "pollinations_app_key");
+  const settingValue = typeof setting?.value === "string" ? setting.value.trim() : "";
+  return settingValue;
+}
+
+export function buildPollinationsAuthorizeUrl(
+  userId: string,
+  input: {
+    redirect_url: string;
+    models?: string;
+    budget?: number;
+    expiry?: number;
+    permissions?: string;
+  }
+): string {
+  const params = new URLSearchParams();
+  params.set("redirect_url", input.redirect_url);
+
+  const appKey = resolvePollinationsAppKey(userId);
+  if (appKey) params.set("app_key", appKey);
+  if (input.models) params.set("models", input.models);
+  if (typeof input.budget === "number" && Number.isFinite(input.budget) && input.budget > 0) {
+    params.set("budget", String(Math.floor(input.budget)));
+  }
+  if (typeof input.expiry === "number" && Number.isFinite(input.expiry) && input.expiry > 0) {
+    params.set("expiry", String(Math.floor(input.expiry)));
+  }
+  if (input.permissions) params.set("permissions", input.permissions);
+
+  return `https://enter.pollinations.ai/authorize?${params.toString()}`;
 }
 
 function rowToProfile(row: any): ConnectionProfile {
