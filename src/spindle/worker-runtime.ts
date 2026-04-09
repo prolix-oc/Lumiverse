@@ -731,6 +731,31 @@ const spindleApi: SpindleAPI = {
         return result as boolean;
       },
     },
+    chat: {
+      async get(chatId: string, key: string): Promise<string> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_get_chat", requestId, chatId, key });
+        return result as string;
+      },
+      async set(chatId: string, key: string, value: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_set_chat", requestId, chatId, key, value });
+      },
+      async delete(chatId: string, key: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_delete_chat", requestId, chatId, key });
+      },
+      async list(chatId: string): Promise<Record<string, string>> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_list_chat", requestId, chatId });
+        return result as Record<string, string>;
+      },
+      async has(chatId: string, key: string): Promise<boolean> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_has_chat", requestId, chatId, key });
+        return result as boolean;
+      },
+    },
   },
 
   characters: {

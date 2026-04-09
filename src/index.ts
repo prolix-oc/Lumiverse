@@ -99,7 +99,7 @@ const server = Bun.serve({
   hostname: "::",
   fetch: app.fetch,
   websocket,
-  maxRequestBodySize: 512 * 1024 * 1024, // 512 MB (Bun default is 128 MB)
+  maxRequestBodySize: 1000 * 1024 * 1024, // 1000 MB — matches MAX_CHARX_SIZE in character-card.service.ts
 });
 
 // Give the EventBus access to the server for native topic-based publish().

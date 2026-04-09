@@ -16,6 +16,7 @@ export enum TokenType {
   FLAG_PRESERVE,
   DOT,
   DOLLAR,
+  AT,
   OPERATOR,
   ESCAPED_BRACE,
   EOF,
@@ -173,7 +174,11 @@ export interface MacroEnv {
   variables: {
     local: Map<string, string>;
     global: Map<string, string>;
+    /** Chat-scoped persisted variables — saved to chat.metadata.chat_variables after generation. */
+    chat: Map<string, string>;
   };
+  /** Set to true when any chat variable macro mutates state. Used to trigger persistence. */
+  _chatVarsDirty?: boolean;
   dynamicMacros: Record<string, string | MacroHandler | MacroDefinition>;
   /** Pre-normalized lowercase key → value map for O(1) dynamic macro lookup.
    *  Built automatically by buildEnv(); kept in sync if dynamicMacros changes. */

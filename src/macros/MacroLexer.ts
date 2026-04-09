@@ -78,15 +78,18 @@ function lexMacroContent(input: string, start: number, len: number, tokens: Toke
   // Skip whitespace
   while (pos < len && (input[pos] === " " || input[pos] === "\t")) pos++;
 
-  // Check for variable shorthand: .varName or $varName
-  if (pos < len && (input[pos] === "." || input[pos] === "$")) {
-    const shorthandType = input[pos] === "." ? TokenType.DOT : TokenType.DOLLAR;
+  // Check for variable shorthand: .varName, $varName, or @varName
+  if (pos < len && (input[pos] === "." || input[pos] === "$" || input[pos] === "@")) {
+    const shorthandType = input[pos] === "." ? TokenType.DOT : input[pos] === "$" ? TokenType.DOLLAR : TokenType.AT;
     tokens.push({ type: shorthandType, value: input[pos], offset: pos });
     pos++;
 
-    // Scan variable name
+    // Scan variable name (word chars + internal hyphens, but stop at operator sequences like -- or -=)
     const nameStart = pos;
-    while (pos < len && /[\w\-]/.test(input[pos])) pos++;
+    while (pos < len && /[\w\-]/.test(input[pos])) {
+      if (input[pos] === "-" && pos + 1 < len && (input[pos + 1] === "-" || input[pos + 1] === "=")) break;
+      pos++;
+    }
     if (pos > nameStart) {
       tokens.push({ type: TokenType.IDENTIFIER, value: input.substring(nameStart, pos), offset: nameStart });
     }
@@ -250,12 +253,12 @@ function lexSpaceDelimitedArgs(input: string, start: number, len: number, tokens
     if (input[pos] === ":") break;
     if (input[pos] === "}" && pos + 1 < len && input[pos + 1] === "}") break;
 
-    // Check for variable shorthand (.var or $var) as a space arg
-    if ((input[pos] === "." || input[pos] === "$") && pos + 1 < len && /[a-zA-Z]/.test(input[pos + 1])) {
+    // Check for variable shorthand (.var, $var, or @var) as a space arg
+    if ((input[pos] === "." || input[pos] === "$" || input[pos] === "@") && pos + 1 < len && /[a-zA-Z]/.test(input[pos + 1])) {
       tokens.push({ type: TokenType.SEPARATOR, value: " ", offset: pos });
-      // Emit as nested macro: MACRO_OPEN + DOT/DOLLAR + IDENTIFIER + MACRO_CLOSE
+      // Emit as nested macro: MACRO_OPEN + DOT/DOLLAR/AT + IDENTIFIER + MACRO_CLOSE
       tokens.push({ type: TokenType.MACRO_OPEN, value: "{{", offset: pos });
-      const shorthandType = input[pos] === "." ? TokenType.DOT : TokenType.DOLLAR;
+      const shorthandType = input[pos] === "." ? TokenType.DOT : input[pos] === "$" ? TokenType.DOLLAR : TokenType.AT;
       tokens.push({ type: shorthandType, value: input[pos], offset: pos });
       pos++;
       const nameStart = pos;
@@ -339,7 +342,7 @@ function lexOperator(input: string, start: number, len: number, tokens: Token[])
     // For assignment operators, scan the value
     if (two === "+=" || two === "-=" || two === "==" || two === "!=" || two === ">=" || two === "<=" || two === "||" || two === "??") {
       while (pos < len && (input[pos] === " " || input[pos] === "\t")) pos++;
-      pos = lexOperatorValue(input, pos, len, tokens);
+      pos = lexArgument(input, pos, len, tokens);
     }
     return pos;
   }
@@ -349,23 +352,10 @@ function lexOperator(input: string, start: number, len: number, tokens: Token[])
     tokens.push({ type: TokenType.OPERATOR, value: input[pos], offset: pos });
     pos++;
     while (pos < len && (input[pos] === " " || input[pos] === "\t")) pos++;
-    pos = lexOperatorValue(input, pos, len, tokens);
+    pos = lexArgument(input, pos, len, tokens);
     return pos;
   }
 
   return pos;
 }
 
-function lexOperatorValue(input: string, start: number, len: number, tokens: Token[]): number {
-  let pos = start;
-  const valStart = pos;
-  // Consume until }}
-  while (pos < len) {
-    if (input[pos] === "}" && pos + 1 < len && input[pos + 1] === "}") break;
-    pos++;
-  }
-  if (pos > valStart) {
-    tokens.push({ type: TokenType.TEXT, value: input.substring(valStart, pos).trim(), offset: valStart });
-  }
-  return pos;
-}

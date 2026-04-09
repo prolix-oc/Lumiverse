@@ -2,6 +2,7 @@ import { registry } from "../MacroRegistry";
 import { evaluate } from "../MacroEvaluator";
 import {
   getRegexScriptByScriptId,
+  substituteRegexCaptures,
 } from "../../services/regex-scripts.service";
 
 /** Normalize a script_id: lowercase, spaces/hyphens → underscores, strip punctuation. */
@@ -46,17 +47,57 @@ export function registerRegexRefMacros(): void {
 
       try {
         const regex = new RegExp(script.find_regex, script.flags);
+        let result: string;
 
-        // Resolve macros in replacement string if configured
-        let replaceString = script.replace_string;
-        if (script.substitute_macros !== "none") {
-          const resolved = (await evaluate(replaceString, ctx.env, registry)).text;
-          replaceString = script.substitute_macros === "escaped"
-            ? resolved.replace(/\$/g, "$$$$")
-            : resolved;
+        if (script.substitute_macros === "raw") {
+          // "raw" mode: substitute capture groups BEFORE macro resolution
+          // so $1, $2, etc. are available inside macro arguments
+          const re = new RegExp(regex.source, regex.flags);
+          const matches: { fullMatch: string; index: number; groups: (string | undefined)[]; namedGroups?: Record<string, string> }[] = [];
+
+          if (re.global || re.sticky) {
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text)) !== null) {
+              matches.push({ fullMatch: m[0], index: m.index, groups: Array.from(m).slice(1), namedGroups: m.groups });
+              if (m[0].length === 0) re.lastIndex++;
+            }
+          } else {
+            const m = re.exec(text);
+            if (m) matches.push({ fullMatch: m[0], index: m.index, groups: Array.from(m).slice(1), namedGroups: m.groups });
+          }
+
+          if (matches.length > 0) {
+            const replacements = await Promise.all(
+              matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
+                const withCaptures = substituteRegexCaptures(
+                  script.replace_string, fullMatch, groups, index, text, namedGroups,
+                );
+                return (await evaluate(withCaptures, ctx.env, registry)).text;
+              }),
+            );
+            let out = "";
+            let lastIdx = 0;
+            for (let i = 0; i < matches.length; i++) {
+              out += text.slice(lastIdx, matches[i].index);
+              out += replacements[i];
+              lastIdx = matches[i].index + matches[i].fullMatch.length;
+            }
+            out += text.slice(lastIdx);
+            result = out;
+          } else {
+            result = text;
+          }
+        } else {
+          // "none" or "escaped" mode
+          let replaceString = script.replace_string;
+          if (script.substitute_macros !== "none") {
+            const resolved = (await evaluate(replaceString, ctx.env, registry)).text;
+            replaceString = script.substitute_macros === "escaped"
+              ? resolved.replace(/\$/g, "$$$$")
+              : resolved;
+          }
+          result = text.replace(regex, replaceString);
         }
-
-        let result = text.replace(regex, replaceString);
 
         // Apply trim_strings
         if (script.trim_strings.length > 0) {

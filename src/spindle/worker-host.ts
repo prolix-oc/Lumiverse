@@ -743,6 +743,21 @@ export class WorkerHost {
       case "vars_has_global":
         this.handleVarsHasGlobal(msg.requestId, msg.key, msg.userId);
         break;
+      case "vars_get_chat":
+        this.handleVarsGetChat(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_set_chat":
+        this.handleVarsSetChat(msg.requestId, msg.chatId, msg.key, msg.value);
+        break;
+      case "vars_delete_chat":
+        this.handleVarsDeleteChat(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_list_chat":
+        this.handleVarsListChat(msg.requestId, msg.chatId);
+        break;
+      case "vars_has_chat":
+        this.handleVarsHasChat(msg.requestId, msg.chatId, msg.key);
+        break;
       // ─── Characters (gated: "characters") ─────────────────────────────
       case "characters_list":
         this.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId);
@@ -1070,6 +1085,7 @@ export class WorkerHost {
             variables: {
               local: Object.fromEntries(ctx.env.variables.local),
               global: Object.fromEntries(ctx.env.variables.global),
+              chat: Object.fromEntries(ctx.env.variables.chat),
             },
             dynamicMacros: Object.fromEntries(
               Object.entries(ctx.env.dynamicMacros).filter(
@@ -3215,6 +3231,75 @@ export class WorkerHost {
     }
   }
 
+  // ─── Chat-Scoped Persisted Variables (free tier) ────────────────────
+
+  private getChatVars(chatId: string): Record<string, string> {
+    const userId = this.getChatOwnerId(chatId);
+    if (!userId) throw new Error("Chat not found");
+    this.enforceScopedUser(userId);
+    const chat = chatsSvc.getChat(userId, chatId);
+    if (!chat) throw new Error("Chat not found");
+    return (chat.metadata?.chat_variables as Record<string, string>) || {};
+  }
+
+  private setChatVars(chatId: string, vars: Record<string, string>): void {
+    const userId = this.getChatOwnerId(chatId);
+    if (!userId) throw new Error("Chat not found");
+    const chat = chatsSvc.getChat(userId, chatId);
+    if (!chat) throw new Error("Chat not found");
+    const metadata = { ...chat.metadata, chat_variables: vars };
+    chatsSvc.updateChat(userId, chatId, { metadata });
+  }
+
+  private handleVarsGetChat(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsSetChat(requestId: string, chatId: string, key: string, value: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      vars[key] = value;
+      this.setChatVars(chatId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsDeleteChat(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      delete vars[key];
+      this.setChatVars(chatId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsListChat(requestId: string, chatId: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsHasChat(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: key in vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   // ─── Characters (gated: "characters") ──────────────────────────────
 
   private toCharacterDTO(c: any): CharacterDTO {
@@ -4682,7 +4767,7 @@ export class WorkerHost {
             model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
             lastGenerationType: "normal", isMobile: false,
           },
-          variables: { local: new Map(), global: new Map() },
+          variables: { local: new Map(), global: new Map(), chat: new Map() },
           dynamicMacros: {},
           extra: {},
         };

@@ -917,11 +917,26 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   let { messages } = pipeline;
   const { parameters: mergedParams, breakdown, activatedWorldInfo, deliberationHandledByMacro } = pipeline;
 
-  // Persist deferred WI state after assembly
-  if (pipeline.deferredWiState) {
-    chatsSvc.updateChat(input.userId, pipeline.deferredWiState.chatId, {
-      metadata: pipeline.deferredWiState.metadata,
-    });
+  // Persist deferred WI state and dirty chat variables after assembly
+  {
+    let deferredMetadata = pipeline.deferredWiState?.metadata;
+    if (pipeline.macroEnv?._chatVarsDirty) {
+      if (deferredMetadata) {
+        // Merge chat variables into the same metadata snapshot (single DB write)
+        deferredMetadata = { ...deferredMetadata, chat_variables: Object.fromEntries(pipeline.macroEnv.variables.chat) };
+      } else {
+        // No WI state to persist — build metadata from current chat
+        const chat = chatsSvc.getChat(input.userId, input.chat_id);
+        if (chat) {
+          deferredMetadata = { ...chat.metadata, chat_variables: Object.fromEntries(pipeline.macroEnv.variables.chat) };
+        }
+      }
+    }
+    if (deferredMetadata) {
+      chatsSvc.updateChat(input.userId, pipeline.deferredWiState?.chatId ?? input.chat_id, {
+        metadata: deferredMetadata,
+      });
+    }
   }
 
   // Emit activated world info event (always emit so UI can clear stale entries)

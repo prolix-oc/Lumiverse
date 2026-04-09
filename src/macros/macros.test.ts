@@ -11,6 +11,7 @@ import type { MacroEnv } from "./types";
 function makeEnv(opts: {
   localVars?: Record<string, string>;
   globalVars?: Record<string, string>;
+  chatVars?: Record<string, string>;
   messages?: { content: string; name: string; is_user: boolean }[];
   characterTags?: string[];
   chatCreatedAt?: number;
@@ -67,6 +68,7 @@ function makeEnv(opts: {
     variables: {
       local: new Map(Object.entries(opts.localVars ?? {})),
       global: new Map(Object.entries(opts.globalVars ?? {})),
+      chat: new Map(Object.entries(opts.chatVars ?? {})),
     },
     dynamicMacros: {},
     extra: {
@@ -273,6 +275,93 @@ describe("Variables", () => {
     const env = makeEnv();
     await ev("{{setgvar::theme::dark}}", env);
     expect(await ev("{{getgvar::theme}}", env)).toBe("dark");
+  });
+});
+
+describe("Chat-scoped persisted variables", () => {
+  test("setchatvar and getchatvar with ::", async () => {
+    const env = makeEnv();
+    await ev("{{setchatvar::hp::100}}", env);
+    expect(await ev("{{getchatvar::hp}}", env)).toBe("100");
+  });
+
+  test("@var shorthand read", async () => {
+    const env = makeEnv({ chatVars: { score: "42" } });
+    expect(await ev("Score: {{@score}}", env)).toBe("Score: 42");
+  });
+
+  test("@var = assignment", async () => {
+    const env = makeEnv();
+    await ev("{{@hp = 100}}", env);
+    expect(env.variables.chat.get("hp")).toBe("100");
+    expect(env._chatVarsDirty).toBe(true);
+  });
+
+  test("@var++ increment", async () => {
+    const env = makeEnv({ chatVars: { turn: "5" } });
+    await ev("{{@turn++}}", env);
+    expect(env.variables.chat.get("turn")).toBe("6");
+    expect(env._chatVarsDirty).toBe(true);
+  });
+
+  test("@var-- decrement", async () => {
+    const env = makeEnv({ chatVars: { lives: "3" } });
+    await ev("{{@lives--}}", env);
+    expect(env.variables.chat.get("lives")).toBe("2");
+  });
+
+  test("@var += addition", async () => {
+    const env = makeEnv({ chatVars: { xp: "50" } });
+    await ev("{{@xp += 25}}", env);
+    expect(env.variables.chat.get("xp")).toBe("75");
+  });
+
+  test("@var -= subtraction", async () => {
+    const env = makeEnv({ chatVars: { hp: "100" } });
+    await ev("{{@hp -= 30}}", env);
+    expect(env.variables.chat.get("hp")).toBe("70");
+  });
+
+  test("incchatvar returns new value", async () => {
+    const env = makeEnv({ chatVars: { counter: "0" } });
+    expect(await ev("{{incchatvar::counter}}", env)).toBe("1");
+    expect(await ev("{{incchatvar::counter}}", env)).toBe("2");
+  });
+
+  test("addchatvar returns new value", async () => {
+    const env = makeEnv({ chatVars: { gold: "100" } });
+    expect(await ev("{{addchatvar::gold::50}}", env)).toBe("150");
+  });
+
+  test("haschatvar / deletechatvar", async () => {
+    const env = makeEnv({ chatVars: { quest: "active" } });
+    expect(await ev("{{haschatvar::quest}}", env)).toBe("true");
+    await ev("{{deletechatvar::quest}}", env);
+    expect(await ev("{{haschatvar::quest}}", env)).toBe("false");
+  });
+
+  test("chat vars are independent from local vars", async () => {
+    const env = makeEnv({ localVars: { x: "local" }, chatVars: { x: "chat" } });
+    expect(await ev("{{.x}}", env)).toBe("local");
+    expect(await ev("{{@x}}", env)).toBe("chat");
+  });
+
+  test("nested macro in @var assignment", async () => {
+    const env = makeEnv({ chatVars: { count: "0" } });
+    await ev("{{@n = {{incchatvar::count}} }}", env);
+    expect(env.variables.chat.get("n")).toBe("1");
+    expect(env.variables.chat.get("count")).toBe("1");
+  });
+
+  test("@var in if condition", async () => {
+    const env = makeEnv({ chatVars: { alive: "true" } });
+    expect(await ev("{{if @alive}}yes{{/if}}", env)).toBe("yes");
+  });
+
+  test("_chatVarsDirty not set on read-only access", async () => {
+    const env = makeEnv({ chatVars: { x: "1" } });
+    await ev("{{@x}}", env);
+    expect(env._chatVarsDirty).toBeUndefined();
   });
 });
 

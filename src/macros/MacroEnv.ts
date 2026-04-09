@@ -93,6 +93,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     variables: {
       local: new Map(Object.entries((chat.metadata?.macro_variables?.local as Record<string, string>) || {})),
       global: new Map(Object.entries((chat.metadata?.macro_variables?.global as Record<string, string>) || {})),
+      chat: new Map(Object.entries((chat.metadata?.chat_variables as Record<string, string>) || {})),
     },
     dynamicMacros: ctx.dynamicMacros || {},
     _dynamicMacrosLower: buildDynamicLookup(ctx.dynamicMacros),

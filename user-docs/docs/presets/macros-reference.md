@@ -41,14 +41,17 @@ Some macros accept arguments, separated by `::` (double colon) **or spaces**:
 
 ### Variable Shorthand
 
-Access variables directly with `.` (local) or `$` (global) prefixes:
+Access variables directly with `.` (local), `$` (global), or `@` (chat-persisted) prefixes:
 
 ```
 {{.myVar}}                  — same as {{getvar::myVar}}
 {{$theme}}                  — same as {{getgvar::theme}}
+{{@hp}}                     — same as {{getchatvar::hp}}
 {{.score = 100}}            — same as {{setvar::score::100}}
+{{@hp = 100}}               — same as {{setchatvar::hp::100}}
 {{.hp -= 25}}               — subtract 25 from hp
 {{.counter++}}              — increment by 1
+{{@turn++}}                 — increment a persisted counter
 {{.counter--}}              — decrement by 1
 ```
 
@@ -59,6 +62,7 @@ Variable shorthands work inside conditions too:
 {{if .score == 100}}perfect!{{/if}}
 {{if !.gameOver}}still playing{{/if}}
 {{if $theme == dark}}dark mode{{/if}}
+{{if @hp > 0}}still alive{{/if}}
 ```
 
 ### Scoped Macros
@@ -451,52 +455,115 @@ Script IDs are auto-normalized: lowercase, spaces/hyphens become underscores, pu
 
 ## Variables
 
-Read and write persistent values — **local** (per-chat) or **global** (cross-chat).
+Read and write values in three scopes — **local** (transient per-evaluation), **chat** (persisted per-chat), or **global** (cross-chat).
 
-### Local Variables (Chat-Scoped)
+### Local Variables (Transient)
+
+Local variables live for the duration of a single evaluation pass. They are useful for intermediate calculations, loop counters, and temporary values within a preset block. They are **not** saved between generations.
 
 | Macro | Description | Args |
 |-------|-------------|------|
 | `{{getvar::key}}` | Get a variable's value | Variable name |
 | `{{setvar::key::value}}` | Set a variable (returns nothing) | Name and value |
 | `{{addvar::key::value}}` | Add a number to a variable | Name and number |
-| `{{incvar::key}}` | Increment by 1 | Variable name |
-| `{{decvar::key}}` | Decrement by 1 | Variable name |
+| `{{incvar::key}}` | Increment by 1 (returns new value) | Variable name |
+| `{{decvar::key}}` | Decrement by 1 (returns new value) | Variable name |
 | `{{hasvar::key}}` | Check if variable exists (`"true"` / `"false"`) | Variable name |
 | `{{deletevar::key}}` | Delete a variable | Variable name |
 
 Aliases: `{{varexists}}` for `{{hasvar}}`, `{{flushvar}}` for `{{deletevar}}`
 
+**Shorthand:** `.` prefix — `{{.myVar}}`, `{{.score = 100}}`, `{{.counter++}}`
+
+### Chat-Persisted Variables
+
+Chat-persisted variables are **automatically saved** to the chat after each generation. They survive across messages, regenerations, and page reloads — making them ideal for tracking story state like health, quest progress, relationship points, or turn counters.
+
+| Macro | Description | Args |
+|-------|-------------|------|
+| `{{getchatvar::key}}` | Get a persisted variable's value | Variable name |
+| `{{setchatvar::key::value}}` | Set a persisted variable (returns nothing) | Name and value |
+| `{{addchatvar::key::value}}` | Add a number to a persisted variable (returns new value) | Name and number |
+| `{{incchatvar::key}}` | Increment by 1 (returns new value) | Variable name |
+| `{{decchatvar::key}}` | Decrement by 1 (returns new value) | Variable name |
+| `{{haschatvar::key}}` | Check if exists (`"true"` / `"false"`) | Variable name |
+| `{{deletechatvar::key}}` | Delete a persisted variable | Variable name |
+
+Alias: `{{flushchatvar}}` for `{{deletechatvar}}`
+
+**Shorthand:** `@` prefix — `{{@hp}}`, `{{@hp = 100}}`, `{{@turn++}}`, `{{@hp -= 25}}`
+
+!!! tip "When to use `@` vs `.`"
+    Use **`@` (chat-persisted)** for anything that should survive between messages — HP, quest stages, relationship scores, turn counters, discovered secrets.
+
+    Use **`.` (local)** for scratch values within a single evaluation — loop counters, intermediate calculations, temporary formatting state.
+
+**Example — RPG state tracking:**
+
+```
+{{@turn++}}
+{{@hp -= {{roll::1d6}}}}
+
+{{if::{{gt::{{@hp}}::0}}}}
+Turn {{@turn}}: {{char}} takes damage. HP: {{@hp}}/{{@maxHp}}
+{{else}}
+Turn {{@turn}}: {{char}} has fallen!
+{{/if}}
+```
+
+**Example — Relationship tracker:**
+
+```
+{{setchatvar::affection::50}}
+
+{{if::{{gt::{{@affection}}::80}}}}
+{{char}} looks at you warmly.
+{{else}}
+{{char}} gives you a polite nod.
+{{/if}}
+```
+
+`setchatvar` also supports scoped syntax — the enclosed content becomes the value:
+
+```
+{{setchatvar::last_scene}}The group arrived at the ancient temple...{{/setchatvar}}
+```
+
 ### Global Variables (Cross-Chat)
+
+Global variables persist across all chats for the current user. Useful for preferences, themes, or cross-character state.
 
 | Macro | Description | Args |
 |-------|-------------|------|
 | `{{getgvar::key}}` | Get a global variable | Variable name |
 | `{{setgvar::key::value}}` | Set a global variable | Name and value |
 | `{{addgvar::key::value}}` | Add a number to a global variable | Name and number |
-| `{{incgvar::key}}` | Increment by 1 | Variable name |
-| `{{decgvar::key}}` | Decrement by 1 | Variable name |
+| `{{incgvar::key}}` | Increment by 1 (returns new value) | Variable name |
+| `{{decgvar::key}}` | Decrement by 1 (returns new value) | Variable name |
 | `{{hasgvar::key}}` | Check if exists (`"true"` / `"false"`) | Variable name |
 | `{{deletegvar::key}}` | Delete a global variable | Variable name |
 
 Aliases: `{{getglobalvar}}`, `{{setglobalvar}}`, `{{addglobalvar}}`, `{{incglobalvar}}`, `{{decglobalvar}}`, `{{hasglobalvar}}`, `{{gvarexists}}`, `{{flushgvar}}`, `{{flushglobalvar}}`, `{{deleteglobalvar}}`
 
-**Example — Tracking a quest:**
+**Shorthand:** `$` prefix — `{{$theme}}`, `{{$theme = dark}}`
+
+### Variable Scope Summary
+
+| Scope | Prefix | Persists? | Storage | Use Case |
+|-------|--------|-----------|---------|----------|
+| Local | `.` | No — one evaluation only | In-memory | Temp calculations, loop counters |
+| Chat | `@` | Yes — across generations | `chat.metadata` | HP, quests, turns, story state |
+| Global | `$` | Yes — across all chats | User settings | Preferences, cross-character state |
+
+**Example — Combined usage:**
 
 ```
-{{setvar::quest_stage::2}}
-Current quest stage: {{getvar::quest_stage}}
-
-{{if::{{hasvar::secret_discovered}}}}
-You know the secret about the crystal.
-{{/if}}
+{{.roll = {{roll::1d20}}}}
+{{@hp -= {{.roll}}}}
+Rolled {{.roll}} damage. {{char}}'s HP: {{@hp}}/{{@maxHp}}
 ```
 
-`setvar` also supports scoped syntax — the enclosed content becomes the value:
-
-```
-{{setvar::diary_entry}}The events of today were extraordinary...{{/setvar}}
-```
+Here `.roll` is a temporary local variable (used for the current evaluation only), while `@hp` and `@maxHp` are chat-persisted and carry over to the next generation.
 
 ---
 
@@ -650,6 +717,7 @@ These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed fo
 | `{{loomSovHandActive}}` | Sovereign Hand mode is on |
 | `{{memoriesActive}}` | Memories were retrieved |
 | `{{hasvar::key}}` | Local variable exists |
+| `{{haschatvar::key}}` | Chat-persisted variable exists |
 | `{{hasgvar::key}}` | Global variable exists |
 | `{{charTag::tag}}` | Character has the specified tag |
 | `{{regexInstalled::id}}` | Regex script with that ID is installed and enabled |
@@ -685,7 +753,7 @@ The adventure is well underway.
     Wrap council-specific content in `{{if::{{lumiaCouncilModeActive}}}}` so it only appears when council is active. Same for group chat content with `{{if::{{isGroupChat}}}}`. This keeps prompts lean.
 
 !!! tip "Variables for state tracking"
-    Use `{{setvar}}` and `{{getvar}}` to track story state across turns — or use the shorthand `{{.var}}` and `{{.var = value}}`. For example, track relationship points, quest stages, or discovered secrets. Global variables (`{{$var}}`) persist across all chats.
+    Use **`@` variables** to track story state that persists across messages — `{{@hp = 100}}`, `{{@turn++}}`, `{{@quest_stage = 2}}`. These are automatically saved after each generation. Use `.` variables for temporary calculations within a single evaluation. Global variables (`{{$var}}`) persist across all chats.
 
 !!! tip "`{{default}}` replaces common if/else patterns"
     Instead of `{{if::{{hasvar::title}}}}{{.title}}{{else}}Stranger{{/if}}`, just write `{{default::{{.title}}::Stranger}}`. Cleaner and shorter.

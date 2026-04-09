@@ -197,7 +197,7 @@ function buildEnvFromIds(userId: string, body: {
       model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
       lastGenerationType: "normal", isMobile: false,
     },
-    variables: { local: new Map(), global: new Map() },
+    variables: { local: new Map(), global: new Map(), chat: new Map() },
     dynamicMacros: body.dynamic_macros || {},
     extra: {},
   };

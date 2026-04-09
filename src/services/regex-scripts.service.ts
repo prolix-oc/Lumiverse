@@ -403,6 +403,90 @@ export function getActiveScripts(
 }
 
 /**
+ * Manually substitute regex capture references ($1, $&, etc.) in a replacement
+ * template using actual match values.  Mirrors String.prototype.replace's
+ * special $ patterns so that macros can see the captured text.
+ */
+export function substituteRegexCaptures(
+  template: string,
+  fullMatch: string,
+  groups: (string | undefined)[],
+  offset: number,
+  input: string,
+  namedGroups?: Record<string, string>,
+): string {
+  return template.replace(
+    /\$(?:(\$)|(&)|(`)|(')|(\d{1,2})|<([^>]*)>)/g,
+    (token, dollar, amp, backtick, quote, digits, name) => {
+      if (dollar !== undefined) return "$";
+      if (amp !== undefined) return fullMatch;
+      if (backtick !== undefined) return input.slice(0, offset);
+      if (quote !== undefined) return input.slice(offset + fullMatch.length);
+      if (digits !== undefined) {
+        const idx = parseInt(digits, 10);
+        if (idx >= 1 && idx <= groups.length) return groups[idx - 1] ?? "";
+        return token;
+      }
+      if (name !== undefined && namedGroups) return namedGroups[name] ?? token;
+      return token;
+    },
+  );
+}
+
+/**
+ * Collect all regex matches from a string, returning match metadata needed
+ * for capture-group substitution.
+ */
+function collectMatches(content: string, regex: RegExp) {
+  const re = new RegExp(regex.source, regex.flags);
+  const matches: { fullMatch: string; index: number; groups: (string | undefined)[]; namedGroups?: Record<string, string> }[] = [];
+
+  if (re.global || re.sticky) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      matches.push({
+        fullMatch: m[0],
+        index: m.index,
+        groups: Array.from(m).slice(1),
+        namedGroups: m.groups,
+      });
+      if (m[0].length === 0) re.lastIndex++;
+    }
+  } else {
+    const m = re.exec(content);
+    if (m) {
+      matches.push({
+        fullMatch: m[0],
+        index: m.index,
+        groups: Array.from(m).slice(1),
+        namedGroups: m.groups,
+      });
+    }
+  }
+
+  return matches;
+}
+
+/**
+ * Rebuild a string by splicing replacements into the original at match positions.
+ */
+function rebuildFromMatches(
+  content: string,
+  matches: { fullMatch: string; index: number }[],
+  replacements: string[],
+): string {
+  let out = "";
+  let lastIdx = 0;
+  for (let i = 0; i < matches.length; i++) {
+    out += content.slice(lastIdx, matches[i].index);
+    out += replacements[i];
+    lastIdx = matches[i].index + matches[i].fullMatch.length;
+  }
+  out += content.slice(lastIdx);
+  return out;
+}
+
+/**
  * Resolve macros in a regex replacement string based on the substitute_macros mode.
  * - "none": return as-is
  * - "raw": resolve macros, result may contain regex back-references ($1, etc.)
@@ -432,6 +516,10 @@ async function resolveReplacementMacros(
  * When `macroEnv` is provided, scripts with `substitute_macros` set to "raw" or
  * "escaped" will have their replacement strings resolved through the macro engine
  * before being applied.
+ *
+ * For "raw" mode, capture groups ($1, $2, etc.) are substituted into the
+ * replacement template BEFORE macro resolution, so macros can reference
+ * captured text (e.g. `{{setvar::key::$1}}`).
  */
 export async function applyRegexScripts(
   content: string,
@@ -456,13 +544,29 @@ export async function applyRegexScripts(
       const startTime = Date.now();
       const regex = new RegExp(script.find_regex, script.flags);
 
-      // Resolve macros in replacement string if configured and env is available
-      let replaceString = script.replace_string;
-      if (macroEnv && script.substitute_macros !== "none") {
-        replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
+      if (macroEnv && script.substitute_macros === "raw") {
+        // "raw" mode: substitute capture groups into the replacement template
+        // BEFORE macro resolution so $1, $2, etc. are available inside macros
+        const matches = collectMatches(result, regex);
+        if (matches.length > 0) {
+          const replacements = await Promise.all(
+            matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
+              const withCaptures = substituteRegexCaptures(
+                script.replace_string, fullMatch, groups, index, result, namedGroups,
+              );
+              return (await evaluate(withCaptures, macroEnv, registry)).text;
+            }),
+          );
+          result = rebuildFromMatches(result, matches, replacements);
+        }
+      } else {
+        // "none" or "escaped" mode: resolve macros first (if applicable), then string replace
+        let replaceString = script.replace_string;
+        if (macroEnv && script.substitute_macros !== "none") {
+          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
+        }
+        result = result.replace(regex, replaceString);
       }
-
-      result = result.replace(regex, replaceString);
 
       // Apply trim_strings
       if (script.trim_strings.length > 0) {
