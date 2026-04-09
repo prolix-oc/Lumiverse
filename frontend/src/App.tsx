@@ -46,6 +46,10 @@ export default function App() {
 
   const loadSettings = useStore((s) => s.loadSettings)
   const isAuthenticated = useStore((s) => s.isAuthenticated)
+  const openDrawer = useStore((s) => s.openDrawer)
+  const setDrawerTab = useStore((s) => s.setDrawerTab)
+  const setActiveProfile = useStore((s) => s.setActiveProfile)
+  const setActiveImageGenConnection = useStore((s) => s.setActiveImageGenConnection)
   useEffect(() => {
     if (isAuthenticated) {
       loadSettings()
@@ -64,6 +68,35 @@ export default function App() {
     sessionStorage.setItem('pollinations_byop_returned_api_key', byopApiKey)
     window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
   }, [])
+
+  // After BYOP redirect, bring the user directly to Connections and focus
+  // the intended profile when editing an existing one.
+  useEffect(() => {
+    const returnedKey = sessionStorage.getItem('pollinations_byop_returned_api_key')
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    if (!returnedKey || !pendingRaw) return
+
+    try {
+      const pending = JSON.parse(pendingRaw) as {
+        target?: string
+        provider?: string
+        connectionId?: string | null
+      }
+      if (pending.provider !== 'pollinations') return
+
+      openDrawer('connections')
+      setDrawerTab('connections')
+
+      if (pending.target === 'connections' && pending.connectionId) {
+        setActiveProfile(pending.connectionId)
+      }
+      if (pending.target === 'image-gen-connections' && pending.connectionId) {
+        setActiveImageGenConnection(pending.connectionId)
+      }
+    } catch {
+      // ignore malformed pending payload
+    }
+  }, [openDrawer, setDrawerTab, setActiveProfile, setActiveImageGenConnection])
 
   // Global Cmd+K / Ctrl+K shortcut to open the command palette
   const openCommandPalette = useStore((s) => s.openCommandPalette)
