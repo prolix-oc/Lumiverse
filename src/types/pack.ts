@@ -121,6 +121,7 @@ export interface PackWithItems extends Pack {
   lumia_items: LumiaItem[];
   loom_items: LoomItem[];
   loom_tools: LoomTool[];
+  regex_scripts: import("./regex-script").RegexScript[];
 }
 
 // ---- Import Payload (extension camelCase format) ----
@@ -161,5 +162,23 @@ export interface PackImportPayload {
     authorName?: string;
     version?: string;
     sortOrder?: number;
+  }>;
+  regexScripts?: Array<{
+    name: string;
+    scriptId?: string;
+    findRegex: string;
+    replaceString?: string;
+    flags?: string;
+    placement?: string[];
+    target?: string;
+    minDepth?: number | null;
+    maxDepth?: number | null;
+    trimStrings?: string[];
+    runOnEdit?: boolean;
+    substituteMacros?: string;
+    disabled?: boolean;
+    sortOrder?: number;
+    description?: string;
+    metadata?: Record<string, any>;
   }>;
 }

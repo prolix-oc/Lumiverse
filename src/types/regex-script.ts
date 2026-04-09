@@ -24,6 +24,7 @@ export interface RegexScript {
   sort_order: number;
   description: string;
   folder: string;
+  pack_id: string | null;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
@@ -48,6 +49,7 @@ export interface CreateRegexScriptInput {
   sort_order?: number;
   description?: string;
   folder?: string;
+  pack_id?: string | null;
   metadata?: Record<string, any>;
 }
 
@@ -56,6 +58,6 @@ export type UpdateRegexScriptInput = Partial<CreateRegexScriptInput>;
 export interface RegexScriptExport {
   version: 1;
   type: "lumiverse_regex_scripts";
-  scripts: Array<Omit<RegexScript, "id" | "user_id" | "created_at" | "updated_at">>;
+  scripts: Array<Omit<RegexScript, "id" | "user_id" | "pack_id" | "created_at" | "updated_at">>;
   exported_at: number;
 }

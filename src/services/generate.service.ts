@@ -1198,7 +1198,34 @@ async function runGeneration(
 
   function processContentToken(token: string) {
     if (cotPhase === "content") {
-      emitContentToken(token);
+      if (!cotPrefix) {
+        emitContentToken(token);
+        return;
+      }
+      // Scan content for reasoning prefix re-entry (handles mid-response thinking tags)
+      cotDetectBuffer += token;
+      const prefixIdx = cotDetectBuffer.indexOf(cotPrefix);
+      if (prefixIdx !== -1) {
+        // Full prefix found — emit content before it, switch to reasoning
+        if (prefixIdx > 0) emitContentToken(cotDetectBuffer.slice(0, prefixIdx));
+        cotPhase = "reasoning";
+        const afterPrefix = cotDetectBuffer.slice(prefixIdx + cotPrefix.length);
+        cotDetectBuffer = "";
+        if (afterPrefix) processReasoningChunk(afterPrefix);
+        return;
+      }
+      // Check if the buffer tail could be the start of the prefix (partial match)
+      let partialLen = Math.min(cotDetectBuffer.length, cotPrefix.length - 1);
+      while (partialLen > 0) {
+        if (cotPrefix.startsWith(cotDetectBuffer.slice(-partialLen))) break;
+        partialLen--;
+      }
+      // Emit everything that's definitely content (not a potential prefix start)
+      const safeLen = cotDetectBuffer.length - partialLen;
+      if (safeLen > 0) {
+        emitContentToken(cotDetectBuffer.slice(0, safeLen));
+        cotDetectBuffer = cotDetectBuffer.slice(safeLen);
+      }
       return;
     }
     if (cotPhase === "detecting") {
@@ -1212,9 +1239,11 @@ async function runGeneration(
       } else if (cotPrefix.startsWith(trimmed)) {
         // Partial match — keep buffering
       } else {
+        // No prefix at response start — switch to content which also scans for prefix
         cotPhase = "content";
-        emitContentToken(cotDetectBuffer);
+        const buf = cotDetectBuffer;
         cotDetectBuffer = "";
+        processContentToken(buf);
       }
       return;
     }
@@ -1222,10 +1251,15 @@ async function runGeneration(
   }
 
   function flushCotBuffers() {
-    if (cotPhase === "detecting" && cotDetectBuffer) {
-      emitContentToken(cotDetectBuffer);
+    if (cotDetectBuffer) {
+      if (cotPhase === "reasoning") {
+        emitReasoningToken(cotDetectBuffer);
+      } else {
+        emitContentToken(cotDetectBuffer);
+      }
       cotDetectBuffer = "";
-    } else if (cotPhase === "reasoning" && cotSuffixBuffer) {
+    }
+    if (cotPhase === "reasoning" && cotSuffixBuffer) {
       emitReasoningToken(cotSuffixBuffer);
       cotSuffixBuffer = "";
     }
@@ -1344,6 +1378,37 @@ async function runGeneration(
     if (!signal.aborted) {
       // Flush any remaining CoT detection buffers before saving
       flushCotBuffers();
+
+      // Post-parse: extract any reasoning tags that slipped through streaming
+      // detection. Handles edge cases where prefix/suffix split across chunks
+      // in ways the streaming state machine didn't catch, and ensures the
+      // saved message content is always clean of reasoning tag markup.
+      {
+        const ppPrefix = ((reasoningSetting?.value?.prefix as string) || "<think>\n").replace(/^\n+|\n+$/g, "");
+        const ppSuffix = ((reasoningSetting?.value?.suffix as string) || "\n</think>").replace(/^\n+|\n+$/g, "");
+        if (ppPrefix && ppSuffix && fullContent.includes(ppPrefix)) {
+          let cleaned = fullContent;
+          let extracted = "";
+          let idx = cleaned.indexOf(ppPrefix);
+          while (idx !== -1) {
+            const endIdx = cleaned.indexOf(ppSuffix, idx + ppPrefix.length);
+            if (endIdx !== -1) {
+              extracted += cleaned.slice(idx + ppPrefix.length, endIdx);
+              cleaned = cleaned.slice(0, idx) + cleaned.slice(endIdx + ppSuffix.length);
+            } else {
+              // Unclosed tag — extract everything after prefix
+              extracted += cleaned.slice(idx + ppPrefix.length);
+              cleaned = cleaned.slice(0, idx);
+              break;
+            }
+            idx = cleaned.indexOf(ppPrefix);
+          }
+          if (extracted) {
+            fullContent = cleaned;
+            fullReasoning = (fullReasoning ? fullReasoning + "\n" : "") + extracted;
+          }
+        }
+      }
 
       // Apply regex scripts (response target) to completed content
       {

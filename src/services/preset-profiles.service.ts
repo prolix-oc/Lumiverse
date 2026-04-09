@@ -97,7 +97,8 @@ export function setChatBinding(
   userId: string,
   chatId: string,
   presetId: string,
-  blockStates: Record<string, boolean>
+  blockStates: Record<string, boolean> | null,
+  linkedToDefaults?: boolean
 ): PresetProfileBinding {
   // Validate chat exists
   const chat = chatsSvc.getChat(userId, chatId);
@@ -105,8 +106,9 @@ export function setChatBinding(
 
   const binding: PresetProfileBinding = {
     preset_id: presetId,
-    block_states: blockStates,
+    block_states: blockStates ?? {},
     captured_at: Math.floor(Date.now() / 1000),
+    ...(linkedToDefaults ? { linked_to_defaults: true } : {}),
   };
   settingsSvc.putSetting(userId, chatKey(chatId), binding);
   return binding;
@@ -132,7 +134,11 @@ export function resolveProfile(
   // 1. Chat-level binding (most specific)
   const chatBinding = getChatBinding(userId, chatId);
   if (chatBinding && chatBinding.preset_id === presetId) {
-    return { binding: chatBinding, source: "chat" };
+    // If this binding is linked to defaults, skip to defaults resolution
+    // so that updating the defaults propagates to all linked chats.
+    if (!chatBinding.linked_to_defaults) {
+      return { binding: chatBinding, source: "chat" };
+    }
   }
 
   // 2. Character-level binding
@@ -141,7 +147,7 @@ export function resolveProfile(
     return { binding: charBinding, source: "character" };
   }
 
-  // 3. Default snapshot
+  // 3. Default snapshot — also used when chat binding delegates via linked_to_defaults
   const defaults = getDefaults(userId);
   if (defaults && defaults.preset_id === presetId) {
     return { binding: defaults, source: "defaults" };

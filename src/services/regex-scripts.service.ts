@@ -25,13 +25,14 @@ const VALID_FLAGS = new Set(["g", "i", "m", "s", "u"]);
 const VALID_MACRO_MODES = new Set(["none", "raw", "escaped"]);
 const MAX_PATTERN_LENGTH = 10_000;
 
-function rowToRegexScript(row: any): RegexScript {
+export function rowToRegexScript(row: any): RegexScript {
   return {
     ...row,
     script_id: row.script_id || "",
     placement: JSON.parse(row.placement),
     trim_strings: JSON.parse(row.trim_strings),
     folder: row.folder || "",
+    pack_id: row.pack_id || null,
     metadata: JSON.parse(row.metadata),
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
@@ -170,8 +171,8 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -194,6 +195,7 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
       input.sort_order ?? 0,
       input.description ?? "",
       input.folder ?? "",
+      input.pack_id ?? null,
       JSON.stringify(input.metadata ?? {}),
       now,
       now
@@ -629,7 +631,7 @@ export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptE
   }
 
   const scripts = rows.map(rowToRegexScript).map((s) => {
-    const { id, user_id, created_at, updated_at, ...rest } = s;
+    const { id, user_id, created_at, updated_at, pack_id, ...rest } = s;
     return rest;
   });
 
@@ -639,6 +641,13 @@ export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptE
     scripts,
     exported_at: Math.floor(Date.now() / 1000),
   };
+}
+
+export function getRegexScriptsByPackId(userId: string, packId: string): RegexScript[] {
+  const rows = getDb()
+    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND pack_id = ? ORDER BY sort_order ASC, created_at ASC")
+    .all(userId, packId) as any[];
+  return rows.map(rowToRegexScript);
 }
 
 // SillyTavern regex_placement enum → Lumiverse placement strings

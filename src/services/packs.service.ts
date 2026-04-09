@@ -8,8 +8,10 @@ import type {
   CreateLoomToolInput, UpdateLoomToolInput,
   PackImportPayload,
 } from "../types/pack";
+import type { RegexPlacement, RegexTarget, RegexMacroMode } from "../types/regex-script";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+import * as regexScriptsSvc from "./regex-scripts.service";
 
 // --- Row mappers ---
 
@@ -130,8 +132,9 @@ export function getPackWithItems(userId: string, id: string): PackWithItems | nu
   const lumia_items = (stmts.lumiaByPack.all(id) as any[]).map(rowToLumiaItem);
   const loom_items = (stmts.loomByPack.all(id) as any[]).map(rowToLoomItem);
   const loom_tools = (stmts.toolsByPack.all(id) as any[]).map(rowToLoomTool);
+  const regex_scripts = regexScriptsSvc.getRegexScriptsByPackId(userId, id);
 
-  return { ...pack, lumia_items, loom_items, loom_tools };
+  return { ...pack, lumia_items, loom_items, loom_tools, regex_scripts };
 }
 
 /** List all packs with their items in a single efficient batch. */
@@ -144,7 +147,8 @@ export function listPacksWithItems(userId: string, pagination: PaginationParams)
     const lumia_items = (stmts.lumiaByPack.all(pack.id) as any[]).map(rowToLumiaItem);
     const loom_items = (stmts.loomByPack.all(pack.id) as any[]).map(rowToLoomItem);
     const loom_tools = (stmts.toolsByPack.all(pack.id) as any[]).map(rowToLoomTool);
-    return { ...pack, lumia_items, loom_items, loom_tools };
+    const regex_scripts = regexScriptsSvc.getRegexScriptsByPackId(userId, pack.id);
+    return { ...pack, lumia_items, loom_items, loom_tools, regex_scripts };
   });
 
   return { ...result, data: packsWithItems };
@@ -468,6 +472,24 @@ function normalizePackPayload(raw: any): PackImportPayload {
       version: tool.version != null ? String(tool.version) : undefined,
       sortOrder: tool.sortOrder ?? tool.sort_order ?? undefined,
     })),
+    regexScripts: (data.regexScripts || data.regex_scripts || []).map((s: any, i: number) => ({
+      name: s.name || s.scriptName || `Script ${i + 1}`,
+      scriptId: s.scriptId || s.script_id || "",
+      findRegex: s.findRegex || s.find_regex || "",
+      replaceString: s.replaceString || s.replace_string || "",
+      flags: s.flags || "gi",
+      placement: s.placement || ["ai_output"],
+      target: s.target || "response",
+      minDepth: s.minDepth ?? s.min_depth ?? null,
+      maxDepth: s.maxDepth ?? s.max_depth ?? null,
+      trimStrings: s.trimStrings || s.trim_strings || [],
+      runOnEdit: s.runOnEdit ?? s.run_on_edit ?? false,
+      substituteMacros: s.substituteMacros || s.substitute_macros || "none",
+      disabled: s.disabled ?? false,
+      sortOrder: s.sortOrder ?? s.sort_order ?? i,
+      description: s.description || "",
+      metadata: s.metadata || {},
+    })),
   };
 }
 
@@ -550,6 +572,34 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         now, now
       );
     }
+
+    // Import embedded regex scripts with folder set to pack name and pack_id for association
+    for (let i = 0; i < (payload.regexScripts || []).length; i++) {
+      const s = payload.regexScripts![i];
+      if (!s.name || !s.findRegex) continue;
+      regexScriptsSvc.createRegexScript(userId, {
+        name: s.name,
+        script_id: s.scriptId || "",
+        find_regex: s.findRegex,
+        replace_string: s.replaceString || "",
+        flags: s.flags || "gi",
+        placement: (s.placement as RegexPlacement[]) || ["ai_output"],
+        scope: "global",
+        scope_id: null,
+        target: (s.target as RegexTarget) || "response",
+        min_depth: s.minDepth ?? null,
+        max_depth: s.maxDepth ?? null,
+        trim_strings: s.trimStrings || [],
+        run_on_edit: s.runOnEdit ?? false,
+        substitute_macros: (s.substituteMacros as RegexMacroMode) || "none",
+        disabled: s.disabled ?? false,
+        sort_order: s.sortOrder ?? i,
+        description: s.description || "",
+        folder: payload.name || "Imported Pack",
+        pack_id: id,
+        metadata: s.metadata || {},
+      });
+    }
   })();
 
   return getPackWithItems(userId, id)!;
@@ -597,5 +647,25 @@ export function exportPack(userId: string, id: string): PackImportPayload | null
       version: tool.version,
       sortOrder: tool.sort_order,
     })),
+    regexScripts: pack.regex_scripts.length > 0
+      ? pack.regex_scripts.map((s) => ({
+          name: s.name,
+          scriptId: s.script_id || undefined,
+          findRegex: s.find_regex,
+          replaceString: s.replace_string || undefined,
+          flags: s.flags,
+          placement: s.placement,
+          target: s.target,
+          minDepth: s.min_depth,
+          maxDepth: s.max_depth,
+          trimStrings: s.trim_strings.length > 0 ? s.trim_strings : undefined,
+          runOnEdit: s.run_on_edit || undefined,
+          substituteMacros: s.substitute_macros !== "none" ? s.substitute_macros : undefined,
+          disabled: s.disabled || undefined,
+          sortOrder: s.sort_order,
+          description: s.description || undefined,
+          metadata: Object.keys(s.metadata).length > 0 ? s.metadata : undefined,
+        }))
+      : undefined,
   };
 }

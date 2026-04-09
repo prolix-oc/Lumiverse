@@ -84,15 +84,19 @@ app.get("/chat/:chatId", (c) => {
 app.put("/chat/:chatId", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  if (!body.preset_id || !body.block_states) {
-    return c.json({ error: "preset_id and block_states are required" }, 400);
+  if (!body.preset_id) {
+    return c.json({ error: "preset_id is required" }, 400);
+  }
+  if (!body.block_states && !body.linked_to_defaults) {
+    return c.json({ error: "block_states or linked_to_defaults is required" }, 400);
   }
   try {
     const binding = svc.setChatBinding(
       userId,
       c.req.param("chatId"),
       body.preset_id,
-      body.block_states
+      body.block_states || null,
+      body.linked_to_defaults
     );
     return c.json(binding);
   } catch (e: any) {
