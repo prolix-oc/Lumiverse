@@ -32,6 +32,10 @@ import * as generateSvc from "../services/generate.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as charactersSvc from "../services/characters.service";
 import * as chatsSvc from "../services/chats.service";
+import {
+  getCharacterWorldBookIds,
+  setCharacterWorldBookIds,
+} from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
 import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
@@ -622,6 +626,15 @@ export class WorkerHost {
         break;
       case "chat_delete_message":
         this.handleChatDeleteMessage(msg.requestId, msg.chatId, msg.messageId);
+        break;
+      case "chat_set_message_hidden":
+        this.handleChatSetMessageHidden(msg.requestId, msg.chatId, msg.messageId, msg.hidden);
+        break;
+      case "chat_set_messages_hidden":
+        this.handleChatSetMessagesHidden(msg.requestId, msg.chatId, msg.messageIds, msg.hidden);
+        break;
+      case "chat_is_message_hidden":
+        this.handleChatIsMessageHidden(msg.requestId, msg.chatId, msg.messageId);
         break;
       case "events_track":
         this.handleEventsTrack(msg.requestId, msg.eventName, msg.payload, msg.options);
@@ -2795,6 +2808,88 @@ export class WorkerHost {
     }
   }
 
+  private handleChatSetMessageHidden(
+    requestId: string,
+    chatId: string,
+    messageId: string,
+    hidden: boolean,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+
+      const current = getChatMessage(userId, messageId);
+      if (!current || current.chat_id !== chatId) {
+        throw new Error("Message not found");
+      }
+
+      chatsSvc.bulkSetHidden(userId, chatId, [messageId], !!hidden);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatSetMessagesHidden(
+    requestId: string,
+    chatId: string,
+    messageIds: string[],
+    hidden: boolean,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+
+      if (!Array.isArray(messageIds)) {
+        throw new Error("messageIds must be an array of strings");
+      }
+      // Filter to defensively-typed strings; the underlying service caps the
+      // batch at 500 and will throw past that.
+      const filtered = messageIds.filter((id): id is string => typeof id === "string" && !!id);
+
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+
+      chatsSvc.bulkSetHidden(userId, chatId, filtered, !!hidden);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatIsMessageHidden(
+    requestId: string,
+    chatId: string,
+    messageId: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+
+      const current = getChatMessage(userId, messageId);
+      if (!current || current.chat_id !== chatId) {
+        throw new Error("Message not found");
+      }
+
+      const extra = (current.extra || {}) as Record<string, unknown>;
+      this.postToWorker({ type: "response", requestId, result: extra.hidden === true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   // ─── Event tracking ────────────────────────────────────────────────────
 
   private getEventLogPath(): string {
@@ -3348,9 +3443,27 @@ export class WorkerHost {
       alternate_greetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings : [],
       creator: c.creator || "",
       image_id: c.image_id || null,
+      world_book_ids: getCharacterWorldBookIds(c.extensions),
       created_at: c.created_at,
       updated_at: c.updated_at,
     };
+  }
+
+  /**
+   * Normalize and dedupe a `world_book_ids` input from an extension. Filters
+   * out non-string and empty entries, deduplicates while preserving order.
+   */
+  private sanitizeWorldBookIds(input: unknown): string[] {
+    if (!Array.isArray(input)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of input) {
+      if (typeof id !== "string" || !id.trim()) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
   }
 
   private handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
@@ -3412,7 +3525,7 @@ export class WorkerHost {
         throw new Error("Character name is required");
       }
 
-      const c = charactersSvc.createCharacter(resolvedUserId, {
+      const createInput: any = {
         name: input.name,
         description: input.description,
         personality: input.personality,
@@ -3425,7 +3538,12 @@ export class WorkerHost {
         tags: input.tags,
         alternate_greetings: input.alternate_greetings,
         creator: input.creator,
-      });
+      };
+      if (input.world_book_ids !== undefined) {
+        const ids = this.sanitizeWorldBookIds(input.world_book_ids);
+        createInput.extensions = setCharacterWorldBookIds({}, ids);
+      }
+      const c = charactersSvc.createCharacter(resolvedUserId, createInput);
       this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -3441,7 +3559,27 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const c = charactersSvc.updateCharacter(resolvedUserId, characterId, input || {});
+      // Whitelist allowed update fields. The raw `extensions` blob is never
+      // accepted from extensions — only structured fields like `world_book_ids`
+      // are allowed to mutate it, and only via the dedicated helper.
+      const update: any = {};
+      const passthroughFields = [
+        "name", "description", "personality", "scenario", "first_mes",
+        "mes_example", "creator_notes", "system_prompt", "post_history_instructions",
+        "tags", "alternate_greetings", "creator",
+      ] as const;
+      for (const field of passthroughFields) {
+        if (input?.[field] !== undefined) update[field] = input[field];
+      }
+
+      if (input?.world_book_ids !== undefined) {
+        const existing = charactersSvc.getCharacter(resolvedUserId, characterId);
+        if (!existing) throw new Error("Character not found");
+        const ids = this.sanitizeWorldBookIds(input.world_book_ids);
+        update.extensions = setCharacterWorldBookIds(existing.extensions || {}, ids);
+      }
+
+      const c = charactersSvc.updateCharacter(resolvedUserId, characterId, update);
       if (!c) throw new Error("Character not found");
       this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
     } catch (err: any) {

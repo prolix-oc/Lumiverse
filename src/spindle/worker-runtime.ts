@@ -608,6 +608,36 @@ const spindleApi: SpindleAPI = {
         messageId,
       });
     },
+    async setMessageHidden(chatId: string, messageId: string, hidden: boolean): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "chat_set_message_hidden",
+        requestId,
+        chatId,
+        messageId,
+        hidden,
+      });
+    },
+    async setMessagesHidden(chatId: string, messageIds: string[], hidden: boolean): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "chat_set_messages_hidden",
+        requestId,
+        chatId,
+        messageIds,
+        hidden,
+      });
+    },
+    async isMessageHidden(chatId: string, messageId: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "chat_is_message_hidden",
+        requestId,
+        chatId,
+        messageId,
+      });
+      return result as boolean;
+    },
   },
 
   events: {
