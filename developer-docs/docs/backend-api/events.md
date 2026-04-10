@@ -28,12 +28,26 @@ unsub()
 
 ### Generation
 
-| Event | Payload |
-|-------|---------|
-| `GENERATION_STARTED` | `{ generationId, chatId, model }` |
-| `GENERATION_ENDED` | `{ generationId, chatId, messageId, content }` |
-| `GENERATION_STOPPED` | `{ generationId, chatId, content }` |
-| `STREAM_TOKEN_RECEIVED` | `{ generationId, chatId, token }` |
+!!! warning "Permission required: `generation`"
+    Subscribing to generation events requires the `generation` permission. Without it, the subscription is rejected and a `permission_denied` notification is sent to the extension.
+
+| Event | Typed Payload | Description |
+|-------|---------------|-------------|
+| `GENERATION_STARTED` | `GenerationStartedPayloadDTO` | A generation has begun |
+| `STREAM_TOKEN_RECEIVED` | `StreamTokenPayloadDTO` | A token was received from the LLM |
+| `GENERATION_ENDED` | `GenerationEndedPayloadDTO` | Generation completed (success or error) |
+| `GENERATION_STOPPED` | `GenerationStoppedPayloadDTO` | User stopped the generation |
+
+These events have typed overloads — payloads are automatically narrowed when using `lumiverse-spindle-types`:
+
+```ts
+spindle.on('STREAM_TOKEN_RECEIVED', (payload) => {
+  // payload: StreamTokenPayloadDTO — fully typed
+  console.log(payload.token, payload.seq, payload.type)
+})
+```
+
+See [Generation > Stream Observation](generation.md#stream-observation) for the high-level `observe()` helper and full payload field reference.
 
 ### Entities
 

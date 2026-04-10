@@ -955,12 +955,36 @@ export class WorkerHost {
 
   // ─── Event subscription ──────────────────────────────────────────────
 
+  /** Generation-related events that require the `generation` permission. */
+  private static readonly GENERATION_EVENTS = new Set([
+    EventType.GENERATION_STARTED,
+    EventType.GENERATION_ENDED,
+    EventType.GENERATION_STOPPED,
+    EventType.STREAM_TOKEN_RECEIVED,
+  ]);
+
   private handleSubscribeEvent(event: string): void {
     const eventType = (EventType as any)[event];
     if (!eventType) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Unknown event: ${event}`
       );
+      return;
+    }
+
+    // Generation lifecycle/streaming events require the generation permission
+    if (
+      WorkerHost.GENERATION_EVENTS.has(eventType) &&
+      !managerSvc.hasPermission(this.manifest.identifier, "generation")
+    ) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Generation permission required for event: ${event}`
+      );
+      this.postToWorker({
+        type: "permission_denied",
+        permission: "generation",
+        operation: `subscribe_event:${event}`,
+      });
       return;
     }
 

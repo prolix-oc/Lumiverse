@@ -73,7 +73,7 @@ function request(msg: WorkerToHost & { requestId: string }): Promise<unknown> {
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: SpindleAPI = {
-  on(event: string, handler: (payload: unknown) => void): () => void {
+  on(event: string, handler: (payload: any) => void): () => void {
     if (!eventHandlers.has(event)) {
       eventHandlers.set(event, new Set());
       post({ type: "subscribe_event", event });
@@ -175,6 +175,76 @@ const spindleApi: SpindleAPI = {
         userId,
       });
       return result as import("lumiverse-spindle-types").DryRunResultDTO;
+    },
+
+    observe(chatId: string): import("lumiverse-spindle-types").GenerationObserver {
+      type StartPayload = import("lumiverse-spindle-types").GenerationStartedPayloadDTO;
+      type TokenPayload = import("lumiverse-spindle-types").StreamTokenPayloadDTO;
+      type EndPayload = import("lumiverse-spindle-types").GenerationEndedPayloadDTO;
+      type StopPayload = import("lumiverse-spindle-types").GenerationStoppedPayloadDTO;
+
+      let startHandlers: Array<(info: StartPayload) => void> = [];
+      let tokenHandlers: Array<(token: TokenPayload) => void> = [];
+      let endHandlers: Array<(result: EndPayload) => void> = [];
+      let stopHandlers: Array<(result: StopPayload) => void> = [];
+
+      let content = "";
+      let reasoning = "";
+      let activeGenerationId: string | null = null;
+
+      const unsubStart = spindleApi.on("GENERATION_STARTED", (payload: unknown) => {
+        const p = payload as StartPayload;
+        if (p.chatId !== chatId) return;
+        activeGenerationId = p.generationId;
+        content = "";
+        reasoning = "";
+        for (const h of startHandlers) h(p);
+      });
+
+      const unsubToken = spindleApi.on("STREAM_TOKEN_RECEIVED", (payload: unknown) => {
+        const p = payload as TokenPayload;
+        if (p.chatId !== chatId) return;
+        if (p.type === "reasoning") {
+          reasoning += p.token;
+        } else {
+          content += p.token;
+        }
+        for (const h of tokenHandlers) h(p);
+      });
+
+      const unsubEnd = spindleApi.on("GENERATION_ENDED", (payload: unknown) => {
+        const p = payload as EndPayload;
+        if (p.chatId !== chatId) return;
+        activeGenerationId = null;
+        for (const h of endHandlers) h(p);
+      });
+
+      const unsubStop = spindleApi.on("GENERATION_STOPPED", (payload: unknown) => {
+        const p = payload as StopPayload;
+        if (p.chatId !== chatId) return;
+        activeGenerationId = null;
+        for (const h of stopHandlers) h(p);
+      });
+
+      return {
+        onStart(handler) { startHandlers.push(handler); },
+        onToken(handler) { tokenHandlers.push(handler); },
+        onEnd(handler) { endHandlers.push(handler); },
+        onStop(handler) { stopHandlers.push(handler); },
+        get content() { return content; },
+        get reasoning() { return reasoning; },
+        get generationId() { return activeGenerationId; },
+        dispose() {
+          unsubStart();
+          unsubToken();
+          unsubEnd();
+          unsubStop();
+          startHandlers = [];
+          tokenHandlers = [];
+          endHandlers = [];
+          stopHandlers = [];
+        },
+      };
     },
   },
 
