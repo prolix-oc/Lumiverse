@@ -729,7 +729,16 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
     .run(JSON.stringify(swipes), JSON.stringify(swipeDates), newSwipeId, content, messageId);
 
   const updated = getMessage(userId, messageId)!;
-  eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
+  eventBus.emit(
+    EventType.MESSAGE_SWIPED,
+    {
+      chatId: updated.chat_id,
+      message: updated,
+      action: "added",
+      swipeId: newSwipeId,
+    },
+    userId,
+  );
   return updated;
 }
 
@@ -749,7 +758,16 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
 
   getDb().query(`UPDATE messages SET ${updates} WHERE id = ?`).run(...values);
   const updated = getMessage(userId, messageId)!;
-  eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
+  eventBus.emit(
+    EventType.MESSAGE_SWIPED,
+    {
+      chatId: updated.chat_id,
+      message: updated,
+      action: "updated",
+      swipeId: swipeIdx,
+    },
+    userId,
+  );
 
   return updated;
 }
@@ -758,6 +776,8 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
   const msg = getMessage(userId, messageId);
   if (!msg || msg.swipes.length <= 1) return null; // can't delete last swipe
   if (swipeIdx < 0 || swipeIdx >= msg.swipes.length) return null;
+
+  const previousSwipeId = msg.swipe_id;
 
   const swipes = [...msg.swipes];
   swipes.splice(swipeIdx, 1);
@@ -780,7 +800,17 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
     .run(JSON.stringify(swipes), JSON.stringify(swipeDates), newSwipeId, newContent, messageId);
 
   const updated = getMessage(userId, messageId)!;
-  eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
+  eventBus.emit(
+    EventType.MESSAGE_SWIPED,
+    {
+      chatId: updated.chat_id,
+      message: updated,
+      action: "deleted",
+      swipeId: swipeIdx,
+      previousSwipeId,
+    },
+    userId,
+  );
   return updated;
 }
 
@@ -791,6 +821,7 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
   const nextIdx = direction === "left" ? msg.swipe_id - 1 : msg.swipe_id + 1;
   if (nextIdx < 0 || nextIdx >= msg.swipes.length) return msg;
 
+  const previousSwipeId = msg.swipe_id;
   const nextContent = msg.swipes[nextIdx] ?? msg.content;
 
   getDb()
@@ -798,7 +829,17 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
     .run(nextIdx, nextContent, messageId);
 
   const updated = getMessage(userId, messageId)!;
-  eventBus.emit(EventType.MESSAGE_SWIPED, { chatId: updated.chat_id, message: updated }, userId);
+  eventBus.emit(
+    EventType.MESSAGE_SWIPED,
+    {
+      chatId: updated.chat_id,
+      message: updated,
+      action: "navigated",
+      swipeId: nextIdx,
+      previousSwipeId,
+    },
+    userId,
+  );
   return updated;
 }
 

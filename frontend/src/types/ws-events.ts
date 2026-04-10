@@ -177,9 +177,27 @@ export interface MessageDeletedPayload {
   messageId: string
 }
 
+export type MessageSwipeAction = 'added' | 'updated' | 'deleted' | 'navigated'
+
 export interface MessageSwipedPayload {
   chatId: string
   message: import('./api').Message
+  /** Distinguishes which swipe operation produced this event. */
+  action: MessageSwipeAction
+  /**
+   * The swipe index this event concerns:
+   *  - `'added'`     → index of the new swipe (= `message.swipe_id`)
+   *  - `'updated'`   → index of the edited swipe
+   *  - `'deleted'`   → index that was removed (no longer present in `message.swipes`,
+   *                     and `message.swipe_id` may have shifted)
+   *  - `'navigated'` → destination index (= `message.swipe_id`)
+   */
+  swipeId: number
+  /**
+   * For `'navigated'` and `'deleted'`: the active swipe index before the change.
+   * Omitted for `'added'` and `'updated'`.
+   */
+  previousSwipeId?: number
 }
 
 export interface GroupTurnStartedPayload {
