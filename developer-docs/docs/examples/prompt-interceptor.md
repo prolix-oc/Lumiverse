@@ -47,11 +47,11 @@ spindle.registerInterceptor(async (messages, context) => {
 }, 10) // Low priority = runs early
 
 // Listen for tone changes from the frontend
-spindle.onFrontendMessage(async (payload: any) => {
+spindle.onFrontendMessage(async (payload: any, userId) => {
   if (payload.type === 'set_tone') {
     currentTone = payload.tone
     await spindle.storage.write('tone.txt', currentTone)
-    spindle.sendToFrontend({ type: 'tone_updated', tone: currentTone })
+    spindle.sendToFrontend({ type: 'tone_updated', tone: currentTone }, userId)
     spindle.log.info(`Tone set to: ${currentTone}`)
   }
 })

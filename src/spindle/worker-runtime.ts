@@ -1218,8 +1218,8 @@ const spindleApi: SpindleAPI = {
     post({ type: "register_context_handler", priority });
   },
 
-  sendToFrontend(payload: unknown): void {
-    post({ type: "frontend_message", payload });
+  sendToFrontend(payload: unknown, userId?: string): void {
+    post({ type: "frontend_message", payload, userId });
   },
 
   onFrontendMessage(handler: (payload: unknown, userId: string) => void): () => void {

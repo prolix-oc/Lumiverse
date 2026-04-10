@@ -251,7 +251,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         { userId },
       )
       spindle.toast.success('Nudge history cleared')
-      spindle.sendToFrontend({ type: 'history_cleared', characterId: payload.characterId })
+      spindle.sendToFrontend({ type: 'history_cleared', characterId: payload.characterId }, userId)
     }
   }
 })

@@ -704,7 +704,18 @@ export class WorkerHost {
       case "enclave_list":
         this.handleEnclaveList(msg.requestId, msg.userId);
         break;
-      case "frontend_message":
+      case "frontend_message": {
+        // User-scoped extensions can only ever target their installer; the
+        // worker-supplied userId is ignored to prevent cross-user delivery.
+        // Operator-scoped extensions may pass an explicit userId to route the
+        // message to a single connected user — when omitted we fall back to
+        // the legacy broadcast behaviour for backwards compatibility.
+        const targetUserId =
+          this.installScope === "user"
+            ? this.installedByUserId ?? undefined
+            : typeof msg.userId === "string" && msg.userId.length > 0
+              ? msg.userId
+              : undefined;
         eventBus.emit(
           EventType.SPINDLE_FRONTEND_MSG,
           {
@@ -712,9 +723,10 @@ export class WorkerHost {
             identifier: this.manifest.identifier,
             data: msg.payload,
           },
-          this.installScope === "user" ? this.installedByUserId ?? undefined : undefined
+          targetUserId
         );
         break;
+      }
       case "oauth_callback_result":
         if (msg.error) {
           this.rejectRequest(msg.requestId, new Error(msg.error));
