@@ -3373,6 +3373,15 @@ function buildParameters(
 ): Record<string, any> {
   const params: Record<string, any> = {};
 
+  // Streaming toggle — transport-level concern, orthogonal to sampler tuning.
+  // Applied regardless of overrides.enabled so users can disable streaming without
+  // also opting into sampler overrides. The `_streaming` key is consumed by
+  // generate.service.ts and stripped before reaching providers (also in each
+  // provider's INTERNAL_PARAMS allowlist as a safety net).
+  if (overrides && overrides.streaming === false) {
+    params._streaming = false;
+  }
+
   // Sampler overrides — when enabled, apply user values (or defaults for core params).
   // A value of 0 on sampling params means "exclude from request", allowing users to
   // avoid provider conflicts (e.g. Claude rejects requests with both temperature and top_p).
@@ -3461,10 +3470,17 @@ export function injectReasoningParams(params: Record<string, any>, providerName:
   } else if (providerName === "google" || providerName === "google_vertex") {
     // Google Gemini / Vertex AI: thinkingConfig with thinkingLevel
     // Valid levels: minimal, low, medium, high
-    if (!params.thinkingConfig) {
-      const validLevels = new Set(["minimal", "low", "medium", "high"]);
-      params.thinkingConfig = { thinkingLevel: validLevels.has(effort) ? effort : "medium" };
-    }
+    const validLevels = new Set(["minimal", "low", "medium", "high"]);
+    const existing = (params.thinkingConfig && typeof params.thinkingConfig === "object") ? params.thinkingConfig : {};
+    // Merge: preserve any user-supplied thinkingLevel/thinkingBudget, but
+    // always set includeThoughts: true so the API actually returns thought
+    // summary parts (without this flag, Gemini reasons internally but
+    // emits zero `part.thought` parts and our parser sees nothing).
+    params.thinkingConfig = {
+      ...existing,
+      thinkingLevel: existing.thinkingLevel ?? (validLevels.has(effort) ? effort : "medium"),
+      includeThoughts: true,
+    };
   } else if (providerName === "openrouter") {
     // OpenRouter: unified reasoning object with effort levels
     // Valid: none, minimal, low, medium, high, xhigh

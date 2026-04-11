@@ -1120,17 +1120,6 @@ async function runGeneration(
   let fullContent = "";
   let fullReasoning = "";
 
-  // Prepend assistant prefill to content: the model continues *after* the prefill,
-  // so the prefill text is not included in the model's output. Emit it as the first
-  // content token so the frontend sees it, and include it in the saved content.
-  if (assistantPrefill) {
-    fullContent = assistantPrefill;
-    const seq = pool.appendPoolContent(generationId, assistantPrefill);
-    eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: assistantPrefill, seq,
-    }, userId);
-  }
-
   let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
   let reasoningStartedAt = 0;
   let reasoningDurationMs = 0;
@@ -1262,6 +1251,18 @@ async function runGeneration(
       cotSuffixBuffer = "";
     }
     cotPhase = "content";
+  }
+
+  // Route the assistant prefill ("Start Reply With") through the CoT detection
+  // state machine before the model's stream begins. The model continues *after*
+  // the prefill, so the prefill text is not included in the model's output —
+  // we still need to surface it to the frontend and include it in the saved
+  // content/reasoning. Running it through processContentToken ensures that if
+  // the prefill is (or starts with) the configured reasoning prefix, it's
+  // classified as reasoning from the first token instead of leaking into the
+  // content bubble and then being re-extracted by the post-parse safety net.
+  if (assistantPrefill) {
+    processContentToken(assistantPrefill);
   }
 
   // Determine streaming mode from _streaming parameter (defaults to true)

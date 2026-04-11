@@ -75,6 +75,8 @@ export interface SamplerOverrides {
   frequencyPenalty: number | null;
   presencePenalty: number | null;
   repetitionPenalty: number | null;
+  /** When explicitly false, the request uses the non-streaming provider path. Defaults to true. */
+  streaming?: boolean;
 }
 
 export interface AdvancedSettings {
