@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useStore } from '@/store'
 import { useMessageCard } from '@/hooks/useMessageCard'
 import useSwipeAction from '@/hooks/useSwipeAction'
@@ -13,8 +13,74 @@ import ReasoningBlock from './ReasoningBlock'
 import StreamingIndicator from './StreamingIndicator'
 import LazyImage from '@/components/shared/LazyImage'
 import type { Message } from '@/types/api'
+import type { GenerationMetrics } from '@/types/ws-events'
 import styles from './MinimalMessage.module.css'
 import clsx from 'clsx'
+
+function formatMetaDate(timestamp: number) {
+  const d = new Date(timestamp * 1000)
+  const month = d.toLocaleString('en-US', { month: 'short' })
+  const day = d.getDate()
+  const time = d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  return `${month} ${day}, ${time}`
+}
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
+function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMetrics }: {
+  index: number
+  timestamp: number
+  tokenCount: number | undefined
+  isHidden: boolean
+  isUser: boolean
+  generationMetrics: GenerationMetrics | undefined
+}) {
+  const [showTooltip, setShowTooltip] = useState(false)
+  const hasStreamingDetails = !isUser && generationMetrics?.wasStreaming && (generationMetrics.ttft != null || generationMetrics.tps != null)
+
+  return (
+    <span
+      className={styles.metaPill}
+      onMouseEnter={hasStreamingDetails ? () => setShowTooltip(true) : undefined}
+      onMouseLeave={hasStreamingDetails ? () => setShowTooltip(false) : undefined}
+    >
+      #{index}
+      <span className={styles.metaDot}>&middot;</span>
+      {formatMetaDate(timestamp)}
+      {tokenCount != null && (
+        <>
+          <span className={styles.metaDot}>&middot;</span>
+          {tokenCount}t
+        </>
+      )}
+      {isHidden && (
+        <>
+          <span className={styles.metaDot}>&middot;</span>
+          <span className={styles.hiddenBadge}>Hidden</span>
+        </>
+      )}
+      {showTooltip && hasStreamingDetails && (
+        <span className={styles.metaPillTooltip}>
+          {generationMetrics!.ttft != null && (
+            <span className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>First token</span>
+              <span className={styles.tooltipValue}>{formatMs(generationMetrics!.ttft)}</span>
+            </span>
+          )}
+          {generationMetrics!.tps != null && (
+            <span className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>Speed</span>
+              <span className={styles.tooltipValue}>{generationMetrics!.tps} tok/s</span>
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  )
+}
 
 interface MinimalMessageProps {
   message: Message
@@ -39,6 +105,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     reasoning,
     reasoningDuration,
     reasoningStartedAt,
+    tokenCount,
+    generationMetrics,
     avatarUrl,
     fullAvatarUrl,
     displayName,
@@ -104,11 +172,19 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
       </div>
 
       <div className={styles.bubble}>
-        {/* Name */}
+        {/* Name + meta pill */}
         <div className={styles.header}>
           <span className={clsx(styles.name, isUser ? styles.nameUser : styles.nameChar)}>
             {displayName}
           </span>
+          <MetaPill
+            index={message.index_in_chat}
+            timestamp={message.swipe_dates?.[message.swipe_id] ?? message.send_date}
+            tokenCount={tokenCount}
+            isHidden={isHidden}
+            isUser={isUser}
+            generationMetrics={generationMetrics}
+          />
         </div>
 
         {/* Reasoning block — hidden during editing since the edit area shows it inline */}
