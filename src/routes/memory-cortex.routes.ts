@@ -852,7 +852,9 @@ app.post("/chats/:chatId/rebuild", async (c) => {
 
     generateRawFn = async (opts: any) => {
       const { quietGenerate } = await import("../services/generate.service");
-      const toolChoiceParams = sidecarProvider
+      // Only inject tool_choice when the call provides tools — consolidation
+      // and arc summarization don't use tools, so tool_choice would cause a 400.
+      const toolChoiceParams = (sidecarProvider && opts.tools?.length)
         ? memoryCortex.getToolChoiceParams(sidecarProvider)
         : {};
       const sidecarParams: Record<string, any> = {

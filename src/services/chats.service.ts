@@ -1419,8 +1419,11 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       const generateRawFn = sidecarConnectionId
         ? async (opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any>; tools?: any[]; signal?: AbortSignal }) => {
             const { quietGenerate } = await import("./generate.service");
-            // Inject tool_choice to force the model to use tools
-            const toolChoiceParams = sidecarProvider
+            // Only inject tool_choice when the call actually provides tools.
+            // Consolidation and arc summarization don't use tools — injecting
+            // tool_choice without tools causes providers to reject the request
+            // with "tool_choice is required, but no tools were provided".
+            const toolChoiceParams = (sidecarProvider && opts.tools?.length)
               ? memoryCortex.getToolChoiceParams(sidecarProvider)
               : {};
             const sidecarParams: Record<string, any> = {
