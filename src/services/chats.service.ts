@@ -606,6 +606,17 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId?
   return message;
 }
 
+/**
+ * Lightweight extra-only update that skips chunk rebuilds, cache invalidation,
+ * and MESSAGE_EDITED events. Use only for housekeeping (clearing stale fields)
+ * where a full updateMessage would trigger expensive background work.
+ */
+export function patchMessageExtra(userId: string, id: string, extra: Record<string, any>): void {
+  const existing = getMessage(userId, id);
+  if (!existing) return;
+  getDb().query("UPDATE messages SET extra = ? WHERE id = ?").run(JSON.stringify(extra), id);
+}
+
 export function updateMessage(userId: string, id: string, input: UpdateMessageInput): Message | null {
   const existing = getMessage(userId, id);
   if (!existing) return null;

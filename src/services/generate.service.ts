@@ -580,10 +580,11 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
       // Clear stale generation metrics from the previous swipe so the pill
       // doesn't display outdated values while the new generation runs.
+      // Uses patchMessageExtra to avoid triggering chunk rebuilds / WS events.
       const prevExtra = targetMsg.extra;
       if (prevExtra && (prevExtra.tokenCount != null || prevExtra.generationMetrics || prevExtra.usage || prevExtra.reasoning || prevExtra.reasoningDuration)) {
         const { tokenCount: _, generationMetrics: _gm, usage: _u, reasoning: _r, reasoningDuration: _rd, ...cleanExtra } = prevExtra;
-        chatsSvc.updateMessage(input.userId, targetMsg.id, { extra: cleanExtra });
+        chatsSvc.patchMessageExtra(input.userId, targetMsg.id, cleanExtra);
       }
     }
   } else if (genType === "continue") {
