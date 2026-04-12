@@ -1521,12 +1521,11 @@ async function runGeneration(
           if (finalPoolEntry.firstTokenAt) {
             ttft = finalPoolEntry.firstTokenAt - streamStart;
           }
-          // TPS: content tokens over content streaming duration
-          const contentStart = finalPoolEntry.firstContentTokenAt;
-          if (contentStart && resolvedTokenCount && resolvedTokenCount > 1) {
-            const contentDurationSec = (now - contentStart) / 1000;
-            if (contentDurationSec > 0) {
-              tps = Math.round((resolvedTokenCount / contentDurationSec) * 10) / 10;
+          // TPS: total output tokens over total streaming duration (first token → completion)
+          if (finalPoolEntry.firstTokenAt && resolvedTokenCount && resolvedTokenCount > 1) {
+            const streamDurationSec = (now - finalPoolEntry.firstTokenAt) / 1000;
+            if (streamDurationSec > 0) {
+              tps = Math.round((resolvedTokenCount / streamDurationSec) * 10) / 10;
             }
           }
         }
