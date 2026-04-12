@@ -295,7 +295,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
     const pos = newPosition as PromptBlock['position']
     setPosition(pos)
     const isAppend = role === 'user_append' || role === 'assistant_append'
-    if (pos === 'post_history' && !isAppend) setRole('assistant')
+    if (pos === 'post_history' && !isAppend && role === 'system') setRole('user')
     else if (pos === 'pre_history' && role === 'assistant') setRole('system')
   }
 
@@ -367,13 +367,12 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
             <div className={s.formGroup} style={{ flex: 1, minWidth: '120px' }}>
               <label className={s.label}>Role</label>
               <select className={s.select} value={role} onChange={e => setRole(e.target.value as PromptBlock['role'])}>
-                <option value="system">System</option>
+                {position !== 'post_history' && <option value="system">System</option>}
                 <option value="user">User</option>
                 <option value="assistant">Assistant</option>
                 <option value="user_append">User Append</option>
                 <option value="assistant_append">Assistant Append</option>
               </select>
-              {position === 'post_history' && role !== 'user_append' && role !== 'assistant_append' && <div className={s.postHistoryNote}>Post-history blocks are sent as assistant messages.</div>}
             </div>
             {role !== 'user_append' && role !== 'assistant_append' && (
               <div className={s.formGroup} style={{ flex: 1, minWidth: '140px' }}>
@@ -1180,6 +1179,24 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   } = useLoomBuilder()
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+  const addToast = __contextMeterStore((s) => s.addToast)
+
+  const reapplyDefaults = useCallback(() => {
+    const binding = presetProfiles.defaults
+    if (!binding || !activePreset?.blocks?.length) return
+
+    const updatedBlocks = activePreset.blocks.map(b =>
+      b.id in binding.block_states ? { ...b, enabled: binding.block_states[b.id] } : b
+    )
+
+    const changed = updatedBlocks.some((b, i) => b.enabled !== activePreset.blocks[i].enabled)
+    if (changed) {
+      saveBlocks(updatedBlocks)
+      addToast({ type: 'success', message: 'Default profile reapplied' })
+    } else {
+      addToast({ type: 'info', message: 'Block states already match defaults' })
+    }
+  }, [presetProfiles.defaults, activePreset, saveBlocks, addToast])
 
   // Apply preset profile binding when the resolved binding changes (chat/character/default switch).
   // Uses refs for values we read but don't want to trigger the effect on.
@@ -1469,13 +1486,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             ) : (
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
-                onClick={presetProfiles.clearDefaults}
+                onClick={reapplyDefaults}
                 disabled={presetProfiles.isLoading}
-                title="Clear default block states"
+                title="Reapply default block states"
                 type="button"
               >
-                <Camera size={10} /> Defaults
-                <X size={8} />
+                <RotateCcw size={10} /> Defaults
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.clearDefaults() }}
+                  title="Clear default block states"
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
               </button>
             )}
 
@@ -1493,13 +1518,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             ) : (
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
-                onClick={presetProfiles.unbindCharacter}
+                onClick={presetProfiles.bindToCharacter}
                 disabled={presetProfiles.isLoading}
-                title="Remove character binding"
+                title="Rebind current block states to this character"
                 type="button"
               >
-                <Unlink size={10} /> Character
-                <X size={8} />
+                <RotateCcw size={10} /> Character
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.unbindCharacter() }}
+                  title="Remove character binding"
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
               </button>
             )}
 
@@ -1517,13 +1550,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             ) : (
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
-                onClick={presetProfiles.unbindChat}
+                onClick={presetProfiles.bindToChat}
                 disabled={presetProfiles.isLoading}
-                title="Remove chat binding"
+                title="Rebind current block states to this chat"
                 type="button"
               >
-                <Unlink size={10} /> Chat
-                <X size={8} />
+                <RotateCcw size={10} /> Chat
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.unbindChat() }}
+                  title="Remove chat binding"
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
               </button>
             )}
           </div>

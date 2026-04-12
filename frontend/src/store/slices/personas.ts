@@ -1,6 +1,12 @@
 import type { StateCreator } from 'zustand'
 import type { PersonasSlice } from '@/types/store'
+import type { CharacterPersonaBinding } from '@/types/api'
 import { settingsApi } from '@/api/settings'
+
+/** Normalize a binding value to the object form. */
+export function resolveBinding(val: string | CharacterPersonaBinding): CharacterPersonaBinding {
+  return typeof val === 'string' ? { personaId: val } : val
+}
 
 export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
   personas: [],
@@ -28,10 +34,12 @@ export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
     set({ activePersonaId: id })
     settingsApi.put('activePersonaId', id).catch(() => {})
   },
-  setCharacterPersonaBinding: (characterId, personaId) => {
+  setCharacterPersonaBinding: (characterId, personaId, addonStates) => {
     const bindings = { ...get().characterPersonaBindings }
     if (personaId) {
-      bindings[characterId] = personaId
+      bindings[characterId] = addonStates && Object.keys(addonStates).length > 0
+        ? { personaId, addonStates }
+        : personaId
     } else {
       delete bindings[characterId]
     }
@@ -61,8 +69,8 @@ export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
       // Clean up character bindings that reference the deleted persona
       const bindings = { ...s.characterPersonaBindings }
       let bindingsChanged = false
-      for (const [charId, personaId] of Object.entries(bindings)) {
-        if (personaId === id) {
+      for (const [charId, val] of Object.entries(bindings)) {
+        if (resolveBinding(val).personaId === id) {
           delete bindings[charId]
           bindingsChanged = true
         }

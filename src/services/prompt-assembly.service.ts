@@ -216,6 +216,55 @@ function isAppendRole(role: string): boolean {
   return role === 'user_append' || role === 'assistant_append';
 }
 
+/**
+ * Reorder non-marker blocks so their `position` field is respected relative
+ * to the chat_history marker.  Blocks with position "post_history" (or
+ * "in_history") that sit before the marker are moved to just after it, and
+ * blocks with position "pre_history" that sit after the marker are moved to
+ * just before it.  Marker blocks and append-role blocks are left in place.
+ */
+function reorderBlocksByPosition(blocks: PromptBlock[]): void {
+  const chatHistoryIdx = blocks.findIndex(b => b.marker === 'chat_history');
+  if (chatHistoryIdx < 0) return;
+
+  // Identify misplaced content blocks
+  const moveToAfter: Set<number> = new Set();
+  const moveToBefore: Set<number> = new Set();
+
+  for (let i = 0; i < blocks.length; i++) {
+    if (i === chatHistoryIdx) continue;
+    const b = blocks[i];
+    if (b.marker || isAppendRole(b.role)) continue;
+
+    if (i < chatHistoryIdx && (b.position === 'post_history' || b.position === 'in_history')) {
+      moveToAfter.add(i);
+    } else if (i > chatHistoryIdx && b.position === 'pre_history') {
+      moveToBefore.add(i);
+    }
+  }
+
+  if (moveToAfter.size === 0 && moveToBefore.size === 0) return;
+
+  // Rebuild: blocks before chat_history (minus those moving after)
+  const result: PromptBlock[] = [];
+  for (let i = 0; i < chatHistoryIdx; i++) {
+    if (!moveToAfter.has(i)) result.push(blocks[i]);
+  }
+  // Pre-history blocks that were after chat_history (preserve their relative order)
+  for (const idx of moveToBefore) result.push(blocks[idx]);
+  // chat_history marker
+  result.push(blocks[chatHistoryIdx]);
+  // Post-history blocks that were before chat_history (preserve their relative order)
+  for (const idx of moveToAfter) result.push(blocks[idx]);
+  // Remaining blocks after chat_history (minus those moved before)
+  for (let i = chatHistoryIdx + 1; i < blocks.length; i++) {
+    if (!moveToBefore.has(i)) result.push(blocks[i]);
+  }
+
+  blocks.length = 0;
+  blocks.push(...result);
+}
+
 function appendBaseRole(role: string): 'user' | 'assistant' {
   return role === 'user_append' ? 'user' : 'assistant';
 }
@@ -301,6 +350,10 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     }
   }
   presetProfilesSvc.normalizeCategoryBlockStates(blocks);
+
+  // Reorder blocks so the position field (pre_history / post_history /
+  // in_history) is honoured relative to the chat_history marker.
+  reorderBlocksByPosition(blocks);
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {
@@ -860,7 +913,9 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     if (resolved) {
       if (block.marker === "jailbreak") jailbreakBlockResolved = true;
 
-      const role: LlmMessage["role"] = block.position === "post_history" ? "assistant" : (block.role as LlmMessage["role"] || "system");
+      const role: LlmMessage["role"] = block.position === "post_history"
+        ? ((block.role === "system" || !block.role) ? "assistant" : (block.role as LlmMessage["role"]))
+        : (block.role as LlmMessage["role"] || "system");
 
       // Blocks with position "in_history" and depth > 0 are deferred for
       // depth-based insertion after WI and Author's Note.

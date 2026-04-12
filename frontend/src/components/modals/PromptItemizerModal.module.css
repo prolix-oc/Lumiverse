@@ -91,7 +91,7 @@
 .accordion {
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .accordionHeader {

@@ -185,27 +185,28 @@ export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'tem
 // PROVIDER DISPLAY NAMES
 // ============================================================================
 
+// Keyed on canonical Lumiverse provider IDs (same as PROVIDER_PARAMS above).
 export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   openai: 'OpenAI',
-  azure_openai: 'Azure OpenAI',
-  claude: 'Claude',
-  makersuite: 'Google AI Studio',
-  vertexai: 'Vertex AI',
+  anthropic: 'Claude',
+  google: 'Google AI Studio',
+  google_vertex: 'Vertex AI',
   openrouter: 'OpenRouter',
-  custom: 'Custom',
-  mistralai: 'Mistral',
-  cohere: 'Cohere',
-  perplexity: 'Perplexity',
-  groq: 'Groq',
   deepseek: 'DeepSeek',
-  xai: 'xAI',
   chutes: 'Chutes',
   nanogpt: 'NanoGPT',
-  electronhub: 'ElectronHub',
+  zai: 'Z.AI',
+  moonshot: 'Moonshot',
+  mistral: 'Mistral',
   ai21: 'AI21',
-  textgenerationwebui: 'Text Gen WebUI',
-  kobold: 'KoboldAI',
-  novel: 'NovelAI',
+  perplexity: 'Perplexity',
+  groq: 'Groq',
+  xai: 'xAI',
+  electronhub: 'ElectronHub',
+  fireworks: 'Fireworks',
+  pollinations: 'Pollinations',
+  siliconflow: 'SiliconFlow',
+  custom: 'Custom',
 }
 
 // ============================================================================

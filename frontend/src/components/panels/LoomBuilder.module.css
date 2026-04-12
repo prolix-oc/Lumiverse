@@ -997,6 +997,24 @@
   color: var(--lumiverse-primary);
 }
 
+.profileBtnDismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 1px 2px;
+  border-radius: 3px;
+  opacity: 0.5;
+  transition: all var(--lumiverse-transition-fast);
+  cursor: pointer;
+}
+
+.profileBtnDismiss:hover {
+  opacity: 1;
+  background: var(--lumiverse-danger-010, rgba(239, 68, 68, 0.12));
+  color: var(--lumiverse-danger, #ef4444);
+}
+
 .profileSourceBadge {
   font-size: 9px;
   font-weight: 600;

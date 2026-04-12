@@ -425,6 +425,11 @@ export interface AttachedGlobalAddon {
   enabled: boolean
 }
 
+export interface CharacterPersonaBinding {
+  personaId: string
+  addonStates?: Record<string, boolean>
+}
+
 export interface Persona {
   id: string;
   name: string;

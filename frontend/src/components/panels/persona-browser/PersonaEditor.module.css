@@ -279,6 +279,28 @@
   color: var(--lumiverse-primary);
 }
 
+.rebindBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-dim);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.rebindBtn:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-015);
+}
+
 .addonsBtn {
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, var(--lumiverse-bg));
   border-color: color-mix(in srgb, var(--lumiverse-primary) 40%, var(--lumiverse-border));

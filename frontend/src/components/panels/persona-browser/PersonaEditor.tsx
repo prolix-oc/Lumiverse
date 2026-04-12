@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe } from 'lucide-react'
+import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
@@ -14,6 +14,7 @@ import { Button } from '@/components/shared/FormComponents'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { useFolders } from '@/hooks/useFolders'
+import { resolveBinding } from '@/store/slices/personas'
 import type { Persona, WorldBook } from '@/types/api'
 import styles from './PersonaEditor.module.css'
 import clsx from 'clsx'
@@ -242,15 +243,41 @@ export default function PersonaEditor({
 
   // Character-persona binding
   const activeCharName = activeCharacterId ? characters.find((c) => c.id === activeCharacterId)?.name : null
-  const isBoundToActiveChar = activeCharacterId ? characterPersonaBindings[activeCharacterId] === persona.id : false
+  const rawBinding = activeCharacterId ? characterPersonaBindings[activeCharacterId] : undefined
+  const boundPersonaId = rawBinding ? resolveBinding(rawBinding).personaId : undefined
+  const isBoundToActiveChar = boundPersonaId === persona.id
+  const boundAddonStates = isBoundToActiveChar && rawBinding ? resolveBinding(rawBinding).addonStates : undefined
   const personaAddonCount = Array.isArray(persona.metadata?.addons) ? persona.metadata.addons.length : 0
   const globalAddonCount = Array.isArray(persona.metadata?.attached_global_addons) ? persona.metadata.attached_global_addons.length : 0
   const addonCount = personaAddonCount + globalAddonCount
 
+  /** Build a snapshot of current addon enabled states. */
+  const snapshotAddonStates = useCallback((): Record<string, boolean> => {
+    const states: Record<string, boolean> = {}
+    const addons = persona.metadata?.addons
+    if (Array.isArray(addons)) {
+      for (const a of addons) states[a.id] = a.enabled
+    }
+    const globalRefs = persona.metadata?.attached_global_addons
+    if (Array.isArray(globalRefs)) {
+      for (const r of globalRefs) states[r.id] = r.enabled
+    }
+    return states
+  }, [persona.metadata])
+
   const handleToggleCharacterBinding = useCallback(() => {
     if (!activeCharacterId) return
-    setCharacterPersonaBinding(activeCharacterId, isBoundToActiveChar ? null : persona.id)
-  }, [activeCharacterId, isBoundToActiveChar, persona.id, setCharacterPersonaBinding])
+    if (isBoundToActiveChar) {
+      setCharacterPersonaBinding(activeCharacterId, null)
+    } else {
+      setCharacterPersonaBinding(activeCharacterId, persona.id, snapshotAddonStates())
+    }
+  }, [activeCharacterId, isBoundToActiveChar, persona.id, snapshotAddonStates, setCharacterPersonaBinding])
+
+  const handleRebindAddons = useCallback(() => {
+    if (!activeCharacterId || !isBoundToActiveChar) return
+    setCharacterPersonaBinding(activeCharacterId, persona.id, snapshotAddonStates())
+  }, [activeCharacterId, isBoundToActiveChar, persona.id, snapshotAddonStates, setCharacterPersonaBinding])
 
   return (
     <div className={styles.editor}>
@@ -429,7 +456,7 @@ export default function PersonaEditor({
             title={
               isBoundToActiveChar
                 ? `Unbind from ${activeCharName || 'character'}`
-                : `Bind to ${activeCharName || 'character'} — auto-switch to this persona when chatting with them`
+                : `Bind to ${activeCharName || 'character'} — auto-switch to this persona and add-on states when chatting with them`
             }
           >
             <Link size={11} />
@@ -437,6 +464,17 @@ export default function PersonaEditor({
           <span className={clsx(styles.bindingLabel, isBoundToActiveChar && styles.bindingLabelActive)}>
             {isBoundToActiveChar ? `Bound to ${activeCharName}` : `Bind to ${activeCharName}`}
           </span>
+          {isBoundToActiveChar && addonCount > 0 && (
+            <button
+              type="button"
+              className={styles.rebindBtn}
+              onClick={handleRebindAddons}
+              title={`Rebind add-on states to ${activeCharName || 'character'} — snapshot current enabled/disabled states`}
+            >
+              <RefreshCw size={10} />
+              <span>{boundAddonStates ? 'Rebind' : 'Bind'} Add-Ons</span>
+            </button>
+          )}
         </div>
       )}
 
