@@ -35,7 +35,7 @@ import type {
 let manifest: SpindleManifest;
 let storagePath: string;
 
-const eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
+const eventHandlers = new Map<string, Set<(payload: unknown, userId?: string) => void>>();
 const pendingResponses = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
@@ -1442,7 +1442,7 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       if (handlers) {
         for (const handler of handlers) {
           try {
-            handler(msg.payload);
+            handler(msg.payload, msg.userId);
           } catch (err: any) {
             post({
               type: "log",

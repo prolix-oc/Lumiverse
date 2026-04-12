@@ -28,13 +28,13 @@ export async function processDocument(userId: string, docId: string): Promise<vo
   try {
     // Mark as processing
     crud.updateDocumentStatus(docId, "processing");
-    emitStatus(doc, "processing");
+    emitStatus(userId, doc, "processing");
 
     // 1. Parse the file
     const parsed = await parseDocument(userId, doc.filePath);
     if (!parsed.text.trim()) {
       crud.updateDocumentStatus(docId, "error", { errorMessage: "Document is empty after parsing" });
-      emitStatus(doc, "error", "Document is empty after parsing");
+      emitStatus(userId, doc, "error", "Document is empty after parsing");
       return;
     }
 
@@ -42,7 +42,7 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     const chunkResults = chunkDocument(parsed.text);
     if (chunkResults.length === 0) {
       crud.updateDocumentStatus(docId, "error", { errorMessage: "No chunks produced from document" });
-      emitStatus(doc, "error", "No chunks produced from document");
+      emitStatus(userId, doc, "error", "No chunks produced from document");
       return;
     }
 
@@ -68,7 +68,7 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     if (!cfg.enabled) {
       // Embeddings not configured — mark as ready without vectors
       crud.updateDocumentStatus(docId, "ready", { totalChunks: chunkRows.length });
-      emitStatus(doc, "ready", undefined, chunkRows.length);
+      emitStatus(userId, doc, "ready", undefined, chunkRows.length);
       return;
     }
 
@@ -76,13 +76,13 @@ export async function processDocument(userId: string, docId: string): Promise<vo
 
     // 6. Mark as ready
     crud.updateDocumentStatus(docId, "ready", { totalChunks: chunkRows.length });
-    emitStatus(doc, "ready", undefined, chunkRows.length);
+    emitStatus(userId, doc, "ready", undefined, chunkRows.length);
 
     console.info(`[databank] Processed document "${doc.name}" — ${chunkRows.length} chunks vectorized`);
   } catch (err: any) {
     console.error(`[databank] Failed to process document ${docId}:`, err);
     crud.updateDocumentStatus(docId, "error", { errorMessage: err.message || "Unknown error" });
-    emitStatus(doc, "error", err.message);
+    emitStatus(userId, doc, "error", err.message);
   }
 }
 
@@ -142,12 +142,12 @@ export async function deleteDatabankVectors(userId: string, databankId: string):
   await embeddingsSvc.deleteDatabankEmbeddings(userId, databankId);
 }
 
-function emitStatus(doc: DatabankDocument, status: string, error?: string, totalChunks?: number): void {
+function emitStatus(userId: string, doc: DatabankDocument, status: string, error?: string, totalChunks?: number): void {
   eventBus.emit(EventType.DATABANK_DOCUMENT_STATUS, {
     documentId: doc.id,
     databankId: doc.databankId,
     status,
     totalChunks,
     error,
-  });
+  }, userId);
 }

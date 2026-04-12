@@ -1028,6 +1028,7 @@ export class WorkerHost {
         type: "event",
         event,
         payload: msg.payload,
+        userId: msg.userId,
       });
     });
     this.eventUnsubscribers.set(event, unsub);

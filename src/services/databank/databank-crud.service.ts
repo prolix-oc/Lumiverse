@@ -38,7 +38,7 @@ export function createDatabank(userId: string, input: CreateDatabankInput): Data
   );
 
   const bank = getDatabank(userId, id)!;
-  eventBus.emit(EventType.DATABANK_CHANGED, { databankId: bank.id, databank: bank });
+  eventBus.emit(EventType.DATABANK_CHANGED, { databankId: bank.id, databank: bank }, userId);
   return bank;
 }
 
@@ -110,7 +110,7 @@ export function updateDatabank(userId: string, id: string, input: UpdateDatabank
 
   const bank = getDatabank(userId, id);
   if (bank) {
-    eventBus.emit(EventType.DATABANK_CHANGED, { databankId: bank.id, databank: bank });
+    eventBus.emit(EventType.DATABANK_CHANGED, { databankId: bank.id, databank: bank }, userId);
   }
   return bank;
 }
@@ -133,7 +133,7 @@ export async function deleteDatabank(userId: string, id: string): Promise<boolea
   // CASCADE handles documents and chunks in SQLite
   const result = db.run("DELETE FROM databanks WHERE id = ? AND user_id = ?", [id, userId]);
   if (result.changes > 0) {
-    eventBus.emit(EventType.DATABANK_DELETED, { databankId: id });
+    eventBus.emit(EventType.DATABANK_DELETED, { databankId: id }, userId);
     return true;
   }
   return false;
@@ -301,7 +301,7 @@ export async function deleteDocument(userId: string, docId: string): Promise<boo
       documentId: docId,
       databankId: doc.databankId,
       status: "deleted",
-    });
+    }, userId);
     return true;
   }
   return false;

@@ -189,7 +189,7 @@ export const wsHandler = upgradeWebSocket((c) => {
               extensionId,
               identifier: host.manifest.identifier,
               ...(data.payload as Record<string, unknown>),
-            });
+            }, userId);
           }
 
           host.sendFrontendMessage(data.payload, userId!);
