@@ -1,6 +1,8 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { useStore } from '@/store'
 import { useMessageCard } from '@/hooks/useMessageCard'
+import useSwipeAction from '@/hooks/useSwipeAction'
+import useSwipeGesture from '@/hooks/useSwipeGesture'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
@@ -52,12 +54,25 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
 
   const openModal = useStore((s) => s.openModal)
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
+  const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
 
+  const cardRef = useRef<HTMLDivElement>(null)
+  const { handleSwipe } = useSwipeAction(message, chatId)
+  const onSwipeLeft = useCallback(() => handleSwipe('left'), [handleSwipe])
+  const onSwipeRight = useCallback(() => handleSwipe('right'), [handleSwipe])
+
+  useSwipeGesture(cardRef, {
+    enabled: swipeGesturesEnabled && !isUser && !isEditing && !isSelectMode,
+    onSwipeLeft,
+    onSwipeRight,
+  })
+
   return (
     <div
+      ref={cardRef}
       data-component="MinimalMessage"
       data-part={isUser ? 'user' : 'character'}
       className={clsx(

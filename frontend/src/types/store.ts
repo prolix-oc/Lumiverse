@@ -328,6 +328,7 @@ export interface SettingsSlice {
   globalWorldBooks: string[]
   worldInfoSettings: import('./api').WorldInfoSettings
   regenFeedback: RegenFeedbackSettings
+  swipeGesturesEnabled: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings

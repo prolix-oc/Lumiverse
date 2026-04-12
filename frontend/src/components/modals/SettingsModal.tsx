@@ -668,6 +668,17 @@ function ChatSettings() {
           </p>
         </div>
       )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Swipe Navigation</h3>
+      <p className={styles.helperText}>
+        Navigate message swipes using touch gestures (mobile) or arrow keys (desktop). Hold Shift and hover to target a specific message.
+      </p>
+
+      <Toggle.Checkbox
+        checked={useStore((s) => s.swipeGesturesEnabled)}
+        onChange={(checked) => setSetting('swipeGesturesEnabled', checked)}
+        label="Enable swipe gestures & keyboard shortcuts"
+      />
     </div>
   )
 }

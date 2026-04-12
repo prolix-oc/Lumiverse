@@ -83,6 +83,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'reasoningSettings',
   'promptBias',
   'regenFeedback',
+  'swipeGesturesEnabled',
   'guidedGenerations',
   'quickReplySets',
   'toastPosition',
@@ -225,6 +226,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     enabled: false,
     position: 'user',
   },
+  swipeGesturesEnabled: true,
   globalWorldBooks: [],
   worldInfoSettings: {
     globalScanDepth: null,

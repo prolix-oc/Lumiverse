@@ -12,6 +12,7 @@ import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { resolveBinding } from '@/store/slices/personas'
 import type { WallpaperRef } from '@/types/store'
+import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
@@ -44,6 +45,8 @@ export default function ChatView() {
   const toggleSelectMode = useCallback(() => {
     setMessageSelectMode(!messageSelectMode)
   }, [messageSelectMode, setMessageSelectMode])
+
+  useSwipeKeyboard()
 
   const innerStyle = useMemo(() => {
     switch (chatWidthMode) {

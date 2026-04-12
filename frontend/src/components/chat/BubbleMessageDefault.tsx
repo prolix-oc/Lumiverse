@@ -2,6 +2,7 @@
  * Default BubbleMessage renderer — the original implementation extracted
  * so it can be used as a fallback when a user override crashes or is disabled.
  */
+import { useRef, useCallback } from 'react'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
@@ -11,6 +12,8 @@ import ReasoningBlock from './ReasoningBlock'
 import StreamingIndicator from './StreamingIndicator'
 import BubbleActions from './BubbleActions'
 import LazyImage from '@/components/shared/LazyImage'
+import useSwipeAction from '@/hooks/useSwipeAction'
+import useSwipeGesture from '@/hooks/useSwipeGesture'
 import { useStore } from '@/store'
 import type { Message } from '@/types/api'
 import styles from './BubbleMessage.module.css'
@@ -69,9 +72,21 @@ export default function BubbleMessageDefault({
   handleFork, handlePromptBreakdown,
 }: BubbleMessageDefaultProps) {
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
+  const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const { handleSwipe } = useSwipeAction(message, chatId)
+  const onSwipeLeft = useCallback(() => handleSwipe('left'), [handleSwipe])
+  const onSwipeRight = useCallback(() => handleSwipe('right'), [handleSwipe])
+
+  useSwipeGesture(cardRef, {
+    enabled: swipeGesturesEnabled && !isUser && !isEditing && !isSelectMode,
+    onSwipeLeft,
+    onSwipeRight,
+  })
 
   return (
     <div
+      ref={cardRef}
       className={clsx(
         styles.card,
         isUser ? styles.user : styles.character,
