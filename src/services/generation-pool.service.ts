@@ -38,6 +38,14 @@ export interface PooledTokensEntry {
   acknowledged?: boolean;
   /** True while the generation is paused waiting for user to decide on failed council tools */
   councilRetryPending?: boolean;
+  /** Timestamp (ms) when the LLM streaming request was initiated (post-assembly, post-council) */
+  streamingStartedAt?: number;
+  /** Timestamp (ms) when the first token (content or reasoning) arrived from the provider */
+  firstTokenAt?: number;
+  /** Timestamp (ms) when the first content token arrived (excluding reasoning) */
+  firstContentTokenAt?: number;
+  /** Whether this generation used streaming mode */
+  wasStreaming?: boolean;
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -93,7 +101,11 @@ export function createPoolEntry(opts: {
 
 export function setPoolStatus(generationId: string, status: PoolStatus): void {
   const entry = pool.get(generationId);
-  if (entry) entry.status = status;
+  if (!entry) return;
+  entry.status = status;
+  if (status === "streaming" && !entry.streamingStartedAt) {
+    entry.streamingStartedAt = Date.now();
+  }
 }
 
 /**
@@ -103,10 +115,13 @@ export function setPoolStatus(generationId: string, status: PoolStatus): void {
 export function appendPoolContent(generationId: string, text: string): number {
   const entry = pool.get(generationId);
   if (!entry) return 0;
+  const now = Date.now();
   // Finalize reasoning duration on the first content token
   if (entry.reasoningStartedAt && !entry.reasoningDurationMs) {
-    entry.reasoningDurationMs = Date.now() - entry.reasoningStartedAt;
+    entry.reasoningDurationMs = now - entry.reasoningStartedAt;
   }
+  if (!entry.firstTokenAt) entry.firstTokenAt = now;
+  if (!entry.firstContentTokenAt) entry.firstContentTokenAt = now;
   entry.content += text;
   return ++entry.tokenSeq;
 }
@@ -118,7 +133,9 @@ export function appendPoolContent(generationId: string, text: string): number {
 export function appendPoolReasoning(generationId: string, text: string): number {
   const entry = pool.get(generationId);
   if (!entry) return 0;
-  if (!entry.reasoningStartedAt) entry.reasoningStartedAt = Date.now();
+  const now = Date.now();
+  if (!entry.reasoningStartedAt) entry.reasoningStartedAt = now;
+  if (!entry.firstTokenAt) entry.firstTokenAt = now;
   entry.reasoning += text;
   return ++entry.tokenSeq;
 }

@@ -290,6 +290,7 @@
 
 /* Meta pill — monospace badge */
 .metaPill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   align-self: flex-start;
@@ -309,6 +310,40 @@
 }
 
 /* metaPill blur removed — sits inside the card which already has 40px blur */
+
+.metaPillTooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--lumiverse-fill-deepest);
+  border: 1px solid var(--lumiverse-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  line-height: 1.3;
+}
+
+.tooltipRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tooltipLabel {
+  color: var(--lumiverse-text-muted);
+}
+
+.tooltipValue {
+  color: var(--lumiverse-text);
+  font-variant-numeric: tabular-nums;
+}
 
 .metaDot {
   margin: 0 6px;

@@ -155,11 +155,20 @@ export interface GenerationStartedPayload {
   characterName?: string
 }
 
+export interface GenerationMetrics {
+  ttft?: number
+  tps?: number
+  durationMs: number
+  wasStreaming: boolean
+}
+
 export interface GenerationEndedPayload {
   generationId: string
   chatId: string
   messageId: string
   error?: string
+  tokenCount?: number
+  generationMetrics?: GenerationMetrics
 }
 
 export interface MessageSentPayload {

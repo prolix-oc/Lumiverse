@@ -2,7 +2,7 @@
  * Default BubbleMessage renderer — the original implementation extracted
  * so it can be used as a fallback when a user override crashes or is disabled.
  */
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useState } from 'react'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
@@ -16,6 +16,7 @@ import useSwipeAction from '@/hooks/useSwipeAction'
 import useSwipeGesture from '@/hooks/useSwipeGesture'
 import { useStore } from '@/store'
 import type { Message } from '@/types/api'
+import type { GenerationMetrics } from '@/types/ws-events'
 import styles from './BubbleMessage.module.css'
 import clsx from 'clsx'
 
@@ -40,6 +41,7 @@ export interface BubbleMessageDefaultProps {
   reasoningDuration: number | undefined
   reasoningStartedAt: number | undefined
   tokenCount: number | undefined
+  generationMetrics: GenerationMetrics | undefined
   avatarUrl: string | null
   fullAvatarUrl: string | null
   displayName: string
@@ -63,11 +65,68 @@ function formatMetaDate(timestamp: number) {
   return `${month} ${day}, ${time}`
 }
 
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
+function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMetrics }: {
+  index: number
+  timestamp: number
+  tokenCount: number | undefined
+  isHidden: boolean
+  isUser: boolean
+  generationMetrics: GenerationMetrics | undefined
+}) {
+  const [showTooltip, setShowTooltip] = useState(false)
+  const hasStreamingDetails = !isUser && generationMetrics?.wasStreaming && (generationMetrics.ttft != null || generationMetrics.tps != null)
+
+  return (
+    <span
+      className={styles.metaPill}
+      onMouseEnter={hasStreamingDetails ? () => setShowTooltip(true) : undefined}
+      onMouseLeave={hasStreamingDetails ? () => setShowTooltip(false) : undefined}
+    >
+      #{index}
+      <span className={styles.metaDot}>&middot;</span>
+      {formatMetaDate(timestamp)}
+      {tokenCount != null && (
+        <>
+          <span className={styles.metaDot}>&middot;</span>
+          {tokenCount}t
+        </>
+      )}
+      {isHidden && (
+        <>
+          <span className={styles.metaDot}>&middot;</span>
+          <span className={styles.hiddenBadge}>Hidden</span>
+        </>
+      )}
+      {showTooltip && hasStreamingDetails && (
+        <span className={styles.metaPillTooltip}>
+          {generationMetrics!.ttft != null && (
+            <span className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>First token</span>
+              <span className={styles.tooltipValue}>{formatMs(generationMetrics!.ttft)}</span>
+            </span>
+          )}
+          {generationMetrics!.tps != null && (
+            <span className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>Speed</span>
+              <span className={styles.tooltipValue}>{generationMetrics!.tps} tok/s</span>
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  )
+}
+
 export default function BubbleMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-  tokenCount, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden, userLeft,
+  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden, userLeft,
   handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
   handleFork, handlePromptBreakdown,
 }: BubbleMessageDefaultProps) {
@@ -136,23 +195,14 @@ export default function BubbleMessageDefault({
               <span className={clsx(styles.name, isUser ? styles.nameUser : styles.nameChar)}>
                 {displayName}
               </span>
-              <span className={styles.metaPill}>
-                #{message.index_in_chat}
-                <span className={styles.metaDot}>&middot;</span>
-                {formatMetaDate(message.swipe_dates?.[message.swipe_id] ?? message.send_date)}
-                {tokenCount != null && (
-                  <>
-                    <span className={styles.metaDot}>&middot;</span>
-                    {tokenCount}t
-                  </>
-                )}
-                {isHidden && (
-                  <>
-                    <span className={styles.metaDot}>&middot;</span>
-                    <span className={styles.hiddenBadge}>Hidden</span>
-                  </>
-                )}
-              </span>
+              <MetaPill
+                index={message.index_in_chat}
+                timestamp={message.swipe_dates?.[message.swipe_id] ?? message.send_date}
+                tokenCount={tokenCount}
+                isHidden={isHidden}
+                isUser={isUser}
+                generationMetrics={generationMetrics}
+              />
             </div>
           </div>
         </div>

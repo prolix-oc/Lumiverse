@@ -222,6 +222,21 @@ export function useWebSocket() {
               })
             }
 
+            // Patch generation metrics onto the in-store message immediately so the
+            // detail pill can display tokenCount/TTFT/TPS before reconciliation completes.
+            if (payload.messageId && (payload.tokenCount != null || payload.generationMetrics)) {
+              const msg = state.messages.find((m) => m.id === payload.messageId)
+              if (msg) {
+                state.updateMessage(payload.messageId, {
+                  extra: {
+                    ...msg.extra,
+                    ...(payload.tokenCount != null ? { tokenCount: payload.tokenCount } : {}),
+                    ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
+                  },
+                })
+              }
+            }
+
             // In group chats, mark the character as spoken and clear responding state
             if (state.isGroupChat && state.activeGroupCharacterId) {
               state.markCharacterSpoken(state.activeGroupCharacterId)

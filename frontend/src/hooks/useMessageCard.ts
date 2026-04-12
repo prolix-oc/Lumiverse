@@ -100,6 +100,9 @@ export function useMessageCard(message: Message, chatId: string) {
     ? (streamingReasoningStartedAt ?? undefined)
     : undefined
   const tokenCount = message.extra?.tokenCount as number | undefined
+  const generationMetrics = message.extra?.generationMetrics as
+    | { ttft?: number; tps?: number; durationMs: number; wasStreaming: boolean }
+    | undefined
 
   const isGroupChat = useStore((s) => s.isGroupChat)
 
@@ -308,6 +311,7 @@ export function useMessageCard(message: Message, chatId: string) {
     reasoningDuration,
     reasoningStartedAt,
     tokenCount,
+    generationMetrics,
     avatarUrl,
     fullAvatarUrl,
     displayName,

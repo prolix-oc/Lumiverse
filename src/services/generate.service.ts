@@ -578,6 +578,13 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       // before council/assembly begins (MESSAGE_SWIPED event fires now).
       const withBlank = chatsSvc.addSwipe(input.userId, targetMsg.id, "");
       lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
+      // Clear stale generation metrics from the previous swipe so the pill
+      // doesn't display outdated values while the new generation runs.
+      const prevExtra = targetMsg.extra;
+      if (prevExtra && (prevExtra.tokenCount != null || prevExtra.generationMetrics || prevExtra.usage || prevExtra.reasoning || prevExtra.reasoningDuration)) {
+        const { tokenCount: _, generationMetrics: _gm, usage: _u, reasoning: _r, reasoningDuration: _rd, ...cleanExtra } = prevExtra;
+        chatsSvc.updateMessage(input.userId, targetMsg.id, { extra: cleanExtra });
+      }
     }
   } else if (genType === "continue") {
     const lastMsg = chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
@@ -1269,6 +1276,10 @@ async function runGeneration(
   const useStreaming = parameters._streaming !== false;
   delete parameters._streaming;
 
+  // Record streaming mode on the pool entry for metrics
+  const poolEntry = pool.getPoolEntry(generationId);
+  if (poolEntry) poolEntry.wasStreaming = useStreaming;
+
   try {
     // Non-streaming path: call generate() once, then synthesize a single-chunk stream
     const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
@@ -1484,6 +1495,56 @@ async function runGeneration(
         chatsSvc.updateMessage(userId, messageId, { extra: { ...existing, reasoningDuration: reasoningDurationMs } });
       }
 
+      // ── Generation metrics (tokenCount, TTFT, TPS) ─────────────────────
+      const finalPoolEntry = pool.getPoolEntry(generationId);
+      // Total output token count via model's tokenizer (content + reasoning)
+      let resolvedTokenCount: number | undefined;
+      const fullOutput = (fullReasoning ? fullReasoning + fullContent : fullContent);
+      if (fullOutput.length > 0) {
+        try {
+          resolvedTokenCount = (await tokenizerSvc.countForModel(model, fullOutput)) ?? undefined;
+        } catch { /* non-fatal */ }
+      }
+
+      let generationMetrics: { ttft?: number; tps?: number; durationMs: number; wasStreaming: boolean } | undefined;
+      if (finalPoolEntry) {
+        const wasStreaming = finalPoolEntry.wasStreaming ?? true;
+        const streamStart = finalPoolEntry.streamingStartedAt;
+        const now = Date.now();
+        const durationMs = streamStart ? now - streamStart : 0;
+        let ttft: number | undefined;
+        let tps: number | undefined;
+
+        if (wasStreaming && streamStart) {
+          // TTFT: time from LLM request to first token (content or reasoning)
+          if (finalPoolEntry.firstTokenAt) {
+            ttft = finalPoolEntry.firstTokenAt - streamStart;
+          }
+          // TPS: content tokens over content streaming duration
+          const contentStart = finalPoolEntry.firstContentTokenAt;
+          if (contentStart && resolvedTokenCount && resolvedTokenCount > 1) {
+            const contentDurationSec = (now - contentStart) / 1000;
+            if (contentDurationSec > 0) {
+              tps = Math.round((resolvedTokenCount / contentDurationSec) * 10) / 10;
+            }
+          }
+        }
+
+        generationMetrics = { durationMs, wasStreaming, ...(ttft != null ? { ttft } : {}), ...(tps != null ? { tps } : {}) };
+      }
+
+      // Persist tokenCount and generation metrics in message extra
+      if (resolvedTokenCount || generationMetrics) {
+        const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
+        chatsSvc.updateMessage(userId, messageId, {
+          extra: {
+            ...existing,
+            ...(resolvedTokenCount ? { tokenCount: resolvedTokenCount } : {}),
+            ...(generationMetrics ? { generationMetrics } : {}),
+          },
+        });
+      }
+
       // Compute and store breakdown for the generated message
       let breakdownPayload: any;
       if (lifecycle.breakdown && lifecycle.breakdown.length > 0 && lifecycle.model) {
@@ -1512,6 +1573,8 @@ async function runGeneration(
         content: fullContent,
         breakdown: breakdownPayload,
         usage: streamUsage,
+        tokenCount: resolvedTokenCount,
+        generationMetrics,
       }, userId);
 
       // Fire-and-forget expression detection after successful generation
