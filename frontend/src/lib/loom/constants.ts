@@ -150,25 +150,33 @@ export const SAMPLER_PARAMS: SamplerParam[] = [
 // PROVIDER PARAMETER SUPPORT
 // ============================================================================
 
+// Keyed on canonical Lumiverse provider IDs (matches `profile.provider` from
+// connection profiles and each backend provider's registration ID). Each set
+// must mirror that provider's `capabilities.parameters` allowlist in
+// `src/llm/providers/*.ts` — parameters not in the backend allowlist are
+// dropped silently before reaching the API, so surfacing them in the UI would
+// be misleading.
 export const PROVIDER_PARAMS: Record<string, Set<string>> = {
   openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
-  azure_openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
-  claude: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
-  makersuite: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
-  vertexai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
+  anthropic: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
+  google: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
+  google_vertex: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
   openrouter: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
-  custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
-  mistralai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
-  cohere: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
-  perplexity: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
-  groq: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   deepseek: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
-  xai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
-  zai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
-  chutes: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'repetitionPenalty']),
-  nanogpt: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'repetitionPenalty']),
+  chutes: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  nanogpt: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  zai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  moonshot: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  mistral: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'minP', 'frequencyPenalty', 'presencePenalty']),
+  ai21: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  perplexity: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  groq: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  xai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   electronhub: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
-  ai21: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
+  fireworks: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty']),
+  pollinations: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  siliconflow: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
 }
 
 export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty'])
