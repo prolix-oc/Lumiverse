@@ -87,6 +87,17 @@ export async function queryCortex(
   // 1c. Load salience data for all candidates
   const salienceMap = loadSalienceMap(db, query.chatId, candidateChunkIds);
 
+  // Early exit: if Phase 1 found zero candidate chunks (no entities, no
+  // salience records, no vectorized chunks for this chat), skip the
+  // expensive Phase 2 entirely.  Without this guard, the LanceDB query
+  // falls through to an UNSCOPED nearest-neighbor scan across the entire
+  // embeddings table (potentially tens of thousands of rows from other
+  // chats), which blocks the event loop via the native NAPI call and is
+  // the primary cause of server lockups on chats without cortex data.
+  if (candidateChunkIds.size === 0) {
+    return emptyResult(startTime);
+  }
+
   // Early abort: if the caller (timeout wrapper) already fired, bail out
   // before the expensive vector search + embedding API call.
   if (signal?.aborted) return emptyResult(startTime);

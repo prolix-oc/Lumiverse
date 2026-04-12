@@ -645,9 +645,16 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
   invalidateChatMemoryCache(updated.chat_id);
 
-  rebuildChatChunks(userId, updated.chat_id).catch(err => {
-    console.warn("[chats] Failed to rebuild chunks after message edit:", err);
-  });
+  // Only rebuild chunks when content changes — chunks are built from message
+  // content, so extra-only or name-only updates don't affect chunk data.
+  // Skipping unnecessary rebuilds prevents a cascade of DELETE + INSERT + vectorize
+  // operations that can stall the server (especially after generation, which
+  // persists reasoning/usage/metrics as extra-only writes).
+  if (input.content !== undefined) {
+    rebuildChatChunks(userId, updated.chat_id).catch(err => {
+      console.warn("[chats] Failed to rebuild chunks after message edit:", err);
+    });
+  }
 
   return updated;
 }
@@ -1570,10 +1577,47 @@ export async function ensureChatMemoryFresh(userId: string, chatId: string): Pro
 }
 
 /**
+ * In-flight rebuild tracking per chat — prevents concurrent rebuilds from
+ * racing each other (each deleting the previous one's chunks). When a
+ * rebuild is already running for a chatId, subsequent calls wait for it
+ * and then trigger one more rebuild to capture any changes that landed
+ * during the first rebuild.
+ */
+const _rebuildInflight = new Map<string, Promise<void>>();
+const _rebuildPending = new Set<string>();
+
+/**
  * Rebuild all chunks for a chat from scratch.
  * Used for migration or when chunk structure needs to be reset.
+ *
+ * Concurrent calls for the same chat are coalesced: the first runs
+ * immediately, subsequent callers wait for it and then a single follow-up
+ * rebuild runs to capture any changes that landed during the first.
  */
 export async function rebuildChatChunks(userId: string, chatId: string): Promise<void> {
+  const inflight = _rebuildInflight.get(chatId);
+  if (inflight) {
+    // Another rebuild is already running — mark pending and wait for it
+    _rebuildPending.add(chatId);
+    await inflight;
+    // If we're the one to run the follow-up, do it; otherwise another
+    // caller already picked it up.
+    if (!_rebuildPending.has(chatId)) return;
+    _rebuildPending.delete(chatId);
+  }
+
+  const promise = _rebuildChatChunksImpl(userId, chatId);
+  _rebuildInflight.set(chatId, promise);
+  try {
+    await promise;
+  } finally {
+    if (_rebuildInflight.get(chatId) === promise) {
+      _rebuildInflight.delete(chatId);
+    }
+  }
+}
+
+async function _rebuildChatChunksImpl(userId: string, chatId: string): Promise<void> {
   invalidateChatMemoryCache(chatId);
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);

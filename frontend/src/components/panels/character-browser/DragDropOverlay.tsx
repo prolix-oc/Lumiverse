@@ -13,7 +13,7 @@ export default function DragDropOverlay({ visible }: DragDropOverlayProps) {
       <div className={styles.content}>
         <FileUp size={32} />
         <span className={styles.text}>Drop character files to import</span>
-        <span className={styles.hint}>.json, .png, .charx</span>
+        <span className={styles.hint}>.json, .png, .charx, .jpg</span>
       </div>
     </div>
   )

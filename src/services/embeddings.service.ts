@@ -312,21 +312,45 @@ const CLEANUP_GRACE_PERIOD_MS = 2 * 60_000;
 // LanceDB's internal conflict resolver panics when optimize() deletes version
 // manifests that in-flight mergeInsert() operations still reference.
 // Serializing all writes through a single async mutex eliminates this entirely.
+//
+// Safety bounds:
+//   - Lock acquisition times out after WRITE_LOCK_WAIT_TIMEOUT_MS to prevent
+//     unbounded queue growth when LanceDB operations are slow or hung.
+//   - The queue is capped at MAX_WRITE_LOCK_QUEUE to reject new work instead
+//     of piling up indefinitely behind a slow lock holder.
 // ---------------------------------------------------------------------------
-const _writeLockQueue: Array<() => void> = [];
+const WRITE_LOCK_WAIT_TIMEOUT_MS = 30_000; // 30s max wait to acquire the lock
+const MAX_WRITE_LOCK_QUEUE = 50;           // reject if more than 50 waiters queued
+const _writeLockQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 let _writeLockHeld = false;
 
 async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   if (!_writeLockHeld) {
     _writeLockHeld = true;
   } else {
-    await new Promise<void>((resolve) => _writeLockQueue.push(resolve));
+    if (_writeLockQueue.length >= MAX_WRITE_LOCK_QUEUE) {
+      throw new Error(`[embeddings] Write lock queue full (${_writeLockQueue.length} waiters) — rejecting to prevent resource exhaustion`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const entry = { resolve, reject };
+      _writeLockQueue.push(entry);
+      const timer = setTimeout(() => {
+        const idx = _writeLockQueue.indexOf(entry);
+        if (idx >= 0) {
+          _writeLockQueue.splice(idx, 1);
+          reject(new Error(`[embeddings] Write lock acquisition timed out after ${WRITE_LOCK_WAIT_TIMEOUT_MS}ms (${_writeLockQueue.length} still queued)`));
+        }
+      }, WRITE_LOCK_WAIT_TIMEOUT_MS);
+      // Clear the timer if the lock is acquired before timeout
+      const origResolve = entry.resolve;
+      entry.resolve = () => { clearTimeout(timer); origResolve(); };
+    });
   }
   try {
     return await fn();
   } finally {
     const next = _writeLockQueue.shift();
-    if (next) next();
+    if (next) next.resolve();
     else _writeLockHeld = false;
   }
 }

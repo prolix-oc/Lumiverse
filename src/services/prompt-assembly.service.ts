@@ -449,6 +449,14 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     settings: worldInfoSettings,
   });
 
+  // Yield after world-info activation — the keyword scanning loop above is
+  // synchronous and can block for 50-200ms on large setups (hundreds of
+  // entries × thousands of messages). Yielding here lets Bun drain its I/O
+  // queue before the next heavy phase (vector retrieval, macro evaluation).
+  if (wiEntries.length > 50) {
+    await new Promise<void>(r => setTimeout(r, 0));
+  }
+
   // Optional vector retrieval for vectorized world book entries.
   // These entries are merged with keyword-activated entries when enabled.
   // When pre-computed results are available (from the generation pipeline's

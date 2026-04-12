@@ -110,7 +110,7 @@ export const COMMANDS: Command[] = [
   {
     id: 'action-import-character',
     label: 'Import Character',
-    description: 'Upload a character card (.png, .webp, .json)',
+    description: 'Upload a character card (.png, .charx, .jpg, .json)',
     icon: Upload,
     keywords: ['import', 'upload', 'card', 'character', 'file'],
     group: 'Actions',
@@ -118,7 +118,7 @@ export const COMMANDS: Command[] = [
     run: async () => {
       const input = document.createElement('input')
       input.type = 'file'
-      input.accept = '.png,.webp,.json'
+      input.accept = '.png,.charx,.jpg,.jpeg,.webp,.json'
       input.onchange = async (e) => {
         const file = (e.target as HTMLInputElement).files?.[0]
         if (!file) return

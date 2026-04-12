@@ -63,6 +63,14 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     ? allMessages.filter(m => m.id !== ctx.excludeMessageId)
     : allMessages;
 
+  // Yield after loading messages — for large chats (thousands of messages),
+  // the SQLite query + JSON.parse per row can block the event loop for
+  // 50-200ms. Yielding here lets Bun process pending HTTP requests and
+  // WebSocket frames before we continue with more sync DB work.
+  if (allMessages.length > 200) {
+    await new Promise<void>(r => setTimeout(r, 0));
+  }
+
   const characterId = ctx.targetCharacterId || chat.character_id;
   const character = charactersSvc.getCharacter(ctx.userId, characterId);
   if (!character) throw new Error("Character not found");

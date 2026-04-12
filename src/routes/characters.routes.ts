@@ -572,10 +572,18 @@ app.post("/import-bulk", async (c) => {
         let risuModule: cardSvc.RisuModule | null = null;
         let expressionAssets: cardSvc.CharxExpressionAsset[] = [];
 
+        // Detect JPEG+ZIP polyglot (RisuAI card format)
+        const isJpeg = /\.jpe?g$/i.test(filenameLower) || file.type === "image/jpeg";
+        let isJpegPolyglot = false;
+        if (isJpeg) {
+          const peek = new Uint8Array(await file.slice(0, Math.min(file.size, 5_000_000)).arrayBuffer());
+          isJpegPolyglot = cardSvc.looksLikeJpegZipPolyglot(peek);
+        }
+
         if (file.type === "image/png" || filenameLower.endsWith(".png")) {
           cardInput = await cardSvc.extractCardFromPng(file);
           avatarFile = file;
-        } else if (filenameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed") {
+        } else if (filenameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed" || isJpegPolyglot) {
           const charxResult = await cardSvc.extractCardFromCharx(file);
           cardInput = charxResult.card;
           avatarFile = charxResult.avatarFile;
@@ -583,6 +591,10 @@ app.post("/import-bulk", async (c) => {
           charxAssetFiles = charxResult.assetFiles;
           risuModule = charxResult.risuModule;
           expressionAssets = charxResult.expressionAssets;
+        } else if (isJpeg) {
+          // Plain JPEG with no embedded data — skip
+          results.push({ filename, success: false, error: "JPEG file does not contain embedded character card data" });
+          continue;
         } else {
           const text = await file.text();
           const json = JSON.parse(text);
@@ -720,7 +732,21 @@ app.post("/import", async (c) => {
       if (!file) return c.json({ error: "file is required" }, 400);
 
       const nameLower = file.name?.toLowerCase() ?? "";
-      if (file.type === "image/png" || nameLower.endsWith(".png")) {
+
+      // Detect file format — JPEG+ZIP polyglots (RisuAI card format) route to the CharX pipeline
+      const isPng = file.type === "image/png" || nameLower.endsWith(".png");
+      const isCharx = nameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
+      const isJpeg = /\.jpe?g$/i.test(nameLower) || file.type === "image/jpeg";
+      let isJpegPolyglot = false;
+      if (isJpeg && !isPng && !isCharx) {
+        const peek = new Uint8Array(await file.slice(0, Math.min(file.size, 5_000_000)).arrayBuffer());
+        isJpegPolyglot = cardSvc.looksLikeJpegZipPolyglot(peek);
+        if (!isJpegPolyglot) {
+          return c.json({ error: "JPEG file does not contain embedded character card data" }, 400);
+        }
+      }
+
+      if (isPng) {
         // PNG card — extract embedded JSON + use as avatar
         const cardInput = await cardSvc.extractCardFromPng(file);
         const character = svc.createCharacter(userId, cardInput);
@@ -730,10 +756,10 @@ app.post("/import", async (c) => {
         autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
         return c.json({ character: imported }, 201);
-      } else if (nameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed") {
-        // CHARX archive — ZIP with card.json + optional avatar + gallery images + modules
+      } else if (isCharx || isJpegPolyglot) {
+        // CHARX archive (or JPEG+ZIP polyglot) — ZIP with card.json + optional avatar + gallery images + modules
         const charxResult = await cardSvc.extractCardFromCharx(file);
-        const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles } = charxResult;
+        const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles, expressionGroupAnalysis } = charxResult;
         const character = svc.createCharacter(userId, cardInput);
         // Track archive-path → image-id for resolving inline asset references in text fields
         const assetImageMap = new Map<string, string>();
@@ -768,6 +794,31 @@ app.post("/import", async (c) => {
                 defaultExpression: lumiverseModules.expressions.defaultExpression,
                 mappings: exprMappings,
               };
+            }
+          }
+
+          // Import expression groups from Lumiverse modules (multi-character)
+          if (lumiverseModules.expression_groups?.groups) {
+            const expressionGroups: Record<string, Record<string, string>> = {};
+
+            for (const [groupName, labelMap] of Object.entries(lumiverseModules.expression_groups.groups)) {
+              const groupMappings: Record<string, string> = {};
+              for (const [label, archivePath] of Object.entries(labelMap)) {
+                const assetFile = assetFiles.get(archivePath);
+                if (assetFile) {
+                  const img = await images.uploadImage(userId, assetFile);
+                  groupMappings[label] = img.id;
+                  consumedPaths.add(archivePath);
+                  assetImageMap.set(archivePath, img.id);
+                }
+              }
+              if (Object.keys(groupMappings).length > 0) {
+                expressionGroups[groupName] = groupMappings;
+              }
+            }
+
+            if (Object.keys(expressionGroups).length > 0) {
+              extensions.expression_groups = expressionGroups;
             }
           }
 
@@ -856,6 +907,7 @@ app.post("/import", async (c) => {
         }
 
         // Resolve inline asset references (embeded://, relative filenames, Risu <img="...">) in character text fields
+        const risuAssetMap: Record<string, string> = {};
         if (assetImageMap.size > 0) {
           const resolvedFields = cardSvc.resolveInlineAssetReferences(
             {
@@ -877,7 +929,6 @@ app.post("/import", async (c) => {
 
           // Store Risu asset name → image ID mapping for display-time resolution of
           // AI-generated <img="AssetName"> tags (mirrors RisuAI's display-time asset lookup)
-          const risuAssetMap: Record<string, string> = {};
           for (const [archivePath, imageId] of assetImageMap) {
             const stem = cardSvc.fileStem(archivePath);
             if (!risuAssetMap[stem]) risuAssetMap[stem] = imageId;
@@ -893,7 +944,40 @@ app.post("/import", async (c) => {
         }
 
         importRisuModuleRegexScripts(userId, character.id, risuModule);
-        await importRisuExpressionAssets(userId, character.id, expressionAssets);
+
+        // Multi-character expression handling: when expression assets span multiple
+        // characters (detected by prefix grouping), store structured expression_groups
+        // instead of a flat expression mapping. Display-time resolution uses risu_asset_map.
+        // Skip if Lumiverse modules already imported expression_groups.
+        const charForExprCheck = svc.getCharacter(userId, character.id);
+        const hasLumiverseGroups = !!charForExprCheck?.extensions?.expression_groups;
+        if (!hasLumiverseGroups && expressionGroupAnalysis?.isMultiCharacter && Object.keys(risuAssetMap).length > 0) {
+          const expressionGroups: Record<string, Record<string, string>> = {};
+          for (const [groupName, labelMap] of Object.entries(expressionGroupAnalysis.groups)) {
+            const groupMappings: Record<string, string> = {};
+            for (const [cleanLabel, originalLabel] of Object.entries(labelMap)) {
+              const imageId = risuAssetMap[originalLabel];
+              if (imageId) {
+                groupMappings[cleanLabel] = imageId;
+              }
+            }
+            if (Object.keys(groupMappings).length > 0) {
+              expressionGroups[groupName] = groupMappings;
+            }
+          }
+
+          if (Object.keys(expressionGroups).length > 0) {
+            const char = svc.getCharacter(userId, character.id);
+            if (char) {
+              svc.updateCharacter(userId, character.id, {
+                extensions: { ...(char.extensions || {}), expression_groups: expressionGroups },
+              });
+            }
+          }
+        } else {
+          await importRisuExpressionAssets(userId, character.id, expressionAssets);
+        }
+
         autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
         return c.json({

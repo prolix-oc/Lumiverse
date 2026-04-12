@@ -105,7 +105,7 @@ export default function CharacterBrowser() {
       dragCounterRef.current = 0
       setDragging(false)
       const files = Array.from(e.dataTransfer.files).filter((f) =>
-        /\.(json|png|charx)$/i.test(f.name)
+        /\.(json|png|charx|jpe?g)$/i.test(f.name)
       )
       if (files.length > 0) {
         browser.importFiles(files)

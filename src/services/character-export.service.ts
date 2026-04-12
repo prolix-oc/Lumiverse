@@ -2,7 +2,7 @@ import sharp from "sharp";
 import { extname } from "path";
 import { zipSync } from "fflate";
 import { getCharacter } from "./characters.service";
-import { getExpressionConfig } from "./expressions.service";
+import { getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { listGallery } from "./character-gallery.service";
 import { getImage, getImageFilePath } from "./images.service";
 import { exportWorldBook, getWorldBook } from "./world-books.service";
@@ -127,11 +127,13 @@ async function readImageBytes(userId: string, imageId: string): Promise<ImageByt
 /** Extension keys that are Lumiverse-internal and should not leak into CCSv3 exports. */
 const INTERNAL_EXTENSION_KEYS = new Set([
   "expressions",
+  "expression_groups",
   "alternate_fields",
   "alternate_avatars",
   "world_book_id",
   "world_book_ids",
   "_lumiverse_source_filename",
+  "risu_asset_map",
 ]);
 
 export function buildCCSv3Json(userId: string, character: Character): Record<string, any> {
@@ -289,6 +291,10 @@ export interface LumiverseModulesExport {
     defaultExpression: string;
     mappings: Record<string, string>; // label → archive path
   };
+  /** Multi-character expression groups: characterName → { label → archivePath }. */
+  expression_groups?: {
+    groups: Record<string, Record<string, string>>;
+  };
   alternate_fields?: Record<string, Array<{ id: string; label: string; content: string }>>;
   alternate_avatars?: Array<{ id: string; label: string; path: string }>;
   world_books?: Record<string, any>[];
@@ -343,6 +349,36 @@ export async function exportAsCharx(userId: string, characterId: string): Promis
       if (Object.keys(exprMappings).some(isNsfwExpressionLabel)) {
         modules.has_nsfw_expressions = true;
       }
+    }
+  }
+
+  // Multi-character expression groups
+  const exprGroups = getExpressionGroups(userId, characterId);
+  if (exprGroups && Object.keys(exprGroups).length > 0) {
+    const groupMappings: Record<string, Record<string, string>> = {};
+
+    for (const [groupName, labels] of Object.entries(exprGroups)) {
+      const safeName = sanitizeArchiveName(groupName);
+      const labelMappings: Record<string, string> = {};
+
+      for (const [label, imageId] of Object.entries(labels)) {
+        const img = await readImageBytes(userId, imageId);
+        if (img) {
+          const safeLabel = sanitizeArchiveName(label);
+          const archivePath = `assets/other/image/exprg_${safeName}--${safeLabel}${img.ext}`;
+          entries[archivePath] = img.bytes;
+          labelMappings[label] = archivePath;
+          if (isNsfwExpressionLabel(label)) modules.has_nsfw_expressions = true;
+        }
+      }
+
+      if (Object.keys(labelMappings).length > 0) {
+        groupMappings[groupName] = labelMappings;
+      }
+    }
+
+    if (Object.keys(groupMappings).length > 0) {
+      modules.expression_groups = { groups: groupMappings };
     }
   }
 
@@ -423,7 +459,7 @@ export async function exportAsCharx(userId: string, characterId: string): Promis
 
   // Only include lumiverse_modules.json if there's content
   const hasModules =
-    modules.expressions || modules.alternate_fields || modules.alternate_avatars || modules.world_books?.length || modules.regex_scripts;
+    modules.expressions || modules.expression_groups || modules.alternate_fields || modules.alternate_avatars || modules.world_books?.length || modules.regex_scripts;
   if (hasModules) {
     entries["lumiverse_modules.json"] = new TextEncoder().encode(
       JSON.stringify(modules, null, 2)

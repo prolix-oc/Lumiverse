@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plus, Upload, Image as ImageIcon, Ghost } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { Plus, Upload, Image as ImageIcon, Ghost, Trash2, Users } from 'lucide-react'
 import { expressionsApi } from '@/api/expressions'
 import { characterGalleryApi } from '@/api/character-gallery'
 import { imagesApi } from '@/api/images'
@@ -8,7 +8,7 @@ import { useStore } from '@/store'
 import ExpressionSlotCard from './ExpressionSlotCard'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import { Toggle } from '@/components/shared/Toggle'
-import type { ExpressionConfig, ExpressionSlot } from '@/types/expressions'
+import type { ExpressionConfig, ExpressionSlot, ExpressionGroups } from '@/types/expressions'
 import type { CharacterGalleryItem } from '@/types/api'
 import styles from './ExpressionEditorTab.module.css'
 import editorStyles from './CharacterEditorPage.module.css'
@@ -28,6 +28,8 @@ interface Props {
 
 export default function ExpressionEditorTab({ characterId }: Props) {
   const [config, setConfig] = useState<ExpressionConfig | null>(null)
+  const [groups, setGroups] = useState<ExpressionGroups | null>(null)
+  const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
@@ -42,10 +44,17 @@ export default function ExpressionEditorTab({ characterId }: Props) {
 
   const fetchConfig = useCallback(() => {
     setLoading(true)
-    expressionsApi.get(characterId)
-      .then(setConfig)
-      .catch(() => setConfig({ enabled: false, defaultExpression: '', mappings: {} }))
-      .finally(() => setLoading(false))
+    Promise.all([
+      expressionsApi.get(characterId).catch(() => ({ enabled: false, defaultExpression: '', mappings: {} } as ExpressionConfig)),
+      expressionsApi.getGroups(characterId).catch(() => ({} as ExpressionGroups)),
+    ]).then(([cfg, grps]) => {
+      setConfig(cfg)
+      const hasGroups = grps && Object.keys(grps).length > 0
+      setGroups(hasGroups ? grps : null)
+      if (hasGroups && !activeGroup) {
+        setActiveGroup(Object.keys(grps).filter((n) => n !== '_default')[0] || Object.keys(grps)[0] || null)
+      }
+    }).finally(() => setLoading(false))
   }, [characterId])
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
@@ -207,7 +216,364 @@ export default function ExpressionEditorTab({ characterId }: Props) {
     setPickerImageId(null)
   }, [pickerImageId, pickerLabel, config, saveConfig])
 
+  // ── Multi-character group management ──────────────────────────────────────
+
+  const [showAddGroup, setShowAddGroup] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const groupZipRef = useRef<HTMLInputElement>(null)
+  const groupUploadRef = useRef<HTMLInputElement>(null)
+
+  const handleConvertToGroups = useCallback(() => {
+    expressionsApi.convertToGroups(characterId).then((grps) => {
+      setGroups(grps)
+      setConfig({ enabled: false, defaultExpression: '', mappings: {} })
+      setActiveGroup(Object.keys(grps)[0] || null)
+    }).catch(() => {})
+  }, [characterId])
+
+  const handleConvertToFlat = useCallback(() => {
+    if (!activeGroup) return
+    expressionsApi.convertToFlat(characterId, activeGroup).then((cfg) => {
+      setConfig(cfg)
+      setGroups(null)
+      setActiveGroup(null)
+    }).catch(() => {})
+  }, [characterId, activeGroup])
+
+  const handleAddGroup = useCallback(() => {
+    const name = newGroupName.trim()
+    if (!name) return
+    expressionsApi.addGroup(characterId, name).then((grps) => {
+      setGroups(grps)
+      setActiveGroup(name)
+      setShowAddGroup(false)
+      setNewGroupName('')
+    }).catch(() => {})
+  }, [characterId, newGroupName])
+
+  const handleGroupZipUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file || !activeGroup) return
+      e.target.value = ''
+      setUploading(true)
+      try {
+        const updated = await expressionsApi.uploadGroupZip(characterId, activeGroup, file)
+        setGroups(updated)
+      } catch { /* silent */ }
+      finally { setUploading(false) }
+    },
+    [characterId, activeGroup]
+  )
+
+  const handleGroupDirectUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file || !activeGroup) return
+      e.target.value = ''
+      const baseName = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9_\- ]/g, '').trim()
+      const label = baseName || 'expression'
+      setUploading(true)
+      try {
+        const image = await imagesApi.upload(file)
+        const updated = await expressionsApi.addGroupLabel(characterId, activeGroup, label, image.id)
+        setGroups(updated)
+      } catch { /* silent */ }
+      finally { setUploading(false) }
+    },
+    [characterId, activeGroup]
+  )
+
+  const handleGroupGalleryPick = useCallback(() => {
+    if (!pickerImageId || !pickerLabel.trim() || !activeGroup) return
+    const label = pickerLabel.trim().toLowerCase()
+    expressionsApi.addGroupLabel(characterId, activeGroup, label, pickerImageId).then((updated) => {
+      setGroups(updated)
+      setShowGalleryPicker(false)
+      setPickerLabel('')
+      setPickerImageId(null)
+    }).catch(() => {})
+  }, [characterId, activeGroup, pickerImageId, pickerLabel])
+
+  const groupNames = useMemo(() => {
+    if (!groups) return []
+    // Named characters first, _default last
+    const named = Object.keys(groups).filter((n) => n !== '_default').sort()
+    if (groups['_default']) named.push('_default')
+    return named
+  }, [groups])
+
+  const activeGroupSlots: ExpressionSlot[] = useMemo(() => {
+    if (!groups || !activeGroup || !groups[activeGroup]) return []
+    return Object.entries(groups[activeGroup]).map(([label, imageId]) => ({ label, imageId }))
+  }, [groups, activeGroup])
+
+  const handleGroupLabelDelete = useCallback(
+    (label: string) => {
+      if (!activeGroup) return
+      expressionsApi.removeGroupLabel(characterId, activeGroup, label)
+        .then((updated) => {
+          setGroups(Object.keys(updated).length > 0 ? updated : null)
+          if (!updated[activeGroup]) {
+            setActiveGroup(Object.keys(updated).filter((n) => n !== '_default')[0] || Object.keys(updated)[0] || null)
+          }
+        })
+        .catch(() => {})
+    },
+    [characterId, activeGroup]
+  )
+
+  const handleGroupLabelRename = useCallback(
+    (oldLabel: string, newLabel: string) => {
+      if (!groups || !activeGroup || !groups[activeGroup]) return
+      const groupMap = groups[activeGroup]
+      const imageId = groupMap[oldLabel]
+      if (!imageId) return
+      const { [oldLabel]: _, ...rest } = groupMap
+      const updated: ExpressionGroups = { ...groups, [activeGroup]: { ...rest, [newLabel]: imageId } }
+      setGroups(updated)
+      expressionsApi.putGroups(characterId, updated).catch(() => {})
+    },
+    [characterId, groups, activeGroup]
+  )
+
+  const handleDeleteGroup = useCallback(
+    (groupName: string) => {
+      expressionsApi.removeGroup(characterId, groupName)
+        .then((updated) => {
+          const hasRemaining = Object.keys(updated).length > 0
+          setGroups(hasRemaining ? updated : null)
+          if (activeGroup === groupName) {
+            setActiveGroup(
+              hasRemaining
+                ? Object.keys(updated).filter((n) => n !== '_default')[0] || Object.keys(updated)[0] || null
+                : null
+            )
+          }
+        })
+        .catch(() => {})
+    },
+    [characterId, activeGroup]
+  )
+
   if (loading) return null
+
+  // ── Multi-character grouped view ────────────────────────────────────────
+  if (groups && groupNames.length > 0) {
+    const totalExpressions = Object.values(groups).reduce((sum, g) => sum + Object.keys(g).length, 0)
+
+    return (
+      <div>
+        <div className={styles.header}>
+          <span className={editorStyles.fieldLabel}>Expression Sprites — Multi-Character</span>
+          <span className={editorStyles.fieldHelper}>
+            This card contains expressions for {groupNames.filter((n) => n !== '_default').length} characters
+            ({totalExpressions} total). The active character is detected automatically from conversation context.
+          </span>
+        </div>
+
+        {/* Detection settings — shared with single-character mode */}
+        <div className={styles.detectionSection}>
+          <div className={styles.detectionHeader}>Expression Detection</div>
+          <div className={styles.detectionHint}>
+            After each message, the system identifies which character is speaking and selects their expression.
+          </div>
+          <div className={styles.detectionModes}>
+            {([
+              ['auto', 'Automatic', 'A sidecar LLM call identifies the active character and their expression after each generation.'],
+              ['off', 'Off', 'No automatic detection. Expressions only change via <img=""> tags in the response.'],
+            ] as const).map(([mode, name, desc]) => (
+              <label key={mode} className={styles.modeOption}>
+                <input
+                  type="radio"
+                  name="expr-detection-mode"
+                  checked={detection.mode === mode || (detection.mode === 'council' && mode === 'auto')}
+                  onChange={() => saveDetection({ ...detection, mode })}
+                />
+                <span className={styles.modeLabel}>
+                  <span className={styles.modeName}>{name}</span>
+                  <span className={styles.modeDesc}>{desc}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {detection.mode === 'auto' && sidecarName && (
+            <div className={styles.contextRow}>
+              <label>Sidecar LLM:</label>
+              <span className={styles.modeDesc}>{sidecarName}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Character group tabs + add button */}
+        <div className={styles.groupTabs}>
+          {groupNames.map((name) => (
+            <button
+              key={name}
+              type="button"
+              className={activeGroup === name ? styles.groupTabActive : styles.groupTab}
+              onClick={() => setActiveGroup(name)}
+            >
+              {name === '_default' ? 'Default' : name}
+              <span className={styles.groupTabCount}>{Object.keys(groups[name]).length}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            className={styles.groupTab}
+            onClick={() => setShowAddGroup(true)}
+            title="Add character"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+
+        {/* Add character group form */}
+        {showAddGroup && (
+          <div className={styles.labelPrompt}>
+            <span className={editorStyles.fieldHelper}>Enter a character name for the new expression group:</span>
+            <input
+              type="text"
+              className={styles.labelPromptInput}
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              placeholder="e.g. Alice, Bob..."
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddGroup() }}
+            />
+            <div className={styles.labelPromptActions}>
+              <button type="button" className={styles.labelPromptBtn} onClick={() => { setShowAddGroup(false); setNewGroupName('') }}>
+                Cancel
+              </button>
+              <button type="button" className={styles.labelPromptBtnPrimary} onClick={handleAddGroup} disabled={!newGroupName.trim()}>
+                Add Character
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Active group content */}
+        {activeGroup && groups[activeGroup] && (
+          <>
+            <div className={styles.groupHeader}>
+              <span className={styles.count}>{activeGroupSlots.length} expressions</span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {groupNames.length === 1 && (
+                  <button type="button" className={styles.groupDeleteBtn} onClick={handleConvertToFlat}>
+                    Switch to Single-Character
+                  </button>
+                )}
+                <button type="button" className={styles.groupDeleteBtn} onClick={() => handleDeleteGroup(activeGroup)}>
+                  <Trash2 size={12} /> Remove group
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.controls}>
+              <button type="button" className={styles.controlBtn} onClick={() => groupZipRef.current?.click()}>
+                <Upload size={14} /> Import ZIP
+              </button>
+              <button type="button" className={styles.controlBtn} onClick={openGalleryPicker}>
+                <ImageIcon size={14} /> Add from Gallery
+              </button>
+              <button type="button" className={styles.controlBtn} onClick={() => groupUploadRef.current?.click()}>
+                <Plus size={14} /> Upload Image
+              </button>
+              <input ref={groupZipRef} type="file" accept=".zip" hidden onChange={handleGroupZipUpload} />
+              <input ref={groupUploadRef} type="file" accept="image/*" hidden onChange={handleGroupDirectUpload} />
+            </div>
+
+            {uploading && <div className={styles.uploading}>Uploading...</div>}
+
+            {activeGroupSlots.length === 0 && !uploading && (
+              <div className={styles.empty}>
+                <Ghost size={40} className={styles.emptyIcon} />
+                <div className={styles.emptyTitle}>No expressions yet</div>
+                <div className={styles.emptyHint}>
+                  Upload a ZIP of expression images, add from gallery, or upload one by one.
+                </div>
+              </div>
+            )}
+
+            {activeGroupSlots.length > 0 && (
+              <div className={styles.grid}>
+                {activeGroupSlots.map((slot) => (
+                  <ExpressionSlotCard
+                    key={slot.label}
+                    label={slot.label}
+                    imageId={slot.imageId}
+                    onDelete={handleGroupLabelDelete}
+                    onRename={handleGroupLabelRename}
+                    onPreview={setLightboxSrc}
+                  />
+                ))}
+                <div className={styles.addCard} onClick={() => groupUploadRef.current?.click()}>
+                  <Plus size={24} />
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Gallery picker overlay (shared) */}
+        {showGalleryPicker && (
+          <div>
+            <span className={editorStyles.fieldLabel}>Select from Gallery</span>
+            {galleryItems.length === 0 ? (
+              <div className={styles.emptyHint} style={{ padding: '20px 0' }}>
+                No gallery images found. Upload images to the Gallery tab first.
+              </div>
+            ) : (
+              <>
+                <div className={styles.galleryModal}>
+                  {galleryItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`${styles.galleryPickItem}${pickerImageId === item.image_id ? ` ${styles.selected}` : ''}`}
+                      onClick={() => {
+                        setPickerImageId(item.image_id)
+                        if (!pickerLabel) setPickerLabel(item.caption || 'expression')
+                      }}
+                    >
+                      <img src={characterGalleryApi.smallUrl(item.image_id)} alt={item.caption || ''} className={styles.galleryPickImage} />
+                    </div>
+                  ))}
+                </div>
+                {pickerImageId && (
+                  <div className={styles.labelPrompt}>
+                    <span className={editorStyles.fieldHelper}>Enter an expression label for this image:</span>
+                    <input
+                      type="text"
+                      className={styles.labelPromptInput}
+                      value={pickerLabel}
+                      onChange={(e) => setPickerLabel(e.target.value)}
+                      placeholder="e.g. happy, sad, angry..."
+                      autoFocus
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleGroupGalleryPick() }}
+                    />
+                    <div className={styles.labelPromptActions}>
+                      <button type="button" className={styles.labelPromptBtn} onClick={() => { setShowGalleryPicker(false); setPickerImageId(null); setPickerLabel('') }}>
+                        Cancel
+                      </button>
+                      <button type="button" className={styles.labelPromptBtnPrimary} onClick={handleGroupGalleryPick} disabled={!pickerLabel.trim()}>
+                        Add Expression
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {lightboxSrc && (
+          <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+        )}
+      </div>
+    )
+  }
+
+  // ── Single-character flat view (existing) ───────────────────────────────
 
   const slots: ExpressionSlot[] = config
     ? Object.entries(config.mappings).map(([label, imageId]) => ({ label, imageId }))
@@ -313,6 +679,9 @@ export default function ExpressionEditorTab({ characterId }: Props) {
         </button>
         <button type="button" className={styles.controlBtn} onClick={() => uploadRef.current?.click()}>
           <Plus size={14} /> Upload Image
+        </button>
+        <button type="button" className={styles.controlBtn} onClick={handleConvertToGroups}>
+          <Users size={14} /> Multi-Character Mode
         </button>
         <input ref={zipRef} type="file" accept=".zip" hidden onChange={handleZipUpload} />
         <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleDirectUpload} />

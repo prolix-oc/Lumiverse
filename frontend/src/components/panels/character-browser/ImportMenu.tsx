@@ -9,7 +9,7 @@ interface ImportMenuProps {
   importLoading: boolean
 }
 
-const ACCEPTED_TYPES = '.json,.png,.charx'
+const ACCEPTED_TYPES = '.json,.png,.charx,.jpg,.jpeg'
 
 export default function ImportMenu({
   onImportFile,

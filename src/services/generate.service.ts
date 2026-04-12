@@ -27,8 +27,8 @@ import * as tokenizerSvc from "./tokenizer.service";
 import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
 import * as pool from "./generation-pool.service";
-import { detectExpression, getExpressionDetectionSettings } from "./expression-detection.service";
-import { hasExpressions, getExpressionConfig } from "./expressions.service";
+import { detectExpression, detectMultiCharacterExpression, getExpressionDetectionSettings } from "./expression-detection.service";
+import { hasExpressions, getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { getSidecarSettings } from "./sidecar-settings.service";
 
 interface GenerateInput {
@@ -625,6 +625,28 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     characterName,
   }, input.userId);
 
+  // ── Return the HTTP response NOW ──────────────────────────────────────
+  // Council execution, prompt assembly, and embedding calls can take 10-60s+.
+  // Holding the HTTP response open for that duration blocks the frontend's
+  // connection pool and makes the UI appear frozen when the user navigates
+  // away. By returning immediately, the frontend gets the generationId and
+  // can track progress via WS events + the pool status endpoint.
+  //
+  // The remaining heavy work (council → assembly → streaming) runs as a
+  // detached async continuation. Errors are surfaced via GENERATION_ENDED
+  // with an error payload.
+  void (async () => {
+    // Yield to the macro task queue IMMEDIATELY so that the HTTP response
+    // (`return { generationId, status: "streaming" }` below) is sent before
+    // any assembly work begins.  Without this, JavaScript's async execution
+    // model runs everything between here and the first internal `await`
+    // synchronously — which can include council settings, all DB prefetch
+    // queries, world-info activation, and more — blocking the event loop
+    // and delaying the response (and every other request) until that first
+    // internal `await` yields.
+    await new Promise<void>(r => setTimeout(r, 0));
+    try {
+
   // Execute council if enabled (before prompt assembly so it doesn't slow the critical path visibly)
   const councilSettings = getCouncilSettings(input.userId);
   let councilResult: CouncilExecutionResult | null = null;
@@ -706,6 +728,14 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
           stagedMessageId = stagedMsg.id;
         }
 
+        checkAborted();
+
+        // Yield before the heavy council enrichment phase — the next section
+        // loads all messages, collects world info entries, and runs keyword
+        // activation synchronously. Without a yield here the event loop is
+        // blocked from the setTimeout at the top of the IIFE through all of
+        // this sync work until the first real `await` (embedding API call).
+        await new Promise<void>(r => setTimeout(r, 0));
         checkAborted();
 
         // Pre-compute enrichment for council tools — resolve world info at the
@@ -995,39 +1025,52 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   // Run generation in the background
   runGeneration(generationId, provider, apiKey, apiUrl, connection.model, messages, mergedParams, input.userId, input.chat_id, lifecycle, abortController.signal, inlineTools, pipeline.assistantPrefill, pipeline.macroEnv);
 
+    } catch (err: any) {
+      // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted
+      activeGenerations.delete(generationId);
+      activeChatGenerations.delete(chatKey);
+
+      // Clean up any pending council retry decision
+      const pendingRetry = pendingCouncilRetries.get(generationId);
+      if (pendingRetry) {
+        clearTimeout(pendingRetry.timeout);
+        pendingCouncilRetries.delete(generationId);
+      }
+
+      // If this was a user-initiated abort (stop request), emit proper events so the
+      // frontend can reset its streaming state and clean up.
+      if (abortController.signal.aborted) {
+        // Clean up staged message if one was created (sidecar council mode)
+        if (stagedMessageId) {
+          try {
+            chatsSvc.deleteMessage(input.userId, stagedMessageId);
+          } catch { /* best-effort cleanup */ }
+        }
+        pool.stopPool(generationId);
+        eventBus.emit(EventType.GENERATION_STOPPED, {
+          generationId,
+          chatId: input.chat_id,
+          content: "",
+        }, input.userId);
+        return;
+      }
+
+      pool.errorPool(generationId, err.message);
+      eventBus.emit(EventType.GENERATION_ENDED, {
+        generationId,
+        chatId: input.chat_id,
+        error: err.message,
+      }, input.userId);
+    }
+  })();
+
   return { generationId, status: "streaming" };
 
   } catch (err: any) {
-    // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted
+    // Early setup failure (before the async continuation) — connection
+    // resolution, character lookup, swipe creation, etc.
     activeGenerations.delete(generationId);
     activeChatGenerations.delete(chatKey);
-
-    // Clean up any pending council retry decision
-    const pendingRetry = pendingCouncilRetries.get(generationId);
-    if (pendingRetry) {
-      clearTimeout(pendingRetry.timeout);
-      pendingCouncilRetries.delete(generationId);
-    }
-
-    // If this was a user-initiated abort (stop request), emit proper events so the
-    // frontend can reset its streaming state and clean up.
-    if (abortController.signal.aborted) {
-      // Clean up staged message if one was created (sidecar council mode)
-      if (stagedMessageId) {
-        try {
-          chatsSvc.deleteMessage(input.userId, stagedMessageId);
-        } catch { /* best-effort cleanup */ }
-      }
-      pool.stopPool(generationId);
-      eventBus.emit(EventType.GENERATION_STOPPED, {
-        generationId,
-        chatId: input.chat_id,
-        content: "",
-      }, input.userId);
-      // Return a stopped status instead of throwing, so the HTTP response is clean
-      return { generationId, status: "stopped" };
-    }
-
     pool.errorPool(generationId, err.message);
     throw err;
   }
@@ -1320,10 +1363,10 @@ async function runGeneration(
 
         if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
           chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, closedContent);
-          // Persist partial reasoning on abort for regenerate
+          // Persist partial reasoning on abort for regenerate (extra-only, no chunk rebuild needed)
           if (fullReasoning) {
             const existingExtra = chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
-            chatsSvc.updateMessage(userId, lifecycle.targetMessageId, { extra: { ...existingExtra, reasoning: fullReasoning } });
+            chatsSvc.patchMessageExtra(userId, lifecycle.targetMessageId, { ...existingExtra, reasoning: fullReasoning });
           }
         } else if (lifecycle.stagedMessageId) {
           // Preserve existing extra (character_id etc.) and save partial reasoning
@@ -1442,10 +1485,6 @@ async function runGeneration(
         // Regenerate: fill in the blank swipe that was created at generation start
         const updated = chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, fullContent);
         messageId = updated?.id ?? lifecycle.targetMessageId;
-        // Persist API reasoning in message extra
-        if (fullReasoning) {
-          chatsSvc.updateMessage(userId, messageId, { extra: { ...chatsSvc.getMessage(userId, messageId)?.extra, reasoning: fullReasoning } });
-        }
       } else if (lifecycle.continueMessageId) {
         // Continue: append generated text to existing assistant message,
         // inserting the continuePostfix separator (e.g. newline, double newline)
@@ -1480,20 +1519,9 @@ async function runGeneration(
         messageId = message.id;
       }
 
-      // Persist provider usage (token counts) in message extra when available
-      if (streamUsage) {
-        const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-        chatsSvc.updateMessage(userId, messageId, { extra: { ...existing, usage: streamUsage } });
-      }
-
       // Compute reasoning duration if content tokens never arrived (reasoning-only response)
       if (reasoningStartedAt && !reasoningDurationMs) {
         reasoningDurationMs = Date.now() - reasoningStartedAt;
-      }
-      // Persist reasoning duration in message extra when reasoning was detected
-      if (reasoningDurationMs > 0) {
-        const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-        chatsSvc.updateMessage(userId, messageId, { extra: { ...existing, reasoningDuration: reasoningDurationMs } });
       }
 
       // ── Generation metrics (tokenCount, TTFT, TPS) ─────────────────────
@@ -1533,16 +1561,21 @@ async function runGeneration(
         generationMetrics = { durationMs, wasStreaming, ...(ttft != null ? { ttft } : {}), ...(tps != null ? { tps } : {}) };
       }
 
-      // Persist tokenCount and generation metrics in message extra
-      if (resolvedTokenCount || generationMetrics) {
-        const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-        chatsSvc.updateMessage(userId, messageId, {
-          extra: {
-            ...existing,
-            ...(resolvedTokenCount ? { tokenCount: resolvedTokenCount } : {}),
-            ...(generationMetrics ? { generationMetrics } : {}),
-          },
-        });
+      // Persist all generation metadata (reasoning, usage, metrics) in a single
+      // patchMessageExtra call to avoid triggering redundant chunk rebuilds,
+      // cache invalidation, and MESSAGE_EDITED events for each field.
+      {
+        const metaExtra: Record<string, any> = {};
+        if (fullReasoning) metaExtra.reasoning = fullReasoning;
+        if (streamUsage) metaExtra.usage = streamUsage;
+        if (reasoningDurationMs > 0) metaExtra.reasoningDuration = reasoningDurationMs;
+        if (resolvedTokenCount) metaExtra.tokenCount = resolvedTokenCount;
+        if (generationMetrics) metaExtra.generationMetrics = generationMetrics;
+
+        if (Object.keys(metaExtra).length > 0) {
+          const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
+          chatsSvc.patchMessageExtra(userId, messageId, { ...existing, ...metaExtra });
+        }
       }
 
       // Compute and store breakdown for the generated message
@@ -1613,7 +1646,38 @@ async function fireExpressionDetection(
   if (!chat) return;
 
   const characterId = lifecycle.targetCharacterId || chat.character_id;
-  if (!characterId || !hasExpressions(userId, characterId)) return;
+  if (!characterId) return;
+
+  // ── Multi-character expression groups ──────────────────────────────────────
+  // Cards with expression_groups (e.g., multi-character RisuAI imports) use a
+  // two-stage pipeline: identify the focus character, then detect expression
+  // within that character's label set.
+  const expressionGroups = getExpressionGroups(userId, characterId);
+  if (expressionGroups && Object.keys(expressionGroups).length > 0) {
+    const detectionSettings = getExpressionDetectionSettings(userId);
+    if (detectionSettings.mode === "off") return;
+
+    const allMessages = chatsSvc.getMessages(userId, chatId);
+    const recentMessages: LlmMessage[] = allMessages
+      .slice(-detectionSettings.contextWindow)
+      .map((m) => ({ role: m.is_user ? "user" as const : "assistant" as const, content: m.content }));
+
+    const result = await detectMultiCharacterExpression({
+      userId,
+      chatId,
+      characterId,
+      groups: expressionGroups,
+      recentMessages,
+    }, rawGenerate);
+
+    if (result) {
+      emitExpressionChanged(userId, chatId, chat, characterId, result.expression, result.imageId, result.characterGroup);
+    }
+    return;
+  }
+
+  // ── Single-character expression detection (existing path) ─────────────────
+  if (!hasExpressions(userId, characterId)) return;
 
   const expressionConfig = getExpressionConfig(userId, characterId);
   if (!expressionConfig?.enabled) return;
@@ -1659,7 +1723,8 @@ function emitExpressionChanged(
   chat: { metadata: any },
   characterId: string,
   label: string,
-  imageId: string
+  imageId: string,
+  expressionGroup?: string,
 ): void {
   const isGroup = chat.metadata?.group === true;
 
@@ -1667,6 +1732,11 @@ function emitExpressionChanged(
   // chat metadata so any user-driven changes that landed during generation
   // (alternate field selections, world books, etc.) are preserved.
   const partial: Record<string, any> = { active_expression: label };
+
+  // Track which character group the expression belongs to (multi-character cards)
+  if (expressionGroup) {
+    partial.active_expression_group = expressionGroup;
+  }
 
   if (isGroup) {
     // Re-read current group_expressions so we don't drop entries written by
@@ -1686,6 +1756,7 @@ function emitExpressionChanged(
     characterId,
     label,
     imageId,
+    expressionGroup,
   }, userId);
 }
 
