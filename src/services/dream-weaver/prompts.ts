@@ -154,11 +154,26 @@ Return ONLY valid JSON. No markdown, no explanations.
       "id": "uuid",
       "name": "NPC Name",
       "role": "short role label",
-      "description": "who they are and why they matter",
-      "scenario": "how they intersect with the soul draft"
+      "description": "who they are — background, motivations, what makes them distinct",
+      "appearance": "physical appearance, clothing, distinguishing features",
+      "personality": "behavioral patterns, habits, quirks — how they act, not just adjectives",
+      "voice": "how they speak — cadence, diction, verbal tics, speech patterns",
+      "relationship_to_card": "their specific dynamic with the main character",
+      "keyword_triggers": ["keyword1", "keyword2"],
+      "importance": "major" | "minor"
     }
   ]
 }
+
+## NPC Depth Guidelines
+- Every NPC must have ALL fields filled out. Do not leave any field empty.
+- **description**: Go beyond role summaries. Include backstory, goals, and what drives them.
+- **appearance**: Concrete physical details — build, coloring, clothing style, notable features.
+- **personality**: Specific behavioral patterns, not generic traits. How do they react under pressure? What are their habits?
+- **voice**: How they actually talk — sentence length, formality, slang, verbal tics, accent markers if any.
+- **relationship_to_card**: The specific dynamic, not just "ally" or "rival". What's the history? What tension exists?
+- **keyword_triggers**: 2-4 terms that would naturally appear in conversation about or with this NPC.
+- **importance**: "major" for recurring/pivotal NPCs, "minor" for atmospheric/supporting cast.
 
 ## Scope Rules
 - Generate only lorebooks and npc_definitions.
@@ -261,9 +276,12 @@ function summarizeExistingLorebooks(draft: DW_DRAFT_V1): string {
 function summarizeExistingNpcs(draft: DW_DRAFT_V1): string {
   if (!draft.npc_definitions?.length) return "None yet.";
   return draft.npc_definitions
-    .map((npc: any) =>
-      `- "${npc.name}" (${npc.role}, ${npc.importance}): ${(npc.description || "").slice(0, 120)}${(npc.description || "").length > 120 ? "..." : ""}`,
-    )
+    .map((npc: any) => {
+      const parts = [`- "${npc.name}" (${npc.role || "no role"}, ${npc.importance || "minor"})`];
+      if (npc.description) parts.push(`  Description: ${npc.description.slice(0, 100)}${npc.description.length > 100 ? "..." : ""}`);
+      if (npc.relationship_to_card) parts.push(`  Relationship: ${npc.relationship_to_card.slice(0, 80)}${npc.relationship_to_card.length > 80 ? "..." : ""}`);
+      return parts.join("\n");
+    })
     .join("\n");
 }
 
@@ -338,17 +356,19 @@ export function buildExtendPrompt(
         "## Existing NPCs",
         summarizeExistingNpcs(draft),
         "## Task",
-        `Generate ${count} new NPC definition(s). Each NPC must fill a different narrative role and have a clear relationship to ${draft.card.name}. Do NOT duplicate existing NPCs.`,
+        `Generate ${count} new NPC definition(s). Each NPC must fill a different narrative role and have a clear relationship to ${draft.card.name}. Do NOT duplicate existing NPCs. Every field must be filled — no empty strings.`,
         "## Output Format",
         [
           `{ "npc_definitions": [{`,
           `  "id": "unique-string",`,
           `  "name": "NPC Name",`,
           `  "role": "short role label",`,
-          `  "description": "who they are and why they matter",`,
-          `  "personality": "behavioral traits and quirks",`,
-          `  "relationship_to_card": "how they relate to ${draft.card.name}",`,
-          `  "keyword_triggers": ["trigger1"],`,
+          `  "description": "backstory, motivations, what makes them distinct",`,
+          `  "appearance": "physical appearance, clothing, distinguishing features",`,
+          `  "personality": "behavioral patterns, habits, quirks",`,
+          `  "voice": "speech patterns, cadence, diction, verbal tics",`,
+          `  "relationship_to_card": "specific dynamic with ${draft.card.name}",`,
+          `  "keyword_triggers": ["trigger1", "trigger2"],`,
           `  "importance": "major" | "minor"`,
           `}] }`,
         ].join("\n"),

@@ -463,7 +463,7 @@ async function executeDraftGeneration(
       ],
       parameters: {
         temperature: 1.0,
-        max_tokens: 8000,
+        max_tokens: 16384,
       },
       connection_id: connection.id,
     });
@@ -604,7 +604,7 @@ async function executeWorldGeneration(
       ],
       parameters: {
         temperature: 0.8,
-        max_tokens: 8000,
+        max_tokens: 16384,
       },
       connection_id: connection.id,
     });
@@ -688,7 +688,9 @@ function formatNpcEntryContent(npc: any, characterName: string): string {
   const header = npc.role ? `[${npc.name} — ${npc.role}]` : `[${npc.name}]`;
   parts.push(header);
   if (npc.description) parts.push(npc.description);
+  if (npc.appearance) parts.push(`Appearance: ${npc.appearance}`);
   if (npc.personality) parts.push(`Personality: ${npc.personality}`);
+  if (npc.voice) parts.push(`Voice: ${npc.voice}`);
   if (npc.relationship_to_card) {
     parts.push(`Relationship to ${characterName}: ${npc.relationship_to_card}`);
   }
@@ -1056,7 +1058,7 @@ export async function extendDraft(
     ],
     parameters: {
       temperature: 0.9,
-      max_tokens: 6000,
+      max_tokens: 16384,
     },
     connection_id: connection.id,
   });

@@ -564,7 +564,7 @@ export const dreamWeaverApi = {
     apiClient.post<DreamWeaverFinalizeResult>(`/dream-weaver/sessions/${id}/finalize`, {}),
 
   extend: (id: string, input: ExtendDraftInput) =>
-    apiClient.post<ExtendDraftResult>(`/dream-weaver/sessions/${id}/extend`, input),
+    apiClient.post<ExtendDraftResult>(`/dream-weaver/sessions/${id}/extend`, input, { timeout: 120_000 }),
 
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),
