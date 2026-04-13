@@ -8,6 +8,7 @@ import { worldBooksApi } from '@/api/world-books'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ImportWorldBookModal, { type WorldBookImportResult } from './ImportWorldBookModal'
 import PostImportWorldBookModal from '@/components/shared/PostImportWorldBookModal'
+import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookDiagnosticsModal'
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
 import type { WorldBook, WorldBookEntry, WorldBookVectorSummary } from '@/types/api'
@@ -19,6 +20,7 @@ const POSITION_SHORT = ['Before Main', 'After Main', 'Before AN', 'After AN', '@
 export default function WorldBookEditorModal() {
   const closeModal = useStore((s) => s.closeModal)
   const modalProps = useStore((s) => s.modalProps)
+  const activeChatId = useStore((s) => s.activeChatId)
 
   // Book list state
   const [books, setBooks] = useState<WorldBook[]>([])
@@ -46,6 +48,11 @@ export default function WorldBookEditorModal() {
   const [deleteBookConfirm, setDeleteBookConfirm] = useState<string | null>(null)
   const [deleteEntryConfirm, setDeleteEntryConfirm] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [convertPreview, setConvertPreview] = useState<{
+    total: number; eligible: number; constant_skipped: number
+    already_vectorized: number; empty_skipped: number; disabled_skipped: number
+  } | null>(null)
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false)
 
   // Debounce refs
   const bookNameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -124,6 +131,7 @@ export default function WorldBookEditorModal() {
       }
       setEntrySearchFilter('')
       setSelectedEntryId(null)
+      setShowDiagnosticsModal(false)
     } else {
       setEntries([])
       setEntryTotal(0)
@@ -131,6 +139,7 @@ export default function WorldBookEditorModal() {
       setEntrySearchFilter('')
       setSelectedEntryId(null)
       setVectorSummary(null)
+      setShowDiagnosticsModal(false)
     }
   }, [selectedBookId, books, loadEntries, loadVectorSummary])
 
@@ -270,6 +279,46 @@ export default function WorldBookEditorModal() {
     }
   }, [selectedBookId, reindexing, loadEntries, loadVectorSummary])
 
+  const handleConvertToVectorizedPreview = useCallback(async () => {
+    if (!selectedBookId) return
+    try {
+      const preview = await worldBooksApi.getConvertToVectorizedPreview(selectedBookId)
+      setConvertPreview(preview)
+    } catch {
+      setVectorStatus('Failed to load conversion preview')
+    }
+  }, [selectedBookId])
+
+  const handleConvertToVectorized = useCallback(async () => {
+    if (!selectedBookId) return
+    setConvertPreview(null)
+    try {
+      setReindexing(true)
+      const result = await worldBooksApi.convertToVectorized(selectedBookId)
+      setVectorSummary(result.summary)
+      setVectorStatus(`Converted ${result.converted} entries. Reindexing vectors...`)
+      await loadEntries(selectedBookId)
+      const reindexResult = await worldBooksApi.reindexVectors(selectedBookId, {
+        onProgress: (p) => {
+          setVectorStatus(`Reindexing... ${formatWorldBookReindexStatus(p)}`)
+        },
+      })
+      const finalStatus = formatWorldBookReindexStatus(reindexResult)
+      setVectorStatus(`Done: ${finalStatus}`)
+      await loadEntries(selectedBookId)
+      await loadVectorSummary(selectedBookId)
+    } catch {
+      setVectorStatus('Failed to convert and reindex')
+    } finally {
+      setReindexing(false)
+    }
+  }, [selectedBookId, loadEntries, loadVectorSummary])
+
+  const handleDiagnostics = useCallback(() => {
+    if (!selectedBookId || !activeChatId) return
+    setShowDiagnosticsModal(true)
+  }, [selectedBookId, activeChatId])
+
   const handleImport = useCallback((result: WorldBookImportResult) => {
     setBooks((prev) => [result.world_book, ...prev])
     setSelectedBookId(result.world_book.id)
@@ -401,6 +450,23 @@ export default function WorldBookEditorModal() {
                     disabled={reindexing}
                   >
                     {reindexing ? 'Reindexing...' : 'Reindex vector search'}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={handleConvertToVectorizedPreview}
+                    disabled={reindexing}
+                  >
+                    Convert to Vectorized
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={handleDiagnostics}
+                    disabled={!activeChatId}
+                  >
+                    <Search size={12} />
+                    Diagnose Current Chat
                   </button>
                   {vectorStatus && (
                     <span className={styles.vectorStatusText}>{vectorStatus}</span>
@@ -565,6 +631,40 @@ export default function WorldBookEditorModal() {
         <PostImportWorldBookModal
           book={postImportBook}
           onClose={() => setPostImportBook(null)}
+        />
+      )}
+
+      {/* Convert to vectorized confirmation */}
+      {convertPreview && (
+        <ConfirmationModal
+          isOpen={true}
+          title="Convert to Vectorized"
+          message={
+            convertPreview.eligible === 0
+              ? 'No entries are eligible for conversion. All non-constant entries are either already vectorized, empty, or disabled.'
+              : <>
+                  <p>This will enable vector activation for <strong>{convertPreview.eligible}</strong> {convertPreview.eligible === 1 ? 'entry' : 'entries'} and immediately start reindexing.</p>
+                  <ul style={{ textAlign: 'left', margin: '8px 0', paddingLeft: '20px', fontSize: '12px', opacity: 0.8 }}>
+                    {convertPreview.constant_skipped > 0 && <li>{convertPreview.constant_skipped} constant {convertPreview.constant_skipped === 1 ? 'entry' : 'entries'} skipped (always active)</li>}
+                    {convertPreview.already_vectorized > 0 && <li>{convertPreview.already_vectorized} already vectorized</li>}
+                    {convertPreview.empty_skipped > 0 && <li>{convertPreview.empty_skipped} empty {convertPreview.empty_skipped === 1 ? 'entry' : 'entries'} skipped</li>}
+                    {convertPreview.disabled_skipped > 0 && <li>{convertPreview.disabled_skipped} disabled {convertPreview.disabled_skipped === 1 ? 'entry' : 'entries'} skipped</li>}
+                  </ul>
+                </>
+          }
+          variant="safe"
+          confirmText={convertPreview.eligible > 0 ? 'Convert & Reindex' : 'OK'}
+          onConfirm={convertPreview.eligible > 0 ? handleConvertToVectorized : () => setConvertPreview(null)}
+          onCancel={() => setConvertPreview(null)}
+        />
+      )}
+
+      {/* Diagnostics modal */}
+      {showDiagnosticsModal && selectedBookId && activeChatId && (
+        <WorldBookDiagnosticsModal
+          book={books.find((b) => b.id === selectedBookId)!}
+          chatId={activeChatId}
+          onClose={() => setShowDiagnosticsModal(false)}
         />
       )}
     </>

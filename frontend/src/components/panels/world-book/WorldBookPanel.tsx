@@ -336,7 +336,8 @@ export default function WorldBookPanel() {
   const [globalPopoverOpen, setGlobalPopoverOpen] = useState(false)
   const globalPopoverRef = useRef<HTMLDivElement>(null)
   const globalAddBtnRef = useRef<HTMLButtonElement>(null)
-  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number; maxWidth: number } | null>(null)
+  const globalSectionRef = useRef<HTMLDivElement>(null)
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!globalPopoverOpen) return
@@ -355,14 +356,13 @@ export default function WorldBookPanel() {
   const openGlobalPopover = useCallback(() => {
     setGlobalPopoverOpen((prev) => {
       const next = !prev
-      if (next && globalAddBtnRef.current) {
-        const rect = globalAddBtnRef.current.getBoundingClientRect()
-        const vw = window.innerWidth
-        const margin = 8
+      if (next && globalAddBtnRef.current && globalSectionRef.current) {
+        const btnRect = globalAddBtnRef.current.getBoundingClientRect()
+        const sectionRect = globalSectionRef.current.getBoundingClientRect()
         setPopoverPos({
-          top: rect.bottom + 4,
-          right: vw - rect.right,
-          maxWidth: Math.min(320, rect.right - margin),
+          top: btnRect.bottom + 4,
+          left: sectionRect.left,
+          width: sectionRect.width,
         })
       }
       return next
@@ -390,7 +390,8 @@ export default function WorldBookPanel() {
   const [chatPopoverOpen, setChatPopoverOpen] = useState(false)
   const chatPopoverRef = useRef<HTMLDivElement>(null)
   const chatAddBtnRef = useRef<HTMLButtonElement>(null)
-  const [chatPopoverPos, setChatPopoverPos] = useState<{ top: number; right: number; maxWidth: number } | null>(null)
+  const chatSectionRef = useRef<HTMLDivElement>(null)
+  const [chatPopoverPos, setChatPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!activeChatId) {
@@ -422,14 +423,13 @@ export default function WorldBookPanel() {
   const openChatPopover = useCallback(() => {
     setChatPopoverOpen((prev) => {
       const next = !prev
-      if (next && chatAddBtnRef.current) {
-        const rect = chatAddBtnRef.current.getBoundingClientRect()
-        const vw = window.innerWidth
-        const margin = 8
+      if (next && chatAddBtnRef.current && chatSectionRef.current) {
+        const btnRect = chatAddBtnRef.current.getBoundingClientRect()
+        const sectionRect = chatSectionRef.current.getBoundingClientRect()
         setChatPopoverPos({
-          top: rect.bottom + 4,
-          right: vw - rect.right,
-          maxWidth: Math.min(320, rect.right - margin),
+          top: btnRect.bottom + 4,
+          left: sectionRect.left,
+          width: sectionRect.width,
         })
       }
       return next
@@ -508,7 +508,7 @@ export default function WorldBookPanel() {
   return (
     <div className={styles.panel}>
       {/* Global world books section */}
-      <div className={styles.globalSection}>
+      <div ref={globalSectionRef} className={styles.globalSection}>
         <div className={styles.globalHeader}>
           <Globe size={12} className={styles.globalIcon} />
           <span className={styles.globalLabel}>Always Active</span>
@@ -530,7 +530,7 @@ export default function WorldBookPanel() {
               <div
                 ref={globalPopoverRef}
                 className={styles.globalPopover}
-                style={{ top: popoverPos.top, right: popoverPos.right, maxWidth: popoverPos.maxWidth }}
+                style={{ top: popoverPos.top, left: popoverPos.left, width: popoverPos.width }}
               >
                 {books.length === 0 ? (
                   <div className={styles.globalPopoverEmpty}>No world books available</div>
@@ -577,7 +577,7 @@ export default function WorldBookPanel() {
       </div>
 
       {/* Chat-scoped world books section */}
-      <div className={clsx(styles.chatSection, !activeChatId && styles.chatSectionDisabled)}>
+      <div ref={chatSectionRef} className={clsx(styles.chatSection, !activeChatId && styles.chatSectionDisabled)}>
         <div className={styles.chatHeader}>
           <MessageSquare size={12} className={styles.chatIcon} />
           <span className={styles.chatLabel}>This Chat Only</span>
@@ -600,7 +600,7 @@ export default function WorldBookPanel() {
                 <div
                   ref={chatPopoverRef}
                   className={styles.chatPopover}
-                  style={{ top: chatPopoverPos.top, right: chatPopoverPos.right, maxWidth: chatPopoverPos.maxWidth }}
+                  style={{ top: chatPopoverPos.top, left: chatPopoverPos.left, width: chatPopoverPos.width }}
                 >
                   {books.length === 0 ? (
                     <div className={styles.chatPopoverEmpty}>No world books available</div>

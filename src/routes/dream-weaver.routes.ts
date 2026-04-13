@@ -66,12 +66,12 @@ app.post("/sessions/:id/generate", async (c) => {
   return c.json(session);
 });
 
-// Generate world package
-app.post("/sessions/:id/generate/world", async (c) => {
+// Generate world package (fire-and-forget — progress via WS events)
+app.post("/sessions/:id/generate/world", (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("id");
-  const result = await dreamWeaverSvc.generateWorld(userId, sessionId);
-  return c.json(result);
+  const session = dreamWeaverSvc.generateWorld(userId, sessionId);
+  return c.json(session);
 });
 
 // Finalize
@@ -79,6 +79,15 @@ app.post("/sessions/:id/finalize", async (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("id");
   const result = await dreamWeaverSvc.finalize(userId, sessionId);
+  return c.json(result);
+});
+
+// Extend draft (additive generation)
+app.post("/sessions/:id/extend", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const body = await c.req.json();
+  const result = await dreamWeaverSvc.extendDraft(userId, sessionId, body);
   return c.json(result);
 });
 

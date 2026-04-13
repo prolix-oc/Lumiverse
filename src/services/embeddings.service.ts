@@ -22,7 +22,7 @@ const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
 /** Default safety timeout for embedding API requests. Prevents a hanging
  *  upstream server from stalling the entire generation pipeline.
  *  User-configurable via EmbeddingConfig.request_timeout (seconds). */
-const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 60_000; // 60 seconds
+const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 120_000; // 120 seconds
 
 export type EmbeddingProvider =
   | "openai-compatible"
@@ -406,7 +406,7 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
     vectorize_chat_messages: false,
     vectorize_chat_documents: true,
     chat_memory_mode: "balanced",
-    request_timeout: 60,
+    request_timeout: 120,
   };
 }
 
@@ -1539,9 +1539,10 @@ export async function reindexWorldBookEntries(
 
   await ensureWorldBookVectorVersion(userId);
 
-  for (let i = 0; i < toIndex.length; i += batchSize) {
-    const batch = toIndex.slice(i, i + batchSize);
-
+  /** Process a batch of entries: embed, upsert into LanceDB, update state.
+   *  On timeout/abort failures, retries with halved batch size (min 1).
+   *  Returns the entries that permanently failed after all retries. */
+  const processBatch = async (batch: WorldBookEntry[], currentBatchSize: number): Promise<void> => {
     try {
       const searchTexts = batch.map((entry) => buildWorldBookEntrySearchText(entry));
       const vectors = await cachedEmbedTexts(userId, searchTexts);
@@ -1577,6 +1578,22 @@ export async function reindexWorldBookEntries(
       progress.current += batch.length;
       emitProgress();
     } catch (err) {
+      const isTimeout = err instanceof Error && /timed out|abort/i.test(err.message);
+
+      // Retry with smaller batches if the failure looks like a timeout and
+      // we can still split further.
+      if (isTimeout && currentBatchSize > 1) {
+        const half = Math.max(1, Math.floor(currentBatchSize / 2));
+        console.warn(
+          `[embeddings] Batch of ${batch.length} timed out, retrying in sub-batches of ${half}`
+        );
+        for (let j = 0; j < batch.length; j += half) {
+          await processBatch(batch.slice(j, j + half), half);
+        }
+        return;
+      }
+
+      // Permanent failure — mark entries as errored.
       console.warn("[embeddings] Batch embedding failed:", err);
       const message = err instanceof Error ? err.message : "Batch vector indexing failed";
       updateWorldBookEntriesVectorState(batch.map((entry) => entry.id), "error", null, message);
@@ -1584,6 +1601,11 @@ export async function reindexWorldBookEntries(
       progress.current += batch.length;
       emitProgress();
     }
+  };
+
+  for (let i = 0; i < toIndex.length; i += batchSize) {
+    const batch = toIndex.slice(i, i + batchSize);
+    await processBatch(batch, batchSize);
   }
 
   // Compact all fragments into fewer files, prune old versions, and

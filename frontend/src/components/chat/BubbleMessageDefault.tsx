@@ -87,20 +87,22 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
       onMouseEnter={hasStreamingDetails ? () => setShowTooltip(true) : undefined}
       onMouseLeave={hasStreamingDetails ? () => setShowTooltip(false) : undefined}
     >
-      #{index}
-      <span className={styles.metaDot}>&middot;</span>
-      {formatMetaDate(timestamp)}
+      <span className={styles.metaSegment}>#{index}</span>
+      <span className={styles.metaSegment}>
+        <span className={styles.metaDot}>&middot;</span>
+        {formatMetaDate(timestamp)}
+      </span>
       {tokenCount != null && (
-        <>
+        <span className={styles.metaSegment}>
           <span className={styles.metaDot}>&middot;</span>
           {tokenCount}t
-        </>
+        </span>
       )}
       {isHidden && (
-        <>
+        <span className={styles.metaSegment}>
           <span className={styles.metaDot}>&middot;</span>
           <span className={styles.hiddenBadge}>Hidden</span>
-        </>
+        </span>
       )}
       {showTooltip && hasStreamingDetails && (
         <span className={styles.metaPillTooltip}>

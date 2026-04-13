@@ -148,6 +148,8 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 2px 8px;
   border-radius: 12px;
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
@@ -157,6 +159,12 @@
   background: var(--lumiverse-fill-deepest);
   border: 1px solid var(--lumiverse-border);
   line-height: 1;
+}
+
+.metaSegment {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 .metaDot {

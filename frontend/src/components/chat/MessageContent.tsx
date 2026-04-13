@@ -498,14 +498,20 @@ function resolveRisuAssetTags(text: string, assetMap: Record<string, string>): s
   })
 }
 
-/** Resolve standard <img src="AssetName"> tags where src is an unresolved asset reference. */
+/** Resolve standard <img src="AssetName"> tags where src is an unresolved asset reference.
+ *  Unresolved asset refs are converted to markdown images so they go through the same
+ *  custom renderer (proseImageWrap, lightbox) as Risu <img="..."> tags.
+ *  Already-resolved URLs (absolute paths, http, data:) are left as raw HTML. */
 function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
   IMG_SRC_ASSET_RE.lastIndex = 0
   return text.replace(IMG_SRC_ASSET_RE, (match, before: string, src: string, after: string) => {
-    // Skip already-resolved URLs
+    // Skip already-resolved URLs — these are valid img tags that should render as-is
     if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
     const imageId = resolveAssetId(src, assetMap)
-    if (imageId) return `<img${before} src="/api/v1/images/${imageId}"${after}>`
+    if (imageId) {
+      const alt = src.replace(/[[\]]/g, '')
+      return `\n\n![${alt}](/api/v1/images/${imageId})\n\n`
+    }
     return match
   })
 }

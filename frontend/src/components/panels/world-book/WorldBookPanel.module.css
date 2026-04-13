@@ -58,7 +58,7 @@
 
 .globalPopover {
   position: fixed;
-  min-width: 200px;
+  box-sizing: border-box;
   max-height: 240px;
   overflow-y: auto;
   background: var(--lumiverse-bg);
@@ -264,7 +264,7 @@
 
 .chatPopover {
   position: fixed;
-  min-width: 200px;
+  box-sizing: border-box;
   max-height: 240px;
   overflow-y: auto;
   background: var(--lumiverse-bg);

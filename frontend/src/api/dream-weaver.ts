@@ -203,6 +203,25 @@ export interface DreamWeaverFinalizeResult {
   alreadyFinalized: boolean
 }
 
+export type ExtendTarget =
+  | 'greetings'
+  | 'alternate_fields.description'
+  | 'alternate_fields.personality'
+  | 'alternate_fields.scenario'
+  | 'lorebook_entries'
+  | 'npc_definitions'
+
+export interface ExtendDraftInput {
+  target: ExtendTarget
+  instruction?: string
+  count?: number
+}
+
+export interface ExtendDraftResult {
+  target: ExtendTarget
+  items: any[]
+}
+
 export interface CreateSessionInput {
   dream_text: string
   tone?: string
@@ -539,14 +558,13 @@ export const dreamWeaverApi = {
     apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/generate`, {}),
 
   generateWorld: (id: string) =>
-    apiClient.post<DreamWeaverDraftResult>(
-      `/dream-weaver/sessions/${id}/generate/world`,
-      {},
-      { timeout: 120_000 },
-    ),
+    apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/generate/world`, {}),
 
   finalize: (id: string) =>
     apiClient.post<DreamWeaverFinalizeResult>(`/dream-weaver/sessions/${id}/finalize`, {}),
+
+  extend: (id: string, input: ExtendDraftInput) =>
+    apiClient.post<ExtendDraftResult>(`/dream-weaver/sessions/${id}/extend`, input),
 
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),

@@ -1,25 +1,31 @@
+import { Sparkles } from 'lucide-react'
 import { generateUUID } from '@/lib/uuid'
+import { Spinner } from '@/components/shared/Spinner'
 import { StickySection } from '../components/StickySection'
 import { VoiceGuidanceEditor } from '../components/VoiceGuidanceEditor'
-import type { DreamWeaverAlternateField, DreamWeaverDraft, DreamWeaverGreeting } from '../../../api/dream-weaver'
+import type { DreamWeaverAlternateField, DreamWeaverDraft, DreamWeaverGreeting, ExtendTarget } from '../../../api/dream-weaver'
 import type { SectionStatus } from '../hooks/useDreamWeaverStudio'
 import styles from './SoulTab.module.css'
 
 interface SoulTabProps {
   draft: DreamWeaverDraft | null
+  extending: Record<string, boolean>
   onUpdateCard: (patch: Partial<DreamWeaverDraft['card']>) => void
   onUpdateAlternates: (alternates: DreamWeaverDraft['alternate_fields']) => void
   onUpdateGreetings: (greetings: DreamWeaverDraft['greetings']) => void
   onUpdateVoice: (voice: DreamWeaverDraft['voice_guidance']) => void
+  onExtend: (target: ExtendTarget, instruction?: string) => Promise<void>
   getSectionStatus: (section: string) => SectionStatus
 }
 
 export function SoulTab({
   draft,
+  extending,
   onUpdateCard,
   onUpdateAlternates,
   onUpdateGreetings,
   onUpdateVoice,
+  onExtend,
   getSectionStatus,
 }: SoulTabProps) {
   const updateAlternateField = (
@@ -187,36 +193,51 @@ export function SoulTab({
         status={getSectionStatus('alternate_fields')}
         color="#ff8eac"
       >
-        {(['description', 'personality', 'scenario'] as const).map((fieldType) => (
-          <div key={fieldType} className={styles.alternateGroup}>
-            <h4 className={styles.groupTitle}>{fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} Alternates</h4>
-            {draft.alternate_fields[fieldType].map((alt, idx) => (
-              <div key={alt.id || idx} className={styles.entry}>
-                <input
-                  className={styles.input}
-                  placeholder="Label"
-                  value={alt.label}
-                  onChange={(e) => updateAlternateField(fieldType, idx, { label: e.target.value })}
-                />
-                <textarea
-                  className={styles.entryTextarea}
-                  value={alt.content}
-                  onChange={(e) => updateAlternateField(fieldType, idx, { content: e.target.value })}
-                  placeholder={`Alternate ${fieldType} content...`}
-                  rows={3}
-                />
+        {(['description', 'personality', 'scenario'] as const).map((fieldType) => {
+          const extendTarget = `alternate_fields.${fieldType}` as ExtendTarget
+          const isExtending = extending[extendTarget] ?? false
+
+          return (
+            <div key={fieldType} className={styles.alternateGroup}>
+              <h4 className={styles.groupTitle}>{fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} Alternates</h4>
+              {draft.alternate_fields[fieldType].map((alt, idx) => (
+                <div key={alt.id || idx} className={styles.entry}>
+                  <input
+                    className={styles.input}
+                    placeholder="Label"
+                    value={alt.label}
+                    onChange={(e) => updateAlternateField(fieldType, idx, { label: e.target.value })}
+                  />
+                  <textarea
+                    className={styles.entryTextarea}
+                    value={alt.content}
+                    onChange={(e) => updateAlternateField(fieldType, idx, { content: e.target.value })}
+                    placeholder={`Alternate ${fieldType} content...`}
+                    rows={3}
+                  />
+                  <button
+                    className={styles.deleteEntry}
+                    onClick={() => removeAlternateField(fieldType, idx)}
+                  >&times;</button>
+                </div>
+              ))}
+              <div className={styles.buttonRow}>
                 <button
-                  className={styles.deleteEntry}
-                  onClick={() => removeAlternateField(fieldType, idx)}
-                >&times;</button>
+                  className={styles.addButton}
+                  onClick={() => addAlternateField(fieldType)}
+                >+ Add {fieldType} alternate</button>
+                <button
+                  className={styles.generateButton}
+                  disabled={isExtending}
+                  onClick={() => onExtend(extendTarget)}
+                >
+                  {isExtending ? <Spinner size={11} /> : <Sparkles size={11} />}
+                  Generate
+                </button>
               </div>
-            ))}
-            <button
-              className={styles.addButton}
-              onClick={() => addAlternateField(fieldType)}
-            >+ Add {fieldType} alternate</button>
-          </div>
-        ))}
+            </div>
+          )
+        })}
       </StickySection>
 
       <StickySection
@@ -246,10 +267,20 @@ export function SoulTab({
             >&times;</button>
           </div>
         ))}
-        <button
-          className={styles.addButton}
-          onClick={() => onUpdateGreetings([...draft.greetings, { id: generateUUID(), label: '', content: '' }])}
-        >+ Add Greeting</button>
+        <div className={styles.buttonRow}>
+          <button
+            className={styles.addButton}
+            onClick={() => onUpdateGreetings([...draft.greetings, { id: generateUUID(), label: '', content: '' }])}
+          >+ Add Greeting</button>
+          <button
+            className={styles.generateButton}
+            disabled={extending.greetings ?? false}
+            onClick={() => onExtend('greetings')}
+          >
+            {extending.greetings ? <Spinner size={11} /> : <Sparkles size={11} />}
+            Generate
+          </button>
+        </div>
       </StickySection>
 
       {/* System Prompt */}

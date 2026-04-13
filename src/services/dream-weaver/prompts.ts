@@ -206,3 +206,154 @@ export function buildWorldGenerationPrompt(
 
   return sections.join("\n\n");
 }
+
+// ---------------------------------------------------------------------------
+// Extend (additive generation)
+// ---------------------------------------------------------------------------
+
+export type ExtendTarget =
+  | "greetings"
+  | "alternate_fields.description"
+  | "alternate_fields.personality"
+  | "alternate_fields.scenario"
+  | "lorebook_entries"
+  | "npc_definitions";
+
+export const EXTEND_SYSTEM_PROMPT = `You are Dream Weaver's Extension module. You generate additional entries for an existing character package. Your output is ADDITIVE — it extends the current draft without replacing or duplicating anything already present.
+
+${ANTI_SLOP_RULES}
+
+Return ONLY valid JSON. No markdown, no explanations.`;
+
+function summarizeExistingGreetings(draft: DW_DRAFT_V1): string {
+  if (!draft.greetings?.length) return "None yet.";
+  return draft.greetings
+    .map((g, i) => `${i + 1}. "${g.label}": ${g.content.slice(0, 150)}${g.content.length > 150 ? "..." : ""}`)
+    .join("\n");
+}
+
+function summarizeExistingAlternates(
+  draft: DW_DRAFT_V1,
+  fieldType: string,
+): string {
+  const alts = (draft.alternate_fields as Record<string, Array<{ label: string; content: string }>>)[fieldType];
+  if (!alts?.length) return "None yet.";
+  return alts
+    .map((a, i) => `${i + 1}. "${a.label}": ${a.content.slice(0, 150)}${a.content.length > 150 ? "..." : ""}`)
+    .join("\n");
+}
+
+function summarizeExistingLorebooks(draft: DW_DRAFT_V1): string {
+  if (!draft.lorebooks?.length) return "None yet.";
+  return draft.lorebooks
+    .map((book: any) => {
+      const entryCount = book.entries?.length ?? 0;
+      const keywords = (book.entries || [])
+        .flatMap((e: any) => e.keywords || [])
+        .slice(0, 12);
+      return `- "${book.name}" (${entryCount} entries, keywords: ${keywords.join(", ")})`;
+    })
+    .join("\n");
+}
+
+function summarizeExistingNpcs(draft: DW_DRAFT_V1): string {
+  if (!draft.npc_definitions?.length) return "None yet.";
+  return draft.npc_definitions
+    .map((npc: any) =>
+      `- "${npc.name}" (${npc.role}, ${npc.importance}): ${(npc.description || "").slice(0, 120)}${(npc.description || "").length > 120 ? "..." : ""}`,
+    )
+    .join("\n");
+}
+
+function buildCharacterContext(draft: DW_DRAFT_V1): string {
+  return [
+    `Name: ${draft.card.name}`,
+    `Kind: ${draft.kind}`,
+    `Description: ${draft.card.description.slice(0, 400)}`,
+    `Personality: ${draft.card.personality.slice(0, 400)}`,
+    `Scenario: ${draft.card.scenario.slice(0, 400)}`,
+    `Voice: ${draft.voice_guidance?.compiled?.slice(0, 250) ?? ""}`,
+  ].join("\n");
+}
+
+export function buildExtendPrompt(
+  draft: DW_DRAFT_V1,
+  target: ExtendTarget,
+  count: number,
+  instruction?: string,
+): string {
+  const sections: string[] = [
+    "## Character Context",
+    buildCharacterContext(draft),
+  ];
+
+  if (instruction?.trim()) {
+    sections.push("## User Instruction", instruction.trim());
+  }
+
+  switch (target) {
+    case "greetings":
+      sections.push(
+        "## Existing Greetings",
+        summarizeExistingGreetings(draft),
+        "## Task",
+        `Generate ${count} new greeting(s). Each greeting must be a distinct entry point — different mood, setting, or situation. Do NOT duplicate existing greetings. Each greeting should begin with action or dialogue, 3-5 paragraphs.`,
+        "## Output Format",
+        `{ "greetings": [{ "id": "unique-string", "label": "Short label", "content": "Full greeting text" }] }`,
+      );
+      break;
+
+    case "alternate_fields.description":
+    case "alternate_fields.personality":
+    case "alternate_fields.scenario": {
+      const fieldType = target.split(".")[1];
+      sections.push(
+        `## Base ${fieldType}`,
+        (draft.card as Record<string, string>)[fieldType]?.slice(0, 600) || "(empty)",
+        `## Existing ${fieldType} Alternates`,
+        summarizeExistingAlternates(draft, fieldType),
+        "## Task",
+        `Generate ${count} new alternate(s) for the "${fieldType}" field. Each alternate must present a meaningfully different angle — not cosmetic rewording. Do NOT duplicate existing alternates.`,
+        "## Output Format",
+        `{ "alternates": [{ "id": "unique-string", "label": "Short descriptive label", "content": "Full alternate content" }] }`,
+      );
+      break;
+    }
+
+    case "lorebook_entries":
+      sections.push(
+        "## Existing World Books",
+        summarizeExistingLorebooks(draft),
+        "## Task",
+        `Generate ${count} new world book(s) with entries. Cover new aspects of the world not already present. Each book should have a clear theme and 3-5 entries with keyword triggers.`,
+        "## Output Format",
+        `{ "lorebooks": [{ "id": "unique-string", "name": "Book Name", "entries": [{ "id": "unique-string", "keywords": ["keyword1", "keyword2"], "content": "World detail" }] }] }`,
+      );
+      break;
+
+    case "npc_definitions":
+      sections.push(
+        "## Existing NPCs",
+        summarizeExistingNpcs(draft),
+        "## Task",
+        `Generate ${count} new NPC definition(s). Each NPC must fill a different narrative role and have a clear relationship to ${draft.card.name}. Do NOT duplicate existing NPCs.`,
+        "## Output Format",
+        [
+          `{ "npc_definitions": [{`,
+          `  "id": "unique-string",`,
+          `  "name": "NPC Name",`,
+          `  "role": "short role label",`,
+          `  "description": "who they are and why they matter",`,
+          `  "personality": "behavioral traits and quirks",`,
+          `  "relationship_to_card": "how they relate to ${draft.card.name}",`,
+          `  "keyword_triggers": ["trigger1"],`,
+          `  "importance": "major" | "minor"`,
+          `}] }`,
+        ].join("\n"),
+      );
+      break;
+  }
+
+  sections.push("Generate now.");
+  return sections.join("\n\n");
+}

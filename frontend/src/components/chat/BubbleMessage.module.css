@@ -303,10 +303,17 @@
   letter-spacing: 0.02em;
   flex-wrap: wrap;
   gap: 0;
+  max-width: 100%;
   background: var(--lumiverse-fill-deepest);
   border: 1px solid var(--lumiverse-border);
   line-height: 1;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.metaSegment {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 /* metaPill blur removed — sits inside the card which already has 40px blur */
@@ -557,6 +564,14 @@
 
   .name {
     font-size: calc(15px * var(--lumiverse-font-scale, 1));
+  }
+
+  .metaDot {
+    margin: 0 4px;
+  }
+
+  .metaPill {
+    padding: 3px 8px;
   }
 
   .actionsPill {

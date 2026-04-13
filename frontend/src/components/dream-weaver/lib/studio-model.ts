@@ -70,3 +70,21 @@ export function getSessionStatusLabel(session: DreamWeaverSession): string {
 export function isWorldStale(session: DreamWeaverSession | null): boolean {
   return session?.world_state === 'stale'
 }
+
+export const WEAVING_OPERATIONS = {
+  soul: {
+    title: 'Weaving The Soul',
+    description: 'Shaping the card, voice, and opening from your dream.',
+    steps: ['Reading dream', 'Shaping voice', 'Binding the card'],
+  },
+  world: {
+    title: 'Building The World',
+    description: 'Generating lorebooks and NPC definitions from the soul.',
+    steps: ['Preparing world', 'Building world', 'Assembling lorebooks & NPCs', 'Saving world data'],
+  },
+  finalize: {
+    title: 'Bringing To Life',
+    description: 'Creating your character and preparing the first chat.',
+    steps: ['Saving portrait', 'Creating character', 'Setting up chat', 'Finishing up'],
+  },
+} as const

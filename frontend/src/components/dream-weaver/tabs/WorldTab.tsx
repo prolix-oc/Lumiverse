@@ -1,9 +1,10 @@
 import { Globe, Sparkles } from 'lucide-react'
 import { generateUUID } from '@/lib/uuid'
 import { Button } from '@/components/shared/FormComponents'
+import { Spinner } from '@/components/shared/Spinner'
 import { StickySection } from '../components/StickySection'
 import { CollapsibleGroup } from '../components/CollapsibleGroup'
-import type { DreamWeaverDraft } from '../../../api/dream-weaver'
+import type { DreamWeaverDraft, ExtendTarget } from '../../../api/dream-weaver'
 import type { SectionStatus } from '../hooks/useDreamWeaverStudio'
 import { hasWorldContent } from '../lib/studio-model'
 import styles from './WorldTab.module.css'
@@ -11,20 +12,24 @@ import styles from './WorldTab.module.css'
 interface WorldTabProps {
   draft: DreamWeaverDraft | null
   generatingWorld: boolean
+  extending: Record<string, boolean>
   worldStale: boolean
   onUpdateLorebooks: (lorebooks: DreamWeaverDraft['lorebooks']) => void
   onUpdateNpcs: (npcs: DreamWeaverDraft['npc_definitions']) => void
   onGenerateWorld: () => Promise<void>
+  onExtend: (target: ExtendTarget, instruction?: string) => Promise<void>
   getSectionStatus: (section: string) => SectionStatus
 }
 
 export function WorldTab({
   draft,
   generatingWorld,
+  extending,
   worldStale,
   onUpdateLorebooks,
   onUpdateNpcs,
   onGenerateWorld,
+  onExtend,
   getSectionStatus,
 }: WorldTabProps) {
   if (!draft) {
@@ -55,6 +60,9 @@ export function WorldTab({
       </div>
     )
   }
+
+  const extendingLorebooks = extending.lorebook_entries ?? false
+  const extendingNpcs = extending.npc_definitions ?? false
 
   return (
     <div className={styles.worldTab}>
@@ -141,12 +149,22 @@ export function WorldTab({
             >+ Add Entry</button>
           </CollapsibleGroup>
         ))}
-        <button
-          className={styles.addButton}
-          onClick={() => {
-            onUpdateLorebooks([...draft.lorebooks, { id: generateUUID(), name: 'New World Book', entries: [] }])
-          }}
-        >+ Add World Book</button>
+        <div className={styles.buttonRow}>
+          <button
+            className={styles.addButton}
+            onClick={() => {
+              onUpdateLorebooks([...draft.lorebooks, { id: generateUUID(), name: 'New World Book', entries: [] }])
+            }}
+          >+ Add World Book</button>
+          <button
+            className={styles.generateButton}
+            disabled={extendingLorebooks}
+            onClick={() => onExtend('lorebook_entries')}
+          >
+            {extendingLorebooks ? <Spinner size={11} /> : <Sparkles size={11} />}
+            Generate
+          </button>
+        </div>
       </StickySection>
 
       <StickySection
@@ -177,10 +195,20 @@ export function WorldTab({
             </div>
           </CollapsibleGroup>
         ))}
-        <button
-          className={styles.addButton}
-          onClick={() => onUpdateNpcs([...draft.npc_definitions, { id: generateUUID(), name: '', role: '', description: '', personality: '', relationship_to_card: '', keyword_triggers: [], importance: 'minor' }])}
-        >+ Add NPC</button>
+        <div className={styles.buttonRow}>
+          <button
+            className={styles.addButton}
+            onClick={() => onUpdateNpcs([...draft.npc_definitions, { id: generateUUID(), name: '', role: '', description: '', personality: '', relationship_to_card: '', keyword_triggers: [], importance: 'minor' }])}
+          >+ Add NPC</button>
+          <button
+            className={styles.generateButton}
+            disabled={extendingNpcs}
+            onClick={() => onExtend('npc_definitions')}
+          >
+            {extendingNpcs ? <Spinner size={11} /> : <Sparkles size={11} />}
+            Generate
+          </button>
+        </div>
       </StickySection>
     </div>
   )

@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
-import { Sparkles, Wand2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { Button } from '@/components/shared/FormComponents'
@@ -11,6 +10,7 @@ import { useDreamWeaverStudio, type TabId } from './hooks/useDreamWeaverStudio'
 import { useVisualStudio } from './hooks/useVisualStudio'
 import { IconRail } from './components/IconRail'
 import { DreamSidePanel } from './components/DreamSidePanel'
+import { WeavingOverlay } from './components/WeavingOverlay'
 import { SoulTab } from './tabs/SoulTab'
 import { WorldTab } from './tabs/WorldTab'
 import { VisualsTab } from './tabs/VisualsTab'
@@ -154,63 +154,56 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                   </nav>
 
                   <div className={styles.canvas} ref={canvasRef}>
-                    {showWeavingCanvas ? (
-                      <div className={styles.weavingState}>
-                        <div className={styles.weavingGlyph} aria-hidden="true">
-                          <span className={styles.weavingHalo} />
-                          <span className={styles.weavingCore}>
-                            <Sparkles size={18} />
-                          </span>
-                        </div>
-                        <div className={styles.weavingCopy}>
-                          <p className={styles.weavingEyebrow}>Dream Weaver</p>
-                          <h3 className={styles.weavingTitle}>Weaving The Soul</h3>
-                          <p className={styles.weavingText}>
-                            Shaping the card, voice, and opening from your dream.
-                          </p>
-                        </div>
-                        <div className={styles.weavingSteps} aria-label="Generation stages">
-                          <div className={styles.weavingStep}>
-                            <Wand2 size={14} />
-                            <span>Reading dream</span>
-                          </div>
-                          <div className={styles.weavingStep}>
-                            <Wand2 size={14} />
-                            <span>Shaping voice</span>
-                          </div>
-                          <div className={styles.weavingStep}>
-                            <Wand2 size={14} />
-                            <span>Binding the card</span>
-                          </div>
-                        </div>
-                      </div>
-                    ) : studio.activeTab === 'soul' && (
-                      <SoulTab
-                        draft={studio.draft}
-                        onUpdateCard={studio.updateDraftCard}
-                        onUpdateAlternates={(value) => studio.updateDraftField('alternate_fields', value)}
-                        onUpdateGreetings={(value) => studio.updateDraftField('greetings', value)}
-                        onUpdateVoice={(voice) => studio.updateDraftField('voice_guidance', voice)}
-                        getSectionStatus={studio.getSectionStatus}
+                    {studio.finalizing ? (
+                      <WeavingOverlay
+                        operation="finalize"
+                        currentStepIndex={studio.progress?.operation === 'finalize' ? studio.progress.stepIndex : -1}
                       />
-                    )}
-                    {studio.activeTab === 'world' && (
-                      <WorldTab
-                        draft={studio.draft}
-                        generatingWorld={studio.generatingWorld}
-                        worldStale={isWorldStale(studio.session)}
-                        onUpdateLorebooks={(value) => studio.updateDraftField('lorebooks', value)}
-                        onUpdateNpcs={(value) => studio.updateDraftField('npc_definitions', value)}
-                        onGenerateWorld={studio.generateWorld}
-                        getSectionStatus={studio.getSectionStatus}
+                    ) : showWeavingCanvas ? (
+                      <WeavingOverlay
+                        operation="soul"
+                        currentStepIndex={studio.progress?.operation === 'soul' ? studio.progress.stepIndex : -1}
                       />
-                    )}
-                    {studio.activeTab === 'visuals' && (
-                      <VisualsTab
-                        draft={studio.draft}
-                        worldStale={isWorldStale(studio.session)}
-                        visuals={visuals}
+                    ) : studio.generatingWorld ? (
+                      <WeavingOverlay
+                        operation="world"
+                        currentStepIndex={studio.progress?.operation === 'world' ? studio.progress.stepIndex : -1}
                       />
+                    ) : (
+                      <>
+                        {studio.activeTab === 'soul' && (
+                          <SoulTab
+                            draft={studio.draft}
+                            extending={studio.extending}
+                            onUpdateCard={studio.updateDraftCard}
+                            onUpdateAlternates={(value) => studio.updateDraftField('alternate_fields', value)}
+                            onUpdateGreetings={(value) => studio.updateDraftField('greetings', value)}
+                            onUpdateVoice={(voice) => studio.updateDraftField('voice_guidance', voice)}
+                            onExtend={studio.extendField}
+                            getSectionStatus={studio.getSectionStatus}
+                          />
+                        )}
+                        {studio.activeTab === 'world' && (
+                          <WorldTab
+                            draft={studio.draft}
+                            generatingWorld={studio.generatingWorld}
+                            extending={studio.extending}
+                            worldStale={isWorldStale(studio.session)}
+                            onUpdateLorebooks={(value) => studio.updateDraftField('lorebooks', value)}
+                            onUpdateNpcs={(value) => studio.updateDraftField('npc_definitions', value)}
+                            onGenerateWorld={studio.generateWorld}
+                            onExtend={studio.extendField}
+                            getSectionStatus={studio.getSectionStatus}
+                          />
+                        )}
+                        {studio.activeTab === 'visuals' && (
+                          <VisualsTab
+                            draft={studio.draft}
+                            worldStale={isWorldStale(studio.session)}
+                            visuals={visuals}
+                          />
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
