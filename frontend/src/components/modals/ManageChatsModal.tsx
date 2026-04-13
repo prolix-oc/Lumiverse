@@ -254,16 +254,17 @@ export default function ManageChatsModal() {
       e.target.value = ''
 
       setImportingSt(true)
-      try {
-        for (const file of Array.from(files)) {
+      let imported = 0
+      for (const file of Array.from(files)) {
+        try {
           await chatsApi.importFromSt(characterId, file)
+          imported++
+        } catch (err) {
+          console.error('[ManageChats] Failed to import ST chat:', file.name, err)
         }
-        await fetchChats()
-      } catch (err) {
-        console.error('[ManageChats] Failed to import ST chat:', err)
-      } finally {
-        setImportingSt(false)
       }
+      if (imported > 0) await fetchChats()
+      setImportingSt(false)
     },
     [characterId, fetchChats]
   )

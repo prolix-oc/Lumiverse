@@ -190,13 +190,13 @@ app.post("/import-st", async (c) => {
     return c.json({ error: "Expected multipart/form-data" }, 400);
   }
 
-  const characterId = formData.get("character_id");
-  const file = formData.get("file");
+  const characterId = formData.get("character_id") as string | null;
+  const file = formData.get("file") as File | null;
 
-  if (typeof characterId !== "string" || !characterId) {
+  if (!characterId) {
     return c.json({ error: "character_id is required" }, 400);
   }
-  if (!(file instanceof File)) {
+  if (!file) {
     return c.json({ error: "file is required" }, 400);
   }
 
@@ -205,7 +205,7 @@ app.post("/import-st", async (c) => {
   if (lines.length === 0) return c.json({ error: "File is empty" }, 400);
 
   // Detect and parse optional ST metadata header (line 0)
-  let chatName = file.name.replace(/\.jsonl$/i, "");
+  let chatName = (file.name || "import").replace(/\.jsonl$/i, "");
   let chatCreatedAt: number | undefined;
 
   try {
@@ -240,7 +240,18 @@ app.post("/import-st", async (c) => {
   for (let i = startLine; i < lines.length; i++) {
     try {
       const msg = JSON.parse(lines[i]);
-      const content = msg.mes || msg.content || "";
+      const msgSwipes: string[] | undefined = Array.isArray(msg.swipes) ? msg.swipes : undefined;
+      const swipeId: number | undefined = typeof msg.swipe_id === "number" ? msg.swipe_id : undefined;
+
+      // ST sometimes leaves `mes` empty when the active swipe holds the content.
+      // Resolve: mes → swipes[swipe_id] → swipes[0] → "".
+      const content =
+        msg.mes ||
+        msg.content ||
+        (msgSwipes && swipeId !== undefined ? msgSwipes[swipeId] : undefined) ||
+        (msgSwipes ? msgSwipes[0] : undefined) ||
+        "";
+
       if (!content && !msg.name) continue;
 
       messages.push({
@@ -248,8 +259,8 @@ app.post("/import-st", async (c) => {
         name: msg.name || (msg.is_user ? "User" : "Character"),
         content,
         send_date: parseMessageDate(msg),
-        swipes: Array.isArray(msg.swipes) ? msg.swipes : undefined,
-        swipe_id: typeof msg.swipe_id === "number" ? msg.swipe_id : undefined,
+        swipes: msgSwipes,
+        swipe_id: swipeId,
         extra: msg.extra || undefined,
       });
     } catch { /* skip unparseable lines */ }
