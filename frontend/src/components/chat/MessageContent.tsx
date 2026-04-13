@@ -246,22 +246,35 @@ marked.setOptions({
 })
 
 // ── HTML Island Isolation ──
-// Detects self-contained HTML blocks containing <style> tags and extracts them
-// for Shadow DOM rendering, preventing markdown parsing from breaking interactive
-// HTML (CSS checkbox/radio hacks, tabs, etc.) and isolating their styles.
+// Detects self-contained HTML blocks containing <style> tags or significant
+// inline styling and extracts them for Shadow DOM rendering, preventing markdown
+// parsing from breaking interactive/styled HTML (CSS checkbox/radio hacks, tabs,
+// phone screens, etc.) and isolating their styles.
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
 const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details)\b/i
+const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
+
+/** Detect HTML blocks with enough inline styling to warrant island extraction. */
+function hasSignificantInlineStyles(html: string): boolean {
+  INLINE_STYLE_ATTR_RE.lastIndex = 0
+  let count = 0
+  while (INLINE_STYLE_ATTR_RE.exec(html)) {
+    if (++count >= 3) return true
+  }
+  return false
+}
 
 function extractHtmlIslands(
   raw: string,
   isStreaming: boolean,
 ): { content: string; islands: string[] } {
-  if (!/<style[\s>]/i.test(raw)) return { content: raw, islands: [] }
+  const hasStyleTag = /<style[\s>]/i.test(raw)
+  if (!hasStyleTag && !/\bstyle\s*=/i.test(raw)) return { content: raw, islands: [] }
 
-  // Don't extract during streaming if a <style> tag is still unclosed
-  if (isStreaming) {
+  // Don't extract <style>-based islands during streaming if a <style> tag is still unclosed
+  if (isStreaming && hasStyleTag) {
     const opens = (raw.match(/<style[\s>]/gi) || []).length
     const closes = (raw.match(/<\/style\s*>/gi) || []).length
     if (opens > closes) return { content: raw, islands: [] }
@@ -275,8 +288,9 @@ function extractHtmlIslands(
   while (i < lines.length) {
     const trimmed = lines[i].trim()
 
-    // Strategy 1: Block-level element that might wrap a <style> block.
-    // Collect the entire balanced tag tree, then check for <style> inside.
+    // Strategy 1: Block-level element that might wrap a <style> block or
+    // contain significant inline styling (e.g. phone screens, UI mockups).
+    // Collect the entire balanced tag tree, then check for isolation criteria.
     const blockMatch = trimmed.match(BLOCK_ELEMENT_RE)
     if (blockMatch) {
       const blockLines: string[] = []
@@ -295,8 +309,8 @@ function extractHtmlIslands(
 
       const blockContent = blockLines.join('\n')
 
-      // Only isolate if the block is balanced and contains <style>
-      if (depth <= 0 && /<style[\s>]/i.test(blockContent)) {
+      // Isolate if balanced and contains <style> or significant inline styling
+      if (depth <= 0 && (/<style[\s>]/i.test(blockContent) || hasSignificantInlineStyles(blockContent))) {
         const idx = islands.length
         islands.push(blockContent)
         output.push('', `<!--${HTML_ISLAND_TOKEN}_${idx}-->`, '')
@@ -395,8 +409,7 @@ function processMarkdownInIsland(html: string): string {
     if (/^<!--ISLAND_STYLE_\d+-->$/.test(part.trim())) continue
     if (!/[*_`~\[#\-]/.test(part)) continue
 
-    let processed = (marked.parse(part, { async: false }) as string).replace(/\n$/, '')
-    parts[i] = processed
+    parts[i] = marked.parseInline(part, { async: false }) as string
   }
 
   let result = parts.join('')
@@ -457,13 +470,42 @@ function IsolatedHtml({ html }: { html: string }) {
 // Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
 const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
 
+// Standard <img src="AssetName"> where src is a relative asset reference (not a URL)
+const IMG_SRC_ASSET_RE = /<img\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>/gi
+
+/** Strip path prefix and file extension to get the asset stem. */
+function assetStem(name: string): string {
+  const base = name.split('/').pop() || name
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(0, dot) : base
+}
+
+/** Look up an asset reference in the map — tries exact, then stem. Handles embeded:// URIs. */
+function resolveAssetId(src: string, assetMap: Record<string, string>): string | undefined {
+  // Strip Risu embeded:// prefix
+  const cleaned = src.startsWith('embeded://') ? src.slice('embeded://'.length) : src
+  return assetMap[cleaned] ?? assetMap[assetStem(cleaned)]
+}
+
 /** Resolve Risu <img="AssetName"> tags to rendered image markdown using the character's stored asset map. */
 function resolveRisuAssetTags(text: string, assetMap: Record<string, string>): string {
   if (!text.includes('<img="')) return text
   RISU_IMG_TAG_RE.lastIndex = 0
   return text.replace(RISU_IMG_TAG_RE, (match, assetName: string) => {
-    const imageId = assetMap[assetName]
+    const imageId = resolveAssetId(assetName, assetMap)
     if (imageId) return `\n\n![${assetName.replace(/[[\]]/g, '')}](/api/v1/images/${imageId})\n\n`
+    return match
+  })
+}
+
+/** Resolve standard <img src="AssetName"> tags where src is an unresolved asset reference. */
+function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
+  IMG_SRC_ASSET_RE.lastIndex = 0
+  return text.replace(IMG_SRC_ASSET_RE, (match, before: string, src: string, after: string) => {
+    // Skip already-resolved URLs
+    if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
+    const imageId = resolveAssetId(src, assetMap)
+    if (imageId) return `<img${before} src="/api/v1/images/${imageId}"${after}>`
     return match
   })
 }
@@ -513,9 +555,16 @@ export default function MessageContent({
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
   )
 
-  // Resolve Risu <img="AssetName"> tags before regex/macro processing
+  // Resolve Risu asset tags before regex/macro processing:
+  // 1. <img="AssetName"> (Risu custom syntax) → markdown image
+  // 2. <img src="AssetName"> (standard HTML with relative asset ref) → resolved src URL
   const risuResolvedContent = useMemo(
-    () => risuAssetMap ? resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap) : interceptorCleanedContent,
+    () => {
+      if (!risuAssetMap) return interceptorCleanedContent
+      let resolved = resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap)
+      resolved = resolveImgSrcAssetTags(resolved, risuAssetMap)
+      return resolved
+    },
     [interceptorCleanedContent, risuAssetMap],
   )
 

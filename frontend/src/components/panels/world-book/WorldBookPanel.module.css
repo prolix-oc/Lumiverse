@@ -58,7 +58,6 @@
 
 .globalPopover {
   position: fixed;
-  transform: translateX(-100%);
   min-width: 200px;
   max-height: 240px;
   overflow-y: auto;
@@ -265,7 +264,6 @@
 
 .chatPopover {
   position: fixed;
-  transform: translateX(-100%);
   min-width: 200px;
   max-height: 240px;
   overflow-y: auto;

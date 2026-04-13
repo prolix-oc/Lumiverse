@@ -508,7 +508,7 @@ export default function CharacterEditorPage() {
   const [wbPopoverOpen, setWbPopoverOpen] = useState(false)
   const wbAddBtnRef = useRef<HTMLButtonElement>(null)
   const wbPopoverRef = useRef<HTMLDivElement>(null)
-  const [wbPopoverPos, setWbPopoverPos] = useState<{ top: number; left: number } | null>(null)
+  const [wbPopoverPos, setWbPopoverPos] = useState<{ top: number; left: number; maxWidth: number } | null>(null)
 
   useEffect(() => {
     if (!wbPopoverOpen) return
@@ -529,7 +529,14 @@ export default function CharacterEditorPage() {
       const next = !prev
       if (next && wbAddBtnRef.current) {
         const rect = wbAddBtnRef.current.getBoundingClientRect()
-        setWbPopoverPos({ top: rect.bottom + 4, left: rect.left })
+        const vw = window.innerWidth
+        const margin = 8
+        const left = Math.max(margin, rect.left)
+        setWbPopoverPos({
+          top: rect.bottom + 4,
+          left,
+          maxWidth: vw - left - margin,
+        })
       }
       return next
     })
@@ -1070,7 +1077,7 @@ export default function CharacterEditorPage() {
                             <div
                               ref={wbPopoverRef}
                               className={styles.charWbPopover}
-                              style={{ top: wbPopoverPos.top, left: wbPopoverPos.left }}
+                              style={{ top: wbPopoverPos.top, left: wbPopoverPos.left, maxWidth: wbPopoverPos.maxWidth }}
                             >
                               {worldBooks.length === 0 ? (
                                 <div className={styles.charWbPopoverEmpty}>No world books available</div>

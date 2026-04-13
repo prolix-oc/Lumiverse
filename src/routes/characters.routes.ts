@@ -658,6 +658,12 @@ app.post("/import-bulk", async (c) => {
             {
               first_mes: character.first_mes,
               description: character.description,
+              personality: character.personality,
+              scenario: character.scenario,
+              mes_example: character.mes_example,
+              system_prompt: character.system_prompt,
+              post_history_instructions: character.post_history_instructions,
+              creator_notes: character.creator_notes,
               alternate_greetings: character.alternate_greetings,
             },
             bulkAssetImageMap,
