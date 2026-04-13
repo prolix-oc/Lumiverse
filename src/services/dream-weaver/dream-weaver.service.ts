@@ -12,6 +12,9 @@ import * as connectionsSvc from "../connections.service";
 import * as charactersSvc from "../characters.service";
 import * as chatsSvc from "../chats.service";
 import * as imagesSvc from "../images.service";
+import * as worldBooksSvc from "../world-books.service";
+import * as regexScriptsSvc from "../regex-scripts.service";
+import { setCharacterWorldBookIds } from "../../utils/character-world-books";
 import {
   DREAM_WEAVER_SYSTEM_PROMPT,
   WORLD_GENERATION_SYSTEM_PROMPT,
@@ -216,11 +219,11 @@ interface DreamWeaverWorldDraft {
 }
 
 function parseWorldDraftResponse(content: string): DreamWeaverWorldDraft {
-  const trimmed = content.trim();
-  const jsonContent = trimmed.startsWith("```")
-    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
-    : trimmed;
-  const parsed = JSON.parse(jsonContent) as Partial<DreamWeaverWorldDraft>;
+  const parsed = safeParseJson(content) as Partial<DreamWeaverWorldDraft> | null;
+  if (!parsed) {
+    console.warn("[DreamWeaver] Could not parse world draft response — returning empty world");
+    return { lorebooks: [], npc_definitions: [] };
+  }
 
   return {
     lorebooks: Array.isArray(parsed.lorebooks) ? parsed.lorebooks : [],
@@ -664,6 +667,116 @@ function buildGenerationPrompt(session: DreamWeaverSession): string {
   return prompt;
 }
 
+// ---------------------------------------------------------------------------
+// Finalize helpers — world books, NPCs, voice, regex
+// ---------------------------------------------------------------------------
+
+function buildSystemPromptWithVoiceGuidance(draft: DW_DRAFT_V1): string {
+  let systemPrompt = draft.card.system_prompt || "";
+  const compiled = draft.voice_guidance?.compiled?.trim();
+  if (compiled) {
+    const voiceSection = `## Voice & Speech Patterns\n${compiled}`;
+    systemPrompt = systemPrompt.trim()
+      ? `${systemPrompt.trim()}\n\n${voiceSection}`
+      : voiceSection;
+  }
+  return systemPrompt;
+}
+
+function formatNpcEntryContent(npc: any, characterName: string): string {
+  const parts: string[] = [];
+  const header = npc.role ? `[${npc.name} — ${npc.role}]` : `[${npc.name}]`;
+  parts.push(header);
+  if (npc.description) parts.push(npc.description);
+  if (npc.personality) parts.push(`Personality: ${npc.personality}`);
+  if (npc.relationship_to_card) {
+    parts.push(`Relationship to ${characterName}: ${npc.relationship_to_card}`);
+  }
+  return parts.join("\n");
+}
+
+function createWorldBooksFromDraft(
+  userId: string,
+  draft: DW_DRAFT_V1,
+): string[] {
+  const worldBookIds: string[] = [];
+
+  // Lorebooks → world books
+  for (const lorebook of draft.lorebooks || []) {
+    const entries = lorebook.entries || [];
+    if (!entries.length) continue;
+
+    const book = worldBooksSvc.createWorldBook(userId, {
+      name: lorebook.name || `${draft.card.name} — Lore`,
+    });
+
+    for (const entry of entries) {
+      const keywords: string[] = Array.isArray(entry.keywords)
+        ? entry.keywords
+        : typeof entry.keywords === "string"
+          ? entry.keywords.split(",").map((k: string) => k.trim()).filter(Boolean)
+          : [];
+
+      worldBooksSvc.createEntry(userId, book.id, {
+        key: keywords,
+        content: entry.content || "",
+        position: 0,
+        priority: 10,
+      });
+    }
+
+    worldBookIds.push(book.id);
+  }
+
+  // NPC definitions → world book with keyword-triggered entries
+  const npcs = draft.npc_definitions || [];
+  if (npcs.length > 0) {
+    const npcBook = worldBooksSvc.createWorldBook(userId, {
+      name: `${draft.card.name} — NPCs`,
+    });
+
+    for (const npc of npcs) {
+      const keywords: string[] = Array.isArray(npc.keyword_triggers) && npc.keyword_triggers.length > 0
+        ? npc.keyword_triggers
+        : [npc.name].filter(Boolean);
+
+      worldBooksSvc.createEntry(userId, npcBook.id, {
+        key: keywords,
+        content: formatNpcEntryContent(npc, draft.card.name),
+        position: 0,
+        priority: npc.importance === "major" ? 20 : 10,
+        constant: npc.importance === "major",
+      });
+    }
+
+    worldBookIds.push(npcBook.id);
+  }
+
+  return worldBookIds;
+}
+
+function createRegexScriptsFromDraft(
+  userId: string,
+  characterId: string,
+  draft: DW_DRAFT_V1,
+): void {
+  for (const script of draft.regex_scripts || []) {
+    if (!script.name || !script.find_regex) continue;
+
+    regexScriptsSvc.createRegexScript(userId, {
+      name: script.name,
+      find_regex: script.find_regex,
+      replace_string: script.replace_string || "",
+      flags: script.flags || "gi",
+      target: script.target || "response",
+      scope: "character",
+      scope_id: characterId,
+      description: script.description || "",
+      folder: `Dream Weaver — ${draft.card.name}`,
+    });
+  }
+}
+
 export async function finalize(
   userId: string,
   sessionId: string,
@@ -721,7 +834,11 @@ export async function finalize(
 
   emitProgress(userId, sessionId, "finalize", "creating_character", 1, 4, "Creating character");
 
-  const extensions: Record<string, unknown> = {
+  // Create world books from lorebooks + NPC definitions (before character so
+  // we can attach the IDs at creation time).
+  const worldBookIds = createWorldBooksFromDraft(userId, draft);
+
+  let extensions: Record<string, unknown> = {
     alternate_fields: draft.alternate_fields,
     dream_weaver: {
       session_id: sessionId,
@@ -731,13 +848,20 @@ export async function finalize(
     },
   };
 
+  if (worldBookIds.length > 0) {
+    extensions = setCharacterWorldBookIds(extensions as Record<string, any>, worldBookIds);
+  }
+
+  // Merge voice guidance into system_prompt so it's always in context
+  const systemPrompt = buildSystemPromptWithVoiceGuidance(draft);
+
   const character = charactersSvc.createCharacter(userId, {
     name: draft.card.name,
     description: draft.card.description,
     personality: draft.card.personality,
     scenario: draft.card.scenario,
     first_mes: draft.card.first_mes,
-    system_prompt: draft.card.system_prompt,
+    system_prompt: systemPrompt,
     post_history_instructions: draft.card.post_history_instructions,
     tags: draft.meta.tags,
     alternate_greetings: draft.greetings.slice(1).map((greeting) => greeting.content),
@@ -746,6 +870,9 @@ export async function finalize(
   if (portraitImageId) {
     charactersSvc.setCharacterImage(userId, character.id, portraitImageId);
   }
+
+  // Create character-scoped regex scripts
+  createRegexScriptsFromDraft(userId, character.id, draft);
 
   emitProgress(userId, sessionId, "finalize", "creating_chat", 2, 4, "Setting up chat");
 
@@ -779,6 +906,88 @@ export function deleteSession(userId: string, sessionId: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Truncated-JSON repair
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt to repair JSON that was truncated mid-stream (e.g. by hitting
+ * max_tokens). Closes unterminated strings and any open brackets/braces,
+ * and strips trailing commas. Returns the repaired string — callers should
+ * still wrap `JSON.parse()` in a try/catch because not all damage is
+ * recoverable.
+ */
+function repairTruncatedJson(raw: string): string {
+  let repaired = raw;
+
+  let inString = false;
+  let escaped = false;
+  const openStack: string[] = [];
+
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && inString) {
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString) {
+      if (ch === "{") openStack.push("}");
+      else if (ch === "[") openStack.push("]");
+      else if (ch === "}" || ch === "]") openStack.pop();
+    }
+  }
+
+  // Close an unterminated string (the most common truncation symptom)
+  if (inString) {
+    repaired += '"';
+  }
+
+  // Close all remaining open brackets/braces, stripping trailing commas
+  // before each closing token so the JSON stays valid.
+  while (openStack.length > 0) {
+    repaired = repaired.replace(/,\s*$/, "");
+    repaired += openStack.pop();
+  }
+
+  return repaired;
+}
+
+/**
+ * Strip optional code-fence wrapper and parse JSON. On failure, attempt
+ * truncation repair and retry once. Returns `null` if both attempts fail.
+ */
+function safeParseJson(content: string): any | null {
+  const trimmed = content.trim();
+  const jsonContent = trimmed.startsWith("```")
+    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
+    : trimmed;
+
+  try {
+    return JSON.parse(jsonContent);
+  } catch {
+    // First parse failed — try repairing truncated JSON
+  }
+
+  try {
+    const repaired = repairTruncatedJson(jsonContent);
+    return JSON.parse(repaired);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Extend draft (additive generation)
 // ---------------------------------------------------------------------------
 
@@ -794,12 +1003,11 @@ export interface ExtendDraftResult {
 }
 
 function parseExtendResponse(content: string, target: ExtendTarget): any[] {
-  const trimmed = content.trim();
-  const jsonContent = trimmed.startsWith("```")
-    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
-    : trimmed;
-
-  const parsed = JSON.parse(jsonContent);
+  const parsed = safeParseJson(content);
+  if (!parsed) {
+    console.warn("[DreamWeaver] Could not parse extend response — returning empty items");
+    return [];
+  }
 
   switch (target) {
     case "greetings":
@@ -848,7 +1056,7 @@ export async function extendDraft(
     ],
     parameters: {
       temperature: 0.9,
-      max_tokens: 4000,
+      max_tokens: 6000,
     },
     connection_id: connection.id,
   });

@@ -60,7 +60,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       personality: character.personality || "",
       scenario: character.scenario || "",
       persona: buildPersonaWithAddons(persona),
-      mesExamples: character.mes_example || "",
+      mesExamples: character.mes_example || getDreamWeaverVoiceGuidance(character) || "",
       mesExamplesRaw: character.mes_example || "",
       systemPrompt: character.system_prompt || "",
       postHistoryInstructions: character.post_history_instructions || "",
@@ -138,6 +138,19 @@ export function resolveGroupCharacterNames(
     if (name) names.push(name);
   }
   return names.length > 0 ? names : undefined;
+}
+
+/**
+ * Dream Weaver cards don't populate `mes_example` — they use voice guidance
+ * instead. When the `dialogue_examples` block resolves `{{mesExamples}}`, this
+ * lets DW cards fill that slot with their compiled voice guidance so preset
+ * prompt orders that include dialogue examples still work.
+ */
+function getDreamWeaverVoiceGuidance(character: Character): string {
+  const dw = character.extensions?.dream_weaver as
+    | { voice_guidance?: { compiled?: string } }
+    | undefined;
+  return dw?.voice_guidance?.compiled?.trim() || "";
 }
 
 function buildPersonaWithAddons(persona: Persona | null): string {

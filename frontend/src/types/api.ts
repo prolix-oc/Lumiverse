@@ -638,6 +638,7 @@ export interface WorldBookDiagnostics {
     matched_comment: string | null;
     score_breakdown: {
       vectorSimilarity: number;
+      lexicalContentBoost: number;
       primaryExact: number;
       primaryPartial: number;
       secondaryExact: number;
@@ -678,6 +679,7 @@ export interface WorldBookDiagnostics {
     matched_comment: string | null;
     score_breakdown: {
       vectorSimilarity: number;
+      lexicalContentBoost: number;
       primaryExact: number;
       primaryPartial: number;
       secondaryExact: number;

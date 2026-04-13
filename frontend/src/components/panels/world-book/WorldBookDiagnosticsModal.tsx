@@ -28,6 +28,7 @@ const DIAGNOSTIC_BREAKDOWN_LABELS: Array<{
   label: string
 }> = [
   { key: 'vectorSimilarity', label: 'Vector' },
+  { key: 'lexicalContentBoost', label: 'FTS content' },
   { key: 'primaryExact', label: 'Primary exact' },
   { key: 'primaryPartial', label: 'Primary partial' },
   { key: 'secondaryExact', label: 'Alias exact' },

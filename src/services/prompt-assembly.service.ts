@@ -1565,6 +1565,7 @@ interface VectorQueryLexicalState {
 
 export interface VectorScoreBreakdown {
   vectorSimilarity: number;
+  lexicalContentBoost: number;
   primaryExact: number;
   primaryPartial: number;
   secondaryExact: number;
@@ -2365,7 +2366,8 @@ function scoreVectorWorldInfoCandidate(
   };
   const matchedComment = rawCommentMatches.matchedValues[0] ?? null;
 
-  const vectorSimilarity = distanceToSimilarity(candidate.distance);
+  const isFtsOnly = !Number.isFinite(candidate.distance);
+  const vectorSimilarity = distanceToSimilarity(isFtsOnly ? 2 : candidate.distance);
   const primaryExactScore = primaryMatches.exactScore;
   const primaryPartialScore = primaryMatches.partialScore;
   const secondaryExactScore = secondaryMatches.exactScore;
@@ -2376,6 +2378,12 @@ function scoreVectorWorldInfoCandidate(
   const focusBoost = focusOverlap.score * 0.05;
   const priorityScore = clamp01((entry.priority || 0) / 100) * preset.weights.priority;
   const vectorScore = vectorSimilarity * preset.weights.vector;
+  // FTS content-level match: provides a secondary vector-like signal when the entry's
+  // content (not just keys) matches the query. Critical for FTS-only candidates that
+  // weren't returned by vector nearest-neighbor search and have zero vectorScore.
+  const lexicalContentBoost = candidate.lexical_score != null && candidate.lexical_score > 0
+    ? clamp01(Math.log1p(candidate.lexical_score) / Math.log1p(30)) * preset.weights.vector * 0.35
+    : 0;
   const lexicalSpecificityAnchor = Math.max(
     primaryMatches.matchedSpecificity,
     secondaryMatches.matchedSpecificity,
@@ -2395,13 +2403,20 @@ function scoreVectorWorldInfoCandidate(
     commentExactScore +
     commentPartialScore
   );
-  const vectorWeakness = clamp01((candidate.distance - 0.92) / 0.45);
+  // Use capped distance for vectorWeakness to prevent Infinity arithmetic edge cases.
+  // FTS-only candidates get weakness from distance cap (2.0), but lexicalContentBoost
+  // compensates when the FTS score is strong.
+  const effectiveDistance = isFtsOnly ? 2 : candidate.distance;
+  const ftsWeaknessReduction = isFtsOnly && lexicalContentBoost > 0
+    ? clamp01(lexicalContentBoost / (preset.weights.vector * 0.35)) * 0.45
+    : 0;
+  const vectorWeakness = clamp01(((effectiveDistance - 0.92) / 0.45) - ftsWeaknessReduction);
   const baseBroadPenalty = clamp01(1 - entrySpecificityAnchor)
     * preset.weights.broadPenalty
     * (lexicalSpecificityAnchor > 0 ? 0.25 : 0.9);
   const referencePenalty = estimateReferenceEntryPenalty(
     entry,
-    candidate.distance,
+    effectiveDistance,
     lexicalSpecificityAnchor,
     primaryMatches,
     secondaryMatches,
@@ -2412,11 +2427,12 @@ function scoreVectorWorldInfoCandidate(
       * (lexicalSignalStrength > 0.02 ? 0.55 : 1)
       * (queryState.focusTokenSet.size > 0 ? 1 : 0)
     : 0;
-  const subjectMismatchPenalty = getEntrySubjectMismatchPenalty(entry, queryState, candidate.distance);
+  const subjectMismatchPenalty = getEntrySubjectMismatchPenalty(entry, queryState, effectiveDistance);
   const broadPenalty = baseBroadPenalty + referencePenalty + focusMissPenalty + subjectMismatchPenalty;
 
   const finalScore = Math.max(0,
     vectorScore +
+    lexicalContentBoost +
     primaryExactScore +
     primaryPartialScore +
     secondaryExactScore +
@@ -2439,6 +2455,7 @@ function scoreVectorWorldInfoCandidate(
     matchedComment,
     scoreBreakdown: {
       vectorSimilarity: vectorScore,
+      lexicalContentBoost,
       primaryExact: primaryExactScore,
       primaryPartial: primaryPartialScore,
       secondaryExact: secondaryExactScore,
@@ -2718,11 +2735,20 @@ export async function collectVectorActivatedWorldInfoDetailed(
     const scoredCandidates = pooledCandidates.map(({ entry, candidate }) =>
       scoreVectorWorldInfoCandidate(entry, candidate, queryState, preset)
     );
+    // FTS-only candidates (distance = Infinity, found by full-text search but not
+    // vector nearest-neighbor) bypass the distance-based similarity gate. Their quality
+    // is controlled by finalScore and the rerank_cutoff instead.
     const thresholdPassed = cfg.similarity_threshold > 0
-      ? scoredCandidates.filter((item) => item.distance <= cfg.similarity_threshold)
+      ? scoredCandidates.filter((item) => {
+        if (!Number.isFinite(item.distance)) return item.finalScore > 0;
+        return item.distance <= cfg.similarity_threshold;
+      })
       : scoredCandidates;
     const thresholdRejectedCandidates = cfg.similarity_threshold > 0
-      ? scoredCandidates.filter((item) => item.distance > cfg.similarity_threshold)
+      ? scoredCandidates.filter((item) => {
+        if (!Number.isFinite(item.distance)) return item.finalScore <= 0;
+        return item.distance > cfg.similarity_threshold;
+      })
       : [];
     const hitsAfterThreshold = thresholdPassed.length;
     const thresholdRejected = hitsBeforeThreshold - hitsAfterThreshold;

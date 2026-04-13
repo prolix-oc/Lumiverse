@@ -223,7 +223,9 @@ export const EXTEND_SYSTEM_PROMPT = `You are Dream Weaver's Extension module. Yo
 
 ${ANTI_SLOP_RULES}
 
-Return ONLY valid JSON. No markdown, no explanations.`;
+Return ONLY valid JSON. No markdown, no code fences, no explanations.
+
+CRITICAL: Your entire response must be a single, complete, parseable JSON object. Do NOT let any string value exceed ~300 words — keep entries focused and dense rather than sprawling. Ensure every opened brace, bracket, and quote is properly closed.`;
 
 function summarizeExistingGreetings(draft: DW_DRAFT_V1): string {
   if (!draft.greetings?.length) return "None yet.";
@@ -309,7 +311,7 @@ export function buildExtendPrompt(
       const fieldType = target.split(".")[1];
       sections.push(
         `## Base ${fieldType}`,
-        (draft.card as Record<string, string>)[fieldType]?.slice(0, 600) || "(empty)",
+        (draft.card[fieldType as keyof typeof draft.card] as string | undefined)?.slice(0, 600) || "(empty)",
         `## Existing ${fieldType} Alternates`,
         summarizeExistingAlternates(draft, fieldType),
         "## Task",
