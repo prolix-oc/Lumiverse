@@ -410,25 +410,14 @@ export async function updateSession(
   return getSession(userId, sessionId)!;
 }
 
-export async function generateDraft(
+async function executeDraftGeneration(
   userId: string,
   sessionId: string,
-): Promise<{ session: DreamWeaverSession; draft: DW_DRAFT_V1 }> {
+): Promise<void> {
   ensureDreamWeaverSchema();
 
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
-
-  const db = getDb();
-  const now = Math.floor(Date.now() / 1000);
-
-  db.prepare(`
-    UPDATE dream_weaver_sessions
-    SET status = ?, soul_state = ?, updated_at = ?
-    WHERE id = ? AND user_id = ?
-  `).run("generating", "generating", now, sessionId, userId);
-
-  eventBus.emit(EventType.DREAM_WEAVER_GENERATING, { sessionId }, userId);
 
   try {
     const connection = session.connection_id
@@ -458,7 +447,7 @@ export async function generateDraft(
     const nextDraft = mergeGeneratedSoul(previousDraft, generatedDraft);
     const snapshot = deriveSessionStateSnapshot(session, previousDraft, nextDraft);
 
-    db.prepare(`
+    getDb().prepare(`
       UPDATE dream_weaver_sessions
       SET draft = ?, status = ?, soul_state = ?, world_state = ?, soul_revision = ?, world_source_revision = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
@@ -475,13 +464,8 @@ export async function generateDraft(
     );
 
     eventBus.emit(EventType.DREAM_WEAVER_COMPLETE, { sessionId }, userId);
-
-    return {
-      session: getSession(userId, sessionId)!,
-      draft: nextDraft,
-    };
   } catch (error) {
-    db.prepare(`
+    getDb().prepare(`
       UPDATE dream_weaver_sessions
       SET status = ?, soul_state = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
@@ -492,8 +476,40 @@ export async function generateDraft(
       { sessionId, error: error instanceof Error ? error.message : String(error) },
       userId,
     );
-    throw error;
   }
+}
+
+export function generateDraft(
+  userId: string,
+  sessionId: string,
+): DreamWeaverSession {
+  ensureDreamWeaverSchema();
+
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+  if (session.status === "generating" || session.soul_state === "generating") {
+    return session;
+  }
+
+  const connection = session.connection_id
+    ? connectionsSvc.getConnection(userId, session.connection_id)
+    : connectionsSvc.getDefaultConnection(userId);
+
+  if (!connection) {
+    throw new Error("No connection available");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb().prepare(`
+    UPDATE dream_weaver_sessions
+    SET status = ?, soul_state = ?, updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).run("generating", "generating", now, sessionId, userId);
+
+  const nextSession = getSession(userId, sessionId)!;
+  eventBus.emit(EventType.DREAM_WEAVER_GENERATING, { sessionId }, userId);
+  void executeDraftGeneration(userId, sessionId);
+  return nextSession;
 }
 
 export async function generateWorld(

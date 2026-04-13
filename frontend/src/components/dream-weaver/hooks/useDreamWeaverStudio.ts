@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import {
   dreamWeaverApi,
   normalizeDraftVisualAssets,
+  normalizeDreamWeaverDraft,
   type DreamWeaverDraft,
   type DreamWeaverSession,
 } from '../../../api/dream-weaver'
@@ -10,6 +11,8 @@ import { charactersApi } from '../../../api/characters'
 import { chatsApi } from '../../../api/chats'
 import { toast } from '../../../lib/toast'
 import { useStore } from '../../../store'
+import { EventType } from '../../../types/ws-events'
+import { wsClient } from '../../../ws/client'
 import { getTextSectionStatus } from '../lib/studio-model'
 
 export type TabId = 'soul' | 'world' | 'visuals'
@@ -58,7 +61,7 @@ function parseStoredDraft(rawDraft: string | null): DreamWeaverDraft | null {
   if (!rawDraft) return null
 
   try {
-    return JSON.parse(rawDraft) as DreamWeaverDraft
+    return normalizeDreamWeaverDraft(JSON.parse(rawDraft) as DreamWeaverDraft)
   } catch {
     return null
   }
@@ -104,6 +107,7 @@ export function useDreamWeaverStudio(
         setSession(nextSession)
         setDraft(parseStoredDraft(nextSession.draft))
         setDirty(false)
+        if (nextSession.soul_state === 'generating') setGenerating(true)
       })
       .catch((err: any) => {
         if (cancelled) return
@@ -117,6 +121,48 @@ export function useDreamWeaverStudio(
       cancelled = true
     }
   }, [sessionId])
+
+  const refreshSession = useCallback(async () => {
+    const nextSession = await dreamWeaverApi.getSession(sessionId)
+    setSession(nextSession)
+    setDraft(parseStoredDraft(nextSession.draft))
+    return nextSession
+  }, [sessionId])
+
+  useEffect(() => {
+    const handleGenerating = (payload: { sessionId?: string }) => {
+      if (payload?.sessionId !== sessionId) return
+      setGenerating(true)
+      void refreshSession()
+    }
+
+    const handleComplete = (payload: { sessionId?: string }) => {
+      if (payload?.sessionId !== sessionId) return
+      void refreshSession().then(() => {
+        setDirty(false)
+        setGenerating(false)
+        setActiveTab('soul')
+      })
+    }
+
+    const handleError = (payload: { sessionId?: string; error?: string }) => {
+      if (payload?.sessionId !== sessionId) return
+      void refreshSession().finally(() => {
+        setGenerating(false)
+        setErrorMessage(payload?.error ?? 'Generation failed')
+      })
+    }
+
+    const unsubs = [
+      wsClient.on(EventType.DREAM_WEAVER_GENERATING, handleGenerating),
+      wsClient.on(EventType.DREAM_WEAVER_COMPLETE, handleComplete),
+      wsClient.on(EventType.DREAM_WEAVER_ERROR, handleError),
+    ]
+
+    return () => {
+      unsubs.forEach((unsub) => unsub())
+    }
+  }, [refreshSession, sessionId])
 
   const updateSessionField = useCallback(
     <K extends keyof Pick<
@@ -188,14 +234,11 @@ export function useDreamWeaverStudio(
     try {
       if (dirtyRef.current) await save()
 
-      const result = await dreamWeaverApi.generateDraft(currentSession.id)
-      setSession(result.session)
-      setDraft(result.draft)
-      setDirty(false)
+      const nextSession = await dreamWeaverApi.generateDraft(currentSession.id)
+      setSession(nextSession)
       setActiveTab('soul')
     } catch (err: any) {
       setErrorMessage(err?.message ?? 'Generation failed')
-    } finally {
       setGenerating(false)
     }
   }, [save])
@@ -211,7 +254,7 @@ export function useDreamWeaverStudio(
 
       const result = await dreamWeaverApi.generateWorld(currentSession.id)
       setSession(result.session)
-      setDraft(result.draft)
+      setDraft(normalizeDreamWeaverDraft(result.draft))
       setDirty(false)
       setActiveTab('world')
     } catch (err: any) {

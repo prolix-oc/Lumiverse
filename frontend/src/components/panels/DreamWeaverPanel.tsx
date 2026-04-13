@@ -6,6 +6,7 @@ import {
   Clock3,
   FolderOpen,
   History,
+  Loader2,
   Sparkles,
   Trash2,
 } from 'lucide-react'
@@ -27,7 +28,9 @@ import {
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { toast } from '@/lib/toast'
 import { useStore } from '@/store'
+import { EventType } from '@/types/ws-events'
 import type { ConnectionProfile, Persona } from '@/types/api'
+import { wsClient } from '@/ws/client'
 import {
   buildDreamWeaverSessionArchive,
   formatDreamWeaverSessionTimestamp,
@@ -123,6 +126,23 @@ export default function DreamWeaverPanel() {
   useEffect(() => {
     if (activeModal !== 'dreamWeaverStudio') void loadSessions()
   }, [activeModal, loadSessions])
+
+  useEffect(() => {
+    const refresh = (payload?: { sessionId?: string }) => {
+      if (!payload?.sessionId) return
+      void loadSessions()
+    }
+
+    const unsubs = [
+      wsClient.on(EventType.DREAM_WEAVER_GENERATING, refresh),
+      wsClient.on(EventType.DREAM_WEAVER_COMPLETE, refresh),
+      wsClient.on(EventType.DREAM_WEAVER_ERROR, refresh),
+    ]
+
+    return () => {
+      unsubs.forEach((unsub) => unsub())
+    }
+  }, [loadSessions])
 
   const toggleArchiveGroup = useCallback((key: ArchiveKey) => {
     setExpandedArchiveKeys((current) => ({ ...current, [key]: !(current[key] ?? false) }))
@@ -337,7 +357,12 @@ export default function DreamWeaverPanel() {
                             >
                               <div className={styles.sessionHeading}>
                                 <span className={styles.sessionTitle}>{getDreamWeaverSessionTitle(session)}</span>
-                                <span className={styles.sessionStatus}>{getSessionStatusLabel(session)}</span>
+                                <span className={styles.sessionStatus} data-generating={session.soul_state === 'generating' || undefined}>
+                                  {session.soul_state === 'generating' && (
+                                    <Loader2 size={10} className={styles.sessionStatusSpin} />
+                                  )}
+                                  {getSessionStatusLabel(session)}
+                                </span>
                               </div>
                               <span className={styles.sessionPreview}>{getDreamWeaverSessionPreview(session)}</span>
                               <div className={styles.sessionMeta}>

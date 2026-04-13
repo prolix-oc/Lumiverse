@@ -243,6 +243,102 @@ export function createDefaultVisualAssets(): DreamWeaverVisualAsset[] {
   ]
 }
 
+function normalizeAltFields(value: unknown): DreamWeaverAlternateField[] {
+  if (!Array.isArray(value)) return []
+
+  return value.map((entry, index) => {
+    const next = isRecord(entry) ? entry : null
+    return {
+      id: typeof next?.id === 'string' && next.id.trim() ? next.id : crypto.randomUUID(),
+      label:
+        typeof next?.label === 'string' && next.label.trim()
+          ? next.label.trim()
+          : `Variant ${index + 1}`,
+      content: typeof next?.content === 'string' ? next.content : '',
+    }
+  })
+}
+
+function normalizeGreetings(value: unknown): DreamWeaverGreeting[] {
+  if (!Array.isArray(value)) return []
+
+  return value.map((entry, index) => {
+    const next = isRecord(entry) ? entry : null
+    return {
+      id: typeof next?.id === 'string' && next.id.trim() ? next.id : crypto.randomUUID(),
+      label:
+        typeof next?.label === 'string' && next.label.trim()
+          ? next.label.trim()
+          : `Greeting ${index + 1}`,
+      content: typeof next?.content === 'string' ? next.content : '',
+    }
+  })
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item ?? '').trim()).filter(Boolean)
+}
+
+export function normalizeDreamWeaverDraft(
+  value: Partial<DreamWeaverDraft> | null | undefined,
+): DreamWeaverDraft {
+  const next = value ?? {}
+  const meta: Record<string, any> = isRecord(next.meta) ? next.meta : {}
+  const card: Record<string, any> = isRecord(next.card) ? next.card : {}
+  const voice: Record<string, any> = isRecord(next.voice_guidance) ? next.voice_guidance : {}
+  const rules: Record<string, any> = isRecord(voice.rules) ? voice.rules : {}
+  const alternateFields: Record<string, any> = isRecord(next.alternate_fields) ? next.alternate_fields : {}
+  const appearanceData = isRecord(card.appearance_data) ? card.appearance_data : undefined
+
+  const normalizedDraft: DreamWeaverDraft = {
+    format: 'DW_DRAFT_V1',
+    version: 1,
+    kind: next.kind === 'scenario' ? 'scenario' : 'character',
+    meta: {
+      title: typeof meta.title === 'string' ? meta.title : '',
+      summary: typeof meta.summary === 'string' ? meta.summary : '',
+      tags: normalizeStringArray(meta.tags),
+      content_rating: meta.content_rating === 'nsfw' ? 'nsfw' : 'sfw',
+    },
+    card: {
+      name: typeof card.name === 'string' ? card.name : '',
+      appearance: typeof card.appearance === 'string' ? card.appearance : '',
+      appearance_data: appearanceData,
+      description: typeof card.description === 'string' ? card.description : '',
+      personality: typeof card.personality === 'string' ? card.personality : '',
+      scenario: typeof card.scenario === 'string' ? card.scenario : '',
+      first_mes: typeof card.first_mes === 'string' ? card.first_mes : '',
+      system_prompt: typeof card.system_prompt === 'string' ? card.system_prompt : '',
+      post_history_instructions:
+        typeof card.post_history_instructions === 'string' ? card.post_history_instructions : '',
+    },
+    voice_guidance: {
+      compiled: typeof voice.compiled === 'string' ? voice.compiled : '',
+      rules: {
+        baseline: normalizeStringArray(rules.baseline),
+        rhythm: normalizeStringArray(rules.rhythm),
+        diction: normalizeStringArray(rules.diction),
+        quirks: normalizeStringArray(rules.quirks),
+        hard_nos: normalizeStringArray(rules.hard_nos),
+      },
+    },
+    alternate_fields: {
+      description: normalizeAltFields(alternateFields.description),
+      personality: normalizeAltFields(alternateFields.personality),
+      scenario: normalizeAltFields(alternateFields.scenario),
+    },
+    greetings: normalizeGreetings(next.greetings),
+    lorebooks: Array.isArray(next.lorebooks) ? next.lorebooks : [],
+    npc_definitions: Array.isArray(next.npc_definitions) ? next.npc_definitions : [],
+    regex_scripts: Array.isArray(next.regex_scripts) ? next.regex_scripts : [],
+    image_assets: Array.isArray(next.image_assets) ? next.image_assets : [],
+    visual_assets: normalizeDraftVisualAssets(next),
+  }
+
+  return syncDraftVisualAssets(normalizedDraft) as DreamWeaverDraft
+}
+
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -440,7 +536,7 @@ export const dreamWeaverApi = {
     apiClient.put<DreamWeaverSession>(`/dream-weaver/sessions/${id}`, input),
 
   generateDraft: (id: string) =>
-    apiClient.post<DreamWeaverDraftResult>(`/dream-weaver/sessions/${id}/generate`, {}),
+    apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/generate`, {}),
 
   generateWorld: (id: string) =>
     apiClient.post<DreamWeaverDraftResult>(
