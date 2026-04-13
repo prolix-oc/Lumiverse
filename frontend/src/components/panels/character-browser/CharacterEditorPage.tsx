@@ -535,7 +535,7 @@ export default function CharacterEditorPage() {
         setWbPopoverPos({
           top: rect.bottom + 4,
           left,
-          maxWidth: vw - left - margin,
+          maxWidth: Math.min(320, vw - left - margin),
         })
       }
       return next

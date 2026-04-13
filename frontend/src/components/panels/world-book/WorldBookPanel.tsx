@@ -362,7 +362,7 @@ export default function WorldBookPanel() {
         setPopoverPos({
           top: rect.bottom + 4,
           right: vw - rect.right,
-          maxWidth: rect.right - margin,
+          maxWidth: Math.min(320, rect.right - margin),
         })
       }
       return next
@@ -429,7 +429,7 @@ export default function WorldBookPanel() {
         setChatPopoverPos({
           top: rect.bottom + 4,
           right: vw - rect.right,
-          maxWidth: rect.right - margin,
+          maxWidth: Math.min(320, rect.right - margin),
         })
       }
       return next
