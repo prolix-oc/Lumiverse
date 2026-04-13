@@ -2,6 +2,7 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getCharacter } from "./characters.service";
+import { getEffectiveCharacterName } from "../types/character";
 import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import type { Message, CreateMessageInput, UpdateMessageInput } from "../types/message";
 import type { BulkMessageInput } from "../types/migrate";
@@ -196,7 +197,7 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
   let chatName = input.name || "";
   if (!chatName) {
     const character = getCharacter(userId, input.character_id);
-    if (character) chatName = character.name;
+    if (character) chatName = getEffectiveCharacterName(character);
   }
 
   getDb()
@@ -216,7 +217,7 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
     if (greeting) {
       createMessage(id, {
         is_user: false,
-        name: character.name,
+        name: getEffectiveCharacterName(character),
         content: greeting,
       });
     }
@@ -374,7 +375,7 @@ export function addGroupMember(
     if (greeting) {
       createMessage(chatId, {
         is_user: false,
-        name: character.name,
+        name: getEffectiveCharacterName(character),
         content: greeting,
       }, userId);
     }

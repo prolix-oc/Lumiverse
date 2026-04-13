@@ -1,4 +1,5 @@
 import type { Character } from "../types/character";
+import { getEffectiveCharacterName } from "../types/character";
 import type { Persona } from "../types/persona";
 import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
@@ -42,7 +43,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   return {
     names: {
       user: persona?.name || "User",
-      char: character.name,
+      char: getEffectiveCharacterName(character),
       group: allGroupNames?.join(", ") ?? "",
       groupNotMuted: (ctx.groupNotMutedNames ?? allGroupNames)?.join(", ") ?? "",
       notChar: persona?.name || "User",

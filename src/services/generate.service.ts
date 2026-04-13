@@ -16,6 +16,7 @@ import {
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
 import * as charactersSvc from "./characters.service";
+import { getEffectiveCharacterName } from "../types/character";
 import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationRequest, type GenerationResponse, type StreamChunk, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
 import { contextHandlerChain } from "../spindle/context-handler";
@@ -551,7 +552,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   const targetCharId = input.target_character_id || chat?.character_id;
   if (targetCharId) {
     const character = charactersSvc.getCharacter(input.userId, targetCharId);
-    if (character) characterName = character.name;
+    if (character) characterName = getEffectiveCharacterName(character);
   }
 
   // Resolve persona_id from settings if not provided by the frontend, so the

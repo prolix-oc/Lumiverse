@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { evaluate, buildEnv, resolveGroupCharacterNames, registry, initMacros } from "../macros";
+import { getEffectiveCharacterName } from "../types/character";
 import type { MacroEnv, MacroHandler, MacroDefinition } from "../macros";
 import * as chatsSvc from "../services/chats.service";
 import * as charactersSvc from "../services/characters.service";
@@ -135,8 +136,10 @@ function buildEnvFromIds(userId: string, body: {
           ? connectionsSvc.getConnection(userId, body.connection_id)
           : connectionsSvc.getDefaultConnection(userId);
 
-        const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) =>
-          charactersSvc.getCharacter(userId, cid)?.name);
+        const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) => {
+          const c = charactersSvc.getCharacter(userId, cid);
+          return c ? getEffectiveCharacterName(c) : undefined;
+        });
         const isGroup = !!chat.metadata?.group;
         return buildEnv({
           character,
@@ -147,7 +150,7 @@ function buildEnvFromIds(userId: string, body: {
           connection,
           dynamicMacros: body.dynamic_macros,
           groupCharacterNames,
-          targetCharacterName: isGroup ? character.name : undefined,
+          targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
       }
     }

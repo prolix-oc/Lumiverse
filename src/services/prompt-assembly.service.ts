@@ -2,6 +2,7 @@ import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyRes
 import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
+import { getEffectiveCharacterName } from "../types/character";
 import type { Persona } from "../types/persona";
 import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
@@ -543,8 +544,10 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // ---- Macro engine ----
   initMacros();
   const groupCharsMap = pf?.groupCharacters;
-  const resolveCharName = (cid: string) =>
-    groupCharsMap?.get(cid)?.name ?? charactersSvc.getCharacter(ctx.userId, cid)?.name;
+  const resolveCharName = (cid: string) => {
+    const char = groupCharsMap?.get(cid) ?? charactersSvc.getCharacter(ctx.userId, cid);
+    return char ? getEffectiveCharacterName(char) : undefined;
+  };
   const groupCharacterNames = resolveGroupCharacterNames(chat, resolveCharName);
   const mutedIds = chatsSvc.getGroupMutedIds(chat);
   const groupNotMutedNames = groupCharacterNames && mutedIds.length > 0
@@ -568,7 +571,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     groupCharacterNames,
     groupNotMutedNames,
     targetCharacterId: ctx.targetCharacterId,
-    targetCharacterName: ctx.targetCharacterId ? effectiveCharacter.name : undefined,
+    targetCharacterName: ctx.targetCharacterId ? getEffectiveCharacterName(effectiveCharacter) : undefined,
   });
 
   // Use prefetched settings or batch-load all needed settings in a single query
@@ -3447,10 +3450,10 @@ function applyCompletionSettings(
 
     // namesBehavior: 1 = add name field, 2 = prepend "Name: " to content
     if (namesBehavior === 1 && (msg.role === "user" || msg.role === "assistant")) {
-      const name = msg.role === "user" ? (persona?.name ?? "User") : character.name;
+      const name = msg.role === "user" ? (persona?.name ?? "User") : getEffectiveCharacterName(character);
       result[i] = { ...result[i], name };
     } else if (namesBehavior === 2 && (msg.role === "user" || msg.role === "assistant")) {
-      const name = msg.role === "user" ? (persona?.name ?? "User") : character.name;
+      const name = msg.role === "user" ? (persona?.name ?? "User") : getEffectiveCharacterName(character);
       if (typeof result[i].content === "string") {
         result[i] = { ...result[i], content: `${name}: ${result[i].content}` };
       } else {
@@ -3753,14 +3756,19 @@ async function legacyAssembly(
   if (character && chat) {
     const chatObj = chat as Chat;
     const groupNames = userId
-      ? resolveGroupCharacterNames(chatObj, (cid) =>
-          charactersSvc.getCharacter(userId, cid)?.name)
+      ? resolveGroupCharacterNames(chatObj, (cid) => {
+          const char = charactersSvc.getCharacter(userId, cid);
+          return char ? getEffectiveCharacterName(char) : undefined;
+        })
       : undefined;
     const isGroup = !!chatObj.metadata?.group;
     const legacyMutedIds = userId ? chatsSvc.getGroupMutedIds(chatObj) : [];
     const legacyNotMuted = groupNames && legacyMutedIds.length > 0 && userId
-      ? resolveGroupCharacterNames(chatObj, (cid) =>
-          legacyMutedIds.includes(cid) ? undefined : charactersSvc.getCharacter(userId, cid)?.name)
+      ? resolveGroupCharacterNames(chatObj, (cid) => {
+          if (legacyMutedIds.includes(cid)) return undefined;
+          const char = charactersSvc.getCharacter(userId, cid);
+          return char ? getEffectiveCharacterName(char) : undefined;
+        })
       : undefined;
     // Resolve alternate field overrides and group scenario override (legacy path)
     const legacyEffectiveChar = userId
@@ -3776,7 +3784,7 @@ async function legacyAssembly(
       connection: connection ?? null,
       groupCharacterNames: groupNames,
       groupNotMutedNames: legacyNotMuted,
-      targetCharacterName: isGroup ? legacyEffectiveChar.name : undefined,
+      targetCharacterName: isGroup ? getEffectiveCharacterName(legacyEffectiveChar) : undefined,
     });
     // Populate reasoning macros
     if (userId) {

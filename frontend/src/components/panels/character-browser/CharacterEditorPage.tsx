@@ -358,6 +358,18 @@ export default function CharacterEditorPage() {
     [mutateExtensions]
   )
 
+  const handleAlternateCharacterNameChange = useCallback(
+    (value: string) => {
+      mutateExtensions((ext) => {
+        const next = { ...ext }
+        if (value.trim()) next.alternate_character_name = value.trim()
+        else delete next.alternate_character_name
+        return next
+      }, false)
+    },
+    [mutateExtensions]
+  )
+
   const handleAvatarSelect = useCallback(
     async (imageId: string | null) => {
       if (!activeChatId) return
@@ -917,6 +929,13 @@ export default function CharacterEditorPage() {
 
                   {activeTab === 'identity' && (
                     <>
+                      <Field
+                        label="Alternate Character Name"
+                        helper="Used as {{char}} in prompts and as the chat display name. Leaves the card's title untouched."
+                        value={character?.extensions?.alternate_character_name || ''}
+                        onChange={handleAlternateCharacterNameChange}
+                        multiline={false}
+                      />
                       <Field
                         label="Creator"
                         helper="Who created this character."
