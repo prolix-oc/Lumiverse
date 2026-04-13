@@ -1,0 +1,82 @@
+.menu {
+  position: fixed;
+  z-index: 10020;
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 96%, var(--lumiverse-bg-deep));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 16px;
+  box-shadow: var(--lumiverse-shadow-xl);
+  min-width: 260px;
+  max-width: 360px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.header {
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.classType {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+}
+
+.nodeId {
+  font-size: 0.7rem;
+  color: var(--lumiverse-text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.field {
+  padding: 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 88%, transparent);
+}
+
+.fieldRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+}
+
+.fieldName {
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.fieldValue {
+  color: var(--lumiverse-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.select {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  color: var(--lumiverse-text);
+  font-size: 0.8rem;
+}
+
+.autoDetectedHint {
+  margin-top: 4px;
+  font-size: 0.65rem;
+  color: var(--lumiverse-primary);
+  font-style: italic;
+}

@@ -1,5 +1,7 @@
 // Dream Weaver Prompts
 
+import type { DreamWeaverSession, DW_DRAFT_V1 } from "../../types/dream-weaver";
+
 const BANNED_NAMES = [
   "Elara", "Alaric", "Kaelen", "Seraphina", "Thorne", "Lyra", "Zephyr",
   "Aria", "Cassian", "Rowan", "Ember", "Asher", "Luna", "Orion",
@@ -66,6 +68,7 @@ Return ONLY valid JSON. No markdown, no explanations.
   "card": {
     "name": "string",
     "appearance": "string",
+    "appearance_data": {},
     "description": "string",
     "personality": "string",
     "scenario": "string",
@@ -116,8 +119,90 @@ Scenario: Leave blank ""
 **alternates**: 2-3 meaningful variants (not cosmetic).
 **greetings**: 2-3 different entry points.
 
+## Package Boundary Rules
+- Generate the core card package only.
+- leave \`lorebooks\` and \`npc_definitions\` as empty arrays during the initial dream weave.
+- World content is generated later by the dedicated World flow.
+- Leave \`regex_scripts\` as an empty array unless the dream explicitly asks for bundled regex behavior.
+
 Generate now.`;
 
 export const REWRITE_SYSTEM_PROMPT = `Rewrite the section based on user feedback.
 
 Return ONLY the rewritten content as plain text, not JSON.`;
+
+export const WORLD_GENERATION_SYSTEM_PROMPT = `You are Dream Weaver's World Builder module.
+
+${ANTI_SLOP_RULES}
+
+## Output Format
+
+Return ONLY valid JSON. No markdown, no explanations.
+
+{
+  "lorebooks": [
+    {
+      "id": "uuid",
+      "name": "World Book Name",
+      "entries": [
+        { "id": "uuid", "keywords": ["keyword1"], "content": "world detail" }
+      ]
+    }
+  ],
+  "npc_definitions": [
+    {
+      "id": "uuid",
+      "name": "NPC Name",
+      "role": "short role label",
+      "description": "who they are and why they matter",
+      "scenario": "how they intersect with the soul draft"
+    }
+  ]
+}
+
+## Scope Rules
+- Generate only lorebooks and npc_definitions.
+- Do not return card fields.
+- Do not return alternate_fields.
+- Do not return greetings.
+- Ground the world package in the current Soul draft first and the dream text second.
+`;
+
+export function buildWorldGenerationPrompt(
+  session: Pick<DreamWeaverSession, "dream_text" | "tone" | "constraints" | "dislikes">,
+  draft: Pick<DW_DRAFT_V1, "meta" | "card" | "voice_guidance">,
+): string {
+  const sections = [
+    "## Dream Context",
+    session.dream_text,
+    "## Soul Context",
+    [
+      `Name: ${draft.card.name}`,
+      `Summary: ${draft.meta?.summary ?? ""}`,
+      `Description: ${draft.card.description}`,
+      `Personality: ${draft.card.personality}`,
+      `Scenario: ${draft.card.scenario}`,
+      `Appearance: ${draft.card.appearance}`,
+      `Voice Guidance: ${draft.voice_guidance?.compiled ?? ""}`,
+    ].join("\n"),
+  ];
+
+  if (session.tone) {
+    sections.push("## Tone", session.tone);
+  }
+
+  if (session.constraints) {
+    sections.push("## Constraints", session.constraints);
+  }
+
+  if (session.dislikes) {
+    sections.push("## Hard No's", session.dislikes);
+  }
+
+  sections.push(
+    "## Requested Output",
+    "Generate lorebooks and npc_definitions for the current Soul draft. Preserve continuity with the Soul draft and avoid duplicating the character card fields.",
+  );
+
+  return sections.join("\n\n");
+}

@@ -13,7 +13,12 @@ export interface DreamWeaverSession {
   connection_id: string | null;
   draft: string | null;
   status: "draft" | "generating" | "complete" | "error";
+  soul_state: "empty" | "generating" | "ready" | "error";
+  world_state: "empty" | "ready" | "stale";
+  soul_revision: number;
+  world_source_revision: number | null;
   character_id: string | null;
+  launch_chat_id: string | null;
 }
 
 export interface CreateSessionInput {
@@ -48,6 +53,7 @@ export interface DW_DRAFT_V1 {
   card: {
     name: string;
     appearance: string;
+    appearance_data?: Record<string, string>;
     description: string;
     personality: string;
     scenario: string;
@@ -78,6 +84,52 @@ export interface DW_DRAFT_V1 {
   lorebooks: any[];
   npc_definitions: any[];
   regex_scripts: any[];
+  image_assets?: DreamWeaverLegacyImageAsset[];
+  visual_assets?: any[];
+}
+
+export interface DreamWeaverLegacyImageAsset {
+  id: string;
+  type: string;
+  label: string;
+  prompt: string;
+  negative: string;
+  imageId?: string | null;
+  imageUrl?: string | null;
+  locked?: boolean;
+}
+
+export type DreamWeaverVisualProvider =
+  | "comfyui"
+  | "novelai"
+  | "nanogpt"
+  | "google_gemini"
+  | "a1111"
+  | "swarmui";
+
+export interface DreamWeaverVisualReference {
+  id: string;
+  image_id?: string | null;
+  image_url?: string | null;
+  weight?: number;
+  label?: string;
+}
+
+export interface DreamWeaverVisualAsset {
+  id: string;
+  asset_type: "card_portrait";
+  label: string;
+  prompt: string;
+  negative_prompt: string;
+  macro_tokens: string[];
+  width: number;
+  height: number;
+  aspect_ratio: string;
+  seed: number | null;
+  references: DreamWeaverVisualReference[];
+  provider: DreamWeaverVisualProvider | null;
+  preset_id: string | null;
+  provider_state: Record<string, any>;
 }
 
 export interface UpdateSessionInput {

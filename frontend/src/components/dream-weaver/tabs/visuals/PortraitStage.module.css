@@ -1,0 +1,198 @@
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.stageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--lumiverse-primary);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--lumiverse-text);
+}
+
+.status {
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+  color: var(--lumiverse-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hero,
+.pane {
+  position: relative;
+  min-height: 420px;
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--lumiverse-primary) 12%, transparent), transparent 48%),
+    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-bg-elevated) 88%, transparent), color-mix(in srgb, var(--lumiverse-bg-deep) 96%, transparent));
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 94%, transparent);
+}
+
+.image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  object-fit: cover;
+}
+
+.emptyImage {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 420px;
+  padding: 2rem;
+  text-align: center;
+  color: var(--lumiverse-text-muted);
+}
+
+.emptyTitle {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+}
+
+.emptyBody {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  max-width: 24rem;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 1rem;
+  background: linear-gradient(180deg, transparent, rgba(10, 9, 16, 0.62));
+}
+
+.overlayBadge {
+  padding: 0.5rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(12, 11, 20, 0.82);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 26%, transparent);
+  color: var(--lumiverse-text);
+  font-size: 0.76rem;
+}
+
+.compareGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.paneLabel {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 1;
+  padding: 0.28rem 0.58rem;
+  border-radius: 999px;
+  background: rgba(12, 11, 20, 0.72);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 90%, transparent);
+  color: var(--lumiverse-text);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.actions {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  gap: 0.55rem;
+}
+
+.primaryAction,
+.secondaryAction {
+  padding: 0.62rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primaryAction {
+  border: none;
+  background: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-contrast, #fff);
+}
+
+.secondaryAction {
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 94%, transparent);
+  background: rgba(12, 11, 20, 0.72);
+  color: var(--lumiverse-text);
+}
+
+.errorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.8rem 0.95rem;
+  border-radius: 14px;
+  background: color-mix(in srgb, #ef4444 10%, var(--lumiverse-bg-deep));
+  border: 1px solid color-mix(in srgb, #ef4444 22%, transparent);
+  color: #fda4af;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 900px) {
+  .compareGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .hero,
+  .pane,
+  .emptyImage,
+  .image {
+    min-height: 340px;
+  }
+
+  .actions {
+    left: 1rem;
+    right: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .stageHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

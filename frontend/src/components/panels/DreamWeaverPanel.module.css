@@ -1,117 +1,104 @@
-.wrapper {
+/* ── Panel root ── */
+
+.panel {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
-  overflow-y: auto;
-  background: var(--lumiverse-bg);
+  gap: 12px;
   container-type: inline-size;
 }
 
-.header {
-  padding: 16px 16px 0;
-}
+/* ── Field atoms ── */
 
-.headerMain {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.iconBadge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  color: var(--lumiverse-primary-contrast, #fff);
-  border-radius: var(--lumiverse-radius-lg);
-  background: color-mix(in srgb, var(--lumiverse-primary) 88%, var(--lumiverse-bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 28%, var(--lumiverse-border));
-}
-
-.headerCopy {
-  min-width: 0;
-}
-
-.headerTitle {
-  margin: 0;
-  color: var(--lumiverse-text);
-  font-size: 20px;
-  line-height: 1.1;
-  font-weight: 700;
-}
-
-.headerSubtitle {
-  margin: 4px 0 0;
-  color: var(--lumiverse-text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.content {
+.field {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 16px;
-  min-width: 0;
-}
-
-.composeSection {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.fieldBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
+  gap: 6px;
 }
 
 .fieldLabel {
-  color: var(--lumiverse-text);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
 }
 
-.mainTextarea {
+/* ── Persona / Connection row ── */
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@container (max-width: 260px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Dream button ── */
+
+.dreamBtn {
   width: 100%;
-  min-width: 0;
-  min-height: 176px;
-  box-sizing: border-box;
-  resize: vertical;
-  padding: 14px;
-  color: var(--lumiverse-text);
-  font: inherit;
-  line-height: 1.6;
-  border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius-lg);
-  background: var(--lumiverse-bg-elevated);
-  outline: none;
-  transition:
-    border-color var(--lumiverse-transition-fast),
-    background var(--lumiverse-transition-fast),
-    box-shadow var(--lumiverse-transition-fast);
 }
 
-.mainTextarea::placeholder {
-  color: var(--lumiverse-text-hint);
+/* ── Refine collapsible ── */
+
+.refineToggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 4px 0;
+  cursor: pointer;
 }
 
-.mainTextarea:focus {
-  border-color: var(--lumiverse-primary);
-  background: var(--lumiverse-fill);
-  box-shadow: 0 0 0 1px var(--lumiverse-primary-020);
+.refineLine {
+  flex: 1;
+  height: 1px;
+  background: var(--lumiverse-border);
 }
+
+.refineLabel {
+  padding: 0 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.refineToggle:hover .refineLabel {
+  color: var(--lumiverse-text-muted);
+}
+
+.refineChevron {
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.refineChevronOpen {
+  transform: rotate(90deg);
+}
+
+.refineBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* ── Error box ── */
 
 .errorBox {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: var(--lumiverse-radius-md);
   border: 1px solid var(--lumiverse-danger-050);
   background: var(--lumiverse-danger-015);
@@ -120,151 +107,199 @@
   line-height: 1.5;
 }
 
-.actionRow {
-  display: flex;
-}
-
-.weaveButton {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 24%, transparent);
-  border-radius: var(--lumiverse-radius-md);
-  cursor: pointer;
-  color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 14px;
-  font-weight: 700;
-  background: var(--lumiverse-primary);
-  transition:
-    background var(--lumiverse-transition-fast),
-    border-color var(--lumiverse-transition-fast),
-    box-shadow var(--lumiverse-transition-fast),
-    opacity var(--lumiverse-transition-fast);
-}
-
-.weaveButton:hover:not(:disabled) {
-  background: var(--lumiverse-primary-hover);
-  border-color: color-mix(in srgb, var(--lumiverse-primary-hover) 30%, transparent);
-  box-shadow: var(--lumiverse-shadow-sm);
-}
-
-.weaveButton:disabled {
-  opacity: 0.56;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-.sessionsSection {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-top: 4px;
-  border-top: 1px solid var(--lumiverse-border);
-}
-
-.sessionsHeader {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--lumiverse-text-dim);
-}
-
-.sessionsHeaderCopy {
-  min-width: 0;
-}
-
-.sectionTitle {
-  margin: 0;
-  color: var(--lumiverse-text);
-  font-size: 14px;
-  font-weight: 650;
-}
+/* ── Previous Weaves ── */
 
 .sessionsEmpty {
-  padding: 14px;
-  border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius-lg);
-  background: var(--lumiverse-bg-elevated);
   color: var(--lumiverse-text-muted);
   font-size: 12px;
-  line-height: 1.5;
+  padding: 4px 0;
 }
 
-.sessionsList {
-  display: grid;
-  gap: 12px;
-}
-
-.sessionCard {
+.archiveList {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius-lg);
-  background: var(--lumiverse-bg-elevated);
-  cursor: pointer;
-  transition:
-    border-color var(--lumiverse-transition-fast),
-    background var(--lumiverse-transition-fast),
-    box-shadow var(--lumiverse-transition-fast);
+  gap: 6px;
 }
 
-.sessionCard:hover {
-  border-color: var(--lumiverse-border-hover, var(--lumiverse-primary-020));
-  background: var(--lumiverse-fill-subtle);
-  box-shadow: var(--lumiverse-shadow-sm);
+.archiveGroup {
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 80%, transparent);
+  border-radius: var(--lumiverse-radius-md);
+  overflow: hidden;
 }
 
-.sessionTopRow {
+.archiveToggle {
+  width: 100%;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  background: var(--lumiverse-bg-elevated);
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--lumiverse-transition-fast);
 }
 
-.sessionHeading {
-  display: flex;
-  flex-direction: column;
+.archiveToggle:hover {
+  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 54%, transparent);
+}
+
+.archiveToggle:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: -2px;
+}
+
+.archiveToggleLeft {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.sessionTitle {
-  margin: 0;
-  color: var(--lumiverse-text);
-  font-size: 14px;
+.archiveGroupLabel {
+  font-size: 11px;
   font-weight: 700;
-  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-muted);
 }
 
-.sessionStatus {
+.archiveGroupCount {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
-  min-height: 22px;
-  padding: 0 9px;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-dim);
   font-size: 10px;
   font-weight: 700;
+}
+
+.archiveRows {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.sessionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.sessionRow + .sessionRow {
+  border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 80%, transparent);
+}
+
+.sessionMain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sessionMain:hover .sessionTitle {
+  color: var(--lumiverse-primary);
+}
+
+.sessionMain:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: -2px;
+}
+
+.sessionHeading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.sessionTitle {
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.sessionStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  font-size: 9px;
+  font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 
-.deleteButton,
-.resumeButton {
+.sessionPreview {
+  margin: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sessionMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sessionMetaItem,
+.sessionMetaTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--lumiverse-text-dim);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.sessionMetaTag {
+  padding: 0 6px;
+  min-height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.sessionActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.openBtn,
+.deleteBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 32px;
+  gap: 5px;
+  min-height: 28px;
   border-radius: var(--lumiverse-radius-md);
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
@@ -272,83 +307,29 @@
   cursor: pointer;
   transition:
     background var(--lumiverse-transition-fast),
-    border-color var(--lumiverse-transition-fast),
-    color var(--lumiverse-transition-fast);
+    border-color var(--lumiverse-transition-fast);
 }
 
-.deleteButton {
-  width: 32px;
+.openBtn {
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.deleteBtn {
+  width: 28px;
   padding: 0;
-  flex-shrink: 0;
   color: var(--lumiverse-text-dim);
 }
 
-.deleteButton:hover,
-.resumeButton:hover {
+.openBtn:hover,
+.deleteBtn:hover {
   background: var(--lumiverse-fill);
   border-color: var(--lumiverse-border-hover, var(--lumiverse-border));
 }
 
-.sessionPreview {
-  margin: 0;
-  color: var(--lumiverse-text-muted);
-  font-size: 12px;
-  line-height: 1.55;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.sessionMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sessionMetaItem {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--lumiverse-text-dim);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.sessionActions {
-  display: flex;
-  justify-content: flex-start;
-}
-
-.resumeButton {
-  padding: 0 12px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-@container (min-width: 520px) {
-  .sessionsList {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@container (max-width: 359px) {
-  .header,
-  .content {
-    padding: 12px;
-  }
-
-  .mainTextarea {
-    min-height: 144px;
-    padding: 12px;
-  }
-
-  .weaveButton {
-    min-height: 42px;
-    font-size: 13px;
-  }
-
-  .sessionCard {
-    padding: 12px;
-  }
+.openBtn:focus-visible,
+.deleteBtn:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 1px;
 }

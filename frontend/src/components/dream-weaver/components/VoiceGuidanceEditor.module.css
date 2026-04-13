@@ -1,0 +1,143 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.viewToggle {
+  display: flex;
+  gap: 0.25rem;
+  align-self: flex-start;
+}
+
+.toggleOption {
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: var(--lumiverse-text-secondary, #797384);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toggleOption[data-active] {
+  background: rgba(189, 157, 255, 0.1);
+  border-color: rgba(189, 157, 255, 0.2);
+  color: var(--lumiverse-primary, #bd9dff);
+}
+
+.compiled {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.compiledHint {
+  font-size: 0.6875rem;
+  color: var(--lumiverse-text-secondary, #797384);
+  margin: 0;
+}
+
+.compiledText {
+  font-size: 0.8125rem;
+  color: var(--lumiverse-text-muted, #afa8bb);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.categories {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.category {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.categoryHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.categoryLabel {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--lumiverse-text-secondary, #797384);
+}
+
+.categoryCount {
+  font-size: 0.5625rem;
+  color: var(--lumiverse-text-secondary, #797384);
+  opacity: 0.6;
+}
+
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ruleRow {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.ruleInput {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.15);
+  color: var(--lumiverse-text, #f0e7fc);
+  font-size: 0.75rem;
+  font-family: var(--lumiverse-font-body, 'Inter', sans-serif);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.ruleInput:focus {
+  border-color: rgba(189, 157, 255, 0.25);
+}
+
+.removeRule {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--lumiverse-text-secondary, #797384);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.removeRule:hover {
+  color: #ff6e84;
+  background: rgba(255, 110, 132, 0.08);
+}
+
+.addRule {
+  align-self: flex-start;
+  padding: 0.2rem 0.5rem;
+  border: none;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--lumiverse-primary, #bd9dff);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.addRule:hover {
+  opacity: 1;
+}

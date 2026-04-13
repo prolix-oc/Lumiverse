@@ -1,50 +1,97 @@
-import { useCallback, useEffect, useId, useState } from 'react'
-import { AlertCircle, Clock3, FolderOpen, History, Sparkles, Trash2 } from 'lucide-react'
-import { dreamWeaverApi, type DreamWeaverDraft, type DreamWeaverSession } from '@/api/dream-weaver'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  FolderOpen,
+  History,
+  Sparkles,
+  Trash2,
+} from 'lucide-react'
+import clsx from 'clsx'
+import { connectionsApi } from '@/api/connections'
+import { dreamWeaverApi, type DreamWeaverSession } from '@/api/dream-weaver'
+import { personasApi } from '@/api/personas'
+import {
+  getSessionStatusLabel,
+  resolveSelectedConnectionId,
+} from '@/components/dream-weaver/lib/studio-model'
+import {
+  Button,
+  EditorSection,
+  Select,
+  TextArea,
+  TextInput,
+} from '@/components/shared/FormComponents'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { toast } from '@/lib/toast'
 import { useStore } from '@/store'
+import type { ConnectionProfile, Persona } from '@/types/api'
+import {
+  buildDreamWeaverSessionArchive,
+  formatDreamWeaverSessionTimestamp,
+  getDefaultExpandedDreamWeaverArchiveKeys,
+  getDreamWeaverSessionPreview,
+  getDreamWeaverSessionTitle,
+  resolveSelectedDreamWeaverPersonaId,
+  type SessionArchiveGroup,
+} from './dream-weaver-panel.lib'
 import styles from './DreamWeaverPanel.module.css'
 
-function parseDraft(rawDraft: string | null): DreamWeaverDraft | null {
-  if (!rawDraft) return null
-  try {
-    return JSON.parse(rawDraft) as DreamWeaverDraft
-  } catch {
-    return null
-  }
-}
-
-function sessionTitle(session: DreamWeaverSession): string {
-  const draft = parseDraft(session.draft)
-  return draft?.card?.name || draft?.meta?.title || 'Untitled weave'
-}
-
-function sessionPreview(session: DreamWeaverSession): string {
-  const draft = parseDraft(session.draft)
-  return draft?.meta?.summary || session.dream_text
-}
-
-function sessionStatus(session: DreamWeaverSession): string {
-  if (session.character_id) return 'Finalized'
-  if (session.status === 'complete') return 'Draft ready'
-  if (session.status === 'generating') return 'Weaving'
-  if (session.status === 'error') return 'Needs attention'
-  return 'Saved'
-}
+type ArchiveKey = SessionArchiveGroup['key']
 
 export default function DreamWeaverPanel() {
   const [dreamText, setDreamText] = useState('')
+  const [tone, setTone] = useState('')
+  const [constraints, setConstraints] = useState('')
+  const [dislikes, setDislikes] = useState('')
+  const [refineExpanded, setRefineExpanded] = useState(false)
   const [sessions, setSessions] = useState<DreamWeaverSession[]>([])
+  const [personas, setPersonas] = useState<Persona[]>([])
+  const [connections, setConnections] = useState<ConnectionProfile[]>([])
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null)
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null)
+  const [expandedArchiveKeys, setExpandedArchiveKeys] = useState<Partial<Record<ArchiveKey, boolean>>>({})
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isLoadingSessions, setIsLoadingSessions] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<DreamWeaverSession | null>(null)
 
-  const dreamId = useId()
-
   const openModal = useStore((s) => s.openModal)
   const activeModal = useStore((s) => s.activeModal)
+  const activePersonaId = useStore((s) => s.activePersonaId)
+  const activeProfileId = useStore((s) => s.activeProfileId)
+  const storedPersonas = useStore((s) => s.personas)
+  const storedProfiles = useStore((s) => s.profiles)
+
+  const resolvedPersonaId = useMemo(
+    () => resolveSelectedDreamWeaverPersonaId(selectedPersonaId, activePersonaId, personas),
+    [activePersonaId, personas, selectedPersonaId],
+  )
+  const resolvedConnectionId = useMemo(
+    () => resolveSelectedConnectionId(selectedConnectionId ?? activeProfileId, connections),
+    [activeProfileId, connections, selectedConnectionId],
+  )
+
+  const archiveGroups = useMemo(
+    () => buildDreamWeaverSessionArchive(sessions, ''),
+    [sessions],
+  )
+
+  useEffect(() => { setPersonas(storedPersonas) }, [storedPersonas])
+  useEffect(() => { setConnections(storedProfiles) }, [storedProfiles])
+
+  useEffect(() => {
+    setExpandedArchiveKeys((current) => {
+      const defaultKeys = new Set(getDefaultExpandedDreamWeaverArchiveKeys(archiveGroups))
+      const next: Partial<Record<ArchiveKey, boolean>> = {}
+      for (const group of archiveGroups) {
+        next[group.key] = current[group.key] ?? defaultKeys.has(group.key)
+      }
+      return next
+    })
+  }, [archiveGroups])
 
   const loadSessions = useCallback(async () => {
     setIsLoadingSessions(true)
@@ -59,27 +106,41 @@ export default function DreamWeaverPanel() {
     }
   }, [])
 
+  const loadBootstrapOptions = useCallback(async () => {
+    const [personaResult, connectionResult] = await Promise.allSettled([
+      personasApi.list({ limit: 200 }),
+      connectionsApi.list({ limit: 200 }),
+    ])
+    if (personaResult.status === 'fulfilled') setPersonas(personaResult.value.data)
+    if (connectionResult.status === 'fulfilled') setConnections(connectionResult.value.data)
+  }, [])
+
   useEffect(() => {
     void loadSessions()
-  }, [loadSessions])
+    void loadBootstrapOptions()
+  }, [loadBootstrapOptions, loadSessions])
 
   useEffect(() => {
-    if (activeModal !== 'dreamWeaverStudio') {
-      void loadSessions()
-    }
+    if (activeModal !== 'dreamWeaverStudio') void loadSessions()
   }, [activeModal, loadSessions])
 
-  const handleWeave = async () => {
-    if (!dreamText.trim()) return
+  const toggleArchiveGroup = useCallback((key: ArchiveKey) => {
+    setExpandedArchiveKeys((current) => ({ ...current, [key]: !(current[key] ?? false) }))
+  }, [])
 
+  const handleDream = async () => {
+    if (!dreamText.trim()) return
     setIsCreating(true)
     setErrorMessage(null)
-
     try {
       const session = await dreamWeaverApi.createSession({
         dream_text: dreamText,
+        tone: tone.trim() || undefined,
+        constraints: constraints.trim() || undefined,
+        dislikes: dislikes.trim() || undefined,
+        persona_id: resolvedPersonaId || undefined,
+        connection_id: resolvedConnectionId || undefined,
       })
-
       try {
         await dreamWeaverApi.generateDraft(session.id)
       } catch (error: any) {
@@ -89,7 +150,6 @@ export default function DreamWeaverPanel() {
         toast.error(recoveryMessage, { title: 'Dream Weaver' })
         return
       }
-
       setDreamText('')
       openModal('dreamWeaverStudio', { sessionId: session.id })
     } catch (error: any) {
@@ -108,10 +168,9 @@ export default function DreamWeaverPanel() {
 
   const handleDeleteSession = async () => {
     if (!sessionToDelete) return
-
     try {
       await dreamWeaverApi.deleteSession(sessionToDelete.id)
-      setSessions((current) => current.filter((session) => session.id !== sessionToDelete.id))
+      setSessions((current) => current.filter((s) => s.id !== sessionToDelete.id))
       toast.success('Dream Weaver session deleted', { title: 'Dream Weaver' })
     } catch (error: any) {
       const message = error?.body?.error || error?.message || 'Failed to delete Dream Weaver session'
@@ -121,126 +180,207 @@ export default function DreamWeaverPanel() {
     }
   }
 
+  const personaOptions = useMemo(
+    () =>
+      personas.length === 0
+        ? [{ value: '', label: 'No personas available' }]
+        : personas.map((p) => ({ value: p.id, label: p.name })),
+    [personas],
+  )
+
+  const connectionOptions = useMemo(
+    () =>
+      connections.length === 0
+        ? [{ value: '', label: 'No connections available' }]
+        : connections.map((c) => ({ value: c.id, label: c.name })),
+    [connections],
+  )
+
   return (
     <>
-      <div className={styles.wrapper}>
-        <section className={styles.header}>
-          <div className={styles.headerMain}>
-            <div className={styles.iconBadge}>
-              <Sparkles size={18} />
-            </div>
-            <div className={styles.headerCopy}>
-              <h1 className={styles.headerTitle}>Dream Weaver</h1>
-              <p className={styles.headerSubtitle}>Start with the core idea. Re-weave in the studio.</p>
-            </div>
-          </div>
-        </section>
+      <div className={styles.panel}>
 
-        <div className={styles.content}>
-          <section className={styles.composeSection}>
-          <div className={styles.fieldBlock}>
-            <label className={styles.fieldLabel} htmlFor={dreamId}>
-              Dream
-            </label>
-            <textarea
-              id={dreamId}
-              className={styles.mainTextarea}
-              placeholder={
-                "Describe the character, tension, history, and angle you want preserved."
-              }
-              value={dreamText}
-              onChange={(event) => setDreamText(event.target.value)}
-              rows={6}
+        {/* Dream textarea */}
+        <div className={styles.field}>
+          <span className={styles.fieldLabel}>Dream</span>
+          <TextArea
+            value={dreamText}
+            onChange={setDreamText}
+            placeholder="Describe the tension, dynamic, history, and angle worth preserving."
+            rows={6}
+          />
+        </div>
+
+        {/* Persona + Connection */}
+        <div className={styles.grid2}>
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Persona</span>
+            <Select
+              value={resolvedPersonaId ?? ''}
+              onChange={(v) => setSelectedPersonaId(v || null)}
+              options={personaOptions}
+              disabled={personas.length === 0}
             />
           </div>
-          </section>
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Connection</span>
+            <Select
+              value={resolvedConnectionId ?? ''}
+              onChange={(v) => setSelectedConnectionId(v || null)}
+              options={connectionOptions}
+              disabled={connections.length === 0}
+            />
+          </div>
+        </div>
 
-          {errorMessage && (
-            <div className={styles.errorBox} role="alert">
-              <AlertCircle size={16} />
-              <span>{errorMessage}</span>
+        {/* Refine — collapsed by default */}
+        <div>
+          <button
+            type="button"
+            className={styles.refineToggle}
+            onClick={() => setRefineExpanded((v) => !v)}
+          >
+            <span className={styles.refineLine} />
+            <span className={styles.refineLabel}>
+              Refine
+              <ChevronRight
+                size={12}
+                className={clsx(styles.refineChevron, refineExpanded && styles.refineChevronOpen)}
+              />
+            </span>
+            <span className={styles.refineLine} />
+          </button>
+
+          {refineExpanded && (
+            <div className={styles.refineBody}>
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>Tone</span>
+                <TextInput
+                  value={tone}
+                  onChange={setTone}
+                  placeholder="Uneasy, intimate, grounded, sharp…"
+                />
+              </div>
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>Constraints</span>
+                <TextInput
+                  value={constraints}
+                  onChange={setConstraints}
+                  placeholder="Keep the prior history explicit."
+                />
+              </div>
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>Avoid</span>
+                <TextInput
+                  value={dislikes}
+                  onChange={setDislikes}
+                  placeholder="No flattening, no clichés."
+                />
+              </div>
             </div>
           )}
-
-          <div className={styles.actionRow}>
-            <button
-              className={styles.weaveButton}
-              onClick={handleWeave}
-              disabled={!dreamText.trim() || isCreating}
-            >
-              <Sparkles size={18} />
-              {isCreating ? 'Weaving...' : 'Weave Dream'}
-            </button>
-          </div>
-
-          <section className={styles.sessionsSection}>
-            <div className={styles.sessionsHeader}>
-              <History size={16} />
-              <div className={styles.sessionsHeaderCopy}>
-                <h2 className={styles.sectionTitle}>Previous Weaves</h2>
-              </div>
-            </div>
-
-            {isLoadingSessions ? (
-              <div className={styles.sessionsEmpty}>Loading saved weaves...</div>
-            ) : sessions.length === 0 ? (
-              <div className={styles.sessionsEmpty}>No saved weaves yet.</div>
-            ) : (
-              <div className={styles.sessionsList}>
-                {sessions.map((session) => (
-                  <article
-                    key={session.id}
-                    className={styles.sessionCard}
-                    onClick={() => handleOpenSession(session.id)}
-                  >
-                    <div className={styles.sessionTopRow}>
-                      <div className={styles.sessionHeading}>
-                        <h3 className={styles.sessionTitle}>{sessionTitle(session)}</h3>
-                        <span className={styles.sessionStatus}>{sessionStatus(session)}</span>
-                      </div>
-                      <button
-                        type="button"
-                        className={styles.deleteButton}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          setSessionToDelete(session)
-                        }}
-                        aria-label="Delete session"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-
-                    <p className={styles.sessionPreview}>{sessionPreview(session)}</p>
-
-                    <div className={styles.sessionMeta}>
-                      <span className={styles.sessionMetaItem}>
-                        <Clock3 size={12} />
-                        {new Date(session.updated_at * 1000).toLocaleString()}
-                      </span>
-                      {session.tone && <span className={styles.sessionMetaItem}>{session.tone}</span>}
-                    </div>
-
-                    <div className={styles.sessionActions}>
-                      <button
-                        type="button"
-                        className={styles.resumeButton}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleOpenSession(session.id)
-                        }}
-                      >
-                        <FolderOpen size={14} />
-                        Open Session
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
         </div>
+
+        {/* Dream button */}
+        <Button
+          variant="primary"
+          icon={<Sparkles size={14} />}
+          loading={isCreating}
+          disabled={!dreamText.trim() || isCreating}
+          onClick={() => void handleDream()}
+          className={styles.dreamBtn}
+        >
+          {isCreating ? 'Dreaming...' : 'Dream'}
+        </Button>
+
+        {/* Error */}
+        {errorMessage && (
+          <div className={styles.errorBox} role="alert">
+            <AlertCircle size={16} />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* Previous Weaves */}
+        <EditorSection title="Previous Weaves" Icon={History} defaultExpanded={true}>
+          {isLoadingSessions ? (
+            <div className={styles.sessionsEmpty}>Loading saved weaves...</div>
+          ) : archiveGroups.length === 0 ? (
+            <div className={styles.sessionsEmpty}>No saved weaves yet.</div>
+          ) : (
+            <div className={styles.archiveList}>
+              {archiveGroups.map((group) => {
+                const expanded = expandedArchiveKeys[group.key] ?? false
+                return (
+                  <section key={group.key} className={styles.archiveGroup}>
+                    <button
+                      type="button"
+                      className={styles.archiveToggle}
+                      onClick={() => toggleArchiveGroup(group.key)}
+                      aria-expanded={expanded}
+                    >
+                      <span className={styles.archiveToggleLeft}>
+                        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                        <span className={styles.archiveGroupLabel}>{group.label}</span>
+                      </span>
+                      <span className={styles.archiveGroupCount}>{group.sessions.length}</span>
+                    </button>
+
+                    {expanded && (
+                      <div className={styles.archiveRows}>
+                        {group.sessions.map((session) => (
+                          <div key={session.id} className={styles.sessionRow}>
+                            <button
+                              type="button"
+                              className={styles.sessionMain}
+                              onClick={() => handleOpenSession(session.id)}
+                            >
+                              <div className={styles.sessionHeading}>
+                                <span className={styles.sessionTitle}>{getDreamWeaverSessionTitle(session)}</span>
+                                <span className={styles.sessionStatus}>{getSessionStatusLabel(session)}</span>
+                              </div>
+                              <span className={styles.sessionPreview}>{getDreamWeaverSessionPreview(session)}</span>
+                              <div className={styles.sessionMeta}>
+                                <span className={styles.sessionMetaItem}>
+                                  <Clock3 size={11} />
+                                  {formatDreamWeaverSessionTimestamp(session.updated_at)}
+                                </span>
+                                {session.tone && (
+                                  <span className={styles.sessionMetaTag}>{session.tone}</span>
+                                )}
+                              </div>
+                            </button>
+                            <div className={styles.sessionActions}>
+                              <button
+                                type="button"
+                                className={styles.openBtn}
+                                onClick={() => handleOpenSession(session.id)}
+                              >
+                                <FolderOpen size={13} />
+                                Open
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.deleteBtn}
+                                onClick={() => setSessionToDelete(session)}
+                                aria-label="Delete session"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                )
+              })}
+            </div>
+          )}
+        </EditorSection>
+
       </div>
+
       {sessionToDelete && (
         <ConfirmationModal
           isOpen={true}

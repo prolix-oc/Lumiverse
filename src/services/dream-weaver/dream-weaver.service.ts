@@ -10,7 +10,23 @@ import type {
 import { rawGenerate } from "../generate.service";
 import * as connectionsSvc from "../connections.service";
 import * as charactersSvc from "../characters.service";
-import { DREAM_WEAVER_SYSTEM_PROMPT } from "./prompts";
+import * as chatsSvc from "../chats.service";
+import * as imagesSvc from "../images.service";
+import {
+  DREAM_WEAVER_SYSTEM_PROMPT,
+  WORLD_GENERATION_SYSTEM_PROMPT,
+  buildWorldGenerationPrompt,
+} from "./prompts";
+import {
+  applyAcceptedPortraitImageId,
+  getAcceptedPortraitReference,
+  isPersistablePortraitDataUrl,
+} from "./portrait-reference";
+import {
+  canFinalizeSession,
+  deriveSessionStateSnapshot,
+  mergeGeneratedSoul,
+} from "./session-state";
 
 const DREAM_WEAVER_REQUIRED_COLUMNS: Array<[name: string, definition: string]> = [
   ["dream_text", "TEXT NOT NULL DEFAULT ''"],
@@ -20,7 +36,12 @@ const DREAM_WEAVER_REQUIRED_COLUMNS: Array<[name: string, definition: string]> =
   ["persona_id", "TEXT"],
   ["connection_id", "TEXT"],
   ["draft", "TEXT"],
+  ["soul_state", "TEXT NOT NULL DEFAULT 'empty'"],
+  ["world_state", "TEXT NOT NULL DEFAULT 'empty'"],
+  ["soul_revision", "INTEGER NOT NULL DEFAULT 0"],
+  ["world_source_revision", "INTEGER"],
   ["character_id", "TEXT"],
+  ["launch_chat_id", "TEXT"],
 ];
 
 let dreamWeaverSchemaEnsured = false;
@@ -42,7 +63,12 @@ function createDreamWeaverTable(): void {
       connection_id TEXT,
       draft TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
+      soul_state TEXT NOT NULL DEFAULT 'empty',
+      world_state TEXT NOT NULL DEFAULT 'empty',
+      soul_revision INTEGER NOT NULL DEFAULT 0,
+      world_source_revision INTEGER,
       character_id TEXT,
+      launch_chat_id TEXT,
       FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE,
       FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE SET NULL,
       FOREIGN KEY (connection_id) REFERENCES connection_profiles(id) ON DELETE SET NULL,
@@ -134,7 +160,12 @@ function rowToSession(row: any): DreamWeaverSession {
     connection_id: row.connection_id ?? null,
     draft: row.draft ?? null,
     status: row.status,
+    soul_state: row.soul_state ?? "empty",
+    world_state: row.world_state ?? "empty",
+    soul_revision: Number(row.soul_revision ?? 0),
+    world_source_revision: row.world_source_revision == null ? null : Number(row.world_source_revision),
     character_id: row.character_id ?? null,
+    launch_chat_id: row.launch_chat_id ?? null,
   };
 }
 
@@ -153,6 +184,31 @@ function parseDraftResponse(content: string): DW_DRAFT_V1 {
   return draft;
 }
 
+export function parseStoredDreamWeaverDraft(
+  rawDraft: string | null | undefined,
+): DW_DRAFT_V1 | null {
+  if (!rawDraft) return null;
+  return parseDraftResponse(rawDraft);
+}
+
+interface DreamWeaverWorldDraft {
+  lorebooks: any[];
+  npc_definitions: any[];
+}
+
+function parseWorldDraftResponse(content: string): DreamWeaverWorldDraft {
+  const trimmed = content.trim();
+  const jsonContent = trimmed.startsWith("```")
+    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
+    : trimmed;
+  const parsed = JSON.parse(jsonContent) as Partial<DreamWeaverWorldDraft>;
+
+  return {
+    lorebooks: Array.isArray(parsed.lorebooks) ? parsed.lorebooks : [],
+    npc_definitions: Array.isArray(parsed.npc_definitions) ? parsed.npc_definitions : [],
+  };
+}
+
 function normalizeOptionalText(value: string | null | undefined): string | null {
   if (value == null) return null;
   const trimmed = value.trim();
@@ -165,6 +221,41 @@ function serializeDraft(draft: DW_DRAFT_V1 | null | undefined): string | null {
     throw new Error("Dream Weaver draft payload is invalid");
   }
   return JSON.stringify(draft);
+}
+
+async function persistAcceptedPortraitImage(
+  userId: string,
+  draft: DW_DRAFT_V1,
+): Promise<{ draft: DW_DRAFT_V1; imageId: string | null }> {
+  const acceptedPortrait = getAcceptedPortraitReference(draft);
+  if (!acceptedPortrait) {
+    return { draft, imageId: null };
+  }
+
+  if (
+    typeof acceptedPortrait.reference.image_id === "string" &&
+    acceptedPortrait.reference.image_id.trim()
+  ) {
+    return {
+      draft,
+      imageId: acceptedPortrait.reference.image_id,
+    };
+  }
+
+  if (!isPersistablePortraitDataUrl(acceptedPortrait.reference)) {
+    return { draft, imageId: null };
+  }
+
+  const image = await imagesSvc.saveImageFromDataUrl(
+    userId,
+    acceptedPortrait.reference.image_url!,
+    `${imagesSvc.IMAGE_GEN_FILENAME_PREFIX}dream-weaver-${acceptedPortrait.assetId}.png`,
+  );
+
+  return {
+    draft: applyAcceptedPortraitImageId(draft, acceptedPortrait.assetId, image.id),
+    imageId: image.id,
+  };
 }
 
 export function createSession(userId: string, input: CreateSessionInput): DreamWeaverSession {
@@ -182,8 +273,9 @@ export function createSession(userId: string, input: CreateSessionInput): DreamW
   db.prepare(`
     INSERT INTO dream_weaver_sessions (
       id, user_id, created_at, updated_at,
-      dream_text, tone, constraints, dislikes, persona_id, connection_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      dream_text, tone, constraints, dislikes, persona_id, connection_id,
+      soul_state, world_state, soul_revision, world_source_revision, launch_chat_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     userId,
@@ -195,6 +287,11 @@ export function createSession(userId: string, input: CreateSessionInput): DreamW
     input.dislikes?.trim() || null,
     input.persona_id || null,
     input.connection_id || null,
+    "empty",
+    "empty",
+    0,
+    null,
+    null,
   );
 
   return getSession(userId, id)!;
@@ -225,11 +322,11 @@ export function listSessions(userId: string): DreamWeaverSession[] {
   return rows.map(rowToSession);
 }
 
-export function updateSession(
+export async function updateSession(
   userId: string,
   sessionId: string,
   input: UpdateSessionInput,
-): DreamWeaverSession {
+): Promise<DreamWeaverSession> {
   ensureDreamWeaverSchema();
 
   const existing = getSession(userId, sessionId);
@@ -237,6 +334,7 @@ export function updateSession(
 
   const updates: string[] = [];
   const params: any[] = [];
+  let portraitImageId: string | null = null;
 
   if ("dream_text" in input) {
     const dreamText = input.dream_text?.trim() ?? "";
@@ -271,10 +369,24 @@ export function updateSession(
   }
 
   if ("draft" in input) {
+    const existingDraft = parseStoredDreamWeaverDraft(existing.draft);
+    const nextDraft = input.draft
+      ? await persistAcceptedPortraitImage(userId, input.draft)
+      : { draft: input.draft, imageId: null };
+    portraitImageId = nextDraft.imageId;
+    const snapshot = deriveSessionStateSnapshot(existing, existingDraft, nextDraft.draft);
     updates.push("draft = ?");
-    params.push(serializeDraft(input.draft));
+    params.push(serializeDraft(nextDraft.draft));
     updates.push("status = ?");
-    params.push(input.draft ? "complete" : "draft");
+    params.push(nextDraft.draft ? "complete" : "draft");
+    updates.push("soul_state = ?");
+    params.push(snapshot.soul_state);
+    updates.push("world_state = ?");
+    params.push(snapshot.world_state);
+    updates.push("soul_revision = ?");
+    params.push(snapshot.soul_revision);
+    updates.push("world_source_revision = ?");
+    params.push(snapshot.world_source_revision);
   }
 
   if (updates.length === 0) {
@@ -291,10 +403,17 @@ export function updateSession(
     WHERE id = ? AND user_id = ?
   `).run(...params);
 
+  if (existing.character_id && portraitImageId) {
+    charactersSvc.setCharacterImage(userId, existing.character_id, portraitImageId);
+  }
+
   return getSession(userId, sessionId)!;
 }
 
-export async function generateDraft(userId: string, sessionId: string): Promise<DW_DRAFT_V1> {
+export async function generateDraft(
+  userId: string,
+  sessionId: string,
+): Promise<{ session: DreamWeaverSession; draft: DW_DRAFT_V1 }> {
   ensureDreamWeaverSchema();
 
   const session = getSession(userId, sessionId);
@@ -305,9 +424,9 @@ export async function generateDraft(userId: string, sessionId: string): Promise<
 
   db.prepare(`
     UPDATE dream_weaver_sessions
-    SET status = ?, updated_at = ?
+    SET status = ?, soul_state = ?, updated_at = ?
     WHERE id = ? AND user_id = ?
-  `).run("generating", now, sessionId, userId);
+  `).run("generating", "generating", now, sessionId, userId);
 
   eventBus.emit(EventType.DREAM_WEAVER_GENERATING, { sessionId }, userId);
 
@@ -328,29 +447,45 @@ export async function generateDraft(userId: string, sessionId: string): Promise<
         { role: "user", content: buildGenerationPrompt(session) },
       ],
       parameters: {
-        temperature: 0.8,
+        temperature: 1.0,
         max_tokens: 8000,
       },
       connection_id: connection.id,
     });
 
-    const draft = parseDraftResponse(result.content);
+    const generatedDraft = parseDraftResponse(result.content);
+    const previousDraft = parseStoredDreamWeaverDraft(session.draft);
+    const nextDraft = mergeGeneratedSoul(previousDraft, generatedDraft);
+    const snapshot = deriveSessionStateSnapshot(session, previousDraft, nextDraft);
 
     db.prepare(`
       UPDATE dream_weaver_sessions
-      SET draft = ?, status = ?, updated_at = ?
+      SET draft = ?, status = ?, soul_state = ?, world_state = ?, soul_revision = ?, world_source_revision = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
-    `).run(JSON.stringify(draft), "complete", Math.floor(Date.now() / 1000), sessionId, userId);
+    `).run(
+      JSON.stringify(nextDraft),
+      "complete",
+      snapshot.soul_state,
+      snapshot.world_state,
+      snapshot.soul_revision,
+      snapshot.world_source_revision,
+      Math.floor(Date.now() / 1000),
+      sessionId,
+      userId,
+    );
 
     eventBus.emit(EventType.DREAM_WEAVER_COMPLETE, { sessionId }, userId);
 
-    return draft;
+    return {
+      session: getSession(userId, sessionId)!,
+      draft: nextDraft,
+    };
   } catch (error) {
     db.prepare(`
       UPDATE dream_weaver_sessions
-      SET status = ?, updated_at = ?
+      SET status = ?, soul_state = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
-    `).run("error", Math.floor(Date.now() / 1000), sessionId, userId);
+    `).run("error", "error", Math.floor(Date.now() / 1000), sessionId, userId);
 
     eventBus.emit(
       EventType.DREAM_WEAVER_ERROR,
@@ -359,6 +494,75 @@ export async function generateDraft(userId: string, sessionId: string): Promise<
     );
     throw error;
   }
+}
+
+export async function generateWorld(
+  userId: string,
+  sessionId: string,
+): Promise<{ session: DreamWeaverSession; draft: DW_DRAFT_V1 }> {
+  ensureDreamWeaverSchema();
+
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+
+  const currentDraft = parseStoredDreamWeaverDraft(session.draft);
+  if (!currentDraft) throw new Error("Generate Soul before World");
+
+  const connection = session.connection_id
+    ? connectionsSvc.getConnection(userId, session.connection_id)
+    : connectionsSvc.getDefaultConnection(userId);
+
+  if (!connection) {
+    throw new Error("No connection available");
+  }
+
+  const result = await rawGenerate(userId, {
+    provider: connection.provider,
+    model: connection.model,
+    messages: [
+      { role: "system", content: WORLD_GENERATION_SYSTEM_PROMPT },
+      { role: "user", content: buildWorldGenerationPrompt(session, currentDraft) },
+    ],
+    parameters: {
+      temperature: 0.8,
+      max_tokens: 8000,
+    },
+    connection_id: connection.id,
+  });
+
+  const worldDraft = parseWorldDraftResponse(result.content);
+  const nextDraft: DW_DRAFT_V1 = {
+    ...currentDraft,
+    lorebooks: worldDraft.lorebooks,
+    npc_definitions: worldDraft.npc_definitions,
+  };
+  const snapshot = deriveSessionStateSnapshot(
+    session,
+    currentDraft,
+    nextDraft,
+    { worldGeneratedFromCurrentSoul: true },
+  );
+
+  getDb().prepare(`
+    UPDATE dream_weaver_sessions
+    SET draft = ?, status = ?, soul_state = ?, world_state = ?, soul_revision = ?, world_source_revision = ?, updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).run(
+    JSON.stringify(nextDraft),
+    "complete",
+    snapshot.soul_state,
+    snapshot.world_state,
+    snapshot.soul_revision,
+    snapshot.world_source_revision,
+    Math.floor(Date.now() / 1000),
+    sessionId,
+    userId,
+  );
+
+  return {
+    session: getSession(userId, sessionId)!,
+    draft: nextDraft,
+  };
 }
 
 function buildGenerationPrompt(session: DreamWeaverSession): string {
@@ -371,14 +575,54 @@ function buildGenerationPrompt(session: DreamWeaverSession): string {
   return prompt;
 }
 
-export async function finalize(userId: string, sessionId: string): Promise<{ characterId: string }> {
+export async function finalize(
+  userId: string,
+  sessionId: string,
+): Promise<{
+  session: DreamWeaverSession;
+  characterId: string;
+  chatId: string | null;
+  alreadyFinalized: boolean;
+}> {
   ensureDreamWeaverSchema();
 
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
-  if (!session.draft) throw new Error("No draft to finalize");
+  const storedDraft = parseStoredDreamWeaverDraft(session.draft);
+  if (!storedDraft) throw new Error("No draft to finalize");
+  const persistedPortrait = await persistAcceptedPortraitImage(userId, storedDraft);
+  const draft = persistedPortrait.draft;
+  const portraitImageId = persistedPortrait.imageId;
+  if (!draft) throw new Error("No draft to finalize");
+  if (!canFinalizeSession(session, draft) && !session.character_id) {
+    throw new Error("Dream Weaver session is not ready to finalize");
+  }
 
-  const draft = JSON.parse(session.draft) as DW_DRAFT_V1;
+  if (session.character_id) {
+    const chatId = session.launch_chat_id ?? chatsSvc.createChat(userId, {
+      character_id: session.character_id,
+    }).id;
+
+    if (portraitImageId) {
+      charactersSvc.setCharacterImage(userId, session.character_id, portraitImageId);
+    }
+
+    if (chatId !== session.launch_chat_id || draft !== storedDraft) {
+      getDb().prepare(`
+        UPDATE dream_weaver_sessions
+        SET launch_chat_id = ?, draft = ?, updated_at = ?
+        WHERE id = ? AND user_id = ?
+      `).run(chatId, serializeDraft(draft), Math.floor(Date.now() / 1000), sessionId, userId);
+    }
+
+    return {
+      session: getSession(userId, sessionId)!,
+      characterId: session.character_id,
+      chatId,
+      alreadyFinalized: true,
+    };
+  }
+
   const extensions: Record<string, unknown> = {
     alternate_fields: draft.alternate_fields,
     dream_weaver: {
@@ -401,14 +645,25 @@ export async function finalize(userId: string, sessionId: string): Promise<{ cha
     alternate_greetings: draft.greetings.slice(1).map((greeting) => greeting.content),
     extensions,
   });
+  if (portraitImageId) {
+    charactersSvc.setCharacterImage(userId, character.id, portraitImageId);
+  }
+  const chat = chatsSvc.createChat(userId, {
+    character_id: character.id,
+  });
 
   getDb().prepare(`
     UPDATE dream_weaver_sessions
-    SET character_id = ?, updated_at = ?
+    SET draft = ?, character_id = ?, launch_chat_id = ?, updated_at = ?
     WHERE id = ? AND user_id = ?
-  `).run(character.id, Math.floor(Date.now() / 1000), sessionId, userId);
+  `).run(serializeDraft(draft), character.id, chat.id, Math.floor(Date.now() / 1000), sessionId, userId);
 
-  return { characterId: character.id };
+  return {
+    session: getSession(userId, sessionId)!,
+    characterId: character.id,
+    chatId: chat.id,
+    alreadyFinalized: false,
+  };
 }
 
 export function deleteSession(userId: string, sessionId: string): void {

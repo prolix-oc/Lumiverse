@@ -1,4 +1,5 @@
 import * as apiClient from './client'
+import type { ComfyUICapabilities } from './image-gen'
 
 export interface DreamWeaverAlternateField {
   id: string
@@ -23,6 +24,117 @@ export interface DreamWeaverVoiceGuidance {
   }
 }
 
+export interface DreamWeaverLegacyImageAsset {
+  id: string
+  type: string
+  label: string
+  prompt: string
+  negative: string
+  imageId?: string | null
+  imageUrl?: string | null
+  locked?: boolean
+}
+
+export type DreamWeaverVisualProvider =
+  | 'comfyui'
+  | 'novelai'
+  | 'nanogpt'
+  | 'google_gemini'
+  | 'a1111'
+  | 'swarmui'
+
+export interface DreamWeaverVisualReference {
+  id: string
+  image_id?: string | null
+  image_url?: string | null
+  weight?: number
+  label?: string
+}
+
+export interface DreamWeaverVisualAsset {
+  id: string
+  asset_type: 'card_portrait'
+  label: string
+  prompt: string
+  negative_prompt: string
+  macro_tokens: string[]
+  width: number
+  height: number
+  aspect_ratio: string
+  seed: number | null
+  references: DreamWeaverVisualReference[]
+  provider: DreamWeaverVisualProvider | null
+  preset_id: string | null
+  provider_state: Record<string, any>
+}
+
+export type ComfyUIMappedFieldSemantic =
+  | 'positive_prompt'
+  | 'negative_prompt'
+  | 'seed'
+  | 'steps'
+  | 'cfg'
+  | 'sampler_name'
+  | 'scheduler'
+  | 'width'
+  | 'height'
+  | 'checkpoint'
+  | 'custom'
+
+export interface ComfyUIFieldMapping {
+  nodeId: string
+  fieldName: string
+  mappedAs: ComfyUIMappedFieldSemantic
+  autoDetected?: boolean
+}
+
+export interface ComfyUIWorkflowConfig {
+  workflow_json: Record<string, any>
+  workflow_api_json: Record<string, any>
+  workflow_format: 'ui_workflow' | 'api_prompt'
+  field_mappings: ComfyUIFieldMapping[]
+  field_options?: Record<string, string[]>
+  imported_at: number
+  needs_reimport?: boolean
+}
+
+export interface DreamWeaverVisualJobResult {
+  image_id?: string | null
+  image_url?: string | null
+  imageId?: string | null
+  imageUrl?: string | null
+  settingsSnapshot?: Record<string, unknown>
+}
+
+export interface DreamWeaverVisualJob {
+  id: string
+  asset_id: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  progress?: Record<string, any> | null
+  result?: DreamWeaverVisualJobResult | null
+  error?: string | null
+}
+
+export interface DreamWeaverVisualTagSuggestion {
+  suggestedTags: string
+}
+
+export interface PromptLayer {
+  appearance: string
+  composition: string
+  lighting: string
+  mood: string
+  detail: string
+  negative: string
+  style: string
+}
+
+export interface ImagePromptPreset {
+  id: string
+  name: string
+  layers: Partial<PromptLayer>
+}
+
 export interface DreamWeaverDraft {
   format: 'DW_DRAFT_V1'
   version: 1
@@ -36,6 +148,7 @@ export interface DreamWeaverDraft {
   card: {
     name: string
     appearance: string
+    appearance_data?: Record<string, string>
     description: string
     personality: string
     scenario: string
@@ -53,6 +166,8 @@ export interface DreamWeaverDraft {
   lorebooks: any[]
   npc_definitions: any[]
   regex_scripts: any[]
+  image_assets?: DreamWeaverLegacyImageAsset[]
+  visual_assets?: DreamWeaverVisualAsset[]
 }
 
 export interface DreamWeaverSession {
@@ -68,7 +183,24 @@ export interface DreamWeaverSession {
   connection_id: string | null
   draft: string | null
   status: 'draft' | 'generating' | 'complete' | 'error'
+  soul_state: 'empty' | 'generating' | 'ready' | 'error'
+  world_state: 'empty' | 'ready' | 'stale'
+  soul_revision: number
+  world_source_revision: number | null
   character_id: string | null
+  launch_chat_id: string | null
+}
+
+export interface DreamWeaverDraftResult {
+  session: DreamWeaverSession
+  draft: DreamWeaverDraft
+}
+
+export interface DreamWeaverFinalizeResult {
+  session: DreamWeaverSession
+  characterId: string
+  chatId: string | null
+  alreadyFinalized: boolean
 }
 
 export interface CreateSessionInput {
@@ -90,6 +222,210 @@ export interface UpdateSessionInput {
   draft?: DreamWeaverDraft | null
 }
 
+export function createDefaultVisualAssets(): DreamWeaverVisualAsset[] {
+  return [
+    {
+      id: 'portrait-main',
+      asset_type: 'card_portrait',
+      label: 'Main Portrait',
+      prompt: '',
+      negative_prompt: '',
+      macro_tokens: [],
+      width: 1024,
+      height: 1024,
+      aspect_ratio: '1:1',
+      seed: null,
+      references: [],
+      provider: null,
+      preset_id: null,
+      provider_state: {},
+    },
+  ]
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isVisualProvider(value: unknown): value is DreamWeaverVisualProvider {
+  return (
+    value === 'comfyui' ||
+    value === 'novelai' ||
+    value === 'nanogpt' ||
+    value === 'google_gemini' ||
+    value === 'a1111' ||
+    value === 'swarmui'
+  )
+}
+
+function normalizeVisualReferences(value: unknown): DreamWeaverVisualReference[] {
+  if (!Array.isArray(value)) return []
+
+  const references: DreamWeaverVisualReference[] = []
+  for (const reference of value) {
+    if (!isRecord(reference)) continue
+    if (typeof reference.id !== 'string' || !reference.id.trim()) continue
+    references.push({
+      id: reference.id,
+      image_id:
+        typeof reference.image_id === 'string' && reference.image_id.trim()
+          ? reference.image_id
+          : undefined,
+      image_url:
+        typeof reference.image_url === 'string' && reference.image_url.trim()
+          ? reference.image_url
+          : undefined,
+      weight: typeof reference.weight === 'number' ? reference.weight : undefined,
+      label:
+        typeof reference.label === 'string' && reference.label.trim() ? reference.label : undefined,
+    })
+  }
+  return references
+}
+
+function normalizeVisualAsset(value: unknown): DreamWeaverVisualAsset | null {
+  if (!isRecord(value) || value.asset_type !== 'card_portrait') return null
+
+  return {
+    ...value,
+    id: typeof value.id === 'string' && value.id.trim() ? value.id : 'portrait-main',
+    asset_type: 'card_portrait',
+    label: typeof value.label === 'string' && value.label.trim() ? value.label : 'Main Portrait',
+    prompt: typeof value.prompt === 'string' ? value.prompt : '',
+    negative_prompt: typeof value.negative_prompt === 'string' ? value.negative_prompt : '',
+    macro_tokens: Array.isArray(value.macro_tokens)
+      ? value.macro_tokens.filter((token: unknown) => typeof token === 'string')
+      : [],
+    width: Number.isFinite(value.width) ? Number(value.width) : 1024,
+    height: Number.isFinite(value.height) ? Number(value.height) : 1024,
+    aspect_ratio:
+      typeof value.aspect_ratio === 'string' && value.aspect_ratio.trim()
+        ? value.aspect_ratio
+        : '1:1',
+    seed:
+      value.seed == null
+        ? null
+        : Number.isFinite(value.seed)
+          ? Number(value.seed)
+          : null,
+    references: normalizeVisualReferences(value.references),
+    provider: isVisualProvider(value.provider) ? value.provider : null,
+    preset_id: typeof value.preset_id === 'string' ? value.preset_id : null,
+    provider_state: isRecord(value.provider_state) ? value.provider_state : {},
+  }
+}
+
+function legacyAssetToVisualAsset(asset: DreamWeaverLegacyImageAsset): DreamWeaverVisualAsset {
+  const imageId = typeof asset.imageId === 'string' && asset.imageId.trim() ? asset.imageId : undefined
+  const imageUrl =
+    typeof asset.imageUrl === 'string' && asset.imageUrl.trim() ? asset.imageUrl : undefined
+
+  return {
+    id: asset.id,
+    asset_type: 'card_portrait',
+    label: asset.label || 'Main Portrait',
+    prompt: asset.prompt || '',
+    negative_prompt: asset.negative || '',
+    macro_tokens: [],
+    width: 1024,
+    height: 1024,
+    aspect_ratio: '1:1',
+    seed: null,
+    references:
+      imageId || imageUrl
+        ? [{ id: `${asset.id}-ref`, image_id: imageId, image_url: imageUrl }]
+        : [],
+    provider: null,
+    preset_id: null,
+    provider_state: {},
+  }
+}
+
+function mergeLegacyIntoVisualAssets(
+  visualAssets: DreamWeaverVisualAsset[],
+  legacyAssets: DreamWeaverLegacyImageAsset[],
+): DreamWeaverVisualAsset[] {
+  if (!legacyAssets.length) return visualAssets
+
+  const visualById = new Map(visualAssets.map((asset) => [asset.id, asset]))
+  const mergedAssets = legacyAssets.map((legacyAsset) => {
+    const existingVisual = visualById.get(legacyAsset.id)
+    if (!existingVisual) {
+      return legacyAssetToVisualAsset(legacyAsset)
+    }
+
+    visualById.delete(legacyAsset.id)
+    return {
+      ...existingVisual,
+      label: typeof legacyAsset.label === 'string' && legacyAsset.label.trim()
+        ? legacyAsset.label
+        : existingVisual.label,
+      prompt: typeof legacyAsset.prompt === 'string' ? legacyAsset.prompt : existingVisual.prompt,
+      negative_prompt:
+        typeof legacyAsset.negative === 'string'
+          ? legacyAsset.negative
+          : existingVisual.negative_prompt,
+    }
+  })
+
+  return [...mergedAssets, ...visualById.values()]
+}
+
+export function normalizeDraftVisualAssets(
+  draft: Partial<DreamWeaverDraft> | null | undefined,
+): DreamWeaverVisualAsset[] {
+  if (Array.isArray(draft?.visual_assets) && draft.visual_assets.length > 0) {
+    const normalizedVisualAssets = draft.visual_assets
+      .map((asset) => normalizeVisualAsset(asset))
+      .filter((asset): asset is DreamWeaverVisualAsset => Boolean(asset))
+
+    if (normalizedVisualAssets.length > 0) {
+      return normalizedVisualAssets
+    }
+  }
+
+  if (Array.isArray(draft?.image_assets) && draft.image_assets.length > 0) {
+    return draft.image_assets.map(legacyAssetToVisualAsset)
+  }
+
+  return createDefaultVisualAssets()
+}
+
+export function syncDraftVisualAssets(draft: DreamWeaverDraft): DreamWeaverDraft
+export function syncDraftVisualAssets(
+  visualAssets: DreamWeaverVisualAsset[],
+  legacyAssets: DreamWeaverLegacyImageAsset[],
+): DreamWeaverVisualAsset[]
+export function syncDraftVisualAssets(
+  input: DreamWeaverDraft | DreamWeaverVisualAsset[],
+  legacyInputAssets: DreamWeaverLegacyImageAsset[] = [],
+): DreamWeaverDraft | DreamWeaverVisualAsset[] {
+  if (Array.isArray(input)) {
+    return mergeLegacyIntoVisualAssets(input, legacyInputAssets)
+  }
+
+  const visualAssets = mergeLegacyIntoVisualAssets(
+    normalizeDraftVisualAssets(input),
+    input.image_assets ?? [],
+  )
+  const syncedLegacyAssets: DreamWeaverLegacyImageAsset[] = visualAssets.map((asset) => ({
+    id: asset.id,
+    type: 'portrait',
+    label: asset.label,
+    prompt: asset.prompt,
+    negative: asset.negative_prompt,
+    imageId: asset.references[0]?.image_id ?? null,
+    imageUrl: asset.references[0]?.image_url ?? null,
+    locked: false,
+  }))
+
+  return {
+    ...input,
+    visual_assets: visualAssets,
+    image_assets: syncedLegacyAssets,
+  }
+}
+
 export const dreamWeaverApi = {
   createSession: (input: CreateSessionInput) =>
     apiClient.post<DreamWeaverSession>('/dream-weaver/sessions', input),
@@ -104,11 +440,58 @@ export const dreamWeaverApi = {
     apiClient.put<DreamWeaverSession>(`/dream-weaver/sessions/${id}`, input),
 
   generateDraft: (id: string) =>
-    apiClient.post<DreamWeaverDraft>(`/dream-weaver/sessions/${id}/generate`, {}),
+    apiClient.post<DreamWeaverDraftResult>(`/dream-weaver/sessions/${id}/generate`, {}),
+
+  generateWorld: (id: string) =>
+    apiClient.post<DreamWeaverDraftResult>(
+      `/dream-weaver/sessions/${id}/generate/world`,
+      {},
+      { timeout: 120_000 },
+    ),
 
   finalize: (id: string) =>
-    apiClient.post<{ characterId: string }>(`/dream-weaver/sessions/${id}/finalize`, {}),
+    apiClient.post<DreamWeaverFinalizeResult>(`/dream-weaver/sessions/${id}/finalize`, {}),
 
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),
+
+  importComfyUIWorkflow: (connectionId: string, workflow: unknown) =>
+    apiClient.post<{ config: ComfyUIWorkflowConfig }>(
+      '/dream-weaver/visual/workflows/import',
+      { connectionId, workflow },
+    ),
+
+  updateComfyUIWorkflowMappings: (connectionId: string, mappings: ComfyUIFieldMapping[]) =>
+    apiClient.put<{ config: ComfyUIWorkflowConfig }>(
+      `/dream-weaver/visual/workflows/${connectionId}/mappings`,
+      { mappings },
+    ),
+
+  getComfyUIWorkflowConfig: (connectionId: string) =>
+    apiClient.get<{ config: ComfyUIWorkflowConfig | null }>(
+      `/dream-weaver/visual/workflows/${connectionId}`,
+    ),
+
+  getComfyUICapabilities: async (connectionId: string, forceRefresh = false) => {
+    const query = forceRefresh ? '?refresh=1' : ''
+    const response = await apiClient.get<{ capabilities: ComfyUICapabilities }>(
+      `/dream-weaver/visual/comfyui/${connectionId}/capabilities${query}`,
+    )
+    return response.capabilities
+  },
+
+  suggestVisualTags: (sessionId: string, draft?: DreamWeaverDraft | null) =>
+    apiClient.post<DreamWeaverVisualTagSuggestion>(
+      '/dream-weaver/visual/tag-suggestions',
+      { sessionId, draft },
+    ),
+
+  startVisualJob: (sessionId: string, asset: DreamWeaverVisualAsset, connectionId: string) =>
+    apiClient.post<DreamWeaverVisualJob>(
+      '/dream-weaver/visual/jobs',
+      { sessionId, asset, connectionId },
+    ),
+
+  getVisualJob: (jobId: string) =>
+    apiClient.get<DreamWeaverVisualJob>(`/dream-weaver/visual/jobs/${jobId}`),
 }

@@ -1,0 +1,109 @@
+.bar {
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 94%, var(--lumiverse-bg-deep));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 16px;
+  padding: 12px 16px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+}
+
+.barHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.collapsedBar {
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 94%, var(--lumiverse-bg-deep));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 16px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toggleButton {
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.fieldCount {
+  font-size: 0.75rem;
+  color: var(--lumiverse-text-dim);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.fieldBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldBlockWide {
+  grid-column: span 3;
+}
+
+.label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--lumiverse-text-dim);
+}
+
+.input,
+.textarea {
+  background: color-mix(in srgb, var(--lumiverse-fill-subtle) 88%, transparent);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  color: var(--lumiverse-text);
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.generateBlock {
+  display: flex;
+  align-items: flex-end;
+}
+
+.generateButton {
+  background: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-contrast, #fff);
+  border: none;
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-weight: 700;
+  cursor: pointer;
+  width: 100%;
+}
+
+.generateButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .fieldBlockWide {
+    grid-column: span 1;
+  }
+}

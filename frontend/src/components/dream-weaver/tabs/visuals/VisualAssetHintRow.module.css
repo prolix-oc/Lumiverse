@@ -1,0 +1,38 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.125rem 0 0.5rem;
+}
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 92%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 38%, transparent);
+}
+
+.item[data-state='active'] {
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 36%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+}
+
+.item[data-state='muted'] {
+  opacity: 0.72;
+}
+
+.label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text);
+}
+
+.hint {
+  font-size: 0.67rem;
+  color: var(--lumiverse-text-dim);
+}

@@ -23,7 +23,7 @@ import PersonaAddonsModal from './PersonaAddonsModal'
 import GlobalAddonsLibraryModal from './GlobalAddonsLibraryModal'
 import GroupSettingsModal from './GroupSettingsModal'
 import CustomCSSModal from './CustomCSSModal'
-import DreamWeaverStudioModal from './DreamWeaverStudioModal'
+import { DreamWeaverStudio } from '@/components/dream-weaver/DreamWeaverStudio'
 
 export default function ModalContainer() {
   const settingsModalOpen = useStore((s) => s.settingsModalOpen)
@@ -130,7 +130,9 @@ export default function ModalContainer() {
       )}
 
       {activeModal === 'customCSS' && <CustomCSSModal />}
-      {activeModal === 'dreamWeaverStudio' && modalProps.sessionId && <DreamWeaverStudioModal />}
+      {activeModal === 'dreamWeaverStudio' && modalProps.sessionId && (
+        <DreamWeaverStudio sessionId={modalProps.sessionId} />
+      )}
 
       <PermissionRequestModal />
       <CommandPalette />

@@ -1,0 +1,148 @@
+.paramGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--lumiverse-radius-sm, 0.25rem);
+  background: color-mix(in srgb, var(--lumiverse-bg) 50%, var(--lumiverse-bg-elevated));
+  border: 1px solid var(--lumiverse-border);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.groupHeader:hover {
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 30%, transparent);
+}
+
+.groupLabel {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--lumiverse-text-muted);
+}
+
+.groupChevron {
+  font-size: 0.625rem;
+  color: var(--lumiverse-text-dim);
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.groupChevron[data-open] {
+  transform: rotate(90deg);
+}
+
+.groupContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding-left: 0.25rem;
+}
+
+.paramRow {
+  display: flex;
+  gap: 0.625rem;
+}
+
+.paramField {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.paramLabel {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--lumiverse-text-dim);
+}
+
+.paramSelect {
+  padding: 0.4375rem 0.625rem;
+  border-radius: var(--lumiverse-radius-sm, 0.25rem);
+  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-bg) 50%, var(--lumiverse-bg-elevated));
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: 0.75rem;
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.paramSelect:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.paramInput {
+  padding: 0.4375rem 0.625rem;
+  border-radius: var(--lumiverse-radius-sm, 0.25rem);
+  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-bg) 50%, var(--lumiverse-bg-elevated));
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: 0.75rem;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.paramInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.paramToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.toggleTrack {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--lumiverse-border);
+  position: relative;
+  transition: background var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+}
+
+.toggleTrack[data-on] {
+  background: var(--lumiverse-primary);
+}
+
+.toggleThumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.toggleTrack[data-on] .toggleThumb {
+  transform: translateX(14px);
+}
+
+.toggleLabel {
+  font-size: 0.75rem;
+  color: var(--lumiverse-text-muted);
+}
+
+.paramDescription {
+  font-size: 0.625rem;
+  color: var(--lumiverse-text-dim);
+  line-height: 1.4;
+}

@@ -1,5 +1,25 @@
 import { get, post } from './client'
 
+export interface ComfyUICapabilities {
+  checkpoints: string[]
+  unets: string[]
+  clips: string[]
+  dualClips: string[]
+  vaes: string[]
+  loras: string[]
+  upscaleModels: string[]
+  detectorModels: string[]
+  samplers: string[]
+  schedulers: string[]
+  installedPacks: {
+    impactPack: boolean
+    upscaling: boolean
+    controlnet: boolean
+  }
+  modelLoaderType: 'checkpoint' | 'unet' | 'both'
+  clipLoaderType: 'single' | 'dual' | 'none'
+}
+
 export interface SceneData {
   environment: string
   time_of_day: string

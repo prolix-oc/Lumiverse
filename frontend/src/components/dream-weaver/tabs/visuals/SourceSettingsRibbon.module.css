@@ -1,0 +1,131 @@
+.ribbon {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+  min-width: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0 0 0.95rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--lumiverse-border) 88%, transparent);
+}
+
+.section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.sectionLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-dim);
+}
+
+.pill {
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
+  color: var(--lumiverse-text);
+  font-size: 0.66rem;
+}
+
+.metaInline {
+  color: var(--lumiverse-text-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.select,
+.input,
+.sourceValue {
+  width: 100%;
+  padding: 0.65rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 94%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 58%, transparent);
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.select:focus,
+.input:focus {
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 34%, transparent);
+}
+
+.sourceValue {
+  display: flex;
+  align-items: center;
+  min-height: 43px;
+}
+
+.meta {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--lumiverse-text-muted);
+}
+
+.warning {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--lumiverse-warning, #fbbf24);
+}
+
+.workflowButton {
+  align-self: flex-start;
+  padding: 0.62rem 0.86rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+  color: var(--lumiverse-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.controlGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.control,
+.controlWide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.controlWide {
+  grid-column: 1 / -1;
+}
+
+.controlLabel {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-dim);
+}
+
+@media (max-width: 900px) {
+  .controlGrid {
+    grid-template-columns: 1fr;
+  }
+}
