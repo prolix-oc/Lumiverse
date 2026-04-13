@@ -637,27 +637,14 @@ export default function DreamWeaverStudioModal() {
     setErrorMessage(null)
 
     try {
-      const generatedDraft = normalizeDraft(await dreamWeaverApi.generateDraft(savedSession.id))
-      setDraft(generatedDraft)
-      setSession((current) =>
-        current
-          ? {
-              ...current,
-              draft: JSON.stringify(generatedDraft),
-              status: 'complete',
-              updated_at: Math.floor(Date.now() / 1000),
-            }
-          : current,
-      )
-      setDirty(false)
+      const generatedSession = await dreamWeaverApi.generateDraft(savedSession.id)
+      setSession(generatedSession)
       setActiveSection('identity')
-      toast.success('Dream woven', { title: 'Dream Weaver' })
     } catch (error: any) {
       const message = error?.body?.error || error?.message || 'Dream weaving failed'
       setErrorMessage(message)
       toast.error(message, { title: 'Dream Weaver' })
     } finally {
-      setGenerating(false)
       setConfirmRegenerate(false)
     }
   }, [saveSession, session])

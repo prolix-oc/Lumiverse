@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
+import { Sparkles, Wand2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { Button } from '@/components/shared/FormComponents'
@@ -77,6 +78,7 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
   const contentRating = studio.draft?.meta?.content_rating ?? 'sfw'
   const kind = studio.draft?.kind
   const showOpenChat = shouldOfferOpenChat(studio.session)
+  const showWeavingCanvas = studio.generating
 
   return createPortal(
     <>
@@ -152,7 +154,37 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                   </nav>
 
                   <div className={styles.canvas} ref={canvasRef}>
-                    {studio.activeTab === 'soul' && (
+                    {showWeavingCanvas ? (
+                      <div className={styles.weavingState}>
+                        <div className={styles.weavingGlyph} aria-hidden="true">
+                          <span className={styles.weavingHalo} />
+                          <span className={styles.weavingCore}>
+                            <Sparkles size={18} />
+                          </span>
+                        </div>
+                        <div className={styles.weavingCopy}>
+                          <p className={styles.weavingEyebrow}>Dream Weaver</p>
+                          <h3 className={styles.weavingTitle}>Weaving The Soul</h3>
+                          <p className={styles.weavingText}>
+                            Shaping the card, voice, and opening from your dream.
+                          </p>
+                        </div>
+                        <div className={styles.weavingSteps} aria-label="Generation stages">
+                          <div className={styles.weavingStep}>
+                            <Wand2 size={14} />
+                            <span>Reading dream</span>
+                          </div>
+                          <div className={styles.weavingStep}>
+                            <Wand2 size={14} />
+                            <span>Shaping voice</span>
+                          </div>
+                          <div className={styles.weavingStep}>
+                            <Wand2 size={14} />
+                            <span>Binding the card</span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : studio.activeTab === 'soul' && (
                       <SoulTab
                         draft={studio.draft}
                         onUpdateCard={studio.updateDraftCard}

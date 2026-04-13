@@ -238,6 +238,7 @@
 .sessionStatus {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   min-height: 18px;
   padding: 0 7px;
   border-radius: 999px;
@@ -248,6 +249,16 @@
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+}
+
+.sessionStatus[data-generating] {
+  color: var(--lumiverse-primary);
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+}
+
+.sessionStatusSpin {
+  animation: sessionStatusSpin 1s linear infinite;
 }
 
 .sessionPreview {
@@ -332,4 +343,10 @@
 .deleteBtn:focus-visible {
   outline: 2px solid var(--lumiverse-primary);
   outline-offset: 1px;
+}
+
+@keyframes sessionStatusSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }

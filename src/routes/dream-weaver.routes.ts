@@ -62,8 +62,8 @@ app.put("/sessions/:id", async (c) => {
 app.post("/sessions/:id/generate", async (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("id");
-  const result = await dreamWeaverSvc.generateDraft(userId, sessionId);
-  return c.json(result);
+  const session = dreamWeaverSvc.generateDraft(userId, sessionId);
+  return c.json(session);
 });
 
 // Generate world package
