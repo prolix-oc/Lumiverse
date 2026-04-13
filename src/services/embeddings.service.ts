@@ -1638,7 +1638,10 @@ export async function searchWorldBookEntriesHybridWithVector(
 ): Promise<WorldBookSearchCandidate[]> {
   await ensureWorldBookVectorVersion(userId);
   const table = await getTableIfExists();
-  if (!table) return [];
+  if (!table) {
+    console.debug("[embeddings] WI vector search: no LanceDB table exists yet (entries may not be indexed)");
+    return [];
+  }
 
   const trimmedQuery = queryText.trim();
   const filter = `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND owner_id = ${sqlValue(worldBookId)}`;
@@ -1653,6 +1656,10 @@ export async function searchWorldBookEntriesHybridWithVector(
   // Refine with full vectors after PQ approximate search for better accuracy
   if (vectorIndexReady) query.refineFactor(5);
   const vectorRows = await query.toArray();
+
+  if (vectorRows.length === 0) {
+    console.debug("[embeddings] WI vector search: 0 rows from LanceDB for book=%s (limit=%d)", worldBookId.slice(0, 8), effectiveLimit);
+  }
 
   const merged = new Map<string, WorldBookSearchCandidate>();
 

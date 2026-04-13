@@ -221,6 +221,17 @@ export interface AssemblyResult {
     totalActivated: number;
     deduplicated: number;
     queryPreview: string;
+    /** Diagnostic details from the vector retrieval pipeline. */
+    vectorRetrieval?: {
+      eligibleCount: number;
+      hitsBeforeThreshold: number;
+      hitsAfterThreshold: number;
+      thresholdRejected: number;
+      hitsAfterRerankCutoff: number;
+      rerankRejected: number;
+      topK: number;
+      blockerMessages: string[];
+    };
   };
   /** Statistics from long-term memory retrieval. */
   memoryStats?: MemoryStats;

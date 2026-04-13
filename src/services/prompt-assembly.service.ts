@@ -463,14 +463,36 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // council enrichment phase), reuse them to avoid redundant embedding queries.
   const vectorQueryPreview = await getWorldInfoVectorQueryPreview(ctx.userId, messages);
   let vectorActivated = ctx.precomputedVectorEntries ?? null;
+  let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
   if (!vectorActivated) {
     try {
-      vectorActivated = await collectVectorActivatedWorldInfo(
+      const detailed = await collectVectorActivatedWorldInfoDetailed(
         ctx.userId,
         wiSources.worldBookIds,
         wiEntries,
         messages,
       );
+      vectorActivated = detailed.entries;
+      vectorRetrievalDetails = detailed;
+
+      if (detailed.blockerMessages.length > 0) {
+        console.debug(
+          "[prompt-assembly] Vector WI blocked: %s (eligible=%d, books=%d)",
+          detailed.blockerMessages.join("; "),
+          detailed.eligibleCount,
+          wiSources.worldBookIds.length,
+        );
+      } else {
+        console.debug(
+          "[prompt-assembly] Vector WI retrieval: eligible=%d, hits=%d, afterThreshold=%d, afterRerank=%d, shortlisted=%d (topK=%d)",
+          detailed.eligibleCount,
+          detailed.hitsBeforeThreshold,
+          detailed.hitsAfterThreshold,
+          detailed.hitsAfterRerankCutoff,
+          detailed.entries.length,
+          detailed.topK,
+        );
+      }
     } catch (err) {
       console.warn("[prompt-assembly] Vector world info activation failed, continuing with keyword-only:", err);
       vectorActivated = [];
@@ -497,6 +519,16 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     totalActivated: mergedWorldInfo.totalActivated,
     deduplicated: mergedWorldInfo.deduplicated,
     queryPreview: vectorQueryPreview,
+    vectorRetrieval: vectorRetrievalDetails ? {
+      eligibleCount: vectorRetrievalDetails.eligibleCount,
+      hitsBeforeThreshold: vectorRetrievalDetails.hitsBeforeThreshold,
+      hitsAfterThreshold: vectorRetrievalDetails.hitsAfterThreshold,
+      thresholdRejected: vectorRetrievalDetails.thresholdRejected,
+      hitsAfterRerankCutoff: vectorRetrievalDetails.hitsAfterRerankCutoff,
+      rerankRejected: vectorRetrievalDetails.rerankRejected,
+      topK: vectorRetrievalDetails.topK,
+      blockerMessages: vectorRetrievalDetails.blockerMessages,
+    } : undefined,
   };
 
   // ---- Defer WI state persistence to after generation ----
@@ -2455,15 +2487,29 @@ export function mergeActivatedWorldInfoEntries(
     preserveOrder: true,
   });
 
+  let vectorSkippedBudget = 0;
+  let vectorSkippedMinPriority = 0;
+  let vectorSkippedGroup = 0;
+  let vectorSkippedDedup = 0;
+  let vectorSkippedBudgetSim = 0;
+
   for (const item of vectorEntries) {
-    if (finalized.activatedEntries.length >= maxActivatedTarget) break;
-    if (seen.has(item.entry.id)) continue;
+    if (finalized.activatedEntries.length >= maxActivatedTarget) {
+      vectorSkippedBudget += vectorEntries.length - vectorEntries.indexOf(item);
+      break;
+    }
+    if (seen.has(item.entry.id)) {
+      vectorSkippedDedup++;
+      continue;
+    }
     if (settings.minPriority > 0 && item.entry.priority < settings.minPriority && !item.entry.constant) {
+      vectorSkippedMinPriority++;
       continue;
     }
 
     const groupKey = getGroupKey(item.entry);
     if (groupKey && occupiedGroups.has(groupKey)) {
+      vectorSkippedGroup++;
       continue;
     }
 
@@ -2476,6 +2522,7 @@ export function mergeActivatedWorldInfoEntries(
     const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
 
     if (!itemSurvived || (!grewActivationSet && !item.entry.constant)) {
+      vectorSkippedBudgetSim++;
       continue;
     }
 
@@ -2484,6 +2531,20 @@ export function mergeActivatedWorldInfoEntries(
     if (groupKey) occupiedGroups.add(groupKey);
     sources.set(item.entry.id, { source: "vector", score: item.finalScore });
     finalized = nextFinalized;
+  }
+
+  if (vectorEntries.length > 0) {
+    const accepted = vectorEntries.length - vectorSkippedBudget - vectorSkippedMinPriority - vectorSkippedGroup - vectorSkippedDedup - vectorSkippedBudgetSim;
+    console.debug(
+      "[WI merge] vector candidates=%d → accepted=%d, skipped: dedup=%d, minPriority=%d, group=%d, budgetCap=%d, budgetSim=%d",
+      vectorEntries.length,
+      accepted,
+      vectorSkippedDedup,
+      vectorSkippedMinPriority,
+      vectorSkippedGroup,
+      vectorSkippedBudget,
+      vectorSkippedBudgetSim,
+    );
   }
 
   // Content-level deduplication: remove exact, near-exact, and fuzzy

@@ -135,6 +135,16 @@ export interface DryRunResult {
     vectorActivated: number;
     totalActivated: number;
     queryPreview: string;
+    vectorRetrieval?: {
+      eligibleCount: number;
+      hitsBeforeThreshold: number;
+      hitsAfterThreshold: number;
+      thresholdRejected: number;
+      hitsAfterRerankCutoff: number;
+      rerankRejected: number;
+      topK: number;
+      blockerMessages: string[];
+    };
   };
   memoryStats?: import("../llm/types").MemoryStats;
 }
