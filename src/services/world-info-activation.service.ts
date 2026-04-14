@@ -1,6 +1,7 @@
 import type { WorldBookEntry } from "../types/world-book";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Message } from "../types/message";
+import { WorldInfoMatcher, makeScanState, type ScanState } from "./world-info-matcher.service";
 
 /**
  * Per-entry sticky/cooldown/delay tracking state, stored in chat.metadata.wi_state.
@@ -87,9 +88,6 @@ export interface FinalizeWorldInfoOptions {
   preserveOrder?: boolean;
 }
 
-/** Hoisted escaping regex — compiled once at module level. */
-const REGEX_ESCAPE_PATTERN = /[.*+?^${}()|[\]\\]/g;
-
 /**
  * Run full World Info activation pipeline.
  *
@@ -102,29 +100,11 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const { entries, messages, wiState } = input;
   const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...input.settings };
 
-  // 0. Cleanup wiState:
-  //   (a) Drop entries whose UID no longer exists in the candidate list —
-  //       prevents hidden sticky/active state from persisting after a book
-  //       is detached.
-  //   (b) Drop default-valued records (no-op state with all zeros / inactive).
-  //       Older versions of this function called getOrInitState on every
-  //       conditional entry regardless of whether it could match, which
-  //       bloated chat.metadata.wi_state to hundreds of KB for 9000+ entry
-  //       books. Compacting on read prevents that blob from being rewritten.
+  // 0. Cleanup wiState: Remove any keys that are no longer in the candidates list.
+  // This prevents hidden sticky/active entries from persisting after a lorebook is removed.
   const entryUids = new Set(entries.map(e => e.uid));
   for (const uid in wiState) {
-    const state = wiState[uid];
     if (!entryUids.has(uid)) {
-      delete wiState[uid];
-      continue;
-    }
-    if (
-      state &&
-      state.stickyLeft === 0 &&
-      state.cooldownLeft === 0 &&
-      state.delayCount === 0 &&
-      state.active === false
-    ) {
       delete wiState[uid];
     }
   }
@@ -142,21 +122,12 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     return true;
   });
 
-  // 2. Separate constants (always activate) from conditional candidates,
-  // and split conditional into "keyable" (has keywords → can match) and
-  // "unkeyable" (no keywords → only reachable via vector/sticky carryover).
-  //
-  // Large vector-only lorebooks (e.g. 9000+ entries with key=[]) land entirely
-  // in `unkeyable`. Iterating them in the recursion loop below does no useful
-  // work but allocates O(N) getOrInitState records and repeats 3× per pass.
-  // Treating them separately keeps the hot path proportional to keyable N only.
+  // 2. Separate constants (always activate)
   const constants: WorldBookEntry[] = [];
-  const keyableConditional: WorldBookEntry[] = [];
-  const unkeyableConditional: WorldBookEntry[] = [];
+  const conditional: WorldBookEntry[] = [];
   for (const e of candidates) {
     if (e.constant) constants.push(e);
-    else if (e.key.length > 0) keyableConditional.push(e);
-    else unkeyableConditional.push(e);
+    else conditional.push(e);
   }
 
   // 3. Evaluate conditional entries
@@ -166,18 +137,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const matchedThisTurn = new Set<string>();
   const delayIncremented = new Set<string>();
 
-  // Cooldown decay: keyable entries participate every turn (they might match).
-  // Unkeyable entries only need decay if they have prior state — otherwise
-  // cooldownLeft is 0 by construction and there is nothing to decrement.
-  for (const entry of keyableConditional) {
-    const state = getOrInitState(wiState, entry);
-    if (state.cooldownLeft > 0) {
-      state.cooldownLeft--;
-      state.active = false;
-      blockedByCooldown.add(entry.uid);
-    }
-  }
-  for (const entry of unkeyableConditional) {
+  for (const entry of conditional) {
     const state = wiState[entry.uid];
     if (!state || state.cooldownLeft <= 0) continue;
     state.cooldownLeft--;
@@ -190,127 +150,34 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     activatedUids.add(entry.uid);
   }
 
-  const recursionSourceParts: string[] = [];
-  for (const entry of constants) {
-    if (entry.content && !entry.exclude_recursion) recursionSourceParts.push(entry.content);
-  }
-
-  // Per-activation-cycle caches
-  const regexCache = new Map<string, RegExp | null>();
-  const scanTextCache = new Map<string, string>();
-
-  let recursionPassesUsed = 0;
   const maxPasses = Math.max(0, settings.maxRecursionPasses);
-  // Only iterate keyable entries — unkeyable ones always short-circuited on
-  // the old `entry.key.length === 0` check and cannot contribute to recursion.
-  for (let pass = 0; pass <= maxPasses; pass++) {
-    let activatedThisPass = false;
-    const recursionText = recursionSourceParts.join("\n");
+  const recursionPassesUsed = runAhoCorasickPasses({
+    conditional, constants, messages, settings, wiState,
+    activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
+    maxPasses,
+  });
 
-    // Clear scan text cache between passes (recursionText grows)
-    scanTextCache.clear();
-
-    for (const entry of keyableConditional) {
-      if (activatedUids.has(entry.uid)) continue;
-      if (blockedByCooldown.has(entry.uid)) continue;
-      if (pass === 0 && entry.delay_until_recursion) continue;
-      if (pass > 0 && entry.prevent_recursion) continue;
-
-      const state = getOrInitState(wiState, entry);
-
-      // Resolve effective scan depth: per-entry value takes precedence,
-      // otherwise fall back to the global default.
-      const effectiveScanDepth = entry.scan_depth ?? settings.globalScanDepth;
-
-      const scanText = cachedBuildScanText(scanTextCache, messages, effectiveScanDepth, recursionText);
-
-      const primaryMatch = entry.key.some(k =>
-        matchesKey(k, scanText, entry.case_sensitive, entry.match_whole_words, entry.use_regex, regexCache)
-      );
-      if (!primaryMatch) continue;
-
-      if (entry.selective && entry.keysecondary.length > 0) {
-        const secondaryPass = checkSecondaryKeys(
-          entry.keysecondary,
-          scanText,
-          entry.case_sensitive,
-          entry.match_whole_words,
-          entry.use_regex,
-          entry.selective_logic,
-          regexCache,
-        );
-        if (!secondaryPass) continue;
-      }
-
-      matchedThisTurn.add(entry.uid);
-
-      if (entry.delay > 0 && !delayIncremented.has(entry.uid)) {
-        state.delayCount++;
-        delayIncremented.add(entry.uid);
-      }
-      if (entry.delay > 0 && state.delayCount < entry.delay) {
-        continue;
-      }
-
-      if (entry.use_probability && entry.probability < 100) {
-        if (Math.random() * 100 >= entry.probability) {
-          continue;
-        }
-      }
-
-      state.active = true;
-      state.delayCount = 0;
-      if (entry.sticky > 0) state.stickyLeft = entry.sticky;
-
-      activated.push(entry);
-      activatedUids.add(entry.uid);
-      activatedThisPass = true;
-      if (entry.content && !entry.exclude_recursion) recursionSourceParts.push(entry.content);
-    }
-
-    if (!activatedThisPass) break;
-    recursionPassesUsed = pass + 1;
-  }
-
-  // Post-match state decay. Keyable entries always get a state record (we
-  // may need to reset their delay counter). Unkeyable entries only need
-  // touch-up if they already have a state record — unreached entries stay
-  // out of wiState entirely, which keeps chat.metadata.wi_state bounded.
-  for (const entry of keyableConditional) {
+  for (const entry of conditional) {
     if (activatedUids.has(entry.uid)) continue;
     if (blockedByCooldown.has(entry.uid)) continue;
     if (matchedThisTurn.has(entry.uid)) continue;
-    const state = getOrInitState(wiState, entry);
-    handleNoMatch(state, entry);
-  }
-  for (const entry of unkeyableConditional) {
     const state = wiState[entry.uid];
     if (!state) continue;
-    if (activatedUids.has(entry.uid)) continue;
-    if (blockedByCooldown.has(entry.uid)) continue;
     handleNoMatch(state, entry);
   }
 
-  // Re-activate sticky entries still in their sticky window. Iterate wiState
-  // directly (bounded by entries that actually have state) rather than
-  // scanning every conditional — the old `activated.includes(entry)` guard
-  // was also O(activated.length) per entry.
-  const conditionalByUid = new Map<string, WorldBookEntry>();
-  for (const e of keyableConditional) conditionalByUid.set(e.uid, e);
-  for (const e of unkeyableConditional) conditionalByUid.set(e.uid, e);
-  for (const uid in wiState) {
-    const state = wiState[uid];
-    if (!state || state.stickyLeft <= 0) continue;
-    if (activatedUids.has(uid)) continue;
-    const entry = conditionalByUid.get(uid);
-    if (!entry) continue;
-    state.stickyLeft--;
-    state.active = true;
-    activated.push(entry);
-    activatedUids.add(uid);
-    // When sticky expires, start cooldown
-    if (state.stickyLeft === 0 && entry.cooldown > 0) {
-      state.cooldownLeft = entry.cooldown;
+  // Also re-activate sticky entries that are still in their sticky window
+  for (const entry of conditional) {
+    if (activated.includes(entry)) continue;
+    const state = wiState[entry.uid];
+    if (state && state.stickyLeft > 0) {
+      state.stickyLeft--;
+      state.active = true;
+      activated.push(entry);
+      // When sticky expires, start cooldown
+      if (state.stickyLeft === 0 && entry.cooldown > 0) {
+        state.cooldownLeft = entry.cooldown;
+      }
     }
   }
 
@@ -436,6 +303,101 @@ function enforceBudget(entries: WorldBookEntry[], settings: WorldInfoSettings): 
 // Helpers
 // ---------------------------------------------------------------------------
 
+interface AhoCorasickPassArgs {
+  conditional: WorldBookEntry[];
+  constants: WorldBookEntry[];
+  messages: Message[];
+  settings: WorldInfoSettings;
+  wiState: WiState;
+  activated: WorldBookEntry[];
+  activatedUids: Set<string>;
+  blockedByCooldown: Set<string>;
+  matchedThisTurn: Set<string>;
+  delayIncremented: Set<string>;
+  maxPasses: number;
+}
+
+function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
+  const { conditional, constants, messages, settings, wiState,
+    activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
+    maxPasses } = args;
+
+  const matcher = new WorldInfoMatcher(conditional);
+  const state: ScanState = makeScanState();
+
+  // Pass 0 base: scan messages once per unique effective scan_depth.
+  const depthBuckets = new Map<string, Set<string>>();
+  const depthKey = (d: number | null) => (d === null ? "all" : String(d));
+  for (const e of conditional) {
+    if (e.key.length === 0) continue;
+    const d = e.scan_depth ?? settings.globalScanDepth;
+    const k = depthKey(d);
+    let set = depthBuckets.get(k);
+    if (!set) { set = new Set(); depthBuckets.set(k, set); }
+    set.add(e.uid);
+  }
+  for (const [k, scope] of depthBuckets) {
+    const d = k === "all" ? null : Number(k);
+    const text = buildScanText(messages, d, "");
+    matcher.scanChunk(text, state, scope);
+  }
+
+  // Constants' content is visible to all entries on pass 0.
+  for (const c of constants) {
+    if (c.content && !c.exclude_recursion) matcher.scanChunk(c.content, state);
+  }
+
+  let recursionPassesUsed = 0;
+  let newContent: string[] = [];
+
+  for (let pass = 0; pass <= maxPasses; pass++) {
+    if (pass > 0) {
+      if (newContent.length === 0) break;
+      for (const chunk of newContent) matcher.scanChunk(chunk, state);
+      newContent = [];
+    }
+
+    let activatedThisPass = false;
+
+    for (const entry of conditional) {
+      if (activatedUids.has(entry.uid)) continue;
+      if (blockedByCooldown.has(entry.uid)) continue;
+      if (pass === 0 && entry.delay_until_recursion) continue;
+      if (pass > 0 && entry.prevent_recursion) continue;
+      if (entry.key.length === 0) continue;
+
+      if (!matcher.shouldActivate(entry, state)) continue;
+
+      const entryState = getOrInitState(wiState, entry);
+      matchedThisTurn.add(entry.uid);
+
+      if (entry.delay > 0 && !delayIncremented.has(entry.uid)) {
+        entryState.delayCount++;
+        delayIncremented.add(entry.uid);
+      }
+      if (entry.delay > 0 && entryState.delayCount < entry.delay) continue;
+
+      if (entry.use_probability && entry.probability < 100) {
+        if (Math.random() * 100 >= entry.probability) continue;
+      }
+
+      entryState.active = true;
+      entryState.delayCount = 0;
+      if (entry.sticky > 0) entryState.stickyLeft = entry.sticky;
+
+      activated.push(entry);
+      activatedUids.add(entry.uid);
+      activatedThisPass = true;
+      if (entry.content && !entry.exclude_recursion) newContent.push(entry.content);
+    }
+
+    if (!activatedThisPass) break;
+    recursionPassesUsed = pass + 1;
+  }
+
+  return recursionPassesUsed;
+}
+
 function getOrInitState(wiState: WiState, entry: WorldBookEntry): WiEntryState {
   if (!wiState[entry.uid]) {
     wiState[entry.uid] = { stickyLeft: 0, cooldownLeft: 0, delayCount: 0, active: false };
@@ -467,112 +429,6 @@ function buildScanText(messages: Message[], scanDepth: number | null, recursionT
   if (!recursionText) return base;
   if (!base) return recursionText;
   return `${base}\n${recursionText}`;
-}
-
-/** Cache scan text by scan_depth within a single pass (same recursionText). */
-function cachedBuildScanText(
-  cache: Map<string, string>,
-  messages: Message[],
-  scanDepth: number | null,
-  recursionText: string,
-): string {
-  const cacheKey = String(scanDepth);
-  const cached = cache.get(cacheKey);
-  if (cached !== undefined) return cached;
-  const result = buildScanText(messages, scanDepth, recursionText);
-  cache.set(cacheKey, result);
-  return result;
-}
-
-/** Get or create a cached regex. Returns null for invalid patterns. */
-function getCachedRegex(cache: Map<string, RegExp | null>, pattern: string, flags: string): RegExp | null {
-  const cacheKey = `${pattern}|${flags}`;
-  if (cache.has(cacheKey)) return cache.get(cacheKey)!;
-  try {
-    const regex = new RegExp(pattern, flags);
-    cache.set(cacheKey, regex);
-    return regex;
-  } catch {
-    cache.set(cacheKey, null);
-    return null;
-  }
-}
-
-/**
- * Match a single key against the scan text.
- */
-export function matchesKey(
-  key: string,
-  text: string,
-  caseSensitive: boolean,
-  wholeWords: boolean,
-  useRegex: boolean,
-  regexCache?: Map<string, RegExp | null>,
-): boolean {
-  if (!key) return false;
-
-  if (useRegex) {
-    const flags = caseSensitive ? "g" : "gi";
-    const regex = regexCache
-      ? getCachedRegex(regexCache, key, flags)
-      : (() => { try { return new RegExp(key, flags); } catch { return null; } })();
-    if (!regex) return false;
-    regex.lastIndex = 0;
-    return regex.test(text);
-  }
-
-  let searchKey = key;
-  let searchText = text;
-  if (!caseSensitive) {
-    searchKey = key.toLowerCase();
-    searchText = text.toLowerCase();
-  }
-
-  if (wholeWords) {
-    const escaped = searchKey.replace(REGEX_ESCAPE_PATTERN, "\\$&");
-    const flags = caseSensitive ? "g" : "gi";
-    const pattern = `\\b${escaped}\\b`;
-    const regex = regexCache
-      ? getCachedRegex(regexCache, pattern, flags)
-      : new RegExp(pattern, flags);
-    if (!regex) return false;
-    regex.lastIndex = 0;
-    return regex.test(text);
-  }
-
-  return searchText.includes(searchKey);
-}
-
-/**
- * Check secondary keys based on selective_logic:
- *  0 = AND (all must match)
- *  1 = NOT (none should match)
- *  2 = OR  (at least one must match)
- *  3 = NOT All (fail only if all keys match)
- */
-function checkSecondaryKeys(
-  keys: string[],
-  text: string,
-  caseSensitive: boolean,
-  wholeWords: boolean,
-  useRegex: boolean,
-  logic: number,
-  regexCache?: Map<string, RegExp | null>,
-): boolean {
-  if (keys.length === 0) return true;
-
-  switch (logic) {
-    case 0: // AND
-      return keys.every(k => matchesKey(k, text, caseSensitive, wholeWords, useRegex, regexCache));
-    case 1: // NOT
-      return keys.every(k => !matchesKey(k, text, caseSensitive, wholeWords, useRegex, regexCache));
-    case 2: // OR
-      return keys.some(k => matchesKey(k, text, caseSensitive, wholeWords, useRegex, regexCache));
-    case 3: // NOT All
-      return !keys.every(k => matchesKey(k, text, caseSensitive, wholeWords, useRegex, regexCache));
-    default:
-      return true;
-  }
 }
 
 /**
