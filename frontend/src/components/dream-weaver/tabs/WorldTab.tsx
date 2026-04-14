@@ -1,4 +1,4 @@
-import { Globe, Sparkles } from 'lucide-react'
+import { Globe, Sparkles, RefreshCw } from 'lucide-react'
 import { generateUUID } from '@/lib/uuid'
 import { Button } from '@/components/shared/FormComponents'
 import { Spinner } from '@/components/shared/Spinner'
@@ -14,8 +14,13 @@ interface WorldTabProps {
   generatingWorld: boolean
   extending: Record<string, boolean>
   worldStale: boolean
+  characterId: string | null
+  syncingWorld: boolean
+  worldSynced: boolean
+  onSyncWorld: () => Promise<void>
   onUpdateLorebooks: (lorebooks: DreamWeaverDraft['lorebooks']) => void
   onUpdateNpcs: (npcs: DreamWeaverDraft['npc_definitions']) => void
+  onUpdateRegexScripts: (scripts: DreamWeaverDraft['regex_scripts']) => void
   onGenerateWorld: () => Promise<void>
   onExtend: (target: ExtendTarget, instruction?: string, bookId?: string) => Promise<void>
   getSectionStatus: (section: string) => SectionStatus
@@ -26,8 +31,13 @@ export function WorldTab({
   generatingWorld,
   extending,
   worldStale,
+  characterId,
+  syncingWorld,
+  worldSynced,
+  onSyncWorld,
   onUpdateLorebooks,
   onUpdateNpcs,
+  onUpdateRegexScripts,
   onGenerateWorld,
   onExtend,
   getSectionStatus,
@@ -63,6 +73,7 @@ export function WorldTab({
 
   const extendingLorebooks = extending.lorebook_entries ?? false
   const extendingNpcs = extending.npc_definitions ?? false
+  const showSyncBanner = Boolean(characterId) && hasWorldContent(draft) && !worldSynced
 
   return (
     <div className={styles.worldTab}>
@@ -79,6 +90,23 @@ export function WorldTab({
             disabled={generatingWorld}
           >
             Rebuild World
+          </Button>
+        </div>
+      )}
+      {showSyncBanner && (
+        <div className={styles.syncBanner}>
+          <div>
+            <strong>Push world content to your character</strong>
+            <p>Sync worldbooks, NPCs, and regex scripts to the finalized character so they are active in chat.</p>
+          </div>
+          <Button
+            variant="ghost"
+            onClick={onSyncWorld}
+            loading={syncingWorld}
+            disabled={syncingWorld}
+            icon={<RefreshCw size={13} />}
+          >
+            Sync to Character
           </Button>
         </div>
       )}
@@ -218,6 +246,43 @@ export function WorldTab({
             {extendingNpcs ? <Spinner size={11} /> : <Sparkles size={11} />}
             Generate
           </button>
+        </div>
+      </StickySection>
+
+      <StickySection
+        id="regex_scripts"
+        label="Regex Scripts"
+        status={getSectionStatus('regex_scripts')}
+        color="#6ec6ff"
+      >
+        {(draft.regex_scripts || []).map((script: any, idx: number) => (
+          <CollapsibleGroup
+            key={script.id || idx}
+            label={script.name || `Script ${idx + 1}`}
+            subtitle={script.description || ''}
+            onDelete={() => onUpdateRegexScripts(draft.regex_scripts.filter((_: any, i: number) => i !== idx))}
+          >
+            <div className={styles.npcFields}>
+              <input className={styles.input} placeholder="Name" value={script.name || ''} onChange={(e) => { const u = [...draft.regex_scripts]; u[idx] = { ...u[idx], name: e.target.value }; onUpdateRegexScripts(u) }} />
+              <input className={styles.input} placeholder="Description" value={script.description || ''} onChange={(e) => { const u = [...draft.regex_scripts]; u[idx] = { ...u[idx], description: e.target.value }; onUpdateRegexScripts(u) }} />
+              <div className={styles.regexRow}>
+                <input className={styles.input} placeholder="Find (regex pattern)" value={script.find_regex || ''} onChange={(e) => { const u = [...draft.regex_scripts]; u[idx] = { ...u[idx], find_regex: e.target.value }; onUpdateRegexScripts(u) }} />
+                <input className={`${styles.input} ${styles.regexFlags}`} placeholder="Flags" value={script.flags || 'gi'} onChange={(e) => { const u = [...draft.regex_scripts]; u[idx] = { ...u[idx], flags: e.target.value }; onUpdateRegexScripts(u) }} />
+              </div>
+              <input className={styles.input} placeholder="Replace with" value={script.replace_string || ''} onChange={(e) => { const u = [...draft.regex_scripts]; u[idx] = { ...u[idx], replace_string: e.target.value }; onUpdateRegexScripts(u) }} />
+              <select className={styles.input} value={script.target || 'response'} onChange={(e) => { const u = [...draft.regex_scripts]; u[idx] = { ...u[idx], target: e.target.value }; onUpdateRegexScripts(u) }}>
+                <option value="response">Target: AI Response</option>
+                <option value="prompt">Target: User Prompt</option>
+                <option value="display">Target: Display Only</option>
+              </select>
+            </div>
+          </CollapsibleGroup>
+        ))}
+        <div className={styles.buttonRow}>
+          <button
+            className={styles.addButton}
+            onClick={() => onUpdateRegexScripts([...(draft.regex_scripts || []), { id: generateUUID(), name: '', description: '', find_regex: '', replace_string: '', flags: 'gi', target: 'response' }])}
+          >+ Add Script</button>
         </div>
       </StickySection>
     </div>

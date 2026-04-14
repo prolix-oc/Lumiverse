@@ -38,10 +38,14 @@ export class ComfyUIImageProvider implements ImageProvider {
 
     // Connect WebSocket for progress before queuing, so we don't miss early events
     const wsUrl = baseUrl.replace(/^http/, "ws") + `/ws?clientId=${clientId}`
+    console.debug("[ComfyUI] Opening WS to %s (clientId=%s)", wsUrl, clientId)
     const ws = new WebSocket(wsUrl)
 
     await new Promise<void>((resolve, reject) => {
-      ws.addEventListener("open", () => resolve())
+      ws.addEventListener("open", () => {
+        console.debug("[ComfyUI] WS connected (clientId=%s)", clientId)
+        resolve()
+      })
       ws.addEventListener("error", (e) => reject(new Error(`ComfyUI WebSocket error: ${e}`)))
       setTimeout(() => reject(new Error("ComfyUI WebSocket connection timeout")), 10000)
     })
@@ -62,6 +66,7 @@ export class ComfyUIImageProvider implements ImageProvider {
 
     const queueData = (await queueRes.json()) as { prompt_id: string }
     const promptId = queueData.prompt_id
+    console.debug("[ComfyUI] Prompt queued (promptId=%s, clientId=%s)", promptId, clientId)
 
     // Wait for execution to complete via WebSocket events
     try {
@@ -78,6 +83,7 @@ export class ComfyUIImageProvider implements ImageProvider {
     }
 
     // Fetch the generated image from history
+    console.debug("[ComfyUI] Fetching history for promptId=%s", promptId)
     const historyRes = await fetch(`${baseUrl}/history/${promptId}`, { signal: request.signal })
     if (!historyRes.ok) {
       throw new Error(`ComfyUI history fetch failed: ${historyRes.status}`)
@@ -85,10 +91,19 @@ export class ComfyUIImageProvider implements ImageProvider {
 
     const history = (await historyRes.json()) as Record<string, any>
     const outputs = history[promptId]?.outputs
-    if (!outputs) throw new Error("No outputs in ComfyUI history")
+    if (!outputs) {
+      const historyKeys = Object.keys(history)
+      const entryKeys = history[promptId] ? Object.keys(history[promptId]) : []
+      console.error("[ComfyUI] No outputs in history. promptId=%s, historyKeys=%j, entryKeys=%j", promptId, historyKeys, entryKeys)
+      throw new Error("No outputs in ComfyUI history")
+    }
 
     const imageResult = findFirstComfyImageResult(outputs)
-    if (!imageResult) throw new Error("No image output found in ComfyUI results")
+    if (!imageResult) {
+      logOutputsShape(outputs, promptId)
+      throw new Error("No image output found in ComfyUI results")
+    }
+    console.debug("[ComfyUI] Found image result: filename=%s subfolder=%s type=%s", imageResult.filename, imageResult.subfolder, imageResult.type)
 
     // Fetch the image data
     const imageUrl = buildComfyImageViewUrl(baseUrl, imageResult)
@@ -148,6 +163,7 @@ export class ComfyUIImageProvider implements ImageProvider {
 
     const queueData = (await queueRes.json()) as { prompt_id: string }
     const promptId = queueData.prompt_id
+    console.debug("[ComfyUI] [stream] Prompt queued (promptId=%s, clientId=%s)", promptId, clientId)
 
     try {
       for await (const event of this.wsEventsWithNodes(ws, promptId, request.signal)) {
@@ -167,6 +183,7 @@ export class ComfyUIImageProvider implements ImageProvider {
       ws.close()
     }
 
+    console.debug("[ComfyUI] [stream] Fetching history for promptId=%s", promptId)
     const historyRes = await fetch(`${baseUrl}/history/${promptId}`, { signal: request.signal })
     if (!historyRes.ok) {
       throw new Error(`ComfyUI history fetch failed: ${historyRes.status}`)
@@ -174,10 +191,19 @@ export class ComfyUIImageProvider implements ImageProvider {
 
     const history = (await historyRes.json()) as Record<string, any>
     const outputs = history[promptId]?.outputs
-    if (!outputs) throw new Error("No outputs in ComfyUI history")
+    if (!outputs) {
+      const historyKeys = Object.keys(history)
+      const entryKeys = history[promptId] ? Object.keys(history[promptId]) : []
+      console.error("[ComfyUI] [stream] No outputs in history. promptId=%s, historyKeys=%j, entryKeys=%j", promptId, historyKeys, entryKeys)
+      throw new Error("No outputs in ComfyUI history")
+    }
 
     const imageResult = findFirstComfyImageResult(outputs)
-    if (!imageResult) throw new Error("No image output found in ComfyUI results")
+    if (!imageResult) {
+      logOutputsShape(outputs, promptId)
+      throw new Error("No image output found in ComfyUI results")
+    }
+    console.debug("[ComfyUI] [stream] Found image result: filename=%s subfolder=%s type=%s", imageResult.filename, imageResult.subfolder, imageResult.type)
 
     const imageUrl = buildComfyImageViewUrl(baseUrl, imageResult)
     const imageRes = await fetch(imageUrl, { signal: request.signal })
@@ -253,7 +279,9 @@ export class ComfyUIImageProvider implements ImageProvider {
       if (typeof evt.data === "string") {
         try {
           const msg = JSON.parse(evt.data)
-          if (msg.type === "progress" && msg.data?.prompt_id === promptId) {
+          if (msg.type === "execution_cached" && msg.data?.prompt_id === promptId) {
+            console.debug("[ComfyUI] [stream] execution_cached nodes=%j (promptId=%s)", msg.data.nodes, promptId)
+          } else if (msg.type === "progress" && msg.data?.prompt_id === promptId) {
             enqueue({ type: "progress", value: msg.data.value, max: msg.data.max })
           } else if (msg.type === "executing" && msg.data?.prompt_id === promptId) {
             if (msg.data.node === null) {
@@ -275,7 +303,8 @@ export class ComfyUIImageProvider implements ImageProvider {
       }
     })
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (e) => {
+      console.debug("[ComfyUI] [stream] WS closed (code=%s, reason=%s, promptId=%s)", (e as any).code, (e as any).reason, promptId)
       done = true
       if (resolve) {
         resolve()
@@ -334,7 +363,9 @@ export class ComfyUIImageProvider implements ImageProvider {
       if (typeof evt.data === "string") {
         try {
           const msg = JSON.parse(evt.data)
-          if (msg.type === "progress" && msg.data?.prompt_id === promptId) {
+          if (msg.type === "execution_cached" && msg.data?.prompt_id === promptId) {
+            console.debug("[ComfyUI] execution_cached nodes=%j (promptId=%s)", msg.data.nodes, promptId)
+          } else if (msg.type === "progress" && msg.data?.prompt_id === promptId) {
             enqueue({ type: "progress", value: msg.data.value, max: msg.data.max })
           } else if (msg.type === "executing" && msg.data?.prompt_id === promptId) {
             if (msg.data.node === null) {
@@ -356,7 +387,8 @@ export class ComfyUIImageProvider implements ImageProvider {
       }
     })
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (e) => {
+      console.debug("[ComfyUI] WS closed (code=%s, reason=%s, promptId=%s)", (e as any).code, (e as any).reason, promptId)
       done = true
       if (resolve) {
         resolve()
@@ -384,6 +416,34 @@ export class ComfyUIImageProvider implements ImageProvider {
         }
       }
     }
+  }
+}
+
+/**
+ * Log a summary of the ComfyUI output shape when no image is found.
+ */
+function logOutputsShape(outputs: Record<string, any>, promptId: string): void {
+  try {
+    const summary: Record<string, { keys: string[]; imageCount: number; imageShape?: any }> = {}
+    for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
+      const keys = nodeOutput && typeof nodeOutput === "object" ? Object.keys(nodeOutput) : []
+      const images = Array.isArray(nodeOutput?.images) ? nodeOutput.images : []
+      summary[nodeId] = {
+        keys,
+        imageCount: images.length,
+        ...(images.length > 0 && images[0]
+          ? { imageShape: Object.keys(images[0]) }
+          : {}),
+      }
+    }
+    console.error(
+      "[ComfyUI] No image found in outputs. promptId=%s nodeCount=%d outputShape=%j",
+      promptId,
+      Object.keys(outputs).length,
+      summary,
+    )
+  } catch {
+    console.error("[ComfyUI] No image found in outputs and failed to log shape. promptId=%s", promptId)
   }
 }
 

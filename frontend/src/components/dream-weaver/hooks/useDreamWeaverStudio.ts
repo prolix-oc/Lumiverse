@@ -42,6 +42,8 @@ interface StudioState {
   errorMessage: string | null
   progress: ProgressState | null
   extending: Record<string, boolean>
+  syncingWorld: boolean
+  worldSynced: boolean
 }
 
 interface StudioActions {
@@ -64,6 +66,7 @@ interface StudioActions {
   generateWorld: () => Promise<void>
   finalize: () => Promise<void>
   openChat: () => Promise<void>
+  syncWorld: () => Promise<void>
   requestClose: () => boolean
   dismissError: () => void
   getSectionStatus: (section: string) => SectionStatus
@@ -135,6 +138,8 @@ export function useDreamWeaverStudio(
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [progress, setProgress] = useState<ProgressState | null>(null)
   const [extending, setExtending] = useState<Record<string, boolean>>({})
+  const [syncingWorld, setSyncingWorld] = useState(false)
+  const [worldSynced, setWorldSynced] = useState(false)
 
   const sessionRef = useRef(session)
   const draftRef = useRef(draft)
@@ -325,6 +330,7 @@ export function useDreamWeaverStudio(
         if (op === 'world') {
           completeProgressAnimation(() => {
             setGeneratingWorld(false)
+            setWorldSynced(false)
             setActiveTab('world')
           })
         } else if (op === 'finalize') {
@@ -757,6 +763,34 @@ export function useDreamWeaverStudio(
     }
   }, [])
 
+  const syncWorld = useCallback(async () => {
+    const currentSession = sessionRef.current
+    if (!currentSession?.character_id) return
+
+    setSyncingWorld(true)
+    setErrorMessage(null)
+    try {
+      if (dirtyRef.current) await save()
+
+      const result = await dreamWeaverApi.syncWorld(currentSession.id)
+      const bookCount = result.worldBookIds.length
+      const scriptCount = result.regexScriptsCreated
+      const parts: string[] = []
+      if (bookCount > 0) parts.push(`${bookCount} world book${bookCount > 1 ? 's' : ''}`)
+      if (scriptCount > 0) parts.push(`${scriptCount} regex script${scriptCount > 1 ? 's' : ''}`)
+
+      const message = parts.length > 0
+        ? `Synced ${parts.join(' and ')} to character`
+        : 'World content is already in sync'
+      toast.success(message)
+      setWorldSynced(true)
+    } catch (err: any) {
+      setErrorMessage(err?.message ?? 'Failed to sync world content')
+    } finally {
+      setSyncingWorld(false)
+    }
+  }, [save])
+
   const requestClose = useCallback(() => !dirtyRef.current, [])
   const dismissError = useCallback(() => setErrorMessage(null), [])
   const toggleDreamPanel = useCallback((next?: boolean) => {
@@ -777,6 +811,8 @@ export function useDreamWeaverStudio(
     errorMessage,
     progress,
     extending,
+    syncingWorld,
+    worldSynced,
     setActiveTab,
     toggleDreamPanel,
     updateSessionField,
@@ -787,6 +823,7 @@ export function useDreamWeaverStudio(
     generateWorld,
     finalize,
     openChat,
+    syncWorld,
     requestClose,
     dismissError,
     getSectionStatus,
@@ -805,6 +842,8 @@ export function useDreamWeaverStudio(
     errorMessage,
     progress,
     extending,
+    syncingWorld,
+    worldSynced,
     updateSessionField,
     updateDraftCard,
     updateDraftField,
@@ -813,6 +852,7 @@ export function useDreamWeaverStudio(
     generateWorld,
     finalize,
     openChat,
+    syncWorld,
     requestClose,
     dismissError,
     getSectionStatus,

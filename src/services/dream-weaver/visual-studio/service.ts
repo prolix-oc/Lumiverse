@@ -126,6 +126,7 @@ async function executeDreamWeaverVisualJob(
   job: DreamWeaverVisualJob,
   input: StartDreamWeaverVisualJobInput,
 ): Promise<void> {
+  console.debug("[DreamWeaver:Visual] Starting job=%s session=%s asset=%s provider=%s", job.id, job.sessionId, job.assetId, input.connection.provider)
   try {
     const preparing = updateVisualJobProgress(job.id, job.userId, {
       stage: "preparing",
@@ -149,9 +150,17 @@ async function executeDreamWeaverVisualJob(
       result,
     });
 
-    const completed = completeVisualJob(job.id, job.userId, persistedResult ?? result);
+    const finalResult = persistedResult ?? result;
+    console.debug(
+      "[DreamWeaver:Visual] Job completed. job=%s image_id=%s has_url=%s",
+      job.id,
+      finalResult.image_id ?? "(none)",
+      Boolean(finalResult.image_url),
+    );
+    const completed = completeVisualJob(job.id, job.userId, finalResult);
     emitJobEvent(EventType.DREAM_WEAVER_VISUAL_JOB_COMPLETED, completed);
   } catch (error) {
+    console.error("[DreamWeaver:Visual] Job failed. job=%s error=%s", job.id, toErrorMessage(error));
     const failed = failVisualJob(job.id, job.userId, toErrorMessage(error));
     emitJobEvent(EventType.DREAM_WEAVER_VISUAL_JOB_FAILED, failed);
   } finally {

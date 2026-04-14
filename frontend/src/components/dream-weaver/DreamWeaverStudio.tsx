@@ -189,8 +189,13 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                             generatingWorld={studio.generatingWorld}
                             extending={studio.extending}
                             worldStale={isWorldStale(studio.session)}
+                            characterId={studio.session?.character_id ?? null}
+                            syncingWorld={studio.syncingWorld}
+                            worldSynced={studio.worldSynced}
+                            onSyncWorld={studio.syncWorld}
                             onUpdateLorebooks={(value) => studio.updateDraftField('lorebooks', value)}
                             onUpdateNpcs={(value) => studio.updateDraftField('npc_definitions', value)}
+                            onUpdateRegexScripts={(value) => studio.updateDraftField('regex_scripts', value)}
                             onGenerateWorld={studio.generateWorld}
                             onExtend={studio.extendField}
                             getSectionStatus={studio.getSectionStatus}

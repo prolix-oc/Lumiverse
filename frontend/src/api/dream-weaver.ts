@@ -569,6 +569,12 @@ export const dreamWeaverApi = {
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),
 
+  syncWorld: (id: string) =>
+    apiClient.post<{ worldBookIds: string[]; regexScriptsCreated: number }>(
+      `/dream-weaver/sessions/${id}/sync-world`,
+      {},
+    ),
+
   importComfyUIWorkflow: (connectionId: string, workflow: unknown) =>
     apiClient.post<{ config: ComfyUIWorkflowConfig }>(
       '/dream-weaver/visual/workflows/import',

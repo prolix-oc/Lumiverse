@@ -93,6 +93,14 @@ app.post("/sessions/:id/extend", async (c) => {
   return c.json(result);
 });
 
+// Sync world content
+app.post("/sessions/:id/sync-world", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const result = dreamWeaverSvc.syncWorldToCharacter(userId, sessionId);
+  return c.json(result);
+});
+
 // Delete session
 app.delete("/sessions/:id", (c) => {
   const userId = c.get("userId");
@@ -297,20 +305,27 @@ app.post("/visual/jobs", async (c) => {
     onSettled: timeoutHandle !== null ? () => clearTimeout(timeoutHandle) : undefined,
     persistResult: async ({ job, result }) => {
       if (!result.image_url || !result.image_url.startsWith("data:image/")) {
+        console.debug("[DreamWeaver:Visual] persistResult: no data URL to persist (job=%s, has_url=%s)", job.id, Boolean(result.image_url));
         return result;
       }
 
-      const image = await imagesSvc.saveImageFromDataUrl(
-        userId,
-        result.image_url,
-        `${imagesSvc.IMAGE_GEN_FILENAME_PREFIX}dream-weaver-${job.sessionId}-${job.assetId}.png`,
-      );
+      try {
+        const image = await imagesSvc.saveImageFromDataUrl(
+          userId,
+          result.image_url,
+          `${imagesSvc.IMAGE_GEN_FILENAME_PREFIX}dream-weaver-${job.sessionId}-${job.assetId}.png`,
+        );
+        console.debug("[DreamWeaver:Visual] persistResult: saved image=%s (job=%s)", image.id, job.id);
 
-      return {
-        ...result,
-        image_id: image.id,
-        image_url: undefined,
-      };
+        return {
+          ...result,
+          image_id: image.id,
+          image_url: undefined,
+        };
+      } catch (err) {
+        console.error("[DreamWeaver:Visual] persistResult: failed to save image (job=%s) error=%s", job.id, err instanceof Error ? err.message : String(err));
+        throw err;
+      }
     },
   });
 

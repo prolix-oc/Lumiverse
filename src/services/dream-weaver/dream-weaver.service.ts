@@ -15,7 +15,7 @@ import * as chatsSvc from "../chats.service";
 import * as imagesSvc from "../images.service";
 import * as worldBooksSvc from "../world-books.service";
 import * as regexScriptsSvc from "../regex-scripts.service";
-import { setCharacterWorldBookIds } from "../../utils/character-world-books";
+import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../../utils/character-world-books";
 import {
   DREAM_WEAVER_SYSTEM_PROMPT,
   WORLD_GENERATION_SYSTEM_PROMPT,
@@ -217,18 +217,20 @@ export function parseStoredDreamWeaverDraft(
 interface DreamWeaverWorldDraft {
   lorebooks: any[];
   npc_definitions: any[];
+  regex_scripts: any[];
 }
 
 function parseWorldDraftResponse(content: string): DreamWeaverWorldDraft {
   const parsed = safeParseJson(content) as Partial<DreamWeaverWorldDraft> | null;
   if (!parsed) {
     console.warn("[DreamWeaver] Could not parse world draft response — returning empty world");
-    return { lorebooks: [], npc_definitions: [] };
+    return { lorebooks: [], npc_definitions: [], regex_scripts: [] };
   }
 
   return {
     lorebooks: Array.isArray(parsed.lorebooks) ? parsed.lorebooks : [],
     npc_definitions: Array.isArray(parsed.npc_definitions) ? parsed.npc_definitions : [],
+    regex_scripts: Array.isArray(parsed.regex_scripts) ? parsed.regex_scripts : [],
   };
 }
 
@@ -622,6 +624,7 @@ async function executeWorldGeneration(
       ...currentDraft,
       lorebooks: worldDraft.lorebooks,
       npc_definitions: worldDraft.npc_definitions,
+      regex_scripts: worldDraft.regex_scripts,
     };
     const snapshot = deriveSessionStateSnapshot(
       session,
@@ -813,15 +816,48 @@ export async function finalize(
   }
 
   if (session.character_id) {
+    emitProgress(userId, sessionId, "finalize", "creating_character", 1, 4, "Syncing character");
+
+    const worldBookIds = createWorldBooksFromDraft(userId, draft);
+    if (worldBookIds.length > 0) {
+      const character = charactersSvc.getCharacter(userId, session.character_id);
+      if (character) {
+        const existingIds = getCharacterWorldBookIds(character.extensions);
+        const mergedIds = [...existingIds, ...worldBookIds];
+        const nextExtensions = setCharacterWorldBookIds(
+          character.extensions ?? {},
+          mergedIds,
+        );
+        charactersSvc.updateCharacter(userId, session.character_id, {
+          extensions: nextExtensions,
+        });
+      }
+    }
+
+    createRegexScriptsFromDraft(userId, session.character_id, draft);
+
+    const systemPrompt = buildSystemPromptWithVoiceGuidance(draft);
+    charactersSvc.updateCharacter(userId, session.character_id, {
+      name: draft.card.name,
+      description: draft.card.description,
+      personality: draft.card.personality,
+      scenario: draft.card.scenario,
+      first_mes: draft.card.first_mes,
+      system_prompt: systemPrompt,
+      post_history_instructions: draft.card.post_history_instructions,
+      tags: draft.meta.tags,
+      alternate_greetings: draft.greetings.slice(1).map((greeting) => greeting.content),
+    });
+
+    if (portraitImageId) {
+      charactersSvc.setCharacterImage(userId, session.character_id, portraitImageId);
+    }
+
     emitProgress(userId, sessionId, "finalize", "creating_chat", 2, 4, "Setting up chat");
 
     const chatId = session.launch_chat_id ?? chatsSvc.createChat(userId, {
       character_id: session.character_id,
     }).id;
-
-    if (portraitImageId) {
-      charactersSvc.setCharacterImage(userId, session.character_id, portraitImageId);
-    }
 
     emitProgress(userId, sessionId, "finalize", "complete", 3, 4, "Finishing up");
 
@@ -912,6 +948,49 @@ export function deleteSession(userId: string, sessionId: string): void {
     DELETE FROM dream_weaver_sessions
     WHERE id = ? AND user_id = ?
   `).run(sessionId, userId);
+}
+
+export interface SyncWorldResult {
+  worldBookIds: string[];
+  regexScriptsCreated: number;
+}
+
+export function syncWorldToCharacter(
+  userId: string,
+  sessionId: string,
+): SyncWorldResult {
+  ensureDreamWeaverSchema();
+
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+  if (!session.character_id) throw new Error("Session has no finalized character");
+
+  const draft = parseStoredDreamWeaverDraft(session.draft);
+  if (!draft) throw new Error("No draft to sync");
+
+  const character = charactersSvc.getCharacter(userId, session.character_id);
+  if (!character) throw new Error("Character not found");
+
+  const worldBookIds = createWorldBooksFromDraft(userId, draft);
+
+  if (worldBookIds.length > 0) {
+    const existingIds = getCharacterWorldBookIds(character.extensions);
+    const mergedIds = [...existingIds, ...worldBookIds];
+    const nextExtensions = setCharacterWorldBookIds(
+      character.extensions ?? {},
+      mergedIds,
+    );
+    charactersSvc.updateCharacter(userId, session.character_id, {
+      extensions: nextExtensions,
+    });
+  }
+
+  const regexScriptsCreated = (draft.regex_scripts || []).filter(
+    (s: any) => s.name && s.find_regex,
+  ).length;
+  createRegexScriptsFromDraft(userId, session.character_id, draft);
+
+  return { worldBookIds, regexScriptsCreated };
 }
 
 // ---------------------------------------------------------------------------

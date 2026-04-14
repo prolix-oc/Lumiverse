@@ -10,6 +10,7 @@ interface UseComfyUIWorkflowConfigResult {
   config: ComfyUIWorkflowConfig | null
   capabilities: ReturnType<typeof useComfyUICapabilities>['capabilities']
   loading: boolean
+  configFetched: boolean
   error: string | null
   importWorkflow: (workflow: unknown) => Promise<ComfyUIWorkflowConfig | null>
   updateMappings: (mappings: ComfyUIFieldMapping[]) => Promise<ComfyUIWorkflowConfig | null>
@@ -30,6 +31,7 @@ export function useComfyUIWorkflowConfig(
   const [config, setConfig] = useState<ComfyUIWorkflowConfig | null>(null)
   const [workflowLoading, setWorkflowLoading] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
+  const [configFetched, setConfigFetched] = useState(false)
 
   const fetchWorkflowConfig = useCallback(async () => {
     if (!connectionId || provider !== 'comfyui') {
@@ -48,6 +50,7 @@ export function useComfyUIWorkflowConfig(
       setWorkflowError(error?.message ?? 'Failed to load ComfyUI workflow')
     } finally {
       setWorkflowLoading(false)
+      setConfigFetched(true)
     }
   }, [connectionId, provider])
 
@@ -101,6 +104,7 @@ export function useComfyUIWorkflowConfig(
     config,
     capabilities,
     loading: workflowLoading || capabilitiesLoading,
+    configFetched,
     error: workflowError ?? capabilitiesError,
     importWorkflow,
     updateMappings,

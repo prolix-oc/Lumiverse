@@ -14,14 +14,16 @@ export const SOUL_SECTIONS = [
   'system_prompt',
   'post_history_instructions',
 ] as const
-export const WORLD_SECTIONS = ['lorebooks', 'npc_definitions'] as const
-export const VISUALS_SECTIONS = [
-  'regex_scripts',
-] as const
+export const WORLD_SECTIONS = ['lorebooks', 'npc_definitions', 'regex_scripts'] as const
+export const VISUALS_SECTIONS = [] as const
 
 export function hasWorldContent(draft: DreamWeaverDraft | null): boolean {
   if (!draft) return false
-  return (draft.lorebooks?.length ?? 0) > 0 || (draft.npc_definitions?.length ?? 0) > 0
+  return (
+    (draft.lorebooks?.length ?? 0) > 0 ||
+    (draft.npc_definitions?.length ?? 0) > 0 ||
+    (draft.regex_scripts?.length ?? 0) > 0
+  )
 }
 
 export function getTextSectionStatus(value: string | null | undefined): 'empty' | 'populated' {
@@ -79,7 +81,7 @@ export const WEAVING_OPERATIONS = {
   },
   world: {
     title: 'Building The World',
-    description: 'Generating lorebooks and NPC definitions from the soul.',
+    description: 'Generating lorebooks, NPC definitions, and regex scripts from the soul.',
     steps: ['Preparing world', 'Building world', 'Assembling lorebooks & NPCs', 'Saving world data'],
   },
   finalize: {

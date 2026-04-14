@@ -157,12 +157,13 @@ export function useVisualStudio(
     }
 
     if (!selectedConnectionId) return
-    if (comfyui.loading || comfyui.config) return
+    if (comfyui.loading || !comfyui.configFetched) return
+    if (comfyui.config) return
     if (workflowAutoOpenedForConnectionRef.current === selectedConnectionId) return
 
     workflowAutoOpenedForConnectionRef.current = selectedConnectionId
     setWorkflowEditorOpen(true)
-  }, [comfyui.config, comfyui.loading, selectedConnection?.provider, selectedConnectionId])
+  }, [comfyui.config, comfyui.configFetched, comfyui.loading, selectedConnection?.provider, selectedConnectionId])
 
   const handleSelectConnection = useCallback(
     (connectionId: string | null) => {

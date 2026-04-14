@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComfyUIFieldMapping, ComfyUIMappedFieldSemantic } from '../../../../api/dream-weaver'
 import styles from './MappedFieldsForm.module.css'
 
@@ -22,6 +22,59 @@ export interface MappedFieldsFormProps {
   onChange: (next: MappedFieldValues) => void
   onGenerate: () => void
   generating: boolean
+}
+
+interface NumericInputProps {
+  value: number | undefined
+  onChange: (next: number | undefined) => void
+  step?: number
+  className?: string
+}
+
+function NumericInput({ value, onChange, step, className }: NumericInputProps) {
+  const [text, setText] = useState(() => (value != null ? String(value) : ''))
+  const lastCommittedRef = useRef(value)
+
+  useEffect(() => {
+    if (value !== lastCommittedRef.current) {
+      lastCommittedRef.current = value
+      setText(value != null ? String(value) : '')
+    }
+  }, [value])
+
+  const commit = useCallback(() => {
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      lastCommittedRef.current = undefined
+      onChange(undefined)
+      return
+    }
+    const n = Number(trimmed)
+    if (!Number.isNaN(n)) {
+      lastCommittedRef.current = n
+      onChange(n)
+    } else {
+      setText(lastCommittedRef.current != null ? String(lastCommittedRef.current) : '')
+    }
+  }, [text, onChange])
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className={className}
+      value={text}
+      step={step}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+        }
+      }}
+    />
+  )
 }
 
 export function MappedFieldsForm(props: MappedFieldsFormProps) {
@@ -94,56 +147,51 @@ export function MappedFieldsForm(props: MappedFieldsFormProps) {
         {uniqueSemantics.has('seed') && (
           <div className={styles.fieldBlock}>
             <label className={styles.label}>Seed</label>
-            <input
-              type="number"
+            <NumericInput
               className={styles.input}
-              value={props.values.seed ?? ''}
-              onChange={(e) => updateField('seed', e.target.value === '' ? undefined : Number(e.target.value))}
+              value={props.values.seed}
+              onChange={(v) => updateField('seed', v)}
             />
           </div>
         )}
         {uniqueSemantics.has('steps') && (
           <div className={styles.fieldBlock}>
             <label className={styles.label}>Steps</label>
-            <input
-              type="number"
+            <NumericInput
               className={styles.input}
-              value={props.values.steps ?? ''}
-              onChange={(e) => updateField('steps', e.target.value === '' ? undefined : Number(e.target.value))}
+              value={props.values.steps}
+              onChange={(v) => updateField('steps', v)}
             />
           </div>
         )}
         {uniqueSemantics.has('cfg') && (
           <div className={styles.fieldBlock}>
             <label className={styles.label}>CFG</label>
-            <input
-              type="number"
-              step="0.1"
+            <NumericInput
               className={styles.input}
-              value={props.values.cfg ?? ''}
-              onChange={(e) => updateField('cfg', e.target.value === '' ? undefined : Number(e.target.value))}
+              value={props.values.cfg}
+              onChange={(v) => updateField('cfg', v)}
+              step={0.1}
             />
           </div>
         )}
         {uniqueSemantics.has('width') && (
           <div className={styles.fieldBlock}>
             <label className={styles.label}>Width</label>
-            <input
-              type="number"
+            <NumericInput
               className={styles.input}
-              value={props.values.width ?? ''}
-              onChange={(e) => updateField('width', e.target.value === '' ? undefined : Number(e.target.value))}
+              value={props.values.width}
+              onChange={(v) => updateField('width', v)}
             />
           </div>
         )}
         {uniqueSemantics.has('height') && (
           <div className={styles.fieldBlock}>
             <label className={styles.label}>Height</label>
-            <input
-              type="number"
+            <NumericInput
               className={styles.input}
-              value={props.values.height ?? ''}
-              onChange={(e) => updateField('height', e.target.value === '' ? undefined : Number(e.target.value))}
+              value={props.values.height}
+              onChange={(v) => updateField('height', v)}
             />
           </div>
         )}

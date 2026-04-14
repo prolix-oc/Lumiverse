@@ -162,6 +162,17 @@ Return ONLY valid JSON. No markdown, no explanations.
       "keyword_triggers": ["keyword1", "keyword2"],
       "importance": "major" | "minor"
     }
+  ],
+  "regex_scripts": [
+    {
+      "id": "uuid",
+      "name": "Script Name",
+      "description": "What this script does",
+      "find_regex": "regex pattern",
+      "replace_string": "replacement text",
+      "flags": "gi",
+      "target": "response"
+    }
   ]
 }
 
@@ -175,8 +186,20 @@ Return ONLY valid JSON. No markdown, no explanations.
 - **keyword_triggers**: 2-4 terms that would naturally appear in conversation about or with this NPC.
 - **importance**: "major" for recurring/pivotal NPCs, "minor" for atmospheric/supporting cast.
 
+## Regex Script Guidelines
+Regex scripts transform AI-generated text to enforce character voice and setting consistency.
+Generate scripts that are useful for the character's unique traits, for example:
+- **Accent/dialect patterns**: r->w for speech impediments, dropping g's from "-ing" words, etc.
+- **Action formatting**: wrapping actions in asterisks, italicizing environmental descriptions
+- **Term substitution**: replacing modern words with setting-appropriate vocabulary
+- **Speech quirks**: adding verbal tics, stuttering patterns, or catchphrases
+Only generate regex_scripts when the character has distinctive speech patterns, dialect, or setting-specific language that benefits from automated text transformation. If the character speaks normally, return an empty array.
+- **target**: "response" for AI output, "prompt" for user input processing, "display" for visual display changes
+- **flags**: usually "gi" (global, case-insensitive). Use "g" if case matters.
+- Keep patterns precise — avoid overly broad regex that could corrupt normal text.
+
 ## Scope Rules
-- Generate only lorebooks and npc_definitions.
+- Generate only lorebooks, npc_definitions, and regex_scripts.
 - Do not return card fields.
 - Do not return alternate_fields.
 - Do not return greetings.
@@ -216,7 +239,7 @@ export function buildWorldGenerationPrompt(
 
   sections.push(
     "## Requested Output",
-    "Generate lorebooks and npc_definitions for the current Soul draft. Preserve continuity with the Soul draft and avoid duplicating the character card fields.",
+    "Generate lorebooks, npc_definitions, and regex_scripts for the current Soul draft. Preserve continuity with the Soul draft and avoid duplicating the character card fields. Only include regex_scripts if the character has distinctive speech patterns or setting-specific language worth automating.",
   );
 
   return sections.join("\n\n");
