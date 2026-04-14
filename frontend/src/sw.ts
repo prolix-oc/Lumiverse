@@ -18,9 +18,25 @@ precacheAndRoute(self.__WB_MANIFEST)
 cleanupOutdatedCaches()
 
 // ── SPA navigation fallback ─────────────────────────────────────────
+// NavigationRoute only matches requests with mode: 'navigate', but certain
+// top-level fetches (direct URL-bar loads, PWA install-prompt manifest
+// probes, and older stale SW installs) can route non-SPA paths through this
+// handler and end up serving index.html for assets — which causes Chrome
+// to report "Manifest: manifest.json:1 col:1 Syntax error" when HTML is
+// returned for the manifest fetch. Explicitly exclude known static assets
+// and file-extension paths so the SW never hijacks them.
 registerRoute(new NavigationRoute(
   createHandlerBoundToURL('index.html'),
-  { denylist: [/^\/api/, /^\/uploads/] }
+  {
+    denylist: [
+      /^\/api/,
+      /^\/uploads/,
+      /^\/manifest\.json$/,
+      /^\/sw\.js$/,
+      /^\/icon(-\d+)?\.(svg|png|ico)$/,
+      /\.[a-z0-9]+$/i,
+    ],
+  }
 ))
 
 // ── Runtime caching: avatars ────────────────────────────────────────
