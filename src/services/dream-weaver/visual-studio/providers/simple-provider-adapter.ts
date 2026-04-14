@@ -26,36 +26,30 @@ function buildProviderSpecificParameters(
   provider: SimpleVisualProvider,
   asset: DreamWeaverVisualAsset,
 ): Record<string, any> {
-  const providerState = asset.provider_state[provider] ?? {};
-  const stepOverride =
-    typeof providerState.steps === "number" && Number.isFinite(providerState.steps)
-      ? providerState.steps
-      : undefined;
-
+  // Only include values that are actually derived from canonical asset fields
+  // (dimensions, aspect ratio, seed). Regular provider params like `steps` flow
+  // through `assetParams` — including them here with `undefined` would clobber
+  // the user's overrides when spread into the final parameters object.
   switch (provider) {
     case "novelai":
       return {
         resolution: `${asset.width}x${asset.height}`,
-        seed: asset.seed ?? undefined,
-        steps: stepOverride,
+        ...(asset.seed != null ? { seed: asset.seed } : {}),
       };
     case "nanogpt":
       return {
         size: `${asset.width}x${asset.height}`,
-        seed: asset.seed ?? undefined,
-        steps: stepOverride,
+        ...(asset.seed != null ? { seed: asset.seed } : {}),
       };
     case "google_gemini":
       return {
         aspectRatio: asset.aspect_ratio,
-        steps: stepOverride,
       };
     case "swarmui":
       return {
         width: asset.width,
         height: asset.height,
-        seed: asset.seed ?? undefined,
-        steps: stepOverride,
+        ...(asset.seed != null ? { seed: asset.seed } : {}),
       };
   }
 }
