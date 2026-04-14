@@ -45,12 +45,19 @@ function buildProviderSpecificParameters(
       return {
         aspectRatio: asset.aspect_ratio,
       };
-    case "swarmui":
+    case "swarmui": {
+      // SwarmUI exposes width/height as first-class schema params, so the user
+      // can tune them directly through ProviderParamRenderer. Prefer those
+      // overrides, falling back to the asset's canonical dimensions.
+      const stateParams = (asset.provider_state?.params ?? {}) as Record<string, unknown>;
+      const stateWidth = stateParams.width != null ? Number(stateParams.width) : NaN;
+      const stateHeight = stateParams.height != null ? Number(stateParams.height) : NaN;
       return {
-        width: asset.width,
-        height: asset.height,
+        width: Number.isFinite(stateWidth) && stateWidth > 0 ? stateWidth : asset.width,
+        height: Number.isFinite(stateHeight) && stateHeight > 0 ? stateHeight : asset.height,
         ...(asset.seed != null ? { seed: asset.seed } : {}),
       };
+    }
   }
 }
 

@@ -200,6 +200,10 @@ export class SwarmUIImageProvider implements ImageProvider {
       images: 1,
       prompt: request.prompt,
       model: request.model,
+      // SwarmUI only honors explicit width/height when aspectratio is "Custom".
+      // Otherwise the server derives dimensions from `sidelength` + the selected
+      // aspect ratio preset (default "1:1") and our width/height are ignored.
+      aspectratio: "Custom",
       width: Number(p.width) || 1024,
       height: Number(p.height) || 1024,
     }
