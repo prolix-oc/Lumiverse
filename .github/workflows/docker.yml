@@ -3,6 +3,12 @@ name: Build & Push Docker Image
 on:
   push:
     tags: ["v*"]
+  schedule:
+    # Weekly rebuild to refresh the CA certificate bundle baked into `:latest`.
+    # Combined with the CA_REFRESH build-arg below, this forces apt to pull the
+    # current `ca-certificates` package so TLS trust stays in sync with Mozilla
+    # root updates without waiting for a Lumiverse release.
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -33,6 +39,11 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name == 'schedule' }}
+
+      - name: Compute CA refresh key (ISO week)
+        id: ca
+        run: echo "refresh=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:
@@ -41,5 +52,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CA_REFRESH=${{ steps.ca.outputs.refresh }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

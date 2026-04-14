@@ -1,6 +1,19 @@
 services:
   lumiverse:
-    build: .
+    build:
+      context: .
+      args:
+        # Cache-busts the `ca-certificates` install layer in the Dockerfile so
+        # the CA trust store gets refreshed from Debian's mirror. On the very
+        # first build this is a no-op (there's nothing cached yet). For later
+        # rebuilds, change this value to force apt to re-fetch; the easiest
+        # way is to export it before building, e.g.:
+        #
+        #   CA_REFRESH=$(date -u +%G-W%V) docker compose -f docker-compose.build.yml build
+        #
+        # Compose doesn't support shell command substitution in this file, so
+        # the static default just invalidates once when you first adopt this.
+        CA_REFRESH: ${CA_REFRESH:-local-build}
     container_name: lumiverse
     ports:
       - "7860:7860"
