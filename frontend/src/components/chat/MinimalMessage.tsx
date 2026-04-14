@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useStore } from '@/store'
 import { useMessageCard } from '@/hooks/useMessageCard'
 import useSwipeAction from '@/hooks/useSwipeAction'
@@ -30,29 +31,42 @@ function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
-function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMetrics }: {
+function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMetrics, showTokenCount }: {
   index: number
   timestamp: number
   tokenCount: number | undefined
   isHidden: boolean
   isUser: boolean
   generationMetrics: GenerationMetrics | undefined
+  showTokenCount: boolean
 }) {
-  const [showTooltip, setShowTooltip] = useState(false)
+  const pillRef = useRef<HTMLSpanElement>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
   const hasStreamingDetails = !isUser && generationMetrics?.wasStreaming && (generationMetrics.ttft != null || generationMetrics.tps != null)
+
+  const handleMouseEnter = useCallback(() => {
+    if (!hasStreamingDetails || !pillRef.current) return
+    const rect = pillRef.current.getBoundingClientRect()
+    setTooltipPos({ x: rect.left, y: rect.top })
+  }, [hasStreamingDetails])
+
+  const handleMouseLeave = useCallback(() => {
+    setTooltipPos(null)
+  }, [])
 
   return (
     <span
+      ref={pillRef}
       className={styles.metaPill}
-      onMouseEnter={hasStreamingDetails ? () => setShowTooltip(true) : undefined}
-      onMouseLeave={hasStreamingDetails ? () => setShowTooltip(false) : undefined}
+      onMouseEnter={hasStreamingDetails ? handleMouseEnter : undefined}
+      onMouseLeave={hasStreamingDetails ? handleMouseLeave : undefined}
     >
       <span className={styles.metaSegment}>#{index}</span>
       <span className={styles.metaSegment}>
         <span className={styles.metaDot}>&middot;</span>
         {formatMetaDate(timestamp)}
       </span>
-      {tokenCount != null && (
+      {showTokenCount && tokenCount != null && (
         <span className={styles.metaSegment}>
           <span className={styles.metaDot}>&middot;</span>
           {tokenCount}t
@@ -64,8 +78,11 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
           <span className={styles.hiddenBadge}>Hidden</span>
         </span>
       )}
-      {showTooltip && hasStreamingDetails && (
-        <span className={styles.metaPillTooltip}>
+      {tooltipPos && hasStreamingDetails && createPortal(
+        <span
+          className={styles.metaPillTooltip}
+          style={{ position: 'fixed', left: tooltipPos.x, top: tooltipPos.y - 6, transform: 'translateY(-100%)' }}
+        >
           {generationMetrics!.ttft != null && (
             <span className={styles.tooltipRow}>
               <span className={styles.tooltipLabel}>First token</span>
@@ -78,7 +95,8 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
               <span className={styles.tooltipValue}>{generationMetrics!.tps} tok/s</span>
             </span>
           )}
-        </span>
+        </span>,
+        document.body
       )}
     </span>
   )
@@ -125,6 +143,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   const openModal = useStore((s) => s.openModal)
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
+  const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
@@ -186,6 +205,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
             isHidden={isHidden}
             isUser={isUser}
             generationMetrics={generationMetrics}
+            showTokenCount={showMessageTokenCount}
           />
         </div>
 

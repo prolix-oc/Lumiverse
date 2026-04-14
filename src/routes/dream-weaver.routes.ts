@@ -22,6 +22,7 @@ import {
   getDreamWeaverVisualJob,
 } from "../services/dream-weaver/visual-studio/service";
 import { suggestVisualTags } from "../services/dream-weaver/visual-studio/tag-suggester";
+import { getDWGenParams, createDWTimeout } from "../services/dream-weaver/dw-gen-params";
 import type { DreamWeaverVisualAsset, DW_DRAFT_V1 } from "../types/dream-weaver";
 
 const app = new Hono();
@@ -233,13 +234,27 @@ app.post("/visual/tag-suggestions", async (c) => {
     return c.json({ error: "Generate a Soul draft first." }, 400);
   }
 
-  const result = await suggestVisualTags({
-    userId,
-    connectionId: session.connection_id,
-    draft,
-  });
+  const dwParams = getDWGenParams(userId);
+  const dwAbort = createDWTimeout(dwParams);
 
-  return c.json(result);
+  try {
+    const result = await suggestVisualTags({
+      userId,
+      connectionId: session.connection_id,
+      draft,
+      params: dwParams,
+      signal: dwAbort?.signal,
+    });
+    return c.json(result);
+  } catch (error) {
+    const isAbort = error instanceof Error && (error.name === "AbortError" || error.message.includes("abort"));
+    const message = isAbort
+      ? "Tag generation timed out."
+      : error instanceof Error ? error.message : "Tag generation failed.";
+    return c.json({ error: message }, 422);
+  } finally {
+    dwAbort?.cleanup();
+  }
 });
 
 // Start a visual generation job

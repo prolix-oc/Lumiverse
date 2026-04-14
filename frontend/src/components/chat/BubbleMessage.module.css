@@ -319,9 +319,6 @@
 /* metaPill blur removed — sits inside the card which already has 40px blur */
 
 .metaPillTooltip {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -331,9 +328,10 @@
   border: 1px solid var(--lumiverse-border);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
-  z-index: 10;
+  z-index: 9999;
   pointer-events: none;
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
   line-height: 1.3;
 }
 

@@ -329,6 +329,7 @@ export interface SettingsSlice {
   worldInfoSettings: import('./api').WorldInfoSettings
   regenFeedback: RegenFeedbackSettings
   swipeGesturesEnabled: boolean
+  showMessageTokenCount: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings

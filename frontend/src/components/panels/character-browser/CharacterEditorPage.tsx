@@ -65,6 +65,7 @@ export default function CharacterEditorPage() {
   const [tags, setTags] = useState<string[]>([])
   const [newTag, setNewTag] = useState('')
   const [alternateGreetings, setAlternateGreetings] = useState<string[]>([])
+  const [alternateCharacterName, setAlternateCharacterName] = useState('')
   const [extensionsJson, setExtensionsJson] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -129,6 +130,7 @@ export default function CharacterEditorPage() {
     })
     setTags(character.tags || [])
     setAlternateGreetings(character.alternate_greetings || [])
+    setAlternateCharacterName(character.extensions?.alternate_character_name || '')
     setExtensionsJson(JSON.stringify(character.extensions || {}, null, 2))
     setJsonError(null)
     pendingExtensionsRef.current = null
@@ -360,6 +362,7 @@ export default function CharacterEditorPage() {
 
   const handleAlternateCharacterNameChange = useCallback(
     (value: string) => {
+      setAlternateCharacterName(value)
       mutateExtensions((ext) => {
         const next = { ...ext }
         if (value.trim()) next.alternate_character_name = value.trim()
@@ -932,7 +935,7 @@ export default function CharacterEditorPage() {
                       <Field
                         label="Alternate Character Name"
                         helper="Used as {{char}} in prompts and as the chat display name. Leaves the card's title untouched."
-                        value={character?.extensions?.alternate_character_name || ''}
+                        value={alternateCharacterName}
                         onChange={handleAlternateCharacterNameChange}
                         multiline={false}
                       />

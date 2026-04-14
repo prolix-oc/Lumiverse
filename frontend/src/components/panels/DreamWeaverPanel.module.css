@@ -92,6 +92,27 @@
   padding-top: 6px;
 }
 
+/* ── Tune collapsible ── */
+
+.tuneHint {
+  margin: 0 0 2px;
+  color: var(--lumiverse-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tuneGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@container (max-width: 260px) {
+  .tuneGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Error box ── */
 
 .errorBox {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ChevronDown,
@@ -14,6 +14,7 @@ import clsx from 'clsx'
 import { connectionsApi } from '@/api/connections'
 import { dreamWeaverApi, type DreamWeaverSession } from '@/api/dream-weaver'
 import { personasApi } from '@/api/personas'
+import { settingsApi } from '@/api/settings'
 import {
   getSessionStatusLabel,
   resolveSelectedConnectionId,
@@ -44,12 +45,23 @@ import styles from './DreamWeaverPanel.module.css'
 
 type ArchiveKey = SessionArchiveGroup['key']
 
+interface DWGenParams {
+  temperature?: number | null
+  topP?: number | null
+  maxTokens?: number | null
+  topK?: number | null
+  timeoutMs?: number | null
+}
+
 export default function DreamWeaverPanel() {
   const [dreamText, setDreamText] = useState('')
   const [tone, setTone] = useState('')
   const [constraints, setConstraints] = useState('')
   const [dislikes, setDislikes] = useState('')
   const [refineExpanded, setRefineExpanded] = useState(false)
+  const [tuneExpanded, setTuneExpanded] = useState(false)
+  const [genParams, setGenParams] = useState<DWGenParams>({})
+  const genParamsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [sessions, setSessions] = useState<DreamWeaverSession[]>([])
   const [personas, setPersonas] = useState<Persona[]>([])
   const [connections, setConnections] = useState<ConnectionProfile[]>([])
@@ -122,6 +134,25 @@ export default function DreamWeaverPanel() {
     void loadSessions()
     void loadBootstrapOptions()
   }, [loadBootstrapOptions, loadSessions])
+
+  useEffect(() => {
+    settingsApi.get('dreamWeaverGenParams').then((row) => {
+      if (row?.value && typeof row.value === 'object') {
+        setGenParams(row.value as DWGenParams)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const updateGenParam = useCallback(<K extends keyof DWGenParams>(key: K, value: DWGenParams[K]) => {
+    setGenParams((prev) => {
+      const next = { ...prev, [key]: value }
+      if (genParamsSaveTimerRef.current) clearTimeout(genParamsSaveTimerRef.current)
+      genParamsSaveTimerRef.current = setTimeout(() => {
+        settingsApi.put('dreamWeaverGenParams', next).catch(() => {})
+      }, 500)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     if (activeModal !== 'dreamWeaverStudio') void loadSessions()
@@ -296,6 +327,92 @@ export default function DreamWeaverPanel() {
                   onChange={setDislikes}
                   placeholder="No flattening, no clichés."
                 />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Tune — LLM sampling params, collapsed by default */}
+        <div>
+          <button
+            type="button"
+            className={styles.refineToggle}
+            onClick={() => setTuneExpanded((v) => !v)}
+          >
+            <span className={styles.refineLine} />
+            <span className={styles.refineLabel}>
+              Tune
+              <ChevronRight
+                size={12}
+                className={clsx(styles.refineChevron, tuneExpanded && styles.refineChevronOpen)}
+              />
+            </span>
+            <span className={styles.refineLine} />
+          </button>
+
+          {tuneExpanded && (
+            <div className={styles.refineBody}>
+              <p className={styles.tuneHint}>
+                Applies to every Dream Weaver generation step. Leave blank to use per-step defaults.
+              </p>
+              <div className={styles.tuneGrid}>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Temperature</span>
+                  <TextInput
+                    value={genParams.temperature != null ? String(genParams.temperature) : ''}
+                    onChange={(v) => updateGenParam('temperature', v !== '' ? parseFloat(v) : null)}
+                    type="number"
+                    placeholder="Default"
+                    min={0}
+                    max={2}
+                    step={0.05}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Top P</span>
+                  <TextInput
+                    value={genParams.topP != null ? String(genParams.topP) : ''}
+                    onChange={(v) => updateGenParam('topP', v !== '' ? parseFloat(v) : null)}
+                    type="number"
+                    placeholder="Default"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Max Tokens</span>
+                  <TextInput
+                    value={genParams.maxTokens != null ? String(genParams.maxTokens) : ''}
+                    onChange={(v) => updateGenParam('maxTokens', v !== '' ? parseInt(v, 10) : null)}
+                    type="number"
+                    placeholder="Default"
+                    min={256}
+                    step={256}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Top K</span>
+                  <TextInput
+                    value={genParams.topK != null ? String(genParams.topK) : ''}
+                    onChange={(v) => updateGenParam('topK', v !== '' ? parseInt(v, 10) : null)}
+                    type="number"
+                    placeholder="Default"
+                    min={1}
+                    step={1}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Timeout (s)</span>
+                  <TextInput
+                    value={genParams.timeoutMs != null ? String(Math.round(genParams.timeoutMs / 1000)) : ''}
+                    onChange={(v) => updateGenParam('timeoutMs', v !== '' ? parseInt(v, 10) * 1000 : null)}
+                    type="number"
+                    placeholder="None"
+                    min={10}
+                    step={10}
+                  />
+                </div>
               </div>
             </div>
           )}

@@ -2,10 +2,19 @@ import type { LlmMessage } from "../../../llm/types";
 import type { DW_DRAFT_V1 } from "../../../types/dream-weaver";
 import { quietGenerate } from "../../generate.service";
 
+export interface DWTagLlmParams {
+  temperature?: number | null;
+  topP?: number | null;
+  maxTokens?: number | null;
+  topK?: number | null;
+}
+
 export interface SuggestVisualTagsInput {
   userId: string;
   connectionId?: string | null;
   draft: DW_DRAFT_V1;
+  params?: DWTagLlmParams | null;
+  signal?: AbortSignal | null;
 }
 
 function compactText(value: string | null | undefined): string {
@@ -353,13 +362,22 @@ export async function suggestVisualTags(
   input: SuggestVisualTagsInput,
 ): Promise<{ suggestedTags: string; suggestedNegativeTags: string }> {
   const deterministicSeed = buildDeterministicTagSeed(input.draft);
+
+  const paramOverrides: Record<string, unknown> = {};
+  if (input.params?.temperature != null) paramOverrides.temperature = input.params.temperature;
+  if (input.params?.topP != null) paramOverrides.top_p = input.params.topP;
+  if (input.params?.maxTokens != null) paramOverrides.max_tokens = input.params.maxTokens;
+  if (input.params?.topK != null) paramOverrides.top_k = input.params.topK;
+
   const response = await quietGenerate(input.userId, {
     connection_id: input.connectionId ?? undefined,
     messages: buildTagSuggestionMessages(input.draft),
     parameters: {
       temperature: 0.35,
       max_tokens: 2048,
+      ...paramOverrides,
     },
+    signal: input.signal ?? undefined,
   });
 
   const parsed = parseSectionedTagResponse(response.content);

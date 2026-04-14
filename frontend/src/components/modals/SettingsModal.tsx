@@ -669,6 +669,15 @@ function ChatSettings() {
         </div>
       )}
 
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Message Info</h3>
+
+      <Toggle.Checkbox
+        checked={useStore((s) => s.showMessageTokenCount ?? true)}
+        onChange={(checked) => setSetting('showMessageTokenCount', checked)}
+        label="Show token count in message pill"
+        hint="Displays the token count for assistant messages in the timestamp badge below each message"
+      />
+
       <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Swipe Navigation</h3>
       <p className={styles.helperText}>
         Navigate message swipes using touch gestures (mobile) or arrow keys (desktop). Hold Shift and hover to target a specific message.

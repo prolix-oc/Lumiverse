@@ -8,6 +8,7 @@ import type {
   UpdateSessionInput,
 } from "../../types/dream-weaver";
 import { rawGenerate } from "../generate.service";
+import { getDWGenParams, applyDWGenParams, createDWTimeout } from "./dw-gen-params";
 import * as connectionsSvc from "../connections.service";
 import * as charactersSvc from "../characters.service";
 import * as chatsSvc from "../chats.service";
@@ -441,6 +442,9 @@ async function executeDraftGeneration(
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
 
+  const dwParams = getDWGenParams(userId);
+  const dwAbort = createDWTimeout(dwParams);
+
   try {
     emitProgress(userId, sessionId, "soul", "reading_dream", 0, 3, "Reading dream");
 
@@ -461,12 +465,11 @@ async function executeDraftGeneration(
         { role: "system", content: DREAM_WEAVER_SYSTEM_PROMPT },
         { role: "user", content: buildGenerationPrompt(session) },
       ],
-      parameters: {
-        temperature: 1.0,
-        max_tokens: 16384,
-      },
+      parameters: applyDWGenParams({ temperature: 1.0, max_tokens: 16384 }, dwParams),
       connection_id: connection.id,
+      signal: dwAbort?.signal,
     });
+    dwAbort?.cleanup();
 
     emitProgress(userId, sessionId, "soul", "binding_card", 2, 3, "Binding the card");
 
@@ -493,6 +496,7 @@ async function executeDraftGeneration(
 
     eventBus.emit(EventType.DREAM_WEAVER_COMPLETE, { sessionId, operation: "soul" }, userId);
   } catch (error) {
+    dwAbort?.cleanup();
     getDb().prepare(`
       UPDATE dream_weaver_sessions
       SET status = ?, soul_state = ?, updated_at = ?
@@ -576,6 +580,9 @@ async function executeWorldGeneration(
   userId: string,
   sessionId: string,
 ): Promise<void> {
+  const dwParams = getDWGenParams(userId);
+  const dwAbort = createDWTimeout(dwParams);
+
   try {
     const session = getSession(userId, sessionId);
     if (!session) throw new Error("Session not found");
@@ -602,12 +609,11 @@ async function executeWorldGeneration(
         { role: "system", content: WORLD_GENERATION_SYSTEM_PROMPT },
         { role: "user", content: buildWorldGenerationPrompt(session, currentDraft) },
       ],
-      parameters: {
-        temperature: 0.8,
-        max_tokens: 16384,
-      },
+      parameters: applyDWGenParams({ temperature: 0.8, max_tokens: 16384 }, dwParams),
       connection_id: connection.id,
+      signal: dwAbort?.signal,
     });
+    dwAbort?.cleanup();
 
     emitProgress(userId, sessionId, "world", "assembling", 2, 4, "Assembling lorebooks & NPCs");
 
@@ -644,6 +650,7 @@ async function executeWorldGeneration(
 
     eventBus.emit(EventType.DREAM_WEAVER_COMPLETE, { sessionId, operation: "world" }, userId);
   } catch (error) {
+    dwAbort?.cleanup();
     getDb().prepare(`
       UPDATE dream_weaver_sessions SET world_state = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
@@ -1057,6 +1064,8 @@ export async function extendDraft(
   const count = Math.min(Math.max(input.count ?? 2, 1), 5);
   const prompt = buildExtendPrompt(draft, input.target, count, input.instruction, input.bookId);
 
+  const dwParams = getDWGenParams(userId);
+  const dwAbort = createDWTimeout(dwParams);
   const result = await rawGenerate(userId, {
     provider: connection.provider,
     model: connection.model,
@@ -1064,12 +1073,11 @@ export async function extendDraft(
       { role: "system", content: EXTEND_SYSTEM_PROMPT },
       { role: "user", content: prompt },
     ],
-    parameters: {
-      temperature: 0.9,
-      max_tokens: 16384,
-    },
+    parameters: applyDWGenParams({ temperature: 0.9, max_tokens: 16384 }, dwParams),
     connection_id: connection.id,
+    signal: dwAbort?.signal,
   });
+  dwAbort?.cleanup();
 
   return {
     target: input.target,

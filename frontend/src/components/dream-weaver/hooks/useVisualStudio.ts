@@ -6,6 +6,7 @@ import {
   type DreamWeaverVisualAsset,
   type DreamWeaverVisualJob,
 } from '@/api/dream-weaver'
+import { ApiError } from '@/api/client'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import type { ImageGenConnectionProfile } from '@/types/api'
 import { useStore } from '@/store'
@@ -264,7 +265,12 @@ export function useVisualStudio(
       setPendingTagSuggestion(result.suggestedTags)
       setPendingNegativeTagSuggestion(result.suggestedNegativeTags || null)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to suggest tags.'
+      let message = 'Failed to suggest tags.'
+      if (error instanceof ApiError && error.body?.error) {
+        message = error.body.error
+      } else if (error instanceof Error) {
+        message = error.message
+      }
       setTagSuggestionError(message)
     } finally {
       setTagSuggestionLoading(false)

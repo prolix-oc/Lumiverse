@@ -138,3 +138,88 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* LLM generation settings */
+.llmSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.llmHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--lumiverse-text-muted, #afa8bb);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  width: 100%;
+}
+
+.llmHeader:hover {
+  color: var(--lumiverse-text);
+}
+
+.llmChevron {
+  font-size: 0.6rem;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.llmChevron[data-open='true'] {
+  transform: rotate(180deg);
+}
+
+.llmHint {
+  margin: 0;
+  color: var(--lumiverse-text-secondary, #797384);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.llmGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.llmField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--lumiverse-text-muted, #afa8bb);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.llmInput {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--lumiverse-text, #f0e7fc);
+  font: inherit;
+  font-size: 0.8rem;
+  outline: none;
+  padding: 0.5rem 0.6rem;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.llmInput:focus {
+  border-color: rgba(189, 157, 255, 0.35);
+}
+
+.llmInput::placeholder {
+  color: rgba(175, 168, 187, 0.4);
+}
