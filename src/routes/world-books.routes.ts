@@ -10,6 +10,7 @@ import {
   collectVectorActivatedWorldInfoDetailed,
   getWorldInfoVectorQueryPreview,
   mergeActivatedWorldInfoEntries,
+  applyVectorPriorityBoost,
 } from "../services/prompt-assembly.service";
 import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
 import { activateWorldInfo, finalizeActivatedWorldInfoEntries, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
@@ -250,25 +251,45 @@ function traceDiagnosticVectorHitOutcomes(
       }
     }
 
-    if (finalized.activatedEntries.length >= maxActivatedTarget && !item.entry.constant) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_max_entries", {
-        maxActivatedEntries: settings.maxActivatedEntries,
-        rerankRank: item.rerankRank,
-        finalScore: item.finalScore,
-        distance: item.distance,
-      }));
-      continue;
-    }
-
+    // Mirror prompt-assembly's merge: when the cap is full, apply a bounded
+    // score-derived priority boost to vector entries so they can compete on
+    // retrieval relevance instead of losing the order_value tiebreaker. See
+    // `applyVectorPriorityBoost` in prompt-assembly.service.ts.
+    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
     const nextMergedEntries = [...mergedEntries, item.entry];
-    const nextFinalized = finalizeActivatedWorldInfoEntries(nextMergedEntries, settings, {
+    const finalizeInput = budgetFull
+      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
+      : nextMergedEntries;
+    const rawNextFinalized = finalizeActivatedWorldInfoEntries(finalizeInput, settings, {
       skipGroupLogic: true,
-      preserveOrder: true,
+      preserveOrder: !budgetFull,
     });
+    const nextFinalized = budgetFull
+      ? {
+          ...rawNextFinalized,
+          activatedEntries: rawNextFinalized.activatedEntries
+            .map((e) => nextMergedEntries.find((orig) => orig.id === e.id))
+            .filter((e): e is WorldBookEntry => !!e),
+        }
+      : rawNextFinalized;
     const itemSurvived = nextFinalized.activatedEntries.some((entry) => entry.id === item.entry.id);
     const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
 
-    if (!itemSurvived || (!grewActivationSet && !item.entry.constant)) {
+    if (!itemSurvived) {
+      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
+        budgetFull
+          ? "blocked_by_max_entries"
+          : settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
+        {
+          maxActivatedEntries: settings.maxActivatedEntries,
+          rerankRank: item.rerankRank,
+          finalScore: item.finalScore,
+          distance: item.distance,
+        },
+      ));
+      continue;
+    }
+    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
       outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
         settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
         {

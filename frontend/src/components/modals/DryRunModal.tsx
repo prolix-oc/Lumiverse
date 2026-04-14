@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChevronRight } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Badge } from '@/components/shared/Badge'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
-import type { DryRunResponse } from '@/api/generate'
+import type { DryRunResponse, DryRunMessage } from '@/api/generate'
 import styles from './DryRunModal.module.css'
 import clsx from 'clsx'
 
@@ -14,24 +15,165 @@ const ROLE_COLOR: Record<string, 'warning' | 'info' | 'primary'> = {
   assistant: 'primary',
 }
 
+// Auto-collapse the messages section above this count to keep the modal snappy on open.
+const MESSAGES_AUTO_COLLAPSE_THRESHOLD = 50
+// Per-message expand button appears when content exceeds this length.
+const MESSAGE_EXPAND_THRESHOLD = 400
+// Memory chunk previews are clipped to this many characters by default.
+const CHUNK_PREVIEW_CAP = 500
+
+interface MessageCardProps {
+  msg: DryRunMessage
+  index: number
+  expanded: boolean
+  onToggle: () => void
+}
+
+function MessageCard({ msg, index, expanded, onToggle }: MessageCardProps) {
+  const needsToggle = msg.content.length > MESSAGE_EXPAND_THRESHOLD
+  return (
+    <div className={styles.messageCard}>
+      <div className={styles.messageHeader}>
+        <Badge color={ROLE_COLOR[msg.role] ?? 'neutral'} size="sm" className={styles.roleBadge}>
+          {msg.role}
+        </Badge>
+        <span className={styles.messageIndex}>#{index + 1}</span>
+        {needsToggle && (
+          <button type="button" className={styles.expandButton} onClick={onToggle}>
+            {expanded ? 'Show less' : 'Show full'}
+          </button>
+        )}
+      </div>
+      <div
+        className={clsx(
+          styles.messageContent,
+          needsToggle && !expanded && styles.messageContentClamped,
+        )}
+      >
+        {msg.content}
+      </div>
+    </div>
+  )
+}
+
+interface ChunkPreviewProps {
+  text: string
+}
+
+function ChunkPreview({ text }: ChunkPreviewProps) {
+  const [expanded, setExpanded] = useState(false)
+  const needsToggle = text.length > CHUNK_PREVIEW_CAP
+  const display = expanded || !needsToggle ? text : text.slice(0, CHUNK_PREVIEW_CAP) + '…'
+  return (
+    <>
+      <span className={styles.chunkPreview}>{display}</span>
+      {needsToggle && (
+        <button
+          type="button"
+          className={styles.inlineExpandButton}
+          onClick={() => setExpanded((e) => !e)}
+        >
+          {expanded ? 'Show less' : `Show full (${text.length.toLocaleString()} chars)`}
+        </button>
+      )}
+    </>
+  )
+}
+
+interface VirtualizedMessagesProps {
+  messages: DryRunMessage[]
+}
+
+function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const [expandedSet, setExpandedSet] = useState<Set<number>>(() => new Set())
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 140,
+    overscan: 6,
+  })
+
+  const toggle = (idx: number) => {
+    setExpandedSet((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
+    // Expanded/collapsed cards have very different heights — kick the
+    // virtualizer to remeasure on the next frame after the DOM updates.
+    requestAnimationFrame(() => virtualizer.measure())
+  }
+
+  return (
+    <div ref={parentRef} className={styles.messagesScroll}>
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          position: 'relative',
+          width: '100%',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const msg = messages[virtualRow.index]
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                transform: `translateY(${virtualRow.start}px)`,
+                paddingBottom: 8,
+              }}
+            >
+              <MessageCard
+                msg={msg}
+                index={virtualRow.index}
+                expanded={expandedSet.has(virtualRow.index)}
+                onToggle={() => toggle(virtualRow.index)}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function DryRunModal() {
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats } = modalProps
+
+  const [messagesOpen, setMessagesOpen] = useState(
+    messages.length <= MESSAGES_AUTO_COLLAPSE_THRESHOLD,
+  )
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [paramsOpen, setParamsOpen] = useState(false)
   const [wiStatsOpen, setWiStatsOpen] = useState(false)
   const [memStatsOpen, setMemStatsOpen] = useState(false)
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats } = modalProps
-
-  // Build a token count lookup from tokenCount.breakdown (matched by name)
-  const tokensByName = new Map<string, number>()
-  if (tokenCount?.breakdown) {
-    for (const entry of tokenCount.breakdown) {
-      tokensByName.set(entry.name, entry.tokens)
+  // Memoise derived values so toggling a sibling section doesn't re-serialise
+  // potentially large payloads on every render.
+  const tokensByName = useMemo(() => {
+    const map = new Map<string, number>()
+    if (tokenCount?.breakdown) {
+      for (const entry of tokenCount.breakdown) map.set(entry.name, entry.tokens)
     }
-  }
+    return map
+  }, [tokenCount])
+
+  const parametersJson = useMemo(
+    () => JSON.stringify(parameters, null, 2),
+    [parameters],
+  )
 
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(1100px, var(--lumiverse-content-max-width, 1100px)))" className={styles.modal}>
@@ -46,22 +188,24 @@ export default function DryRunModal() {
 
           {/* Scrollable body */}
           <div className={styles.body}>
-            {/* Messages */}
-            <div className={styles.messagesSection}>
-              <p className={styles.sectionLabel}>
+            {/* Messages — collapsible + virtualised so 600+ message chats stay responsive */}
+            <div className={styles.collapsible}>
+              <button
+                type="button"
+                className={styles.collapsibleHeader}
+                onClick={() => setMessagesOpen((o) => !o)}
+              >
+                <ChevronRight
+                  size={14}
+                  className={clsx(styles.chevron, messagesOpen && styles.chevronOpen)}
+                />
                 Messages ({messages.length})
-              </p>
-              {messages.map((msg, i) => (
-                <div key={i} className={styles.messageCard}>
-                  <div className={styles.messageHeader}>
-                    <Badge color={ROLE_COLOR[msg.role] ?? 'neutral'} size="sm" className={styles.roleBadge}>
-                      {msg.role}
-                    </Badge>
-                    <span className={styles.messageIndex}>#{i + 1}</span>
-                  </div>
-                  <div className={styles.messageContent}>{msg.content}</div>
+              </button>
+              {messagesOpen && messages.length > 0 && (
+                <div className={styles.messagesCollapsibleBody}>
+                  <VirtualizedMessages messages={messages} />
                 </div>
-              ))}
+              )}
             </div>
 
             {/* Assistant prefill */}
@@ -250,13 +394,11 @@ export default function DryRunModal() {
                             <span className={styles.breakdownLabel} style={{ fontWeight: 600 }}>Retrieved Chunks</span>
                           </div>
                           {memoryStats.retrievedChunks.map((chunk, i) => (
-                            <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, paddingLeft: 8 }}>
+                            <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4, paddingLeft: 8 }}>
                               <span className={styles.breakdownLabel}>
                                 #{i + 1} — score: {chunk.score.toFixed(4)}, ~{chunk.tokenEstimate} tokens
                               </span>
-                              <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto', fontSize: 11, display: 'block' }}>
-                                {chunk.preview}
-                              </span>
+                              <ChunkPreview text={chunk.preview} />
                             </div>
                           ))}
                         </>
@@ -284,7 +426,7 @@ export default function DryRunModal() {
                 {paramsOpen && (
                   <div className={styles.collapsibleBody}>
                     <div className={styles.parametersJson}>
-                      {JSON.stringify(parameters, null, 2)}
+                      {parametersJson}
                     </div>
                   </div>
                 )}

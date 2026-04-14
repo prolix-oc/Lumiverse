@@ -15,6 +15,7 @@ import {
   finalizeActivatedWorldInfoEntries,
   type WiState,
   type WorldInfoSettings,
+  type FinalizedWorldInfoEntries,
   DEFAULT_WORLD_INFO_SETTINGS,
 } from "./world-info-activation.service";
 import * as chatsSvc from "./chats.service";
@@ -2474,6 +2475,63 @@ function scoreVectorWorldInfoCandidate(
   };
 }
 
+/**
+ * Upper bound on the priority uplift a vector candidate can receive from its
+ * finalScore. Keeps vectors competitive with equal-priority keyword entries
+ * (so a good vector hit doesn't silently lose the order_value tiebreaker)
+ * without letting a single strong hit override a user-chosen priority gap.
+ * finalScore is typically in [0, 3]; with a 10x factor and a 20-point cap,
+ * a score of ≥2.0 saturates the boost.
+ */
+export const VECTOR_PRIORITY_BOOST_MAX = 20;
+export const VECTOR_PRIORITY_BOOST_SCALE = 10;
+
+export function vectorPriorityBoost(finalScore: number | undefined): number {
+  if (typeof finalScore !== "number" || !Number.isFinite(finalScore) || finalScore <= 0) return 0;
+  const raw = Math.round(finalScore * VECTOR_PRIORITY_BOOST_SCALE);
+  return Math.max(0, Math.min(VECTOR_PRIORITY_BOOST_MAX, raw));
+}
+
+/**
+ * Returns a shallow-cloned array where vector-sourced entries have their
+ * priority increased by a bounded, score-derived boost. Used only when the
+ * entry-count budget is full so vectors can compete on their retrieval
+ * score rather than losing to equal-priority keyword entries on the
+ * order_value tiebreaker. Originals are never mutated.
+ */
+export function applyVectorPriorityBoost<T extends { id: string; priority: number }>(
+  entries: T[],
+  sources: Map<string, { source: "keyword" | "vector"; score?: number }>,
+  candidate?: { entry: { id: string }; finalScore: number },
+): T[] {
+  return entries.map((entry) => {
+    const src = candidate && entry.id === candidate.entry.id
+      ? { source: "vector" as const, score: candidate.finalScore }
+      : sources.get(entry.id);
+    if (!src || src.source !== "vector") return entry;
+    const boost = vectorPriorityBoost(src.score);
+    if (boost === 0) return entry;
+    return { ...entry, priority: entry.priority + boost };
+  });
+}
+
+/**
+ * `finalizeActivatedWorldInfoEntries` receives priority-boosted clones when
+ * `applyVectorPriorityBoost` was used; rebuild its `activatedEntries` from
+ * the original (unboosted) entries so downstream consumers read the user's
+ * configured priority, not the internal competition value.
+ */
+function remapFinalizedToOriginalEntries(
+  finalized: FinalizedWorldInfoEntries,
+  originals: WorldBookEntryModel[],
+): FinalizedWorldInfoEntries {
+  const byId = new Map(originals.map((e) => [e.id, e]));
+  const activatedEntries = finalized.activatedEntries
+    .map((e) => byId.get(e.id))
+    .filter((e): e is WorldBookEntryModel => !!e);
+  return { ...finalized, activatedEntries };
+}
+
 export function mergeActivatedWorldInfoEntries(
   keywordEntries: WorldBookEntryModel[],
   vectorEntries: VectorActivatedEntry[],
@@ -2534,10 +2592,24 @@ export function mergeActivatedWorldInfoEntries(
     // lower-priority keyword entries instead of being blanket-rejected.
     const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
     const nextMergedEntries = [...mergedEntries, item.entry];
-    const nextFinalized = finalizeActivatedWorldInfoEntries(nextMergedEntries, settings, {
+    // When budget is full and priorities tie, order_value-ascending alone
+    // decides — and vector candidates (drawn from big books with large
+    // order_values) always lose. Apply a score-derived priority boost to
+    // vector entries so genuinely relevant hits can displace equal-priority
+    // keyword entries. The boost is bounded so it never overrides a
+    // meaningful user-set priority gap. We clone the entries for the
+    // finalize call and map back to originals afterwards so downstream
+    // consumers still see the user's configured priority.
+    const finalizeInput = budgetFull
+      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
+      : nextMergedEntries;
+    const rawNextFinalized = finalizeActivatedWorldInfoEntries(finalizeInput, settings, {
       skipGroupLogic: true,
       preserveOrder: !budgetFull,
     });
+    const nextFinalized = budgetFull
+      ? remapFinalizedToOriginalEntries(rawNextFinalized, nextMergedEntries)
+      : rawNextFinalized;
     const itemSurvived = nextFinalized.activatedEntries.some((entry) => entry.id === item.entry.id);
     const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
 

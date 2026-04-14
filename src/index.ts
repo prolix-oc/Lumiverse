@@ -116,17 +116,25 @@ if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "functio
   process.send({ type: "ready", payload: { port: env.port, pid: process.pid } });
 }
 
-// Auto-connect to LumiHub if linked
-import("./lumihub/client").then(({ autoConnect }) => {
-  autoConnect().catch((err) => console.error("[LumiHub] Auto-connect failed:", err));
-});
+// Auto-connect to LumiHub if linked. Deferred to a timer tick so the HTTP
+// server gets a chance to service its first requests before the WebSocket
+// connect runs — a hung/unreachable LumiHub can otherwise stall the event
+// loop (TLS/DNS wait) long enough for callers to observe "server not
+// accepting requests" immediately after startup.
+setTimeout(() => {
+  import("./lumihub/client").then(({ autoConnect }) => {
+    autoConnect().catch((err) => console.error("[LumiHub] Auto-connect failed:", err));
+  });
+}, 0);
 
-// Auto-connect MCP servers (fire-and-forget)
-import("./services/mcp-client-manager").then(({ getMcpClientManager }) => {
-  getMcpClientManager().autoConnectAll().catch((err) =>
-    console.error("[MCP] Auto-connect failed:", err)
-  );
-});
+// Auto-connect MCP servers (fire-and-forget, same deferred pattern as LumiHub)
+setTimeout(() => {
+  import("./services/mcp-client-manager").then(({ getMcpClientManager }) => {
+    getMcpClientManager().autoConnectAll().catch((err) =>
+      console.error("[MCP] Auto-connect failed:", err)
+    );
+  });
+}, 0);
 
 // Log trusted origins so it's visible in the runner and easy to verify that LAN IPs were detected and applied automatically.
 if (env.trustAnyOrigin) {

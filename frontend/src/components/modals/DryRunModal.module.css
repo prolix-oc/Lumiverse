@@ -40,25 +40,38 @@
 }
 
 /* ── Messages ── */
-.messagesSection {
-  margin-bottom: 16px;
+/*
+ * Bounded scroll container for the virtualised messages list.
+ * The fixed height gives @tanstack/react-virtual a stable scroll parent
+ * and lets it render only ~10–20 cards at a time even for 600+ message chats.
+ */
+.messagesCollapsibleBody {
+  padding: 8px 12px 12px;
+  height: clamp(240px, 50vh, 600px);
+  display: flex;
+  flex-direction: column;
 }
 
-.sectionLabel {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.4));
-  margin: 0 0 10px;
+.messagesScroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+.messagesScroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.messagesScroll::-webkit-scrollbar-thumb {
+  background: var(--lumiverse-fill);
+  border-radius: 4px;
 }
 
 .messageCard {
-  margin-bottom: 8px;
   border-radius: 10px;
   border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
   background: var(--lumiverse-fill-subtle);
-  overflow: auto;
 }
 
 .messageHeader {
@@ -76,6 +89,11 @@
   font-weight: 600;
 }
 
+/*
+ * Each message renders its full content inline (no nested scroll container —
+ * 600 nested scrollers used to crash mobile WebKit). Long messages get a
+ * webkit-line-clamp preview with a Show full toggle.
+ */
 .messageContent {
   padding: 10px 12px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
@@ -84,23 +102,66 @@
   color: var(--lumiverse-text, rgba(230, 230, 240, 0.85));
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
-.messageContent::-webkit-scrollbar {
-  width: 3px;
-}
-
-.messageContent::-webkit-scrollbar-thumb {
-  background: var(--lumiverse-fill-subtle);
-  border-radius: 4px;
+.messageContentClamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .messageIndex {
   font-size: 10px;
   color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+}
+
+.expandButton {
   margin-left: auto;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6));
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.expandButton:hover {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+}
+
+.inlineExpandButton {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  border-radius: 4px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6));
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.inlineExpandButton:hover {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+}
+
+.chunkPreview {
+  display: block;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.5));
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── Collapsible sections ── */

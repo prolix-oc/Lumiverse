@@ -15,11 +15,16 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 60_000;
 const MANIFEST_SYNC_DEBOUNCE_MS = 5_000;
+// Fail fast if LumiHub doesn't complete the WebSocket handshake in time.
+// Without this, an unreachable host can leave the socket stuck in CONNECTING
+// (no close/error fires) and no reconnect is ever scheduled.
+const CONNECT_TIMEOUT_MS = 15_000;
 
 class LumiHubWSClient {
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = INITIAL_RECONNECT_MS;
   private connected = false;
   private intentionalClose = false;
@@ -52,8 +57,23 @@ class LumiHubWSClient {
     try {
       const url = `${this.wsUrl}?token=${encodeURIComponent(this.linkToken)}`;
       this.ws = new WebSocket(url);
+      const ws = this.ws;
 
-      this.ws.addEventListener("open", () => {
+      // Arm a connect timeout so a hung handshake doesn't leave us stuck in
+      // CONNECTING with no close/error event and no scheduled reconnect.
+      this.connectTimeoutTimer = setTimeout(() => {
+        this.connectTimeoutTimer = null;
+        if (ws.readyState === WebSocket.CONNECTING) {
+          console.warn(`[LumiHub WS] Connect timed out after ${CONNECT_TIMEOUT_MS}ms`);
+          try { ws.close(); } catch {}
+          if (!this.intentionalClose) {
+            this.scheduleReconnect();
+          }
+        }
+      }, CONNECT_TIMEOUT_MS);
+
+      ws.addEventListener("open", () => {
+        this.clearConnectTimeout();
         console.log("[LumiHub WS] Connected");
         this.connected = true;
         this.reconnectDelay = INITIAL_RECONNECT_MS;
@@ -62,11 +82,12 @@ class LumiHubWSClient {
         eventBus.emit(EventType.LUMIHUB_CONNECTION_CHANGED, { connected: true });
       });
 
-      this.ws.addEventListener("message", (event) => {
+      ws.addEventListener("message", (event) => {
         this.handleMessage(event.data as string);
       });
 
-      this.ws.addEventListener("close", (event) => {
+      ws.addEventListener("close", (event) => {
+        this.clearConnectTimeout();
         console.log(`[LumiHub WS] Closed: ${event.code} ${event.reason}`);
         this.connected = false;
         this.stopHeartbeat();
@@ -77,14 +98,27 @@ class LumiHubWSClient {
         }
       });
 
-      this.ws.addEventListener("error", (event) => {
+      ws.addEventListener("error", (event) => {
         console.error("[LumiHub WS] Error:", event);
+        // Defensive: some runtimes fire `error` without a subsequent `close`
+        // when the handshake fails pre-upgrade. scheduleReconnect short-circuits
+        // if already armed, so this is safe to call alongside the close path.
+        if (!this.intentionalClose) {
+          this.scheduleReconnect();
+        }
       });
     } catch (err) {
       console.error("[LumiHub WS] Connection failed:", err);
       if (!this.intentionalClose) {
         this.scheduleReconnect();
       }
+    }
+  }
+
+  private clearConnectTimeout(): void {
+    if (this.connectTimeoutTimer) {
+      clearTimeout(this.connectTimeoutTimer);
+      this.connectTimeoutTimer = null;
     }
   }
 
@@ -263,6 +297,7 @@ class LumiHubWSClient {
 
   private cleanup(): void {
     this.stopHeartbeat();
+    this.clearConnectTimeout();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
