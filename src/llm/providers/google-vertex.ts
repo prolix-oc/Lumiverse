@@ -4,7 +4,7 @@ import { getTextContent, type GenerationRequest, type GenerationResponse, type S
 
 // ── Service account JWT → OAuth2 access token ──────────────────────────────
 
-interface ServiceAccountCredentials {
+export interface ServiceAccountCredentials {
   type: string;
   project_id: string;
   private_key_id: string;
@@ -74,7 +74,7 @@ async function createSignedJwt(sa: ServiceAccountCredentials): Promise<string> {
   return `${signingInput}.${base64urlEncode(signature)}`;
 }
 
-async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
+export async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const cached = tokenCache.get(sa.client_email);
   if (cached && now < cached.expiresAt - TOKEN_REFRESH_MARGIN) {
@@ -104,7 +104,7 @@ async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
 }
 
 /** Parse the service account JSON stored as the "API key" secret. */
-function parseServiceAccount(apiKey: string): ServiceAccountCredentials {
+export function parseServiceAccount(apiKey: string): ServiceAccountCredentials {
   try {
     const sa = JSON.parse(apiKey);
     if (!sa.private_key || !sa.client_email || !sa.project_id) {
@@ -116,8 +116,18 @@ function parseServiceAccount(apiKey: string): ServiceAccountCredentials {
   }
 }
 
-/** Resolve the API hostname for a given Vertex AI location. */
-function vertexHostForLocation(location: string): string {
+/**
+ * Resolve the API hostname for a given Vertex AI location.
+ *
+ * Per Google's @google/genai SDK (`_api_client.ts`):
+ *   - `global`  → `https://aiplatform.googleapis.com/` (un-prefixed)
+ *   - regional  → `https://{location}-aiplatform.googleapis.com/`
+ *
+ * There is no `global-aiplatform.googleapis.com` host — that was an
+ * incorrect guess. All Vertex operations (generate, stream, list publishers)
+ * use the same host pattern.
+ */
+export function vertexHostForLocation(location: string): string {
   if (!location || location === "global") return "https://aiplatform.googleapis.com";
   return `https://${location}-aiplatform.googleapis.com`;
 }
@@ -196,7 +206,7 @@ export class GoogleVertexProvider implements LlmProvider {
     const sa = parseServiceAccount(apiKey);
     // Location is encoded in the URL by resolveEffectiveApiUrl (from metadata.vertex_region).
     // Regional: https://{location}-aiplatform.googleapis.com  →  extract location
-    // Global:   https://aiplatform.googleapis.com              →  "global"
+    // Global:   https://aiplatform.googleapis.com             →  "global" (default)
     let location = "global";
     const parsedUrl = apiUrl || this.defaultUrl;
     const regionalMatch = parsedUrl.match(/^https?:\/\/([a-z0-9-]+)-aiplatform\.googleapis\.com/);
@@ -360,11 +370,12 @@ export class GoogleVertexProvider implements LlmProvider {
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
-      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
       const host = vertexHostForLocation(location);
-      // https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.models/list
-      const url = `${host}/v1/projects/${projectId}/locations/${location}/models?pageSize=1`;
+      // See listModels() for URL rationale. The publisher-list endpoint is
+      // un-prefixed (no project/location in the path) and lives at v1beta1.
+      const url = `${host}/v1beta1/publishers/google/models?pageSize=1`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -381,7 +392,7 @@ export class GoogleVertexProvider implements LlmProvider {
 
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
     try {
-      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
       const host = vertexHostForLocation(location);
       const allModels: string[] = [];
@@ -390,8 +401,14 @@ export class GoogleVertexProvider implements LlmProvider {
       do {
         const params = new URLSearchParams();
         if (pageToken) params.set("pageToken", pageToken);
-        // https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.models/list
-        const url = `${host}/v1/projects/${projectId}/locations/${location}/models${params.toString() ? `?${params}` : ""}`;
+        // List base (publisher) models. Per Google's @google/genai SDK
+        // (`_api_client.ts` → `shouldPrependVertexProjectPath`):
+        //   "For base models Vertex does not accept a project/location
+        //    prefix (for tuned models the prefix is required)."
+        // So the URL is un-prefixed and sits at v1beta1 (the SDK's default
+        // version for Vertex; the v1 surface does not expose this list).
+        //   →  {host}/v1beta1/publishers/google/models
+        const url = `${host}/v1beta1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -401,13 +418,15 @@ export class GoogleVertexProvider implements LlmProvider {
           break;
         }
         const data = (await res.json()) as any;
-        const models: any[] = data.models || [];
+        // Response may use `publisherModels`, `models`, or `tunedModels`
+        // depending on the surface — mirrors tExtractModels() in the SDK.
+        const models: any[] = data.publisherModels || data.models || data.tunedModels || [];
         for (const m of models) {
-          // Response names are like "projects/{p}/locations/{l}/models/{id}"
+          // Names are "publishers/google/models/{id}".
           const name: string = m.name || "";
-          const shortName = name.replace(/^projects\/[^/]+\/locations\/[^/]+\/models\//, "");
+          const shortName = name.replace(/^publishers\/google\/models\//, "");
           const id = shortName || name;
-          allModels.push(id);
+          if (id) allModels.push(id);
         }
         pageToken = data.nextPageToken;
       } while (pageToken);
