@@ -781,6 +781,10 @@ export interface EmbeddingConfig {
   chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
   request_timeout: number;
   has_api_key: boolean;
+  /** True when the server owner has enabled a shared embedding config and the
+   *  current user is a non-owner inheriting it. The form should be read-only
+   *  and the config is not user-editable while this flag is set. */
+  inherited?: boolean;
 }
 
 export interface ChatMemorySettings {

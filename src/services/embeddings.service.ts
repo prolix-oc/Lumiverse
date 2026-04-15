@@ -17,6 +17,7 @@ import {
   getAccessToken,
   vertexHostForLocation,
 } from "../llm/providers/google-vertex";
+import { getFirstUserId } from "../auth/seed";
 
 const EMBEDDING_SETTINGS_KEY = "embeddingConfig";
 const EMBEDDING_SECRET_KEY = "embedding_api_key";
@@ -64,6 +65,10 @@ export interface EmbeddingConfig {
 
 export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
   has_api_key: boolean;
+  /** True when the returned config belongs to the server owner and the caller
+   *  is a non-owner receiving it by inheritance. Non-owners cannot mutate an
+   *  inherited config and share the owner's API key / billing. */
+  inherited?: boolean;
 }
 
 export interface WorldBookEmbeddingMetadata {
@@ -1099,18 +1104,60 @@ export function getProviderDefaults(provider: EmbeddingProvider) {
   };
 }
 
-export async function getEmbeddingConfig(userId: string): Promise<EmbeddingConfigWithStatus> {
+/** Raw per-user embedding config (no inheritance resolution). */
+function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
   const setting = settingsSvc.getSetting(userId, EMBEDDING_SETTINGS_KEY);
-  const cfg = normalizeConfig(setting?.value);
-  const has_api_key = await secretsSvc.validateSecret(userId, EMBEDDING_SECRET_KEY);
-  return { ...cfg, has_api_key };
+  return normalizeConfig(setting?.value);
+}
+
+/**
+ * Owner gate: LanceDB stores one table with a dimension locked at creation,
+ * so a multi-user box cannot support different embedding models per user
+ * without dim mismatches. When the owner has enabled embeddings, every
+ * non-owner inherits that config (and the owner's API key / billing). When
+ * the owner has embeddings disabled, users fall back to their own config.
+ *
+ * Returns the userId whose settings + secret should drive embedding
+ * operations, and whether inheritance is active for the caller.
+ */
+function resolveEmbeddingUserContext(callerUserId: string): { userId: string; inherited: boolean } {
+  const ownerId = getFirstUserId();
+  if (!ownerId || ownerId === callerUserId) {
+    return { userId: callerUserId, inherited: false };
+  }
+  const ownerCfg = readRawEmbeddingConfig(ownerId);
+  if (ownerCfg.enabled) {
+    return { userId: ownerId, inherited: true };
+  }
+  return { userId: callerUserId, inherited: false };
+}
+
+export async function getEmbeddingConfig(userId: string): Promise<EmbeddingConfigWithStatus> {
+  const ctx = resolveEmbeddingUserContext(userId);
+  const cfg = readRawEmbeddingConfig(ctx.userId);
+  const has_api_key = await secretsSvc.validateSecret(ctx.userId, EMBEDDING_SECRET_KEY);
+  return ctx.inherited
+    ? { ...cfg, has_api_key, inherited: true }
+    : { ...cfg, has_api_key };
 }
 
 export async function updateEmbeddingConfig(
   userId: string,
   input: Partial<EmbeddingConfig> & { api_key?: string | null }
 ): Promise<EmbeddingConfigWithStatus> {
-  const current = await getEmbeddingConfig(userId);
+  const ownerId = getFirstUserId();
+  const callerIsOwner = ownerId !== null && ownerId === userId;
+
+  // Reject non-owner writes while the gate is active — the config they'd see
+  // is inherited from the owner, so a per-user write would be silently shadowed.
+  if (!callerIsOwner && ownerId) {
+    const ownerCfg = readRawEmbeddingConfig(ownerId);
+    if (ownerCfg.enabled) {
+      throw new Error("Embedding configuration is managed by the server owner and cannot be overridden.");
+    }
+  }
+
+  const current = readRawEmbeddingConfig(userId);
   const merged = normalizeConfig({ ...current, ...input });
   settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, merged);
 
@@ -1123,15 +1170,23 @@ export async function updateEmbeddingConfig(
     }
   }
 
-  // Detect model change and invalidate stale vectors
   const oldFp = getModelFingerprint(current);
   const newFp = getModelFingerprint(merged);
-  if (
+  const fingerprintChanged =
     oldFp.provider !== newFp.provider ||
     oldFp.model !== newFp.model ||
     oldFp.dimensions !== newFp.dimensions ||
-    oldFp.api_url !== newFp.api_url
-  ) {
+    oldFp.api_url !== newFp.api_url;
+
+  // When the owner flips the gate or changes their fingerprint while enabled,
+  // every user's vectors become stale at once — nuke the shared LanceDB store
+  // so everyone re-vectorizes against the new config. For non-owner edits
+  // (only reachable when the gate was inactive), scope invalidation to caller.
+  const ownerGateTransition = callerIsOwner && current.enabled !== merged.enabled;
+  const ownerFingerprintChanged = callerIsOwner && merged.enabled && fingerprintChanged;
+  if (ownerGateTransition || ownerFingerprintChanged) {
+    await forceResetLanceDB();
+  } else if (!callerIsOwner && fingerprintChanged) {
     await invalidateAllVectors(userId);
   }
 
@@ -1296,9 +1351,12 @@ async function requestEmbeddings(
   texts: string[],
   options?: { omitDimensions?: boolean }
 ): Promise<number[][]> {
-  const cfg = await getEmbeddingConfig(userId);
+  // Resolve which user's settings + API key actually drive this call. In gate
+  // mode non-owners inherit the owner's config and use the owner's key.
+  const ctx = resolveEmbeddingUserContext(userId);
+  const cfg = readRawEmbeddingConfig(ctx.userId);
   if (!cfg.enabled) throw new Error("Embeddings are disabled for this user");
-  const apiKey = await secretsSvc.getSecret(userId, EMBEDDING_SECRET_KEY);
+  const apiKey = await secretsSvc.getSecret(ctx.userId, EMBEDDING_SECRET_KEY);
   if (!apiKey) throw new Error("Embedding API key is not configured");
   if (!texts.length) return [];
 
@@ -1461,7 +1519,19 @@ export async function testEmbeddingConfig(
   const first = vectors[0] || [];
   if (!first.length) throw new Error("No embedding vector returned");
 
-  const current = await getEmbeddingConfig(userId);
+  // In gate mode non-owners get a read-only test — verify the inherited config
+  // works for them without mutating the owner's stored dimension.
+  const ctx = resolveEmbeddingUserContext(userId);
+  if (ctx.inherited) {
+    const ownerCfg = readRawEmbeddingConfig(ctx.userId);
+    const has_api_key = await secretsSvc.validateSecret(ctx.userId, EMBEDDING_SECRET_KEY);
+    return {
+      dimension: first.length,
+      config: { ...ownerCfg, has_api_key, inherited: true },
+    };
+  }
+
+  const current = readRawEmbeddingConfig(userId);
   const updated = normalizeConfig({ ...current, dimensions: first.length });
   settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, updated);
   const has_api_key = await secretsSvc.validateSecret(userId, EMBEDDING_SECRET_KEY);

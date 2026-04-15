@@ -1463,10 +1463,18 @@ function EmbeddingsSettings() {
   const checklistPercent = Math.round((completedChecklistCount / setupChecklist.length) * 100)
   const checklistReady = completedChecklistCount === setupChecklist.length
 
+  const inherited = !!cfg.inherited
+
   return (
     <div className={styles.settingsSection}>
       <h3 className={styles.sectionTitle}>Embeddings</h3>
       <p className={styles.placeholder}>Configure vector embeddings for long-term memory retrieval. Vectorizes world books, chat messages, and documents for vector search during generation.</p>
+
+      {inherited && (
+        <p className={styles.placeholder} style={{ fontStyle: 'normal', padding: '8px 12px', border: '1px solid var(--lumiverse-border-subtle)', borderRadius: 6, background: 'var(--lumiverse-surface-raised)' }}>
+          These embedding settings are managed by the server owner. Your account inherits the shared configuration and uses the owner's API key — you cannot change the provider, model, or key here. Test verifies the inherited connection works for your account.
+        </p>
+      )}
 
       {error && <p className={styles.errorText}>{error}</p>}
       {success && <p className={styles.successText}>{success}</p>}
@@ -1688,16 +1696,18 @@ function EmbeddingsSettings() {
         </span>
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
-        <input
-          className={styles.select}
-          type="password"
-          value={apiKey}
-          placeholder="Paste a new key to replace"
-          onChange={(e) => setApiKey(e.target.value)}
-        />
-      </div>
+      {!inherited && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
+          <input
+            className={styles.select}
+            type="password"
+            value={apiKey}
+            placeholder="Paste a new key to replace"
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </div>
+      )}
 
       <Toggle.Checkbox
         checked={cfg.vectorize_world_books}
@@ -1718,7 +1728,7 @@ function EmbeddingsSettings() {
       />
 
       <div className={styles.drawerRow}>
-        <Button size="sm" onClick={save} disabled={saving} loading={saving}>
+        <Button size="sm" onClick={save} disabled={saving || inherited} loading={saving}>
           {saving ? 'Saving...' : 'Save Embedding Settings'}
         </Button>
         <Button size="sm" onClick={test} disabled={testing || saving} loading={testing}>
@@ -1726,7 +1736,9 @@ function EmbeddingsSettings() {
         </Button>
       </div>
       <p className={styles.placeholder}>
-        Testing auto-detects native model dimensions and applies them to this configuration.
+        {inherited
+          ? 'Testing verifies the inherited embedding connection without changing any settings.'
+          : 'Testing auto-detects native model dimensions and applies them to this configuration.'}
       </p>
     </div>
   )
