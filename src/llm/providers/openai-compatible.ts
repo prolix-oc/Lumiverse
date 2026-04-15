@@ -26,11 +26,17 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     return {};
   }
 
+  protected normalizeApiKey(apiKey: string): string {
+    return apiKey.trim().replace(/^Bearer\s+/i, "");
+  }
+
   protected headers(apiKey: string): Record<string, string> {
+    const normalizedApiKey = this.normalizeApiKey(apiKey);
+
     return {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      ...this.extraHeaders(apiKey),
+      ...(normalizedApiKey ? { Authorization: `Bearer ${normalizedApiKey}` } : {}),
+      ...this.extraHeaders(normalizedApiKey),
     };
   }
 
@@ -241,7 +247,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
-  protected static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "use_responses_api", "_openrouter", "_streaming"]);
+  protected static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "use_responses_api"]);
 
   /** Build the request body using capabilities as the parameter allowlist. */
   protected buildBody(request: GenerationRequest, stream: boolean): any {
