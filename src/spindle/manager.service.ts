@@ -621,9 +621,10 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
 
-  // Clean build artifacts and installed dependencies so git pull succeeds
-  await spawnAsync(["git", "checkout", "."], { cwd: repo });
-  await spawnAsync(["git", "clean", "-fd"], { cwd: repo });
+  // Clean build artifacts and installed dependencies so git pull succeeds.
+  // We don't read stdout for these — ignore it to reduce pipe overhead.
+  await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
+  await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
 
   const pullProc = await spawnAsync(["git", "pull"], {
     cwd: repo,

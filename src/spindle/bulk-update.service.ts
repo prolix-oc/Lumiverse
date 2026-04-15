@@ -94,6 +94,18 @@ export function isBulkUpdateInProgress(): boolean {
   return bulkUpdateInProgress;
 }
 
+/**
+ * Sleep helper used to give Bun breathing room between iterations. The bulk
+ * loop tears down + rebuilds Workers and spawns many subprocesses (git, bun
+ * install, bun build); without a small gap between iterations, Bun 1.3.x has
+ * been observed to segfault in its subprocess/worker cleanup path. 150ms is
+ * cheap (invisible over the tens-of-seconds each extension takes) and
+ * sufficient to let pending stream/worker cleanup complete.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function runBulkUpdate(
   targets: ExtensionInfo[],
   userId: string
@@ -144,6 +156,9 @@ async function runBulkUpdate(
     try {
       if (wasRunning) {
         await lifecycle.stopExtension(ext.id);
+        // Brief pause after worker teardown so Bun's worker-cleanup path
+        // settles before we start spawning git/bun subprocesses.
+        await sleep(100);
       }
 
       await managerSvc.update(ext.identifier);
@@ -151,6 +166,7 @@ async function runBulkUpdate(
       // Only restart if it was enabled before the update. Disabled
       // extensions stay disabled — we update them, but never auto-enable.
       if (wasEnabled) {
+        await sleep(100); // give the FS + subprocess cleanup a beat
         await lifecycle.startExtension(ext.id);
       }
 
@@ -175,6 +191,7 @@ async function runBulkUpdate(
       // restart so the user isn't left with a silently-stopped extension.
       if (wasRunning && wasEnabled) {
         try {
+          await sleep(100);
           await lifecycle.startExtension(ext.id);
         } catch (restartErr: any) {
           console.error(
@@ -185,6 +202,13 @@ async function runBulkUpdate(
       }
 
       console.error(`[Spindle] Bulk update failed for ${ext.identifier}:`, err);
+    }
+
+    // Inter-iteration breathing room: lets Bun finish tearing down the
+    // previous extension's workers + subprocesses before we spin up the
+    // next one's.
+    if (i < targets.length - 1) {
+      await sleep(150);
     }
   }
 

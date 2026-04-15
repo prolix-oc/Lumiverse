@@ -292,6 +292,13 @@ export default function SpindlePanel() {
   const bulkProcessed = bulkUpdateStatus
     ? bulkUpdateStatus.completed + bulkUpdateStatus.failed
     : 0
+  // While an extension is actively being updated, show its 1-indexed
+  // position (e.g. "1/3" when the first is in flight) rather than the
+  // count-of-finished (which would start at 0). Once everything is done,
+  // fall back to the finished count.
+  const bulkDisplayIndex = bulkUpdateStatus?.currentName
+    ? Math.min(bulkProcessed + 1, bulkUpdateStatus.total)
+    : bulkProcessed
 
   const handleUpdateAll = useCallback(() => {
     if (manageableCount === 0) return
@@ -380,7 +387,7 @@ export default function SpindlePanel() {
             {bulkUpdating ? (
               <>
                 <Spinner size={12} fast />
-                Updating {bulkProcessed}/{bulkUpdateStatus?.total ?? manageableCount}
+                Updating {bulkDisplayIndex}/{bulkUpdateStatus?.total ?? manageableCount}
                 {bulkUpdateStatus?.currentName ? `: ${bulkUpdateStatus.currentName}` : '…'}
               </>
             ) : (
