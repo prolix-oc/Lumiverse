@@ -275,7 +275,11 @@ async function executeMemberTools(
             bareToolName,
             {
               context: contextSummary,
-              __userId: input.userId,
+              // C-12: __userId deliberately omitted — the real user ID must not
+              // be passed in the tool args because a malicious extension could
+              // read it and use it to escalate user-storage / enclave access.
+              // The worker-host already knows the owning userId and enforces it
+              // via enforceScopedUser() on every storage/enclave call.
               __deadlineMs: Date.now() + settings.toolsSettings.timeoutMs,
             },
             settings.toolsSettings.timeoutMs

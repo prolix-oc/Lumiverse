@@ -23,6 +23,19 @@ app.get("/auth", async (c) => {
   if (!connectionId && !connectionName) return c.json({ error: "connection_id or connection_name is required" }, 400);
   if (!callbackUrl) return c.json({ error: "callback_url is required" }, 400);
 
+  // H-07: Validate callback_url is a legitimate http(s) URL so the OAuth
+  // callback cannot be redirected to a javascript: or data: URI (XSS), or to
+  // an internal address (SSRF).
+  let parsedCallback: URL;
+  try {
+    parsedCallback = new URL(callbackUrl);
+  } catch {
+    return c.json({ error: "callback_url is not a valid URL" }, 400);
+  }
+  if (parsedCallback.protocol !== "https:" && parsedCallback.protocol !== "http:") {
+    return c.json({ error: "callback_url must use http or https" }, 400);
+  }
+
   if (connectionId) {
     const conn = connSvc.getConnection(userId, connectionId);
     if (!conn) return c.json({ error: "Connection not found" }, 404);

@@ -347,7 +347,14 @@ app.get("/mentions/autocomplete", (c) => {
 app.post("/mentions/resolve", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const { slug, chatId, characterId, maxTokens } = body;
+  const { slug, chatId, characterId } = body;
+  // M-31: Validate maxTokens is a positive integer to prevent negative/zero
+  // values from producing empty content or very large slices.
+  const rawMax = body.maxTokens;
+  const maxTokens =
+    typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
+      ? Math.floor(rawMax)
+      : undefined;
 
   if (!slug) return c.json({ error: "slug is required" }, 400);
 
@@ -358,7 +365,7 @@ app.post("/mentions/resolve", async (c) => {
   if (!content) return c.json({ error: "Document has no content" }, 404);
 
   const truncated = maxTokens ? content.length > maxTokens * 4 : false;
-  const resultContent = truncated ? content.slice(0, (maxTokens || 2000) * 4) : content;
+  const resultContent = truncated ? content.slice(0, (maxTokens ?? 2000) * 4) : content;
 
   return c.json({
     slug: doc.slug,

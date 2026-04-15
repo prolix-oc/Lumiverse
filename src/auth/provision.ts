@@ -7,6 +7,9 @@ export function provisionUserDirectories(userId: string): void {
   const storagePath = join(userDir, "storage");
   const extensionsPath = join(userDir, "extensions");
 
+  // L-15: mkdirSync throws on failure (e.g. permission denied, disk full).
+  // Let the error propagate so callers know the user's workspace could not
+  // be set up, rather than silently continuing with a missing directory.
   if (!existsSync(storagePath)) mkdirSync(storagePath, { recursive: true });
   if (!existsSync(extensionsPath)) mkdirSync(extensionsPath, { recursive: true });
 }

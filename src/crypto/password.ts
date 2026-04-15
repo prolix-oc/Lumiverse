@@ -38,13 +38,19 @@ export async function verifyPassword({
   hash: string;
   password: string;
 }): Promise<boolean> {
-  const [salt, key] = hash.split(":");
-  if (!salt || !key) throw new Error("Invalid password hash");
-  const derived = scryptSync(password.normalize("NFKC"), salt, SCRYPT_DKLEN, {
-    N: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-    maxmem: SCRYPT_MAXMEM,
-  });
-  return timingSafeEqual(derived, Buffer.from(key, "hex"));
+  // L-18: A malformed hash previously threw, which could surface stack traces
+  // to clients.  Return false instead so authentication simply fails cleanly.
+  const [salt, key] = (hash || "").split(":");
+  if (!salt || !key || Buffer.from(key, "hex").length !== SCRYPT_DKLEN) return false;
+  try {
+    const derived = scryptSync(password.normalize("NFKC"), salt, SCRYPT_DKLEN, {
+      N: SCRYPT_N,
+      r: SCRYPT_R,
+      p: SCRYPT_P,
+      maxmem: SCRYPT_MAXMEM,
+    });
+    return timingSafeEqual(derived, Buffer.from(key, "hex"));
+  } catch {
+    return false;
+  }
 }

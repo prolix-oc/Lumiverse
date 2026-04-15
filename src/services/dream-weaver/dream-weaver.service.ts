@@ -198,7 +198,14 @@ function parseDraftResponse(content: string): DW_DRAFT_V1 {
     ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
     : trimmed;
 
-  const draft = JSON.parse(jsonContent) as DW_DRAFT_V1;
+  // L-14: Wrap JSON.parse so malformed LLM output throws a friendly error
+  // rather than an opaque SyntaxError propagating to the client.
+  let draft: DW_DRAFT_V1;
+  try {
+    draft = JSON.parse(jsonContent) as DW_DRAFT_V1;
+  } catch {
+    throw new Error("Dream Weaver returned a response that is not valid JSON");
+  }
 
   if (draft.format !== "DW_DRAFT_V1") {
     throw new Error("Dream Weaver returned an unexpected draft format");

@@ -10,11 +10,35 @@ import { provisionUserDirectories } from "./provision";
 
 let creationNonce: string | null = null;
 let creationNonceExpiry = 0;
+// Race-condition guard: prevents two concurrent user-creation requests from
+// both passing the nonce check (audit M-02 / auth race-condition finding).
+let _creationLock = false;
 
 export function allowCreation(): string {
   creationNonce = crypto.randomUUID();
   creationNonceExpiry = Date.now() + 10_000;
   return creationNonce;
+}
+
+/**
+ * Execute `fn` while holding the single-use nonce creation lock.
+ * Throws if another creation is already in progress, preventing the race
+ * condition where two concurrent POST /users requests both call allowCreation()
+ * and overwrite each other's nonce.
+ */
+export async function withCreationNonce<T>(fn: () => Promise<T>): Promise<T> {
+  if (_creationLock) {
+    throw new Error("User creation already in progress — try again");
+  }
+  _creationLock = true;
+  creationNonce = crypto.randomUUID();
+  creationNonceExpiry = Date.now() + 10_000;
+  try {
+    return await fn();
+  } finally {
+    creationNonce = null;
+    _creationLock = false;
+  }
 }
 
 function consumeNonce(): boolean {

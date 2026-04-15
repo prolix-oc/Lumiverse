@@ -2,11 +2,18 @@ import { getDb } from "../db/connection";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { DEFAULT_LIMIT, MAX_LIMIT } from "../types/pagination";
 
+const MAX_STMT_CACHE = 200;
 const stmtCache = new Map<string, ReturnType<ReturnType<typeof getDb>["query"]>>();
 
 function cachedQuery(sql: string) {
   let stmt = stmtCache.get(sql);
   if (!stmt) {
+    // Evict the oldest entry when the cache is full to prevent unbounded growth
+    // if any caller ever introduces dynamic SQL strings.
+    if (stmtCache.size >= MAX_STMT_CACHE) {
+      const firstKey = stmtCache.keys().next().value;
+      if (firstKey !== undefined) stmtCache.delete(firstKey);
+    }
     stmt = getDb().query(sql);
     stmtCache.set(sql, stmt);
   }

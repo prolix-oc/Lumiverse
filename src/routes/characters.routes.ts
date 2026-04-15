@@ -237,7 +237,11 @@ async function fetchJannyCharacter(uuid: string, userId: string) {
   // This matches SillyTavern's approach.
   const downloadUrl = new URL(result.downloadUrl);
   await validateHost(downloadUrl.hostname);
-  const pngRes = await fetch(result.downloadUrl, { signal: AbortSignal.timeout(15_000) });
+  // TOCTOU fix: use downloadUrl.href (the normalised URL) rather than
+  // result.downloadUrl (the raw string) so that the URL we validate is
+  // exactly the URL we fetch — preventing a divergence via URL normalisation
+  // edge cases.
+  const pngRes = await fetch(downloadUrl.href, { signal: AbortSignal.timeout(15_000) });
   if (!pngRes.ok) {
     throw new Error(`Failed to download JannyAI character image: ${pngRes.status}`);
   }

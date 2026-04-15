@@ -81,8 +81,12 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     console.info(`[databank] Processed document "${doc.name}" — ${chunkRows.length} chunks vectorized`);
   } catch (err: any) {
     console.error(`[databank] Failed to process document ${docId}:`, err);
+    // L-21: Store the full message in the DB for operator diagnosis, but only
+    // send a sanitised version to the client via WebSocket to prevent leaking
+    // API keys or internal details that may appear in provider error messages.
+    const safeMsg = "Vectorization failed — check server logs for details";
     crud.updateDocumentStatus(docId, "error", { errorMessage: err.message || "Unknown error" });
-    emitStatus(userId, doc, "error", err.message);
+    emitStatus(userId, doc, "error", safeMsg);
   }
 }
 

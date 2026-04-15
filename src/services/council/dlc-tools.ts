@@ -22,7 +22,8 @@ export function getDLCTools(userId: string): CouncilToolDefinition[] {
     category: "story_direction" as CouncilToolCategory,
     prompt: row.prompt || "",
     inputSchema: typeof row.input_schema === "string"
-      ? JSON.parse(row.input_schema)
+      // L-13: Guard JSON.parse in case the DB row is malformed.
+      ? (() => { try { return JSON.parse(row.input_schema); } catch { return { type: "object", properties: {}, required: [] }; } })()
       : row.input_schema || { type: "object", properties: {}, required: [] },
     resultVariable: row.result_variable || undefined,
     storeInDeliberation: true,

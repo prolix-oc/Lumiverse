@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
-import { auth, allowCreation } from "../auth";
+import { auth, withCreationNonce } from "../auth";
 import { getDb } from "../db/connection";
 import { getUserBaseDir } from "../auth/provision";
 import { hashPassword, verifyPassword } from "../crypto/password";
@@ -68,7 +68,11 @@ admin.get("/", (c) => {
 });
 
 // POST / — create a new user
-const VALID_ROLES = new Set(["user", "admin", "owner"]);
+// Only "user" and "admin" are assignable via the create-user API.
+// Nobody can create a second "owner" account — the single-owner model
+// is a core security invariant.  (Bug from audit: VALID_ROLES previously
+// included "owner", allowing privilege escalation.)
+const VALID_ROLES = new Set(["user", "admin"]);
 
 admin.post("/", async (c) => {
   const body = await c.req.json();
@@ -82,17 +86,20 @@ admin.post("/", async (c) => {
     return c.json({ error: `Invalid role. Allowed: ${[...VALID_ROLES].join(", ")}` }, 400);
   }
 
-  allowCreation();
-
   try {
-    const newUser = await auth.api.signUpEmail({
-      body: {
-        email: `${body.username}@lumiverse.local`,
-        password: body.password,
-        name: body.name || body.username,
-        username: body.username,
-      },
-    });
+    // Race-condition fix: withCreationNonce holds a lock around the entire
+    // async signUpEmail call, preventing concurrent requests from overwriting
+    // each other's nonce and bypassing the single-use gate.
+    const newUser = await withCreationNonce(() =>
+      auth.api.signUpEmail({
+        body: {
+          email: `${body.username}@lumiverse.local`,
+          password: body.password,
+          name: body.name || body.username,
+          username: body.username,
+        },
+      })
+    );
 
     if (body.role && body.role !== "user") {
       getDb().run('UPDATE "user" SET role = ? WHERE id = ?', [body.role, newUser.user.id]);

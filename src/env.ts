@@ -70,7 +70,12 @@ function parseEphemeralOverrides(raw?: string): Record<string, number> {
 }
 
 export function loadEnv(): EnvConfig {
-  const port = parseInt(process.env.PORT || "7860", 10);
+  const rawPort = parseInt(process.env.PORT || "7860", 10);
+  // L-26: Validate port is a legitimate TCP port number (1–65535).
+  if (!Number.isFinite(rawPort) || rawPort < 1 || rawPort > 65535) {
+    throw new Error(`Invalid PORT value "${process.env.PORT}": must be 1–65535`);
+  }
+  const port = rawPort;
 
   const encryptionKey = process.env.ENCRYPTION_KEY || "";
 
@@ -125,8 +130,12 @@ export function loadEnv(): EnvConfig {
   const stTargetUser = process.env.SILLYTAVERN_TARGET_USER || "default-user";
   const stMigrationTarget = Math.min(5, Math.max(1, parseInt(process.env.SILLYTAVERN_MIGRATION_TARGET || "5", 10) || 5));
   const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
-  // Publishable BYOP app key default used when no per-instance override is set.
-  const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "pk_Y3z2ooD6zSWfLdL3";
+  // L-25: The Pollinations publishable app key was previously hardcoded as a
+  // fallback default, which means it would be used by all installations that
+  // did not configure POLLINATIONS_APP_KEY.  Remove the hardcoded default so
+  // the service simply runs without a key when none is set (Pollinations works
+  // without an app key in anonymous mode; a key only enables extra quotas).
+  const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "";
 
   return {
     port,

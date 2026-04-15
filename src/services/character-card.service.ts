@@ -5,7 +5,11 @@ import type { CreateRegexScriptInput, RegexTarget } from "../types/regex-script"
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024; // 100 MB (PNG text chunks)
-const MAX_CHARX_SIZE = 1000 * 1024 * 1024; // 1000 MB
+// H-19: Reduced from 1 GB to 50 MB to limit zip-bomb / upload abuse.
+const MAX_CHARX_SIZE = 50 * 1024 * 1024; // 50 MB
+// H-19: Maximum total uncompressed size of all accepted CHARX entries to
+// prevent a zip bomb from exhausting memory/CPU during decompression.
+const MAX_CHARX_DECOMPRESSED = 200 * 1024 * 1024; // 200 MB
 
 /**
  * Reads PNG chunks and extracts the text value for a given keyword.
@@ -597,12 +601,27 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
   }
 
   // Only decompress card.json, module files, and image files — skip everything else
+  // H-19: Also reject individual entries whose stated uncompressed size would
+  // exceed the total budget, blocking zip-bomb payloads where a tiny compressed
+  // entry expands to many GB.
+  let totalDecompressedSize = 0;
   const unzipped = unzipSync(data, {
-    filter: (entry) =>
-      entry.name === "card.json" ||
-      entry.name === "module.risum" ||
-      entry.name === "lumiverse_modules.json" ||
-      IMAGE_EXTENSIONS.test(entry.name),
+    filter: (entry) => {
+      const wanted =
+        entry.name === "card.json" ||
+        entry.name === "module.risum" ||
+        entry.name === "lumiverse_modules.json" ||
+        IMAGE_EXTENSIONS.test(entry.name);
+      if (!wanted) return false;
+      // Reject if this single entry would exceed total decompressed budget
+      totalDecompressedSize += (entry.originalSize ?? 0);
+      if (totalDecompressedSize > MAX_CHARX_DECOMPRESSED) {
+        throw new Error(
+          `CHARX archive decompressed size would exceed ${MAX_CHARX_DECOMPRESSED / 1024 / 1024} MB limit`,
+        );
+      }
+      return true;
+    },
   });
 
   const cardBytes = unzipped["card.json"];

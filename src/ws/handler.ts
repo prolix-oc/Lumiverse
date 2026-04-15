@@ -208,8 +208,12 @@ export const wsHandler = upgradeWebSocket((c) => {
 
           host.invokeCommand(commandId, data.context ?? {}, userId);
         }
-      } catch {
-        // Ignore malformed messages
+      } catch (err) {
+        // L-16: Log unexpected errors rather than silently discarding them.
+        // This preserves the intent to ignore benign parse errors for malformed
+        // client messages while still surfacing actual server-side bugs.
+        if (err instanceof SyntaxError) return; // malformed JSON from client — ignore silently
+        console.error("[WS] onMessage error:", err);
       }
     },
     onClose(_event, ws) {

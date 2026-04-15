@@ -104,13 +104,14 @@ app.get("/status/:chatId", (c) => {
 // --- Council retry decision ---
 
 app.post("/council-retry", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.generation_id) return c.json({ error: "generation_id is required" }, 400);
   const decision = body.decision as string;
   if (decision !== "continue" && decision !== "retry") {
     return c.json({ error: "decision must be 'continue' or 'retry'" }, 400);
   }
-  const resolved = svc.resolveCouncilRetry(body.generation_id, decision);
+  const resolved = svc.resolveCouncilRetry(body.generation_id, decision, userId);
   if (!resolved) return c.json({ error: "No pending council retry for this generation" }, 404);
   return c.json({ resolved: true });
 });

@@ -70,7 +70,13 @@ async function readManifest(identifier: string): Promise<SpindleManifest> {
     throw new Error(`spindle manifest not found in ${repo}`);
   }
   const raw = await Bun.file(manifestPath).text();
-  const manifest: SpindleManifest = JSON.parse(raw);
+  // L-17: Guard JSON.parse so a corrupt spindle.json produces a clear error.
+  let manifest: SpindleManifest;
+  try {
+    manifest = JSON.parse(raw) as SpindleManifest;
+  } catch {
+    throw new Error(`spindle.json in ${repo} is not valid JSON`);
+  }
 
   // Validate
   if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
@@ -97,7 +103,12 @@ async function readManifestFromPath(
   }
 
   const raw = await Bun.file(manifestPath).text();
-  const manifest: SpindleManifest = JSON.parse(raw);
+  let manifest: SpindleManifest;
+  try {
+    manifest = JSON.parse(raw) as SpindleManifest;
+  } catch {
+    throw new Error(`spindle.json at ${manifestPath} is not valid JSON`);
+  }
 
   if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
     throw new Error(
@@ -558,7 +569,13 @@ export async function install(
   }
 
   const raw = await Bun.file(manifestPath).text();
-  const manifest: SpindleManifest = JSON.parse(raw);
+  let manifest: SpindleManifest;
+  try {
+    manifest = JSON.parse(raw) as SpindleManifest;
+  } catch {
+    rmSync(tempDir, { recursive: true, force: true });
+    throw new Error("spindle.json in repository is not valid JSON");
+  }
 
   if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
     rmSync(tempDir, { recursive: true, force: true });

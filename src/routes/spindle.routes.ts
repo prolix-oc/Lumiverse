@@ -41,11 +41,14 @@ app.get("/", async (c) => {
   const viewer = getViewer(c);
   const extensions = (await managerSvc.listForUser(viewer.userId, viewer.role)).map((ext) => ({
     ...ext,
+    // L-07: Both branches of the ternary returned "stopped", so the "running"
+    // state was never surfaced to clients.  Fix: "disabled" for non-enabled
+    // extensions, "stopped" only for enabled ones that aren't currently running.
     status: lifecycle.isRunning(ext.id)
       ? "running"
       : ext.enabled
         ? "stopped"
-        : "stopped",
+        : "disabled",
   }));
   const isPrivileged = viewer.role === "owner" || viewer.role === "admin";
   return c.json({ extensions, isPrivileged });
@@ -160,6 +163,24 @@ app.post("/install", requireOwner, async (c) => {
     const body = await c.req.json();
     if (!body.github_url) {
       return c.json({ error: "github_url is required" }, 400);
+    }
+
+    // H-08: Validate the github_url to ensure it is a legitimate GitHub HTTPS
+    // URL.  Accepting arbitrary git URLs (including file://, ssh://, git+...,
+    // or git@ shorthand) would allow an owner to read local filesystem paths or
+    // connect to internal network services via the git clone step.
+    const githubUrl = String(body.github_url).trim();
+    let parsedGitUrl: URL;
+    try {
+      parsedGitUrl = new URL(githubUrl);
+    } catch {
+      return c.json({ error: "github_url is not a valid URL" }, 400);
+    }
+    if (parsedGitUrl.protocol !== "https:") {
+      return c.json({ error: "github_url must use https" }, 400);
+    }
+    if (parsedGitUrl.hostname !== "github.com") {
+      return c.json({ error: "github_url must be a github.com URL" }, 400);
     }
 
     const requestedScope =

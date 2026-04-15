@@ -31,7 +31,9 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async generate(apiKey: string, apiUrl: string, request: GenerationRequest): Promise<GenerationResponse> {
-    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:generateContent?key=${apiKey}`;
+    // H-14: encode the model name so a model ID containing `/`, `?`, or `#`
+    // cannot escape the path segment or inject extra query parameters.
+    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const body = this.buildBody(request);
 
     const res = await fetch(url, {
@@ -86,7 +88,7 @@ export class GoogleProvider implements LlmProvider {
     apiUrl: string,
     request: GenerationRequest
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${encodeURIComponent(request.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
     const body = this.buildBody(request);
 
     const res = await fetch(url, {
@@ -173,7 +175,7 @@ export class GoogleProvider implements LlmProvider {
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
       const res = await fetch(
-        `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`
+        `${this.baseUrl(apiUrl)}/v1beta/models?key=${encodeURIComponent(apiKey)}`
       );
       return res.ok;
     } catch {
@@ -184,7 +186,7 @@ export class GoogleProvider implements LlmProvider {
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
     try {
       const res = await fetch(
-        `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`
+        `${this.baseUrl(apiUrl)}/v1beta/models?key=${encodeURIComponent(apiKey)}`
       );
       if (!res.ok) return [];
       const data = await res.json() as any;
