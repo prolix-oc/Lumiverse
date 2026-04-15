@@ -1350,6 +1350,69 @@ async function runGeneration(
     cotPhase = "content";
   }
 
+  // Persist whatever was streamed before termination. Shared between user-
+  // initiated abort and mid-stream errors (e.g. socket close) so the UI never
+  // loses content that the user already saw. Routes to the same targets the
+  // success path uses (regen swipe, continue merge, staged slot, or new row).
+  async function persistPartialContent(): Promise<{ messageId?: string; content: string }> {
+    flushCotBuffers();
+    let closedContent = closeUnterminatedReasoningTags(userId, fullContent);
+
+    const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
+      characterId: lifecycle.targetCharacterId,
+      chatId,
+      target: "response",
+    });
+    if (responseScripts.length > 0) {
+      closedContent = await regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0, macroEnv);
+      if (fullReasoning) {
+        fullReasoning = await regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0, macroEnv);
+      }
+    }
+
+    let messageId: string | undefined;
+    if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
+      const updated = chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, closedContent);
+      messageId = updated?.id ?? lifecycle.targetMessageId;
+      if (fullReasoning) {
+        const existingExtra = chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
+        chatsSvc.patchMessageExtra(userId, lifecycle.targetMessageId, { ...existingExtra, reasoning: fullReasoning });
+      }
+    } else if (lifecycle.stagedMessageId) {
+      const existingStagedExtra = chatsSvc.getMessage(userId, lifecycle.stagedMessageId)?.extra || {};
+      const partialExtra = fullReasoning ? { ...existingStagedExtra, reasoning: fullReasoning } : existingStagedExtra;
+      chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
+        content: closedContent,
+        ...(Object.keys(partialExtra).length > 0 ? { extra: partialExtra } : {}),
+      });
+      messageId = lifecycle.stagedMessageId;
+    } else if (lifecycle.continueMessageId && closedContent) {
+      const combined = (lifecycle.continueOriginalContent ?? "") + (lifecycle.continuePostfix ?? "") + closedContent;
+      const existingContinueExtra = chatsSvc.getMessage(userId, lifecycle.continueMessageId)?.extra;
+      const continueExtra = fullReasoning ? { ...existingContinueExtra, reasoning: fullReasoning } : undefined;
+      chatsSvc.updateMessage(userId, lifecycle.continueMessageId, {
+        content: combined,
+        ...(continueExtra ? { extra: continueExtra } : {}),
+      });
+      messageId = lifecycle.continueMessageId;
+    } else if (closedContent) {
+      const isImpersonate = lifecycle.generationType === "impersonate";
+      const extra: Record<string, any> = {};
+      if (isImpersonate && lifecycle.personaId) extra.persona_id = lifecycle.personaId;
+      if (!isImpersonate && lifecycle.targetCharacterId) extra.character_id = lifecycle.targetCharacterId;
+      if (fullReasoning) extra.reasoning = fullReasoning;
+      const created = chatsSvc.createMessage(chatId, {
+        is_user: isImpersonate,
+        name: isImpersonate ? (lifecycle.personaName || "User") : lifecycle.characterName,
+        content: closedContent,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+      }, userId);
+      messageId = created.id;
+    }
+
+    return { messageId, content: closedContent };
+  }
+
   // Route the assistant prefill ("Start Reply With") through the CoT detection
   // state machine before the model's stream begins. The model continues *after*
   // the prefill, so the prefill text is not included in the model's output —
@@ -1387,63 +1450,9 @@ async function runGeneration(
 
     for await (const chunk of stream) {
       if (signal.aborted) {
-        // Flush any buffered CoT tokens before saving partial content
-        flushCotBuffers();
-        // Close unclosed reasoning tags so the frontend can properly collapse them
-        let closedContent = closeUnterminatedReasoningTags(userId, fullContent);
-
-        // Apply regex scripts (response target) to partial content on abort
-        {
-          const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
-            characterId: lifecycle.targetCharacterId,
-            chatId,
-            target: "response",
-          });
-          if (responseScripts.length > 0) {
-            closedContent = await regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0, macroEnv);
-            if (fullReasoning) {
-              fullReasoning = await regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0, macroEnv);
-            }
-          }
-        }
-
-        if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
-          chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, closedContent);
-          // Persist partial reasoning on abort for regenerate (extra-only, no chunk rebuild needed)
-          if (fullReasoning) {
-            const existingExtra = chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
-            chatsSvc.patchMessageExtra(userId, lifecycle.targetMessageId, { ...existingExtra, reasoning: fullReasoning });
-          }
-        } else if (lifecycle.stagedMessageId) {
-          // Preserve existing extra (character_id etc.) and save partial reasoning
-          const existingStagedExtra = chatsSvc.getMessage(userId, lifecycle.stagedMessageId)?.extra || {};
-          const abortExtra = fullReasoning ? { ...existingStagedExtra, reasoning: fullReasoning } : existingStagedExtra;
-          chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
-            content: closedContent,
-            ...(Object.keys(abortExtra).length > 0 ? { extra: abortExtra } : {}),
-          });
-        } else if (lifecycle.continueMessageId && closedContent) {
-          // Continue aborted: merge partial content into existing assistant message
-          const abortCombined = (lifecycle.continueOriginalContent ?? "") + (lifecycle.continuePostfix ?? "") + closedContent;
-          const existingContinueExtra = chatsSvc.getMessage(userId, lifecycle.continueMessageId)?.extra;
-          const continueAbortExtra = fullReasoning ? { ...existingContinueExtra, reasoning: fullReasoning } : undefined;
-          chatsSvc.updateMessage(userId, lifecycle.continueMessageId, { content: abortCombined, ...(continueAbortExtra ? { extra: continueAbortExtra } : {}) });
-        } else if (closedContent) {
-          // Normal generation with no staged message — save partial content as a new message
-          const isImpersonate = lifecycle.generationType === "impersonate";
-          const extra: Record<string, any> = {};
-          if (isImpersonate && lifecycle.personaId) extra.persona_id = lifecycle.personaId;
-          if (!isImpersonate && lifecycle.targetCharacterId) extra.character_id = lifecycle.targetCharacterId;
-          if (fullReasoning) extra.reasoning = fullReasoning;
-          chatsSvc.createMessage(chatId, {
-            is_user: isImpersonate,
-            name: isImpersonate ? (lifecycle.personaName || "User") : lifecycle.characterName,
-            content: closedContent,
-            extra: Object.keys(extra).length > 0 ? extra : undefined,
-          }, userId);
-        }
+        const persisted = await persistPartialContent();
         pool.stopPool(generationId);
-        eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: closedContent }, userId);
+        eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: persisted.content }, userId);
         break;
       }
 
@@ -1673,10 +1682,22 @@ async function runGeneration(
       }, userId);
     } else {
       const msg = errorMessage(err);
+      // Socket drops, provider 5xx mid-stream, etc. — persist whatever was
+      // already streamed so the user keeps the visible content rather than
+      // having the streaming bubble wiped on error.
+      let savedMessageId: string | undefined;
+      let savedContent = fullContent;
+      try {
+        const persisted = await persistPartialContent();
+        savedMessageId = persisted.messageId;
+        savedContent = persisted.content;
+      } catch { /* best-effort; never let save failure shadow the original error */ }
       pool.errorPool(generationId, msg);
       eventBus.emit(EventType.GENERATION_ENDED, {
         generationId,
         chatId,
+        messageId: savedMessageId,
+        content: savedContent,
         error: msg,
       }, userId);
     }

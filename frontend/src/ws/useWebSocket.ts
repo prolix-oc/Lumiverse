@@ -197,7 +197,15 @@ export function useWebSocket() {
               state.removeMessage(regenId)
             }
             state.setStreamingError(payload.error)
-            toast.error(payload.error, { title: 'Generation Failed' })
+            // Backend preserves any content that streamed before the failure
+            // (socket drop, upstream 5xx, etc.) and returns its messageId.
+            // Surface that in the toast so users know their partial response
+            // wasn't lost — it'll appear in the chat after reconciliation.
+            const partialSaved = !!payload.messageId && !!payload.content
+            toast.error(
+              partialSaved ? `${payload.error} — partial response saved.` : payload.error,
+              { title: 'Generation Failed' },
+            )
             // Reconcile message list on error so any backend-staged empty messages
             // are reflected (or removed if the backend cleaned them up).
             if (payload.chatId) {

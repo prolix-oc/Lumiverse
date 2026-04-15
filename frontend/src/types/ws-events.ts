@@ -184,8 +184,8 @@ export interface GenerationMetrics {
 export interface GenerationEndedPayload {
   generationId: string
   chatId: string
-  messageId: string
-   content?: string
+  messageId?: string
+  content?: string
   error?: string
   tokenCount?: number
   generationMetrics?: GenerationMetrics
