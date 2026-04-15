@@ -49,6 +49,36 @@ import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { getSidecarSettings } from "./sidecar-settings.service";
 
 // ---------------------------------------------------------------------------
+// Chat history identity marker
+// ---------------------------------------------------------------------------
+// Each LlmMessage that originates from the user's chat history (as opposed to
+// system blocks, world info, author's note, depth-injected blocks, etc.) is
+// tagged with this property. Downstream consumers (regex script depth filter,
+// tokenizer breakdown snapshot) use the tag to identify chat history messages
+// regardless of where they end up in the final assembled array, since later
+// insertions/merges can shift positions and even break contiguity.
+//
+// The tag is preserved by every mutation that uses object spread
+// (`{ ...result[i], content: ... }`). The merge function — which constructs
+// new message objects without spreading — is updated to preserve the tag
+// explicitly.
+//
+// Tag is a regular string property because Symbol-keyed props are not copied
+// by spread. Providers explicitly destructure {role, content} when building
+// outbound requests, so the tag never leaks to the LLM.
+
+const CHAT_HISTORY_KEY = "__chatHistorySource";
+
+function markAsChatHistory(msg: LlmMessage): LlmMessage {
+  (msg as any)[CHAT_HISTORY_KEY] = true;
+  return msg;
+}
+
+export function isChatHistoryMessage(msg: LlmMessage): boolean {
+  return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
+
+// ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
 // ---------------------------------------------------------------------------
 
@@ -855,9 +885,9 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
               parts.push({ type: "audio", data: b64, mime_type: att.mime_type });
             }
           }
-          result.push({ role, content: parts });
+          result.push(markAsChatHistory({ role, content: parts }));
         } else {
-          result.push({ role, content: resolvedContent });
+          result.push(markAsChatHistory({ role, content: resolvedContent }));
         }
         historyCount++;
       }
@@ -1265,6 +1295,28 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     queryPreview: memoryResult.queryPreview,
     settingsSource: memoryResult.settingsSource,
   };
+
+  // Recompute the chat_history breakdown entry's bounds from the actual final
+  // message positions. The entry was pushed during the chat history loop with
+  // pre-mutation values; downstream insertions (WI before/AN before/EM
+  // before/depth-injected blocks/Author's Note/depth blocks) and mutations
+  // (mergeConsecutiveUserMessages) shift indices and change counts.
+  // Without this, regex-script depth filtering and the tokenizer snapshot in
+  // generate.service.ts would use stale bounds and either skip messages they
+  // should match or include non-history messages they shouldn't.
+  const chatHistoryEntry = breakdown.find(e => e.type === "chat_history");
+  if (chatHistoryEntry) {
+    let firstIdx = -1;
+    let count = 0;
+    for (let i = 0; i < result.length; i++) {
+      if (isChatHistoryMessage(result[i])) {
+        if (firstIdx === -1) firstIdx = i;
+        count++;
+      }
+    }
+    chatHistoryEntry.firstMessageIndex = firstIdx >= 0 ? firstIdx : undefined;
+    chatHistoryEntry.messageCount = count;
+  }
 
   return {
     messages: result,
@@ -3261,11 +3313,15 @@ function mergeConsecutiveUserMessages(
       const bParts = typeof b === "string" ? [] : b.filter((p) => p.type !== "text");
       const allParts = [...aParts, ...bParts];
 
+      // Preserve the chat-history marker if either source message carried it
+      // — both are typically chat-history user turns being merged.
+      const wasChatHistory = isChatHistoryMessage(result[i]) || isChatHistoryMessage(result[i + 1]);
       if (allParts.length > 0) {
         result[i] = { role: "user", content: [{ type: "text" as const, text: mergedText }, ...allParts] };
       } else {
         result[i] = { role: "user", content: mergedText };
       }
+      if (wasChatHistory) markAsChatHistory(result[i]);
       result.splice(i + 1, 1);
       remaining--;
       // Don't increment — next element slid into i+1, check again

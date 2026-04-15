@@ -13,6 +13,7 @@ import {
   injectReasoningParams,
   collectVectorActivatedWorldInfo,
   mergeActivatedWorldInfoEntries,
+  isChatHistoryMessage,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
 import * as charactersSvc from "./characters.service";
@@ -411,15 +412,14 @@ async function runPromptPipeline(opts: {
   // Snapshot chat history messages BEFORE interceptors/post-processing can
   // splice, merge, or reorder the array.  This snapshot is the shared
   // tokenization source used by both dry-run and generation breakdowns.
+  // Filter by the chat-history identity marker rather than slicing by
+  // breakdown bounds: depth-injected blocks (WI depth, Author's Note, depth
+  // blocks, EM/AN-after) can splice non-history messages INTO the chat
+  // history range, which would corrupt a slice-based snapshot.
   let chatHistoryMessages: LlmMessage[] | undefined;
   if (breakdown) {
-    const chEntry = breakdown.find(e => e.type === "chat_history");
-    if (chEntry?.firstMessageIndex != null && chEntry.messageCount && chEntry.messageCount > 0) {
-      chatHistoryMessages = messages.slice(
-        chEntry.firstMessageIndex,
-        chEntry.firstMessageIndex + chEntry.messageCount,
-      );
-    }
+    const filtered = messages.filter(isChatHistoryMessage);
+    if (filtered.length > 0) chatHistoryMessages = filtered;
   }
 
   // Expose activated world info to spindle context
@@ -453,10 +453,20 @@ async function runPromptPipeline(opts: {
     const characterId = opts.targetCharacterId || chatForRegex?.character_id;
     const promptScripts = regexScriptsSvc.getActiveScripts(opts.userId, { characterId, chatId: opts.chatId, target: "prompt" });
     if (promptScripts.length > 0) {
-      // Determine chat history bounds for depth calculation
-      const chEntry = breakdown?.find(e => e.type === "chat_history");
-      const chatHistoryStart = chEntry?.firstMessageIndex ?? 0;
-      const chatHistoryCount = chEntry?.messageCount ?? messages.length;
+      // Build a per-index depth map from the chat-history marker. Walk
+      // messages in order, collect indices that carry the marker, then assign
+      // depth = (totalChatHistory - 1 - positionInHistory) so the latest chat
+      // history message gets depth 0 and the oldest gets depth N-1. This
+      // works regardless of contiguity — depth-injected blocks splicing into
+      // the chat history range no longer skew depth values.
+      const chatHistoryDepth = new Map<number, number>();
+      const chIndices: number[] = [];
+      for (let i = 0; i < messages.length; i++) {
+        if (isChatHistoryMessage(messages[i])) chIndices.push(i);
+      }
+      for (let pos = 0; pos < chIndices.length; pos++) {
+        chatHistoryDepth.set(chIndices[pos], chIndices.length - 1 - pos);
+      }
 
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
@@ -464,9 +474,7 @@ async function runPromptPipeline(opts: {
           : msg.role === "assistant" ? "ai_output" as const
           : "world_info" as const;
 
-        // Depth: distance from end of chat history portion (0 = latest)
-        const isChatHistory = i >= chatHistoryStart && i < chatHistoryStart + chatHistoryCount;
-        const depth = isChatHistory ? (chatHistoryStart + chatHistoryCount - 1 - i) : undefined;
+        const depth = chatHistoryDepth.get(i);
 
         if (typeof msg.content === "string") {
           messages[i] = { ...msg, content: await regexScriptsSvc.applyRegexScripts(msg.content, promptScripts, placement, depth, macroEnv) };
