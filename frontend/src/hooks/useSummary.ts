@@ -88,6 +88,8 @@ export function useSummary() {
         messageContext,
         userName,
         characterName,
+        systemPromptOverride: summarization.systemPromptOverride,
+        userPromptOverride: summarization.userPromptOverride,
       })
 
       if (result) {

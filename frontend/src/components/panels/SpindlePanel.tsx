@@ -8,6 +8,8 @@ import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { toast } from '@/lib/toast'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
 
@@ -44,6 +46,8 @@ export default function SpindlePanel() {
 
   const extensionOperationStatus = useStore((s) => s.extensionOperationStatus)
   const setOperationStatus = useStore((s) => s.setExtensionOperationStatus)
+  const bulkUpdateStatus = useStore((s) => s.bulkUpdateStatus)
+  const updateAllExtensions = useStore((s) => s.updateAllExtensions)
 
   const isPrivileged = spindlePrivileged || user?.role === 'owner' || user?.role === 'admin'
 
@@ -56,6 +60,7 @@ export default function SpindlePanel() {
   const [importingLocal, setImportingLocal] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const [confirmUpdateAllOpen, setConfirmUpdateAllOpen] = useState(false)
 
   // Branch selection for install
   const [installBranches, setInstallBranches] = useState<string[]>([])
@@ -272,6 +277,37 @@ export default function SpindlePanel() {
     }
   }, [grantPermission, revokePermission])
 
+  // Extensions the current user is allowed to update. Matches the backend's
+  // canManageExtension rule: owner/admin can update everything, regular users
+  // can only update their own user-scoped installs.
+  const manageableExtensions = extensions.filter((ext) => {
+    const meta = (ext.metadata as any) || {}
+    const scope = (meta.install_scope || 'operator') as 'operator' | 'user'
+    const installedBy = (meta.installed_by_user_id || null) as string | null
+    return isPrivileged || (scope === 'user' && !!user?.id && installedBy === user.id)
+  })
+  const manageableCount = manageableExtensions.length
+
+  const bulkUpdating = !!bulkUpdateStatus && !bulkUpdateStatus.done
+  const bulkProcessed = bulkUpdateStatus
+    ? bulkUpdateStatus.completed + bulkUpdateStatus.failed
+    : 0
+
+  const handleUpdateAll = useCallback(() => {
+    if (manageableCount === 0) return
+    setConfirmUpdateAllOpen(true)
+  }, [manageableCount])
+
+  const handleConfirmUpdateAll = useCallback(async () => {
+    setConfirmUpdateAllOpen(false)
+    try {
+      await updateAllExtensions()
+    } catch (err: any) {
+      const msg = err?.body?.error || err?.message || 'Failed to start bulk update'
+      toast.error(msg, { title: 'Update All' })
+    }
+  }, [updateAllExtensions])
+
   const handleImportLocal = useCallback(async () => {
     setImportingLocal(true)
     setImportSummary(null)
@@ -329,9 +365,33 @@ export default function SpindlePanel() {
       <SpindleUIControlPanel />
 
       {/* Extensions list */}
-      <span className={styles.sectionLabel}>
-        Installed ({extensions.length})
-      </span>
+      <div className={styles.listHeaderRow}>
+        <span className={styles.sectionLabel}>
+          Installed ({extensions.length})
+        </span>
+        {manageableCount > 0 && (
+          <button
+            type="button"
+            className={styles.updateAllBtn}
+            onClick={handleUpdateAll}
+            disabled={bulkUpdating}
+            title={bulkUpdating ? 'Bulk update in progress' : 'Pull + rebuild every manageable extension'}
+          >
+            {bulkUpdating ? (
+              <>
+                <Spinner size={12} fast />
+                Updating {bulkProcessed}/{bulkUpdateStatus?.total ?? manageableCount}
+                {bulkUpdateStatus?.currentName ? `: ${bulkUpdateStatus.currentName}` : '…'}
+              </>
+            ) : (
+              <>
+                <RefreshCw size={12} />
+                Update All
+              </>
+            )}
+          </button>
+        )}
+      </div>
 
       {extensions.length === 0 ? (
         <div className={styles.emptyState}>
@@ -600,6 +660,22 @@ export default function SpindlePanel() {
       </div>,
       document.body
     )}
+    <ConfirmationModal
+      isOpen={confirmUpdateAllOpen}
+      onConfirm={handleConfirmUpdateAll}
+      onCancel={() => setConfirmUpdateAllOpen(false)}
+      title={`Update ${manageableCount} extension${manageableCount === 1 ? '' : 's'}?`}
+      message={
+        <>
+          Each extension will fetch and rebuild from its remote. This can take a
+          while — you can keep using the app while it runs, and progress will
+          show in this panel. Any currently-disabled extensions will still be
+          updated but will stay disabled.
+        </>
+      }
+      variant="safe"
+      confirmText="Update All"
+    />
     </>
   )
 }

@@ -620,6 +620,23 @@ export interface ExtensionOperationStatus {
   name: string | null
 }
 
+export interface BulkUpdateError {
+  id: string
+  name: string
+  error: string
+}
+
+export interface BulkUpdateStatus {
+  total: number
+  completed: number
+  failed: number
+  currentExtensionId?: string
+  currentName?: string
+  /** Set true by the COMPLETE event; false/undefined while progressing. */
+  done?: boolean
+  errors?: BulkUpdateError[]
+}
+
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
   /** Active theme overrides from Spindle extensions, keyed by extensionId */
@@ -628,6 +645,8 @@ export interface SpindleSlice {
   mutedExtensionThemes: Record<string, boolean>
   /** Real-time operation status from backend WS events */
   extensionOperationStatus: ExtensionOperationStatus | null
+  /** In-flight bulk update progress (null when idle). */
+  bulkUpdateStatus: BulkUpdateStatus | null
   spindlePrivileged: boolean
   pendingPermissionRequest: PendingPermissionRequest | null
   pendingTextEditor: PendingTextEditorRequest | null
@@ -664,6 +683,8 @@ export interface SpindleSlice {
   muteExtensionTheme: (extensionId: string) => void
   unmuteExtensionTheme: (extensionId: string) => void
   setExtensionOperationStatus: (extensionId: string | null, operation: string, name: string | null) => void
+  updateAllExtensions: () => Promise<void>
+  setBulkUpdateStatus: (status: BulkUpdateStatus | null) => void
 }
 
 // ---- Summary Slice ----

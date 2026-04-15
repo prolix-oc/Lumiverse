@@ -1,9 +1,12 @@
 import { generateApi } from '@/api/generate'
 import { chatsApi, messagesApi } from '@/api/chats'
-import { buildSummarizationPrompt } from './prompts'
+import {
+  buildSummarizationPrompt,
+  FALLBACK_SUMMARIZATION_SYSTEM_PROMPT,
+  FALLBACK_SUMMARIZATION_USER_PROMPT,
+} from './prompts'
 import { LOOM_SUMMARY_KEY, LOOM_LAST_SUMMARIZED_KEY } from './types'
 import type { LastSummarizedInfo } from './types'
-import type { Message } from '@/types/api'
 
 interface GenerateSummaryOpts {
   chatId: string
@@ -13,6 +16,50 @@ interface GenerateSummaryOpts {
   characterName: string
   isGroup?: boolean
   groupMembers?: string[]
+  /** Custom system prompt template; falls back to backend default when null/empty. */
+  systemPromptOverride?: string | null
+  /** Custom user prompt template; falls back to backend default when null/empty. */
+  userPromptOverride?: string | null
+}
+
+/**
+ * In-memory cache for the backend's default prompt templates. Fetched on first
+ * summary generation (or UI load) and kept until the page is refreshed. The
+ * defaults are versioned with the server, so there's no TTL to worry about.
+ */
+let defaultsCache: { systemPrompt: string; userPrompt: string } | null = null
+let defaultsInFlight: Promise<{ systemPrompt: string; userPrompt: string }> | null = null
+
+/**
+ * Fetch the backend default prompt templates, cached for the session. Falls
+ * back to the bundled frontend literals if the fetch fails so summary
+ * generation never gets stuck on a network error.
+ */
+export async function loadSummarizationDefaults(): Promise<{ systemPrompt: string; userPrompt: string }> {
+  if (defaultsCache) return defaultsCache
+  if (defaultsInFlight) return defaultsInFlight
+
+  defaultsInFlight = generateApi.getSummarizationDefaults()
+    .then((res) => {
+      defaultsCache = res
+      return res
+    })
+    .catch((err) => {
+      console.warn('[summary] Falling back to bundled defaults:', err)
+      const fallback = {
+        systemPrompt: FALLBACK_SUMMARIZATION_SYSTEM_PROMPT,
+        userPrompt: FALLBACK_SUMMARIZATION_USER_PROMPT,
+      }
+      // Cache the fallback too — if the endpoint is down, we don't want every
+      // summary generation to retry and add latency.
+      defaultsCache = fallback
+      return fallback
+    })
+    .finally(() => {
+      defaultsInFlight = null
+    })
+
+  return defaultsInFlight
 }
 
 /**
@@ -20,7 +67,17 @@ interface GenerateSummaryOpts {
  * Returns the generated summary text, or null if no messages.
  */
 export async function generateSummary(opts: GenerateSummaryOpts): Promise<string | null> {
-  const { chatId, connectionId, messageContext, userName, characterName, isGroup = false, groupMembers = [] } = opts
+  const {
+    chatId,
+    connectionId,
+    messageContext,
+    userName,
+    characterName,
+    isGroup = false,
+    groupMembers = [],
+    systemPromptOverride,
+    userPromptOverride,
+  } = opts
 
   // Fetch chat for existing summary
   const chat = await chatsApi.get(chatId)
@@ -32,15 +89,22 @@ export async function generateSummary(opts: GenerateSummaryOpts): Promise<string
 
   const recentMessages = allMessages.slice(-messageContext)
 
+  // Fetch default templates up front — needed whenever an override is empty
+  const defaults = await loadSummarizationDefaults()
+
   // Build prompt
-  const prompt = buildSummarizationPrompt(
+  const prompt = buildSummarizationPrompt({
     recentMessages,
     existingSummary,
     userName,
     characterName,
     isGroup,
     groupMembers,
-  )
+    systemPromptOverride,
+    userPromptOverride,
+    systemTemplate: defaults.systemPrompt,
+    userTemplate: defaults.userPrompt,
+  })
   if (!prompt) return null
 
   // Send to backend via summarize endpoint (sidecar-aware, not localhost-restricted)

@@ -79,6 +79,10 @@ const SCENE_CACHE_MAX = 200;
 const sceneCache = new Map<string, SceneData>();
 const SCENE_FIELDS: Array<keyof SceneData> = ["environment", "time_of_day", "weather", "mood", "focal_detail"];
 
+// Tracks in-flight image generations keyed by `${userId}:${chatId}` so a new
+// request for the same chat can abort an existing one mid-flight.
+const activeImageGenerations = new Map<string, { controller: AbortController; startedAt: number }>();
+
 function sceneCacheSet(key: string, value: SceneData): void {
   // Delete first so re-insertion moves key to end (most-recently-used)
   sceneCache.delete(key);
@@ -127,103 +131,116 @@ export async function generateSceneBackground(
     throw new Error(`No API key for image generation connection "${connection.name}"`);
   }
 
-  // Scene analysis
-  const scene = await analyzeScene(userId, chatId);
-
-  // Scene change threshold
-  const cacheKey = `${userId}:${chatId}`;
-  const previous = sceneCache.get(cacheKey) || null;
-  const threshold = Math.max(1, Number(settings.sceneChangeThreshold || 2));
-  const force = !!opts?.forceGeneration || !!settings.forceGeneration;
-
-  if (!force && previous && !hasSceneChanged(scene, previous, threshold)) {
-    return {
-      generated: false,
-      reason: "Scene has not changed enough",
-      scene,
-      prompt: buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters),
-      provider: connection.provider,
-    };
-  }
-
-  // Build prompt
-  const prompt = buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters);
-
-  // Prepare request parameters — connection defaults first, then panel-level overrides
-  const params = { ...connection.default_parameters, ...(settings.parameters || {}) };
-
-  // For NovelAI: pre-resolve director reference images (orchestration concern)
-  if (connection.provider === "novelai") {
-    const directorImages = await gatherDirectorImages(userId, chatId, params);
-    if (directorImages.length > 0) {
-      params.resolvedReferenceImages = directorImages;
-    }
-
-    // Pass character tags from scene analysis
-    const charTags =
-      settings.includeCharacters && Array.isArray((scene as any).character_appearances)
-        ? (scene as any).character_appearances
-            .map((c: any) => ({ tags: String(c?.tags || "") }))
-            .filter((c: any) => c.tags)
-        : [];
-    if (charTags.length > 0) {
-      params.characterTags = charTags;
-    }
-  }
-
-  // Generate image through provider
+  // Register this generation up-front so a newer request for the same chat
+  // can abort it during *any* phase (scene analysis as well as image gen).
+  // The timeout is an optional trigger; supersession works independently.
   const timeoutSecs = settings.generationTimeoutSeconds ?? 300;
-  const controller = timeoutSecs > 0 ? new AbortController() : null;
-  const timeoutHandle = controller
+  const controller = new AbortController();
+  const timeoutHandle = timeoutSecs > 0
     ? setTimeout(() => controller.abort(new Error(`Image generation timed out after ${timeoutSecs}s`)), timeoutSecs * 1000)
     : null;
 
-  const request: ImageGenRequest = {
-    prompt,
-    model: connection.model,
-    parameters: params,
-    signal: controller?.signal,
-  };
+  const registryKey = `${userId}:${chatId}`;
+  const existing = activeImageGenerations.get(registryKey);
+  if (existing) {
+    existing.controller.abort(new Error("Image generation superseded by a newer request"));
+  }
+  activeImageGenerations.set(registryKey, { controller, startedAt: Date.now() });
 
-  let response: Awaited<ReturnType<typeof provider.generate>>;
   try {
-    response = await provider.generate(apiKey || "", connection.api_url || "", request);
+    // Scene analysis — abortable by supersession or timeout
+    const scene = await analyzeScene(userId, chatId, controller.signal);
+
+    // Scene change threshold
+    const cacheKey = `${userId}:${chatId}`;
+    const previous = sceneCache.get(cacheKey) || null;
+    const threshold = Math.max(1, Number(settings.sceneChangeThreshold || 2));
+    const force = !!opts?.forceGeneration || !!settings.forceGeneration;
+
+    if (!force && previous && !hasSceneChanged(scene, previous, threshold)) {
+      return {
+        generated: false,
+        reason: "Scene has not changed enough",
+        scene,
+        prompt: buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters),
+        provider: connection.provider,
+      };
+    }
+
+    // Build prompt
+    const prompt = buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters);
+
+    // Prepare request parameters — connection defaults first, then panel-level overrides
+    const params = { ...connection.default_parameters, ...(settings.parameters || {}) };
+
+    // For NovelAI: pre-resolve director reference images (orchestration concern)
+    if (connection.provider === "novelai") {
+      const directorImages = await gatherDirectorImages(userId, chatId, params);
+      if (directorImages.length > 0) {
+        params.resolvedReferenceImages = directorImages;
+      }
+
+      // Pass character tags from scene analysis
+      const charTags =
+        settings.includeCharacters && Array.isArray((scene as any).character_appearances)
+          ? (scene as any).character_appearances
+              .map((c: any) => ({ tags: String(c?.tags || "") }))
+              .filter((c: any) => c.tags)
+          : [];
+      if (charTags.length > 0) {
+        params.characterTags = charTags;
+      }
+    }
+
+    const request: ImageGenRequest = {
+      prompt,
+      model: connection.model,
+      parameters: params,
+      signal: controller.signal,
+    };
+
+    const response = await provider.generate(apiKey || "", connection.api_url || "", request);
+
+    // Persist the generated image to the images table
+    let imageId: string | undefined;
+    let imageUrl: string | undefined;
+    if (response.imageDataUrl) {
+      try {
+        const image = await imagesSvc.saveImageFromDataUrl(
+          userId,
+          response.imageDataUrl,
+          `image-gen-${connection.provider}-${Date.now()}.png`
+        );
+        imageId = image.id;
+        imageUrl = `/api/v1/image-gen/results/${image.id}`;
+      } catch {
+        // Persistence failure is non-fatal — the data URL is still returned
+      }
+    }
+
+    sceneCacheSet(cacheKey, scene);
+    return {
+      generated: true,
+      scene,
+      prompt,
+      provider: connection.provider,
+      imageDataUrl: response.imageDataUrl,
+      imageId,
+      imageUrl,
+    };
   } finally {
     if (timeoutHandle !== null) clearTimeout(timeoutHandle);
-  }
-
-  // Persist the generated image to the images table
-  let imageId: string | undefined;
-  let imageUrl: string | undefined;
-  if (response.imageDataUrl) {
-    try {
-      const image = await imagesSvc.saveImageFromDataUrl(
-        userId,
-        response.imageDataUrl,
-        `image-gen-${connection.provider}-${Date.now()}.png`
-      );
-      imageId = image.id;
-      imageUrl = `/api/v1/image-gen/results/${image.id}`;
-    } catch {
-      // Persistence failure is non-fatal — the data URL is still returned
+    // Only clear the registry entry if it still points at our controller —
+    // a newer request may have already overwritten it.
+    if (activeImageGenerations.get(registryKey)?.controller === controller) {
+      activeImageGenerations.delete(registryKey);
     }
   }
-
-  sceneCacheSet(cacheKey, scene);
-  return {
-    generated: true,
-    scene,
-    prompt,
-    provider: connection.provider,
-    imageDataUrl: response.imageDataUrl,
-    imageId,
-    imageUrl,
-  };
 }
 
 // --- Scene Analysis ---
 
-async function analyzeScene(userId: string, chatId: string): Promise<SceneData> {
+async function analyzeScene(userId: string, chatId: string, signal?: AbortSignal): Promise<SceneData> {
   const sidecar = getSidecarSettings(userId);
   if (!sidecar.connectionProfileId || !sidecar.model) {
     throw new Error("Sidecar LLM connection is required for scene analysis — configure it in the Council panel");
@@ -254,6 +271,7 @@ async function analyzeScene(userId: string, chatId: string): Promise<SceneData> 
       top_p: sidecar.topP,
       max_tokens: sidecar.maxTokens,
     },
+    signal,
   });
 
   return parseSceneJson(response.content || "");

@@ -18,6 +18,7 @@ import {
 } from "fs";
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
+import { spawnAsync } from "./spawn-async";
 
 export type InstallScope = "operator" | "user";
 
@@ -454,25 +455,17 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Always install dependencies first if package.json exists
   const pkgJson = join(repo, "package.json");
   if (existsSync(pkgJson)) {
-    const install = Bun.spawnSync({
-      cmd: bunInstallCmd(),
-      cwd: repo,
-    });
+    const install = await spawnAsync(bunInstallCmd(), { cwd: repo });
     if (install.exitCode !== 0) {
-      throw new Error(
-        `Dependency install failed: ${install.stderr.toString()}`
-      );
+      throw new Error(`Dependency install failed: ${install.stderr}`);
     }
   }
 
   // If the repo ships pre-built dist/ (files tracked in git), skip build entirely
   const distDir = join(repo, "dist");
   if (existsSync(distDir)) {
-    const lsFiles = Bun.spawnSync({
-      cmd: ["git", "ls-files", "dist"],
-      cwd: repo,
-    });
-    if (lsFiles.exitCode === 0 && lsFiles.stdout.toString().trim().length > 0) {
+    const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
+    if (lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0) {
       return;
     }
   }
@@ -495,27 +488,23 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   // Build backend entry if source exists
   if (needsBackendBuild) {
-    const proc = Bun.spawnSync({
-      cmd: bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
-      cwd: repo,
-    });
+    const proc = await spawnAsync(
+      bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
+      { cwd: repo }
+    );
     if (proc.exitCode !== 0) {
-      throw new Error(
-        `Backend build failed: ${proc.stderr.toString()}`
-      );
+      throw new Error(`Backend build failed: ${proc.stderr}`);
     }
   }
 
   // Build frontend entry if source exists
   if (needsFrontendBuild) {
-    const proc = Bun.spawnSync({
-      cmd: bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
-      cwd: repo,
-    });
+    const proc = await spawnAsync(
+      bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
+      { cwd: repo }
+    );
     if (proc.exitCode !== 0) {
-      throw new Error(
-        `Frontend build failed: ${proc.stderr.toString()}`
-      );
+      throw new Error(`Frontend build failed: ${proc.stderr}`);
     }
   }
 }
@@ -633,15 +622,15 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
   }
 
   // Clean build artifacts and installed dependencies so git pull succeeds
-  Bun.spawnSync({ cmd: ["git", "checkout", "."], cwd: repo });
-  Bun.spawnSync({ cmd: ["git", "clean", "-fd"], cwd: repo });
+  await spawnAsync(["git", "checkout", "."], { cwd: repo });
+  await spawnAsync(["git", "clean", "-fd"], { cwd: repo });
 
-  const pullProc = Bun.spawnSync({
-    cmd: ["git", "pull"],
+  const pullProc = await spawnAsync(["git", "pull"], {
     cwd: repo,
+    timeoutMs: 60_000,
   });
   if (pullProc.exitCode !== 0) {
-    throw new Error(`git pull failed: ${pullProc.stderr.toString()}`);
+    throw new Error(`git pull failed: ${pullProc.stderr}`);
   }
 
   // Re-read manifest
@@ -666,11 +655,8 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
   if (hasBuildableSrc) {
     const distDir = join(repo, "dist");
     if (existsSync(distDir)) {
-      const lsFiles = Bun.spawnSync({
-        cmd: ["git", "ls-files", "dist"],
-        cwd: repo,
-      });
-      const distIsTracked = lsFiles.exitCode === 0 && lsFiles.stdout.toString().trim().length > 0;
+      const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
+      const distIsTracked = lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0;
       if (!distIsTracked) {
         rmSync(distDir, { recursive: true });
       }

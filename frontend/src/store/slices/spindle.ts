@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride } from '@/types/store'
+import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride, BulkUpdateStatus } from '@/types/store'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/loader'
@@ -9,6 +9,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensionThemeOverrides: {},
   mutedExtensionThemes: {},
   extensionOperationStatus: null,
+  bulkUpdateStatus: null,
   spindlePrivileged: false,
   pendingPermissionRequest: null,
   pendingTextEditor: null,
@@ -272,5 +273,22 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
         }
       }, 2000)
     }
+  },
+
+  updateAllExtensions: async () => {
+    const result = await spindleApi.updateAll()
+    // Seed progress state so the button flips to its spinner immediately,
+    // before any WS events arrive.
+    set({
+      bulkUpdateStatus: {
+        total: result.total,
+        completed: 0,
+        failed: 0,
+      },
+    })
+  },
+
+  setBulkUpdateStatus: (status: BulkUpdateStatus | null) => {
+    set({ bulkUpdateStatus: status })
   },
 })

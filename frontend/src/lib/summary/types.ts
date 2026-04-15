@@ -19,6 +19,10 @@ export interface SummarizationSettings {
   messageLimitEnabled: boolean
   /** Maximum number of recent messages to include when messageLimit is enabled. */
   messageLimitCount: number
+  /** Custom system prompt template. When null/empty, backend default is used. */
+  systemPromptOverride: string | null
+  /** Custom user prompt template. When null/empty, backend default is used. */
+  userPromptOverride: string | null
 }
 
 export const DEFAULT_SUMMARIZATION_SETTINGS: SummarizationSettings = {
@@ -30,6 +34,8 @@ export const DEFAULT_SUMMARIZATION_SETTINGS: SummarizationSettings = {
   manualMessageContext: 10,
   messageLimitEnabled: false,
   messageLimitCount: 50,
+  systemPromptOverride: null,
+  userPromptOverride: null,
 }
 
 /** Metadata keys stored on chat.metadata */

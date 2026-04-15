@@ -4,6 +4,7 @@ import { verifyPassword } from "../crypto/password";
 import { getDb } from "../db/connection";
 import * as managerSvc from "../spindle/manager.service";
 import { PRIVILEGED_PERMISSIONS } from "../spindle/manager.service";
+import * as bulkUpdateSvc from "../spindle/bulk-update.service";
 import type { ExtensionInfo } from "lumiverse-spindle-types";
 import * as lifecycle from "../spindle/lifecycle";
 import { toolRegistry } from "../spindle/tool-registry";
@@ -202,6 +203,29 @@ app.post("/import-local", requireOwner, async (c) => {
     return c.json(result);
   } catch (err: any) {
     return c.json({ error: err.message }, 400);
+  }
+});
+
+// POST /api/v1/spindle/update-all — Git pull + rebuild every extension the
+// caller can manage, sequentially, in a background task. Returns immediately
+// (HTTP 202). Progress streams via SPINDLE_BULK_UPDATE_PROGRESS / _COMPLETE
+// WS events; per-extension status streams via SPINDLE_EXTENSION_STATUS.
+app.post("/update-all", async (c) => {
+  try {
+    const viewer = getViewer(c);
+    if (!viewer.userId) {
+      return c.json({ error: "Unable to resolve user identity" }, 401);
+    }
+    const isPrivileged = viewer.role === "owner" || viewer.role === "admin";
+    const result = await bulkUpdateSvc.updateAllExtensions({
+      userId: viewer.userId,
+      isPrivileged,
+    });
+    return c.json({ started: true, total: result.total }, 202);
+  } catch (err: any) {
+    const msg = err?.message || "Failed to start bulk update";
+    const status = msg.includes("already running") ? 409 : 400;
+    return c.json({ error: msg }, status);
   }
 });
 

@@ -4,6 +4,7 @@ import type { Context, Next } from "hono";
 import * as svc from "../services/generate.service";
 import * as breakdownSvc from "../services/breakdown.service";
 import * as poolSvc from "../services/generation-pool.service";
+import { getSummarizationPromptDefaults } from "../services/summarization-prompts.service";
 
 const LOCALHOST_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
@@ -126,6 +127,10 @@ app.get("/breakdown/:messageId", async (c) => {
 });
 
 // --- Summarize endpoint (browser-accessible, uses sidecar connection fallback) ---
+
+app.get("/summarize/prompt-defaults", (c) => {
+  return c.json(getSummarizationPromptDefaults());
+});
 
 app.post("/summarize", async (c) => {
   const userId = c.get("userId");

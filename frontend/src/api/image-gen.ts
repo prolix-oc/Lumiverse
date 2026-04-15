@@ -41,8 +41,15 @@ export interface ImageGenResponse {
   imageUrl?: string
 }
 
+// Image generation can legitimately take several minutes (especially for
+// ComfyUI/SwarmUI workflows). The backend enforces its own 300s ceiling via
+// `generationTimeoutSeconds` — give the client a slightly higher cap so the
+// backend's timeout wins first with a clean error message, and a newer request
+// can always supersede an in-flight one regardless of how long it's been.
+const IMAGE_GEN_TIMEOUT_MS = 310_000
+
 export const imageGenApi = {
   generate(input: { chatId: string; forceGeneration?: boolean }) {
-    return post<ImageGenResponse>('/image-gen/generate', input)
+    return post<ImageGenResponse>('/image-gen/generate', input, { timeout: IMAGE_GEN_TIMEOUT_MS })
   },
 }

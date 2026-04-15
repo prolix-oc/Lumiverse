@@ -74,6 +74,10 @@ export const spindleApi = {
     return post<ExtensionInfo>(`/spindle/${id}/update`)
   },
 
+  updateAll() {
+    return post<{ started: boolean; total: number }>('/spindle/update-all')
+  },
+
   getBranches(id: string) {
     return get<{ current: string | null; branches: string[] }>(`/spindle/${id}/branches`)
   },

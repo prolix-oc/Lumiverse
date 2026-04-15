@@ -44,6 +44,11 @@ export interface QuietGenerateResponse {
   }
 }
 
+export interface SummarizationPromptDefaults {
+  systemPrompt: string
+  userPrompt: string
+}
+
 export interface DryRunMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -165,6 +170,10 @@ export const generateApi = {
 
   summarize(request: QuietGenerateRequest) {
     return post<QuietGenerateResponse>('/generate/summarize', request, LONG)
+  },
+
+  getSummarizationDefaults() {
+    return get<SummarizationPromptDefaults>('/generate/summarize/prompt-defaults')
   },
 
   dryRun(request: GenerateRequest) {
