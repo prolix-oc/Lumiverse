@@ -12,6 +12,11 @@ import type {
   WorldBookVectorIndexStatus,
 } from "../types/world-book";
 import { embeddingCache, computeCacheKey, type ModelFingerprint } from "./embedding-cache";
+import {
+  parseServiceAccount,
+  getAccessToken,
+  vertexHostForLocation,
+} from "../llm/providers/google-vertex";
 
 const EMBEDDING_SETTINGS_KEY = "embeddingConfig";
 const EMBEDDING_SECRET_KEY = "embedding_api_key";
@@ -29,7 +34,8 @@ export type EmbeddingProvider =
   | "openai"
   | "openrouter"
   | "electronhub"
-  | "nanogpt";
+  | "nanogpt"
+  | "google_vertex";
 
 export interface EmbeddingConfig {
   enabled: boolean;
@@ -51,6 +57,9 @@ export interface EmbeddingConfig {
   /** Timeout in seconds for individual embedding API requests.
    *  0 = no timeout. Default: 60. */
   request_timeout: number;
+  /** Google Vertex AI region. Only used when `provider === "google_vertex"`.
+   *  The `api_url` field is ignored for Vertex — host is derived from this. */
+  vertex_region?: string;
 }
 
 export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
@@ -296,6 +305,8 @@ const PROVIDER_DEFAULT_URL: Record<EmbeddingProvider, string> = {
   openrouter: "https://openrouter.ai/api/v1/embeddings",
   electronhub: "https://api.electronhub.top/v1/embeddings",
   nanogpt: "https://nano-gpt.com/api/v1/embeddings",
+  // Vertex derives its host from vertex_region — this is a cosmetic default.
+  google_vertex: "https://aiplatform.googleapis.com",
 };
 
 let connPromise: Promise<Connection> | null = null;
@@ -385,6 +396,7 @@ function providerDefaultModel(provider: EmbeddingProvider): string {
   if (provider === "openrouter") return "text-embedding-3-small";
   if (provider === "electronhub") return "text-embedding-3-small";
   if (provider === "openai") return "text-embedding-3-small";
+  if (provider === "google_vertex") return "gemini-embedding-001";
   return "text-embedding-3-small";
 }
 
@@ -407,11 +419,19 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
     vectorize_chat_documents: true,
     chat_memory_mode: "balanced",
     request_timeout: 120,
+    vertex_region: provider === "google_vertex" ? "global" : undefined,
   };
 }
 
+const VALID_EMBEDDING_PROVIDERS: EmbeddingProvider[] = [
+  "openai-compatible", "openai", "openrouter", "electronhub", "nanogpt", "google_vertex",
+];
+
 function normalizeConfig(input: any): EmbeddingConfig {
-  const provider = ((input?.provider as EmbeddingProvider) || "openai-compatible");
+  const rawProvider = input?.provider as EmbeddingProvider | undefined;
+  const provider: EmbeddingProvider = rawProvider && VALID_EMBEDDING_PROVIDERS.includes(rawProvider)
+    ? rawProvider
+    : "openai-compatible";
   const base = defaultConfig(provider);
   return {
     enabled: input?.enabled !== undefined ? !!input.enabled : base.enabled,
@@ -462,6 +482,11 @@ function normalizeConfig(input: any): EmbeddingConfig {
       Number.isFinite(input?.request_timeout) && input.request_timeout >= 0
         ? Math.min(300, input.request_timeout)
         : base.request_timeout,
+    vertex_region: provider === "google_vertex"
+      ? (typeof input?.vertex_region === "string" && input.vertex_region.trim()
+          ? input.vertex_region.trim()
+          : base.vertex_region)
+      : undefined,
   };
 }
 
@@ -1146,6 +1171,126 @@ function parseEmbeddingResponse(payload: any, expectedCount: number): number[][]
   throw new Error("Unrecognized embedding response format");
 }
 
+// ---------------------------------------------------------------------------
+// Google Vertex AI embeddings
+// ---------------------------------------------------------------------------
+
+/**
+ * Vertex splits embeddings across two endpoints. Rule mirrors the
+ * @google/genai SDK's `tIsVertexEmbedContentModel()`:
+ *   - `:embedContent` when the model contains "gemini" (but isn't
+ *     `gemini-embedding-001`) OR contains "maas"
+ *   - `:predict` for everything else (incl. `text-embedding-*`,
+ *     `text-multilingual-embedding-*`, `textembedding-gecko*`,
+ *     and `gemini-embedding-001`)
+ */
+function isVertexEmbedContentModel(model: string): boolean {
+  return (model.includes("gemini") && model !== "gemini-embedding-001")
+      || model.includes("maas");
+}
+
+async function requestVertexEmbeddings(
+  cfg: EmbeddingConfig,
+  apiKey: string,
+  texts: string[],
+  options?: { omitDimensions?: boolean }
+): Promise<number[][]> {
+  const sa = parseServiceAccount(apiKey);
+  const accessToken = await getAccessToken(sa);
+  const location = cfg.vertex_region || "global";
+  const host = vertexHostForLocation(location);
+  const projectId = sa.project_id;
+  const model = cfg.model;
+  const useEmbedContent = isVertexEmbedContentModel(model);
+  const dims = !options?.omitDimensions && cfg.send_dimensions && cfg.dimensions
+    ? cfg.dimensions
+    : undefined;
+
+  const timeoutMs = cfg.request_timeout > 0
+    ? cfg.request_timeout * 1000
+    : DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS;
+
+  const base = `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}`;
+
+  // The `:embedContent` endpoint accepts exactly one content per call.
+  // Serialize the batch to match the SDK's behavior.
+  if (useEmbedContent) {
+    const results: number[][] = [];
+    for (const text of texts) {
+      const body: Record<string, any> = {
+        content: { role: "user", parts: [{ text }] },
+      };
+      if (dims) body.embedContentConfig = { outputDimensionality: dims };
+      const vec = await postVertex<{ embedding?: { values?: number[] } }>(
+        `${base}:embedContent`,
+        accessToken,
+        body,
+        timeoutMs,
+      );
+      const values = vec?.embedding?.values;
+      if (!Array.isArray(values)) {
+        throw new Error("Vertex embedContent response missing embedding.values");
+      }
+      results.push(values);
+    }
+    return results;
+  }
+
+  // `:predict` supports batched inputs via `instances[]`.
+  const body: Record<string, any> = {
+    instances: texts.map((text) => ({ content: text })),
+  };
+  if (dims) body.parameters = { outputDimensionality: dims };
+  const payload = await postVertex<{ predictions?: Array<{ embeddings?: { values?: number[] } }> }>(
+    `${base}:predict`,
+    accessToken,
+    body,
+    timeoutMs,
+  );
+  const preds = payload?.predictions;
+  if (!Array.isArray(preds) || preds.length !== texts.length) {
+    throw new Error(
+      `Vertex predict returned ${preds?.length ?? 0} predictions, expected ${texts.length}`,
+    );
+  }
+  return preds.map((p, i) => {
+    const values = p?.embeddings?.values;
+    if (!Array.isArray(values)) {
+      throw new Error(`Vertex predict response missing embeddings.values at index ${i}`);
+    }
+    return values;
+  });
+}
+
+async function postVertex<T>(url: string, accessToken: string, body: Record<string, any>, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Vertex embedding request timed out after ${timeoutMs / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "Vertex embedding request failed");
+    throw new Error(`Vertex embedding request failed (${res.status}): ${msg}`);
+  }
+  return (await res.json()) as T;
+}
+
 async function requestEmbeddings(
   userId: string,
   texts: string[],
@@ -1156,6 +1301,10 @@ async function requestEmbeddings(
   const apiKey = await secretsSvc.getSecret(userId, EMBEDDING_SECRET_KEY);
   if (!apiKey) throw new Error("Embedding API key is not configured");
   if (!texts.length) return [];
+
+  if (cfg.provider === "google_vertex") {
+    return requestVertexEmbeddings(cfg, apiKey, texts, options);
+  }
 
   const url = resolveEmbeddingUrl(cfg.api_url);
 
@@ -1226,7 +1375,13 @@ export async function embedTexts(userId: string, texts: string[]): Promise<numbe
 }
 
 function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
-  return { provider: cfg.provider, model: cfg.model, dimensions: cfg.dimensions, api_url: cfg.api_url };
+  // For Vertex the `api_url` field is cosmetic — the effective endpoint is
+  // derived from `vertex_region`. Encode it into the fingerprint so a region
+  // change still invalidates cached vectors.
+  const api_url = cfg.provider === "google_vertex"
+    ? `vertex:${cfg.vertex_region || "global"}`
+    : cfg.api_url;
+  return { provider: cfg.provider, model: cfg.model, dimensions: cfg.dimensions, api_url };
 }
 
 /**

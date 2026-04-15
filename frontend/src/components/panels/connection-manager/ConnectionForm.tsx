@@ -176,7 +176,9 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const showResponsesApiToggle = provider === 'openai'
   const showSubscriptionApiToggle = provider === 'nanogpt'
   const isOpenRouter = provider === 'openrouter'
-  const hideApiUrl = isOpenRouter || provider === 'nanogpt'
+  // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
+  // field has no purpose and we don't display it.
+  const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI
 
   const handlePollinationsSignIn = useCallback(async () => {
     setByopStatus(null)
@@ -264,11 +266,9 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       delete metadata.openrouter
     }
 
-    // For Vertex AI, encode the region into the API URL so the backend can extract it
-    let resolvedApiUrl = apiUrl.trim() || undefined
-    if (isVertexAI && !resolvedApiUrl) {
-      resolvedApiUrl = `https://aiplatform.googleapis.com?location=${vertexRegion}`
-    }
+    // For Vertex AI the backend ignores `api_url` entirely and builds the
+    // host from `metadata.vertex_region`, so we don't persist a value here.
+    const resolvedApiUrl = isVertexAI ? undefined : (apiUrl.trim() || undefined)
 
     onSave({
       name: name.trim(),
