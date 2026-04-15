@@ -167,8 +167,13 @@ class EventBus {
       }
     }
 
-    if (visibleSessions === 0 && !this.userAllHiddenSince.has(userId)) {
-      this.userAllHiddenSince.set(userId, Date.now());
+    // No write here — `allHiddenSince` is set by updateUserVisibilityState
+    // whenever a session transitions to hidden. Reading the snapshot used to
+    // also stamp the timer, which mixed observation and mutation in the same
+    // call and left subtle behavior depending on who polled first.
+    let allHiddenSince: number | null = null;
+    if (visibleSessions === 0) {
+      allHiddenSince = this.userAllHiddenSince.get(userId) ?? null;
     }
 
     return {
@@ -176,7 +181,7 @@ class EventBus {
       visibleSessions,
       hiddenSessions: Math.max(totalSessions - visibleSessions, 0),
       isVisible: visibleSessions > 0,
-      allHiddenSince: visibleSessions > 0 ? null : (this.userAllHiddenSince.get(userId) ?? null),
+      allHiddenSince,
     };
   }
 

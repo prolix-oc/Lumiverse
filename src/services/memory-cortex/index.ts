@@ -204,7 +204,7 @@ export async function queryLinkedCortex(
   queryText?: string,
 ): Promise<LinkedCortexResult> {
   const cfg = config ?? getCortexConfig(userId);
-  const linked = getLinkedCortexData(chatId);
+  const linked = getLinkedCortexData(userId, chatId);
   const topK = cfg.retrieval?.maxEntitySnapshots ?? 10;
   const includeRelationships = cfg.retrieval?.relationshipInjection ?? true;
 

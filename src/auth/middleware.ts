@@ -68,6 +68,13 @@ export async function requireAuth(c: Context, next: Next) {
   return next();
 }
 
+/**
+ * Owner-or-admin gate. Despite the historical name, this allows BOTH the
+ * "owner" and "admin" roles — Lumiverse's admin UIs (Operator, Spindle install,
+ * Dropbox/Drive, etc.) all expect this behavior, so changing it would be a
+ * silent privilege regression. For genuinely owner-only operations (cross-user
+ * impersonation, destructive single-tenant actions), use `requireOwnerStrict`.
+ */
 export async function requireOwner(c: Context, next: Next) {
   const session = c.get("session");
   if (!session) {
@@ -76,6 +83,24 @@ export async function requireOwner(c: Context, next: Next) {
 
   const role = session.user.role;
   if (role !== "owner" && role !== "admin") {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  return next();
+}
+
+/**
+ * Strict owner-only gate. Use for operations that admins should NOT perform —
+ * e.g. installing an extension into another user's context, resetting an
+ * owner's password, or modifying owner-owned identity material.
+ */
+export async function requireOwnerStrict(c: Context, next: Next) {
+  const session = c.get("session");
+  if (!session) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  if (session.user.role !== "owner") {
     return c.json({ error: "Forbidden" }, 403);
   }
 

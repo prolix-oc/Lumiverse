@@ -676,7 +676,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // ---- Databank retrieval ----
   // Use the warm-cache pattern: check if a previous generation cached results.
   // The background pre-flight fires alongside cortex (added below).
-  const databankResult = databankSvc.getCachedDatabankResult(ctx.chatId);
+  const databankResult = databankSvc.getCachedDatabankResult(ctx.userId, ctx.chatId);
   const activeDatabankIds = databankSvc.resolveActiveDatabankIds(
     ctx.userId,
     ctx.chatId,

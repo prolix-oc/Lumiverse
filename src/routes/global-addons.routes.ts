@@ -13,7 +13,12 @@ app.get("/", (c) => {
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  if (!body.label && body.label !== "") return c.json({ error: "label is required" }, 400);
+  // The previous check `!body.label && body.label !== ""` accepted falsy
+  // non-string values like `null`, `false`, and `0` because they fail the !==""
+  // half. Force a string + non-empty after trim.
+  if (typeof body.label !== "string" || body.label.trim() === "") {
+    return c.json({ error: "label is required" }, 400);
+  }
   const addon = svc.createGlobalAddon(userId, body);
   return c.json(addon, 201);
 });

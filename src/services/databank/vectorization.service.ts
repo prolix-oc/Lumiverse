@@ -81,9 +81,27 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     console.info(`[databank] Processed document "${doc.name}" — ${chunkRows.length} chunks vectorized`);
   } catch (err: any) {
     console.error(`[databank] Failed to process document ${docId}:`, err);
-    crud.updateDocumentStatus(docId, "error", { errorMessage: err.message || "Unknown error" });
-    emitStatus(userId, doc, "error", err.message);
+    // Don't surface raw err.message to the client — it can include filesystem
+    // paths, API URLs, or upstream provider details that would otherwise leak
+    // via the WebSocket status emission.
+    const safeMessage = redactProcessingError(err);
+    crud.updateDocumentStatus(docId, "error", { errorMessage: safeMessage });
+    emitStatus(userId, doc, "error", safeMessage);
   }
+}
+
+/**
+ * Map the raw processing error into a small set of stable, generic messages.
+ * Full stack and details remain in the server logs above.
+ */
+function redactProcessingError(err: unknown): string {
+  const msg = (err instanceof Error ? err.message : String(err)) || "";
+  if (/embedding|vectoriz/i.test(msg)) return "Embedding step failed";
+  if (/parse|chunk/i.test(msg)) return "Document parsing failed";
+  if (/timeout|abort/i.test(msg)) return "Processing timed out";
+  if (/permission|EACCES|ENOENT/i.test(msg)) return "Filesystem error";
+  if (/quota|rate limit/i.test(msg)) return "Provider quota exceeded";
+  return "Document processing failed";
 }
 
 async function vectorizeChunks(

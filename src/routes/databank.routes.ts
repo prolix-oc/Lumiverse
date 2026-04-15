@@ -357,8 +357,18 @@ app.post("/mentions/resolve", async (c) => {
   const content = databank.getFullDocumentText(userId, doc.id);
   if (!content) return c.json({ error: "Document has no content" }, 404);
 
-  const truncated = maxTokens ? content.length > maxTokens * 4 : false;
-  const resultContent = truncated ? content.slice(0, (maxTokens || 2000) * 4) : content;
+  // Clamp maxTokens to a sane range. Without this, negative values turn the
+  // slice into a tail-strip ("0, -4000" → "" on small docs) and very large
+  // values let a caller request a huge buffer allocation. Treat anything
+  // unparseable as "use the default" rather than failing the request.
+  const MAX_RESOLVE_TOKENS = 100_000;
+  let effectiveMax = 2000;
+  if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
+    effectiveMax = Math.min(Math.floor(maxTokens), MAX_RESOLVE_TOKENS);
+  }
+  const limit = effectiveMax * 4;
+  const truncated = content.length > limit;
+  const resultContent = truncated ? content.slice(0, limit) : content;
 
   return c.json({
     slug: doc.slug,

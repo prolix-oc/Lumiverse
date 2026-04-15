@@ -142,6 +142,19 @@ lumihubRoutes.post("/link", requireOwner, async (c) => {
     return c.json({ error: "redirect_origin is required" }, 400);
   }
 
+  // Validate the redirect origin too. LumiHub will hand the user back to this
+  // URL with the authorization code attached, so we must make sure it's a real
+  // http(s) origin and not a `javascript:` payload or arbitrary scheme.
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(redirectOrigin);
+  } catch {
+    return c.json({ error: "redirect_origin is not a valid URL" }, 400);
+  }
+  if (parsedOrigin.protocol !== "https:" && parsedOrigin.protocol !== "http:") {
+    return c.json({ error: "redirect_origin must use http or https" }, 400);
+  }
+
   // Validate the LumiHub URL is http/https and does not resolve to a private
   // or blocked address (SSRF protection for the callback's token-exchange fetch).
   let parsedHub: URL;

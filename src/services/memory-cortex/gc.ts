@@ -12,7 +12,20 @@ import { getDb } from "../../db/connection";
 
 // ─── Chunk Vectorization Debounce ──────────────────────────────
 
-const dirtyChunks = new Map<string, ReturnType<typeof setTimeout>>();
+interface DirtyEntry {
+  timer: ReturnType<typeof setTimeout>;
+  chatId: string;
+}
+
+/**
+ * Bounded debounce queue. Bulk imports or rapid message replay used to grow
+ * this Map without bound between timer firings; a hard cap with FIFO eviction
+ * keeps it predictable. The eviction path also fires the queued vectorization
+ * immediately so the chunk isn't silently dropped.
+ */
+const MAX_DIRTY_CHUNKS = 5_000;
+const dirtyChunks = new Map<string, DirtyEntry>();
+const pendingExecutors = new Map<string, () => void>();
 
 /**
  * Mark a chunk as needing vectorization, but debounce for `delayMs`.
@@ -29,22 +42,52 @@ export function debouncedVectorize(
   const key = chunkId;
 
   const existing = dirtyChunks.get(key);
-  if (existing) clearTimeout(existing);
+  if (existing) clearTimeout(existing.timer);
 
-  const timer = setTimeout(() => {
+  const fire = () => {
     dirtyChunks.delete(key);
+    pendingExecutors.delete(key);
     queueFn(userId, chatId, chunkId, 3);
-  }, delayMs);
+  };
+  pendingExecutors.set(key, fire);
 
-  dirtyChunks.set(key, timer);
+  const timer = setTimeout(fire, delayMs);
+  dirtyChunks.set(key, { timer, chatId });
+
+  // Evict-and-flush oldest if we exceed the cap.
+  while (dirtyChunks.size > MAX_DIRTY_CHUNKS) {
+    const oldest = dirtyChunks.keys().next();
+    if (oldest.done) break;
+    const oldestKey = oldest.value;
+    const oldestEntry = dirtyChunks.get(oldestKey);
+    if (oldestEntry) clearTimeout(oldestEntry.timer);
+    const exec = pendingExecutors.get(oldestKey);
+    if (exec) exec();
+    else {
+      dirtyChunks.delete(oldestKey);
+      pendingExecutors.delete(oldestKey);
+    }
+  }
+}
+
+/** Drop all pending debounced vectorizations for a chat (call on chat delete). */
+export function clearDebouncedVectorizationsForChat(chatId: string): void {
+  for (const [key, entry] of dirtyChunks) {
+    if (entry.chatId === chatId) {
+      clearTimeout(entry.timer);
+      dirtyChunks.delete(key);
+      pendingExecutors.delete(key);
+    }
+  }
 }
 
 /** Flush all pending debounced vectorizations (call on shutdown) */
 export function flushDebouncedVectorizations(): void {
-  for (const [, timer] of dirtyChunks) {
-    clearTimeout(timer);
+  for (const [, entry] of dirtyChunks) {
+    clearTimeout(entry.timer);
   }
   dirtyChunks.clear();
+  pendingExecutors.clear();
 }
 
 /** Check if a chunk has a pending debounced vectorization */

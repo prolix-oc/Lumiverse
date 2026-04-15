@@ -164,8 +164,23 @@ export class SMBFileSystem implements FileSystem {
 
   // ─── Path helpers ──────────────────────────────────────────────────────
 
-  /** Convert forward-slash paths to backslash for smbclient commands */
+  /**
+   * Convert forward-slash paths to backslash and reject any character that
+   * would let an attacker break out of the quoted `-c` argument. smbclient
+   * honors `!cmd` to spawn a local shell, so a path containing `"; !id; ls "`
+   * was previously enough to get arbitrary code execution on the host.
+   */
   private toSmbPath(path: string): string {
+    if (typeof path !== "string") {
+      throw new Error("SMB path must be a string");
+    }
+    // Disallow shell-meta and quote characters outright. SMB filenames can
+    // technically contain quotes/semicolons, but supporting that safely would
+    // require building commands without `-c` shell concatenation; rejecting
+    // these characters keeps the simple spawn path safe.
+    if (/["'`;!\n\r\u0000$<>|&]/.test(path)) {
+      throw new Error("SMB path contains disallowed characters");
+    }
     return path.replace(/^\/+/, "").replace(/\//g, "\\");
   }
 
@@ -188,10 +203,17 @@ export class SMBFileSystem implements FileSystem {
   // ─── smbclient execution ──────────────────────────────────────────────
 
   private async runCommand(command: string): Promise<string> {
-    const args = this.buildArgs(command);
+    const { args, password } = this.buildArgs(command);
+    // Pass the password via env (PASSWD) instead of `-U user%pass` so it does
+    // not appear in /proc/<pid>/cmdline or `ps` output. smbclient honors
+    // PASSWD for non-interactive auth; this is the standard way to script it.
+    const envForChild: Record<string, string> = {};
+    if (process.env.PATH) envForChild.PATH = process.env.PATH;
+    if (password) envForChild.PASSWD = password;
     const proc = Bun.spawn(["smbclient", ...args], {
       stdout: "pipe",
       stderr: "pipe",
+      env: envForChild,
     });
 
     const [stdout, stderr] = await Promise.all([
@@ -226,7 +248,7 @@ export class SMBFileSystem implements FileSystem {
     return stdout;
   }
 
-  private buildArgs(command: string): string[] {
+  private buildArgs(command: string): { args: string[]; password: string | undefined } {
     const { host, share, port, username, password, domain } = this.config;
     const service = `//${host}/${share}`;
 
@@ -237,7 +259,9 @@ export class SMBFileSystem implements FileSystem {
     }
 
     if (username) {
-      args.push("-U", password ? `${username}%${password}` : username);
+      // Username goes on the command line; password is delivered via the
+      // PASSWD env var by runCommand() so it never appears in argv.
+      args.push("-U", username);
     } else {
       // Anonymous / guest
       args.push("-N");
@@ -247,7 +271,7 @@ export class SMBFileSystem implements FileSystem {
       args.push("-W", domain);
     }
 
-    return args;
+    return { args, password: username ? password : undefined };
   }
 
   // ─── Output parsing ───────────────────────────────────────────────────

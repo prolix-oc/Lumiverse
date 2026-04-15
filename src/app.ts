@@ -53,6 +53,7 @@ import { databankRoutes } from "./routes/databank.routes";
 import { globalAddonsRoutes } from "./routes/global-addons.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
+import { rateLimit } from "./middleware/rate-limit";
 
 const app = new Hono();
 
@@ -62,6 +63,26 @@ app.use("*", compress());
 // Import routes (migrate/*, characters/import, characters/import-bulk) are excluded
 // here to support charx uploads up to 100 MB; the Bun server-level maxRequestBodySize
 // (512 MB in index.ts) covers them.
+// Public/unauthenticated POST surfaces (auth, OAuth callbacks, etc.) never
+// need a multi-megabyte body. Apply a tight 1 MB cap before the broader 10 MB
+// rule below so a client without credentials cannot drive the server-level
+// 1 GB limit by hitting an unauthenticated endpoint with a giant payload.
+const PUBLIC_POST_PREFIXES = [
+  "/api/auth/",
+  "/api/spindle-oauth/",
+  "/api/v1/lumihub",
+  "/api/v1/openrouter/oauth-landing",
+];
+app.use("/api/*", async (c, next) => {
+  const path = c.req.path;
+  const isPublic = PUBLIC_POST_PREFIXES.some((p) => path === p || path.startsWith(p));
+  if (!isPublic) return next();
+  return bodyLimit({
+    maxSize: 1 * 1024 * 1024,
+    onError: (c) => c.json({ error: "Request body too large" }, 413),
+  })(c, next);
+});
+
 app.use("/api/*", async (c, next) => {
   const path = c.req.path;
   if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/characters/import" || path.startsWith("/api/v1/world-books/import") || path === "/api/v1/images" || path.endsWith("/expressions/upload-zip") || path === "/api/v1/stt/transcribe") {
@@ -88,7 +109,10 @@ allowedHosts.add(`[::1]:${env.port}`);
 app.use("/api/*", async (c, next) => {
   if (env.trustAnyOrigin) return next();
   const host = c.req.header("host");
-  if (host && !allowedHosts.has(host)) {
+  // Reject when Host is missing entirely — a raw HTTP/1.0 request or a crafted
+  // TCP connection can omit the Host header, which would otherwise bypass the
+  // DNS-rebinding guard.
+  if (!host || !allowedHosts.has(host)) {
     return c.json({ error: "Forbidden" }, 403);
   }
   return next();
@@ -104,6 +128,31 @@ app.use(
     credentials: true,
   })
 );
+
+// Rate-limit credential-touching auth endpoints to throttle scrypt-driven DoS
+// and brute force. Sign-in/sign-up have the tightest budget; everything else
+// under /api/auth/* gets a looser limit so legitimate session refreshes etc.
+// don't trip the brake.
+const authSensitiveLimiter = rateLimit({
+  bucket: "auth-sensitive",
+  max: 8,
+  windowMs: 5 * 60 * 1000, // 8 attempts per 5 minutes per IP
+  message: "Too many authentication attempts. Try again in a few minutes.",
+});
+const authGeneralLimiter = rateLimit({
+  bucket: "auth-general",
+  max: 60,
+  windowMs: 60 * 1000, // 60 requests per minute per IP for non-credential auth ops
+});
+
+const SENSITIVE_AUTH_PATTERN = /\/api\/auth\/(sign-in|sign-up|forget-password|reset-password|change-password|update-password)/;
+
+app.use("/api/auth/*", async (c, next) => {
+  if (SENSITIVE_AUTH_PATTERN.test(c.req.path)) {
+    return authSensitiveLimiter(c, next);
+  }
+  return authGeneralLimiter(c, next);
+});
 
 // BetterAuth handler — BEFORE auth middleware
 // Rewrite the request URL to use the actual Host header so BetterAuth
@@ -129,23 +178,37 @@ app.route("/api/v1/lumihub", lumihubCallbackRoute);
 // OpenRouter redirects here with ?code=<auth_code>. We relay the code back
 // to the opener window via postMessage so it can call our exchange endpoint.
 app.get("/api/v1/openrouter/oauth-landing", async (c) => {
-  const code = c.req.query("code") || "";
+  const rawCode = c.req.query("code") || "";
+  // Whitelist the OAuth code character set. OpenRouter codes are URL-safe
+  // base64-style strings; rejecting anything outside that set blocks the
+  // </script> XSS payload entirely. JSON.stringify alone does NOT HTML-encode
+  // < or >, so a value like </script><script>alert(1)</script> would otherwise
+  // break out of the inline script context.
+  const code = /^[A-Za-z0-9._~+/=-]{1,512}$/.test(rawCode) ? rawCode : "";
+  // Pass the code to the inline script via a data attribute. dataset reads it
+  // from the DOM as a plain string with no HTML/JS interpretation.
+  const codeAttr = code
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
   return c.html(`<!DOCTYPE html>
 <html><head><title>OpenRouter Authorization</title>
 <style>body{background:#1c1826;color:rgba(255,255,255,.8);font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:14px}</style></head>
 <body>
-<div id="s">Completing authorization...</div>
+<div id="s" data-code="${codeAttr}">Completing authorization...</div>
 <script>
-var code = ${JSON.stringify(code)};
+var el = document.getElementById('s');
+var code = el.dataset.code || '';
 if (code && window.opener) {
   // Restrict postMessage to this origin so only the Lumiverse opener receives the code
   window.opener.postMessage({ type: 'openrouter_oauth_code', code: code }, window.location.origin);
-  document.getElementById('s').textContent = 'Authorized! Closing...';
+  el.textContent = 'Authorized! Closing...';
   setTimeout(function(){ window.close(); }, 500);
 } else if (!code) {
-  document.getElementById('s').textContent = 'No authorization code received.';
+  el.textContent = 'No authorization code received.';
 } else {
-  document.getElementById('s').textContent = 'Could not reach parent window. Copy this code: ' + code;
+  el.textContent = 'Could not reach parent window. Copy this code: ' + code;
 }
 </script>
 </body></html>`);

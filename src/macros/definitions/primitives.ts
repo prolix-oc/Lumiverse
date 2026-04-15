@@ -192,6 +192,25 @@ function resolveInlineShorthands(
     .replace(/(^|\s)\$([a-zA-Z][\w-]*)/g, (_, pre, name) => pre + (variables.global.get(name) ?? ""));
 }
 
+// Order matters here — we scan for the *leftmost* operator and prefer the
+// longest match at that position so e.g. ">=" beats ">" when both could
+// apply at index N.
+const COMPARISON_OPERATORS = ["==", "!=", ">=", "<=", ">", "<"] as const;
+
+function findComparisonOperator(value: string): { op: typeof COMPARISON_OPERATORS[number]; index: number } | null {
+  let bestIndex = -1;
+  let bestOp: typeof COMPARISON_OPERATORS[number] | null = null;
+  for (const op of COMPARISON_OPERATORS) {
+    const index = value.indexOf(op);
+    if (index === -1) continue;
+    if (bestIndex === -1 || index < bestIndex || (index === bestIndex && op.length > (bestOp?.length ?? 0))) {
+      bestIndex = index;
+      bestOp = op;
+    }
+  }
+  return bestOp ? { op: bestOp, index: bestIndex } : null;
+}
+
 function evaluateCondition(value: string): boolean {
   // Unresolved macros (reconstructed as {{name}} by the evaluator) mean the
   // value couldn't be determined — treat the entire condition as falsy.
@@ -199,19 +218,20 @@ function evaluateCondition(value: string): boolean {
     return false;
   }
 
-  // Handle comparison operators
-  const compMatch = value.match(/^(.*?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
-  if (compMatch) {
-    const [, left, op, right] = compMatch;
-    const lv = left.trim();
-    const rv = right.trim();
+  // Linear scan for the first comparison operator; avoids the previous
+  // `^(.*?)\s*(...)\s*(.+)$` regex whose greedy/non-greedy combination
+  // could backtrack pathologically on user-supplied values.
+  const found = findComparisonOperator(value);
+  if (found) {
+    const lv = value.slice(0, found.index).trim();
+    const rv = value.slice(found.index + found.op.length).trim();
 
     // Try numeric comparison
     const ln = parseFloat(lv);
     const rn = parseFloat(rv);
     const bothNumeric = !isNaN(ln) && !isNaN(rn);
 
-    switch (op) {
+    switch (found.op) {
       case "==": return bothNumeric ? ln === rn : lv === rv;
       case "!=": return bothNumeric ? ln !== rn : lv !== rv;
       case ">": return bothNumeric ? ln > rn : lv > rv;

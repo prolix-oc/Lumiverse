@@ -208,8 +208,15 @@ export const wsHandler = upgradeWebSocket((c) => {
 
           host.invokeCommand(commandId, data.context ?? {}, userId);
         }
-      } catch {
-        // Ignore malformed messages
+      } catch (err) {
+        // Malformed JSON is the common case — drop those silently. Any other
+        // error here is a real bug (DB error, worker crash, etc.) that we
+        // need a record of so we can debug from the operator log.
+        if (err instanceof SyntaxError) return;
+        console.error(
+          "[WS] onMessage handler failed:",
+          err instanceof Error ? err.stack || err.message : err,
+        );
       }
     },
     onClose(_event, ws) {

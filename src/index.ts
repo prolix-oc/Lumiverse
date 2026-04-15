@@ -189,6 +189,19 @@ async function gracefulShutdown(signal: string) {
   stopQueryCacheCleanup();
   stopVersionCheckCleanup();
 
+  // 5b. Tear down the regex sandbox worker pool so we don't leak the worker
+  //     threads on shutdown.
+  const { shutdownRegexSandbox } = await import("./utils/regex-sandbox");
+  shutdownRegexSandbox();
+
+  // 5c. Stop the rate-limit sweep timer.
+  const { stopRateLimitSweep } = await import("./middleware/rate-limit");
+  stopRateLimitSweep();
+
+  // 5d. Stop the Vertex AI token cache sweep.
+  const { stopVertexTokenSweep } = await import("./llm/providers/google-vertex");
+  stopVertexTokenSweep();
+
   // 6. Release cached prepared statements
   const { clearStmtCache } = await import("./services/pagination");
   clearStmtCache();

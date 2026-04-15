@@ -6,6 +6,7 @@
 import SFTPClient from "ssh2-sftp-client";
 import { posix } from "path";
 import type { FileSystem, FileEntry, FileStat, SFTPConnectionConfig } from "../types";
+import { MAX_REMOTE_FILE_BYTES } from "../remote-fetch-cap";
 
 export class SFTPFileSystem implements FileSystem {
   readonly type = "sftp" as const;
@@ -66,12 +67,35 @@ export class SFTPFileSystem implements FileSystem {
   }
 
   async readFile(path: string): Promise<Buffer> {
-    // ssh2-sftp-client.get() returns Buffer when no destination is given
+    // Pre-flight stat so we never start streaming a multi-GB file into memory.
+    // SFTP's stat is cheap; this trades one extra round-trip for a hard cap.
+    try {
+      const meta = await this.client.stat(path);
+      const size = (meta as { size?: number })?.size ?? 0;
+      if (size > MAX_REMOTE_FILE_BYTES) {
+        throw new Error(
+          `Remote file "${path}" too large: ${size} bytes (max ${MAX_REMOTE_FILE_BYTES})`,
+        );
+      }
+    } catch (err: any) {
+      // If stat fails for reasons other than our size check, surface that error
+      // verbatim — the get() below would fail with a less specific message.
+      if (err?.message?.includes("too large")) throw err;
+    }
     const data = await this.client.get(path) as unknown;
-    if (Buffer.isBuffer(data)) return data;
+    if (Buffer.isBuffer(data)) {
+      if (data.byteLength > MAX_REMOTE_FILE_BYTES) {
+        throw new Error(`Remote file "${path}" exceeded ${MAX_REMOTE_FILE_BYTES} bytes`);
+      }
+      return data;
+    }
     if (typeof data === "string") return Buffer.from(data);
     // Shouldn't reach here without a dst argument, but handle gracefully
-    return Buffer.from(data as ArrayBuffer);
+    const buf = Buffer.from(data as ArrayBuffer);
+    if (buf.byteLength > MAX_REMOTE_FILE_BYTES) {
+      throw new Error(`Remote file "${path}" exceeded ${MAX_REMOTE_FILE_BYTES} bytes`);
+    }
+    return buf;
   }
 
   async readText(path: string): Promise<string> {

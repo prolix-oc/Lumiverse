@@ -17,6 +17,12 @@ interface PendingOAuth {
 /** In-memory store for pending OAuth sessions. Keyed by session_token. TTL: 5 minutes. */
 const pendingOAuth = new Map<string, PendingOAuth>();
 const OAUTH_TTL_MS = 5 * 60 * 1000;
+/**
+ * Hard cap so an attacker can't keep calling /openrouter/auth and pin entries
+ * indefinitely. cleanupExpiredSessions is also called from initiate, so the
+ * common case is bounded; this is a backstop for adversarial loops.
+ */
+const MAX_PENDING_OAUTH = 10_000;
 
 /** Periodically clean up expired sessions. */
 function cleanupExpiredSessions(): void {
@@ -25,6 +31,12 @@ function cleanupExpiredSessions(): void {
     if (now - session.createdAt > OAUTH_TTL_MS) {
       pendingOAuth.delete(token);
     }
+  }
+  // FIFO eviction if the map is still over the cap after expiry sweep.
+  while (pendingOAuth.size >= MAX_PENDING_OAUTH) {
+    const oldest = pendingOAuth.keys().next();
+    if (oldest.done) break;
+    pendingOAuth.delete(oldest.value);
   }
 }
 

@@ -10,6 +10,25 @@ interface ComfyImageResult {
   type?: string
 }
 
+/**
+ * ComfyUI is intentionally a self-hosted service that often runs on
+ * `localhost`/private IPs, so we can't pipe its requests through safeFetch
+ * (which blocks private addresses). Instead we restrict the protocol to
+ * http/https to keep `file://`, `ssh://`, and other surprising schemes from
+ * being smuggled in via the apiUrl field.
+ */
+function assertSafeComfyUrl(apiUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(apiUrl);
+  } catch {
+    throw new Error("ComfyUI URL is not a valid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`ComfyUI URL protocol "${parsed.protocol}" is not allowed`);
+  }
+}
+
 export class ComfyUIImageProvider implements ImageProvider {
   readonly name = "comfyui"
   readonly displayName = "ComfyUI"
@@ -27,6 +46,7 @@ export class ComfyUIImageProvider implements ImageProvider {
     request: ImageGenRequest,
   ): Promise<ImageGenResponse> {
     const baseUrl = apiUrl || this.capabilities.defaultUrl
+    assertSafeComfyUrl(baseUrl)
 
     const workflow = request.parameters?.workflow
     if (!workflow || typeof workflow !== "object") {
@@ -132,6 +152,7 @@ export class ComfyUIImageProvider implements ImageProvider {
     unknown
   > {
     const baseUrl = apiUrl || this.capabilities.defaultUrl!
+    assertSafeComfyUrl(baseUrl)
 
     const workflow = request.parameters?.workflow
     if (!workflow || typeof workflow !== "object") {
@@ -222,7 +243,9 @@ export class ComfyUIImageProvider implements ImageProvider {
 
   async validateKey(_apiKey: string, apiUrl: string): Promise<boolean> {
     try {
-      const res = await fetch(`${apiUrl || this.capabilities.defaultUrl}/system_stats`, {
+      const baseUrl = apiUrl || this.capabilities.defaultUrl
+      assertSafeComfyUrl(baseUrl!)
+      const res = await fetch(`${baseUrl}/system_stats`, {
         signal: AbortSignal.timeout(5000),
       })
       return res.ok
@@ -234,6 +257,7 @@ export class ComfyUIImageProvider implements ImageProvider {
   async listModels(_apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
     try {
       const baseUrl = apiUrl || this.capabilities.defaultUrl
+      assertSafeComfyUrl(baseUrl!)
       const res = await fetch(`${baseUrl}/object_info/CheckpointLoaderSimple`, {
         signal: AbortSignal.timeout(10000),
       })

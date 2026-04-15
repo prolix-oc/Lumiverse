@@ -74,11 +74,19 @@ app.get("/lucid-cards", async (c) => {
 app.post("/lucid-cards/import", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  if (!body.slug) return c.json({ error: "slug is required" }, 400);
+  if (!body.slug || typeof body.slug !== "string") {
+    return c.json({ error: "slug is required" }, 400);
+  }
+  // Restrict to the slug character set the catalog uses; rejects path-traversal
+  // attempts (`../`) and query-injection (`?foo=bar`) before they reach the
+  // upstream URL builder.
+  if (!/^[a-zA-Z0-9._-]{1,128}$/.test(body.slug)) {
+    return c.json({ error: "slug must be alphanumeric (with . _ -), max 128 chars" }, 400);
+  }
 
   let rawData: any;
   try {
-    const res = await fetch(`https://lucid.cards/api/lumia-dlc/${body.slug}`);
+    const res = await fetch(`https://lucid.cards/api/lumia-dlc/${encodeURIComponent(body.slug)}`);
     if (!res.ok) return c.json({ error: `Pack not found: ${res.status}` }, 404);
     rawData = await res.json();
   } catch {

@@ -327,9 +327,10 @@ export function listVaults(userId: string): Vault[] {
 }
 
 /**
- * Get a vault with its entities and relations.
+ * Get a vault with its entities and relations. Scoped to the caller — vaults
+ * are per-user and never shared, so always require userId here.
  */
-export function getVault(vaultId: string): {
+export function getVault(userId: string, vaultId: string): {
   vault: Vault;
   entities: VaultEntity[];
   relations: VaultRelation[];
@@ -339,8 +340,8 @@ export function getVault(vaultId: string): {
     `SELECT v.*, c.name AS source_chat_name
      FROM cortex_vaults v
      LEFT JOIN chats c ON c.id = v.source_chat_id
-     WHERE v.id = ?`,
-  ).get(vaultId) as (VaultRow & { source_chat_name: string | null }) | null;
+     WHERE v.id = ? AND v.user_id = ?`,
+  ).get(vaultId, userId) as (VaultRow & { source_chat_name: string | null }) | null;
   if (!vaultRow) return null;
 
   const entityRows = db.query(
@@ -409,7 +410,10 @@ export function attachLink(
   // Validate
   if (linkType === "vault") {
     if (!opts.vaultId) throw new Error("vaultId is required for vault links");
-    const vault = db.query(`SELECT id FROM cortex_vaults WHERE id = ?`).get(opts.vaultId);
+    // Scope by user_id so a user can't attach someone else's vault by guessing UUIDs.
+    const vault = db.query(
+      `SELECT id FROM cortex_vaults WHERE id = ? AND user_id = ?`,
+    ).get(opts.vaultId, userId);
     if (!vault) throw new Error("Vault not found");
 
     // Check for duplicate
@@ -420,7 +424,10 @@ export function attachLink(
   } else {
     if (!opts.targetChatId) throw new Error("targetChatId is required for interlinks");
     if (opts.targetChatId === chatId) throw new Error("Cannot interlink a chat with itself");
-    const chat = db.query(`SELECT id FROM chats WHERE id = ?`).get(opts.targetChatId);
+    // Target chat must also belong to the caller; cross-user interlinks are not supported.
+    const chat = db.query(
+      `SELECT id FROM chats WHERE id = ? AND user_id = ?`,
+    ).get(opts.targetChatId, userId);
     if (!chat) throw new Error("Target chat not found");
 
     // Check for duplicate
@@ -496,7 +503,9 @@ export function attachLink(
 }
 
 /**
- * Get all links for a chat with joined display names.
+ * Get all links for a chat with joined display names. Caller MUST verify chat
+ * ownership before invoking — links are scoped per-chat and cortex routes
+ * already gate on getChat(userId, chatId).
  */
 export function getChatLinks(chatId: string): ChatLink[] {
   const rows = getDb().query(
@@ -570,10 +579,11 @@ function vaultRelationsToEdges(relations: VaultRelation[]): RelationEdge[] {
 }
 
 /**
- * Get vault data formatted for prompt assembly.
+ * Get vault data formatted for prompt assembly. Scoped to the caller — assembly
+ * always knows which user's chat it's building for.
  */
-export function getVaultDataForAssembly(vaultId: string): VaultCortexData | null {
-  const data = getVault(vaultId);
+export function getVaultDataForAssembly(userId: string, vaultId: string): VaultCortexData | null {
+  const data = getVault(userId, vaultId);
   if (!data) return null;
 
   return {
@@ -593,6 +603,7 @@ export function getVaultDataForAssembly(vaultId: string): VaultCortexData | null
  * Uses visitedChatIds to prevent circular interlink recursion.
  */
 export function getLinkedCortexData(
+  userId: string,
   chatId: string,
   visitedChatIds?: Set<string>,
 ): {
@@ -608,7 +619,7 @@ export function getLinkedCortexData(
 
   for (const link of links) {
     if (link.linkType === "vault" && link.vaultId) {
-      const vaultData = getVaultDataForAssembly(link.vaultId);
+      const vaultData = getVaultDataForAssembly(userId, link.vaultId);
       if (vaultData) vaults.push(vaultData);
     } else if (link.linkType === "interlink" && link.targetChatId) {
       // Skip if already visited (circular link guard)

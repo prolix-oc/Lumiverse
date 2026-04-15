@@ -25,6 +25,37 @@ const TOKEN_REFRESH_MARGIN = 300; // refresh 5 min before expiry
 /** Per-connection token cache keyed by client_email. */
 const tokenCache = new Map<string, CachedToken>();
 
+/**
+ * Cap on cached tokens. Long-running deployments that rotate through many
+ * service accounts (e.g. a multi-tenant Vertex setup) used to grow this map
+ * without bound. We evict the oldest entry by insertion order when the cap
+ * is hit, and a periodic sweep drops entries that have already expired so
+ * idle accounts don't squat on cache slots.
+ */
+const TOKEN_CACHE_MAX = 256;
+const TOKEN_CACHE_SWEEP_MS = 5 * 60 * 1000;
+let _vertexSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureVertexCacheSweep(): void {
+  if (_vertexSweepTimer) return;
+  _vertexSweepTimer = setInterval(() => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [key, entry] of tokenCache) {
+      if (entry.expiresAt <= now) tokenCache.delete(key);
+    }
+  }, TOKEN_CACHE_SWEEP_MS);
+  if (typeof (_vertexSweepTimer as { unref?: () => void }).unref === "function") {
+    (_vertexSweepTimer as { unref: () => void }).unref();
+  }
+}
+
+export function stopVertexTokenSweep(): void {
+  if (_vertexSweepTimer) {
+    clearInterval(_vertexSweepTimer);
+    _vertexSweepTimer = null;
+  }
+}
+
 function base64urlEncode(input: string | ArrayBuffer): string {
   const bytes = typeof input === "string"
     ? new TextEncoder().encode(input)
@@ -75,6 +106,7 @@ async function createSignedJwt(sa: ServiceAccountCredentials): Promise<string> {
 }
 
 export async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
+  ensureVertexCacheSweep();
   const now = Math.floor(Date.now() / 1000);
   const cached = tokenCache.get(sa.client_email);
   if (cached && now < cached.expiresAt - TOKEN_REFRESH_MARGIN) {
@@ -99,6 +131,14 @@ export async function getAccessToken(sa: ServiceAccountCredentials): Promise<str
     accessToken: data.access_token,
     expiresAt: now + data.expires_in,
   };
+  // FIFO eviction once we hit the cap. We refresh the entry below so a
+  // currently-active service account never gets evicted in favor of a colder
+  // one (we delete then re-set, which moves to the back of insertion order).
+  if (tokenCache.size >= TOKEN_CACHE_MAX && !tokenCache.has(sa.client_email)) {
+    const oldest = tokenCache.keys().next();
+    if (!oldest.done) tokenCache.delete(oldest.value);
+  }
+  tokenCache.delete(sa.client_email);
   tokenCache.set(sa.client_email, token);
   return token.accessToken;
 }

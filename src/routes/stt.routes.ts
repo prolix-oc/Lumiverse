@@ -3,6 +3,8 @@ import * as sttSvc from "../services/stt.service";
 
 const app = new Hono();
 
+const MAX_STT_AUDIO_BYTES = 50 * 1024 * 1024; // 50 MB — well above any realistic recording
+
 /** Transcribe audio via OpenAI STT */
 app.post("/transcribe", async (c) => {
   const userId = c.get("userId");
@@ -12,6 +14,9 @@ app.post("/transcribe", async (c) => {
     const file = formData.get("audio") as File | null;
     if (!file) {
       return c.json({ error: "audio file is required" }, 400);
+    }
+    if (typeof file.size === "number" && file.size > MAX_STT_AUDIO_BYTES) {
+      return c.json({ error: "Audio file too large", maxBytes: MAX_STT_AUDIO_BYTES }, 413);
     }
 
     const audioData = await file.arrayBuffer();

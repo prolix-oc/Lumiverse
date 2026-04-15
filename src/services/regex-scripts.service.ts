@@ -15,6 +15,15 @@ import type {
 import type { MacroEnv } from "../macros/types";
 import { evaluate } from "../macros/MacroEvaluator";
 import { registry } from "../macros/MacroRegistry";
+import {
+  regexCollectSandboxed,
+  regexReplaceSandboxed,
+  regexTestSandboxed,
+  RegexTimeoutError,
+  type SandboxMatch,
+} from "../utils/regex-sandbox";
+
+const REGEX_SCRIPT_TIMEOUT_MS = 500;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -543,13 +552,17 @@ export async function applyRegexScripts(
     }
 
     try {
-      const startTime = Date.now();
-      const regex = new RegExp(script.find_regex, script.flags);
-
       if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
-        // BEFORE macro resolution so $1, $2, etc. are available inside macros
-        const matches = collectMatches(result, regex);
+        // BEFORE macro resolution so $1, $2, etc. are available inside macros.
+        // Match collection runs in the regex sandbox so a pathological
+        // user-authored pattern can't freeze the event loop here.
+        const matches: SandboxMatch[] = await regexCollectSandboxed(
+          script.find_regex,
+          script.flags,
+          result,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
         if (matches.length > 0) {
           const replacements = await Promise.all(
             matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
@@ -562,12 +575,19 @@ export async function applyRegexScripts(
           result = rebuildFromMatches(result, matches, replacements);
         }
       } else {
-        // "none" or "escaped" mode: resolve macros first (if applicable), then string replace
+        // "none" or "escaped" mode: resolve macros first (if applicable), then
+        // run the actual replace inside the sandbox.
         let replaceString = script.replace_string;
         if (macroEnv && script.substitute_macros !== "none") {
           replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
         }
-        result = result.replace(regex, replaceString);
+        result = await regexReplaceSandboxed(
+          script.find_regex,
+          script.flags,
+          result,
+          replaceString,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
       }
 
       // Apply trim_strings
@@ -578,12 +598,13 @@ export async function applyRegexScripts(
           }
         }
       }
-
-      // Safety check: skip script if it took > 500ms
-      if (Date.now() - startTime > 500) {
-        console.warn(`[RegexScripts] Script "${script.name}" (${script.id}) exceeded 500ms, skipping`);
-      }
     } catch (e) {
+      if (e instanceof RegexTimeoutError) {
+        console.warn(
+          `[RegexScripts] Script "${script.name}" (${script.id}) exceeded ${REGEX_SCRIPT_TIMEOUT_MS}ms, skipping`,
+        );
+        continue;
+      }
       console.warn(`[RegexScripts] Failed to apply script "${script.name}" (${script.id}):`, e);
     }
   }
@@ -593,23 +614,31 @@ export async function applyRegexScripts(
 
 // ── Test ─────────────────────────────────────────────────────────────────────
 
-export function testRegex(
+const TEST_REGEX_TIMEOUT_MS = 1_000;
+
+export async function testRegex(
   findRegex: string,
   replaceString: string,
   flags: string,
-  content: string
-): { result: string; matches: number; error?: string } {
+  content: string,
+): Promise<{ result: string; matches: number; error?: string }> {
   try {
-    const regex = new RegExp(findRegex, flags);
-    let matches = 0;
-    content.replace(regex, (...args) => {
-      matches++;
-      return args[0];
-    });
-    const result = content.replace(regex, replaceString);
-    return { result, matches };
+    const out = await regexTestSandboxed(
+      findRegex,
+      flags,
+      content,
+      replaceString,
+      TEST_REGEX_TIMEOUT_MS,
+    );
+    return out;
   } catch (e: any) {
-    return { result: content, matches: 0, error: e.message };
+    if (e instanceof RegexTimeoutError) {
+      // Surface the timeout to the caller as a soft error so the UI can show
+      // "your regex is too slow / contains catastrophic backtracking" without
+      // a 500.
+      return { result: content, matches: 0, error: e.message };
+    }
+    return { result: content, matches: 0, error: e?.message || "Regex error" };
   }
 }
 

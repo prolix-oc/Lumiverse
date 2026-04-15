@@ -4,6 +4,13 @@ import {
   getRegexScriptByScriptId,
   substituteRegexCaptures,
 } from "../../services/regex-scripts.service";
+import {
+  regexCollectSandboxed,
+  regexReplaceSandboxed,
+  RegexTimeoutError,
+} from "../../utils/regex-sandbox";
+
+const REGEX_REF_TIMEOUT_MS = 500;
 
 /** Normalize a script_id: lowercase, spaces/hyphens → underscores, strip punctuation. */
 function normalizeScriptId(raw: string): string {
@@ -46,25 +53,19 @@ export function registerRegexRefMacros(): void {
       if (!script || script.disabled) return text;
 
       try {
-        const regex = new RegExp(script.find_regex, script.flags);
         let result: string;
 
         if (script.substitute_macros === "raw") {
           // "raw" mode: substitute capture groups BEFORE macro resolution
-          // so $1, $2, etc. are available inside macro arguments
-          const re = new RegExp(regex.source, regex.flags);
-          const matches: { fullMatch: string; index: number; groups: (string | undefined)[]; namedGroups?: Record<string, string> }[] = [];
-
-          if (re.global || re.sticky) {
-            let m: RegExpExecArray | null;
-            while ((m = re.exec(text)) !== null) {
-              matches.push({ fullMatch: m[0], index: m.index, groups: Array.from(m).slice(1), namedGroups: m.groups });
-              if (m[0].length === 0) re.lastIndex++;
-            }
-          } else {
-            const m = re.exec(text);
-            if (m) matches.push({ fullMatch: m[0], index: m.index, groups: Array.from(m).slice(1), namedGroups: m.groups });
-          }
+          // so $1, $2, etc. are available inside macro arguments. Match
+          // collection runs in the regex sandbox so a malicious script
+          // pattern can't freeze the assembly thread.
+          const matches = await regexCollectSandboxed(
+            script.find_regex,
+            script.flags,
+            text,
+            REGEX_REF_TIMEOUT_MS,
+          );
 
           if (matches.length > 0) {
             const replacements = await Promise.all(
@@ -96,7 +97,13 @@ export function registerRegexRefMacros(): void {
               ? resolved.replace(/\$/g, "$$$$")
               : resolved;
           }
-          result = text.replace(regex, replaceString);
+          result = await regexReplaceSandboxed(
+            script.find_regex,
+            script.flags,
+            text,
+            replaceString,
+            REGEX_REF_TIMEOUT_MS,
+          );
         }
 
         // Apply trim_strings
@@ -109,8 +116,12 @@ export function registerRegexRefMacros(): void {
         }
 
         return result;
-      } catch {
-        ctx.warn(`regexInstalled: failed to apply script "${scriptId}"`);
+      } catch (err) {
+        if (err instanceof RegexTimeoutError) {
+          ctx.warn(`regexInstalled: script "${scriptId}" exceeded ${REGEX_REF_TIMEOUT_MS}ms`);
+        } else {
+          ctx.warn(`regexInstalled: failed to apply script "${scriptId}"`);
+        }
         return text;
       }
     },

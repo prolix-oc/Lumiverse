@@ -179,11 +179,18 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
   }));
 }
 
-// Prepared statement for hot-path chat fetch
+// Prepared statement for hot-path chat fetch. We re-bind whenever the DB
+// generation token changes (e.g. test teardown or migration reopens the
+// database) — a statement bound to a closed Database silently fails.
 let _stmtChatById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtChatByIdGen = -1;
 
 export function getChat(userId: string, id: string): Chat | null {
-  if (!_stmtChatById) _stmtChatById = getDb().query("SELECT * FROM chats WHERE id = ? AND user_id = ?");
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (!_stmtChatById || _stmtChatByIdGen !== gen) {
+    _stmtChatById = getDb().query("SELECT * FROM chats WHERE id = ? AND user_id = ?");
+    _stmtChatByIdGen = gen;
+  }
   const row = _stmtChatById.get(id, userId) as any;
   if (!row) return null;
   return rowToChat(row);
@@ -245,6 +252,14 @@ export function deleteChat(userId: string, id: string): boolean {
   if (result.changes > 0) {
     invalidateChatMemoryCache(id);
     removePoolEntriesForChat(userId, id);
+    // Drop any debounced vectorization timers tied to this chat — without
+    // this the gc.dirtyChunks Map would hold timers for a chat that no longer
+    // exists until they fire and quietly fail.
+    try {
+      const { clearDebouncedVectorizationsForChat } = require("./memory-cortex/gc") as
+        typeof import("./memory-cortex/gc");
+      clearDebouncedVectorizationsForChat(id);
+    } catch { /* memory-cortex disabled or not loaded */ }
     eventBus.emit(EventType.CHAT_DELETED, { id }, userId);
   }
   return result.changes > 0;
@@ -430,21 +445,26 @@ export function reattributeUserMessages(userId: string, chatId: string, personaI
   const chat = getChat(userId, chatId);
   if (!chat) return null;
 
-  const rows = getDb()
+  const db = getDb();
+  const rows = db
     .query("SELECT id, extra FROM messages WHERE chat_id = ? AND is_user = 1")
     .all(chatId) as Array<{ id: string; extra: string }>;
 
-  const update = getDb().query("UPDATE messages SET name = ?, extra = ? WHERE id = ?");
-  for (const row of rows) {
-    let extra: Record<string, any> = {};
-    try {
-      extra = row.extra ? JSON.parse(row.extra) : {};
-    } catch {
-      extra = {};
+  const update = db.query("UPDATE messages SET name = ?, extra = ? WHERE id = ?");
+  // Wrap the per-message updates in a single transaction so a crash partway
+  // through can never leave the chat in a half-renamed state.
+  db.transaction(() => {
+    for (const row of rows) {
+      let extra: Record<string, any> = {};
+      try {
+        extra = row.extra ? JSON.parse(row.extra) : {};
+      } catch {
+        extra = {};
+      }
+      extra.persona_id = personaId;
+      update.run(personaName, JSON.stringify(extra), row.id);
     }
-    extra.persona_id = personaId;
-    update.run(personaName, JSON.stringify(extra), row.id);
-  }
+  })();
 
   if (rows.length > 0) {
     eventBus.emit(EventType.CHAT_CHANGED, { chatId, reattributedUserMessages: rows.length }, userId);

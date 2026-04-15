@@ -4,14 +4,25 @@ import { auth, allowCreation } from "../auth";
 import { getDb } from "../db/connection";
 import { getUserBaseDir } from "../auth/provision";
 import { hashPassword, verifyPassword } from "../crypto/password";
+import { rateLimit } from "../middleware/rate-limit";
 import { rmSync, existsSync } from "fs";
 
 const app = new Hono();
 
+// scrypt-backed endpoints: bound how often a single client can request work
+// from the libuv thread pool. 5 attempts per 5 minutes per IP is generous for
+// real users (typo, retry) but cripples a brute-force loop.
+const passwordLimiter = rateLimit({
+  bucket: "user-password",
+  max: 5,
+  windowMs: 5 * 60 * 1000,
+  message: "Too many password attempts. Try again later.",
+});
+
 // ── Self-service (any authenticated user) ───────────────────────────────
 
 // POST /me/password — change own password
-app.post("/me/password", async (c) => {
+app.post("/me/password", passwordLimiter, async (c) => {
   const session = c.get("session");
   const body = await c.req.json();
 
@@ -105,7 +116,7 @@ admin.post("/", async (c) => {
 });
 
 // POST /:id/reset-password — admin password reset
-admin.post("/:id/reset-password", async (c) => {
+admin.post("/:id/reset-password", passwordLimiter, async (c) => {
   const { id } = c.req.param();
   const body = await c.req.json();
 

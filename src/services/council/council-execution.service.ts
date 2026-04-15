@@ -275,7 +275,9 @@ async function executeMemberTools(
             bareToolName,
             {
               context: contextSummary,
-              __userId: input.userId,
+              // Deadline hint is opaque and useful for the extension; userId is
+              // intentionally NOT included here — the worker host strips any
+              // attempted __userId injection before posting to the worker.
               __deadlineMs: Date.now() + settings.toolsSettings.timeoutMs,
             },
             settings.toolsSettings.timeoutMs
@@ -331,7 +333,13 @@ async function executeMemberTools(
   return results;
 }
 
-/** Route a tool call to the extension worker that registered it. */
+/**
+ * Route a tool call to the extension worker that registered it. We never
+ * forward the authenticated userId — extensions run in their own user-scoped
+ * worker and reach back via the RPC bridge under that identity. Passing the
+ * raw userId to the tool handler would let a malicious extension impersonate
+ * the user via its own internal state, defeating the worker boundary.
+ */
 async function invokeExtensionToolViaWorker(
   userId: string,
   extensionId: string,
@@ -343,7 +351,7 @@ async function invokeExtensionToolViaWorker(
   if (!host) {
     throw new Error(`Extension worker '${extensionId}' is not running`);
   }
-  return host.invokeExtensionTool(toolName, { ...args, __userId: userId }, timeoutMs);
+  return host.invokeExtensionTool(toolName, args, timeoutMs);
 }
 
 /** Call the sidecar LLM for a single tool. */

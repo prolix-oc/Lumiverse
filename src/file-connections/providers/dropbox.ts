@@ -8,6 +8,7 @@
 
 import { posix } from "path";
 import type { FileSystem, FileEntry, FileStat, DropboxConnectionConfig } from "../types";
+import { readResponseBuffer, MAX_REMOTE_FILE_BYTES } from "../remote-fetch-cap";
 
 const API_BASE = "https://api.dropboxapi.com/2";
 const CONTENT_BASE = "https://content.dropboxapi.com/2";
@@ -100,20 +101,12 @@ export class DropboxFileSystem implements FileSystem {
       },
     });
     if (!res.ok) throw new Error(`Failed to download: ${path}`);
-    return Buffer.from(await res.arrayBuffer());
+    return readResponseBuffer(res, MAX_REMOTE_FILE_BYTES, path);
   }
 
   async readText(path: string): Promise<string> {
-    const dbxPath = this.toDbxPath(path);
-    const res = await fetch(`${CONTENT_BASE}/files/download`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        "Dropbox-API-Arg": JSON.stringify({ path: dbxPath }),
-      },
-    });
-    if (!res.ok) throw new Error(`Failed to download: ${path}`);
-    return res.text();
+    const buf = await this.readFile(path);
+    return buf.toString("utf-8");
   }
 
   // ─── Path operations ──────────────────────────────────────────────────

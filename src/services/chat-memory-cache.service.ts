@@ -180,12 +180,13 @@ function computeSettingsKey(
     hybridWeightMode,
   });
 
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < raw.length; i++) {
-    hash ^= raw.charCodeAt(i);
-    hash = (hash * 0x01000193) >>> 0;
-  }
-  return hash.toString(36);
+  // FNV-32 has only 2^32 outputs, so two distinct settings combinations would
+  // collide after roughly 65k unique payloads (birthday paradox). On a hit the
+  // cache would return the wrong precomputed memories. SHA-256 puts the
+  // collision probability beyond any practical concern.
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(raw);
+  return hasher.digest("hex");
 }
 
 function getVisibleMessageCount(messages: MemoryMessageView[]): number {

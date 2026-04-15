@@ -10,6 +10,7 @@
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { getDb } from "../db/connection";
 import { getProvider } from "../llm/registry";
 import * as chatsSvc from "../services/chats.service";
@@ -22,6 +23,21 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
 const app = new Hono();
+
+/**
+ * Ownership gate: returns the chat if the caller owns it, otherwise emits a 404
+ * Response that the route handler must return immediately. Memory-cortex service
+ * functions take chatId without a userId scope, so EVERY :chatId route must
+ * check ownership here before touching cortex data.
+ */
+function ensureChatOwnership(c: Context, chatId: string):
+  | { ok: true; userId: string }
+  | { ok: false; response: Response } {
+  const userId = c.get("userId");
+  const chat = getChat(userId, chatId);
+  if (!chat) return { ok: false, response: c.json({ error: "Chat not found" }, 404) };
+  return { ok: true, userId };
+}
 
 // ─── Configuration ─────────────────────────────────────────────
 
@@ -503,6 +519,8 @@ app.get("/health", async (c) => {
 /** GET /chats/:chatId/entities — List entities for a chat */
 app.get("/chats/:chatId/entities", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const status = c.req.query("status"); // "active", "inactive", or omit for all
   const entities = memoryCortex.getEntities(chatId);
 
@@ -529,7 +547,10 @@ app.get("/chats/:chatId/entities", (c) => {
 
 /** GET /chats/:chatId/entities/:entityId — Get a single entity */
 app.get("/chats/:chatId/entities/:entityId", (c) => {
-  const entity = memoryCortex.findEntity(c.req.param("chatId"), c.req.param("entityId"));
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const entity = memoryCortex.findEntity(chatId, c.req.param("entityId"));
   if (!entity) return c.json({ error: "Entity not found" }, 404);
   return c.json(entity);
 });
@@ -537,10 +558,12 @@ app.get("/chats/:chatId/entities/:entityId", (c) => {
 /** PUT /chats/:chatId/entities/:entityId — Update an entity (manual edit) */
 app.put("/chats/:chatId/entities/:entityId", async (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const entityId = c.req.param("entityId");
   const body = await c.req.json();
 
-  // Find the entity first
+  // Find the entity first (scoped to this chat — prevents cross-chat hijack via entity ID)
   const entities = memoryCortex.getEntities(chatId);
   const entity = entities.find((e) => e.id === entityId);
   if (!entity) return c.json({ error: "Entity not found" }, 404);
@@ -566,9 +589,11 @@ app.put("/chats/:chatId/entities/:entityId", async (c) => {
   if (updates.length === 0) return c.json({ error: "No fields to update" }, 400);
 
   updates.push("updated_at = ?");
-  params.push(now, entityId);
+  params.push(now, entityId, chatId);
 
-  db.query(`UPDATE memory_entities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+  // Scope WHERE by chat_id as defense-in-depth: even if a global entity ID leaks,
+  // the chat-ownership gate above plus this filter prevents cross-chat writes.
+  db.query(`UPDATE memory_entities SET ${updates.join(", ")} WHERE id = ? AND chat_id = ?`).run(...params);
 
   const updated = memoryCortex.getEntities(chatId).find((e) => e.id === entityId);
   return c.json(updated);
@@ -576,14 +601,18 @@ app.put("/chats/:chatId/entities/:entityId", async (c) => {
 
 /** DELETE /chats/:chatId/entities/:entityId — Delete an entity */
 app.delete("/chats/:chatId/entities/:entityId", (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const entityId = c.req.param("entityId");
   const { getDb } = require("../db/connection");
   const db = getDb();
 
-  // CASCADE will handle mentions, but we need to clean relations manually
-  db.query("DELETE FROM memory_relations WHERE source_entity_id = ? OR target_entity_id = ?")
-    .run(entityId, entityId);
-  const result = db.query("DELETE FROM memory_entities WHERE id = ?").run(entityId);
+  // Scope deletes by chat_id so a leaked entity ID can't take down another chat's data.
+  db.query(
+    `DELETE FROM memory_relations WHERE chat_id = ? AND (source_entity_id = ? OR target_entity_id = ?)`,
+  ).run(chatId, entityId, entityId);
+  const result = db.query("DELETE FROM memory_entities WHERE id = ? AND chat_id = ?").run(entityId, chatId);
 
   if (result.changes === 0) return c.json({ error: "Entity not found" }, 404);
   return c.json({ success: true });
@@ -592,6 +621,8 @@ app.delete("/chats/:chatId/entities/:entityId", (c) => {
 /** POST /chats/:chatId/entities/merge — Merge two entities into one */
 app.post("/chats/:chatId/entities/merge", async (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const { sourceId, targetId } = await c.req.json();
 
   if (!sourceId || !targetId) return c.json({ error: "sourceId and targetId required" }, 400);
@@ -660,6 +691,8 @@ app.post("/chats/:chatId/entities/merge", async (c) => {
 /** GET /chats/:chatId/colors — Get font color attributions with entity names */
 app.get("/chats/:chatId/colors", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const colorMap = memoryCortex.getColorMap(chatId);
 
   // Resolve entity names for display
@@ -679,8 +712,14 @@ app.get("/chats/:chatId/colors", (c) => {
 
 /** DELETE /chats/:chatId/colors/:id — Delete a color attribution */
 app.delete("/chats/:chatId/colors/:id", (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const { getDb } = require("../db/connection");
-  const result = getDb().query("DELETE FROM memory_font_colors WHERE id = ?").run(c.req.param("id"));
+  // Scope by chat_id so the integer :id can never delete another chat's color row.
+  const result = getDb()
+    .query("DELETE FROM memory_font_colors WHERE id = ? AND chat_id = ?")
+    .run(c.req.param("id"), chatId);
   if (result.changes === 0) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
@@ -690,6 +729,8 @@ app.delete("/chats/:chatId/colors/:id", (c) => {
 /** GET /chats/:chatId/relations — List relations with resolved entity names */
 app.get("/chats/:chatId/relations", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const relations = memoryCortex.getRelations(chatId);
 
   // Resolve entity names for display
@@ -718,6 +759,8 @@ app.get("/chats/:chatId/relations", (c) => {
 /** GET /chats/:chatId/consolidations — List consolidations */
 app.get("/chats/:chatId/consolidations", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const tier = c.req.query("tier") ? parseInt(c.req.query("tier")!, 10) : undefined;
   const consolidations = memoryCortex.getConsolidations(chatId, tier);
   return c.json({ data: consolidations, total: consolidations.length });
@@ -728,6 +771,8 @@ app.get("/chats/:chatId/consolidations", (c) => {
 /** GET /chats/:chatId/chunks — List memory chunks with salience data */
 app.get("/chats/:chatId/chunks", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 200);
   const offset = parseInt(c.req.query("offset") || "0", 10);
 
@@ -755,6 +800,8 @@ app.get("/chats/:chatId/chunks", (c) => {
 /** GET /chats/:chatId/salience — List salience records with emotional/narrative data */
 app.get("/chats/:chatId/salience", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 200);
   const offset = parseInt(c.req.query("offset") || "0", 10);
 
@@ -780,6 +827,8 @@ app.get("/chats/:chatId/salience", (c) => {
 /** GET /chats/:chatId/cortex-stats — Get usage stats for a chat's cortex */
 app.get("/chats/:chatId/cortex-stats", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const stats = memoryCortex.getCortexUsageStats(chatId);
   return c.json(stats);
 });
@@ -789,6 +838,8 @@ app.get("/chats/:chatId/cortex-stats", (c) => {
 /** GET /chats/:chatId/rebuild-status — Check if a rebuild is running (survives browser close) */
 app.get("/chats/:chatId/rebuild-status", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const status = memoryCortex.getRebuildStatus(chatId);
   if (!status) return c.json({ status: "idle" });
   return c.json(status);
@@ -938,6 +989,8 @@ app.post("/chats/:chatId/migrate-heuristics", async (c) => {
 /** GET /chats/:chatId/relations/all — List ALL relations including superseded/suspect/merged (diagnostics) */
 app.get("/chats/:chatId/relations/all", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const relations = memoryCortex.getAllRelationsUnfiltered(chatId);
 
   const db = getDb();
@@ -962,6 +1015,8 @@ app.get("/chats/:chatId/relations/all", (c) => {
 /** GET /chats/:chatId/entities/needs-facts — Get entities needing fact extraction */
 app.get("/chats/:chatId/entities/needs-facts", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   const threshold = parseFloat(c.req.query("threshold") || "0.45");
   const entities = memoryCortex.getEntitiesNeedingFactExtraction(chatId, threshold, 20);
   return c.json({ data: entities, total: entities.length });
@@ -999,8 +1054,9 @@ app.get("/vaults", (c) => {
 
 /** GET /vaults/:id — Get vault with entities and relations */
 app.get("/vaults/:id", (c) => {
+  const userId = c.get("userId");
   const vaultId = c.req.param("id");
-  const data = memoryCortex.getVault(vaultId);
+  const data = memoryCortex.getVault(userId, vaultId);
   if (!data) return c.json({ error: "Vault not found" }, 404);
   return c.json(data);
 });
@@ -1057,6 +1113,8 @@ app.post("/chats/:chatId/links", async (c) => {
 /** GET /chats/:chatId/links — List links for a chat */
 app.get("/chats/:chatId/links", (c) => {
   const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
   return c.json({ data: memoryCortex.getChatLinks(chatId) });
 });
 

@@ -163,11 +163,22 @@ export function resolveCanonicalId(
   if (byName) return byName.id;
 
   // 3+4. Combined alias lookup and normalized fuzzy match.
-  // Single query fetches all fields needed for both alias and fuzzy resolution,
-  // replacing the two separate LIMIT 500 queries that previously ran sequentially.
+  // Single query fetches all fields needed for both alias and fuzzy resolution.
+  // The previous LIMIT 500 silently dropped entities below the cutoff in long
+  // chats, causing duplicate-entity drift. We raise the working set to 2000 and
+  // log when we hit the cap so operators can spot pathologically large chats.
+  const FUZZY_RESOLUTION_LIMIT = 2000;
   const allEntities = db
-    .query("SELECT id, name, aliases, entity_type FROM memory_entities WHERE chat_id = ? ORDER BY mention_count DESC LIMIT 500")
-    .all(chatId) as Array<{ id: string; name: string; aliases: string; entity_type: string }>;
+    .query(
+      `SELECT id, name, aliases, entity_type FROM memory_entities
+       WHERE chat_id = ? ORDER BY mention_count DESC LIMIT ?`,
+    )
+    .all(chatId, FUZZY_RESOLUTION_LIMIT) as Array<{ id: string; name: string; aliases: string; entity_type: string }>;
+  if (allEntities.length === FUZZY_RESOLUTION_LIMIT) {
+    console.warn(
+      `[memory-cortex] resolveCanonicalId: chat ${chatId} has ≥${FUZZY_RESOLUTION_LIMIT} entities — fuzzy match window saturated; consider running consolidation`,
+    );
+  }
 
   // 3. Exact alias match (case-insensitive)
   const lowerName = nameOrId.toLowerCase();
@@ -190,13 +201,24 @@ export function resolveCanonicalId(
     const aliases = safeJsonArray(row.aliases);
     if (aliases.some((a) => normalizeEntityName(a) === normalized)) return row.id;
 
-    // Check if incoming is a substring of stored name or vice versa (for "Pulchra" matching "Pulchra Fellini")
+    // Check if incoming is a substring of stored name or vice versa (for "Pulchra" matching "Pulchra Fellini").
+    // Require a longer minimum length on the SHORTER name so common short
+    // tokens like "New" don't fold into "New York" or "Dark Brotherhood".
+    // Also restrict the match to character entities, where first-name shorthand
+    // is an actual usage pattern — locations and other types should not be
+    // auto-merged on substring alone.
     const storedNorm = normalizeEntityName(row.name);
-    if (storedNorm.length >= 3 && normalized.length >= 3) {
-      // Shorter name is contained within longer name as a word boundary match
+    if (
+      row.entity_type === "character" &&
+      storedNorm.length >= 5 &&
+      normalized.length >= 5
+    ) {
       const shorter = storedNorm.length <= normalized.length ? storedNorm : normalized;
       const longer = storedNorm.length <= normalized.length ? normalized : storedNorm;
-      if (longer.startsWith(shorter + " ") || longer.endsWith(" " + shorter)) {
+      if (
+        shorter.length >= 5 &&
+        (longer.startsWith(shorter + " ") || longer.endsWith(" " + shorter))
+      ) {
         return row.id;
       }
     }

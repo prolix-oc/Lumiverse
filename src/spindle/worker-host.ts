@@ -80,6 +80,91 @@ import { join, resolve, relative, sep } from "path";
 const EPHEMERAL_MAX_FILES = 250;
 
 const CORS_PROXY_TIMEOUT_MS = 30_000;
+const CORS_PROXY_MAX_BODY_BYTES = 25 * 1024 * 1024; // 25 MB
+
+const MAX_CSS_VALUE_LENGTH = 1024;
+
+/**
+ * Reject CSS variable values that could exfiltrate data, deface the UI in
+ * surprising ways, or chain into a CSS-injection attack. We accept ordinary
+ * literals (colors, lengths, shadows, gradients, font lists, transforms) and
+ * reject things like `url(javascript:...)`, `expression(...)`, `@import`, and
+ * embedded HTML/JS — everything you'd expect a Lumiverse theme variable to
+ * never contain.
+ */
+function validateCssValue(value: unknown): string | null {
+  if (value === undefined || value === null) return "value must be a string";
+  if (typeof value !== "string") return "value must be a string";
+  if (value.length > MAX_CSS_VALUE_LENGTH) return `value exceeds ${MAX_CSS_VALUE_LENGTH} characters`;
+  if (value.length === 0) return null; // empty string clears the var, which is fine
+
+  const trimmed = value.trim();
+  // Strip any backslash escapes so attackers can't smuggle disallowed tokens
+  // like `expr\ession(...)`. We're checking the literal characters the browser
+  // would interpret.
+  const lowered = trimmed.toLowerCase().replace(/\\/g, "");
+
+  // Disallow control characters and unbalanced delimiters.
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) return "control characters not allowed";
+  if (/[<>]/.test(value)) return "angle brackets not allowed";
+  if (value.includes("{") || value.includes("}") || value.includes(";")) {
+    return "must be a single property value (no { } ; )";
+  }
+
+  // Block CSS sinks that can execute or exfiltrate.
+  if (lowered.includes("javascript:")) return "javascript: URLs not allowed";
+  if (lowered.includes("vbscript:")) return "vbscript: URLs not allowed";
+  if (lowered.includes("data:text/html")) return "data:text/html URLs not allowed";
+  if (lowered.includes("expression(")) return "CSS expression() not allowed";
+  if (lowered.startsWith("@")) return "at-rules not allowed in variable values";
+  if (/^url\(\s*['"]?\s*(?!https?:|data:image\/)/i.test(trimmed)) {
+    return "url() must point to https: or a data:image/* payload";
+  }
+  // Block image-attribute selector exfil patterns (`image-set("https://...")`)
+  // unless they are HTTPS or safe data: image URLs — same rule as url().
+  if (/image-set\(/i.test(trimmed)) {
+    if (!/image-set\(\s*['"]?\s*(https?:|data:image\/)/i.test(trimmed)) {
+      return "image-set() must point to https: or a data:image/* payload";
+    }
+  }
+  return null;
+}
+
+/**
+ * Drain a fetch response body up to `maxBytes`, throwing if the cap is hit.
+ * Using `.text()` would buffer the entire body unconditionally, so an attacker
+ * could ship a multi-GB response and exhaust process memory.
+ */
+async function readResponseBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      throw new Error(
+        `CORS proxy response exceeded ${maxBytes} bytes`,
+      );
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(concatChunks(chunks, total));
+}
+
+function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
 
 function requestWithAddressFamily(
   url: string,
@@ -415,11 +500,21 @@ export class WorkerHost {
   ): Promise<string> {
     const requestId = crypto.randomUUID();
 
+    // Defensive strip: never forward authentication-style metadata to the
+    // worker. Even if a caller leaks `__userId` or similar in args, the
+    // extension handler must not see it — extensions identify themselves via
+    // their worker context, not a string parameter they could exfiltrate.
+    const sanitizedArgs: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(args)) {
+      if (key === "__userId" || key === "__user_id" || key === "userId") continue;
+      sanitizedArgs[key] = value;
+    }
+
     this.postToWorker({
       type: "tool_invocation",
       requestId,
       toolName,
-      args,
+      args: sanitizedArgs,
     });
 
     return new Promise((resolve, reject) => {
@@ -3136,12 +3231,28 @@ export class WorkerHost {
       await validateHost(parsed.hostname);
 
       try {
-        const response = await fetch(url, {
-          method: options.method || "GET",
-          headers: options.headers,
-          body: options.body,
-        });
-        const text = await response.text();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), CORS_PROXY_TIMEOUT_MS);
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            method: options.method || "GET",
+            headers: options.headers,
+            body: options.body,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+        // Reject obvious oversize responses up-front; for unknown lengths we
+        // still cap the buffered body below.
+        const declared = response.headers.get("content-length");
+        if (declared && parseInt(declared, 10) > CORS_PROXY_MAX_BODY_BYTES) {
+          throw new Error(
+            `CORS proxy response too large (declared ${declared} bytes, max ${CORS_PROXY_MAX_BODY_BYTES})`,
+          );
+        }
+        const text = await readResponseBodyCapped(response, CORS_PROXY_MAX_BODY_BYTES);
         this.postToWorker({
           type: "response",
           requestId,
@@ -5009,10 +5120,15 @@ export class WorkerHost {
           this.postToWorker({ type: "response", requestId, error: "overrides.variables must be an object" });
           return;
         }
-        // Only allow CSS custom property keys (--*)
-        for (const key of Object.keys(overrides.variables)) {
+        // Only allow CSS custom property keys (--*) and validate each value
+        for (const [key, value] of Object.entries(overrides.variables)) {
           if (!key.startsWith("--")) {
             this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key: "${key}" (must start with --)` });
+            return;
+          }
+          const issue = validateCssValue(value);
+          if (issue) {
+            this.postToWorker({ type: "response", requestId, error: `Invalid CSS value for "${key}": ${issue}` });
             return;
           }
         }
@@ -5032,9 +5148,14 @@ export class WorkerHost {
               this.postToWorker({ type: "response", requestId, error: `variablesByMode.${modeKey} must be an object` });
               return;
             }
-            for (const key of Object.keys(modeVars)) {
+            for (const [key, value] of Object.entries(modeVars)) {
               if (!key.startsWith("--")) {
                 this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key in variablesByMode.${modeKey}: "${key}"` });
+                return;
+              }
+              const issue = validateCssValue(value);
+              if (issue) {
+                this.postToWorker({ type: "response", requestId, error: `Invalid CSS value in variablesByMode.${modeKey}["${key}"]: ${issue}` });
                 return;
               }
             }

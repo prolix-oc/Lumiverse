@@ -34,6 +34,16 @@ async function getEncryptionKey(): Promise<CryptoKey> {
   return _cachedKey;
 }
 
+/**
+ * Drop the cached AES key so the next encrypt/decrypt re-imports from the
+ * (potentially rotated) identity material. Call this from the identity-key
+ * rotation flow and from any test-suite teardown that reinitializes the
+ * encryption key.
+ */
+export function invalidateLumiHubKeyCache(): void {
+  _cachedKey = null;
+}
+
 async function encrypt(plaintext: string): Promise<{ encrypted: string; iv: string; tag: string }> {
   const key = await getEncryptionKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));

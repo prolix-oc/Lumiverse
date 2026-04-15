@@ -10,21 +10,16 @@ export function registerVariableMacros(): void {
     description: "Get a local (chat-scoped) variable value",
     returnType: "string",
     args: [{ name: "key", description: "Variable name" }],
-    handler: async (ctx) => {
+    handler: (ctx) => {
       const key = (ctx.args[0] || "").trim();
-      // Explicit local variable takes priority
-      if (ctx.env.variables.local.has(key)) {
-        return ctx.env.variables.local.get(key)!;
-      }
-      // Fall back: try resolving as a registered/dynamic macro so that
-      // dot-prefix shorthands like {{.persona}} resolve to {{persona}}
-      // when no variable of that name has been set.
       if (!key) return "";
-      const asMacro = `{{${key}}}`;
-      const resolved = await ctx.resolve(asMacro);
-      // If the evaluator couldn't resolve it (returned raw macro text), return empty
-      if (resolved === asMacro) return "";
-      return resolved;
+      // Explicit local variable lookup only. We do NOT fall back to evaluating
+      // the key as a macro — that allowed character/world-info content to
+      // smuggle macro side effects via keys like "setvar::foo::pwn", silently
+      // mutating variables on lookup.
+      return ctx.env.variables.local.has(key)
+        ? ctx.env.variables.local.get(key)!
+        : "";
     },
   });
 
@@ -137,18 +132,12 @@ export function registerVariableMacros(): void {
     returnType: "string",
     args: [{ name: "key", description: "Variable name" }],
     aliases: ["getglobalvar"],
-    handler: async (ctx) => {
+    handler: (ctx) => {
       const key = (ctx.args[0] || "").trim();
-      // Explicit global variable takes priority
-      if (ctx.env.variables.global.has(key)) {
-        return ctx.env.variables.global.get(key)!;
-      }
-      // Fall back: try resolving as a registered/dynamic macro
       if (!key) return "";
-      const asMacro = `{{${key}}}`;
-      const resolved = await ctx.resolve(asMacro);
-      if (resolved === asMacro) return "";
-      return resolved;
+      return ctx.env.variables.global.has(key)
+        ? ctx.env.variables.global.get(key)!
+        : "";
     },
   });
 
@@ -264,16 +253,12 @@ export function registerVariableMacros(): void {
     description: "Get a chat-scoped persisted variable value",
     returnType: "string",
     args: [{ name: "key", description: "Variable name" }],
-    handler: async (ctx) => {
+    handler: (ctx) => {
       const key = (ctx.args[0] || "").trim();
-      if (ctx.env.variables.chat.has(key)) {
-        return ctx.env.variables.chat.get(key)!;
-      }
       if (!key) return "";
-      const asMacro = `{{${key}}}`;
-      const resolved = await ctx.resolve(asMacro);
-      if (resolved === asMacro) return "";
-      return resolved;
+      return ctx.env.variables.chat.has(key)
+        ? ctx.env.variables.chat.get(key)!
+        : "";
     },
   });
 

@@ -140,73 +140,98 @@ function formatNum(n: number): string {
 // Supports: + - * / % () and unary minus, with numbers (including decimals)
 // ============================================================================
 
+// Cap parser recursion so deeply-nested user input (e.g. `((((((...)))))`)
+// can't blow the JS stack. 100 levels is far beyond any sane real expression
+// and well under V8's default limit.
+const MAX_CALC_DEPTH = 100;
+
 function safeCalc(expr: string): number {
   const cleaned = expr.replace(/\s+/g, "");
   if (!cleaned) return 0;
   let pos = 0;
+  let depth = 0;
+
+  function descend<T>(fn: () => T): T {
+    if (++depth > MAX_CALC_DEPTH) {
+      throw new Error("calc: expression nested too deeply");
+    }
+    try {
+      return fn();
+    } finally {
+      depth--;
+    }
+  }
 
   function parseExpr(): number {
-    let left = parseTerm();
-    while (pos < cleaned.length) {
-      const ch = cleaned[pos];
-      if (ch === "+") {
-        pos++;
-        left += parseTerm();
-      } else if (ch === "-") {
-        pos++;
-        left -= parseTerm();
-      } else {
-        break;
+    return descend(() => {
+      let left = parseTerm();
+      while (pos < cleaned.length) {
+        const ch = cleaned[pos];
+        if (ch === "+") {
+          pos++;
+          left += parseTerm();
+        } else if (ch === "-") {
+          pos++;
+          left -= parseTerm();
+        } else {
+          break;
+        }
       }
-    }
-    return left;
+      return left;
+    });
   }
 
   function parseTerm(): number {
-    let left = parseUnary();
-    while (pos < cleaned.length) {
-      const ch = cleaned[pos];
-      if (ch === "*") {
-        pos++;
-        left *= parseUnary();
-      } else if (ch === "/") {
-        pos++;
-        const r = parseUnary();
-        left = r !== 0 ? left / r : 0;
-      } else if (ch === "%") {
-        pos++;
-        const r = parseUnary();
-        left = r !== 0 ? left % r : 0;
-      } else {
-        break;
+    return descend(() => {
+      let left = parseUnary();
+      while (pos < cleaned.length) {
+        const ch = cleaned[pos];
+        if (ch === "*") {
+          pos++;
+          left *= parseUnary();
+        } else if (ch === "/") {
+          pos++;
+          const r = parseUnary();
+          left = r !== 0 ? left / r : 0;
+        } else if (ch === "%") {
+          pos++;
+          const r = parseUnary();
+          left = r !== 0 ? left % r : 0;
+        } else {
+          break;
+        }
       }
-    }
-    return left;
+      return left;
+    });
   }
 
   function parseUnary(): number {
-    if (cleaned[pos] === "-") {
-      pos++;
-      return -parseUnary();
-    }
-    if (cleaned[pos] === "+") {
-      pos++;
-      return parseUnary();
-    }
-    return parsePrimary();
+    return descend(() => {
+      if (cleaned[pos] === "-") {
+        pos++;
+        return -parseUnary();
+      }
+      if (cleaned[pos] === "+") {
+        pos++;
+        return parseUnary();
+      }
+      return parsePrimary();
+    });
   }
 
   function parsePrimary(): number {
-    if (cleaned[pos] === "(") {
-      pos++;
-      const result = parseExpr();
-      if (cleaned[pos] === ")") pos++;
-      return result;
-    }
-    const start = pos;
-    while (pos < cleaned.length && (/[0-9.]/.test(cleaned[pos]))) pos++;
-    const num = parseFloat(cleaned.substring(start, pos));
-    return isNaN(num) ? 0 : num;
+    return descend(() => {
+      if (cleaned[pos] === "(") {
+        pos++;
+        const result = parseExpr();
+        if (cleaned[pos] === ")") pos++;
+        return result;
+      }
+      const start = pos;
+      while (pos < cleaned.length && (/[0-9.]/.test(cleaned[pos]))) pos++;
+      const num = parseFloat(cleaned.substring(start, pos));
+      return isNaN(num) ? 0 : num;
+    });
   }
 
   try {

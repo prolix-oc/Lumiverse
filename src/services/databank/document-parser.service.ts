@@ -59,15 +59,15 @@ export async function parseDocument(userId: string, filePath: string): Promise<P
 }
 
 function parseCsv(raw: string, delimiter: string): ParsedDocument {
-  const lines = raw.split("\n").filter((l) => l.trim());
-  if (lines.length === 0) return { text: "", metadata: { format: "csv", rows: 0 } };
+  const records = parseCsvRecords(raw, delimiter);
+  if (records.length === 0) return { text: "", metadata: { format: "csv", rows: 0 } };
 
-  const headers = lines[0].split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ""));
+  const headers = records[0];
 
   // Format as readable text: each row as "Header: Value" pairs
   const rows: string[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(delimiter).map((c) => c.trim().replace(/^"|"$/g, ""));
+  for (let i = 1; i < records.length; i++) {
+    const cols = records[i];
     const pairs = headers.map((h, j) => `${h}: ${cols[j] ?? ""}`);
     rows.push(pairs.join(", "));
   }
@@ -76,6 +76,75 @@ function parseCsv(raw: string, delimiter: string): ParsedDocument {
     text: `Columns: ${headers.join(", ")}\n\n${rows.join("\n")}`,
     metadata: { format: "csv", columns: headers, rows: rows.length },
   };
+}
+
+/**
+ * RFC 4180-aware CSV record parser. Handles quoted fields, embedded delimiters
+ * inside quotes ("Smith, John"), escaped quotes (""), and multi-line fields.
+ * The previous naive split() corrupted any cell containing the delimiter.
+ */
+function parseCsvRecords(raw: string, delimiter: string): string[][] {
+  const records: string[][] = [];
+  let current: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (inQuotes) {
+      if (ch === "\"") {
+        if (raw[i + 1] === "\"") {
+          // Escaped quote
+          field += "\"";
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+      continue;
+    }
+    if (ch === "\"") {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+    if (ch === delimiter) {
+      current.push(field);
+      field = "";
+      i++;
+      continue;
+    }
+    if (ch === "\r") {
+      // Treat \r and \r\n as one record separator
+      if (raw[i + 1] === "\n") i++;
+      current.push(field);
+      if (current.length > 1 || current[0] !== "") records.push(current);
+      current = [];
+      field = "";
+      i++;
+      continue;
+    }
+    if (ch === "\n") {
+      current.push(field);
+      if (current.length > 1 || current[0] !== "") records.push(current);
+      current = [];
+      field = "";
+      i++;
+      continue;
+    }
+    field += ch;
+    i++;
+  }
+  // Trailing record (no terminator)
+  if (field.length > 0 || current.length > 0) {
+    current.push(field);
+    if (current.length > 1 || current[0] !== "") records.push(current);
+  }
+  return records;
 }
 
 function parseJson(raw: string): ParsedDocument {
@@ -144,7 +213,17 @@ function decodeRtfHex(_match: string, hex: string): string {
   return String.fromCodePoint(codePoint);
 }
 
+// RTF parsing uses a chain of regexes whose worst-case time grows with input
+// size. Cap the input so a maliciously constructed multi-megabyte RTF blob
+// can't tie up the worker for seconds.
+const MAX_RTF_INPUT_BYTES = 5 * 1024 * 1024;
+
 function parseRtf(raw: string): ParsedDocument {
+  if (raw.length > MAX_RTF_INPUT_BYTES) {
+    throw new Error(
+      `RTF document exceeds parser cap (${MAX_RTF_INPUT_BYTES} bytes)`,
+    );
+  }
   // Basic RTF → plaintext: strip control words and groups
   const text = raw
     .replace(/\{\\[^{}]*\}/g, "")           // Remove nested groups like {\fonttbl...}

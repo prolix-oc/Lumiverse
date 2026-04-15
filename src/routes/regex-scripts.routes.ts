@@ -46,7 +46,7 @@ app.post("/test", async (c) => {
   const userId = c.get("userId");
   const { find_regex, replace_string, flags, content } = await c.req.json();
   if (!find_regex || content === undefined) return c.json({ error: "find_regex and content are required" }, 400);
-  return c.json(svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content));
+  return c.json(await svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content));
 });
 
 // POST /export — export scripts

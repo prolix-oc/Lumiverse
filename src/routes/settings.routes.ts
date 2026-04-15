@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import * as svc from "../services/settings.service";
+import { InvalidSettingError } from "../services/settings.service";
 
 const app = new Hono();
 
@@ -19,15 +20,25 @@ app.get("/:key", (c) => {
 app.put("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const results = svc.putMany(userId, body);
-  return c.json(results);
+  try {
+    const results = svc.putMany(userId, body);
+    return c.json(results);
+  } catch (err: any) {
+    if (err instanceof InvalidSettingError) return c.json({ error: err.message }, 400);
+    throw err;
+  }
 });
 
 app.put("/:key", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const setting = svc.putSetting(userId, c.req.param("key"), body.value);
-  return c.json(setting);
+  try {
+    const setting = svc.putSetting(userId, c.req.param("key"), body.value);
+    return c.json(setting);
+  } catch (err: any) {
+    if (err instanceof InvalidSettingError) return c.json({ error: err.message }, 400);
+    throw err;
+  }
 });
 
 app.delete("/:key", (c) => {

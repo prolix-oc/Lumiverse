@@ -45,17 +45,22 @@ function seedOwnerDirectly(db: ReturnType<typeof getDb>, username: string, passw
   const normalizedUsername = username.toLowerCase();
   const email = `${normalizedUsername}@lumiverse.local`;
 
-  db.run(
-    `INSERT INTO "user" (id, name, email, emailVerified, username, displayUsername, role, createdAt, updatedAt)
-     VALUES (?, ?, ?, 1, ?, ?, 'owner', ?, ?)`,
-    [userId, username, email, normalizedUsername, username, now, now]
-  );
+  // Wrap both inserts in a transaction so a failure on the account row doesn't
+  // leave a stranded user row that blocks future re-seeding (the count-guard in
+  // seedOwner skips when any user exists).
+  db.transaction(() => {
+    db.run(
+      `INSERT INTO "user" (id, name, email, emailVerified, username, displayUsername, role, createdAt, updatedAt)
+       VALUES (?, ?, ?, 1, ?, ?, 'owner', ?, ?)`,
+      [userId, username, email, normalizedUsername, username, now, now]
+    );
 
-  db.run(
-    `INSERT INTO "account" (id, accountId, providerId, userId, password, createdAt, updatedAt)
-     VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
-    [accountId, userId, userId, passwordHash, now, now]
-  );
+    db.run(
+      `INSERT INTO "account" (id, accountId, providerId, userId, password, createdAt, updatedAt)
+       VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
+      [accountId, userId, userId, passwordHash, now, now]
+    );
+  })();
 
   return userId;
 }

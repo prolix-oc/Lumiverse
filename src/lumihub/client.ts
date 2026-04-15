@@ -3,13 +3,17 @@
  * Handles reconnection with exponential backoff, heartbeats, and dispatches
  * install commands to the installer module.
  */
-import type { LumiHubWSMessage, InstallCharacterPayload, InstallWorldbookPayload } from "./types";
+import type { LumiHubWSMessage } from "./types";
 import { installCharacter, installWorldbook } from "./installer";
 import { buildInstallManifest } from "./manifest";
 import { updateLastConnected } from "../services/lumihub-link.service";
 import { getFirstUserId } from "../auth/seed";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import {
+  validateInstallCharacterPayload,
+  validateInstallWorldbookPayload,
+} from "./payload-validation";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const INITIAL_RECONNECT_MS = 1_000;
@@ -168,7 +172,19 @@ class LumiHubWSClient {
   }
 
   private async handleInstallCharacter(msg: LumiHubWSMessage): Promise<void> {
-    const payload = msg.payload as InstallCharacterPayload;
+    const validation = validateInstallCharacterPayload(msg.payload);
+    if (!validation.ok) {
+      console.warn(`[LumiHub WS] Rejected install_character payload: ${validation.error}`);
+      this.send({
+        type: "install_result",
+        id: crypto.randomUUID(),
+        replyTo: msg.id,
+        payload: { requestId: msg.id, success: false, error: validation.error, errorCode: "PARSE_ERROR" },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const payload = validation.value;
     console.log(`[LumiHub WS] Install request: ${payload.characterName} (source: ${payload.source})`);
 
     // Notify local frontend
@@ -197,7 +213,19 @@ class LumiHubWSClient {
   }
 
   private async handleInstallWorldbook(msg: LumiHubWSMessage): Promise<void> {
-    const payload = msg.payload as InstallWorldbookPayload;
+    const validation = validateInstallWorldbookPayload(msg.payload);
+    if (!validation.ok) {
+      console.warn(`[LumiHub WS] Rejected install_worldbook payload: ${validation.error}`);
+      this.send({
+        type: "install_result",
+        id: crypto.randomUUID(),
+        replyTo: msg.id,
+        payload: { requestId: msg.id, success: false, error: validation.error },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const payload = validation.value;
     console.log(`[LumiHub WS] Worldbook install request: ${payload.worldbookName} (source: ${payload.source})`);
 
     eventBus.emit(EventType.LUMIHUB_INSTALL_STARTED, {

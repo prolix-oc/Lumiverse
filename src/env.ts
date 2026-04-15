@@ -70,7 +70,13 @@ function parseEphemeralOverrides(raw?: string): Record<string, number> {
 }
 
 export function loadEnv(): EnvConfig {
-  const port = parseInt(process.env.PORT || "7860", 10);
+  // Validate PORT — out-of-range values used to be silently passed to Bun.serve,
+  // which then failed at bind time with a confusing native error.
+  const portRaw = process.env.PORT || "7860";
+  const port = parseInt(portRaw, 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid PORT "${portRaw}": must be an integer in 1..65535`);
+  }
 
   const encryptionKey = process.env.ENCRYPTION_KEY || "";
 

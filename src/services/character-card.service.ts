@@ -6,6 +6,10 @@ import type { CreateRegexScriptInput, RegexTarget } from "../types/regex-script"
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024; // 100 MB (PNG text chunks)
 const MAX_CHARX_SIZE = 1000 * 1024 * 1024; // 1000 MB
+// Cap on the total bytes produced by .charx ZIP decompression. fflate's
+// unzipSync has no built-in output cap, so a 1 KB compressed file with a 4 GB
+// decompressed payload would otherwise OOM the process.
+const MAX_CHARX_DECOMPRESSED_SIZE = 500 * 1024 * 1024; // 500 MB
 
 /**
  * Reads PNG chunks and extracts the text value for a given keyword.
@@ -597,12 +601,25 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
   }
 
   // Only decompress card.json, module files, and image files — skip everything else
+  // Track running decompressed size against the cap; throw inside the filter so
+  // fflate aborts before allocating a multi-GB buffer for a zip-bomb payload.
+  let plannedBytes = 0;
   const unzipped = unzipSync(data, {
-    filter: (entry) =>
-      entry.name === "card.json" ||
-      entry.name === "module.risum" ||
-      entry.name === "lumiverse_modules.json" ||
-      IMAGE_EXTENSIONS.test(entry.name),
+    filter: (entry) => {
+      const wanted =
+        entry.name === "card.json" ||
+        entry.name === "module.risum" ||
+        entry.name === "lumiverse_modules.json" ||
+        IMAGE_EXTENSIONS.test(entry.name);
+      if (!wanted) return false;
+      plannedBytes += entry.originalSize ?? 0;
+      if (plannedBytes > MAX_CHARX_DECOMPRESSED_SIZE) {
+        throw new Error(
+          `CHARX archive decompresses to more than ${MAX_CHARX_DECOMPRESSED_SIZE / 1024 / 1024} MB`,
+        );
+      }
+      return true;
+    },
   });
 
   const cardBytes = unzipped["card.json"];

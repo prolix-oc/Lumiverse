@@ -1,4 +1,8 @@
 import { registry } from "../MacroRegistry";
+import {
+  regexReplaceSandboxed,
+  RegexTimeoutError,
+} from "../../utils/regex-sandbox";
 
 export function registerStringMacros(): void {
   registry.registerMacro({
@@ -186,15 +190,21 @@ export function registerStringMacros(): void {
       { name: "text", optional: true, description: "Source text (or use scoped body)" },
       { name: "flags", optional: true, description: "Regex flags (default: g)" },
     ],
-    handler: (ctx) => {
+    handler: async (ctx) => {
       const pattern = ctx.args[0] ?? "";
       const replacement = ctx.args[1] ?? "";
       const text = ctx.isScoped ? ctx.body : (ctx.args[2] ?? "");
       const flags = (ctx.isScoped ? ctx.args[2] : ctx.args[3]) ?? "g";
       if (!pattern) return text;
       try {
-        return text.replace(new RegExp(pattern, flags), replacement);
-      } catch {
+        // Run user-supplied regex in the sandbox so a pathological pattern
+        // can't freeze the prompt-assembly thread.
+        return await regexReplaceSandboxed(pattern, flags, text, replacement);
+      } catch (err) {
+        if (err instanceof RegexTimeoutError) {
+          ctx.warn(`Regex pattern exceeded time budget: ${pattern}`);
+          return text;
+        }
         ctx.warn(`Invalid regex pattern: ${pattern}`);
         return text;
       }

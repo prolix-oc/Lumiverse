@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import { verifyPassword } from "../crypto/password";
+import { rateLimit } from "../middleware/rate-limit";
 import { getDb } from "../db/connection";
 import * as managerSvc from "../spindle/manager.service";
 import { PRIVILEGED_PERMISSIONS } from "../spindle/manager.service";
@@ -95,8 +96,17 @@ app.get("/ephemeral/config", requireOwner, async (c) => {
   return c.json(await getEphemeralPoolConfig());
 });
 
+// Re-auth gate before scrypt-verifying the owner password — bound how often
+// a single client can drive scrypt work even when authenticated.
+const ephemeralReauthLimiter = rateLimit({
+  bucket: "spindle-ephemeral-reauth",
+  max: 5,
+  windowMs: 5 * 60 * 1000,
+  message: "Too many configuration attempts. Try again later.",
+});
+
 // PUT /api/v1/spindle/ephemeral/config — Update pool config (credential-gated)
-app.put("/ephemeral/config", requireOwner, async (c) => {
+app.put("/ephemeral/config", requireOwner, ephemeralReauthLimiter, async (c) => {
   try {
     const body = await c.req.json();
     if (!body || typeof body !== "object") {

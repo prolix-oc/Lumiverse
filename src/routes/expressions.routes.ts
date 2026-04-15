@@ -3,6 +3,8 @@ import * as svc from "../services/expressions.service";
 
 const app = new Hono();
 
+const MAX_EXPRESSION_ZIP_BYTES = 100 * 1024 * 1024; // 100 MB
+
 // GET / — get expression config for a character
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -32,6 +34,9 @@ app.post("/upload-zip", async (c) => {
   const formData = await c.req.formData();
   const file = formData.get("file") as File | null;
   if (!file) return c.json({ error: "file is required" }, 400);
+  if (typeof file.size === "number" && file.size > MAX_EXPRESSION_ZIP_BYTES) {
+    return c.json({ error: "Expression ZIP too large", maxBytes: MAX_EXPRESSION_ZIP_BYTES }, 413);
+  }
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const config = await svc.importFromZip(userId, characterId, buffer);
@@ -142,6 +147,9 @@ app.post("/groups/:groupName/upload-zip", async (c) => {
   const formData = await c.req.formData();
   const file = formData.get("file") as File | null;
   if (!file) return c.json({ error: "file is required" }, 400);
+  if (typeof file.size === "number" && file.size > MAX_EXPRESSION_ZIP_BYTES) {
+    return c.json({ error: "Expression ZIP too large", maxBytes: MAX_EXPRESSION_ZIP_BYTES }, 413);
+  }
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
     const groups = await svc.importGroupFromZip(userId, characterId, groupName, buffer);

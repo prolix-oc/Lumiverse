@@ -240,7 +240,14 @@ export function searchDocumentsBySlug(
   limit = 10,
 ): Array<{ slug: string; name: string; databankId: string; databankName: string }> {
   const db = getDb();
-  const slugPattern = `%${partialSlug.toLowerCase()}%`;
+  // Escape SQL LIKE wildcards so a search for "a_b" doesn't match "axb" and a
+  // bare "%" doesn't return every document. The query below uses ESCAPE '\\'.
+  const escaped = partialSlug
+    .toLowerCase()
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_");
+  const slugPattern = `%${escaped}%`;
 
   let sql: string;
   let params: any[];
@@ -252,7 +259,7 @@ export function searchDocumentsBySlug(
            JOIN databanks d ON d.id = dd.databank_id
            WHERE dd.user_id = ? AND dd.status = 'ready'
              AND dd.databank_id IN (${placeholders})
-             AND dd.slug LIKE ?
+             AND dd.slug LIKE ? ESCAPE '\\'
            ORDER BY dd.name ASC
            LIMIT ?`;
     params = [userId, ...databankIds, slugPattern, limit];
@@ -261,7 +268,7 @@ export function searchDocumentsBySlug(
            FROM databank_documents dd
            JOIN databanks d ON d.id = dd.databank_id
            WHERE dd.user_id = ? AND dd.status = 'ready'
-             AND dd.slug LIKE ?
+             AND dd.slug LIKE ? ESCAPE '\\'
            ORDER BY dd.name ASC
            LIMIT ?`;
     params = [userId, slugPattern, limit];

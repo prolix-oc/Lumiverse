@@ -198,9 +198,16 @@ function parseDraftResponse(content: string): DW_DRAFT_V1 {
     ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
     : trimmed;
 
-  const draft = JSON.parse(jsonContent) as DW_DRAFT_V1;
+  let draft: DW_DRAFT_V1;
+  try {
+    draft = JSON.parse(jsonContent) as DW_DRAFT_V1;
+  } catch (err: any) {
+    // A malformed model output or corrupted stored draft used to crash the
+    // entire Dream Weaver session; surface a typed error instead.
+    throw new Error(`Dream Weaver draft is not valid JSON: ${err?.message || "parse failed"}`);
+  }
 
-  if (draft.format !== "DW_DRAFT_V1") {
+  if (!draft || typeof draft !== "object" || draft.format !== "DW_DRAFT_V1") {
     throw new Error("Dream Weaver returned an unexpected draft format");
   }
 

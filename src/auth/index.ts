@@ -69,7 +69,18 @@ export const auth = betterAuth({
           }
         },
         after: async (user) => {
-          provisionUserDirectories(user.id);
+          // BetterAuth swallows hook exceptions, so a failed directory
+          // provision used to leave the operator without any signal that
+          // the user couldn't write to disk. Surface the failure to the
+          // log instead of silently dropping it.
+          try {
+            provisionUserDirectories(user.id);
+          } catch (err) {
+            console.error(
+              `[Auth] Failed to provision directories for user ${user.id}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
         },
       },
     },

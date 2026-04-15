@@ -253,14 +253,24 @@ const activeChatGenerations = new Map<string, string>();
 const COUNCIL_RETRY_SAFETY_CAP_MS = 10 * 60 * 1000;
 
 const pendingCouncilRetries = new Map<string, {
+  userId: string;
   resolve: (decision: "continue" | "retry") => void;
   timeout: ReturnType<typeof setTimeout>;
 }>();
 
-/** Called from the council-retry route to resolve a pending decision. */
-export function resolveCouncilRetry(generationId: string, decision: "continue" | "retry"): boolean {
+/**
+ * Called from the council-retry route to resolve a pending decision. Verifies
+ * the generation belongs to the caller — without this check, any authenticated
+ * user could approve/retry another user's pending generation by guessing IDs.
+ */
+export function resolveCouncilRetry(
+  userId: string,
+  generationId: string,
+  decision: "continue" | "retry",
+): boolean {
   const pending = pendingCouncilRetries.get(generationId);
   if (!pending) return false;
+  if (pending.userId !== userId) return false;
   clearTimeout(pending.timeout);
   pendingCouncilRetries.delete(generationId);
   // Clear the pool flag
@@ -864,7 +874,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
                 if (poolEntry) poolEntry.councilRetryPending = false;
                 resolve("continue");
               }, COUNCIL_RETRY_SAFETY_CAP_MS);
-              pendingCouncilRetries.set(generationId, { resolve, timeout });
+              pendingCouncilRetries.set(generationId, { userId: input.userId, resolve, timeout });
             });
 
             checkAborted();

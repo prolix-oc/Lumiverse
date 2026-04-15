@@ -22,6 +22,22 @@ import { spawnAsync } from "./spawn-async";
 
 export type InstallScope = "operator" | "user";
 
+/**
+ * Parse a stored JSON array column safely. A corrupted `permissions` row used
+ * to crash extension load/sync; treat the row as having no permissions instead
+ * so the rest of the extensions can still be served.
+ */
+function parsePermissionsSafe<T = string>(raw: string | null | undefined): T[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    console.error("[Spindle] Corrupted permissions JSON; treating as empty");
+    return [];
+  }
+}
+
 // ─── Paths ───────────────────────────────────────────────────────────────
 
 function extensionsDir(): string {
@@ -276,7 +292,7 @@ export async function syncManifestToDb(identifier: string): Promise<void> {
     } | null;
   if (!row) return;
 
-  const dbPermissions: string[] = JSON.parse(row.permissions || "[]");
+  const dbPermissions: string[] = parsePermissionsSafe<string>(row.permissions);
   const manifestPermissions = manifest.permissions || [];
 
   // Check if the extensions row needs updating
@@ -511,10 +527,42 @@ export async function buildExtension(identifier: string): Promise<void> {
 
 // ─── Install ─────────────────────────────────────────────────────────────
 
+/**
+ * Validate that a user-supplied repository URL is safe to hand to `git clone`.
+ * Without this check, an owner could (accidentally or coerced) install from
+ * `file:///etc/shadow`, `ssh://internal-host/repo`, or `git://` and exfiltrate
+ * local files or probe internal services.
+ */
+function assertSafeGitUrl(rawUrl: string): void {
+  if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+    throw new Error("Repository URL is required");
+  }
+  const url = rawUrl.trim();
+  // Reject scp-style URLs ("user@host:path") and absolute paths outright; they
+  // bypass URL parsing and let git treat the value as a local clone source.
+  if (/^[\w.+-]+@[^:]+:/.test(url) || url.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(url)) {
+    throw new Error("Repository URL must use https://");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Repository URL is not a valid URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Repository URL protocol "${parsed.protocol}" is not allowed; use https://`);
+  }
+  if (!parsed.hostname) {
+    throw new Error("Repository URL must include a hostname");
+  }
+}
+
 export async function install(
   githubUrl: string,
   options?: { installScope?: InstallScope; installedByUserId?: string | null; branch?: string | null }
 ): Promise<ExtensionInfo> {
+  assertSafeGitUrl(githubUrl);
+
   const baseDir = extensionsDir();
   mkdirSync(baseDir, { recursive: true });
   const installScope: InstallScope = options?.installScope === "user" ? "user" : "operator";
@@ -725,7 +773,7 @@ export function enable(identifier: string): void {
     .query("SELECT permissions FROM extensions WHERE identifier = ?")
     .get(identifier) as { permissions: string } | null;
   if (row) {
-    const requested = JSON.parse(row.permissions || "[]") as string[];
+    const requested = parsePermissionsSafe<string>(row.permissions);
     grantRequestedPermissionsByDefault(identifier, requested);
   }
 }
@@ -1177,7 +1225,7 @@ export async function switchBranch(
 
 async function rowToExtensionInfo(row: any): Promise<ExtensionInfo> {
   const identifier = row.identifier;
-  const permissions: SpindlePermission[] = JSON.parse(row.permissions || "[]");
+  const permissions: SpindlePermission[] = parsePermissionsSafe<SpindlePermission>(row.permissions);
   const granted = getGrantedPermissions(identifier);
 
   let hasFrontend = false;
@@ -1216,7 +1264,12 @@ async function rowToExtensionInfo(row: any): Promise<ExtensionInfo> {
     updated_at: row.updated_at,
     has_frontend: hasFrontend,
     has_backend: hasBackend,
-    status: row.enabled === 1 ? "stopped" : "stopped", // Updated by lifecycle
+    // Reflect actual worker state. The previous literal "stopped : stopped"
+    // ternary always reported stopped, masking running workers in the UI.
+    // Lazy require avoids a circular import (lifecycle.ts already imports
+    // managerSvc), which would otherwise resolve isRunning to undefined on
+    // first load.
+    status: (require("./lifecycle") as typeof import("./lifecycle")).isRunning(row.id) ? "running" : "stopped",
     metadata,
   };
 }

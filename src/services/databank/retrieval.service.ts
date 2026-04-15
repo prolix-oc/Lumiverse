@@ -20,19 +20,28 @@ interface CachedResult {
 
 const resultCache = new Map<string, CachedResult>();
 
-/** Get cached result for a chat (synchronous, for assembly hot path). */
-export function getCachedDatabankResult(chatId: string): DatabankRetrievalResult | null {
-  const cached = resultCache.get(chatId);
+function cacheKey(userId: string, chatId: string): string {
+  return `${userId}:${chatId}`;
+}
+
+/**
+ * Get cached result for a chat (synchronous, for assembly hot path).
+ * Keys include userId so a DB restore that reused chatIds across users (or
+ * any future test fixture re-using chat ids) can never serve another user's
+ * results from the in-memory cache.
+ */
+export function getCachedDatabankResult(userId: string, chatId: string): DatabankRetrievalResult | null {
+  const cached = resultCache.get(cacheKey(userId, chatId));
   if (!cached) return null;
   if (Date.now() - cached.cachedAt > CACHE_TTL_MS) {
-    resultCache.delete(chatId);
+    resultCache.delete(cacheKey(userId, chatId));
     return null;
   }
   return cached.result;
 }
 
-export function clearCache(chatId: string): void {
-  resultCache.delete(chatId);
+export function clearCache(userId: string, chatId: string): void {
+  resultCache.delete(cacheKey(userId, chatId));
 }
 
 // ─── Search ───────────────────────────────────────────────────
@@ -75,7 +84,7 @@ export async function searchDatabanks(
     const result: DatabankRetrievalResult = { chunks, formatted, count: chunks.length };
 
     // Cache for synchronous consumption
-    resultCache.set(chatId, { result, cachedAt: Date.now() });
+    resultCache.set(cacheKey(userId, chatId), { result, cachedAt: Date.now() });
 
     return result;
   } catch (err) {

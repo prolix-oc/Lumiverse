@@ -94,18 +94,19 @@ const spindleApi: SpindleAPI = {
       // Function handler — store directly, strip before posting (not serializable)
       extensionMacroHandlers.set(def.name.toLowerCase(), def.handler as (ctx: unknown) => unknown | Promise<unknown>);
     } else if (typeof def.handler === "string" && def.handler.trim()) {
-      try {
-        const compiled = new Function("ctx", `"use strict";\n${def.handler}`) as (
-          ctx: unknown
-        ) => unknown | Promise<unknown>;
-        extensionMacroHandlers.set(def.name.toLowerCase(), compiled);
-      } catch (err: any) {
-        post({
-          type: "log",
-          level: "error",
-          message: `Failed to compile macro ${def.name}: ${err?.message || err}`,
-        });
-      }
+      // String handlers used to be compiled via `new Function(...)`, which is
+      // equivalent to eval() inside the worker context — every macro string
+      // would run with full access to the extension's RPC bridge. That made
+      // the handler value itself an arbitrary-code-execution sink. Refuse to
+      // load string handlers; extensions must export real functions.
+      post({
+        type: "log",
+        level: "error",
+        message: `Macro "${def.name}" was registered with a string handler. ` +
+          `String handlers are no longer supported — return a function from your ` +
+          `module instead. The macro was NOT registered.`,
+      });
+      return;
     }
     // Strip handler before posting — host creates its own RPC handler;
     // functions can't survive structured cloning anyway
@@ -114,7 +115,10 @@ const spindleApi: SpindleAPI = {
       type: "register_macro",
       definition: {
         ...serializableDef,
-        handler: typeof def.handler === "string" ? def.handler : "",
+        // Always send an empty handler over the wire; the host invokes the
+        // worker's resolveMacro() RPC for execution and never trusts the
+        // serialized field.
+        handler: "",
       },
     });
   },

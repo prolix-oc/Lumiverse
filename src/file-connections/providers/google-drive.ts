@@ -10,6 +10,7 @@
 
 import { posix } from "path";
 import type { FileSystem, FileEntry, FileStat, GoogleDriveConnectionConfig } from "../types";
+import { readResponseBuffer, MAX_REMOTE_FILE_BYTES } from "../remote-fetch-cap";
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -121,14 +122,12 @@ export class GoogleDriveFileSystem implements FileSystem {
     const id = await this.resolveId(path);
     const res = await this.driveGet(`/files/${id}`, { alt: "media" });
     if (!res.ok) throw new Error(`Failed to download: ${path}`);
-    return Buffer.from(await res.arrayBuffer());
+    return readResponseBuffer(res, MAX_REMOTE_FILE_BYTES, path);
   }
 
   async readText(path: string): Promise<string> {
-    const id = await this.resolveId(path);
-    const res = await this.driveGet(`/files/${id}`, { alt: "media" });
-    if (!res.ok) throw new Error(`Failed to download: ${path}`);
-    return res.text();
+    const buf = await this.readFile(path);
+    return buf.toString("utf-8");
   }
 
   // ─── Path operations ──────────────────────────────────────────────────
