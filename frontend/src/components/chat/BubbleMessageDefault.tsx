@@ -277,7 +277,7 @@ export default function BubbleMessageDefault({
           </div>
         )}
 
-        {!isUser && !isEditing && (
+        {!isUser && !isEditing && message.index_in_chat !== 0 && (
           <SwipeControls message={message} chatId={chatId} variant="bubble" />
         )}
 

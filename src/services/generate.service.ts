@@ -222,6 +222,22 @@ function closeUnterminatedReasoningTags(userId: string, content: string): string
   return content;
 }
 
+/**
+ * Safely extract a human-readable message from a thrown value.
+ * Bun's fetch/stream internals on Windows can reject with `null` when an
+ * abort signal fires mid-stream, so `err.message` would throw a TypeError
+ * and crash the server. Handles null, undefined, strings, and non-Error
+ * objects gracefully.
+ */
+function errorMessage(err: unknown): string {
+  if (err == null) return "Unknown error";
+  if (typeof err === "string") return err;
+  if (typeof err === "object" && "message" in err && typeof (err as any).message === "string") {
+    return (err as any).message;
+  }
+  try { return String(err); } catch { return "Unknown error"; }
+}
+
 // Track active generations for stop support
 const activeGenerations = new Map<string, { controller: AbortController; userId: string; chatId: string; startedAt: number }>();
 
@@ -1066,11 +1082,12 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         return;
       }
 
-      pool.errorPool(generationId, err.message);
+      const msg = errorMessage(err);
+      pool.errorPool(generationId, msg);
       eventBus.emit(EventType.GENERATION_ENDED, {
         generationId,
         chatId: input.chat_id,
-        error: err.message,
+        error: msg,
       }, input.userId);
     }
   })();
@@ -1082,7 +1099,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     // resolution, character lookup, swipe creation, etc.
     activeGenerations.delete(generationId);
     activeChatGenerations.delete(chatKey);
-    pool.errorPool(generationId, err.message);
+    pool.errorPool(generationId, errorMessage(err));
     throw err;
   }
 }
@@ -1624,13 +1641,27 @@ async function runGeneration(
       // Fire-and-forget expression detection after successful generation
       fireExpressionDetection(userId, chatId, lifecycle).catch(() => {});
     }
-  } catch (err: any) {
-    pool.errorPool(generationId, err.message);
-    eventBus.emit(EventType.GENERATION_ENDED, {
-      generationId,
-      chatId,
-      error: err.message,
-    }, userId);
+  } catch (err: unknown) {
+    // If the stream iterator threw because the abort signal fired (rather than
+    // the in-loop `signal.aborted` branch catching it first), treat this as a
+    // user-initiated stop, not an error. On Bun for Windows the thrown value
+    // may be `null` in this case, which is why errorMessage() is used.
+    if (signal.aborted) {
+      pool.stopPool(generationId);
+      eventBus.emit(EventType.GENERATION_STOPPED, {
+        generationId,
+        chatId,
+        content: fullContent,
+      }, userId);
+    } else {
+      const msg = errorMessage(err);
+      pool.errorPool(generationId, msg);
+      eventBus.emit(EventType.GENERATION_ENDED, {
+        generationId,
+        chatId,
+        error: msg,
+      }, userId);
+    }
   } finally {
     activeGenerations.delete(generationId);
     // Clean up per-chat lock (only if this generation still owns it — a newer
@@ -2043,8 +2074,8 @@ export async function batchGenerate(userId: string, input: BatchGenerateInput): 
         finish_reason: result.finish_reason,
         usage: result.usage,
       };
-    } catch (err: any) {
-      return { index, success: false, error: err.message };
+    } catch (err: unknown) {
+      return { index, success: false, error: errorMessage(err) };
     }
   };
 

@@ -253,8 +253,9 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
           <MessageAttachments attachments={message.extra.attachments} isUser={true} />
         )}
 
-        {/* Swipe controls — always show on assistant messages for navigation */}
-        {!isUser && !isEditing && (
+        {/* Swipe controls — assistant messages only, except the greeting (index 0),
+            which uses the GreetingNav picker below instead. */}
+        {!isUser && !isEditing && message.index_in_chat !== 0 && (
           <SwipeControls message={message} chatId={chatId} />
         )}
 

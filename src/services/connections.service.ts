@@ -69,6 +69,8 @@ export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: st
   }
   if (profile.provider === "google_vertex") {
     const region = profile.metadata?.vertex_region;
+    // Per Google's @google/genai SDK: `global` routes through the
+    // un-prefixed host, regional routes through `{region}-aiplatform`.
     if (!region || region === "global") return "https://aiplatform.googleapis.com";
     return `https://${region}-aiplatform.googleapis.com`;
   }
