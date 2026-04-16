@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.8.8",
+  "version": "0.9.0",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "@lenml/tokenizer-claude": "^3.7.2",
