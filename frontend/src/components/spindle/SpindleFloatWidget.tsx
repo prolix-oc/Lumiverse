@@ -143,6 +143,7 @@ export default function SpindleFloatWidget({ widget }: Props) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         {...longPress}
+        onTouchStart={(e) => { if (!widget.root.contains(e.target as Node)) longPress.onTouchStart(e) }}
         onContextMenu={handleContextMenu}
       >
         <div className={styles.content} ref={(el) => {
