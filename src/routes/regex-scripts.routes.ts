@@ -72,6 +72,16 @@ app.put("/reorder", async (c) => {
   return c.json({ success: true });
 });
 
+// POST /bulk-delete — delete many scripts in one transaction
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const { ids } = await c.req.json();
+  if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
+  const stringIds = ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
+  const deleted = svc.deleteRegexScripts(userId, stringIds);
+  return c.json({ deleted, count: deleted.length });
+});
+
 // GET /:id — get by ID
 app.get("/:id", (c) => {
   const userId = c.get("userId");

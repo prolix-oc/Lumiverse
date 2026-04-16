@@ -563,8 +563,27 @@ export const dreamWeaverApi = {
   finalize: (id: string) =>
     apiClient.post<DreamWeaverFinalizeResult>(`/dream-weaver/sessions/${id}/finalize`, {}),
 
-  extend: (id: string, input: ExtendDraftInput) =>
-    apiClient.post<ExtendDraftResult>(`/dream-weaver/sessions/${id}/extend`, input, { timeout: 120_000 }),
+  extend: (
+    id: string,
+    input: ExtendDraftInput,
+    options?: { timeoutMs?: number | null },
+  ) => {
+    // Mirror the user's Dream Weaver timeout setting onto the HTTP client so
+    // the browser doesn't abort while the backend is still waiting on the LLM.
+    // `null` (None) disables the frontend timeout entirely. Otherwise add a
+    // 5s buffer so the backend's nicer error message wins the race. Falls back
+    // to a generous 120s default when no setting is provided.
+    let requestOptions: { timeout: number } = { timeout: 120_000 }
+    if (options && 'timeoutMs' in options) {
+      const ms = options.timeoutMs
+      requestOptions = { timeout: ms == null || ms <= 0 ? 0 : ms + 5_000 }
+    }
+    return apiClient.post<ExtendDraftResult>(
+      `/dream-weaver/sessions/${id}/extend`,
+      input,
+      requestOptions,
+    )
+  },
 
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),
@@ -600,11 +619,27 @@ export const dreamWeaverApi = {
     return response.capabilities
   },
 
-  suggestVisualTags: (sessionId: string, draft?: DreamWeaverDraft | null) =>
-    apiClient.post<DreamWeaverVisualTagSuggestion>(
+  suggestVisualTags: (
+    sessionId: string,
+    draft?: DreamWeaverDraft | null,
+    options?: { timeoutMs?: number | null },
+  ) => {
+    // Mirror the user's Dream Weaver timeout setting onto the HTTP client so
+    // the browser doesn't abort at the default 30s while the backend is still
+    // waiting on the LLM. When the user picks a value, add a small buffer
+    // over the backend timeout so the backend's nicer error wins the race.
+    // `null` (None) disables the frontend timeout entirely.
+    let requestOptions: { timeout: number } | undefined
+    if (options && 'timeoutMs' in options) {
+      const ms = options.timeoutMs
+      requestOptions = { timeout: ms == null || ms <= 0 ? 0 : ms + 5_000 }
+    }
+    return apiClient.post<DreamWeaverVisualTagSuggestion>(
       '/dream-weaver/visual/tag-suggestions',
       { sessionId, draft },
-    ),
+      requestOptions,
+    )
+  },
 
   startVisualJob: (sessionId: string, asset: DreamWeaverVisualAsset, connectionId: string) =>
     apiClient.post<DreamWeaverVisualJob>(

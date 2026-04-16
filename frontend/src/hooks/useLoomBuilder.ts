@@ -326,7 +326,7 @@ export function useLoomBuilder() {
       const embeddedRegex = stData.extensions?.regex_scripts
       if (Array.isArray(embeddedRegex) && embeddedRegex.length > 0) {
         try {
-          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: name })
+          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: name, preset_id: created.id })
           if (regexResult.imported > 0) {
             const { loadRegexScripts } = useStore.getState() as any
             if (loadRegexScripts) await loadRegexScripts()

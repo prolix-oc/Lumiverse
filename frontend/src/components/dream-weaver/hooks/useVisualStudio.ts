@@ -7,6 +7,7 @@ import {
   type DreamWeaverVisualJob,
 } from '@/api/dream-weaver'
 import { ApiError } from '@/api/client'
+import { settingsApi } from '@/api/settings'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import type { ImageGenConnectionProfile } from '@/types/api'
 import { useStore } from '@/store'
@@ -262,7 +263,17 @@ export function useVisualStudio(
     setTagSuggestionLoading(true)
     setTagSuggestionError(null)
     try {
-      const result = await dreamWeaverApi.suggestVisualTags(sessionId, draft)
+      // Read the user's Dream Weaver timeout so the browser doesn't abort at
+      // the default 30s while the backend is still waiting on the LLM. The
+      // backend honors the same setting via createDWTimeout(), so without this
+      // the frontend would race the backend and always lose at 30s.
+      let timeoutMs: number | null | undefined
+      try {
+        const row = await settingsApi.get('dreamWeaverGenParams')
+        const value = row?.value as { timeoutMs?: number | null } | null | undefined
+        timeoutMs = value?.timeoutMs
+      } catch {}
+      const result = await dreamWeaverApi.suggestVisualTags(sessionId, draft, { timeoutMs })
       setPendingTagSuggestion(result.suggestedTags)
       setPendingNegativeTagSuggestion(result.suggestedNegativeTags || null)
     } catch (error) {

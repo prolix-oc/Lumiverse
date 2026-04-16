@@ -11,6 +11,7 @@ import {
 } from '../../../api/dream-weaver'
 import { charactersApi } from '../../../api/characters'
 import { chatsApi } from '../../../api/chats'
+import { settingsApi } from '../../../api/settings'
 import { toast } from '../../../lib/toast'
 import { useStore } from '../../../store'
 import { EventType } from '../../../types/ws-events'
@@ -655,7 +656,21 @@ export function useDreamWeaverStudio(
     try {
       if (dirtyRef.current) await save()
 
-      const result = await dreamWeaverApi.extend(currentSession.id, { target, instruction, bookId })
+      // Read the user's Dream Weaver timeout so the browser doesn't abort
+      // before the backend's user-controlled timeout fires. Backend honors
+      // the same setting via createDWTimeout().
+      let timeoutMs: number | null | undefined
+      try {
+        const row = await settingsApi.get('dreamWeaverGenParams')
+        const value = row?.value as { timeoutMs?: number | null } | null | undefined
+        timeoutMs = value?.timeoutMs
+      } catch {}
+
+      const result = await dreamWeaverApi.extend(
+        currentSession.id,
+        { target, instruction, bookId },
+        { timeoutMs },
+      )
 
       setDraft((current) => {
         if (!current) return current

@@ -32,6 +32,16 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
     }))
   },
 
+  bulkRemoveRegexScripts: async (ids: string[]) => {
+    if (ids.length === 0) return 0
+    const { deleted } = await regexApi.bulkRemove(ids)
+    const removed = new Set(deleted)
+    set((s) => ({
+      regexScripts: s.regexScripts.filter((r) => !removed.has(r.id)),
+    }))
+    return deleted.length
+  },
+
   reorderRegexScripts: async (fromIdx: number, toIdx: number) => {
     const scripts = [...get().regexScripts]
     const [moved] = scripts.splice(fromIdx, 1)

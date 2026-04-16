@@ -42,6 +42,7 @@ export function rowToRegexScript(row: any): RegexScript {
     trim_strings: JSON.parse(row.trim_strings),
     folder: row.folder || "",
     pack_id: row.pack_id || null,
+    preset_id: row.preset_id || null,
     metadata: JSON.parse(row.metadata),
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
@@ -180,8 +181,8 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -205,6 +206,7 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
       input.description ?? "",
       input.folder ?? "",
       input.pack_id ?? null,
+      input.preset_id ?? null,
       JSON.stringify(input.metadata ?? {}),
       now,
       now
@@ -276,6 +278,37 @@ export function deleteRegexScript(userId: string, id: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Bulk delete a set of regex scripts. Runs in a single transaction and emits
+ * REGEX_SCRIPT_DELETED per removed row. Returns the IDs that were actually
+ * deleted (missing / cross-user IDs are silently skipped).
+ */
+export function deleteRegexScripts(userId: string, ids: string[]): string[] {
+  if (ids.length === 0) return [];
+
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const existingRows = db
+    .query(`SELECT id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...ids) as Array<{ id: string }>;
+  if (existingRows.length === 0) return [];
+
+  const existingIds = existingRows.map((r) => r.id);
+  const existingPlaceholders = existingIds.map(() => "?").join(", ");
+
+  db.transaction(() => {
+    db
+      .query(`DELETE FROM regex_scripts WHERE user_id = ? AND id IN (${existingPlaceholders})`)
+      .run(userId, ...existingIds);
+  })();
+
+  for (const id of existingIds) {
+    eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  }
+
+  return existingIds;
 }
 
 export function duplicateRegexScript(userId: string, id: string): RegexScript | null {
@@ -660,7 +693,7 @@ export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptE
   }
 
   const scripts = rows.map(rowToRegexScript).map((s) => {
-    const { id, user_id, created_at, updated_at, pack_id, ...rest } = s;
+    const { id, user_id, created_at, updated_at, pack_id, preset_id, ...rest } = s;
     return rest;
   });
 
@@ -677,6 +710,36 @@ export function getRegexScriptsByPackId(userId: string, packId: string): RegexSc
     .query("SELECT * FROM regex_scripts WHERE user_id = ? AND pack_id = ? ORDER BY sort_order ASC, created_at ASC")
     .all(userId, packId) as any[];
   return rows.map(rowToRegexScript);
+}
+
+export function getRegexScriptsByPresetId(userId: string, presetId: string): RegexScript[] {
+  const rows = getDb()
+    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND preset_id = ? ORDER BY sort_order ASC, created_at ASC")
+    .all(userId, presetId) as any[];
+  return rows.map(rowToRegexScript);
+}
+
+/**
+ * Delete every regex script owned by a preset. Emits REGEX_SCRIPT_DELETED per
+ * removed script so subscribed clients update their lists.
+ */
+export function deleteRegexScriptsByPresetId(userId: string, presetId: string): number {
+  const db = getDb();
+  const rows = db
+    .query("SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
+    .all(userId, presetId) as Array<{ id: string }>;
+  if (rows.length === 0) return 0;
+
+  const result = db
+    .query("DELETE FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
+    .run(userId, presetId);
+  const changes = Number(result.changes ?? 0);
+
+  for (const { id } of rows) {
+    eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  }
+
+  return changes;
 }
 
 // SillyTavern regex_placement enum → Lumiverse placement strings
@@ -741,6 +804,12 @@ export function importRegexScripts(
   const folderOverride: string | undefined =
     typeof payload?.folder === "string" && payload.folder.trim()
       ? payload.folder.trim()
+      : undefined;
+
+  // Extract top-level preset_id ownership link so preset deletion can cascade
+  const presetIdOverride: string | undefined =
+    typeof payload?.preset_id === "string" && payload.preset_id.trim()
+      ? payload.preset_id.trim()
       : undefined;
 
   // Normalize input: accept array, { scripts: [] }, or single object
@@ -809,6 +878,11 @@ export function importRegexScripts(
     // Apply folder override if script doesn't already have one
     if (folderOverride && !item.folder) {
       item.folder = folderOverride;
+    }
+
+    // Stamp preset ownership if provided
+    if (presetIdOverride && !item.preset_id) {
+      item.preset_id = presetIdOverride;
     }
 
     const result = createRegexScript(userId, item);

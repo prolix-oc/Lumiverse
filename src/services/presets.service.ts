@@ -4,6 +4,7 @@ import { EventType } from "../ws/events";
 import type { Preset, CreatePresetInput, UpdatePresetInput } from "../types/preset";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
 export interface PresetRegistryRow {
   id: string;
   name: string;
@@ -129,5 +130,8 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
 }
 
 export function deletePreset(userId: string, id: string): boolean {
+  // Cascade-delete any regex scripts that were imported from this preset so
+  // they don't linger as orphaned "preset regexes" in the user's list.
+  deleteRegexScriptsByPresetId(userId, id);
   return getDb().query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
