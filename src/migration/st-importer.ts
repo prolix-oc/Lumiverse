@@ -4,10 +4,12 @@
  * These call Lumiverse service functions directly (no HTTP), accepting a
  * userId and data read by st-reader.ts. Used by the Docker migration
  * orchestrator.
+ *
+ * All functions accept an optional FileSystem parameter for remote sources.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename, extname } from "path";
+import type { FileSystem } from "../file-connections/types";
+import { LocalFileSystem } from "../file-connections/providers/local";
 
 import type { MigrationLogger } from "./st-reader";
 import {
@@ -31,6 +33,10 @@ import { uploadImage } from "../services/images.service";
 import { createPersona, setPersonaAvatar, setPersonaImage } from "../services/personas.service";
 import { importWorldBookBulk } from "../services/world-books.service";
 import { createChatRaw, bulkInsertMessages } from "../services/chats.service";
+
+// ─── Default filesystem singleton ──────────────────────────────────────────
+
+const defaultFs = new LocalFileSystem();
 
 // ─── Result types ───────────────────────────────────────────────────────────
 
@@ -75,28 +81,27 @@ export async function importCharacters(
   userId: string,
   stDataDir: string,
   logger: MigrationLogger,
+  fs: FileSystem = defaultFs,
 ): Promise<CharacterImportResult> {
-  const charsDir = join(stDataDir, "characters");
+  const charsDir = fs.join(stDataDir, "characters");
   const filenameToId = new Map<string, string>();
   let imported = 0;
   let skipped = 0;
   let failed = 0;
 
-  if (!existsSync(charsDir)) return { imported, skipped, failed, filenameToId };
+  if (!(await fs.exists(charsDir))) return { imported, skipped, failed, filenameToId };
 
-  const pngFiles = readdirSync(charsDir).filter((f) => {
-    if (extname(f).toLowerCase() !== ".png") return false;
-    try {
-      return statSync(join(charsDir, f)).isFile();
-    } catch { return false; }
-  });
+  const entries = await fs.readdir(charsDir);
+  const pngFiles = entries.filter(
+    (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".png"
+  );
 
   const total = pngFiles.length;
 
   for (let i = 0; i < pngFiles.length; i++) {
-    const filename = pngFiles[i];
-    const stem = basename(filename, ".png");
-    const filePath = join(charsDir, filename);
+    const filename = pngFiles[i].name;
+    const stem = fs.basename(filename, ".png");
+    const filePath = fs.join(charsDir, filename);
 
     logger.progress("Importing characters", i + 1, total);
 
@@ -109,8 +114,9 @@ export async function importCharacters(
         continue;
       }
 
-      const buffer = readFileSync(filePath);
-      const file = new File([buffer], filename, { type: "image/png" });
+      const buffer = await fs.readFile(filePath);
+      const bytes = new Uint8Array(buffer);
+      const file = new File([bytes], filename, { type: "image/png" });
 
       const cardInput = await extractCardFromPng(file);
       const character = createCharacter(userId, cardInput);
@@ -118,7 +124,7 @@ export async function importCharacters(
 
       // Upload avatar from the same PNG
       try {
-        const avatarFile = new File([buffer], filename, { type: "image/png" });
+        const avatarFile = new File([bytes], filename, { type: "image/png" });
         const image = await uploadImage(userId, avatarFile);
         setCharacterImage(userId, character.id, image.id);
         setCharacterAvatar(userId, character.id, image.filename);
@@ -143,13 +149,14 @@ export async function importWorldBooks(
   userId: string,
   stDataDir: string,
   logger: MigrationLogger,
+  fs: FileSystem = defaultFs,
 ): Promise<WorldBookImportResult> {
   const nameToId = new Map<string, string>();
   let imported = 0;
   let failed = 0;
   let totalEntries = 0;
 
-  const worldBooks = readWorldBooksFromDisk(stDataDir, logger);
+  const worldBooks = await readWorldBooksFromDisk(stDataDir, logger, fs);
   const total = worldBooks.length;
 
   for (let i = 0; i < worldBooks.length; i++) {
@@ -177,13 +184,14 @@ export async function importPersonas(
   stDataDir: string,
   worldBookNameToId: Map<string, string>,
   logger: MigrationLogger,
+  fs: FileSystem = defaultFs,
 ): Promise<PersonaImportResult> {
   const nameToId = new Map<string, string>();
   let imported = 0;
   let failed = 0;
   let avatarsUploaded = 0;
 
-  const personaPayloads = readPersonasFromDisk(stDataDir);
+  const personaPayloads = await readPersonasFromDisk(stDataDir, fs);
   const total = personaPayloads.length;
 
   for (let i = 0; i < personaPayloads.length; i++) {
@@ -204,14 +212,15 @@ export async function importPersonas(
       imported++;
 
       // Try avatar upload
-      const avatarDir = join(stDataDir, "User Avatars");
-      const avatarPath = join(avatarDir, p.avatarKey);
+      const avatarDir = fs.join(stDataDir, "User Avatars");
+      const avatarPath = fs.join(avatarDir, p.avatarKey);
 
-      if (existsSync(avatarPath)) {
+      if (await fs.exists(avatarPath)) {
         try {
-          const avatarBuffer = readFileSync(avatarPath);
+          const avatarBuffer = await fs.readFile(avatarPath);
+          const avatarBytes = new Uint8Array(avatarBuffer);
           const mimeType = p.avatarKey.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
-          const file = new File([avatarBuffer], p.avatarKey, { type: mimeType });
+          const file = new File([avatarBytes], p.avatarKey, { type: mimeType });
           const image = await uploadImage(userId, file);
           setPersonaImage(userId, persona.id, image.id);
           setPersonaAvatar(userId, persona.id, image.filename);
@@ -237,37 +246,38 @@ export async function importChats(
   filenameToId: Map<string, string>,
   personaNameToId: Map<string, string>,
   logger: MigrationLogger,
+  fs: FileSystem = defaultFs,
 ): Promise<ChatImportResult> {
-  const chatsDir = join(stDataDir, "chats");
+  const chatsDir = fs.join(stDataDir, "chats");
   let imported = 0;
   let failed = 0;
   let totalMessages = 0;
   let skippedChars = 0;
 
-  if (!existsSync(chatsDir)) return { imported, failed, totalMessages, skippedChars };
+  if (!(await fs.exists(chatsDir))) return { imported, failed, totalMessages, skippedChars };
 
-  const charDirs = readdirSync(chatsDir).filter((f) => {
-    try {
-      return statSync(join(chatsDir, f)).isDirectory();
-    } catch { return false; }
-  });
+  const entries = await fs.readdir(chatsDir);
+  const charDirs = entries.filter((e) => e.isDirectory);
 
   // Count total chats for progress
   let totalChats = 0;
   for (const dir of charDirs) {
-    totalChats += readdirSync(join(chatsDir, dir)).filter(
-      (f) => extname(f).toLowerCase() === ".jsonl"
+    const chatEntries = await fs.readdir(fs.join(chatsDir, dir.name));
+    totalChats += chatEntries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
     ).length;
   }
 
   let processedChats = 0;
 
-  for (const charDirName of charDirs) {
+  for (const charDirEntry of charDirs) {
+    const charDirName = charDirEntry.name;
     const characterId = filenameToId.get(charDirName);
 
     if (!characterId) {
-      const chatCount = readdirSync(join(chatsDir, charDirName)).filter(
-        (f) => extname(f).toLowerCase() === ".jsonl"
+      const chatEntries = await fs.readdir(fs.join(chatsDir, charDirName));
+      const chatCount = chatEntries.filter(
+        (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
       ).length;
       skippedChars++;
       processedChats += chatCount;
@@ -276,7 +286,7 @@ export async function importChats(
       continue;
     }
 
-    const chatPayloads = readChatsForCharacter(stDataDir, charDirName, personaNameToId, logger);
+    const chatPayloads = await readChatsForCharacter(stDataDir, charDirName, personaNameToId, logger, fs);
 
     for (const chatData of chatPayloads) {
       try {
@@ -300,8 +310,9 @@ export async function importChats(
     }
 
     // Account for chat files that produced no payloads
-    const jsonlCount = readdirSync(join(chatsDir, charDirName)).filter(
-      (f) => extname(f).toLowerCase() === ".jsonl"
+    const chatEntries = await fs.readdir(fs.join(chatsDir, charDirName));
+    const jsonlCount = chatEntries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
     ).length;
     const remaining = jsonlCount - chatPayloads.length;
     if (remaining > 0) {
@@ -321,13 +332,14 @@ export async function importGroupChats(
   filenameToId: Map<string, string>,
   personaNameToId: Map<string, string>,
   logger: MigrationLogger,
+  fs: FileSystem = defaultFs,
 ): Promise<GroupChatImportResult> {
   let imported = 0;
   let failed = 0;
   let skipped = 0;
   let totalMessages = 0;
 
-  const groupDefs = readGroupDefinitions(stDataDir);
+  const groupDefs = await readGroupDefinitions(stDataDir, fs);
   if (groupDefs.length === 0) return { imported, failed, skipped, totalMessages };
 
   // Count total chat files for progress
@@ -340,7 +352,7 @@ export async function importGroupChats(
     // Resolve member character IDs
     const memberCharIds: string[] = [];
     for (const memberFile of group.members) {
-      const stem = basename(memberFile, ".png");
+      const stem = fs.basename(memberFile, ".png");
       const charId = filenameToId.get(stem);
       if (charId) memberCharIds.push(charId);
     }
@@ -354,7 +366,7 @@ export async function importGroupChats(
     }
 
     for (const chatId of group.chatIds) {
-      const chatData = readGroupChatFile(stDataDir, chatId, personaNameToId);
+      const chatData = await readGroupChatFile(stDataDir, chatId, personaNameToId, fs);
 
       if (!chatData) {
         processedChats++;

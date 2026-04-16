@@ -4,7 +4,7 @@
     0 0 40px var(--lumiverse-primary-010);
 }
 
-/* ── Header ── */
+/* -- Header -- */
 .header {
   display: flex;
   align-items: center;
@@ -37,7 +37,7 @@
   white-space: nowrap;
 }
 
-/* ── Body ── */
+/* -- Body -- */
 .body {
   flex: 1;
   overflow-y: auto;
@@ -54,7 +54,70 @@
   padding: 24px 12px;
 }
 
-/* ── Add-on card ── */
+/* -- Section headers -- */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 0 2px;
+}
+
+.sectionIconPersona {
+  color: var(--lumiverse-primary);
+}
+
+.sectionIconGlobal {
+  color: var(--lumiverse-info, #42a5f5);
+}
+
+.manageLibraryBtn {
+  margin-left: auto;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-info, #42a5f5);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: none;
+  letter-spacing: normal;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.manageLibraryBtn:hover {
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 10%, transparent);
+}
+
+.emptySection {
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  font-style: italic;
+  padding: 6px 4px;
+}
+
+.sectionDivider {
+  height: 1px;
+  background: var(--lumiverse-border);
+  margin: 6px 0;
+}
+
+.sectionAddRow {
+  display: flex;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.sectionAddBtn {
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+}
+
+/* -- Add-on card -- */
 .addonCard {
   display: flex;
   flex-direction: column;
@@ -73,6 +136,14 @@
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
 }
 
+.addonCardGlobal {
+  border-left: 3px solid var(--lumiverse-info, #42a5f5);
+}
+
+.addonCardGlobal:hover {
+  border-left-color: var(--lumiverse-info, #42a5f5);
+}
+
 .addonCardDisabled {
   opacity: 0.55;
 }
@@ -83,7 +154,7 @@
   gap: 8px;
 }
 
-/* ── Toggle checkbox ── */
+/* -- Toggle checkbox -- */
 .addonToggle {
   width: 26px;
   height: 26px;
@@ -112,7 +183,71 @@
   box-shadow: 0 0 8px var(--lumiverse-primary-020);
 }
 
-/* ── Inputs ── */
+.addonToggleActiveGlobal {
+  background: var(--lumiverse-info, #42a5f5);
+  border-color: var(--lumiverse-info, #42a5f5);
+  color: #fff;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--lumiverse-info, #42a5f5) 20%, transparent);
+}
+
+/* -- Global addon display -- */
+.globalIndicator {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 12%, transparent);
+  color: var(--lumiverse-info, #42a5f5);
+  flex-shrink: 0;
+}
+
+.globalAddonLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.globalAddonPreview {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  line-height: 1.5;
+  padding: 4px 6px;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detachBtn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+  padding: 0;
+}
+
+.detachBtn:hover {
+  color: var(--lumiverse-warning, #f59e0b);
+  border-color: var(--lumiverse-warning, #f59e0b);
+  background: color-mix(in srgb, var(--lumiverse-warning, #f59e0b) 8%, transparent);
+}
+
+/* -- Inputs -- */
 .addonLabelInput {
   flex: 1;
   min-width: 0;
@@ -179,11 +314,57 @@
   box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
 }
 
-/* ── Footer ── */
+/* -- Attach picker popover -- */
+.attachWrapper {
+  position: relative;
+}
+
+.attachPopover {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  min-width: 220px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.95));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  box-shadow: var(--lumiverse-shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.3));
+  padding: 4px;
+  margin-bottom: 4px;
+  z-index: 10;
+}
+
+.attachPopoverItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.attachPopoverItem:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.attachPopoverIcon {
+  color: var(--lumiverse-info, #42a5f5);
+  flex-shrink: 0;
+}
+
+/* -- Footer -- */
 .footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   padding: 10px 18px;
   border-top: 1px solid var(--lumiverse-border);
   flex-shrink: 0;

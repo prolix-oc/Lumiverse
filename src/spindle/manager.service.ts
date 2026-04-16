@@ -10,7 +10,6 @@ import {
   existsSync,
   mkdirSync,
   rmSync,
-  readFileSync,
   readdirSync,
   renameSync,
   statSync,
@@ -19,8 +18,25 @@ import {
 } from "fs";
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
+import { spawnAsync } from "./spawn-async";
 
 export type InstallScope = "operator" | "user";
+
+/**
+ * Parse a stored JSON array column safely. A corrupted `permissions` row used
+ * to crash extension load/sync; treat the row as having no permissions instead
+ * so the rest of the extensions can still be served.
+ */
+function parsePermissionsSafe<T = string>(raw: string | null | undefined): T[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    console.error("[Spindle] Corrupted permissions JSON; treating as empty");
+    return [];
+  }
+}
 
 // ─── Paths ───────────────────────────────────────────────────────────────
 
@@ -53,18 +69,24 @@ function moveSync(from: string, to: string): void {
 
 // ─── Manifest parsing ────────────────────────────────────────────────────
 
-function readManifest(identifier: string): SpindleManifest {
+async function readManifest(identifier: string): Promise<SpindleManifest> {
   const repo = repoDir(identifier);
   const candidates = [
     join(repo, "spindle.json"),
     join(repo, "spindlefile"),
     join(repo, "spindlefile.json"),
   ];
-  const manifestPath = candidates.find((p) => existsSync(p));
+  let manifestPath: string | undefined;
+  for (const p of candidates) {
+    if (await Bun.file(p).exists()) {
+      manifestPath = p;
+      break;
+    }
+  }
   if (!manifestPath) {
     throw new Error(`spindle manifest not found in ${repo}`);
   }
-  const raw = readFileSync(manifestPath, "utf-8");
+  const raw = await Bun.file(manifestPath).text();
   const manifest: SpindleManifest = JSON.parse(raw);
 
   // Validate
@@ -83,15 +105,15 @@ function readManifest(identifier: string): SpindleManifest {
   return manifest;
 }
 
-function readManifestFromPath(
+async function readManifestFromPath(
   manifestPath: string,
   options?: { allowMissingGithub?: boolean }
-): SpindleManifest {
-  if (!existsSync(manifestPath)) {
+): Promise<SpindleManifest> {
+  if (!(await Bun.file(manifestPath).exists())) {
     throw new Error(`spindle.json not found at ${manifestPath}`);
   }
 
-  const raw = readFileSync(manifestPath, "utf-8");
+  const raw = await Bun.file(manifestPath).text();
   const manifest: SpindleManifest = JSON.parse(raw);
 
   if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
@@ -128,7 +150,7 @@ function moveRootRepoToNestedRepo(extRootDir: string): void {
   }
 }
 
-function ensureRepoLayoutForIdentifier(identifier: string): void {
+async function ensureRepoLayoutForIdentifier(identifier: string): Promise<void> {
   const root = extensionDir(identifier);
   const rootManifestPath = join(root, "spindle.json");
   const rootSpindleFilePath = join(root, "spindlefile");
@@ -138,16 +160,16 @@ function ensureRepoLayoutForIdentifier(identifier: string): void {
   const nestedSpindleFileJsonPath = join(root, "repo", "spindlefile.json");
 
   if (
-    existsSync(nestedManifestPath) ||
-    existsSync(nestedSpindleFilePath) ||
-    existsSync(nestedSpindleFileJsonPath)
+    (await Bun.file(nestedManifestPath).exists()) ||
+    (await Bun.file(nestedSpindleFilePath).exists()) ||
+    (await Bun.file(nestedSpindleFileJsonPath).exists())
   ) {
     return;
   }
   if (
-    !existsSync(rootManifestPath) &&
-    !existsSync(rootSpindleFilePath) &&
-    !existsSync(rootSpindleFileJsonPath)
+    !(await Bun.file(rootManifestPath).exists()) &&
+    !(await Bun.file(rootSpindleFilePath).exists()) &&
+    !(await Bun.file(rootSpindleFileJsonPath).exists())
   ) {
     throw new Error(`No spindle.json found for local extension ${identifier}`);
   }
@@ -252,10 +274,10 @@ function syncPermissionGrants(
  * if anything has changed. Safe to call on every start — no-ops when the
  * manifest matches what the DB already has.
  */
-export function syncManifestToDb(identifier: string): void {
+export async function syncManifestToDb(identifier: string): Promise<void> {
   let manifest: SpindleManifest;
   try {
-    manifest = readManifest(identifier);
+    manifest = await readManifest(identifier);
   } catch {
     // If manifest can't be read (e.g. repo missing), skip sync silently
     return;
@@ -270,7 +292,7 @@ export function syncManifestToDb(identifier: string): void {
     } | null;
   if (!row) return;
 
-  const dbPermissions: string[] = JSON.parse(row.permissions || "[]");
+  const dbPermissions: string[] = parsePermissionsSafe<string>(row.permissions);
   const manifestPermissions = manifest.permissions || [];
 
   // Check if the extensions row needs updating
@@ -441,7 +463,7 @@ function bunInstallCmd(): string[] {
 
 export async function buildExtension(identifier: string): Promise<void> {
   const repo = repoDir(identifier);
-  const manifest = readManifest(identifier);
+  const manifest = await readManifest(identifier);
 
   const backendEntry = manifest.entry_backend || "dist/backend.js";
   const frontendEntry = manifest.entry_frontend || "dist/frontend.js";
@@ -449,25 +471,17 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Always install dependencies first if package.json exists
   const pkgJson = join(repo, "package.json");
   if (existsSync(pkgJson)) {
-    const install = Bun.spawnSync({
-      cmd: bunInstallCmd(),
-      cwd: repo,
-    });
+    const install = await spawnAsync(bunInstallCmd(), { cwd: repo });
     if (install.exitCode !== 0) {
-      throw new Error(
-        `Dependency install failed: ${install.stderr.toString()}`
-      );
+      throw new Error(`Dependency install failed: ${install.stderr}`);
     }
   }
 
   // If the repo ships pre-built dist/ (files tracked in git), skip build entirely
   const distDir = join(repo, "dist");
   if (existsSync(distDir)) {
-    const lsFiles = Bun.spawnSync({
-      cmd: ["git", "ls-files", "dist"],
-      cwd: repo,
-    });
-    if (lsFiles.exitCode === 0 && lsFiles.stdout.toString().trim().length > 0) {
+    const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
+    if (lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0) {
       return;
     }
   }
@@ -490,37 +504,65 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   // Build backend entry if source exists
   if (needsBackendBuild) {
-    const proc = Bun.spawnSync({
-      cmd: bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
-      cwd: repo,
-    });
+    const proc = await spawnAsync(
+      bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
+      { cwd: repo }
+    );
     if (proc.exitCode !== 0) {
-      throw new Error(
-        `Backend build failed: ${proc.stderr.toString()}`
-      );
+      throw new Error(`Backend build failed: ${proc.stderr}`);
     }
   }
 
   // Build frontend entry if source exists
   if (needsFrontendBuild) {
-    const proc = Bun.spawnSync({
-      cmd: bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
-      cwd: repo,
-    });
+    const proc = await spawnAsync(
+      bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
+      { cwd: repo }
+    );
     if (proc.exitCode !== 0) {
-      throw new Error(
-        `Frontend build failed: ${proc.stderr.toString()}`
-      );
+      throw new Error(`Frontend build failed: ${proc.stderr}`);
     }
   }
 }
 
 // ─── Install ─────────────────────────────────────────────────────────────
 
+/**
+ * Validate that a user-supplied repository URL is safe to hand to `git clone`.
+ * Without this check, an owner could (accidentally or coerced) install from
+ * `file:///etc/shadow`, `ssh://internal-host/repo`, or `git://` and exfiltrate
+ * local files or probe internal services.
+ */
+function assertSafeGitUrl(rawUrl: string): void {
+  if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+    throw new Error("Repository URL is required");
+  }
+  const url = rawUrl.trim();
+  // Reject scp-style URLs ("user@host:path") and absolute paths outright; they
+  // bypass URL parsing and let git treat the value as a local clone source.
+  if (/^[\w.+-]+@[^:]+:/.test(url) || url.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(url)) {
+    throw new Error("Repository URL must use https://");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Repository URL is not a valid URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Repository URL protocol "${parsed.protocol}" is not allowed; use https://`);
+  }
+  if (!parsed.hostname) {
+    throw new Error("Repository URL must include a hostname");
+  }
+}
+
 export async function install(
   githubUrl: string,
   options?: { installScope?: InstallScope; installedByUserId?: string | null; branch?: string | null }
 ): Promise<ExtensionInfo> {
+  assertSafeGitUrl(githubUrl);
+
   const baseDir = extensionsDir();
   mkdirSync(baseDir, { recursive: true });
   const installScope: InstallScope = options?.installScope === "user" ? "user" : "operator";
@@ -547,12 +589,12 @@ export async function install(
 
   // Read manifest from cloned repo
   const manifestPath = join(tempDir, "spindle.json");
-  if (!existsSync(manifestPath)) {
+  if (!(await Bun.file(manifestPath).exists())) {
     rmSync(tempDir, { recursive: true, force: true });
     throw new Error("No spindle.json found in repository");
   }
 
-  const raw = readFileSync(manifestPath, "utf-8");
+  const raw = await Bun.file(manifestPath).text();
   const manifest: SpindleManifest = JSON.parse(raw);
 
   if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
@@ -616,7 +658,7 @@ export async function install(
     ]
   );
 
-  return getExtension(id)!;
+  return (await getExtension(id))!;
 }
 
 // ─── Update ──────────────────────────────────────────────────────────────
@@ -627,20 +669,21 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
 
-  // Clean build artifacts and installed dependencies so git pull succeeds
-  Bun.spawnSync({ cmd: ["git", "checkout", "."], cwd: repo });
-  Bun.spawnSync({ cmd: ["git", "clean", "-fd"], cwd: repo });
+  // Clean build artifacts and installed dependencies so git pull succeeds.
+  // We don't read stdout for these — ignore it to reduce pipe overhead.
+  await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
+  await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
 
-  const pullProc = Bun.spawnSync({
-    cmd: ["git", "pull"],
+  const pullProc = await spawnAsync(["git", "pull"], {
     cwd: repo,
+    timeoutMs: 60_000,
   });
   if (pullProc.exitCode !== 0) {
-    throw new Error(`git pull failed: ${pullProc.stderr.toString()}`);
+    throw new Error(`git pull failed: ${pullProc.stderr}`);
   }
 
   // Re-read manifest
-  const manifest = readManifest(identifier);
+  const manifest = await readManifest(identifier);
 
   const db = getDb();
   const existing = db
@@ -661,11 +704,8 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
   if (hasBuildableSrc) {
     const distDir = join(repo, "dist");
     if (existsSync(distDir)) {
-      const lsFiles = Bun.spawnSync({
-        cmd: ["git", "ls-files", "dist"],
-        cwd: repo,
-      });
-      const distIsTracked = lsFiles.exitCode === 0 && lsFiles.stdout.toString().trim().length > 0;
+      const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
+      const distIsTracked = lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0;
       if (!distIsTracked) {
         rmSync(distDir, { recursive: true });
       }
@@ -697,7 +737,7 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
     existingPermissions
   );
 
-  return getExtensionByIdentifier(identifier)!;
+  return (await getExtensionByIdentifier(identifier))!;
 }
 
 // ─── Remove ──────────────────────────────────────────────────────────────
@@ -733,7 +773,7 @@ export function enable(identifier: string): void {
     .query("SELECT permissions FROM extensions WHERE identifier = ?")
     .get(identifier) as { permissions: string } | null;
   if (row) {
-    const requested = JSON.parse(row.permissions || "[]") as string[];
+    const requested = parsePermissionsSafe<string>(row.permissions);
     grantRequestedPermissionsByDefault(identifier, requested);
   }
 }
@@ -808,13 +848,13 @@ export function hasPermission(
 
 // ─── Queries ─────────────────────────────────────────────────────────────
 
-export function list(): ExtensionInfo[] {
+export async function list(): Promise<ExtensionInfo[]> {
   const db = getDb();
   const rows = db.query("SELECT * FROM extensions ORDER BY installed_at DESC").all() as any[];
-  return rows.map(rowToExtensionInfo);
+  return Promise.all(rows.map(rowToExtensionInfo));
 }
 
-export function listForUser(userId: string, role: string | null | undefined): ExtensionInfo[] {
+export async function listForUser(userId: string, role: string | null | undefined): Promise<ExtensionInfo[]> {
   if (role === "owner" || role === "admin") {
     return list();
   }
@@ -828,20 +868,20 @@ export function listForUser(userId: string, role: string | null | undefined): Ex
     )
     .all(userId) as any[];
 
-  return rows.map(rowToExtensionInfo);
+  return Promise.all(rows.map(rowToExtensionInfo));
 }
 
-export function getExtension(id: string): ExtensionInfo | null {
+export async function getExtension(id: string): Promise<ExtensionInfo | null> {
   const db = getDb();
   const row = db.query("SELECT * FROM extensions WHERE id = ?").get(id) as any;
   return row ? rowToExtensionInfo(row) : null;
 }
 
-export function getExtensionForUser(
+export async function getExtensionForUser(
   id: string,
   userId: string,
   role: string | null | undefined
-): ExtensionInfo | null {
+): Promise<ExtensionInfo | null> {
   if (role === "owner" || role === "admin") {
     return getExtension(id);
   }
@@ -871,9 +911,9 @@ export function canManageExtension(
   );
 }
 
-export function getExtensionByIdentifier(
+export async function getExtensionByIdentifier(
   identifier: string
-): ExtensionInfo | null {
+): Promise<ExtensionInfo | null> {
   const db = getDb();
   const row = db
     .query("SELECT * FROM extensions WHERE identifier = ?")
@@ -881,32 +921,32 @@ export function getExtensionByIdentifier(
   return row ? rowToExtensionInfo(row) : null;
 }
 
-export function getManifest(identifier: string): SpindleManifest {
+export async function getManifest(identifier: string): Promise<SpindleManifest> {
   return readManifest(identifier);
 }
 
-export function getEnabledExtensions(): ExtensionInfo[] {
+export async function getEnabledExtensions(): Promise<ExtensionInfo[]> {
   const db = getDb();
   const rows = db
     .query("SELECT * FROM extensions WHERE enabled = 1")
     .all() as any[];
-  return rows.map(rowToExtensionInfo);
+  return Promise.all(rows.map(rowToExtensionInfo));
 }
 
-export function getFrontendBundlePath(identifier: string): string | null {
-  const manifest = readManifest(identifier);
+export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
+  const manifest = await readManifest(identifier);
   const entry = manifest.entry_frontend || "dist/frontend.js";
   const repo = repoDir(identifier);
   const bundlePath = resolveWithin(repo, entry, "entry_frontend");
-  return existsSync(bundlePath) ? bundlePath : null;
+  return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
 }
 
-export function getBackendEntryPath(identifier: string): string | null {
-  const manifest = readManifest(identifier);
+export async function getBackendEntryPath(identifier: string): Promise<string | null> {
+  const manifest = await readManifest(identifier);
   const entry = manifest.entry_backend || "dist/backend.js";
   const repo = repoDir(identifier);
   const entryPath = resolveWithin(repo, entry, "entry_backend");
-  return existsSync(entryPath) ? entryPath : null;
+  return (await Bun.file(entryPath).exists()) ? entryPath : null;
 }
 
 export function getStoragePath(identifier: string): string {
@@ -960,12 +1000,12 @@ export async function importLocalExtensions(): Promise<{
       const rootSpindleFileJsonPath = join(candidateRoot, "spindlefile.json");
 
       let manifestPath: string | null = null;
-      if (existsSync(nestedManifestPath)) manifestPath = nestedManifestPath;
-      else if (existsSync(nestedSpindleFilePath)) manifestPath = nestedSpindleFilePath;
-      else if (existsSync(nestedSpindleFileJsonPath)) manifestPath = nestedSpindleFileJsonPath;
-      else if (existsSync(rootManifestPath)) manifestPath = rootManifestPath;
-      else if (existsSync(rootSpindleFilePath)) manifestPath = rootSpindleFilePath;
-      else if (existsSync(rootSpindleFileJsonPath)) manifestPath = rootSpindleFileJsonPath;
+      if (await Bun.file(nestedManifestPath).exists()) manifestPath = nestedManifestPath;
+      else if (await Bun.file(nestedSpindleFilePath).exists()) manifestPath = nestedSpindleFilePath;
+      else if (await Bun.file(nestedSpindleFileJsonPath).exists()) manifestPath = nestedSpindleFileJsonPath;
+      else if (await Bun.file(rootManifestPath).exists()) manifestPath = rootManifestPath;
+      else if (await Bun.file(rootSpindleFilePath).exists()) manifestPath = rootSpindleFilePath;
+      else if (await Bun.file(rootSpindleFileJsonPath).exists()) manifestPath = rootSpindleFileJsonPath;
       else {
         skipped.push({
           path: candidateRoot,
@@ -974,7 +1014,7 @@ export async function importLocalExtensions(): Promise<{
         continue;
       }
 
-      const manifest = readManifestFromPath(manifestPath, {
+      const manifest = await readManifestFromPath(manifestPath, {
         allowMissingGithub: true,
       });
 
@@ -996,7 +1036,7 @@ export async function importLocalExtensions(): Promise<{
           moveSync(candidateRoot, desiredRoot);
         }
 
-        ensureRepoLayoutForIdentifier(manifest.identifier);
+        await ensureRepoLayoutForIdentifier(manifest.identifier);
       } else {
         // Already nested layout, but ensure root directory matches identifier if needed
         const desiredRoot = extensionDir(manifest.identifier);
@@ -1015,7 +1055,7 @@ export async function importLocalExtensions(): Promise<{
       applyStorageSeeds(manifest.identifier, manifest);
       insertExtensionFromManifest(manifest);
 
-      const ext = getExtensionByIdentifier(manifest.identifier);
+      const ext = await getExtensionByIdentifier(manifest.identifier);
       if (ext) imported.push(ext);
     } catch (err: any) {
       skipped.push({
@@ -1121,7 +1161,7 @@ export async function switchBranch(
   }
 
   // Re-read manifest
-  const manifest = readManifest(identifier);
+  const manifest = await readManifest(identifier);
 
   const db = getDb();
   const existing = db
@@ -1178,21 +1218,21 @@ export async function switchBranch(
     existingPermissions
   );
 
-  return getExtensionByIdentifier(identifier)!;
+  return (await getExtensionByIdentifier(identifier))!;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-function rowToExtensionInfo(row: any): ExtensionInfo {
+async function rowToExtensionInfo(row: any): Promise<ExtensionInfo> {
   const identifier = row.identifier;
-  const permissions: SpindlePermission[] = JSON.parse(row.permissions || "[]");
+  const permissions: SpindlePermission[] = parsePermissionsSafe<SpindlePermission>(row.permissions);
   const granted = getGrantedPermissions(identifier);
 
   let hasFrontend = false;
   let hasBackend = false;
   try {
-    hasFrontend = getFrontendBundlePath(identifier) !== null;
-    hasBackend = getBackendEntryPath(identifier) !== null;
+    hasFrontend = (await getFrontendBundlePath(identifier)) !== null;
+    hasBackend = (await getBackendEntryPath(identifier)) !== null;
   } catch {
     // Extension files may not exist
   }
@@ -1224,7 +1264,12 @@ function rowToExtensionInfo(row: any): ExtensionInfo {
     updated_at: row.updated_at,
     has_frontend: hasFrontend,
     has_backend: hasBackend,
-    status: row.enabled === 1 ? "stopped" : "stopped", // Updated by lifecycle
+    // Reflect actual worker state. The previous literal "stopped : stopped"
+    // ternary always reported stopped, masking running workers in the UI.
+    // Lazy require avoids a circular import (lifecycle.ts already imports
+    // managerSvc), which would otherwise resolve isRunning to undefined on
+    // first load.
+    status: (require("./lifecycle") as typeof import("./lifecycle")).isRunning(row.id) ? "running" : "stopped",
     metadata,
   };
 }

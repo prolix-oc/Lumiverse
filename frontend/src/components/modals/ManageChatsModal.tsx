@@ -59,9 +59,11 @@ export default function ManageChatsModal() {
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatSummary | null>(null)
   const [importing, setImporting] = useState(false)
+  const [importingSt, setImportingSt] = useState(false)
 
   const renameInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const stFileInputRef = useRef<HTMLInputElement>(null)
 
   // Fetch chats for this character
   const fetchChats = useCallback(async () => {
@@ -241,6 +243,32 @@ export default function ManageChatsModal() {
     [characterId, fetchChats]
   )
 
+  const handleImportStClick = useCallback(() => {
+    stFileInputRef.current?.click()
+  }, [])
+
+  const handleImportStFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files
+      if (!files || files.length === 0) return
+      e.target.value = ''
+
+      setImportingSt(true)
+      let imported = 0
+      for (const file of Array.from(files)) {
+        try {
+          await chatsApi.importFromSt(characterId, file)
+          imported++
+        } catch (err) {
+          console.error('[ManageChats] Failed to import ST chat:', file.name, err)
+        }
+      }
+      if (imported > 0) await fetchChats()
+      setImportingSt(false)
+    },
+    [characterId, fetchChats]
+  )
+
   return (
     <>
     <ModalShell isOpen={true} onClose={closeModal} closeOnEscape={false} maxWidth="clamp(340px, 94vw, min(560px, var(--lumiverse-content-max-width, 560px)))" className={styles.modal}>
@@ -284,6 +312,23 @@ export default function ManageChatsModal() {
               accept=".json"
               style={{ display: 'none' }}
               onChange={handleImportFile}
+            />
+            <Button
+              size="sm"
+              icon={importingSt ? <Spinner size={13} /> : <Upload size={13} />}
+              onClick={handleImportStClick}
+              disabled={importingSt}
+              title="Import chat from SillyTavern JSONL"
+            >
+              Import ST
+            </Button>
+            <input
+              ref={stFileInputRef}
+              type="file"
+              accept=".jsonl"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleImportStFile}
             />
           </div>
 

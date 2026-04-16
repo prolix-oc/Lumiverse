@@ -1,12 +1,13 @@
 /**
- * Two responsibilities:
+ * Two responsibilities, both opt-in via `characterAware: true` on the theme:
  *
- * 1. **Character name colors** (always active): Extracts a palette from the active
- *    character's avatar and sets `--char-name-dark` / `--char-name-light` on the root.
- *    These are vibrant, theme-mode-aware name colors used in chat messages.
+ * 1. **Character name colors**: Extracts a palette from the active character's
+ *    avatar and sets `--char-name-dark` / `--char-name-light` on the root.
+ *    Without characterAware (or with extension overrides), these are removed
+ *    so CSS falls back to `--lumiverse-primary-text` (white/black per mode).
  *
- * 2. **Character-aware theme overlay** (opt-in via `characterAware: true`): Merges
- *    accent + base colors derived from the avatar onto the current theme.
+ * 2. **Character-aware theme overlay**: Merges accent + base colors derived
+ *    from the avatar onto the current theme.
  */
 
 import { useEffect, useRef } from 'react'
@@ -28,6 +29,7 @@ const NAME_VAR_KEYS = ['--char-name-dark', '--char-name-light']
 
 export function useCharacterTheme() {
   const characterAware = useStore((s) => (s.theme as ThemeConfig | null)?.characterAware === true)
+  const hasExtensionOverrides = useStore((s) => Object.keys(s.extensionThemeOverrides).length > 0)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const characters = useStore((s) => s.characters)
@@ -46,11 +48,14 @@ export function useCharacterTheme() {
   const appliedAvatarKeyRef = useRef<string | null>(null)
   const nameAppliedAvatarKeyRef = useRef<string | null>(null)
 
-  // ── 1. Character name colors (always active) ──
+  // ── 1. Character name colors (opt-in via characterAware) ──
   useEffect(() => {
     const root = document.documentElement
 
-    if (!activeCharacterId || !avatarUrl || !avatarCacheKey) {
+    // Only derive name colors when characterAware is enabled and no extension
+    // overrides are active. Otherwise the CSS fallback (--lumiverse-primary-text)
+    // applies — white in dark mode, black in light mode.
+    if (!characterAware || hasExtensionOverrides || !activeCharacterId || !avatarUrl || !avatarCacheKey) {
       NAME_VAR_KEYS.forEach((k) => root.style.removeProperty(k))
       nameAppliedAvatarKeyRef.current = null
       return
@@ -82,11 +87,13 @@ export function useCharacterTheme() {
 
     apply()
     return () => { cancelled = true }
-  }, [activeCharacterId, avatarUrl, avatarCacheKey])
+  }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey])
 
   // ── 2. Character-aware theme overlay (opt-in) ──
+  // Suppressed when extension theme overrides are active — extensions take full
+  // control of the palette, so character-derived accent/baseColors must yield.
   useEffect(() => {
-    if (!characterAware) {
+    if (!characterAware || hasExtensionOverrides) {
       appliedAvatarKeyRef.current = null
       return
     }
@@ -131,7 +138,7 @@ export function useCharacterTheme() {
 
     apply()
     return () => { cancelled = true }
-  }, [characterAware, activeCharacterId, avatarUrl, avatarCacheKey])
+  }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey])
 
   // ── 3. React to CHARACTER_AVATAR_CHANGED — force resample ──
   useEffect(() => {

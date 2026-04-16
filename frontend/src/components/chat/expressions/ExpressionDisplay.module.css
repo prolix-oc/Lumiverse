@@ -140,7 +140,6 @@
 
 :global([data-glass]) .labelBadge {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .container:hover .labelBadge {
@@ -271,7 +270,6 @@
 
 :global([data-glass]) .groupNameTag {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .groupSlotActive .groupNameTag,
@@ -285,8 +283,20 @@
 }
 
 @media (max-width: 600px) {
+  /* Larger touch target for mobile — visual indicator stays small via ::after */
   .resizeHandle {
-    display: none;
+    width: 44px;
+    height: 44px;
+    opacity: 0.6;
+  }
+
+  .resizeHandle::after {
+    bottom: 4px;
+    right: 4px;
+    width: 10px;
+    height: 10px;
+    border-right-width: 2.5px;
+    border-bottom-width: 2.5px;
   }
 
   .labelBadge {

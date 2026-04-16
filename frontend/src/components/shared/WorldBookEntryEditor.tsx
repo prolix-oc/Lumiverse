@@ -292,7 +292,7 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
           <Toggle.Checkbox
             checked={entry.vectorized}
             onChange={() => onImmediateUpdate(entry.id, { vectorized: !entry.vectorized })}
-            label="Use for semantic activation"
+            label="Vectorized"
           />
         </div>
         <div className={styles.vectorStatusRow}>

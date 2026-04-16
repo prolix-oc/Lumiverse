@@ -2,6 +2,7 @@ import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyRes
 import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
+import { getEffectiveCharacterName } from "../types/character";
 import type { Persona } from "../types/persona";
 import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
@@ -14,6 +15,7 @@ import {
   finalizeActivatedWorldInfoEntries,
   type WiState,
   type WorldInfoSettings,
+  type FinalizedWorldInfoEntries,
   DEFAULT_WORLD_INFO_SETTINGS,
 } from "./world-info-activation.service";
 import * as chatsSvc from "./chats.service";
@@ -27,6 +29,7 @@ import {
 } from "../utils/content-sanitizer";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
+import * as globalAddonsSvc from "./global-addons.service";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as worldBooksSvc from "./world-books.service";
@@ -35,10 +38,45 @@ import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
 import * as imagesSvc from "./images.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
+import { readCachedChatMemory } from "./chat-memory-cache.service";
+import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import { getCouncilSettings } from "./council/council-settings.service";
-import { getDb } from "../db/connection";
-import { readFileSync } from "fs";
+import * as memoryCortex from "./memory-cortex";
+import { buildEmotionalContext } from "./memory-cortex";
+import * as databankSvc from "./databank";
+import { getCharacterDatabankIds } from "../utils/character-databanks";
+import { getSidecarSettings } from "./sidecar-settings.service";
+
+// ---------------------------------------------------------------------------
+// Chat history identity marker
+// ---------------------------------------------------------------------------
+// Each LlmMessage that originates from the user's chat history (as opposed to
+// system blocks, world info, author's note, depth-injected blocks, etc.) is
+// tagged with this property. Downstream consumers (regex script depth filter,
+// tokenizer breakdown snapshot) use the tag to identify chat history messages
+// regardless of where they end up in the final assembled array, since later
+// insertions/merges can shift positions and even break contiguity.
+//
+// The tag is preserved by every mutation that uses object spread
+// (`{ ...result[i], content: ... }`). The merge function — which constructs
+// new message objects without spreading — is updated to preserve the tag
+// explicitly.
+//
+// Tag is a regular string property because Symbol-keyed props are not copied
+// by spread. Providers explicitly destructure {role, content} when building
+// outbound requests, so the tag never leaks to the LLM.
+
+const CHAT_HISTORY_KEY = "__chatHistorySource";
+
+function markAsChatHistory(msg: LlmMessage): LlmMessage {
+  (msg as any)[CHAT_HISTORY_KEY] = true;
+  return msg;
+}
+
+export function isChatHistoryMessage(msg: LlmMessage): boolean {
+  return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
 
 // ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
@@ -48,8 +86,8 @@ async function resolveAttachmentBase64(userId: string, imageId: string): Promise
   const filePath = await imagesSvc.getImageFilePath(userId, imageId);
   if (!filePath) return null;
   try {
-    const buffer = readFileSync(filePath);
-    return buffer.toString("base64");
+    const buffer = await Bun.file(filePath).arrayBuffer();
+    return Buffer.from(buffer).toString("base64");
   } catch {
     return null;
   }
@@ -210,6 +248,55 @@ function isAppendRole(role: string): boolean {
   return role === 'user_append' || role === 'assistant_append';
 }
 
+/**
+ * Reorder non-marker blocks so their `position` field is respected relative
+ * to the chat_history marker.  Blocks with position "post_history" (or
+ * "in_history") that sit before the marker are moved to just after it, and
+ * blocks with position "pre_history" that sit after the marker are moved to
+ * just before it.  Marker blocks and append-role blocks are left in place.
+ */
+function reorderBlocksByPosition(blocks: PromptBlock[]): void {
+  const chatHistoryIdx = blocks.findIndex(b => b.marker === 'chat_history');
+  if (chatHistoryIdx < 0) return;
+
+  // Identify misplaced content blocks
+  const moveToAfter: Set<number> = new Set();
+  const moveToBefore: Set<number> = new Set();
+
+  for (let i = 0; i < blocks.length; i++) {
+    if (i === chatHistoryIdx) continue;
+    const b = blocks[i];
+    if (b.marker || isAppendRole(b.role)) continue;
+
+    if (i < chatHistoryIdx && (b.position === 'post_history' || b.position === 'in_history')) {
+      moveToAfter.add(i);
+    } else if (i > chatHistoryIdx && b.position === 'pre_history') {
+      moveToBefore.add(i);
+    }
+  }
+
+  if (moveToAfter.size === 0 && moveToBefore.size === 0) return;
+
+  // Rebuild: blocks before chat_history (minus those moving after)
+  const result: PromptBlock[] = [];
+  for (let i = 0; i < chatHistoryIdx; i++) {
+    if (!moveToAfter.has(i)) result.push(blocks[i]);
+  }
+  // Pre-history blocks that were after chat_history (preserve their relative order)
+  for (const idx of moveToBefore) result.push(blocks[idx]);
+  // chat_history marker
+  result.push(blocks[chatHistoryIdx]);
+  // Post-history blocks that were before chat_history (preserve their relative order)
+  for (const idx of moveToAfter) result.push(blocks[idx]);
+  // Remaining blocks after chat_history (minus those moved before)
+  for (let i = chatHistoryIdx + 1; i < blocks.length; i++) {
+    if (!moveToBefore.has(i)) result.push(blocks[i]);
+  }
+
+  blocks.length = 0;
+  blocks.push(...result);
+}
+
 function appendBaseRole(role: string): 'user' | 'assistant' {
   return role === 'user_append' ? 'user' : 'assistant';
 }
@@ -233,11 +320,13 @@ interface PendingAppend {
  * Falls back to legacy simple message mapping if no preset/blocks are found.
  */
 export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResult> {
-  // ---- Load data ----
-  const chat = chatsSvc.getChat(ctx.userId, ctx.chatId);
+  const pf = ctx.prefetched; // shorthand for prefetched data
+
+  // ---- Load data (use prefetched when available, fallback to DB) ----
+  const chat = pf?.chat ?? chatsSvc.getChat(ctx.userId, ctx.chatId);
   if (!chat) throw new Error("Chat not found");
 
-  const allMessages = chatsSvc.getMessages(ctx.userId, ctx.chatId);
+  const allMessages = pf?.messages ?? chatsSvc.getMessages(ctx.userId, ctx.chatId);
   // Filter out the excluded message (e.g. regenerate/swipe target with a blank swipe)
   // so it doesn't appear in macros, WI scanning, or any assembly path.
   const messages = ctx.excludeMessageId
@@ -245,20 +334,30 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     : allMessages;
   // For group chats, resolve the target character; fall back to the chat's primary character
   const characterId = ctx.targetCharacterId || chat.character_id;
-  const character = charactersSvc.getCharacter(ctx.userId, characterId);
+  const character = pf?.character ?? charactersSvc.getCharacter(ctx.userId, characterId);
   if (!character) throw new Error("Character not found");
 
-  const persona = personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
+  let persona = pf?.persona !== undefined ? pf.persona : personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
+
+  // Resolve attached global add-ons for non-prefetched path
+  if (persona && !pf) {
+    const attachedRefs = (persona.metadata?.attached_global_addons as Array<{ id: string; enabled: boolean }>) ?? [];
+    const enabledIds = attachedRefs.filter(a => a.enabled).map(a => a.id);
+    if (enabledIds.length > 0) {
+      const resolved = globalAddonsSvc.getGlobalAddonsByIds(ctx.userId, enabledIds);
+      persona = { ...persona, metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved } };
+    }
+  }
 
   // Resolve connection
-  const connection = ctx.connectionId
+  const connection = pf?.connection !== undefined ? pf.connection : (ctx.connectionId
     ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
-    : connectionsSvc.getDefaultConnection(ctx.userId);
+    : connectionsSvc.getDefaultConnection(ctx.userId));
 
   // Resolve preset: request presetId takes priority, then connection's preset_id
   const resolvedPresetId = ctx.presetId || connection?.preset_id;
-  let preset: Preset | null = null;
-  if (resolvedPresetId) {
+  let preset: Preset | null = pf?.preset !== undefined ? pf.preset : null;
+  if (!pf && resolvedPresetId) {
     preset = presetsSvc.getPreset(ctx.userId, resolvedPresetId);
   }
 
@@ -282,19 +381,98 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       presetProfilesSvc.applyProfileToBlocks(blocks, resolved.binding);
     }
   }
+  presetProfilesSvc.normalizeCategoryBlockStates(blocks);
+
+  // Reorder blocks so the position field (pre_history / post_history /
+  // in_history) is honoured relative to the chat_history marker.
+  reorderBlocksByPosition(blocks);
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {
     return await legacyAssembly(messages, ctx.generationType, character, persona, chat, connection, ctx.userId);
   }
 
+  // ---- Pre-flight: kick off cortex query ----
+  // The cortex query runs concurrently with world info activation and macro
+  // setup below. Prompt assembly only ever consumes warm-cache hits from this
+  // request path; on a cold miss we fall back immediately so cortex never
+  // blocks generation or dry-run rendering.
+  const cortexConfig = pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
+  let cortexChatMemSettings: import("./embeddings.service").ChatMemorySettings | null = null;
+  let cortexPerChatOverrides: import("./embeddings.service").PerChatMemoryOverrides | null = null;
+
+  if (cortexConfig.enabled) {
+    const cmRaw = pf?.allSettings.get("chatMemorySettings") ?? settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ?? null;
+    cortexChatMemSettings = cmRaw ? embeddingsSvc.normalizeChatMemorySettings(cmRaw) : null;
+    cortexPerChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
+
+    // Fire cortex retrieval as best-effort warm-cache work for subsequent
+    // generations. This must stay detached from the hot path.
+    // Build query text eagerly so it's available for both main + linked queries.
+    const embCfgPromise = pf?.embeddingConfig
+      ? Promise.resolve(pf.embeddingConfig)
+      : embeddingsSvc.getEmbeddingConfig(ctx.userId);
+
+    void (async () => {
+      const embCfg = await embCfgPromise;
+      const effective = cortexChatMemSettings
+        ? embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg)
+        : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+
+      const cortexQueryText = buildQueryText(messages, effective);
+      const recentContent = messages.slice(-6).map(m => m.content).join(" ");
+      const emotionalContext = buildEmotionalContext(recentContent);
+
+      // Fire main cortex query + linked cortex queries in parallel
+      const mainQuery = memoryCortex.queryCortex({
+        chatId: ctx.chatId,
+        userId: ctx.userId,
+        queryText: cortexQueryText,
+        emotionalContext,
+        generationType: ctx.generationType,
+        topK: cortexPerChatOverrides?.retrievalTopK ?? effective.retrievalTopK,
+        includeConsolidations: cortexConfig.consolidation.enabled,
+        includeRelationships: cortexConfig.retrieval.relationshipInjection,
+        excludeMessageIds: ctx.excludeMessageId ? [ctx.excludeMessageId] : undefined,
+      }, cortexConfig);
+
+      // Linked cortex queries use the same queryText for semantic relevance
+      const linkedQuery = memoryCortex.queryLinkedCortex(
+        ctx.chatId, ctx.userId, cortexConfig, cortexQueryText,
+      );
+
+      await Promise.all([mainQuery, linkedQuery]);
+    })().catch(err => {
+      console.warn("[prompt-assembly] Background cortex query failed:", err);
+    });
+  }
+
+  // ---- Pre-flight: kick off databank retrieval ----
+  const databankCrossRefs = {
+    characterDatabankIds: getCharacterDatabankIds(character?.extensions),
+    chatDatabankIds: (chat.metadata?.chat_databank_ids as string[] | undefined) ?? [],
+  };
+  {
+    const dbIds = databankSvc.resolveActiveDatabankIds(ctx.userId, ctx.chatId, character?.id ? [character.id] : [], databankCrossRefs);
+    if (dbIds.length > 0) {
+      void (async () => {
+        const embCfg = pf?.embeddingConfig ?? await embeddingsSvc.getEmbeddingConfig(ctx.userId);
+        if (!embCfg.enabled) return;
+        const queryText = messages.slice(-6).map(m => m.content).join(" ");
+        await databankSvc.searchDatabanks(ctx.userId, ctx.chatId, dbIds, queryText, 4);
+      })().catch(err => {
+        console.warn("[prompt-assembly] Background databank query failed:", err);
+      });
+    }
+  }
+
   // ---- World Info activation ----
-  const globalWorldBooks = (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as string[] | undefined) ?? [];
+  const globalWorldBooks = (pf?.allSettings.get("globalWorldBooks") ?? settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as string[] | undefined) ?? [];
   const chatWorldBookIds = (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
-  const wiSources = collectWorldInfoSources(ctx.userId, character, persona, globalWorldBooks, chatWorldBookIds);
+  const wiSources = pf?.worldInfoSources ?? collectWorldInfoSources(ctx.userId, character, persona, globalWorldBooks, chatWorldBookIds);
   const wiEntries = wiSources.entries;
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
-  const worldInfoSettings = (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
+  const worldInfoSettings = (pf?.allSettings.get("worldInfoSettings") ?? settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
   const wiResult = activateWorldInfo({
     entries: wiEntries,
     messages,
@@ -303,18 +481,55 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     settings: worldInfoSettings,
   });
 
+  // Yield after world-info activation — the keyword scanning loop above is
+  // synchronous and can block for 50-200ms on large setups (hundreds of
+  // entries × thousands of messages). Yielding here lets Bun drain its I/O
+  // queue before the next heavy phase (vector retrieval, macro evaluation).
+  if (wiEntries.length > 50) {
+    await new Promise<void>(r => setTimeout(r, 0));
+  }
+
   // Optional vector retrieval for vectorized world book entries.
   // These entries are merged with keyword-activated entries when enabled.
   // When pre-computed results are available (from the generation pipeline's
   // council enrichment phase), reuse them to avoid redundant embedding queries.
   const vectorQueryPreview = await getWorldInfoVectorQueryPreview(ctx.userId, messages);
-  const vectorActivated = ctx.precomputedVectorEntries
-    ?? await collectVectorActivatedWorldInfo(
-      ctx.userId,
-      wiSources.worldBookIds,
-      wiEntries,
-      messages,
-    );
+  let vectorActivated = ctx.precomputedVectorEntries ?? null;
+  let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
+  if (!vectorActivated) {
+    try {
+      const detailed = await collectVectorActivatedWorldInfoDetailed(
+        ctx.userId,
+        wiSources.worldBookIds,
+        wiEntries,
+        messages,
+      );
+      vectorActivated = detailed.entries;
+      vectorRetrievalDetails = detailed;
+
+      if (detailed.blockerMessages.length > 0) {
+        console.debug(
+          "[prompt-assembly] Vector WI blocked: %s (eligible=%d, books=%d)",
+          detailed.blockerMessages.join("; "),
+          detailed.eligibleCount,
+          wiSources.worldBookIds.length,
+        );
+      } else {
+        console.debug(
+          "[prompt-assembly] Vector WI retrieval: eligible=%d, hits=%d, afterThreshold=%d, afterRerank=%d, shortlisted=%d (topK=%d)",
+          detailed.eligibleCount,
+          detailed.hitsBeforeThreshold,
+          detailed.hitsAfterThreshold,
+          detailed.hitsAfterRerankCutoff,
+          detailed.entries.length,
+          detailed.topK,
+        );
+      }
+    } catch (err) {
+      console.warn("[prompt-assembly] Vector world info activation failed, continuing with keyword-only:", err);
+      vectorActivated = [];
+    }
+  }
   const mergedWorldInfo = mergeActivatedWorldInfoEntries(
     wiResult.activatedEntries,
     vectorActivated,
@@ -334,23 +549,41 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     keywordActivated: mergedWorldInfo.keywordActivated,
     vectorActivated: mergedWorldInfo.vectorActivated,
     totalActivated: mergedWorldInfo.totalActivated,
+    deduplicated: mergedWorldInfo.deduplicated,
     queryPreview: vectorQueryPreview,
+    vectorRetrieval: vectorRetrievalDetails ? {
+      eligibleCount: vectorRetrievalDetails.eligibleCount,
+      hitsBeforeThreshold: vectorRetrievalDetails.hitsBeforeThreshold,
+      hitsAfterThreshold: vectorRetrievalDetails.hitsAfterThreshold,
+      thresholdRejected: vectorRetrievalDetails.thresholdRejected,
+      hitsAfterRerankCutoff: vectorRetrievalDetails.hitsAfterRerankCutoff,
+      rerankRejected: vectorRetrievalDetails.rerankRejected,
+      topK: vectorRetrievalDetails.topK,
+      blockerMessages: vectorRetrievalDetails.blockerMessages,
+    } : undefined,
   };
 
   // ---- Defer WI state persistence to after generation ----
+  // Only carry the keys this writer owns. The post-generation save uses
+  // mergeChatMetadata so any user-driven changes (alt field selections, world
+  // book attachments, author's notes) that landed during generation survive.
   const deferredWiState = {
     chatId: chat.id,
-    metadata: { ...chat.metadata, wi_state: wiResult.wiState },
+    partial: { wi_state: wiResult.wiState } as Record<string, any>,
   };
 
   // ---- Macro engine ----
   initMacros();
-  const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) =>
-    charactersSvc.getCharacter(ctx.userId, cid)?.name);
+  const groupCharsMap = pf?.groupCharacters;
+  const resolveCharName = (cid: string) => {
+    const char = groupCharsMap?.get(cid) ?? charactersSvc.getCharacter(ctx.userId, cid);
+    return char ? getEffectiveCharacterName(char) : undefined;
+  };
+  const groupCharacterNames = resolveGroupCharacterNames(chat, resolveCharName);
   const mutedIds = chatsSvc.getGroupMutedIds(chat);
   const groupNotMutedNames = groupCharacterNames && mutedIds.length > 0
     ? resolveGroupCharacterNames(chat, (cid) =>
-        mutedIds.includes(cid) ? undefined : charactersSvc.getCharacter(ctx.userId, cid)?.name)
+        mutedIds.includes(cid) ? undefined : resolveCharName(cid))
     : undefined;
   // Resolve alternate field overrides from per-chat bindings, then group scenario override
   const effectiveCharacter = resolveGroupScenarioOverride(
@@ -369,11 +602,11 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     groupCharacterNames,
     groupNotMutedNames,
     targetCharacterId: ctx.targetCharacterId,
-    targetCharacterName: ctx.targetCharacterId ? effectiveCharacter.name : undefined,
+    targetCharacterName: ctx.targetCharacterId ? getEffectiveCharacterName(effectiveCharacter) : undefined,
   });
 
-  // Batch-load all settings needed for assembly in a single query
-  const settingsKeys = [
+  // Use prefetched settings or batch-load all needed settings in a single query
+  const settingsMap = pf?.allSettings ?? settingsSvc.getSettingsByKeys(ctx.userId, [
     "reasoningSettings",
     "selectedDefinition", "selectedBehaviors", "selectedPersonalities",
     "chimeraMode", "lumiaQuirks", "lumiaQuirksEnabled",
@@ -385,8 +618,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     "contextFilters",
     "summarization",
     "chatMemorySettings",
-  ];
-  const settingsMap = settingsSvc.getSettingsByKeys(ctx.userId, settingsKeys);
+    "council_settings",
+  ]);
 
   // Populate reasoning macros from user settings
   const reasoningVal = settingsMap.get("reasoningSettings");
@@ -404,50 +637,87 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
 
-  // Inject Lumi pipeline results into macroEnv (if present)
-  if (ctx.lumiPipelineResults && ctx.lumiPipelineResults.size > 0) {
-    const pipelineResults = ctx.lumiPipelineResults;
-    const moduleNames = new Map<string, string>();
-    const lumiMeta = preset?.metadata as any;
-    if (lumiMeta?.pipelines) {
-      for (const pipeline of lumiMeta.pipelines) {
-        if (Array.isArray(pipeline.modules)) {
-          for (const mod of pipeline.modules) {
-            moduleNames.set(mod.key, mod.name);
-          }
-        }
-      }
-    }
-    macroEnv.extra.lumiPipeline = {
-      results: pipelineResults,
-      moduleNames,
-    };
-    console.log("[lumi-assembly] Injected %d pipeline results into macroEnv. Module names: %s", pipelineResults.size, [...moduleNames.values()].join(", "));
-  }
-
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (ctx.generationType === "impersonate" && ctx.impersonateMode === "oneliner") {
     return await onelinerImpersonation(messages, character, persona, chat, connection, preset, promptBehavior, completionSettings, samplerOverrides, ctx, macroEnv, reasoningVal);
   }
 
   // ---- Pre-loop: retrieve chat vector memories ----
+  // Reuse settings resolved during cortex pre-flight (avoids duplicate DB reads).
+  // Fall back to batch-loaded settings for the non-cortex path.
   const chatMemSettingsRaw = settingsMap.get("chatMemorySettings") ?? null;
-  const chatMemSettings = chatMemSettingsRaw
+  const chatMemSettings = cortexChatMemSettings ?? (chatMemSettingsRaw
     ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
-    : null;
-  const perChatOverrides = (chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null;
+    : null);
+  const perChatOverrides = cortexPerChatOverrides ?? ((chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null);
 
-  const memoryResult = await collectChatVectorMemory(
-    ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides,
-  );
+  // Memory Cortex: use warm cache hits only. On a cold miss, fall back
+  // immediately to vector retrieval so background cortex work never stalls the
+  // generation path.
+  let cortexResult: memoryCortex.CortexResult | null = null;
+
+  let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
+
+  if (cortexConfig.enabled) {
+    // Fast path: warm cache from a previous generation (synchronous, no I/O)
+    cortexResult = memoryCortex.getCachedCortexResult(ctx.chatId);
+
+    if (cortexResult && cortexResult.memories.length > 0) {
+      memoryResult = formatCortexForAssembly(cortexResult, cortexConfig, character, macroEnv, ctx.chatId);
+    } else {
+      // Genuinely no memories (new chat, no chunks, etc.) — fall back to vector retrieval
+      memoryResult = await safeCollectChatVectorMemory(
+        ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides, ctx.excludeMessageId,
+      );
+    }
+  } else {
+    // Existing path: pure vector retrieval
+    memoryResult = await safeCollectChatVectorMemory(
+      ctx.userId, ctx.chatId, messages, chatMemSettings, perChatOverrides, ctx.excludeMessageId,
+    );
+  }
+
+  // Merge linked cortex data (vaults + interlinks) if available
+  const linkedCortexResult = memoryCortex.getCachedLinkedCortexResult(ctx.chatId);
+  let linkedMemoryText = "";
+  if (linkedCortexResult && (linkedCortexResult.vaults.length > 0 || linkedCortexResult.interlinks.length > 0)) {
+    const linkedBudget = Math.floor(cortexConfig.contextTokenBudget * 0.3);
+    const linkedFormatted = memoryCortex.formatLinkedCortexSection(
+      linkedCortexResult.vaults,
+      linkedCortexResult.interlinks,
+      { mode: cortexConfig.formatterMode, tokenBudget: linkedBudget, currentSpeakerName: character?.name },
+    );
+    linkedMemoryText = linkedFormatted.text;
+  }
 
   // Store in macroEnv for {{memories}} macro access
+  const combinedFormatted = linkedMemoryText
+    ? (memoryResult.formatted ? memoryResult.formatted + "\n\n" + linkedMemoryText : linkedMemoryText)
+    : memoryResult.formatted;
+
   macroEnv.extra.memory = {
     chunks: memoryResult.chunks,
-    formatted: memoryResult.formatted,
+    formatted: combinedFormatted,
     count: memoryResult.count,
     enabled: memoryResult.enabled,
     settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+  };
+
+  // ---- Databank retrieval ----
+  // Use the warm-cache pattern: check if a previous generation cached results.
+  // The background pre-flight fires alongside cortex (added below).
+  const databankResult = databankSvc.getCachedDatabankResult(ctx.userId, ctx.chatId);
+  const activeDatabankIds = databankSvc.resolveActiveDatabankIds(
+    ctx.userId,
+    ctx.chatId,
+    character?.id ? [character.id] : [],
+    databankCrossRefs,
+  );
+  macroEnv.extra.databank = {
+    chunks: databankResult?.chunks ?? [],
+    formatted: databankResult?.formatted ?? "",
+    count: databankResult?.count ?? 0,
+    enabled: activeDatabankIds.length > 0,
   };
 
   // Detect if any enabled block uses the {{memories}} macro
@@ -455,15 +725,71 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     b.enabled && b.content && /\{\{memories(\b|::|\}\})/.test(b.content)
   );
 
+  // Detect if any enabled block uses the {{databank}} macro
+  const macroHandlesDatabank = blocks.some(b =>
+    b.enabled && b.content && /\{\{databank(\b|::|\}\})/.test(b.content)
+  );
+
+  // ---- Resolve #mentions in user messages ----
+  // 1. Strip #tags from ALL user messages so raw tags never reach the LLM.
+  // 2. Resolve + build the document appendix only from the LAST user message's tags.
+  // This handles queued messages, regen, swipe, and dry-run correctly.
+  let databankMentionAppendix = "";
+  {
+    const charIds = character?.id ? [character.id] : [];
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].is_user) { lastUserIdx = i; break; }
+    }
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (!msg.is_user || !msg.content.includes("#")) continue;
+      try {
+        const isLast = i === lastUserIdx;
+        const mentionResult = await databankSvc.resolveMentions(
+          ctx.userId,
+          msg.content,
+          ctx.chatId,
+          charIds,
+          isLast ? messages.slice(-6).map(m => m.content).join(" ") : undefined,
+        );
+        // Always strip tags from the in-memory content
+        if (mentionResult.cleanedContent !== msg.content) {
+          msg.content = mentionResult.cleanedContent;
+        }
+        // Only build appendix from the last user message
+        if (isLast && mentionResult.resolvedDocuments.length > 0) {
+          databankMentionAppendix = databankSvc.formatMentionsAsAppendix(mentionResult.resolvedDocuments);
+        }
+      } catch (err) {
+        console.warn("[prompt-assembly] Databank mention resolution failed:", err);
+      }
+    }
+  }
+
+  // ---- Resolve macros in world info entries ----
+  // WI entry content may contain macros (e.g. {{user}}, {{char}}, {{time}}).
+  // Resolve them before injection so all positions get macro-evaluated content.
+  for (const bucket of [wiCache.before, wiCache.after, wiCache.anBefore, wiCache.anAfter, wiCache.emBefore, wiCache.emAfter] as Array<Array<{ content: string }>>) {
+    for (const entry of bucket) {
+      entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
+    }
+  }
+  for (const entry of wiCache.depth) {
+    entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
+  }
+
   // ---- Assembly loop ----
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
   const pendingAppends: PendingAppend[] = [];
+  const pendingDepthBlocks: { role: LlmMessage["role"]; depth: number; content: string; blockName: string; blockId: string; marker?: string }[] = [];
   let chatHistoryInserted = false;
   let chatHistoryCount = 0;
   let hasWiBefore = false;
   let hasWiAfter = false;
   let firstChatIdx = -1;
+  let jailbreakBlockResolved = false;
 
   for (const block of blocks) {
     // Skip disabled blocks
@@ -486,6 +812,13 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         const memoryContent = memoryResult.formatted;
         result.push({ role: "system", content: memoryContent });
         breakdown.push({ type: "long_term_memory", name: "Long-Term Memory", role: "system", content: memoryContent });
+      }
+
+      // Inject databank content as system message ONLY if no macro handles it
+      if (!macroHandlesDatabank && macroEnv.extra.databank?.count > 0) {
+        const databankContent = macroEnv.extra.databank.formatted;
+        result.push({ role: "system", content: databankContent });
+        breakdown.push({ type: "databank", name: "Databank", role: "system", content: databankContent });
       }
 
       // Insert new-chat separator if configured
@@ -514,6 +847,24 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       // Insert chat messages — evaluate macros in each message's content
       // Skip messages marked as hidden drafts (extra.hidden === true)
       // (excludeMessageId is already filtered out at the top of assemblePrompt)
+      // Pre-resolve all attachment files in parallel so the per-message loop
+      // doesn't pay sequential file I/O costs per attachment.
+      const attachmentImageIds = new Set<string>();
+      for (const msg of effectiveMessages) {
+        if (msg.extra?.hidden === true) continue;
+        const atts = Array.isArray(msg.extra?.attachments) ? msg.extra.attachments : [];
+        for (const att of atts) {
+          if (att.image_id) attachmentImageIds.add(att.image_id);
+        }
+      }
+      const attachmentCache = new Map<string, string | null>();
+      if (attachmentImageIds.size > 0) {
+        const entries = await Promise.all(
+          [...attachmentImageIds].map(async (id) => [id, await resolveAttachmentBase64(ctx.userId, id)] as const)
+        );
+        for (const [id, b64] of entries) attachmentCache.set(id, b64);
+      }
+
       let historyCount = 0;
       const historyParts: string[] = [];
       for (const msg of effectiveMessages) {
@@ -526,7 +877,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
           // Build multipart content: text + attachment parts
           const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolvedContent }];
           for (const att of attachments) {
-            const b64 = await resolveAttachmentBase64(ctx.userId, att.image_id);
+            const b64 = attachmentCache.get(att.image_id) ?? null;
             if (!b64) continue;
             if (att.type === "image") {
               parts.push({ type: "image", data: b64, mime_type: att.mime_type });
@@ -534,13 +885,29 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
               parts.push({ type: "audio", data: b64, mime_type: att.mime_type });
             }
           }
-          result.push({ role, content: parts });
+          result.push(markAsChatHistory({ role, content: parts }));
         } else {
-          result.push({ role, content: resolvedContent });
+          result.push(markAsChatHistory({ role, content: resolvedContent }));
         }
         historyCount++;
       }
       breakdown.push({ type: "chat_history", name: "Chat History", messageCount: historyCount, firstMessageIndex: firstChatIdx, content: historyParts.join("\n") });
+
+      // Append databank #mention context to the last user message
+      if (databankMentionAppendix) {
+        for (let i = result.length - 1; i >= firstChatIdx; i--) {
+          if (result[i].role === "user") {
+            const existing = typeof result[i].content === "string" ? result[i].content : "";
+            result[i] = { ...result[i], content: existing + databankMentionAppendix };
+            breakdown.push({ type: "databank_mention", name: "Databank Reference", role: "user", content: databankMentionAppendix });
+            break;
+          }
+        }
+      }
+
+      // Merge consecutive user messages (queued messages) into single LLM turns
+      historyCount = mergeConsecutiveUserMessages(result, firstChatIdx, historyCount);
+
       chatHistoryInserted = true;
       chatHistoryCount = historyCount;
 
@@ -599,11 +966,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     // Content-bearing markers and regular blocks → resolve block.content
     const content = block.content || "";
     const rawResolved = (await evaluate(content, macroEnv, registry)).text;
-    const resolved = rawResolved.trim();
-    if (resolved) {
-      // Append roles: collect for deferred application after full assembly
-      // Preserve original whitespace (especially leading newlines) for formatting
-      if (isAppendRole(block.role)) {
+
+    // Append roles: collect for deferred application after full assembly.
+    // Check BEFORE the trim gate so whitespace-only appends (e.g. lone
+    // newlines the user deliberately placed between other appends) are kept.
+    if (isAppendRole(block.role)) {
+      if (rawResolved) {
         pendingAppends.push({
           baseRole: appendBaseRole(block.role),
           depth: block.depth || 0,
@@ -611,13 +979,48 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
           blockName: block.name,
           blockId: block.id,
         });
-        continue;
       }
-      const role: LlmMessage["role"] = block.position === "post_history" ? "assistant" : (block.role as LlmMessage["role"] || "system");
-      result.push({ role, content: resolved });
+      continue;
+    }
+
+    const resolved = rawResolved.trim();
+    if (resolved) {
+      if (block.marker === "jailbreak") jailbreakBlockResolved = true;
+
+      const role: LlmMessage["role"] = block.position === "post_history"
+        ? ((block.role === "system" || !block.role) ? "assistant" : (block.role as LlmMessage["role"]))
+        : (block.role as LlmMessage["role"] || "system");
+
+      // Blocks with position "in_history" and depth > 0 are deferred for
+      // depth-based insertion after WI and Author's Note.
+      if (block.position === "in_history" && block.depth > 0) {
+        pendingDepthBlocks.push({
+          role, depth: block.depth, content: resolved,
+          blockName: block.name, blockId: block.id, marker: block.marker ?? undefined,
+        });
+      } else {
+        result.push({ role, content: resolved });
+        breakdown.push({
+          type: "block", name: block.name, role,
+          content: resolved, blockId: block.id, marker: block.marker ?? undefined,
+        });
+      }
+    }
+  }
+
+  // ---- Post-history instructions fallback ----
+  // If the character has post_history_instructions but no jailbreak block resolved
+  // it (e.g. the preset's jailbreak block is empty or missing the {{jailbreak}} macro),
+  // inject the character's post_history_instructions as a system message at the end.
+  // This ensures imported cards (especially Risu cards with image command rules in
+  // post_history_instructions) work out of the box without manual preset configuration.
+  if (!jailbreakBlockResolved && effectiveCharacter.post_history_instructions) {
+    const resolved = (await evaluate(effectiveCharacter.post_history_instructions, macroEnv, registry)).text.trim();
+    if (resolved) {
+      result.push({ role: "system", content: resolved });
       breakdown.push({
-        type: "block", name: block.name, role,
-        content: resolved, blockId: block.id, marker: block.marker ?? undefined,
+        type: "block", name: "Post-History Instructions (auto)", role: "system",
+        content: resolved, marker: "jailbreak",
       });
     }
   }
@@ -701,6 +1104,18 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       result.splice(insertAt, 0, { role: authorsNote.role || "system", content: resolvedAN });
       breakdown.push({ type: "authors_note", name: "Author's Note", role: authorsNote.role, content: resolvedAN });
     }
+  }
+
+  // ---- Depth-based block injection ----
+  // Blocks with position "in_history" and depth > 0 are inserted N messages
+  // from the end, matching the same semantics as WI depth and Author's Note.
+  for (const depthBlock of pendingDepthBlocks) {
+    const insertAt = Math.max(0, result.length - depthBlock.depth);
+    result.splice(insertAt, 0, { role: depthBlock.role, content: depthBlock.content });
+    breakdown.push({
+      type: "block", name: depthBlock.blockName, role: depthBlock.role,
+      content: depthBlock.content, blockId: depthBlock.blockId, marker: depthBlock.marker,
+    });
   }
 
   // ---- Utility prompt injection ----
@@ -832,8 +1247,21 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   applyCompletionSettings(result, completionSettings, character, persona, ctx.generationType);
 
   // ---- Apply pending append blocks ----
+  // Group appends by target (baseRole + depth) so every append for the same
+  // target message is applied in a single atomic operation, preserving relative
+  // order from the preset's prompt_order and all intermediate whitespace.
+  const appendGroups = new Map<string, PendingAppend[]>();
   for (const append of pendingAppends) {
-    applyAppendBlock(result, breakdown, append);
+    const key = `${append.baseRole}:${append.depth}`;
+    let group = appendGroups.get(key);
+    if (!group) {
+      group = [];
+      appendGroups.set(key, group);
+    }
+    group.push(append);
+  }
+  for (const group of appendGroups.values()) {
+    applyAppendGroup(result, breakdown, group);
   }
 
   // ---- Collapse all messages into a single user message (if enabled) ----
@@ -868,6 +1296,28 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     settingsSource: memoryResult.settingsSource,
   };
 
+  // Recompute the chat_history breakdown entry's bounds from the actual final
+  // message positions. The entry was pushed during the chat history loop with
+  // pre-mutation values; downstream insertions (WI before/AN before/EM
+  // before/depth-injected blocks/Author's Note/depth blocks) and mutations
+  // (mergeConsecutiveUserMessages) shift indices and change counts.
+  // Without this, regex-script depth filtering and the tokenizer snapshot in
+  // generate.service.ts would use stale bounds and either skip messages they
+  // should match or include non-history messages they shouldn't.
+  const chatHistoryEntry = breakdown.find(e => e.type === "chat_history");
+  if (chatHistoryEntry) {
+    let firstIdx = -1;
+    let count = 0;
+    for (let i = 0; i < result.length; i++) {
+      if (isChatHistoryMessage(result[i])) {
+        if (firstIdx === -1) firstIdx = i;
+        count++;
+      }
+    }
+    chatHistoryEntry.firstMessageIndex = firstIdx >= 0 ? firstIdx : undefined;
+    chatHistoryEntry.messageCount = count;
+  }
+
   return {
     messages: result,
     breakdown,
@@ -878,6 +1328,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     memoryStats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,
+    macroEnv,
   };
 }
 
@@ -1085,54 +1536,42 @@ export function collectWorldInfoSources(
   globalWorldBookIds?: string[],
   chatWorldBookIds?: string[],
 ): { entries: import("../types/world-book").WorldBookEntry[]; worldBookIds: string[]; bookSourceMap: Map<string, BookSource> } {
-  const entries: import("../types/world-book").WorldBookEntry[] = [];
   const worldBookIds: string[] = [];
   const bookSourceMap = new Map<string, BookSource>();
   const seen = new Set<string>();
 
-  // Character's attached world books (stored in extensions)
-  const charBookIds = getCharacterWorldBookIds(character.extensions);
-  for (const charBookId of charBookIds) {
-    if (seen.has(charBookId)) continue;
-    seen.add(charBookId);
-    worldBookIds.push(charBookId);
-    bookSourceMap.set(charBookId, 'character');
-    entries.push(...worldBooksSvc.listEntries(userId, charBookId));
-  }
+  const pushBook = (id: string | null | undefined, source: BookSource) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    worldBookIds.push(id);
+    bookSourceMap.set(id, source);
+  };
 
-  // Persona's attached world book
-  if (persona?.attached_world_book_id && !seen.has(persona.attached_world_book_id)) {
-    seen.add(persona.attached_world_book_id);
-    worldBookIds.push(persona.attached_world_book_id);
-    bookSourceMap.set(persona.attached_world_book_id, 'persona');
-    entries.push(...worldBooksSvc.listEntries(userId, persona.attached_world_book_id));
+  // Collect in priority order: character → persona → chat → global.
+  // Source attribution keeps the first (narrowest) winner.
+  for (const charBookId of getCharacterWorldBookIds(character.extensions)) {
+    pushBook(charBookId, 'character');
   }
+  pushBook(persona?.attached_world_book_id, 'persona');
+  for (const cId of chatWorldBookIds ?? []) pushBook(cId, 'chat');
+  for (const gId of globalWorldBookIds ?? []) pushBook(gId, 'global');
 
-  // Chat-scoped world books (active for this chat only)
-  if (chatWorldBookIds?.length) {
-    for (const cId of chatWorldBookIds) {
-      if (seen.has(cId)) continue;
-      seen.add(cId);
-      worldBookIds.push(cId);
-      bookSourceMap.set(cId, 'chat');
-      entries.push(...worldBooksSvc.listEntries(userId, cId));
-    }
-  }
-
-  // Global world books (user-wide, always active regardless of character/persona)
-  if (globalWorldBookIds?.length) {
-    for (const gId of globalWorldBookIds) {
-      if (seen.has(gId)) continue;
-      seen.add(gId);
-      worldBookIds.push(gId);
-      bookSourceMap.set(gId, 'global');
-      entries.push(...worldBooksSvc.listEntries(userId, gId));
+  // Batch-load all books in a single pair of queries. With large books
+  // (thousands of entries each), this avoids the N+1 round-trip cost of
+  // calling listEntries() once per attached book.
+  const entries: import("../types/world-book").WorldBookEntry[] = [];
+  if (worldBookIds.length > 0) {
+    const entryMap = worldBooksSvc.listEntriesForBooks(userId, worldBookIds);
+    // Preserve original per-book ordering (character → persona → chat → global).
+    for (const id of worldBookIds) {
+      const bookEntries = entryMap.get(id);
+      if (bookEntries && bookEntries.length > 0) entries.push(...bookEntries);
     }
   }
 
   return {
     entries,
-    worldBookIds: Array.from(new Set(worldBookIds)),
+    worldBookIds,
     bookSourceMap,
   };
 }
@@ -1170,6 +1609,7 @@ interface VectorQueryLexicalState {
 
 export interface VectorScoreBreakdown {
   vectorSimilarity: number;
+  lexicalContentBoost: number;
   primaryExact: number;
   primaryPartial: number;
   secondaryExact: number;
@@ -1197,6 +1637,7 @@ export interface VectorActivatedEntry {
 
 export interface VectorWorldInfoRetrievalResult {
   entries: VectorActivatedEntry[];
+  candidateTrace: VectorRetrievalTraceEntry[];
   queryPreview: string;
   eligibleCount: number;
   hitsBeforeThreshold: number;
@@ -1207,6 +1648,17 @@ export interface VectorWorldInfoRetrievalResult {
   topK: number;
   cap: number;
   blockerMessages: string[];
+}
+
+export type VectorRetrievalTraceStage =
+  | "shortlisted"
+  | "trimmed_by_top_k"
+  | "rejected_by_rerank_cutoff"
+  | "rejected_by_similarity_threshold";
+
+export interface VectorRetrievalTraceEntry extends VectorActivatedEntry {
+  retrievalStage: VectorRetrievalTraceStage;
+  rerankRank: number | null;
 }
 
 export interface MergedWorldInfoEntriesResult {
@@ -1220,6 +1672,8 @@ export interface MergedWorldInfoEntriesResult {
   activatedBeforeBudget: number;
   activatedAfterBudget: number;
   evictedByBudget: number;
+  deduplicated: number;
+  deduplicationDetails: import("./world-info-dedup.service").DedupRemovalRecord[];
 }
 
 const WORLD_INFO_VECTOR_STOPWORDS = new Set([
@@ -1369,22 +1823,34 @@ function buildPhraseSpecificityState(entries: WorldBookEntryModel[]): PhraseSpec
   const tokenDocFrequency = new Map<string, number>();
 
   for (const entry of entries) {
+    // Fast-path: entries with no lexical signals (no keys / keysecondary /
+    // comment) contribute nothing to either frequency map. In large
+    // vector-only lorebooks (e.g. 9000+ entries with key=[]), skipping the
+    // allocation of two empty Sets + three empty-string normalizations per
+    // entry is the difference between a ~1s build and a ~30ms one.
+    const keys = entry.key;
+    const secondaries = entry.keysecondary;
+    const comment = entry.comment;
+    const hasKeys = keys && keys.length > 0;
+    const hasSecondaries = secondaries && secondaries.length > 0;
+    const hasComment = !!(comment && comment.length > 0);
+    if (!hasKeys && !hasSecondaries && !hasComment) continue;
+
     const entryPhrases = new Set<string>();
     const entryTokens = new Set<string>();
-    const values = [
-      ...(entry.key || []),
-      ...(entry.keysecondary || []),
-      entry.comment || "",
-    ];
 
-    for (const value of values) {
+    const ingest = (value: string) => {
       const normalizedValue = normalizeLexicalText(value);
-      if (!normalizedValue) continue;
+      if (!normalizedValue) return;
       entryPhrases.add(normalizedValue);
       for (const token of tokenizeLexicalText(value)) {
         entryTokens.add(token);
       }
-    }
+    };
+
+    if (hasKeys) for (const value of keys) ingest(value);
+    if (hasSecondaries) for (const value of secondaries) ingest(value);
+    if (hasComment) ingest(comment);
 
     for (const phrase of entryPhrases) {
       incrementFrequency(phraseDocFrequency, phrase);
@@ -1956,7 +2422,8 @@ function scoreVectorWorldInfoCandidate(
   };
   const matchedComment = rawCommentMatches.matchedValues[0] ?? null;
 
-  const vectorSimilarity = distanceToSimilarity(candidate.distance);
+  const isFtsOnly = !Number.isFinite(candidate.distance);
+  const vectorSimilarity = distanceToSimilarity(isFtsOnly ? 2 : candidate.distance);
   const primaryExactScore = primaryMatches.exactScore;
   const primaryPartialScore = primaryMatches.partialScore;
   const secondaryExactScore = secondaryMatches.exactScore;
@@ -1967,6 +2434,12 @@ function scoreVectorWorldInfoCandidate(
   const focusBoost = focusOverlap.score * 0.05;
   const priorityScore = clamp01((entry.priority || 0) / 100) * preset.weights.priority;
   const vectorScore = vectorSimilarity * preset.weights.vector;
+  // FTS content-level match: provides a secondary vector-like signal when the entry's
+  // content (not just keys) matches the query. Critical for FTS-only candidates that
+  // weren't returned by vector nearest-neighbor search and have zero vectorScore.
+  const lexicalContentBoost = candidate.lexical_score != null && candidate.lexical_score > 0
+    ? clamp01(Math.log1p(candidate.lexical_score) / Math.log1p(30)) * preset.weights.vector * 0.35
+    : 0;
   const lexicalSpecificityAnchor = Math.max(
     primaryMatches.matchedSpecificity,
     secondaryMatches.matchedSpecificity,
@@ -1986,13 +2459,20 @@ function scoreVectorWorldInfoCandidate(
     commentExactScore +
     commentPartialScore
   );
-  const vectorWeakness = clamp01((candidate.distance - 0.92) / 0.45);
+  // Use capped distance for vectorWeakness to prevent Infinity arithmetic edge cases.
+  // FTS-only candidates get weakness from distance cap (2.0), but lexicalContentBoost
+  // compensates when the FTS score is strong.
+  const effectiveDistance = isFtsOnly ? 2 : candidate.distance;
+  const ftsWeaknessReduction = isFtsOnly && lexicalContentBoost > 0
+    ? clamp01(lexicalContentBoost / (preset.weights.vector * 0.35)) * 0.45
+    : 0;
+  const vectorWeakness = clamp01(((effectiveDistance - 0.92) / 0.45) - ftsWeaknessReduction);
   const baseBroadPenalty = clamp01(1 - entrySpecificityAnchor)
     * preset.weights.broadPenalty
     * (lexicalSpecificityAnchor > 0 ? 0.25 : 0.9);
   const referencePenalty = estimateReferenceEntryPenalty(
     entry,
-    candidate.distance,
+    effectiveDistance,
     lexicalSpecificityAnchor,
     primaryMatches,
     secondaryMatches,
@@ -2003,11 +2483,12 @@ function scoreVectorWorldInfoCandidate(
       * (lexicalSignalStrength > 0.02 ? 0.55 : 1)
       * (queryState.focusTokenSet.size > 0 ? 1 : 0)
     : 0;
-  const subjectMismatchPenalty = getEntrySubjectMismatchPenalty(entry, queryState, candidate.distance);
+  const subjectMismatchPenalty = getEntrySubjectMismatchPenalty(entry, queryState, effectiveDistance);
   const broadPenalty = baseBroadPenalty + referencePenalty + focusMissPenalty + subjectMismatchPenalty;
 
   const finalScore = Math.max(0,
     vectorScore +
+    lexicalContentBoost +
     primaryExactScore +
     primaryPartialScore +
     secondaryExactScore +
@@ -2030,6 +2511,7 @@ function scoreVectorWorldInfoCandidate(
     matchedComment,
     scoreBreakdown: {
       vectorSimilarity: vectorScore,
+      lexicalContentBoost,
       primaryExact: primaryExactScore,
       primaryPartial: primaryPartialScore,
       secondaryExact: secondaryExactScore,
@@ -2043,6 +2525,63 @@ function scoreVectorWorldInfoCandidate(
     },
     searchTextPreview: candidate.searchTextPreview,
   };
+}
+
+/**
+ * Upper bound on the priority uplift a vector candidate can receive from its
+ * finalScore. Keeps vectors competitive with equal-priority keyword entries
+ * (so a good vector hit doesn't silently lose the order_value tiebreaker)
+ * without letting a single strong hit override a user-chosen priority gap.
+ * finalScore is typically in [0, 3]; with a 10x factor and a 20-point cap,
+ * a score of ≥2.0 saturates the boost.
+ */
+export const VECTOR_PRIORITY_BOOST_MAX = 20;
+export const VECTOR_PRIORITY_BOOST_SCALE = 10;
+
+export function vectorPriorityBoost(finalScore: number | undefined): number {
+  if (typeof finalScore !== "number" || !Number.isFinite(finalScore) || finalScore <= 0) return 0;
+  const raw = Math.round(finalScore * VECTOR_PRIORITY_BOOST_SCALE);
+  return Math.max(0, Math.min(VECTOR_PRIORITY_BOOST_MAX, raw));
+}
+
+/**
+ * Returns a shallow-cloned array where vector-sourced entries have their
+ * priority increased by a bounded, score-derived boost. Used only when the
+ * entry-count budget is full so vectors can compete on their retrieval
+ * score rather than losing to equal-priority keyword entries on the
+ * order_value tiebreaker. Originals are never mutated.
+ */
+export function applyVectorPriorityBoost<T extends { id: string; priority: number }>(
+  entries: T[],
+  sources: Map<string, { source: "keyword" | "vector"; score?: number }>,
+  candidate?: { entry: { id: string }; finalScore: number },
+): T[] {
+  return entries.map((entry) => {
+    const src = candidate && entry.id === candidate.entry.id
+      ? { source: "vector" as const, score: candidate.finalScore }
+      : sources.get(entry.id);
+    if (!src || src.source !== "vector") return entry;
+    const boost = vectorPriorityBoost(src.score);
+    if (boost === 0) return entry;
+    return { ...entry, priority: entry.priority + boost };
+  });
+}
+
+/**
+ * `finalizeActivatedWorldInfoEntries` receives priority-boosted clones when
+ * `applyVectorPriorityBoost` was used; rebuild its `activatedEntries` from
+ * the original (unboosted) entries so downstream consumers read the user's
+ * configured priority, not the internal competition value.
+ */
+function remapFinalizedToOriginalEntries(
+  finalized: FinalizedWorldInfoEntries,
+  originals: WorldBookEntryModel[],
+): FinalizedWorldInfoEntries {
+  const byId = new Map(originals.map((e) => [e.id, e]));
+  const activatedEntries = finalized.activatedEntries
+    .map((e) => byId.get(e.id))
+    .filter((e): e is WorldBookEntryModel => !!e);
+  return { ...finalized, activatedEntries };
 }
 
 export function mergeActivatedWorldInfoEntries(
@@ -2078,27 +2617,64 @@ export function mergeActivatedWorldInfoEntries(
     preserveOrder: true,
   });
 
+  let vectorSkippedBudget = 0;
+  let vectorSkippedMinPriority = 0;
+  let vectorSkippedGroup = 0;
+  let vectorSkippedDedup = 0;
+  let vectorSkippedBudgetSim = 0;
+
   for (const item of vectorEntries) {
-    if (finalized.activatedEntries.length >= maxActivatedTarget) break;
-    if (seen.has(item.entry.id)) continue;
+    if (seen.has(item.entry.id)) {
+      vectorSkippedDedup++;
+      continue;
+    }
     if (settings.minPriority > 0 && item.entry.priority < settings.minPriority && !item.entry.constant) {
+      vectorSkippedMinPriority++;
       continue;
     }
 
     const groupKey = getGroupKey(item.entry);
     if (groupKey && occupiedGroups.has(groupKey)) {
+      vectorSkippedGroup++;
       continue;
     }
 
+    // When the entry-count budget is already full from keyword entries, use
+    // priority ordering so higher-priority vector entries can displace
+    // lower-priority keyword entries instead of being blanket-rejected.
+    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
     const nextMergedEntries = [...mergedEntries, item.entry];
-    const nextFinalized = finalizeActivatedWorldInfoEntries(nextMergedEntries, settings, {
+    // When budget is full and priorities tie, order_value-ascending alone
+    // decides — and vector candidates (drawn from big books with large
+    // order_values) always lose. Apply a score-derived priority boost to
+    // vector entries so genuinely relevant hits can displace equal-priority
+    // keyword entries. The boost is bounded so it never overrides a
+    // meaningful user-set priority gap. We clone the entries for the
+    // finalize call and map back to originals afterwards so downstream
+    // consumers still see the user's configured priority.
+    const finalizeInput = budgetFull
+      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
+      : nextMergedEntries;
+    const rawNextFinalized = finalizeActivatedWorldInfoEntries(finalizeInput, settings, {
       skipGroupLogic: true,
-      preserveOrder: true,
+      preserveOrder: !budgetFull,
     });
+    const nextFinalized = budgetFull
+      ? remapFinalizedToOriginalEntries(rawNextFinalized, nextMergedEntries)
+      : rawNextFinalized;
     const itemSurvived = nextFinalized.activatedEntries.some((entry) => entry.id === item.entry.id);
     const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
 
-    if (!itemSurvived || (!grewActivationSet && !item.entry.constant)) {
+    if (!itemSurvived) {
+      if (budgetFull) vectorSkippedBudget++;
+      else vectorSkippedBudgetSim++;
+      continue;
+    }
+    // When budget has room, require growth to avoid unnecessary displacement
+    // from token budget enforcement. When budget is full, displacement is
+    // expected — priority ordering ensures only deserving entries win.
+    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
+      vectorSkippedBudgetSim++;
       continue;
     }
 
@@ -2107,6 +2683,33 @@ export function mergeActivatedWorldInfoEntries(
     if (groupKey) occupiedGroups.add(groupKey);
     sources.set(item.entry.id, { source: "vector", score: item.finalScore });
     finalized = nextFinalized;
+  }
+
+  if (vectorEntries.length > 0) {
+    const accepted = vectorEntries.length - vectorSkippedBudget - vectorSkippedMinPriority - vectorSkippedGroup - vectorSkippedDedup - vectorSkippedBudgetSim;
+    console.debug(
+      "[WI merge] vector candidates=%d → accepted=%d, skipped: dedup=%d, minPriority=%d, group=%d, budgetCap=%d, budgetSim=%d",
+      vectorEntries.length,
+      accepted,
+      vectorSkippedDedup,
+      vectorSkippedMinPriority,
+      vectorSkippedGroup,
+      vectorSkippedBudget,
+      vectorSkippedBudgetSim,
+    );
+  }
+
+  // Content-level deduplication: remove exact, near-exact, and fuzzy
+  // duplicate content across entries from different books/sources.
+  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
+  for (const r of dedupResult.removed) sources.delete(r.removedEntryId);
+
+  // Re-finalize with deduplicated set so budget is recalculated
+  if (dedupResult.removed.length > 0) {
+    finalized = finalizeActivatedWorldInfoEntries(dedupResult.entries, settings, {
+      skipGroupLogic: true,
+      preserveOrder: true,
+    });
   }
 
   const activatedWorldInfo: ActivatedWorldInfoEntry[] = finalized.activatedEntries.map((entry) => {
@@ -2136,6 +2739,8 @@ export function mergeActivatedWorldInfoEntries(
     activatedBeforeBudget: finalized.activatedBeforeBudget,
     activatedAfterBudget: finalized.activatedAfterBudget,
     evictedByBudget: finalized.evictedByBudget,
+    deduplicated: dedupResult.removed.length,
+    deduplicationDetails: dedupResult.removed,
   };
 }
 
@@ -2175,6 +2780,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
 ): Promise<VectorWorldInfoRetrievalResult> {
   const emptyResult: VectorWorldInfoRetrievalResult = {
     entries: [],
+    candidateTrace: [],
     queryPreview: "",
     eligibleCount: 0,
     hitsBeforeThreshold: 0,
@@ -2205,7 +2811,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   if (!cfg.dimensions) blockerMessages.push("Embeddings have not been tested yet, so dimensions are still unknown.");
   if (!cfg.vectorize_world_books) blockerMessages.push("World-book vectorization is disabled in embeddings settings.");
   if (!queryText) blockerMessages.push("The current chat does not have enough visible recent text to build a vector query.");
-  if (eligibleEntries.length === 0) blockerMessages.push("This chat has no semantic-enabled, non-disabled, non-empty lorebook entries to search.");
+  if (eligibleEntries.length === 0) blockerMessages.push("This chat has no vector-enabled, non-disabled, non-empty lorebook entries to search.");
 
   if (blockerMessages.length > 0) {
     return {
@@ -2259,18 +2865,29 @@ export async function collectVectorActivatedWorldInfoDetailed(
 
     const pooledCandidates = Array.from(candidates.values());
     const hitsBeforeThreshold = pooledCandidates.length;
-    const filteredCandidates = cfg.similarity_threshold > 0
-      ? pooledCandidates.filter((item) => item.candidate.distance <= cfg.similarity_threshold)
-      : pooledCandidates;
-    const hitsAfterThreshold = filteredCandidates.length;
-    const thresholdRejected = hitsBeforeThreshold - hitsAfterThreshold;
     const specificityState = buildPhraseSpecificityState(eligibleEntries);
     const queryState = buildVectorQueryLexicalState(queryText, specificityState);
-    const scored = filteredCandidates.map(({ entry, candidate }) =>
+    const scoredCandidates = pooledCandidates.map(({ entry, candidate }) =>
       scoreVectorWorldInfoCandidate(entry, candidate, queryState, preset)
     );
-
-    scored.sort((a, b) => {
+    // FTS-only candidates (distance = Infinity, found by full-text search but not
+    // vector nearest-neighbor) bypass the distance-based similarity gate. Their quality
+    // is controlled by finalScore and the rerank_cutoff instead.
+    const thresholdPassed = cfg.similarity_threshold > 0
+      ? scoredCandidates.filter((item) => {
+        if (!Number.isFinite(item.distance)) return item.finalScore > 0;
+        return item.distance <= cfg.similarity_threshold;
+      })
+      : scoredCandidates;
+    const thresholdRejectedCandidates = cfg.similarity_threshold > 0
+      ? scoredCandidates.filter((item) => {
+        if (!Number.isFinite(item.distance)) return item.finalScore <= 0;
+        return item.distance > cfg.similarity_threshold;
+      })
+      : [];
+    const hitsAfterThreshold = thresholdPassed.length;
+    const thresholdRejected = hitsBeforeThreshold - hitsAfterThreshold;
+    thresholdPassed.sort((a, b) => {
       if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
       if (a.distance !== b.distance) return a.distance - b.distance;
       if (b.entry.priority !== a.entry.priority) return b.entry.priority - a.entry.priority;
@@ -2278,15 +2895,48 @@ export async function collectVectorActivatedWorldInfoDetailed(
     });
 
     const rerankFiltered = cfg.rerank_cutoff > 0
-      ? scored.filter((item) => item.finalScore >= cfg.rerank_cutoff)
-      : scored;
+      ? thresholdPassed.filter((item) => item.finalScore >= cfg.rerank_cutoff)
+      : thresholdPassed;
+    const rerankRejectedCandidates = cfg.rerank_cutoff > 0
+      ? thresholdPassed.filter((item) => item.finalScore < cfg.rerank_cutoff)
+      : [];
     const hitsAfterRerankCutoff = rerankFiltered.length;
-    const rerankRejected = scored.length - hitsAfterRerankCutoff;
+    const rerankRejected = thresholdPassed.length - hitsAfterRerankCutoff;
 
     const cap = topK;
+    const shortlistedEntries = rerankFiltered.slice(0, cap);
+    const topKTrimmedEntries = rerankFiltered.slice(cap);
+    const rerankRankById = new Map<string, number>(
+      thresholdPassed.map((item, index) => [item.entry.id, index + 1]),
+    );
+    const candidateTrace: VectorRetrievalTraceEntry[] = [
+      ...shortlistedEntries.map((item) => ({
+        ...item,
+        retrievalStage: "shortlisted" as const,
+        rerankRank: rerankRankById.get(item.entry.id) ?? null,
+      })),
+      ...topKTrimmedEntries.map((item) => ({
+        ...item,
+        retrievalStage: "trimmed_by_top_k" as const,
+        rerankRank: rerankRankById.get(item.entry.id) ?? null,
+      })),
+      ...rerankRejectedCandidates.map((item) => ({
+        ...item,
+        retrievalStage: "rejected_by_rerank_cutoff" as const,
+        rerankRank: rerankRankById.get(item.entry.id) ?? null,
+      })),
+      ...thresholdRejectedCandidates
+        .sort((a, b) => a.distance - b.distance)
+        .map((item) => ({
+          ...item,
+          retrievalStage: "rejected_by_similarity_threshold" as const,
+          rerankRank: null,
+        })),
+    ];
 
     return {
-      entries: rerankFiltered.slice(0, cap),
+      entries: shortlistedEntries,
+      candidateTrace,
       queryPreview: queryText,
       eligibleCount: eligibleEntries.length,
       hitsBeforeThreshold,
@@ -2446,171 +3096,118 @@ function formatMemoryOutput(
   return settings.memoryHeaderTemplate.replace(/\{\{memories\}\}/g, joined);
 }
 
+/**
+ * Format a CortexResult into a MemoryRetrievalResult and populate the macro
+ * environment. Used by both the warm-cache and await-cortex branches.
+ */
+function formatCortexForAssembly(
+  cortexResult: memoryCortex.CortexResult,
+  cortexConfig: memoryCortex.MemoryCortexConfig,
+  character: Character | null,
+  macroEnv: MacroEnv,
+  chatId: string,
+): Awaited<ReturnType<typeof collectChatVectorMemory>> {
+  const shadowResult = memoryCortex.formatShadowPrompt(
+    cortexResult.memories,
+    cortexResult.entityContext,
+    cortexResult.activeRelationships,
+    cortexResult.arcContext,
+    {
+      mode: cortexConfig.formatterMode as any,
+      tokenBudget: cortexConfig.contextTokenBudget,
+      currentSpeakerName: character?.name,
+    },
+  );
+
+  const colorMapText = memoryCortex.formatColorMapForPrompt(chatId);
+  macroEnv.extra.cortex = {
+    memories: cortexResult.memories,
+    entityContext: cortexResult.entityContext,
+    activeRelationships: cortexResult.activeRelationships,
+    arcContext: cortexResult.arcContext,
+    formatted: colorMapText ? shadowResult.text + "\n\n" + colorMapText : shadowResult.text,
+    colorMap: colorMapText,
+  };
+
+  return {
+    chunks: cortexResult.memories.map((m) => ({
+      content: m.content,
+      score: m.finalScore,
+      metadata: { components: m.components, entityNames: m.entityNames },
+    })),
+    formatted: shadowResult.text,
+    count: cortexResult.memories.length,
+    enabled: true,
+    queryPreview: "",
+    settingsSource: "global" as const,
+    chunksAvailable: 0,
+    chunksPending: 0,
+  };
+}
+
+/** Fault-tolerant wrapper: embedding timeouts or failures should never kill generation. */
+async function safeCollectChatVectorMemory(
+  ...args: Parameters<typeof collectChatVectorMemory>
+): Promise<Awaited<ReturnType<typeof collectChatVectorMemory>>> {
+  try {
+    return await collectChatVectorMemory(...args);
+  } catch (err) {
+    console.warn("[prompt-assembly] Chat vector memory retrieval failed, continuing without memories:", err);
+    return {
+      chunks: [], formatted: "", count: 0, enabled: false,
+      queryPreview: "", settingsSource: "global", chunksAvailable: 0, chunksPending: 0,
+    };
+  }
+}
+
 export async function collectChatVectorMemory(
   userId: string,
   chatId: string,
   messages: Message[],
   chatMemorySettings?: import("./embeddings.service").ChatMemorySettings | null,
   perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null,
+  _excludeMessageId?: string,
 ): Promise<MemoryRetrievalResult> {
-  const emptyResult: MemoryRetrievalResult = {
-    chunks: [], formatted: "", count: 0, enabled: false,
-    queryPreview: "", settingsSource: "global", chunksAvailable: 0, chunksPending: 0,
+  const result = await readCachedChatMemory(
+    userId,
+    chatId,
+    messages,
+    chatMemorySettings ?? null,
+    perChatOverrides ?? null,
+  );
+
+  if (_excludeMessageId && result.chunks.length > 0) {
+    const filteredChunks = result.chunks.filter((chunk) => {
+      const messageIds = Array.isArray(chunk.metadata?.messageIds) ? chunk.metadata.messageIds as string[] : null;
+      return !(messageIds && messageIds.includes(_excludeMessageId));
+    });
+
+    if (filteredChunks.length !== result.chunks.length) {
+      const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+      const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings ?? null, cfg);
+      return {
+        chunks: filteredChunks,
+        formatted: formatMemoryOutput(filteredChunks, settings),
+        count: filteredChunks.length,
+        enabled: result.enabled,
+        queryPreview: result.queryPreview,
+        settingsSource: result.settingsSource,
+        chunksAvailable: result.chunksAvailable,
+        chunksPending: result.chunksPending,
+      };
+    }
+  }
+
+  return {
+    chunks: result.chunks,
+    formatted: result.formatted,
+    count: result.count,
+    enabled: result.enabled,
+    queryPreview: result.queryPreview,
+    settingsSource: result.settingsSource,
+    chunksAvailable: result.chunksAvailable,
+    chunksPending: result.chunksPending,
   };
-
-  // Per-chat disable
-  if (perChatOverrides?.enabled === false) return emptyResult;
-
-  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  if (!cfg.enabled || !cfg.vectorize_chat_messages) return emptyResult;
-
-  const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings ?? null, cfg);
-  const settingsSource: "per_chat" | "global" = perChatOverrides ? "per_chat" : "global";
-
-  // Apply per-chat overrides
-  const effectiveTopK = perChatOverrides?.retrievalTopK ?? settings.retrievalTopK;
-  const effectiveExclusionWindow = perChatOverrides?.exclusionWindow ?? settings.exclusionWindow;
-  const effectiveThreshold = settings.similarityThreshold;
-
-  const queryText = buildQueryText(messages, settings);
-  if (!queryText) return { ...emptyResult, enabled: true, settingsSource };
-
-  // Get chunk stats
-  const allChunks = chatsSvc.getChatChunks(userId, chatId);
-  const pendingChunks = allChunks.filter(c => !c.vectorized_at);
-
-  try {
-    const queryHash = hashQueryText(queryText);
-    const cachedVector = await getQueryVectorFromCache(chatId, queryHash);
-
-    let queryVector: number[];
-
-    if (cachedVector) {
-      queryVector = cachedVector;
-    } else {
-      if (pendingChunks.length > 0) {
-        // Chunks not ready - use SQLite fallback
-        const fallbackContents = getRecentRelevantChunks(userId, chatId, queryText, effectiveTopK);
-        const fallbackChunks = fallbackContents.map(c => ({ content: c, score: 0, metadata: {} }));
-        const formatted = formatMemoryOutput(fallbackChunks, settings);
-        return {
-          chunks: fallbackChunks, formatted, count: fallbackChunks.length, enabled: true,
-          queryPreview: queryText.slice(0, 200), settingsSource,
-          chunksAvailable: allChunks.length, chunksPending: pendingChunks.length,
-        };
-      }
-
-      const [vector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
-      if (!vector || vector.length === 0) return { ...emptyResult, enabled: true, settingsSource };
-
-      queryVector = vector;
-      await cacheQueryVector(chatId, queryHash, queryText, queryVector);
-    }
-
-    // Build exclusion set
-    const excludeIds = new Set<string>();
-    const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
-    const recentMessages = visibleMessages.slice(-effectiveExclusionWindow);
-    for (const m of recentMessages) {
-      excludeIds.add(m.id);
-    }
-
-    const hits = await embeddingsSvc.searchChatChunks(userId, chatId, queryVector, excludeIds, effectiveTopK, queryText, cfg.hybrid_weight_mode);
-
-    let filteredHits = hits;
-    if (effectiveThreshold > 0) {
-      filteredHits = hits.filter(h => h.score <= effectiveThreshold);
-    }
-
-    if (filteredHits.length > 0) {
-      console.info(`[chat-memory] Retrieved ${filteredHits.length} memory chunk(s) from past conversation`);
-    }
-
-    const chunks = filteredHits.map(h => ({
-      content: h.content,
-      score: h.score,
-      metadata: h.metadata ?? {},
-    }));
-    const formatted = formatMemoryOutput(chunks, settings);
-
-    return {
-      chunks, formatted, count: chunks.length, enabled: true,
-      queryPreview: queryText.slice(0, 200), settingsSource,
-      chunksAvailable: allChunks.length, chunksPending: pendingChunks.length,
-    };
-  } catch (err) {
-    console.warn("[prompt] Chat memory retrieval failed:", err);
-    return { ...emptyResult, enabled: true, settingsSource };
-  }
-}
-
-/**
- * Hash query text for cache lookup.
- */
-function hashQueryText(text: string): string {
-  let hash = 0;
-  for (let i = 0; i < text.length; i++) {
-    const char = text.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return hash.toString(36);
-}
-
-/**
- * Get cached query vector from SQLite.
- */
-async function getQueryVectorFromCache(chatId: string, queryHash: string): Promise<number[] | null> {
-  const now = Math.floor(Date.now() / 1000);
-  const row = getDb()
-    .query("SELECT vector_json, expires_at FROM query_vector_cache WHERE chat_id = ? AND query_hash = ? AND expires_at > ?")
-    .get(chatId, queryHash, now) as any;
-
-  if (!row) return null;
-
-  try {
-    const vector = JSON.parse(row.vector_json);
-    // Update hit count and last used
-    getDb()
-      .query("UPDATE query_vector_cache SET hit_count = hit_count + 1, last_used_at = ? WHERE chat_id = ? AND query_hash = ?")
-      .run(now, chatId, queryHash);
-    return vector;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Cache a query vector in SQLite.
- */
-async function cacheQueryVector(chatId: string, queryHash: string, queryText: string, vector: number[]): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  const expiresAt = now + 300; // 5 minutes
-
-  getDb()
-    .query(
-      `INSERT INTO query_vector_cache (id, chat_id, query_hash, query_text, vector_json, hit_count, created_at, last_used_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
-       ON CONFLICT(chat_id, query_hash) DO UPDATE SET
-         vector_json = excluded.vector_json,
-         last_used_at = excluded.last_used_at,
-         expires_at = excluded.expires_at`
-    )
-    .run(crypto.randomUUID(), chatId, queryHash, queryText, JSON.stringify(vector), now, now, expiresAt);
-}
-
-/**
- * Fallback retrieval using SQLite when vectors aren't ready.
- * Returns recent chunks that might be relevant based on recency.
- */
-function getRecentRelevantChunks(userId: string, chatId: string, queryText: string, limit: number): string[] {
-  const chunks = chatsSvc.getChatChunks(userId, chatId);
-
-  // Simple recency-based retrieval
-  const sorted = chunks.sort((a, b) => b.created_at - a.created_at);
-  const topChunks = sorted.slice(0, limit);
-
-  return topChunks.map(c => c.content);
 }
 
 function injectWorldInfoAt(
@@ -2630,42 +3227,109 @@ function injectWorldInfoAt(
   return entries.length;
 }
 
-function applyAppendBlock(
+/**
+ * Apply a group of appends that share the same target (baseRole + depth)
+ * in a single pass. Contents are concatenated in prompt_order sequence
+ * with no extra separator — each rawResolved already carries whatever
+ * whitespace the user placed around it.
+ */
+function applyAppendGroup(
   result: LlmMessage[],
   breakdown: AssemblyBreakdownEntry[],
-  append: PendingAppend,
+  group: PendingAppend[],
 ): void {
+  if (group.length === 0) return;
+  const { baseRole, depth } = group[0];
+
+  // Join all raw contents in order — the first gets a "\n" separator from the
+  // base message, subsequent appends are separated from each other directly
+  // so user-controlled whitespace (leading/trailing newlines) is the only
+  // thing between them.
+  const combinedContent = group.map(a => a.content).join("");
+
   let roleCount = 0;
   for (let i = result.length - 1; i >= 0; i--) {
-    if (result[i].role === append.baseRole) {
-      if (roleCount === append.depth) {
+    if (result[i].role === baseRole) {
+      if (roleCount === depth) {
         if (typeof result[i].content === "string") {
-          result[i] = { ...result[i], content: result[i].content + "\n" + append.content };
+          result[i] = { ...result[i], content: result[i].content + "\n" + combinedContent };
         } else {
           // Multipart: append to the text part
           const parts = [...result[i].content as import("../llm/types").LlmMessagePart[]];
           const textIdx = parts.findIndex((p) => p.type === "text");
           if (textIdx >= 0) {
             const tp = parts[textIdx] as import("../llm/types").LlmTextPart;
-            parts[textIdx] = { type: "text", text: tp.text + "\n" + append.content };
+            parts[textIdx] = { type: "text", text: tp.text + "\n" + combinedContent };
           } else {
-            parts.unshift({ type: "text", text: append.content });
+            parts.unshift({ type: "text", text: combinedContent });
           }
           result[i] = { ...result[i], content: parts };
         }
-        breakdown.push({
-          type: "append",
-          name: `${append.blockName} → ${append.baseRole}@${append.depth}`,
-          role: append.baseRole,
-          content: append.content,
-          blockId: append.blockId,
-        });
+        for (const append of group) {
+          breakdown.push({
+            type: "append",
+            name: `${append.blockName} → ${baseRole}@${depth}`,
+            role: baseRole,
+            content: append.content,
+            blockId: append.blockId,
+          });
+        }
         return;
       }
       roleCount++;
     }
   }
   // Target not found — skip silently
+}
+
+/**
+ * Merge consecutive user messages in the chat history range into single messages,
+ * joining their text content with double newlines. This collapses "queued" user
+ * messages into one LLM turn so providers that disallow consecutive same-role
+ * messages don't reject the request.
+ *
+ * Mutates `result` in-place and returns the new history count (may be smaller
+ * than the original if merges occurred).
+ */
+function mergeConsecutiveUserMessages(
+  result: LlmMessage[],
+  startIdx: number,
+  count: number,
+): number {
+  let remaining = count;
+  let i = startIdx;
+  while (i < startIdx + remaining - 1) {
+    if (result[i].role === "user" && result[i + 1]?.role === "user") {
+      const a = result[i].content;
+      const b = result[i + 1].content;
+
+      // Extract text from each message (string or multipart)
+      const aText = typeof a === "string" ? a : a.filter((p): p is import("../llm/types").LlmTextPart => p.type === "text").map((p) => p.text).join("");
+      const bText = typeof b === "string" ? b : b.filter((p): p is import("../llm/types").LlmTextPart => p.type === "text").map((p) => p.text).join("");
+      const mergedText = aText + "\n\n" + bText;
+
+      // Collect non-text parts (images, audio) from both messages
+      const aParts = typeof a === "string" ? [] : a.filter((p) => p.type !== "text");
+      const bParts = typeof b === "string" ? [] : b.filter((p) => p.type !== "text");
+      const allParts = [...aParts, ...bParts];
+
+      // Preserve the chat-history marker if either source message carried it
+      // — both are typically chat-history user turns being merged.
+      const wasChatHistory = isChatHistoryMessage(result[i]) || isChatHistoryMessage(result[i + 1]);
+      if (allParts.length > 0) {
+        result[i] = { role: "user", content: [{ type: "text" as const, text: mergedText }, ...allParts] };
+      } else {
+        result[i] = { role: "user", content: mergedText };
+      }
+      if (wasChatHistory) markAsChatHistory(result[i]);
+      result.splice(i + 1, 1);
+      remaining--;
+      // Don't increment — next element slid into i+1, check again
+    } else {
+      i++;
+    }
+  }
+  return remaining;
 }
 
 /**
@@ -2914,10 +3578,10 @@ function applyCompletionSettings(
 
     // namesBehavior: 1 = add name field, 2 = prepend "Name: " to content
     if (namesBehavior === 1 && (msg.role === "user" || msg.role === "assistant")) {
-      const name = msg.role === "user" ? (persona?.name ?? "User") : character.name;
+      const name = msg.role === "user" ? (persona?.name ?? "User") : getEffectiveCharacterName(character);
       result[i] = { ...result[i], name };
     } else if (namesBehavior === 2 && (msg.role === "user" || msg.role === "assistant")) {
-      const name = msg.role === "user" ? (persona?.name ?? "User") : character.name;
+      const name = msg.role === "user" ? (persona?.name ?? "User") : getEffectiveCharacterName(character);
       if (typeof result[i].content === "string") {
         result[i] = { ...result[i], content: `${name}: ${result[i].content}` };
       } else {
@@ -2997,6 +3661,15 @@ function buildParameters(
   modelName?: string | null,
 ): Record<string, any> {
   const params: Record<string, any> = {};
+
+  // Streaming toggle — transport-level concern, orthogonal to sampler tuning.
+  // Applied regardless of overrides.enabled so users can disable streaming without
+  // also opting into sampler overrides. The `_streaming` key is consumed by
+  // generate.service.ts and stripped before reaching providers (also in each
+  // provider's INTERNAL_PARAMS allowlist as a safety net).
+  if (overrides && overrides.streaming === false) {
+    params._streaming = false;
+  }
 
   // Sampler overrides — when enabled, apply user values (or defaults for core params).
   // A value of 0 on sampling params means "exclude from request", allowing users to
@@ -3086,10 +3759,17 @@ export function injectReasoningParams(params: Record<string, any>, providerName:
   } else if (providerName === "google" || providerName === "google_vertex") {
     // Google Gemini / Vertex AI: thinkingConfig with thinkingLevel
     // Valid levels: minimal, low, medium, high
-    if (!params.thinkingConfig) {
-      const validLevels = new Set(["minimal", "low", "medium", "high"]);
-      params.thinkingConfig = { thinkingLevel: validLevels.has(effort) ? effort : "medium" };
-    }
+    const validLevels = new Set(["minimal", "low", "medium", "high"]);
+    const existing = (params.thinkingConfig && typeof params.thinkingConfig === "object") ? params.thinkingConfig : {};
+    // Merge: preserve any user-supplied thinkingLevel/thinkingBudget, but
+    // always set includeThoughts: true so the API actually returns thought
+    // summary parts (without this flag, Gemini reasons internally but
+    // emits zero `part.thought` parts and our parser sees nothing).
+    params.thinkingConfig = {
+      ...existing,
+      thinkingLevel: existing.thinkingLevel ?? (validLevels.has(effort) ? effort : "medium"),
+      includeThoughts: true,
+    };
   } else if (providerName === "openrouter") {
     // OpenRouter: unified reasoning object with effort levels
     // Valid: none, minimal, low, medium, high, xhigh
@@ -3179,7 +3859,7 @@ async function onelinerImpersonation(
   // Build parameters from sampler overrides + reasoning settings
   const parameters = buildParameters(samplerOverrides, preset, reasoningSettings, connection?.provider, connection?.model);
 
-  return { messages: result, breakdown, parameters, assistantPrefill };
+  return { messages: result, breakdown, parameters, assistantPrefill, macroEnv };
 }
 
 /**
@@ -3204,14 +3884,19 @@ async function legacyAssembly(
   if (character && chat) {
     const chatObj = chat as Chat;
     const groupNames = userId
-      ? resolveGroupCharacterNames(chatObj, (cid) =>
-          charactersSvc.getCharacter(userId, cid)?.name)
+      ? resolveGroupCharacterNames(chatObj, (cid) => {
+          const char = charactersSvc.getCharacter(userId, cid);
+          return char ? getEffectiveCharacterName(char) : undefined;
+        })
       : undefined;
     const isGroup = !!chatObj.metadata?.group;
     const legacyMutedIds = userId ? chatsSvc.getGroupMutedIds(chatObj) : [];
     const legacyNotMuted = groupNames && legacyMutedIds.length > 0 && userId
-      ? resolveGroupCharacterNames(chatObj, (cid) =>
-          legacyMutedIds.includes(cid) ? undefined : charactersSvc.getCharacter(userId, cid)?.name)
+      ? resolveGroupCharacterNames(chatObj, (cid) => {
+          if (legacyMutedIds.includes(cid)) return undefined;
+          const char = charactersSvc.getCharacter(userId, cid);
+          return char ? getEffectiveCharacterName(char) : undefined;
+        })
       : undefined;
     // Resolve alternate field overrides and group scenario override (legacy path)
     const legacyEffectiveChar = userId
@@ -3227,7 +3912,7 @@ async function legacyAssembly(
       connection: connection ?? null,
       groupCharacterNames: groupNames,
       groupNotMutedNames: legacyNotMuted,
-      targetCharacterName: isGroup ? legacyEffectiveChar.name : undefined,
+      targetCharacterName: isGroup ? getEffectiveCharacterName(legacyEffectiveChar) : undefined,
     });
     // Populate reasoning macros
     if (userId) {
@@ -3279,7 +3964,7 @@ async function legacyAssembly(
   }
 
   if (userId && chat) {
-    const legacyMemoryResult = await collectChatVectorMemory(userId, chat.id, messages);
+    const legacyMemoryResult = await safeCollectChatVectorMemory(userId, chat.id, messages);
     if (legacyMemoryResult.count > 0) {
       const memoryContent = legacyMemoryResult.formatted;
       llmMessages.push({ role: "system", content: memoryContent });
@@ -3289,6 +3974,23 @@ async function legacyAssembly(
 
   // Chat history — evaluate macros in each message
   // Skip messages marked as hidden drafts (extra.hidden === true)
+  // Pre-resolve all attachment files in parallel (same pattern as main assembly)
+  const legacyAttachmentIds = new Set<string>();
+  for (const m of messages) {
+    if (m.extra?.hidden === true) continue;
+    const atts = Array.isArray(m.extra?.attachments) ? m.extra.attachments : [];
+    for (const att of atts) {
+      if (att.image_id) legacyAttachmentIds.add(att.image_id as string);
+    }
+  }
+  const legacyAttachmentCache = new Map<string, string | null>();
+  if (legacyAttachmentIds.size > 0 && userId) {
+    const entries = await Promise.all(
+      [...legacyAttachmentIds].map(async (id) => [id, await resolveAttachmentBase64(userId, id)] as const)
+    );
+    for (const [id, b64] of entries) legacyAttachmentCache.set(id, b64);
+  }
+
   const legacyFirstChatIdx = llmMessages.length;
   let legacyHistoryCount = 0;
   const legacyHistoryParts: string[] = [];
@@ -3301,7 +4003,7 @@ async function legacyAssembly(
       const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolved }];
       for (const att of attachments) {
         if (!att.image_id || !userId) continue;
-        const b64 = await resolveAttachmentBase64(userId, att.image_id as string);
+        const b64 = legacyAttachmentCache.get(att.image_id as string) ?? null;
         if (!b64) continue;
         if (att.type === "image") {
           parts.push({ type: "image", data: b64, mime_type: att.mime_type });
@@ -3323,6 +4025,9 @@ async function legacyAssembly(
   }
   breakdown.push({ type: "chat_history", name: "Chat History (legacy)", messageCount: legacyHistoryCount, content: legacyHistoryParts.join("\n") });
 
+  // Merge consecutive user messages (queued messages) into single LLM turns
+  legacyHistoryCount = mergeConsecutiveUserMessages(llmMessages, legacyFirstChatIdx, legacyHistoryCount);
+
   // Strip reasoning from older chat history messages based on keepInHistory
   let reasoningVal: { apiReasoning?: boolean; reasoningEffort?: string } | null = null;
   if (userId) {
@@ -3342,5 +4047,5 @@ async function legacyAssembly(
   // Build parameters with reasoning settings so API-level reasoning is injected
   const parameters = buildParameters(null, null, reasoningVal, connection?.provider, connection?.model);
 
-  return { messages: llmMessages, breakdown, parameters };
+  return { messages: llmMessages, breakdown, parameters, macroEnv: macroEnv ?? undefined };
 }

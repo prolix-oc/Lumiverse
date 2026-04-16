@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { dirname, join } from "path";
+import { mkdirSync, chmodSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { env } from "../env";
 
 interface VapidKeys {
@@ -20,9 +20,10 @@ let _keys: VapidKeys | null = null;
 export async function initVapidKeys(): Promise<void> {
   const keysPath = join(env.dataDir, "vapid.keys");
 
-  if (existsSync(keysPath)) {
+  const keysFile = Bun.file(keysPath);
+  if (await keysFile.exists()) {
     try {
-      const raw = readFileSync(keysPath, "utf-8");
+      const raw = await keysFile.text();
       const parsed = JSON.parse(raw);
 
       // Support new format (privateJWK + publicKey)
@@ -56,7 +57,15 @@ export async function initVapidKeys(): Promise<void> {
   _keys = { privateJWK, publicKey };
 
   mkdirSync(dirname(keysPath), { recursive: true });
-  writeFileSync(keysPath, JSON.stringify(_keys, null, 2), { mode: 0o600 });
+  await Bun.write(keysPath, JSON.stringify(_keys, null, 2));
+
+  // Set restrictive permissions where the filesystem supports it
+  try {
+    chmodSync(keysPath, 0o600);
+  } catch {
+    // Non-fatal: filesystem doesn't support Unix permissions
+  }
+
   console.log("[vapid] Generated new VAPID keys:", keysPath);
 }
 

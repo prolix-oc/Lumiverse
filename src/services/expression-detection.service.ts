@@ -101,3 +101,178 @@ export function getExpressionDetectionSettings(userId: string): ExpressionDetect
     contextWindow: val.contextWindow ?? 5,
   };
 }
+
+// ── Multi-character expression detection ─────────────────────────────────────
+
+import type { ExpressionGroups } from "./expressions.service";
+
+interface DetectMultiCharExpressionInput {
+  userId: string;
+  chatId: string;
+  characterId: string;
+  groups: ExpressionGroups;
+  recentMessages: LlmMessage[];
+  connectionId?: string;
+}
+
+export interface MultiCharExpressionResult {
+  /** Which character group was identified as the focus. */
+  characterGroup: string;
+  /** The clean expression label (e.g., "Clothed_angry"). */
+  expression: string;
+  /** Resolved image ID for the expression. */
+  imageId: string;
+}
+
+/**
+ * Two-stage expression detection for multi-character cards:
+ *
+ * 1. **Character steering** — identify which character is the focus of the
+ *    latest response via heuristic name matching, with LLM fallback.
+ * 2. **Expression detection** — run standard expression detection scoped
+ *    to the identified character's label set.
+ */
+export async function detectMultiCharacterExpression(
+  input: DetectMultiCharExpressionInput,
+  generateFn: RawGenerateFn,
+): Promise<MultiCharExpressionResult | null> {
+  const { userId, groups, recentMessages } = input;
+
+  // Collect named character groups (exclude "_default" outfit-only bucket)
+  const characterNames = Object.keys(groups).filter((n) => n !== "_default");
+
+  // If only a _default group exists, treat its labels as flat single-character
+  if (characterNames.length === 0) {
+    const defaultGroup = groups["_default"];
+    if (!defaultGroup || Object.keys(defaultGroup).length === 0) return null;
+    const labels = Object.keys(defaultGroup);
+    const detected = await detectExpression({ ...input, labels }, generateFn);
+    if (!detected || !defaultGroup[detected]) return null;
+    return { characterGroup: "_default", expression: detected, imageId: defaultGroup[detected] };
+  }
+
+  // Stage 1: identify which character is the focus of the latest response
+  let targetCharacter = identifyCharacterHeuristic(recentMessages, characterNames);
+
+  // LLM fallback when heuristic is inconclusive (no names found in text)
+  if (!targetCharacter) {
+    targetCharacter = await identifyCharacterLLM(
+      userId, characterNames, recentMessages, generateFn, input.connectionId,
+    );
+  }
+
+  if (!targetCharacter || !groups[targetCharacter]) return null;
+
+  // Stage 2: detect expression within the identified character's label set
+  const groupLabels = groups[targetCharacter];
+  const labels = Object.keys(groupLabels);
+  if (labels.length === 0) return null;
+
+  const detected = await detectExpression({ ...input, labels }, generateFn);
+  if (!detected || !groupLabels[detected]) return null;
+
+  return { characterGroup: targetCharacter, expression: detected, imageId: groupLabels[detected] };
+}
+
+/**
+ * Fast heuristic: scan the last assistant message for character name mentions.
+ * Returns the character whose name appears latest in the text (closest to the
+ * end = most recently acting/speaking), or null if no names are found.
+ */
+function identifyCharacterHeuristic(
+  recentMessages: LlmMessage[],
+  characterNames: string[],
+): string | null {
+  // Find the last assistant message
+  const lastAssistant = [...recentMessages].reverse().find((m) => m.role === "assistant");
+  if (!lastAssistant) return null;
+
+  const content = typeof lastAssistant.content === "string" ? lastAssistant.content : "";
+  if (!content) return null;
+
+  const contentLower = content.toLowerCase();
+
+  let latestPos = -1;
+  let latestChar: string | null = null;
+
+  for (const name of characterNames) {
+    const pos = contentLower.lastIndexOf(name.toLowerCase());
+    if (pos > latestPos) {
+      latestPos = pos;
+      latestChar = name;
+    }
+  }
+
+  return latestChar;
+}
+
+/**
+ * LLM-based character identification fallback. Uses a very short prompt
+ * and low max_tokens to minimize cost when the heuristic can't determine
+ * which character is the focus.
+ */
+async function identifyCharacterLLM(
+  userId: string,
+  characterNames: string[],
+  recentMessages: LlmMessage[],
+  generateFn: RawGenerateFn,
+  connectionIdOverride?: string,
+): Promise<string | null> {
+  const sidecar = getSidecarSettings(userId);
+
+  let connectionId = connectionIdOverride || sidecar.connectionProfileId;
+  let model: string | undefined = sidecar.model || undefined;
+
+  if (!connectionId) {
+    const defaultConn = connectionsSvc.getDefaultConnection(userId);
+    if (!defaultConn) return null;
+    connectionId = defaultConn.id;
+    model = model || defaultConn.model || undefined;
+  }
+
+  const conn = connectionsSvc.getConnection(userId, connectionId);
+  if (!conn) return null;
+
+  const systemPrompt = `You are analyzing a roleplay conversation. Identify which character is the primary focus of the most recent response (the one speaking, acting, or being described).
+
+Available characters: ${characterNames.join(", ")}
+
+Respond with ONLY the character's name, exactly as listed above. Nothing else.`;
+
+  const messages: LlmMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...recentMessages.slice(-3),
+    { role: "user", content: "Which character is the primary focus of the last response? Reply with only their name." },
+  ];
+
+  try {
+    const response = await generateFn(userId, {
+      provider: conn.provider,
+      model: model || conn.model || "",
+      messages,
+      connection_id: connectionId,
+      parameters: { temperature: 0.1, max_tokens: 30 },
+    });
+
+    const raw = (response.content || "").trim();
+    if (!raw) return null;
+
+    const rawLower = raw.toLowerCase();
+
+    // Exact match
+    const exact = characterNames.find((n) => n.toLowerCase() === rawLower);
+    if (exact) return exact;
+
+    // Response contains a character name
+    const contains = characterNames.find((n) => rawLower.includes(n.toLowerCase()));
+    if (contains) return contains;
+
+    // Character name contains the response (handles partial/shortened names)
+    const reverse = characterNames.find((n) => n.toLowerCase().includes(rawLower));
+    if (reverse) return reverse;
+  } catch {
+    // LLM call failed — return null so expression detection is skipped
+  }
+
+  return null;
+}

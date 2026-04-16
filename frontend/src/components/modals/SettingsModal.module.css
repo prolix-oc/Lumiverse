@@ -1,7 +1,7 @@
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: 10001;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10,7 +10,6 @@
 
 :global([data-glass]) .overlay {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .modal {
@@ -58,6 +57,7 @@
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .navBtn {
@@ -91,6 +91,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding: 20px;
 }
 
@@ -688,33 +689,17 @@
 
 .rangeSlider {
   flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
   outline: none;
 }
 
-.rangeSlider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--lumiverse-primary);
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+.rangeSlider::-webkit-slider-runnable-track {
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
 }
 
-.rangeSlider::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--lumiverse-primary);
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+.rangeSlider::-moz-range-track {
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
 }
 
 .rangeValue {

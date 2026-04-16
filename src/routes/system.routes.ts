@@ -1,14 +1,14 @@
 import { Hono } from "hono";
 import { cpus, totalmem, freemem, platform, arch, release, hostname } from "os";
-import { readFileSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 
 const app = new Hono();
 
-function getBackendVersion(): string {
+async function getBackendVersion(): Promise<string> {
   try {
-    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf-8"));
+    const raw = await Bun.file(join(import.meta.dir, "../../package.json")).text();
+    const pkg = JSON.parse(raw);
     return pkg.version ?? "unknown";
   } catch {
     return "unknown";
@@ -38,7 +38,7 @@ function getDiskUsage(): { total: number; used: number } | null {
   }
 }
 
-app.get("/info", (c) => {
+app.get("/info", async (c) => {
   const cpu = cpus();
   const disk = getDiskUsage();
 
@@ -59,7 +59,7 @@ app.get("/info", (c) => {
     },
     disk,
     backend: {
-      version: getBackendVersion(),
+      version: await getBackendVersion(),
       runtime: `Bun ${Bun.version}`,
     },
     git: getGitInfo(),

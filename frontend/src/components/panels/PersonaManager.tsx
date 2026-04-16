@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, type ReactNode } from 'react'
 import { usePersonaBrowser } from '@/hooks/usePersonaBrowser'
 import { useFolders } from '@/hooks/useFolders'
+import { useStore } from '@/store'
 import { ChevronRight } from 'lucide-react'
 import PersonaToolbar from './persona-browser/PersonaToolbar'
 import PersonaCardGrid from './persona-browser/PersonaCardGrid'
@@ -12,6 +13,7 @@ import styles from './PersonaManager.module.css'
 
 export default function PersonaManager() {
   const browser = usePersonaBrowser()
+  const openModal = useStore((s) => s.openModal)
   const { createFolder } = useFolders('personaFolders', browser.allPersonas)
   const [creating, setCreating] = useState(false)
   // Collapsed folders — start with all named folders collapsed, uncategorized open
@@ -102,6 +104,7 @@ export default function PersonaManager() {
         onCreateClick={() => setCreating(true)}
         onCreateFolder={createFolder}
         onRefresh={browser.refresh}
+        onGlobalLibraryClick={() => openModal('globalAddonsLibrary')}
         filteredCount={browser.totalFiltered}
         totalCount={browser.allPersonas.length}
       />

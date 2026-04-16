@@ -1,0 +1,136 @@
+.graphEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  width: min(520px, 100%);
+  padding: 24px 18px;
+  color: var(--lumiverse-text-muted);
+}
+
+.graphCanvas {
+  position: relative;
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(color-mix(in srgb, var(--lumiverse-border) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--lumiverse-border) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-primary) 2%, transparent), transparent 32%),
+    color-mix(in srgb, var(--lumiverse-bg-elevated) 42%, var(--lumiverse-bg-deep));
+  background-size: 40px 40px, 40px 40px, auto, auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.graphCanvas:active {
+  cursor: grabbing;
+}
+
+.graphSurface {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.graphWorld {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.graphEdges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.graphEdgePath {
+  fill: none;
+  stroke: color-mix(in srgb, var(--lumiverse-primary) 38%, var(--lumiverse-border));
+  stroke-width: 2;
+  opacity: 0.82;
+}
+
+.graphNode {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 12px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 94%, var(--lumiverse-bg-deep));
+  color: var(--lumiverse-text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 6px 18px color-mix(in srgb, #000 8%, transparent);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    background var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.graphNode:hover {
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 22%, var(--lumiverse-border));
+  box-shadow: 0 8px 20px color-mix(in srgb, #000 10%, transparent);
+}
+
+.graphNode[data-selected] {
+  border-color: var(--lumiverse-primary);
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-elevated));
+  box-shadow:
+    0 10px 24px color-mix(in srgb, #000 12%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
+}
+
+.mapped {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 1px var(--lumiverse-primary);
+}
+
+.executing {
+  border-color: var(--lumiverse-warning, var(--lumiverse-primary));
+  animation: graph-node-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes graph-node-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px var(--lumiverse-warning, var(--lumiverse-primary));
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--lumiverse-warning, var(--lumiverse-primary));
+  }
+}
+
+.graphNodeType {
+  color: var(--lumiverse-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.graphNodeTitle {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.graphNodeMeta {
+  color: var(--lumiverse-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}

@@ -18,6 +18,14 @@ export interface DrawerTabState {
   id: string
   extensionId: string
   title: string
+  /** Short label for below the sidebar icon (max ~8 chars). Falls back to title. */
+  shortName?: string
+  /** Description shown in command palette. Falls back to "Open {title} extension tab". */
+  description?: string
+  /** Keywords for command palette search. Extension name added automatically. */
+  keywords?: string[]
+  /** Title for the panel header navbar. Falls back to title. */
+  headerTitle?: string
   iconUrl?: string
   iconSvg?: string
   badge: string | null
@@ -72,6 +80,18 @@ export interface InputBarActionState {
   clickHandlers: Set<() => void>
 }
 
+export interface ExtensionCommandState {
+  extensionId: string
+  extensionName: string
+  commands: Array<{
+    id: string
+    label: string
+    description: string
+    keywords?: string[]
+    scope?: 'global' | 'chat' | 'chat-idle' | 'landing' | 'character'
+  }>
+}
+
 const HIDDEN_KEY = 'spindle:hiddenPlacements'
 
 function loadHiddenPlacements(): string[] {
@@ -97,6 +117,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   dockPanels: [],
   appMounts: [],
   inputBarActions: [],
+  extensionCommands: [],
   hiddenPlacements: loadHiddenPlacements(),
 
   // ── Drawer Tabs ──
@@ -119,7 +140,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     }))
   },
 
-  updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'badge'>>) => {
+  updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => {
     set((state) => ({
       drawerTabs: state.drawerTabs.map((t) =>
         t.id === tabId ? { ...t, ...updates } : t
@@ -242,6 +263,24 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     }))
   },
 
+  // ── Extension Commands ──
+
+  setExtensionCommands: (entry: ExtensionCommandState) => {
+    set((state) => {
+      const filtered = state.extensionCommands.filter((e) => e.extensionId !== entry.extensionId)
+      if (entry.commands.length > 0) {
+        filtered.push(entry)
+      }
+      return { extensionCommands: filtered }
+    })
+  },
+
+  clearExtensionCommands: (extensionId: string) => {
+    set((state) => ({
+      extensionCommands: state.extensionCommands.filter((e) => e.extensionId !== extensionId),
+    }))
+  },
+
   // ── Shared ──
 
   removeAllByExtension: (extensionId: string) => {
@@ -251,6 +290,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
       dockPanels: state.dockPanels.filter((p) => p.extensionId !== extensionId),
       appMounts: state.appMounts.filter((m) => m.extensionId !== extensionId),
       inputBarActions: state.inputBarActions.filter((a) => a.extensionId !== extensionId),
+      extensionCommands: state.extensionCommands.filter((e) => e.extensionId !== extensionId),
     }))
   },
 

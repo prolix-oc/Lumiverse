@@ -5,15 +5,17 @@ import clsx from 'clsx'
 interface AccentPickerProps {
   hue: number
   saturation: number
-  onChange: (h: number, s: number) => void
+  luminance: number
+  onChange: (h: number, s: number, l: number) => void
 }
 
 const SWATCHES = [0, 30, 60, 120, 152, 200, 220, 263, 290, 340]
 
-export default function AccentPicker({ hue, saturation, onChange }: AccentPickerProps) {
+export default function AccentPicker({ hue, saturation, luminance, onChange }: AccentPickerProps) {
   const [customOpen, setCustomOpen] = useState(false)
   const [localHue, setLocalHue] = useState(hue)
   const [localSat, setLocalSat] = useState(saturation)
+  const [localLum, setLocalLum] = useState(luminance)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const rafRef = useRef<number>(undefined)
 
@@ -21,51 +23,58 @@ export default function AccentPicker({ hue, saturation, onChange }: AccentPicker
   useEffect(() => {
     setLocalHue(hue)
     setLocalSat(saturation)
-  }, [hue, saturation])
+    setLocalLum(luminance)
+  }, [hue, saturation, luminance])
 
   const debouncedOnChange = useCallback(
-    (h: number, s: number) => {
+    (h: number, s: number, l: number) => {
       clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(() => onChange(h, s), 300)
+      debounceRef.current = setTimeout(() => onChange(h, s, l), 300)
     },
     [onChange]
+  )
+
+  const applyPreview = useCallback(
+    (h: number, s: number, l: number) => {
+      cancelAnimationFrame(rafRef.current!)
+      rafRef.current = requestAnimationFrame(() => {
+        document.documentElement.style.setProperty(
+          '--lumiverse-primary',
+          `hsla(${h}, ${s}%, ${l}%, 0.9)`
+        )
+      })
+    },
+    []
   )
 
   const handleHueSlider = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const h = Number(e.target.value)
       setLocalHue(h)
-
-      // Apply directly via RAF for smooth preview
-      cancelAnimationFrame(rafRef.current!)
-      rafRef.current = requestAnimationFrame(() => {
-        document.documentElement.style.setProperty(
-          '--lumiverse-primary',
-          `hsla(${h}, ${localSat}%, 65%, 0.9)`
-        )
-      })
-
-      debouncedOnChange(h, localSat)
+      applyPreview(h, localSat, localLum)
+      debouncedOnChange(h, localSat, localLum)
     },
-    [localSat, debouncedOnChange]
+    [localSat, localLum, applyPreview, debouncedOnChange]
   )
 
   const handleSatSlider = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const s = Number(e.target.value)
       setLocalSat(s)
-
-      cancelAnimationFrame(rafRef.current!)
-      rafRef.current = requestAnimationFrame(() => {
-        document.documentElement.style.setProperty(
-          '--lumiverse-primary',
-          `hsla(${localHue}, ${s}%, 65%, 0.9)`
-        )
-      })
-
-      debouncedOnChange(localHue, s)
+      applyPreview(localHue, s, localLum)
+      debouncedOnChange(localHue, s, localLum)
     },
-    [localHue, debouncedOnChange]
+    [localHue, localLum, applyPreview, debouncedOnChange]
+  )
+
+  const handleLumSlider = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const l = Number(e.target.value)
+      setLocalLum(l)
+      applyPreview(localHue, localSat, l)
+      debouncedOnChange(localHue, localSat, l)
+    },
+    [localHue, localSat, applyPreview, debouncedOnChange]
   )
 
   const isCustom = !SWATCHES.includes(hue)
@@ -81,7 +90,7 @@ export default function AccentPicker({ hue, saturation, onChange }: AccentPicker
             style={{ background: `hsl(${h}, ${saturation}%, 65%)` }}
             onClick={() => {
               setCustomOpen(false)
-              onChange(h, saturation)
+              onChange(h, saturation, luminance)
             }}
           />
         ))}
@@ -119,6 +128,21 @@ export default function AccentPicker({ hue, saturation, onChange }: AccentPicker
               className={styles.satSlider}
             />
             <span className={styles.sliderValue}>{localSat}%</span>
+          </label>
+          <label className={styles.sliderRow}>
+            <span className={styles.sliderLabel}>Luminance</span>
+            <input
+              type="range"
+              min={30}
+              max={80}
+              value={localLum}
+              onChange={handleLumSlider}
+              className={styles.lumSlider}
+              style={{
+                '--lum-track-bg': `linear-gradient(to right, hsl(${localHue}, ${localSat}%, 30%), hsl(${localHue}, ${localSat}%, 55%), hsl(${localHue}, ${localSat}%, 80%))`,
+              } as React.CSSProperties}
+            />
+            <span className={styles.sliderValue}>{localLum}%</span>
           </label>
         </div>
       )}

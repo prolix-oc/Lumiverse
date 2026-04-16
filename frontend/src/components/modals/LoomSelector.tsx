@@ -1,5 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
-import { Search, XCircle, ChevronDown, ChevronUp, BookOpen, Wrench, Zap } from 'lucide-react'
+import { useState, useMemo, useCallback, useEffect, type ComponentType } from 'react'
+import { Search, XCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { IconScript, IconTool, IconTransform } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { ModalShell } from '@/components/shared/ModalShell'
 import type { LoomItem, LoomItemCategory, PackWithItems } from '@/types/api'
@@ -13,21 +14,21 @@ interface LoomSelectorProps {
   onClose: () => void
 }
 
-const CATEGORY_CONFIG: Record<LoomItemCategory, { title: string; subtitle: string; icon: typeof BookOpen }> = {
+const CATEGORY_CONFIG: Record<LoomItemCategory, { title: string; subtitle: string; icon: ComponentType<{ size?: number | string }> }> = {
   narrative_style: {
     title: 'Narrative Styles',
     subtitle: 'Choose writing styles to shape the narrative voice',
-    icon: BookOpen,
+    icon: IconScript,
   },
   loom_utility: {
     title: 'Loom Utilities',
     subtitle: 'Choose utility prompts for enhanced output control',
-    icon: Wrench,
+    icon: IconTool,
   },
   retrofit: {
     title: 'Retrofits',
     subtitle: 'Choose retrofits to augment character behavior',
-    icon: Zap,
+    icon: IconTransform,
   },
 }
 

@@ -1,6 +1,7 @@
-import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, Puzzle } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe } from 'lucide-react'
+import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
@@ -8,27 +9,37 @@ import { generateApi } from '@/api/generate'
 import { embeddingsApi } from '@/api/embeddings'
 import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
+import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
 import { getPersonaAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
-import type { MessageAttachment, PersonaAddon } from '@/types/api'
+import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import { databankApi } from '@/api/databank'
+import { resolveMacros } from '@/api/macros'
+import type { AutocompleteResult } from '@/api/databank'
 import styles from './InputArea.module.css'
 import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
+import { unlockNotificationAudio } from '@/lib/notificationAudio'
+import { unlockTTSAudio } from '@/lib/ttsAudio'
 
 interface InputAreaProps {
   chatId: string
 }
 
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+const queueModLabel = isMac ? 'Cmd' : 'Ctrl'
+
 export default function InputArea({ chatId }: InputAreaProps) {
   const navigate = useNavigate()
   const [text, setText] = useState('')
   const [dryRunning, setDryRunning] = useState(false)
+  const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
-  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons'>(null)
-  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons'>(null)
+  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank'>(null)
+  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
   const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
@@ -37,9 +48,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [hashQuery, setHashQuery] = useState<string | null>(null)
+  const [hashStartIndex, setHashStartIndex] = useState(0)
+  const [databankResults, setDatabankResults] = useState<AutocompleteResult[]>([])
+  const [databankActiveIdx, setDatabankActiveIdx] = useState(0)
+  const databankDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
+  const queueLockRef = useRef(false)
+  const touchTimerRef = useRef<number>(0)
   const isStreaming = useStore((s) => s.isStreaming)
   const activeGenerationId = useStore((s) => s.activeGenerationId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -49,6 +67,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const activePersonaId = useStore((s) => s.activePersonaId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const regenFeedback = useStore((s) => s.regenFeedback)
+  const retainCouncilForRegens = useStore((s) => s.councilSettings.toolsSettings.retainResultsForRegens)
   const guidedGenerations = useStore((s) => s.guidedGenerations)
   const quickReplySets = useStore((s) => s.quickReplySets)
   const personas = useStore((s) => s.personas)
@@ -106,11 +125,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
     else delete newSelections[field]
     setAltFieldSelections(newSelections)
     try {
-      const chat = await chatsApi.get(chatId, { messages: false })
-      const metadata = { ...(chat.metadata || {}) }
-      if (Object.keys(newSelections).length > 0) metadata.alternate_field_selections = newSelections
-      else delete metadata.alternate_field_selections
-      await chatsApi.update(chatId, { metadata })
+      // Atomic merge — server re-reads the latest chat row so background
+      // writers (post-generation expression detection, council caching,
+      // deferred WI/chat var persistence) cannot clobber this selection.
+      // Send `null` to delete the key when no fields are selected.
+      await chatsApi.patchMetadata(chatId, {
+        alternate_field_selections: Object.keys(newSelections).length > 0 ? newSelections : null,
+      })
     } catch (err) {
       console.error('[AltFields] Failed to save:', err)
     }
@@ -118,16 +139,34 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   // Track persona add-ons for the active persona
   const [personaAddons, setPersonaAddons] = useState<PersonaAddon[]>([])
-  const hasAddons = personaAddons.length > 0
+  // Track global add-ons attached to the active persona
+  const [attachedGlobalAddons, setAttachedGlobalAddons] = useState<(GlobalAddon & { enabled: boolean })[]>([])
+  const hasAddons = personaAddons.length > 0 || attachedGlobalAddons.length > 0
 
   useEffect(() => {
-    if (!activePersonaId) { setPersonaAddons([]); return }
+    if (!activePersonaId) { setPersonaAddons([]); setAttachedGlobalAddons([]); return }
     personasApi.get(activePersonaId)
-      .then((p) => {
+      .then(async (p) => {
         const raw = p.metadata?.addons
         setPersonaAddons(Array.isArray(raw) ? raw : [])
+        // Resolve attached global addons
+        const refs: AttachedGlobalAddon[] = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons : []
+        if (refs.length > 0) {
+          try {
+            const globalRes = await globalAddonsApi.list({ limit: 200, offset: 0 })
+            const refMap = new Map(refs.map(r => [r.id, r.enabled]))
+            const resolved = globalRes.data
+              .filter(g => refMap.has(g.id))
+              .map(g => ({ ...g, enabled: refMap.get(g.id)! }))
+            setAttachedGlobalAddons(resolved)
+          } catch {
+            setAttachedGlobalAddons([])
+          }
+        } else {
+          setAttachedGlobalAddons([])
+        }
       })
-      .catch(() => setPersonaAddons([]))
+      .catch(() => { setPersonaAddons([]); setAttachedGlobalAddons([]) })
   }, [activePersonaId])
 
   // Listen for persona changes via store to keep addons in sync
@@ -138,6 +177,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (p) {
       const raw = p.metadata?.addons
       setPersonaAddons(Array.isArray(raw) ? raw : [])
+      // Update global addon enabled state from store
+      const refs: AttachedGlobalAddon[] = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons : []
+      setAttachedGlobalAddons(prev => {
+        const refMap = new Map(refs.map(r => [r.id, r.enabled]))
+        return prev
+          .filter(g => refMap.has(g.id))
+          .map(g => ({ ...g, enabled: refMap.get(g.id)! }))
+      })
     }
   }, [storePersonas, activePersonaId])
 
@@ -156,6 +203,23 @@ export default function InputArea({ chatId }: InputAreaProps) {
       toast.error('Failed to toggle add-on')
     }
   }, [activePersonaId, personaAddons])
+
+  const handleToggleGlobalAddon = useCallback(async (globalAddonId: string) => {
+    if (!activePersonaId) return
+    const nextAttached = attachedGlobalAddons.map((a) => a.id === globalAddonId ? { ...a, enabled: !a.enabled } : a)
+    setAttachedGlobalAddons(nextAttached)
+    try {
+      const p = await personasApi.get(activePersonaId)
+      const refs: AttachedGlobalAddon[] = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons : []
+      const nextRefs = refs.map((r) => r.id === globalAddonId ? { ...r, enabled: !r.enabled } : r)
+      const newMeta = { ...(p.metadata || {}), attached_global_addons: nextRefs }
+      const updated = await personasApi.update(activePersonaId, { metadata: newMeta })
+      useStore.getState().updatePersona(activePersonaId, updated)
+    } catch {
+      setAttachedGlobalAddons(attachedGlobalAddons)
+      toast.error('Failed to toggle global add-on')
+    }
+  }, [activePersonaId, attachedGlobalAddons])
 
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
@@ -228,23 +292,85 @@ export default function InputArea({ chatId }: InputAreaProps) {
     return () => clearTimeout(timer)
   }, [openPopover, renderPopover])
 
+  // Databank # autocomplete — search when hash query changes
+  useEffect(() => {
+    if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current)
+    if (hashQuery === null || hashQuery.length === 0) {
+      if (openPopover === 'databank') setOpenPopover(null)
+      setDatabankResults([])
+      return
+    }
+    databankDebounceRef.current = setTimeout(async () => {
+      try {
+        const params: { q: string; chatId?: string; characterId?: string } = { q: hashQuery }
+        if (chatId) params.chatId = chatId
+        if (activeCharacterId) params.characterId = activeCharacterId
+        const res = await databankApi.autocomplete(params)
+        const results = res.data || []
+        setDatabankResults(results)
+        setDatabankActiveIdx(0)
+        if (results.length > 0) {
+          setOpenPopover('databank')
+        } else if (openPopover === 'databank') {
+          setOpenPopover(null)
+        }
+      } catch {
+        setDatabankResults([])
+      }
+    }, 200)
+    return () => { if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hashQuery, chatId, activeCharacterId])
+
   // ResizeObserver — set --lcs-input-safe-zone on parent so scroll padding stays in sync
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const parent = el.parentElement
     if (!parent) return
+    const isIOSPwa = document.documentElement.hasAttribute('data-ios-pwa')
 
     const update = () => {
       const h = el.offsetHeight
-      const bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
+      // On iOS PWA, read --app-keyboard-inset-bottom directly instead of
+      // getComputedStyle(el).bottom. The CSS `bottom` property transitions,
+      // so the computed value may be mid-animation when the ResizeObserver
+      // fires (triggered by the instant padding-bottom change). The CSS
+      // variable is set synchronously by JS and always reflects the final value.
+      let bottomOffset: number
+      if (isIOSPwa) {
+        const rootStyle = getComputedStyle(document.documentElement)
+        bottomOffset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
+      } else {
+        bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
+      }
       parent.style.setProperty('--lcs-input-safe-zone', `${h + bottomOffset + 16}px`)
     }
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
     update()
-    return () => ro.disconnect()
+
+    // On iOS PWA, the virtual keyboard changes `bottom` via CSS variable but
+    // doesn't change the element's size — ResizeObserver alone won't catch it.
+    // Listen to visualViewport resize (keyboard open/close) and re-compute.
+    let vpFrame = 0
+    const onViewportResize = () => {
+      // Run after main.tsx's syncViewportVars (also uses requestAnimationFrame)
+      cancelAnimationFrame(vpFrame)
+      vpFrame = requestAnimationFrame(update)
+    }
+    if (isIOSPwa) {
+      window.visualViewport?.addEventListener('resize', onViewportResize)
+    }
+
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(vpFrame)
+      if (isIOSPwa) {
+        window.visualViewport?.removeEventListener('resize', onViewportResize)
+      }
+    }
   }, [])
 
   // Document-level Escape to stop generation
@@ -286,6 +412,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
     charactersApi.get(activeCharacterId).then((c) => setCharacterName(c.name)).catch(() => {})
   }, [activeCharacterId])
 
+  const DOCUMENT_EXTENSIONS = new Set([
+    '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.xml',
+    '.html', '.htm', '.yaml', '.yml', '.log', '.rst', '.rtf',
+  ])
+
+  const isDocumentFile = useCallback((file: File) => {
+    const ext = file.name.lastIndexOf('.') >= 0 ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
+    return DOCUMENT_EXTENSIONS.has(ext)
+  }, [DOCUMENT_EXTENSIONS])
+
   const handleAttachFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return
     setUploading(true)
@@ -293,10 +429,27 @@ export default function InputArea({ chatId }: InputAreaProps) {
       for (const file of Array.from(files)) {
         const isImage = file.type.startsWith('image/')
         const isAudio = file.type.startsWith('audio/')
-        if (!isImage && !isAudio) {
-          toast.error(`Unsupported file type: ${file.type}`, { title: 'Upload Failed' })
+        const isDoc = isDocumentFile(file)
+
+        if (isDoc) {
+          // Document files → upload to chat databank for persistent reference
+          try {
+            const chatLabel = characterName ? `${characterName} Chat` : 'Chat Documents'
+            await databankApi.attachToChat(file, chatId, chatLabel)
+            const docName = file.name.replace(/\.[^.]+$/, '')
+            toast.success(`"${docName}" added to chat databank`, { duration: 3000 })
+          } catch (err: any) {
+            toast.error(err?.body?.error || err?.message || `Failed to upload ${file.name}`, { title: 'Upload Failed' })
+          }
           continue
         }
+
+        if (!isImage && !isAudio) {
+          toast.error(`Unsupported file type: ${file.name}`, { title: 'Upload Failed' })
+          continue
+        }
+
+        // Image/audio → inline attachment as before
         const image = await imagesApi.upload(file)
         const att: MessageAttachment & { previewUrl?: string } = {
           type: isImage ? 'image' : 'audio',
@@ -316,11 +469,66 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [])
+  }, [isDocumentFile, chatId, characterName])
 
   const removeAttachment = useCallback((imageId: string) => {
     setPendingAttachments((prev) => prev.filter((a) => a.image_id !== imageId))
   }, [])
+
+  // Detect trailing consecutive user messages (queued messages awaiting generation)
+  const hasQueuedMessages = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].extra?.hidden) continue
+      return messages[i].is_user
+    }
+    return false
+  }, [messages])
+
+  const handleQueueMessage = useCallback(async () => {
+    if (sendingRef.current || isStreaming) return
+    const content = text.trim()
+    const attachments = pendingAttachments.length > 0
+      ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)
+      : undefined
+    if (!content && !attachments) return
+
+    sendingRef.current = true
+    setText('')
+    setPendingAttachments([])
+    if (saveDraftInput) {
+      try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
+    }
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+        textareaRef.current.focus()
+      }
+    })
+
+    try {
+      const effectivePersonaId = sendPersonaId || activePersonaId
+      const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || 'User'
+      const extra: Record<string, any> = {}
+      if (effectivePersonaId) extra.persona_id = effectivePersonaId
+      if (attachments) extra.attachments = attachments
+
+      const msg = await messagesApi.create(chatId, {
+        is_user: true,
+        name: effectivePersonaName,
+        content: content || '(attached)',
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+      })
+      addMessage(msg)
+      if (sendPersonaId) setSendPersonaId(null)
+      toast.info('Message queued', { duration: 1500 })
+    } catch (err: any) {
+      console.error('[InputArea] Failed to queue message:', err)
+      toast.error(err?.body?.error || err?.message || 'Failed to queue message')
+    } finally {
+      sendingRef.current = false
+    }
+  }, [text, chatId, isStreaming, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput])
 
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
@@ -380,9 +588,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
         startStreaming(res.generationId)
         consumeOneshotGuides()
         if (sendPersonaId) setSendPersonaId(null)
-      } else {
-        // Empty send = silent continue (nudge AI to generate)
+      } else if (hasQueuedMessages) {
+        // Queued user messages waiting — trigger normal generation
         beginStreaming()
+        const res = await generateApi.start(genOpts)
+        if (generationNonceRef.current !== nonce) return
+        startStreaming(res.generationId)
+        consumeOneshotGuides()
+      } else {
+        // Empty send with no queued messages = silent continue (nudge)
+        beginStreaming(undefined, 'continue')
         const res = await generateApi.continueGeneration(genOpts)
         if (generationNonceRef.current !== nonce) return
         startStreaming(res.generationId)
@@ -397,7 +612,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput])
+  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages])
 
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isStreaming) return
@@ -449,6 +664,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         persona_id: activePersonaId || undefined,
         preset_id: getActivePresetForGeneration() || undefined,
         generation_type: 'normal',
+        retain_council: retainCouncilForRegens || undefined,
       }
       if (feedback) {
         genOpts.regen_feedback = feedback
@@ -467,7 +683,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Regeneration Failed' })
     }
-  }, [chatId, isStreaming, messages, activeProfileId, activePersonaId, getActivePresetForGeneration, regenFeedback.position, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, messages, activeProfileId, activePersonaId, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleRegenerate = useCallback(() => {
     if (isStreaming) return
@@ -484,13 +700,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const handleContinue = useCallback(async () => {
     if (isStreaming) return
     const nonce = ++generationNonceRef.current
-    beginStreaming()
+    beginStreaming(undefined, 'continue')
     try {
       const res = await generateApi.continueGeneration({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
         preset_id: getActivePresetForGeneration() || undefined,
+        retain_council: retainCouncilForRegens || undefined,
       })
       if (generationNonceRef.current !== nonce) return
       startStreaming(res.generationId)
@@ -597,31 +814,147 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [chatId, dryRunning, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, openModal, setStreamingError])
 
+  const handleResolveMacros = useCallback(async () => {
+    if (resolvingMacros || isStreaming) return
+    const template = text.trim()
+    if (!template) {
+      toast.info('Nothing to resolve')
+      return
+    }
+    setResolvingMacros(true)
+    try {
+      const res = await resolveMacros({
+        template: text,
+        chat_id: chatId,
+        character_id: activeCharacterId || undefined,
+        persona_id: activePersonaId || undefined,
+        connection_id: activeProfileId || undefined,
+      })
+      if (res.text === text) {
+        toast.info('No macros found to resolve')
+      } else {
+        setText(res.text)
+        const warns = res.diagnostics.filter((d) => d.level === 'warning' || d.level === 'error')
+        if (warns.length > 0) {
+          toast.warning(`Macros resolved with ${warns.length} warning${warns.length !== 1 ? 's' : ''}`)
+        } else {
+          toast.success('Macros resolved')
+        }
+        requestAnimationFrame(() => textareaRef.current?.focus())
+      }
+    } catch (err: any) {
+      console.error('[InputArea] Macro resolution failed:', err)
+      const msg = err?.body?.error || err?.message || 'Failed to resolve macros'
+      toast.error(msg)
+    } finally {
+      setResolvingMacros(false)
+    }
+  }, [text, chatId, resolvingMacros, isStreaming, activeCharacterId, activePersonaId, activeProfileId])
+
+  const handleHashSelect = useCallback((result: { slug: string; name: string }) => {
+    const before = text.slice(0, hashStartIndex)
+    const afterCursor = text.slice(hashStartIndex + 1 + (hashQuery?.length ?? 0))
+    const newText = `${before}#${result.slug} ${afterCursor}`
+    setText(newText)
+    setHashQuery(null)
+    setOpenPopover(null)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [text, hashStartIndex, hashQuery])
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Intercept keys when databank autocomplete popover is active
+      if (openPopover === 'databank' && databankResults.length > 0) {
+        if (e.key === 'ArrowUp') { e.preventDefault(); setDatabankActiveIdx((i) => Math.max(0, i - 1)); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); setDatabankActiveIdx((i) => Math.min(databankResults.length - 1, i + 1)); return }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleHashSelect(databankResults[databankActiveIdx]); return }
+        if (e.key === 'Escape') { e.preventDefault(); setHashQuery(null); setOpenPopover(null); return }
+      }
+
+      // Cmd+L (Mac) / Ctrl+L (other) — resolve macros in input
+      if (e.key === 'l' && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault()
+        handleResolveMacros()
+        return
+      }
+
       if (e.key === 'Enter') {
+        const queueMod = isMac ? e.metaKey : e.ctrlKey
         if (enterToSend) {
-          if (!e.shiftKey) {
+          if (queueMod) {
+            e.preventDefault()
+            handleQueueMessage()
+          } else if (!e.shiftKey) {
             e.preventDefault()
             handleSend()
           }
         } else {
-          if (e.ctrlKey || e.metaKey) {
+          if (queueMod) {
             e.preventDefault()
-            handleSend()
+            handleQueueMessage()
           }
         }
       }
     },
-    [enterToSend, handleSend]
+    [enterToSend, handleSend, handleQueueMessage, handleResolveMacros, openPopover, databankResults, databankActiveIdx, handleHashSelect]
   )
+
+  // Send button: cmd+click (mac) / ctrl+click (other) queues, normal click sends
+  const handleSendClick = useCallback((e: React.MouseEvent) => {
+    unlockNotificationAudio()
+    unlockTTSAudio()
+    if (queueLockRef.current) {
+      queueLockRef.current = false
+      return
+    }
+    const queueMod = isMac ? e.metaKey : e.ctrlKey
+    if (queueMod && (text.trim() || pendingAttachments.length > 0)) {
+      handleQueueMessage()
+    } else {
+      handleSend()
+    }
+  }, [text, pendingAttachments, handleQueueMessage, handleSend])
+
+  // Long-press on send button (mobile, 2s) queues the message
+  const handleSendTouchStart = useCallback(() => {
+    if (!text.trim() && pendingAttachments.length === 0) return
+    touchTimerRef.current = window.setTimeout(() => {
+      queueLockRef.current = true
+      handleQueueMessage()
+    }, 2000)
+  }, [text, pendingAttachments, handleQueueMessage])
+
+  const handleSendTouchEnd = useCallback(() => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = 0
+    }
+  }, [])
 
   // Auto-resize textarea
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value)
+    const val = e.target.value
+    setText(val)
     const ta = e.target
     ta.style.height = 'auto'
     ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'
+
+    // Detect # trigger for databank autocomplete
+    const cursorPos = ta.selectionStart ?? val.length
+    const textBeforeCursor = val.slice(0, cursorPos)
+    const hashIdx = textBeforeCursor.lastIndexOf('#')
+    if (hashIdx >= 0) {
+      const charBefore = hashIdx > 0 ? textBeforeCursor[hashIdx - 1] : ' '
+      if (hashIdx === 0 || /\s/.test(charBefore)) {
+        const fragment = textBeforeCursor.slice(hashIdx + 1)
+        if (!fragment.includes(' ') && fragment.length > 0) {
+          setHashQuery(fragment)
+          setHashStartIndex(hashIdx)
+          return
+        }
+      }
+    }
+    setHashQuery(null)
   }, [])
 
   const toggleGuide = useCallback((id: string) => {
@@ -631,6 +964,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   return (
     <div
+      data-component="InputArea"
       ref={containerRef}
       className={styles.container}
       style={screenCornerRadius ? {
@@ -646,8 +980,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
         onClose={() => setAuthorsNoteOpen(false)}
       />
 
-      {/* Action bar — hidden during streaming */}
+      {/* Action bar — home button always visible, rest hidden during streaming */}
       <div data-spindle-mount="chat_toolbar">
+        {isStreaming && (
+          <div className={styles.actionBar}>
+            <button type="button" className={styles.actionBtn} onClick={() => navigate('/')} title="Back to home">
+              <Home size={14} />
+            </button>
+          </div>
+        )}
         {!isStreaming && (
           <div className={styles.actionBar}>
             <button type="button" className={styles.actionBtn} onClick={() => navigate('/')} title="Back to home">
@@ -669,17 +1010,36 @@ export default function InputArea({ chatId }: InputAreaProps) {
               <UserCircle size={14} />
               {sendPersonaId && <span className={styles.badge}>1</span>}
             </button>
-            {hasAltFields && (
-              <button
-                type="button"
-                className={clsx(styles.actionBtn, openPopover === 'altFields' && styles.actionBtnActive)}
-                onClick={() => setOpenPopover((p) => (p === 'altFields' ? null : 'altFields'))}
-                title="Alternate fields"
-              >
-                <Layers size={14} />
-                {Object.keys(altFieldSelections).length > 0 && <span className={styles.badge}>{Object.keys(altFieldSelections).length}</span>}
-              </button>
-            )}
+            {hasAltFields && (() => {
+              const selectionCount = Object.keys(altFieldSelections).length
+              const hasSelection = selectionCount > 0
+              // Build a descriptive title so the user can confirm what's bound
+              // to this chat without opening the popover.
+              const titleParts: string[] = []
+              for (const [field, variantId] of Object.entries(altFieldSelections)) {
+                const variant = altFieldsData[field]?.find((v) => v.id === variantId)
+                if (variant) titleParts.push(`${field}: ${variant.label}`)
+              }
+              const title = hasSelection
+                ? `Alternate fields — ${titleParts.join(', ')}`
+                : 'Alternate fields'
+              return (
+                <button
+                  type="button"
+                  className={clsx(
+                    styles.actionBtn,
+                    openPopover === 'altFields' && styles.actionBtnActive,
+                    hasSelection && styles.actionBtnHasSelection,
+                  )}
+                  onClick={() => setOpenPopover((p) => (p === 'altFields' ? null : 'altFields'))}
+                  title={title}
+                  aria-label={title}
+                >
+                  <Layers size={14} />
+                  {hasSelection && <span className={styles.badge}>{selectionCount}</span>}
+                </button>
+              )
+            })()}
             {hasAddons && (
               <button
                 type="button"
@@ -687,7 +1047,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
                 onClick={() => setOpenPopover((p) => (p === 'addons' ? null : 'addons'))}
                 title="Persona add-ons"
               >
-                <Puzzle size={14} />
+                <IconPlaylistAdd size={14} />
               </button>
             )}
             <button
@@ -1024,7 +1384,28 @@ export default function InputArea({ chatId }: InputAreaProps) {
                 >
                   <span className={styles.personaMain}>
                     <Eye size={14} />
-                    <span>Dry Run</span>
+                    <span className={styles.personaNameGroup}>
+                      <span>Dry Run</span>
+                      <span className={styles.personaTitle}>Preview the full prompt sent to the AI without generating</span>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.popRowBtn}
+                  onClick={() => {
+                    setOpenPopover(null)
+                    handleResolveMacros()
+                  }}
+                  disabled={resolvingMacros}
+                  style={resolvingMacros ? { opacity: 0.5 } : undefined}
+                >
+                  <span className={styles.personaMain}>
+                    <Braces size={14} />
+                    <span className={styles.personaNameGroup}>
+                      <span>Resolve Macros</span>
+                      <span className={styles.personaTitle}>Replace macros in input text ({isMac ? '⌘' : 'Ctrl'}+L)</span>
+                    </span>
                   </span>
                 </button>
               </div>
@@ -1039,9 +1420,35 @@ export default function InputArea({ chatId }: InputAreaProps) {
                 const variants = altFieldsData[field]
                 if (!Array.isArray(variants) || variants.length === 0) return null
                 const selectedId = altFieldSelections[field] || ''
+                const isOverridden = !!selectedId
                 return (
-                  <div key={field} className={styles.popRowBtn} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'default' }}>
-                    <span style={{ textTransform: 'capitalize' }}>{field}</span>
+                  <div
+                    key={field}
+                    className={styles.popRowBtn}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'default',
+                      // Subtle accent border on rows that have an active override
+                      // so the user sees at a glance which fields are bound.
+                      borderLeft: isOverridden
+                        ? '2px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
+                        : '2px solid transparent',
+                      paddingLeft: isOverridden ? 6 : 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        textTransform: 'capitalize',
+                        color: isOverridden
+                          ? 'var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
+                          : undefined,
+                        fontWeight: isOverridden ? 600 : undefined,
+                      }}
+                    >
+                      {field}
+                    </span>
                     <select
                       style={{
                         marginLeft: 8,
@@ -1050,7 +1457,9 @@ export default function InputArea({ chatId }: InputAreaProps) {
                         padding: '3px 6px',
                         fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))',
                         background: 'var(--lumiverse-fill-hover)',
-                        border: '1px solid var(--lumiverse-border)',
+                        border: isOverridden
+                          ? '1px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.6))'
+                          : '1px solid var(--lumiverse-border)',
                         borderRadius: 6,
                         color: 'var(--lumiverse-text)',
                         outline: 'none',
@@ -1075,20 +1484,70 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
           {renderPopover === 'addons' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
-              <div className={styles.quickSetName}>Persona Add-Ons</div>
-              {personaAddons.length === 0 && <div className={styles.popEmpty}>No add-ons configured.</div>}
-              {personaAddons.map((addon) => (
+              {personaAddons.length > 0 && (
+                <>
+                  <div className={styles.quickSetName}>Persona Add-Ons</div>
+                  {personaAddons.map((addon) => (
+                    <button
+                      key={addon.id}
+                      type="button"
+                      className={clsx(styles.popRowBtn, addon.enabled && styles.popRowBtnActive)}
+                      onClick={() => handleToggleAddon(addon.id)}
+                    >
+                      <span className={styles.personaMain}>
+                        <IconPlaylistAdd size={13} style={{ opacity: addon.enabled ? 1 : 0.4, color: addon.enabled ? 'var(--lumiverse-primary)' : undefined }} />
+                        <span>{addon.label || 'Untitled add-on'}</span>
+                      </span>
+                      <span className={styles.popMeta}>{addon.enabled ? 'ON' : 'OFF'}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {attachedGlobalAddons.length > 0 && (
+                <>
+                  {personaAddons.length > 0 && <div className={styles.popDivider} />}
+                  <div className={styles.quickSetName}>Global Add-Ons</div>
+                  {attachedGlobalAddons.map((addon) => (
+                    <button
+                      key={addon.id}
+                      type="button"
+                      className={clsx(styles.popRowBtn, addon.enabled && styles.popRowBtnActive)}
+                      onClick={() => handleToggleGlobalAddon(addon.id)}
+                    >
+                      <span className={styles.personaMain}>
+                        <Globe size={13} style={{ opacity: addon.enabled ? 1 : 0.4, color: addon.enabled ? 'var(--lumiverse-info, #42a5f5)' : undefined }} />
+                        <span>{addon.label || 'Untitled global add-on'}</span>
+                      </span>
+                      <span className={styles.popMeta}>{addon.enabled ? 'ON' : 'OFF'}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {personaAddons.length === 0 && attachedGlobalAddons.length === 0 && (
+                <div className={styles.popEmpty}>No add-ons configured.</div>
+              )}
+            </div>
+          )}
+
+          {renderPopover === 'databank' && (
+            <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              <div className={styles.quickSetName}>Documents</div>
+              {databankResults.length === 0 && <div className={styles.popEmpty}>No matching documents.</div>}
+              {databankResults.map((r, i) => (
                 <button
-                  key={addon.id}
+                  key={`${r.databankId}-${r.slug}`}
                   type="button"
-                  className={clsx(styles.popRowBtn, addon.enabled && styles.popRowBtnActive)}
-                  onClick={() => handleToggleAddon(addon.id)}
+                  className={clsx(styles.popRowBtn, i === databankActiveIdx && styles.popRowBtnActive)}
+                  onMouseDown={(e) => { e.preventDefault(); handleHashSelect(r) }}
+                  onMouseEnter={() => setDatabankActiveIdx(i)}
                 >
                   <span className={styles.personaMain}>
-                    <Puzzle size={13} style={{ opacity: addon.enabled ? 1 : 0.4, color: addon.enabled ? 'var(--lumiverse-primary)' : undefined }} />
-                    <span>{addon.label || 'Untitled add-on'}</span>
+                    <FileText size={13} style={{ opacity: 0.6 }} />
+                    <span className={styles.personaNameGroup}>
+                      <span>{r.name}</span>
+                      <span className={styles.personaTitle}>{r.databankName}</span>
+                    </span>
                   </span>
-                  <span className={styles.popMeta}>{addon.enabled ? 'ON' : 'OFF'}</span>
                 </button>
               ))}
             </div>
@@ -1123,7 +1582,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,audio/*"
+        accept="image/*,audio/*,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rst,.rtf"
         multiple
         style={{ display: 'none' }}
         onChange={(e) => handleAttachFiles(e.target.files)}
@@ -1173,9 +1632,24 @@ export default function InputArea({ chatId }: InputAreaProps) {
           <button
             type="button"
             className={styles.sendBtn}
-            onClick={handleSend}
-            title={text.trim() || pendingAttachments.length > 0 ? 'Send message' : 'Silent continue (nudge)'}
-            aria-label={text.trim() || pendingAttachments.length > 0 ? 'Send message' : 'Silent continue'}
+            onClick={handleSendClick}
+            onTouchStart={handleSendTouchStart}
+            onTouchEnd={handleSendTouchEnd}
+            onTouchCancel={handleSendTouchEnd}
+            title={
+              text.trim() || pendingAttachments.length > 0
+                ? `Send message (${queueModLabel}+click to queue)`
+                : hasQueuedMessages
+                  ? 'Send queued messages'
+                  : 'Silent continue (nudge)'
+            }
+            aria-label={
+              text.trim() || pendingAttachments.length > 0
+                ? 'Send message'
+                : hasQueuedMessages
+                  ? 'Send queued messages'
+                  : 'Silent continue'
+            }
           >
             <Send size={16} />
           </button>

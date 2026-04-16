@@ -11,6 +11,7 @@ set -euo pipefail
 #   ./start.sh --setup          Run setup wizard only
 #   ./start.sh --reset-password  Reset owner account password
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
+#   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
 #
 # Environment overrides:
@@ -91,7 +92,7 @@ _proot_bun() {
 
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 
-MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | migrate-st
+MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | migrate-st | kill-pkgs
 USE_RUNNER=true
 FORCE_BUILD=false
 for arg in "$@"; do
@@ -103,6 +104,7 @@ for arg in "$@"; do
     --setup)        MODE="setup" ;;
     --reset-password) MODE="reset-password" ;;
     --migrate-st|-m) MODE="migrate-st" ;;
+    --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
     --help|-h)
       sed -n '3,15p' "$0" | sed 's/^# \?//'
@@ -437,6 +439,22 @@ run_migrate_st() {
   (cd "$BACKEND_DIR" && _bun run migrate:st)
 }
 
+# ─── Kill packages (nuke + reinstall) ──────────────────────────────────────
+
+kill_pkgs() {
+  warn "Removing lockfiles and node_modules..."
+
+  rm -f "$BACKEND_DIR/bun.lock"
+  rm -f "$FRONTEND_DIR/bun.lock"
+  rm -rf "$BACKEND_DIR/node_modules"
+  rm -rf "$FRONTEND_DIR/node_modules"
+
+  ok "Cleaned lockfiles and node_modules from backend and frontend"
+
+  install_deps "$BACKEND_DIR" "backend"
+  ok "Backend dependencies reinstalled (frontend deps will install on next build)"
+}
+
 # ─── Install dependencies ───────────────────────────────────────────────────
 
 install_deps() {
@@ -456,18 +474,18 @@ install_deps() {
     # blocks certain syscalls that bun install needs, causing "Bad system call"
     # (SIGSYS) errors. _proot_bun handles both linker and syscall issues.
     (cd "$dir" && _proot_bun install --backend=copyfile)
-    # Rollup's native binary for Android ARM64 isn't auto-resolved by Bun on
-    # Termux — add it explicitly so Vite/Rollup can build the frontend.
-    (cd "$dir" && _proot_bun add @rollup/rollup-android-arm64 --backend=copyfile 2>/dev/null || true)
+    # Rolldown's native binary for Android ARM64 isn't auto-resolved by Bun on
+    # Termux — add it explicitly so Vite can build the frontend.
+    (cd "$dir" && _proot_bun add @rolldown/binding-android-arm64 --backend=copyfile 2>/dev/null || true)
   elif [[ "$IS_PROOT" == true ]]; then
     # Inside proot-distro: proot already intercepts syscalls, just need copyfile backend
     if [[ -d "$HOME/.bun/install/cache" ]]; then
       rm -rf "$HOME/.bun/install/cache"
     fi
     (cd "$dir" && bun install --backend=copyfile)
-    # Rollup's native binary for Android ARM64 isn't auto-resolved by Bun in
-    # proot — add it explicitly so Vite/Rollup can build the frontend.
-    (cd "$dir" && bun add @rollup/rollup-android-arm64 --backend=copyfile 2>/dev/null || true)
+    # Rolldown's native binary for Android ARM64 isn't auto-resolved by Bun in
+    # proot — add it explicitly so Vite can build the frontend.
+    (cd "$dir" && bun add @rolldown/binding-android-arm64 --backend=copyfile 2>/dev/null || true)
   else
     (cd "$dir" && bun install)
   fi
@@ -527,7 +545,7 @@ start_backend() {
     if [[ "$MODE" == "dev" ]]; then
       runner_args="-- --dev"
     fi
-    (cd "$BACKEND_DIR" && _bun run scripts/runner.tsx $runner_args) || {
+    (cd "$BACKEND_DIR" && _bun run scripts/runner.ts $runner_args) || {
       warn "Visual runner failed — falling back to plain mode..."
       USE_RUNNER=false
     }
@@ -603,5 +621,8 @@ case "$MODE" in
     ;;
   migrate-st)
     run_migrate_st
+    ;;
+  kill-pkgs)
+    kill_pkgs
     ;;
 esac

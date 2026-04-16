@@ -195,14 +195,20 @@
   height: 48px;
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1px;
   border-radius: 8px;
   background: transparent;
   border: none;
   color: var(--lumiverse-text-muted);
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.tabBtnLabeled {
+  height: 56px;
 }
 
 .tabBtn:hover {
@@ -220,6 +226,25 @@
 .wrapperLeft .tabBtnActive {
   box-shadow: inset -3px 0 0 var(--lumiverse-primary);
   border-radius: 8px 0 0 8px;
+}
+
+/* ── Tab label ── */
+
+.tabLabel {
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--lumiverse-text-dim);
+  text-align: center;
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.tabBtnActive .tabLabel {
+  color: var(--lumiverse-primary);
 }
 
 /* ── Extension tab styles ── */
@@ -325,9 +350,18 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   padding: 12px;
   position: relative;
+}
+
+/* iOS PWA: the drawer doesn't resize when the keyboard opens (layout viewport
+   stays full-screen). Keyboard-height padding at the bottom creates scroll room
+   so the focusin handler can scroll inputs above the keyboard even when the
+   panel's actual content is shorter than the container. */
+:global(html[data-ios-pwa]) .panelContent {
+  padding-bottom: calc(12px + var(--app-keyboard-inset-bottom, 0px));
 }
 
 .panelContentFull {
@@ -415,6 +449,11 @@
     width: 42px;
     height: 42px;
     flex-shrink: 0;
+  }
+
+  .tabBtnLabeled {
+    width: 52px;
+    height: 48px;
   }
 
   .tabBtnActive {

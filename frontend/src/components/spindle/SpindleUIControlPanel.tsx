@@ -1,4 +1,5 @@
-import { Eye, EyeOff, Layers } from 'lucide-react'
+import { Eye, EyeOff } from 'lucide-react'
+import { IconApps } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import styles from './SpindleUIControlPanel.module.css'
 import clsx from 'clsx'
@@ -27,7 +28,7 @@ export default function SpindleUIControlPanel() {
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <Layers size={13} />
+        <IconApps size={13} />
         <span className={styles.headerLabel}>Extension UI ({allItems.length})</span>
         <div className={styles.headerActions}>
           <button className={styles.smallBtn} onClick={showAllPlacements} title="Show All">

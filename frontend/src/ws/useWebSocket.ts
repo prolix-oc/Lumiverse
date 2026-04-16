@@ -2,10 +2,12 @@ import { useEffect, useRef } from 'react'
 import { wsClient } from './client'
 import { EventType } from './events'
 import { useStore } from '@/store'
+import { hasUnsavedSettings } from '@/store/slices/settings'
 import { routeBackendMessage } from '@/lib/spindle/loader'
 import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
 import { toast } from '@/lib/toast'
+import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -22,6 +24,7 @@ import type {
 } from '@/types/ws-events'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
+import { playNotificationPing } from '@/lib/notificationAudio'
 
 /**
  * Fetch the latest messages using the tail endpoint (single request).
@@ -95,6 +98,17 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
+          // During a continue, the backend updates the target message with combined
+          // content right before GENERATION_ENDED. Skip the update while streaming
+          // to avoid a brief content duplication frame — reconciliation after
+          // GENERATION_ENDED will pick up the final state.
+          if (state.isStreaming && state.streamingGenerationType === 'continue') {
+            const msgs = state.messages
+            const lastAssistant = msgs.length > 0 ? msgs[msgs.length - 1] : null
+            if (lastAssistant && !lastAssistant.is_user && lastAssistant.id === payload.message.id) {
+              return
+            }
+          }
           state.updateMessage(payload.message.id, payload.message)
         }
       }),
@@ -129,15 +143,38 @@ export function useWebSocket() {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
         }
+        // Track as a chat head so it appears if user navigates away
+        state.addChatHead({
+          generationId: payload.generationId,
+          chatId: payload.chatId,
+          characterName: payload.characterName || 'Assistant',
+          characterId: payload.characterId,
+          avatarUrl: null, // resolved by the component via characterId
+          status: 'assembling',
+          model: '',
+          startedAt: Date.now(),
+        })
       }),
 
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
+          // Skip tokens already included in the pooled recovery content
+          if (state.lastPooledSeq != null && (payload as any).seq != null && (payload as any).seq <= state.lastPooledSeq) return
+          // Clear the watermark after the first new token arrives
+          if (state.lastPooledSeq != null) state.setLastPooledSeq(null as any)
           if (payload.type === 'reasoning') {
             state.appendStreamReasoning(payload.token)
           } else {
             state.appendStreamToken(payload.token)
+          }
+        }
+        // Update chat head status only on actual transitions (not every token)
+        if (payload.generationId) {
+          const newStatus = payload.type === 'reasoning' ? 'reasoning' as const : 'streaming' as const
+          const head = state.chatHeads.find((h) => h.generationId === payload.generationId)
+          if (head && head.status !== newStatus) {
+            state.updateChatHead(payload.generationId, { status: newStatus })
           }
         }
       }),
@@ -160,7 +197,15 @@ export function useWebSocket() {
               state.removeMessage(regenId)
             }
             state.setStreamingError(payload.error)
-            toast.error(payload.error, { title: 'Generation Failed' })
+            // Backend preserves any content that streamed before the failure
+            // (socket drop, upstream 5xx, etc.) and returns its messageId.
+            // Surface that in the toast so users know their partial response
+            // wasn't lost — it'll appear in the chat after reconciliation.
+            const partialSaved = !!payload.messageId && !!payload.content
+            toast.error(
+              partialSaved ? `${payload.error} — partial response saved.` : payload.error,
+              { title: 'Generation Failed' },
+            )
             // Reconcile message list on error so any backend-staged empty messages
             // are reflected (or removed if the backend cleaned them up).
             if (payload.chatId) {
@@ -187,6 +232,21 @@ export function useWebSocket() {
               })
             }
 
+            // Patch generation metrics onto the in-store message immediately so the
+            // detail pill can display tokenCount/TTFT/TPS before reconciliation completes.
+            if (payload.messageId && (payload.tokenCount != null || payload.generationMetrics)) {
+              const msg = state.messages.find((m) => m.id === payload.messageId)
+              if (msg) {
+                state.updateMessage(payload.messageId, {
+                  extra: {
+                    ...msg.extra,
+                    ...(payload.tokenCount != null ? { tokenCount: payload.tokenCount } : {}),
+                    ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
+                  },
+                })
+              }
+            }
+
             // In group chats, mark the character as spoken and clear responding state
             if (state.isGroupChat && state.activeGroupCharacterId) {
               state.markCharacterSpoken(state.activeGroupCharacterId)
@@ -198,37 +258,62 @@ export function useWebSocket() {
               store.getState().incrementBadgeCount()
             }
 
+            if (payload.messageId && typeof payload.content === 'string') {
+              triggerTTSAutoPlay(payload.messageId, payload.content)
+            }
+
             // End streaming immediately, then reconcile the full message list
             // from backend source-of-truth to avoid id/index race conditions.
+            // Image gen is deferred until AFTER reconciliation completes so its
+            // backend work (sidecar LLM scene analysis, DB reads) cannot delay
+            // message delivery and cause a perceived UI stall.
             state.endStreaming()
             fetchLatestMessages(payload.chatId).then((res) => {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
               }
-            }).catch(() => { /* ignore */ })
-
-            const latest = store.getState()
-            // Only trigger image gen when not in the middle of a group nudge loop
-            if (
-              !latest.isNudgeLoopActive &&
-              latest.imageGeneration.enabled &&
-              latest.imageGeneration.autoGenerate !== false &&
-              !latest.sceneGenerating
-            ) {
-              latest.setSceneGenerating(true)
-              imageGenApi.generate({
-                chatId: payload.chatId,
-                forceGeneration: !!latest.imageGeneration.forceGeneration,
-              }).then((res) => {
-                if (res.generated && res.imageDataUrl) {
-                  store.getState().setSceneBackground(res.imageDataUrl)
-                }
-              }).catch((err) => {
-                console.warn('[ImageGen] Auto-generate failed:', err)
-              }).finally(() => {
-                store.getState().setSceneGenerating(false)
-              })
+            }).catch(() => { /* ignore */ }).finally(() => {
+              const latest = store.getState()
+              // Don't trigger image gen if a new generation already started,
+              // or if we're in the middle of a group nudge loop.
+              if (
+                !latest.isStreaming &&
+                !latest.isNudgeLoopActive &&
+                latest.imageGeneration.enabled &&
+                latest.imageGeneration.autoGenerate !== false &&
+                !latest.sceneGenerating
+              ) {
+                latest.setSceneGenerating(true)
+                imageGenApi.generate({
+                  chatId: payload.chatId,
+                  forceGeneration: !!latest.imageGeneration.forceGeneration,
+                }).then((res) => {
+                  if (res.generated && res.imageDataUrl) {
+                    store.getState().setSceneBackground(res.imageDataUrl)
+                  }
+                }).catch((err) => {
+                  console.warn('[ImageGen] Auto-generate failed:', err)
+                }).finally(() => {
+                  store.getState().setSceneGenerating(false)
+                })
+              }
+            })
+          }
+        }
+        // Transition chat head to terminal state (it auto-dismisses after a delay).
+        // If the user is currently viewing this chat, dismiss & acknowledge instead —
+        // otherwise the persisted 'completed' head would spawn the moment they navigate away.
+        if (payload.chatId && payload.generationId) {
+          if (payload.chatId === state.activeChatId) {
+            state.removeChatHead(payload.chatId)
+          } else {
+            state.updateChatHead(payload.generationId, {
+              status: payload.error ? 'error' : 'completed',
+            })
+            // Ping when a backgrounded chat finishes successfully
+            if (!payload.error) {
+              playNotificationPing()
             }
           }
         }
@@ -266,6 +351,16 @@ export function useWebSocket() {
           })
         } else {
           state.stopStreaming()
+        }
+        // Transition chat head to stopped state (auto-dismisses after a delay).
+        // If the user is viewing this chat, dismiss & acknowledge instead so it
+        // doesn't reappear when they navigate away.
+        if (payload.chatId && payload.generationId) {
+          if (payload.chatId === state.activeChatId) {
+            state.removeChatHead(payload.chatId)
+          } else {
+            state.updateChatHead(payload.generationId, { status: 'stopped' })
+          }
         }
       }),
 
@@ -314,6 +409,24 @@ export function useWebSocket() {
           store.getState().reconcileRole(payload.role)
         }
         syncExtensions(true)
+
+        // Re-sync settings on every WS (re)connect. Covers two cases:
+        // 1. Page refresh: the old page's keepalive flush may have landed after
+        //    this page's initial loadSettings() — re-reading picks up those values.
+        // 2. Server restart while page is open: settings may have been written by
+        //    another tab or the server itself while we were disconnected.
+        if (!hasUnsavedSettings()) {
+          store.getState().loadSettings()
+        }
+      }),
+
+      // Re-sync settings when another tab (or the old page's keepalive flush)
+      // writes to the settings table. Skip if this tab has pending writes to
+      // avoid overwriting in-flight local changes with stale DB values.
+      wsClient.on(EventType.SETTINGS_UPDATED, () => {
+        if (!hasUnsavedSettings()) {
+          store.getState().loadSettings()
+        }
       }),
 
       wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string; character?: import('@/types/api').Character }) => {
@@ -341,11 +454,17 @@ export function useWebSocket() {
       }),
 
       // Council events
-      wsClient.on(EventType.COUNCIL_STARTED, () => {
+      wsClient.on(EventType.COUNCIL_STARTED, (payload: { chatId?: string }) => {
         const state = store.getState()
         state.setCouncilExecuting(true)
         state.setCouncilToolResults([])
         state.setCouncilExecutionResult(null)
+        state.setCouncilToolsFailure(null)
+        // Transition the chat head from assembling → council
+        if (payload?.chatId) {
+          const head = state.chatHeads.find((h) => h.chatId === payload.chatId)
+          if (head) state.updateChatHead(head.generationId, { status: 'council' })
+        }
       }),
 
       wsClient.on(EventType.COUNCIL_MEMBER_DONE, (payload: { results: CouncilToolResult[] }) => {
@@ -414,6 +533,45 @@ export function useWebSocket() {
         )
       }),
 
+      wsClient.on(EventType.SPINDLE_BULK_UPDATE_PROGRESS, (payload: { total: number; completed: number; failed: number; currentExtensionId?: string; currentName?: string; phase?: string }) => {
+        useStore.getState().setBulkUpdateStatus({
+          total: payload.total,
+          completed: payload.completed,
+          failed: payload.failed,
+          currentExtensionId: payload.currentExtensionId,
+          currentName: payload.currentName,
+        })
+      }),
+
+      wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {
+        const { total, updated, failed, errors } = payload
+        useStore.getState().setBulkUpdateStatus({
+          total,
+          completed: updated,
+          failed,
+          done: true,
+          errors,
+        })
+        if (total === 0) {
+          toast.info('No extensions to update')
+        } else if (failed === 0) {
+          toast.success(`Updated ${updated} extension${updated === 1 ? '' : 's'}`)
+        } else if (updated === 0) {
+          toast.error(`All ${failed} extension update${failed === 1 ? '' : 's'} failed. Check the console for details.`)
+          console.error('[Spindle] Bulk update errors:', errors)
+        } else {
+          toast.warning(`${updated} updated, ${failed} failed. Check the console for details.`)
+          console.error('[Spindle] Bulk update errors:', errors)
+        }
+        // Pick up new version metadata in the list
+        useStore.getState().loadExtensions()
+        // Clear progress state a few seconds after completion
+        setTimeout(() => {
+          const current = useStore.getState().bulkUpdateStatus
+          if (current?.done) useStore.getState().setBulkUpdateStatus(null)
+        }, 3000)
+      }),
+
       wsClient.on(EventType.SPINDLE_FRONTEND_MSG, (payload: { extensionId: string; data: unknown }) => {
         routeBackendMessage(payload.extensionId, payload.data)
       }),
@@ -426,8 +584,18 @@ export function useWebSocket() {
         store.getState().openSpindleModal(payload)
       }),
 
+      wsClient.on(EventType.SPINDLE_MODAL_RESULT, (payload: any) => {
+        // Server-initiated close (programmatic dismiss via handleModalClose).
+        // Use dismissSpindleModal (no WS echo) rather than closeSpindleModal.
+        store.getState().dismissSpindleModal(payload.requestId)
+      }),
+
       wsClient.on(EventType.SPINDLE_CONFIRM_OPEN, (payload: any) => {
         store.getState().openSpindleConfirm(payload)
+      }),
+
+      wsClient.on(EventType.SPINDLE_INPUT_PROMPT_OPEN, (payload: any) => {
+        store.getState().openInputPrompt(payload)
       }),
 
       wsClient.on(EventType.SPINDLE_TOAST, (payload: { extensionId: string; extensionName: string; type: 'success' | 'warning' | 'error' | 'info'; message: string; title?: string; duration?: number }) => {
@@ -439,16 +607,20 @@ export function useWebSocket() {
         toastFn(payload.message, { title: attributedTitle, duration: payload.duration })
       }),
 
-      wsClient.on(EventType.SPINDLE_THEME_OVERRIDES, (payload: { extensionId: string; extensionName: string; overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } } | null }) => {
+      wsClient.on(EventType.SPINDLE_THEME_OVERRIDES, (payload: { extensionId: string; extensionName: string; overrides: { paletteAccent?: { h: number; s: number; l: number }; variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } } | null }) => {
+        // If the user has muted this extension's theme, silently drop the update
+        if (store.getState().mutedExtensionThemes[payload.extensionId]) return
+
         const hasVars = payload.overrides?.variables && Object.keys(payload.overrides.variables).length > 0
         const hasModeVars = payload.overrides?.variablesByMode && (
           Object.keys(payload.overrides.variablesByMode.dark ?? {}).length > 0 ||
           Object.keys(payload.overrides.variablesByMode.light ?? {}).length > 0
         )
-        if (hasVars || hasModeVars) {
+        if (hasVars || hasModeVars || payload.overrides?.paletteAccent) {
           store.getState().setExtensionThemeOverride({
             extensionId: payload.extensionId,
             extensionName: payload.extensionName,
+            paletteAccent: payload.overrides?.paletteAccent,
             variables: payload.overrides!.variables ?? {},
             variablesByMode: payload.overrides!.variablesByMode,
           })
@@ -457,12 +629,27 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.SPINDLE_COMMANDS_CHANGED, (payload: { extensionId: string; extensionName: string; commands: Array<{ id: string; label: string; description: string; keywords?: string[]; scope?: 'global' | 'chat' | 'chat-idle' | 'landing' | 'character' }> }) => {
+        store.getState().setExtensionCommands({
+          extensionId: payload.extensionId,
+          extensionName: payload.extensionName,
+          commands: payload.commands,
+        })
+      }),
+
       // Legacy/event-bus bridge for message tag intercept notifications.
       // Some extensions emit MESSAGE_TAG_INTERCEPTED over WS and expect it
       // on the backend-message channel (ctx.onBackendMessage).
       wsClient.on(EventType.MESSAGE_TAG_INTERCEPTED, (payload: { extensionId?: string } & Record<string, unknown>) => {
         if (typeof payload?.extensionId === 'string' && payload.extensionId) {
           routeBackendMessage(payload.extensionId, payload)
+        }
+      }),
+
+      // Chat deletion — remove lingering chat head so it doesn't navigate to a dead chat
+      wsClient.on(EventType.CHAT_DELETED, (payload: { id: string }) => {
+        if (payload?.id) {
+          store.getState().removeChatHead(payload.id)
         }
       }),
 
@@ -507,6 +694,61 @@ export function useWebSocket() {
       }),
       wsClient.on(EventType.MIGRATION_FAILED, (payload: any) => {
         store.getState().setMigrationFailed(payload)
+      }),
+      // Operator panel
+      wsClient.on(EventType.OPERATOR_LOG, (payload: any) => {
+        if (payload?.entries) {
+          store.getState().appendOperatorLogs(payload.entries)
+        }
+      }),
+      wsClient.on(EventType.OPERATOR_STATUS, (payload: any) => {
+        if (payload) {
+          store.getState().setOperatorStatus(payload)
+        }
+      }),
+      wsClient.on(EventType.OPERATOR_PROGRESS, (payload: any) => {
+        if (payload) {
+          const status = payload.status
+          store.getState().setOperatorBusy(
+            status === 'complete' || status === 'error' ? null : payload.operation
+          )
+        }
+      }),
+
+      // MCP Server events
+      wsClient.on(EventType.MCP_SERVER_CONNECTED, (payload: { id: string; name: string; toolCount: number; tools: any[] }) => {
+        store.getState().setMcpServerStatus(payload.id, {
+          id: payload.id,
+          connected: true,
+          tool_count: payload.toolCount,
+          tools: payload.tools,
+        })
+        toast.success(`Connected — ${payload.toolCount} tool(s) discovered`, { title: `MCP: ${payload.name}` })
+      }),
+      wsClient.on(EventType.MCP_SERVER_DISCONNECTED, (payload: { id: string; name: string }) => {
+        store.getState().setMcpServerStatus(payload.id, {
+          id: payload.id,
+          connected: false,
+          tool_count: 0,
+          tools: [],
+        })
+      }),
+      wsClient.on(EventType.MCP_SERVER_ERROR, (payload: { id: string; name: string; error: string }) => {
+        store.getState().setMcpServerStatus(payload.id, {
+          id: payload.id,
+          connected: false,
+          tool_count: 0,
+          tools: [],
+          error: payload.error,
+        })
+        toast.error(payload.error, { title: `MCP: ${payload.name}` })
+      }),
+      wsClient.on(EventType.MCP_SERVER_CHANGED, (payload: { id: string; profile?: any; deleted?: boolean }) => {
+        if (payload.deleted) {
+          store.getState().removeMcpServer(payload.id)
+        } else if (payload.profile) {
+          store.getState().updateMcpServer(payload.id, payload.profile)
+        }
       }),
     ]
 

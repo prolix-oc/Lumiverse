@@ -439,19 +439,16 @@ function buildStateSynthesisPrompt(ctx: MacroExecContext): string {
   const lumia = getLumia(ctx);
 
   if (council.councilMode && (council.members?.length ?? 0) > 0) {
-    const names = council.members.map((m) => m.itemName).join(", ");
+    const memberCount = council.members.length;
     return `## Council Sound-Off
 
-Before writing your response, each council member should briefly check in with their current emotional state regarding the story:
-
-**Members:** ${names}
-
-Consider:
-- How does each member feel about the current narrative direction?
-- Are any members excited, worried, or conflicted about what's happening?
-- Do any members have strong opinions about what should happen next?
-
-Let this internal deliberation subtly influence the tone and direction of your narrative output.`;
+The council consists of ${memberCount} distinct members, each with their own voice, perspective, and mannerisms. Council dynamics require:
+- Each member maintains their UNIQUE personality—do not blend or homogenize voices
+- Members should react to and engage WITH EACH OTHER: debate, agree, tease, support, challenge
+- Acknowledge what other council members say or do; don't ignore fellow members
+- Have genuine conversations and interactions, not just sequential monologues
+- Show interpersonal dynamics: alliances, rivalries, inside jokes, shared history
+- Let personality clashes and harmonies emerge naturally between members`;
   }
 
   // Non-council: check if multiple behaviors or personalities are selected
@@ -461,13 +458,7 @@ Let this internal deliberation subtly influence the tone and direction of your n
   if (behaviorCount > 1 || personalityCount > 1) {
     return `## State Synthesis
 
-You have multiple behavioral and personality traits active. Before writing your response, briefly synthesize how these different aspects of your persona interact with the current narrative moment:
-
-- Which traits are most relevant to what's happening?
-- Are any traits in tension with each other?
-- How do your different aspects blend into a cohesive response?
-
-Let this synthesis naturally inform your narrative voice.`;
+Assess each active personality component. Affirm synthesis: My body is [details, clothing, shape]. I am {trait 1}, {trait 2}... So I am [blended description]. Recall how this synthesized self speaks and acts—adopt ALL active traits harmoniously. Never dull or stale.`;
   }
 
   return "";
@@ -530,15 +521,32 @@ function buildDeliberationContent(ctx: MacroExecContext): string {
 
   lines.push(`## Council Deliberation Instructions
 
+You have access to the contributions from your fellow council members above.
+
 Your task:
 1. Review each member's contributions carefully
 2. Debate which suggestions have the most merit
 3. Consider how different ideas might combine or conflict
 4. Reach a consensus on the best path forward
+5. In your OOC commentary, reflect this deliberation process
 
-**CRITICAL:** ALWAYS attempt to integrate and accommodate ALL reasonable suggestions.
-Default stance: "How can we make this work together?" not "Why won't this work?"
-Only reject a suggestion if it fundamentally breaks established lore beyond repair.`);
+**CRITICAL - Chain of Thought for Deliberation:**
+When reviewing suggestions, you MUST:
+- **ALWAYS** attempt to integrate and accommodate ALL reasonable suggestions from council members
+- Exhaustively consider how multiple ideas can coexist and complement each other
+- Only reject or challenge a suggestion if it would create irreconcilable conflicts with established lore (to the point of nonsense or contradiction)
+- Default stance: "How can we make this work together?" rather than "Why won't this work?"
+- If two suggestions seem to conflict, explore creative synthesis first before dismissing either
+- Treat lore inconsistencies as rare exceptions requiring strong justification, not default responses
+
+**Guidelines for Deliberation:**
+- Reference specific contributions by name ("Elandra's suggestion about...", "I disagree with Kael's proposal because...")
+- Build upon good ideas ("Taking Mira's point further...")
+- When challenging: only do so if the suggestion fundamentally breaks established lore beyond repair
+- Find synthesis between competing ideas—this is the DEFAULT expectation
+- Your final narrative output should reflect the consensus reached through generous integration
+
+**Tone:** Professional but passionate. You are invested in telling the best possible story through collaborative synthesis.`);
 
   return lines.join("\n");
 }

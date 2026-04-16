@@ -17,6 +17,12 @@ export interface PresetProfileBinding {
   block_states: Record<string, boolean>;
   /** Unix epoch seconds when the snapshot was captured */
   captured_at: number;
+  /**
+   * When true, this binding delegates to the current defaults instead of using
+   * its own block_states. This allows a chat to stay in sync with the defaults
+   * so that updating the defaults propagates to all linked chats.
+   */
+  linked_to_defaults?: boolean;
 }
 
 export interface ResolvedPresetProfile {

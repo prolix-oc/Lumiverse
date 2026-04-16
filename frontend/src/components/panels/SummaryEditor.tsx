@@ -1,7 +1,8 @@
-import { useState, useCallback, type ReactNode } from 'react'
+import { useState, useCallback, useEffect, type ReactNode } from 'react'
 import {
   FileText, Check, AlertCircle, Trash2, Save, RefreshCw,
   Settings, Clock, Cloud, ChevronDown, Play, Scissors, Link2,
+  Sparkles, RotateCcw,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import clsx from 'clsx'
@@ -11,6 +12,16 @@ import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
 import { Button } from '@/components/shared/FormComponents'
 import { Spinner } from '@/components/shared/Spinner'
+import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import {
+  loadSummarizationDefaults,
+} from '@/lib/summary/service'
+import {
+  FALLBACK_SUMMARIZATION_SYSTEM_PROMPT,
+  FALLBACK_SUMMARIZATION_USER_PROMPT,
+  SYSTEM_PROMPT_PLACEHOLDERS,
+  USER_PROMPT_PLACEHOLDERS,
+} from '@/lib/summary/prompts'
 import type { SummaryMode, SummaryApiSource } from '@/lib/summary/types'
 import styles from './SummaryEditor.module.css'
 
@@ -257,6 +268,12 @@ function SummarizationConfig() {
         <Section icon={<Cloud size={16} />} title="API Source">
           <div className={styles.radioGroup}>
             <RadioOption
+              name="sum-source" value="sidecar"
+              checked={apiSource === 'sidecar'}
+              onChange={(v) => setSummarization({ apiSource: v as SummaryApiSource })}
+              label="Sidecar Connection"
+            />
+            <RadioOption
               name="sum-source" value="active"
               checked={apiSource === 'active'}
               onChange={(v) => setSummarization({ apiSource: v as SummaryApiSource })}
@@ -270,9 +287,11 @@ function SummarizationConfig() {
             />
           </div>
           <p className={styles.desc}>
-            {apiSource === 'active'
-              ? 'Uses whichever connection profile is currently active.'
-              : 'Uses a specific connection profile for all summarization.'}
+            {apiSource === 'sidecar'
+              ? 'Uses the shared Sidecar connection configured in your settings.'
+              : apiSource === 'active'
+                ? 'Uses whichever connection profile is currently active.'
+                : 'Uses a specific connection profile for all summarization.'}
           </p>
         </Section>
       )}
@@ -333,6 +352,134 @@ function SummarizationConfig() {
   )
 }
 
+// ─── Prompt Template Editor ───────────────────────────────────────
+
+function PromptTemplateConfig() {
+  const { summarization, setSummarization } = useSummary()
+
+  const [defaults, setDefaults] = useState<{ systemPrompt: string; userPrompt: string }>({
+    systemPrompt: FALLBACK_SUMMARIZATION_SYSTEM_PROMPT,
+    userPrompt: FALLBACK_SUMMARIZATION_USER_PROMPT,
+  })
+
+  // Load backend defaults once when the section mounts so the editor displays
+  // the live server-side defaults (not just the bundled fallbacks). The loader
+  // is cached per-session, so re-mounting the panel is free.
+  useEffect(() => {
+    let cancelled = false
+    loadSummarizationDefaults().then((res) => {
+      if (!cancelled) setDefaults(res)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const systemCustomized = summarization.systemPromptOverride !== null
+  const userCustomized = summarization.userPromptOverride !== null
+
+  const systemValue = summarization.systemPromptOverride ?? defaults.systemPrompt
+  const userValue = summarization.userPromptOverride ?? defaults.userPrompt
+
+  const handleSystemChange = useCallback((val: string) => {
+    // Persist overrides as-is. Treat an empty string the same as "no override"
+    // so the backend default is used instead of sending an empty prompt.
+    setSummarization({ systemPromptOverride: val.length > 0 ? val : null })
+  }, [setSummarization])
+
+  const handleUserChange = useCallback((val: string) => {
+    setSummarization({ userPromptOverride: val.length > 0 ? val : null })
+  }, [setSummarization])
+
+  const resetSystem = useCallback(() => {
+    setSummarization({ systemPromptOverride: null })
+  }, [setSummarization])
+
+  const resetUser = useCallback(() => {
+    setSummarization({ userPromptOverride: null })
+  }, [setSummarization])
+
+  return (
+    <Section
+      icon={<Sparkles size={16} />}
+      title="Prompt Template"
+      status={systemCustomized || userCustomized}
+    >
+      <p className={styles.desc}>
+        Customize how the model is instructed to produce summaries. Leave blank
+        to use the server defaults. These placeholders are substituted at
+        generation time:
+      </p>
+
+      {/* System prompt */}
+      <div className={styles.promptBlock}>
+        <div className={styles.promptBlockHeader}>
+          <span className={styles.promptBlockLabel}>
+            System Prompt
+            {systemCustomized && <Badge color="primary" size="pill">Customized</Badge>}
+          </span>
+          <button
+            type="button"
+            className={styles.promptResetBtn}
+            onClick={resetSystem}
+            disabled={!systemCustomized}
+            title="Restore server default"
+          >
+            <RotateCcw size={11} /> Reset
+          </button>
+        </div>
+        <ExpandableTextarea
+          className={styles.textarea}
+          value={systemValue}
+          onChange={handleSystemChange}
+          title="Summarization System Prompt"
+          rows={8}
+          spellCheck={false}
+        />
+        <div className={styles.placeholderList}>
+          {SYSTEM_PROMPT_PLACEHOLDERS.map((p) => (
+            <code key={p.token} className={styles.placeholderChip} title={p.description}>
+              {p.token}
+            </code>
+          ))}
+        </div>
+      </div>
+
+      {/* User prompt */}
+      <div className={styles.promptBlock}>
+        <div className={styles.promptBlockHeader}>
+          <span className={styles.promptBlockLabel}>
+            User Prompt
+            {userCustomized && <Badge color="primary" size="pill">Customized</Badge>}
+          </span>
+          <button
+            type="button"
+            className={styles.promptResetBtn}
+            onClick={resetUser}
+            disabled={!userCustomized}
+            title="Restore server default"
+          >
+            <RotateCcw size={11} /> Reset
+          </button>
+        </div>
+        <ExpandableTextarea
+          className={styles.textarea}
+          value={userValue}
+          onChange={handleUserChange}
+          title="Summarization User Prompt"
+          rows={6}
+          spellCheck={false}
+        />
+        <div className={styles.placeholderList}>
+          {USER_PROMPT_PLACEHOLDERS.map((p) => (
+            <code key={p.token} className={styles.placeholderChip} title={p.description}>
+              {p.token}
+            </code>
+          ))}
+        </div>
+      </div>
+    </Section>
+  )
+}
+
 // ─── Main Export ──────────────────────────────────────────────────
 
 export default function SummaryEditor() {
@@ -340,6 +487,7 @@ export default function SummaryEditor() {
     <div className={styles.editor}>
       <SummaryTextEditor />
       <SummarizationConfig />
+      <PromptTemplateConfig />
     </div>
   )
 }

@@ -11,7 +11,6 @@
 
 :global([data-glass]) .backdrop {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .modal {

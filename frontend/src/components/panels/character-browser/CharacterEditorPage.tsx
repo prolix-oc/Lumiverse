@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, Plus, BookOpen, ImagePlus, Download, Code2, ChevronDown } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, Plus, ImagePlus, Download, Code2, ChevronDown } from 'lucide-react'
+import { IconNotebook } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -13,6 +14,7 @@ import { chatsApi } from '@/api/chats'
 import { regexApi } from '@/api/regex'
 import { useStore } from '@/store'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
+import { uuidv7 } from '@/lib/uuid'
 import useImageCropFlow from '@/hooks/useImageCropFlow'
 import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import ImageCropModal from '@/components/shared/ImageCropModal'
@@ -63,6 +65,7 @@ export default function CharacterEditorPage() {
   const [tags, setTags] = useState<string[]>([])
   const [newTag, setNewTag] = useState('')
   const [alternateGreetings, setAlternateGreetings] = useState<string[]>([])
+  const [alternateCharacterName, setAlternateCharacterName] = useState('')
   const [extensionsJson, setExtensionsJson] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -127,8 +130,11 @@ export default function CharacterEditorPage() {
     })
     setTags(character.tags || [])
     setAlternateGreetings(character.alternate_greetings || [])
+    setAlternateCharacterName(character.extensions?.alternate_character_name || '')
     setExtensionsJson(JSON.stringify(character.extensions || {}, null, 2))
     setJsonError(null)
+    pendingExtensionsRef.current = null
+    clearTimeout(timers.current['extensions'])
     setLorebookImporting(false)
     setLorebookResult(null)
   }, [character])
@@ -266,6 +272,52 @@ export default function CharacterEditorPage() {
     [editingCharacterId, browser.updateCharacter, showSaving]
   )
 
+  // ── Atomic extensions mutation pipeline ──────────────────────────────
+  // World book attachments, alternate fields, alternate avatars, and the
+  // raw extensions textarea all write to the same `extensions` blob. Without
+  // a single source of truth, an immediate save (e.g. toggling a world book)
+  // and a debounced save (e.g. typing in an alt-field variant) can race and
+  // clobber each other — the debounced save fires last with stale data and
+  // wipes the world book change. The pendingExtensionsRef tracks the latest
+  // mutated extensions so every callsite reads from the freshest value, and
+  // mutateExtensions cancels any pending debounced extensions save when an
+  // immediate save lands so the in-flight changes get persisted together.
+  const pendingExtensionsRef = useRef<Record<string, any> | null>(null)
+
+  const flushExtensionsSave = useCallback(async () => {
+    if (!editingCharacterId) return
+    clearTimeout(timers.current['extensions'])
+    timers.current['extensions'] = undefined as unknown as ReturnType<typeof setTimeout>
+    const next = pendingExtensionsRef.current
+    if (!next) return
+    pendingExtensionsRef.current = null
+    showSaving()
+    await browser.updateCharacter(editingCharacterId, { extensions: next })
+  }, [editingCharacterId, browser.updateCharacter, showSaving])
+
+  const mutateExtensions = useCallback(
+    (mutator: (ext: Record<string, any>) => Record<string, any>, immediate: boolean) => {
+      if (!editingCharacterId || !character) return
+      // Read from the pending ref first (latest in-flight state) so successive
+      // mutations build on each other instead of racing back to the store.
+      const baseline = pendingExtensionsRef.current ?? (character.extensions || {})
+      const next = mutator({ ...baseline })
+      pendingExtensionsRef.current = next
+      setExtensionsJson(JSON.stringify(next, null, 2))
+      setJsonError(null)
+
+      if (immediate) {
+        void flushExtensionsSave()
+      } else {
+        clearTimeout(timers.current['extensions'])
+        timers.current['extensions'] = setTimeout(() => {
+          void flushExtensionsSave()
+        }, DEBOUNCE_MS)
+      }
+    },
+    [editingCharacterId, character, flushExtensionsSave]
+  )
+
   const handleNameChange = useCallback(
     (value: string) => {
       setName(value)
@@ -284,33 +336,41 @@ export default function CharacterEditorPage() {
 
   const handleAlternatesChange = useCallback(
     (field: string, variants: Array<{ id: string; label: string; content: string }>) => {
-      if (!editingCharacterId || !character) return
-      const currentExtensions = character.extensions || {}
-      const currentAltFields = currentExtensions.alternate_fields || {}
-      const updatedAltFields = { ...currentAltFields, [field]: variants }
-      // Clean up empty arrays
-      if (variants.length === 0) delete updatedAltFields[field]
-      const updatedExtensions = { ...currentExtensions, alternate_fields: updatedAltFields }
-      // Clean up if no alternate fields remain
-      if (Object.keys(updatedAltFields).length === 0) delete updatedExtensions.alternate_fields
-      debouncedSave('extensions', updatedExtensions)
+      mutateExtensions((ext) => {
+        const currentAltFields = ext.alternate_fields || {}
+        const updatedAltFields = { ...currentAltFields, [field]: variants }
+        if (variants.length === 0) delete updatedAltFields[field]
+        const next = { ...ext, alternate_fields: updatedAltFields }
+        if (Object.keys(updatedAltFields).length === 0) delete next.alternate_fields
+        return next
+      }, false)
     },
-    [editingCharacterId, character, debouncedSave]
+    [mutateExtensions]
   )
 
   const handleAlternateAvatarsChange = useCallback(
     (avatars: AlternateAvatarEntry[]) => {
-      if (!editingCharacterId || !character) return
-      const currentExtensions = character.extensions || {}
-      const updatedExtensions = { ...currentExtensions }
-      if (avatars.length > 0) {
-        updatedExtensions.alternate_avatars = avatars
-      } else {
-        delete updatedExtensions.alternate_avatars
-      }
-      debouncedSave('extensions', updatedExtensions)
+      mutateExtensions((ext) => {
+        const next = { ...ext }
+        if (avatars.length > 0) next.alternate_avatars = avatars
+        else delete next.alternate_avatars
+        return next
+      }, false)
     },
-    [editingCharacterId, character, debouncedSave]
+    [mutateExtensions]
+  )
+
+  const handleAlternateCharacterNameChange = useCallback(
+    (value: string) => {
+      setAlternateCharacterName(value)
+      mutateExtensions((ext) => {
+        const next = { ...ext }
+        if (value.trim()) next.alternate_character_name = value.trim()
+        else delete next.alternate_character_name
+        return next
+      }, false)
+    },
+    [mutateExtensions]
   )
 
   const handleAvatarSelect = useCallback(
@@ -318,14 +378,9 @@ export default function CharacterEditorPage() {
       if (!activeChatId) return
       setActiveChatAvatarId(imageId)
       try {
-        const chat = await chatsApi.get(activeChatId, { messages: false })
-        const metadata = { ...(chat.metadata || {}) }
-        if (imageId) {
-          metadata.active_avatar_id = imageId
-        } else {
-          delete metadata.active_avatar_id
-        }
-        await chatsApi.update(activeChatId, { metadata })
+        // Atomic merge — server re-reads the latest chat row so background
+        // writers can't clobber this avatar binding.
+        await chatsApi.patchMetadata(activeChatId, { active_avatar_id: imageId ?? null })
       } catch (err) {
         console.error('[Editor] Avatar select failed:', err)
       }
@@ -392,12 +447,18 @@ export default function CharacterEditorPage() {
       try {
         const parsed = JSON.parse(value)
         setJsonError(null)
-        debouncedSave('extensions', parsed)
+        // Mirror the textarea edit into the pending ref so other extensions
+        // mutations (world books, alt fields) build on the user's manual edits.
+        pendingExtensionsRef.current = parsed
+        clearTimeout(timers.current['extensions'])
+        timers.current['extensions'] = setTimeout(() => {
+          void flushExtensionsSave()
+        }, DEBOUNCE_MS)
       } catch {
         setJsonError('Invalid JSON')
       }
     },
-    [debouncedSave]
+    [flushExtensionsSave]
   )
 
   const handleBindRegex = useCallback(
@@ -433,44 +494,37 @@ export default function CharacterEditorPage() {
   )
 
   const handleToggleWorldBook = useCallback(
-    async (worldBookId: string) => {
-      if (!editingCharacterId || !character) return
-      const currentIds = getCharacterWorldBookIds(character.extensions)
-      const nextIds = currentIds.includes(worldBookId)
-        ? currentIds.filter((id) => id !== worldBookId)
-        : [...currentIds, worldBookId]
-
-      if (nextIds.length === 0) clearActivatedWorldInfo()
-
-      const nextExtensions = setCharacterWorldBookIds({ ...(character.extensions || {}) }, nextIds)
-      setExtensionsJson(JSON.stringify(nextExtensions, null, 2))
-      setJsonError(null)
-      showSaving()
-      await browser.updateCharacter(editingCharacterId, { extensions: nextExtensions })
+    (worldBookId: string) => {
+      mutateExtensions((ext) => {
+        const currentIds = getCharacterWorldBookIds(ext)
+        const nextIds = currentIds.includes(worldBookId)
+          ? currentIds.filter((id) => id !== worldBookId)
+          : [...currentIds, worldBookId]
+        if (nextIds.length === 0) clearActivatedWorldInfo()
+        return setCharacterWorldBookIds(ext, nextIds)
+      }, true)
     },
-    [editingCharacterId, character, browser.updateCharacter, showSaving, clearActivatedWorldInfo]
+    [mutateExtensions, clearActivatedWorldInfo]
   )
 
   const handleRemoveWorldBook = useCallback(
-    async (worldBookId: string) => {
-      if (!editingCharacterId || !character) return
-      const currentIds = getCharacterWorldBookIds(character.extensions)
-      const nextIds = currentIds.filter((id) => id !== worldBookId)
-      if (nextIds.length === 0) clearActivatedWorldInfo()
-      const nextExtensions = setCharacterWorldBookIds({ ...(character.extensions || {}) }, nextIds)
-      setExtensionsJson(JSON.stringify(nextExtensions, null, 2))
-      setJsonError(null)
-      showSaving()
-      await browser.updateCharacter(editingCharacterId, { extensions: nextExtensions })
+    (worldBookId: string) => {
+      mutateExtensions((ext) => {
+        const currentIds = getCharacterWorldBookIds(ext)
+        const nextIds = currentIds.filter((id) => id !== worldBookId)
+        if (nextIds.length === 0) clearActivatedWorldInfo()
+        return setCharacterWorldBookIds(ext, nextIds)
+      }, true)
     },
-    [editingCharacterId, character, browser.updateCharacter, showSaving, clearActivatedWorldInfo]
+    [mutateExtensions, clearActivatedWorldInfo]
   )
 
   // World book popover state
   const [wbPopoverOpen, setWbPopoverOpen] = useState(false)
   const wbAddBtnRef = useRef<HTMLButtonElement>(null)
   const wbPopoverRef = useRef<HTMLDivElement>(null)
-  const [wbPopoverPos, setWbPopoverPos] = useState<{ top: number; left: number } | null>(null)
+  const wbFieldGroupRef = useRef<HTMLDivElement>(null)
+  const [wbPopoverPos, setWbPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!wbPopoverOpen) return
@@ -489,9 +543,14 @@ export default function CharacterEditorPage() {
   const openWbPopover = useCallback(() => {
     setWbPopoverOpen((prev) => {
       const next = !prev
-      if (next && wbAddBtnRef.current) {
-        const rect = wbAddBtnRef.current.getBoundingClientRect()
-        setWbPopoverPos({ top: rect.bottom + 4, left: rect.right })
+      if (next && wbAddBtnRef.current && wbFieldGroupRef.current) {
+        const btnRect = wbAddBtnRef.current.getBoundingClientRect()
+        const containerRect = wbFieldGroupRef.current.getBoundingClientRect()
+        setWbPopoverPos({
+          top: btnRect.bottom + 4,
+          left: containerRect.left,
+          width: containerRect.width,
+        })
       }
       return next
     })
@@ -527,26 +586,24 @@ export default function CharacterEditorPage() {
         const originalImage = await imagesApi.upload(originalFile, (p) => setAltAvatarUploadProgress(Math.round(p * 0.4)))
         // Upload cropped for display
         const image = await imagesApi.upload(croppedFile, (p) => setAltAvatarUploadProgress(40 + Math.round(p * 0.6)))
-        const newId = crypto.randomUUID()
+        const newId = uuidv7()
         const entry: AlternateAvatarEntry = {
           id: newId,
           image_id: image.id,
           original_image_id: originalImage.id,
           label: 'New Avatar',
         }
-        const currentExtensions = character.extensions || {}
-        const currentAlts = (currentExtensions.alternate_avatars || []) as AlternateAvatarEntry[]
-        const updatedAlts = [...currentAlts, entry]
-        const updatedExtensions = { ...currentExtensions, alternate_avatars: updatedAlts }
-        showSaving()
-        browser.updateCharacter(editingCharacterId, { extensions: updatedExtensions })
+        mutateExtensions((ext) => {
+          const currentAlts = (ext.alternate_avatars || []) as AlternateAvatarEntry[]
+          return { ...ext, alternate_avatars: [...currentAlts, entry] }
+        }, true)
       } catch (err) {
         console.error('[AltAvatar] Upload failed:', err)
       } finally {
         setAltAvatarUploadProgress(null)
       }
     },
-    [editingCharacterId, character, browser.updateCharacter, showSaving]
+    [mutateExtensions]
   )
 
   const { cropModalProps: altAvatarCropProps, openCropFlow: openAltAvatarCropFlow } =
@@ -876,6 +933,13 @@ export default function CharacterEditorPage() {
                   {activeTab === 'identity' && (
                     <>
                       <Field
+                        label="Alternate Character Name"
+                        helper="Used as {{char}} in prompts and as the chat display name. Leaves the card's title untouched."
+                        value={alternateCharacterName}
+                        onChange={handleAlternateCharacterNameChange}
+                        multiline={false}
+                      />
+                      <Field
                         label="Creator"
                         helper="Who created this character."
                         value={fields.creator || ''}
@@ -1013,7 +1077,7 @@ export default function CharacterEditorPage() {
 
                   {activeTab === 'advanced' && (
                     <>
-                      <div className={styles.fieldGroup}>
+                      <div ref={wbFieldGroupRef} className={styles.fieldGroup}>
                         <span className={styles.fieldLabel}>Attached World Books</span>
                         <span className={styles.fieldHelper}>Used by prompt assembly for world info activation. Attach multiple for richer lore.</span>
                         <div className={styles.charWbHeader}>
@@ -1034,7 +1098,7 @@ export default function CharacterEditorPage() {
                             <div
                               ref={wbPopoverRef}
                               className={styles.charWbPopover}
-                              style={{ top: wbPopoverPos.top, left: wbPopoverPos.left }}
+                              style={{ top: wbPopoverPos.top, left: wbPopoverPos.left, width: wbPopoverPos.width }}
                             >
                               {worldBooks.length === 0 ? (
                                 <div className={styles.charWbPopoverEmpty}>No world books available</div>
@@ -1084,7 +1148,7 @@ export default function CharacterEditorPage() {
 
                       {character.extensions?.character_book?.entries?.length > 0 && (
                         <div className={styles.lorebookImportSection}>
-                          <BookOpen size={14} />
+                          <IconNotebook size={14} />
                           <div className={styles.lorebookImportInfo}>
                             <span className={styles.fieldLabel}>Embedded Lorebook</span>
                             <span className={styles.fieldHelper}>
@@ -1103,13 +1167,10 @@ export default function CharacterEditorPage() {
                                 setLorebookImporting(true)
                                 try {
                                   const res = await worldBooksApi.importCharacterBook(editingCharacterId)
-                                  const currentIds = getCharacterWorldBookIds(character.extensions)
-                                  const nextExtensions = setCharacterWorldBookIds(
-                                    { ...(character.extensions || {}) },
-                                    [...currentIds, res.world_book.id],
-                                  )
-                                  await browser.updateCharacter(editingCharacterId, { extensions: nextExtensions })
-                                  setExtensionsJson(JSON.stringify(nextExtensions, null, 2))
+                                  mutateExtensions((ext) => {
+                                    const currentIds = getCharacterWorldBookIds(ext)
+                                    return setCharacterWorldBookIds(ext, [...currentIds, res.world_book.id])
+                                  }, true)
                                   setLorebookResult(`Imported ${res.entry_count} entries into "${res.world_book.name}" and attached it`)
                                 } catch {
                                   setLorebookImporting(false)

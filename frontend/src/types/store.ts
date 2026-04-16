@@ -12,10 +12,12 @@ export interface ChatSlice {
   streamingContent: string
   streamingReasoning: string
   streamingReasoningDuration: number | null
+  streamingReasoningStartedAt: number | null
   streamingError: string | null
   activeGenerationId: string | null
   regeneratingMessageId: string | null
   streamingGenerationType: string | null
+  lastPooledSeq: number | null
   totalChatLength: number
   setActiveChat: (chatId: string | null, characterId?: string | null) => void
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
@@ -29,6 +31,10 @@ export interface ChatSlice {
   startStreaming: (generationId: string, regeneratingMessageId?: string) => void
   appendStreamToken: (token: string) => void
   appendStreamReasoning: (token: string) => void
+  replaceStreamContent: (content: string) => void
+  replaceStreamReasoning: (reasoning: string) => void
+  setStreamingReasoningStartedAt: (ts: number | null) => void
+  setLastPooledSeq: (seq: number) => void
   endStreaming: () => void
   stopStreaming: () => void
   setStreamingError: (error: string | null) => void
@@ -102,8 +108,8 @@ export type PersonaViewMode = 'grid' | 'list'
 export interface PersonasSlice {
   personas: Persona[]
   activePersonaId: string | null
-  /** Map of characterId → personaId for character-persona bindings */
-  characterPersonaBindings: Record<string, string>
+  /** Map of characterId → personaId or binding object */
+  characterPersonaBindings: Record<string, string | import('@/types/api').CharacterPersonaBinding>
   personaSearchQuery: string
   personaFilterType: PersonaFilterType
   personaSortField: PersonaSortField
@@ -113,8 +119,8 @@ export interface PersonasSlice {
 
   setPersonas: (personas: Persona[]) => void
   setActivePersona: (id: string | null) => void
-  /** Bind a persona to a character (or unbind with null) */
-  setCharacterPersonaBinding: (characterId: string, personaId: string | null) => void
+  /** Bind a persona to a character (or unbind with null). Pass addonStates to snapshot addon enabled state. */
+  setCharacterPersonaBinding: (characterId: string, personaId: string | null, addonStates?: Record<string, boolean>) => void
   addPersona: (persona: Persona) => void
   updatePersona: (id: string, persona: Persona) => void
   removePersona: (id: string) => void
@@ -172,6 +178,10 @@ export interface UISlice {
   badgeCount: number
   incrementBadgeCount: () => void
   resetBadgeCount: () => void
+
+  // Regen feedback text retention
+  lastRegenFeedback: string
+  setLastRegenFeedback: (text: string) => void
 }
 
 // ---- OOC Style Type ----
@@ -277,15 +287,23 @@ export interface WallpaperSettings {
   fit: 'cover' | 'contain' | 'fill'
 }
 
+// ---- Custom CSS ----
+export interface CustomCSSSettings {
+  css: string
+  enabled: boolean
+  revision: number
+}
+
 // ---- Settings Slice ----
 export interface SettingsSlice {
-  enableLandingPage: boolean
   landingPageChatsDisplayed: number
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
   bubbleUserAlign: 'left' | 'right'
+  bubbleDisableHover: boolean
+  bubbleHideAvatarBg: boolean
   chatSheldEnterToSend: boolean
   saveDraftInput: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
@@ -310,14 +328,31 @@ export interface SettingsSlice {
   globalWorldBooks: string[]
   worldInfoSettings: import('./api').WorldInfoSettings
   regenFeedback: RegenFeedbackSettings
+  swipeGesturesEnabled: boolean
+  showMessageTokenCount: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings
   thumbnailSettings: { smallSize: number, largeSize: number }
   pushNotificationPreferences: { enabled: boolean, events: { generation_ended: boolean, generation_error: boolean } }
+  chatHeadsEnabled: boolean
+  chatHeadsSize: number
+  chatHeadsDirection: 'column' | 'row'
+  chatHeadsOpacity: number
+  customCSS: CustomCSSSettings
+  componentOverrides: Record<string, import('@/lib/componentOverrides').ComponentOverride>
+  voiceSettings: VoiceSettings
+  setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
   setTheme: (theme: ThemeConfig | null) => void
+  setCustomCSS: (css: string) => void
+  toggleCustomCSS: (enabled: boolean) => void
+  setComponentCSS: (componentName: string, css: string) => void
+  setComponentTSX: (componentName: string, tsx: string) => void
+  toggleComponentOverride: (componentName: string, enabled: boolean) => void
+  resetAllOverrides: () => void
+  applyThemePack: (pack: import('@/lib/themePack').ThemePack) => void
   loadSettings: () => Promise<void>
 }
 
@@ -330,6 +365,7 @@ export interface DrawerSettings {
   tabSize: 'large' | 'compact'
   panelWidthMode: 'default' | 'stChat' | 'custom'
   customPanelWidth: number
+  showTabLabels: boolean
 }
 
 // ---- Loom Registry Entry ----
@@ -417,6 +453,20 @@ import type {
   CouncilToolsSettings,
 } from 'lumiverse-spindle-types'
 
+export interface CouncilToolsFailedInfo {
+  generationId: string
+  chatId: string
+  failedTools: {
+    memberId: string
+    memberName: string
+    toolName: string
+    toolDisplayName: string
+    error?: string
+  }[]
+  successCount: number
+  failedCount: number
+}
+
 export interface CouncilSlice {
   councilSettings: CouncilSettings
   councilToolResults: CouncilToolResult[]
@@ -424,6 +474,7 @@ export interface CouncilSlice {
   availableCouncilTools: CouncilToolDefinition[]
   councilLoading: boolean
   councilExecuting: boolean
+  councilToolsFailure: CouncilToolsFailedInfo | null
 
   setCouncilSettings: (settings: CouncilSettings) => void
   setCouncilToolResults: (results: CouncilToolResult[]) => void
@@ -431,6 +482,7 @@ export interface CouncilSlice {
   setAvailableCouncilTools: (tools: CouncilToolDefinition[]) => void
   setCouncilLoading: (loading: boolean) => void
   setCouncilExecuting: (executing: boolean) => void
+  setCouncilToolsFailure: (failure: CouncilToolsFailedInfo | null) => void
 
   loadCouncilSettings: () => Promise<void>
   saveCouncilSettings: (partial: Partial<CouncilSettings>) => Promise<void>
@@ -507,6 +559,19 @@ export type SpindleModalItem =
   | { type: 'heading'; content: string }
   | { type: 'card'; items: SpindleModalItem[] }
 
+export interface PendingInputPromptRequest {
+  requestId: string
+  extensionId: string
+  extensionName: string
+  title: string
+  message?: string
+  placeholder?: string
+  defaultValue?: string
+  submitLabel?: string
+  cancelLabel?: string
+  multiline?: boolean
+}
+
 export interface PendingConfirmRequest {
   requestId: string
   extensionId: string
@@ -537,6 +602,11 @@ export interface PendingContextMenuItem {
 export interface ExtensionThemeOverride {
   extensionId: string
   extensionName: string
+  paletteAccent?: {
+    h: number
+    s: number
+    l: number
+  }
   variables: Record<string, string>
   variablesByMode?: {
     dark?: Record<string, string>
@@ -550,17 +620,39 @@ export interface ExtensionOperationStatus {
   name: string | null
 }
 
+export interface BulkUpdateError {
+  id: string
+  name: string
+  error: string
+}
+
+export interface BulkUpdateStatus {
+  total: number
+  completed: number
+  failed: number
+  currentExtensionId?: string
+  currentName?: string
+  /** Set true by the COMPLETE event; false/undefined while progressing. */
+  done?: boolean
+  errors?: BulkUpdateError[]
+}
+
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
   /** Active theme overrides from Spindle extensions, keyed by extensionId */
   extensionThemeOverrides: Record<string, ExtensionThemeOverride>
+  /** Extension IDs whose theme overrides are suppressed by the user */
+  mutedExtensionThemes: Record<string, boolean>
   /** Real-time operation status from backend WS events */
   extensionOperationStatus: ExtensionOperationStatus | null
+  /** In-flight bulk update progress (null when idle). */
+  bulkUpdateStatus: BulkUpdateStatus | null
   spindlePrivileged: boolean
   pendingPermissionRequest: PendingPermissionRequest | null
   pendingTextEditor: PendingTextEditorRequest | null
   pendingModal: PendingModalRequest | null
   pendingConfirm: PendingConfirmRequest | null
+  pendingInputPrompt: PendingInputPromptRequest | null
   pendingContextMenu: PendingContextMenuRequest | null
   loadExtensions: () => Promise<void>
   installExtension: (githubUrl: string, branch?: string | null) => Promise<void>
@@ -578,14 +670,21 @@ export interface SpindleSlice {
   closeTextEditor: (requestId: string, text: string, cancelled: boolean) => void
   openSpindleModal: (request: PendingModalRequest) => void
   closeSpindleModal: (requestId: string, dismissedBy: 'user' | 'extension' | 'cleanup') => void
+  dismissSpindleModal: (requestId: string) => void
   openSpindleConfirm: (request: PendingConfirmRequest) => void
   closeSpindleConfirm: (requestId: string, confirmed: boolean) => void
+  openInputPrompt: (request: PendingInputPromptRequest) => void
+  closeInputPrompt: (requestId: string, value: string | null) => void
   openContextMenu: (request: PendingContextMenuRequest) => void
   closeContextMenu: (requestId: string, selectedKey: string | null) => void
   setExtensionThemeOverride: (override: ExtensionThemeOverride) => void
   clearExtensionThemeOverride: (extensionId: string) => void
   clearAllExtensionThemeOverrides: () => void
+  muteExtensionTheme: (extensionId: string) => void
+  unmuteExtensionTheme: (extensionId: string) => void
   setExtensionOperationStatus: (extensionId: string | null, operation: string, name: string | null) => void
+  updateAllExtensions: () => Promise<void>
+  setBulkUpdateStatus: (status: BulkUpdateStatus | null) => void
 }
 
 // ---- Summary Slice ----
@@ -689,6 +788,7 @@ import type {
   DockPanelState,
   AppMountState,
   InputBarActionState,
+  ExtensionCommandState,
 } from '@/store/slices/spindle-placement'
 
 export interface SpindlePlacementSlice {
@@ -697,11 +797,12 @@ export interface SpindlePlacementSlice {
   dockPanels: DockPanelState[]
   appMounts: AppMountState[]
   inputBarActions: InputBarActionState[]
+  extensionCommands: ExtensionCommandState[]
   hiddenPlacements: string[]
 
   registerDrawerTab: (tab: DrawerTabState) => void
   unregisterDrawerTab: (tabId: string) => void
-  updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'badge'>>) => void
+  updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => void
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void
@@ -718,6 +819,9 @@ export interface SpindlePlacementSlice {
   registerInputBarAction: (action: InputBarActionState) => void
   unregisterInputBarAction: (actionId: string) => void
   updateInputBarAction: (actionId: string, updates: Partial<Pick<InputBarActionState, 'label' | 'enabled'>>) => void
+
+  setExtensionCommands: (entry: ExtensionCommandState) => void
+  clearExtensionCommands: (extensionId: string) => void
 
   removeAllByExtension: (extensionId: string) => void
   togglePlacementVisibility: (placementId: string) => void
@@ -754,6 +858,7 @@ export interface RegexSlice {
   addRegexScript: (input: CreateRegexScriptInput) => Promise<RegexScript>
   updateRegexScript: (id: string, updates: UpdateRegexScriptInput) => Promise<void>
   removeRegexScript: (id: string) => Promise<void>
+  bulkRemoveRegexScripts: (ids: string[]) => Promise<number>
   reorderRegexScripts: (fromIdx: number, toIdx: number) => Promise<void>
   toggleRegexScript: (id: string, disabled: boolean) => Promise<void>
   setRegexEditingId: (id: string | null) => void
@@ -800,6 +905,51 @@ export interface ImageGenConnectionsSlice {
   setImageGenProviders: (providers: ImageGenProviderInfo[]) => void
 }
 
+// ---- MCP Servers Slice ----
+export interface McpServersSlice {
+  mcpServers: import('@/api/mcp-servers').McpServerProfile[]
+  mcpServerStatuses: Record<string, import('@/api/mcp-servers').McpServerStatus>
+
+  setMcpServers: (servers: import('@/api/mcp-servers').McpServerProfile[]) => void
+  addMcpServer: (server: import('@/api/mcp-servers').McpServerProfile) => void
+  updateMcpServer: (id: string, updates: Partial<import('@/api/mcp-servers').McpServerProfile>) => void
+  removeMcpServer: (id: string) => void
+  setMcpServerStatus: (id: string, status: import('@/api/mcp-servers').McpServerStatus) => void
+}
+
+// ---- TTS Connections Slice ----
+export interface TtsConnectionsSlice {
+  ttsProfiles: import('@/types/api').TtsConnectionProfile[]
+  ttsProviders: import('@/types/api').TtsProviderInfo[]
+
+  setTtsProfiles: (profiles: import('@/types/api').TtsConnectionProfile[]) => void
+  addTtsProfile: (profile: import('@/types/api').TtsConnectionProfile) => void
+  updateTtsProfile: (id: string, updates: Partial<import('@/types/api').TtsConnectionProfile>) => void
+  removeTtsProfile: (id: string) => void
+  setTtsProviders: (providers: import('@/types/api').TtsProviderInfo[]) => void
+}
+
+// ---- Voice Settings ----
+export interface SpeechDetectionRules {
+  asterisked: 'skip' | 'narration'
+  quoted: 'speech' | 'narration' | 'skip'
+  undecorated: 'narration' | 'speech' | 'skip'
+}
+
+export interface VoiceSettings {
+  sttProvider: 'webspeech' | 'openai'
+  sttLanguage: string
+  sttContinuous: boolean
+  sttInterimResults: boolean
+  sttConnectionId: string | null
+  ttsEnabled: boolean
+  ttsConnectionId: string | null
+  ttsAutoPlay: boolean
+  ttsSpeed: number
+  ttsVolume: number
+  speechDetectionRules: SpeechDetectionRules
+}
+
 // ---- Loadouts Slice ----
 export interface LoadoutsSlice {
   loadouts: import('@/api/loadouts').Loadout[]
@@ -830,6 +980,82 @@ export interface MigrationSlice {
   resetMigration: () => void
 }
 
+// ---- Operator Slice ----
+import type { OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
+
+export interface OperatorSlice {
+  operatorLogs: OperatorLogEntry[]
+  operatorStatus: OperatorStatusPayload | null
+  operatorBusy: string | null
+  appendOperatorLogs: (entries: OperatorLogEntry[]) => void
+  setOperatorStatus: (status: OperatorStatusPayload) => void
+  setOperatorBusy: (operation: string | null) => void
+  clearOperatorLogs: () => void
+}
+
+// ---- Floating Avatar Slice ----
+export interface FloatingAvatarState {
+  imageUrl: string
+  displayName: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface FloatingAvatarSlice {
+  floatingAvatar: FloatingAvatarState | null
+  openFloatingAvatar: (imageUrl: string, displayName: string) => void
+  updateFloatingAvatar: (partial: Partial<FloatingAvatarState>) => void
+  closeFloatingAvatar: () => void
+}
+
+// ---- Chat Heads (floating generation status) ----
+
+export type ChatHeadStatus = 'assembling' | 'council' | 'council_failed' | 'reasoning' | 'streaming' | 'completed' | 'stopped' | 'error'
+
+export interface ChatHeadEntry {
+  generationId: string
+  chatId: string
+  characterName: string
+  characterId?: string
+  avatarUrl: string | null
+  status: ChatHeadStatus
+  model: string
+  startedAt: number
+}
+
+export interface ChatHeadsSlice {
+  chatHeads: ChatHeadEntry[]
+  /** Position stored as percentage of viewport (0-1) for responsive persistence */
+  chatHeadsPosition: { xPct: number; yPct: number }
+  addChatHead: (head: ChatHeadEntry) => void
+  updateChatHead: (generationId: string, updates: Partial<ChatHeadEntry>) => void
+  removeChatHead: (chatId: string) => void
+  setChatHeadsPosition: (pos: { xPct: number; yPct: number }) => void
+  /** Re-sync persisted heads against the backend's active generation list */
+  reconcileChatHeads: () => Promise<void>
+}
+
+export interface DatabankSlice {
+  databanks: import('@/api/databank').Databank[]
+  databankDocuments: import('@/api/databank').DatabankDocument[]
+  selectedDatabankId: string | null
+  databankScopeFilter: 'global' | 'character' | 'chat'
+  databankScopeCharacterId: string | null
+  setDatabanks: (banks: import('@/api/databank').Databank[]) => void
+  addDatabank: (bank: import('@/api/databank').Databank) => void
+  updateDatabank: (id: string, updates: Partial<import('@/api/databank').Databank>) => void
+  removeDatabank: (id: string) => void
+  setSelectedDatabankId: (id: string | null) => void
+  setDatabankScopeFilter: (scope: 'global' | 'character' | 'chat') => void
+  setDatabankScopeCharacterId: (id: string | null) => void
+  setDatabankDocuments: (docs: import('@/api/databank').DatabankDocument[]) => void
+  addDatabankDocument: (doc: import('@/api/databank').DatabankDocument) => void
+  updateDatabankDocument: (id: string, updates: Partial<import('@/api/databank').DatabankDocument>) => void
+  removeDatabankDocument: (id: string) => void
+}
+
 // ---- Combined Store ----
 export type AppStore = ChatSlice &
   CharactersSlice &
@@ -852,5 +1078,11 @@ export type AppStore = ChatSlice &
   RegexSlice &
   ExpressionSlice &
   ImageGenConnectionsSlice &
+  TtsConnectionsSlice &
+  McpServersSlice &
   LoadoutsSlice &
-  MigrationSlice
+  MigrationSlice &
+  OperatorSlice &
+  FloatingAvatarSlice &
+  ChatHeadsSlice &
+  DatabankSlice

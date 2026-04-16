@@ -316,17 +316,24 @@ export function generateThemeVariables(
   // Font scale: always set so UI updates immediately in both directions.
   vars['--lumiverse-font-scale'] = `${fs}`
 
-  // ── Chat Sheld glass tokens ──
+  // UI scale: CSS zoom on body for full UI magnification.
+  const us = config.uiScale ?? 1
+  vars['--lumiverse-ui-scale'] = `${us}`
+
+  // ── Chat Shell glass tokens ──
+  // When glass is OFF, these must be fully opaque (alpha 1) because color-mix
+  // multiplies alphas — 0.97 * 0.78 = 0.76, producing unintended translucency
+  // without any backdrop-filter blur to compensate.
   if (isDark) {
-    vars['--lcs-glass-bg'] = glass ? hsla(h, bgSat, 6, 0.55) : hsla(h, bgSat, 10, 0.97)
-    vars['--lcs-glass-bg-hover'] = glass ? hsla(h, bgSat, 9, 0.65) : hsla(h, bgSat, 14, 0.99)
+    vars['--lcs-glass-bg'] = glass ? hsla(h, bgSat, 6, 0.55) : hsla(h, bgSat, 10, 1)
+    vars['--lcs-glass-bg-hover'] = glass ? hsla(h, bgSat, 9, 0.65) : hsla(h, bgSat, 14, 1)
     vars['--lcs-glass-border'] = rgba(255, 255, 255, glass ? 0.06 : 0.05)
     vars['--lcs-glass-border-hover'] = rgba(255, 255, 255, glass ? 0.1 : 0.08)
     vars['--lcs-glass-blur'] = glass ? '8px' : '0px'
     vars['--lcs-glass-soft-blur'] = glass ? '6px' : '0px'
     vars['--lcs-glass-strong-blur'] = glass ? '12px' : '0px'
   } else {
-    vars['--lcs-glass-bg'] = glass ? hsla(h, s * 0.15, 98, 0.6) : hsla(h, s * 0.15, 97, 0.98)
+    vars['--lcs-glass-bg'] = glass ? hsla(h, s * 0.15, 98, 0.6) : hsla(h, s * 0.15, 97, 1)
     vars['--lcs-glass-bg-hover'] = glass ? hsla(h, s * 0.15, 100, 0.72) : hsla(h, s * 0.15, 99, 1)
     vars['--lcs-glass-border'] = rgba(0, 0, 0, glass ? 0.06 : 0.09)
     vars['--lcs-glass-border-hover'] = rgba(0, 0, 0, glass ? 0.08 : 0.12)

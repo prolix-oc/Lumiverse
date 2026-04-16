@@ -8,6 +8,7 @@ import { generateApi } from '@/api/generate'
 import type { BreakdownCacheEntry } from '@/types/store'
 import { groupBreakdownEntries, getBlockDisplayColor } from '@/lib/prompt-breakdown'
 import type { BreakdownGroup } from '@/lib/prompt-breakdown'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import styles from './PromptItemizerModal.module.css'
 import clsx from 'clsx'
 
@@ -69,7 +70,7 @@ export default function PromptItemizerModal() {
   const handleCopy = () => {
     if (!data) return
     const text = data.entries.map((e) => `[${e.type}] ${e.name}: ${e.tokens} tokens`).join('\n')
-    navigator.clipboard.writeText(text)
+    copyTextToClipboard(text).catch(console.error)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
@@ -79,7 +80,7 @@ export default function PromptItemizerModal() {
   const mainGroups = groups.filter((g) => g.label !== 'Sidecar (Lumi Pipeline)')
 
   return (
-    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)))" zIndex={1000} className={styles.modal}>
+    <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)))" zIndex={10001} className={styles.modal}>
           <div className={styles.header}>
             <h2 className={styles.title}>Prompt Breakdown</h2>
             {data && (

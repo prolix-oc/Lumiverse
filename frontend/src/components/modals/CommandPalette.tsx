@@ -1,26 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { Puzzle, Search, X } from 'lucide-react'
+import { Search, X } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router'
 import clsx from 'clsx'
 import { useStore } from '@/store'
-import { COMMANDS, GROUP_ORDER, type Command, type CommandScope } from '@/lib/commands'
-import type { DrawerTabState } from '@/store/slices/spindle-placement'
+import { buildCommands, GROUP_ORDER, type Command, type CommandScope } from '@/lib/commands'
+import { extensionTabsToCommands, extensionCommandsToCommands } from '@/lib/drawer-tab-registry'
 import styles from './CommandPalette.module.css'
-
-/** Convert extension drawer tabs into Command objects so they appear in search. */
-function extensionTabsToCommands(tabs: DrawerTabState[]): Command[] {
-  return tabs.map((tab) => ({
-    id: `ext-tab-${tab.id}`,
-    label: tab.title,
-    description: `Open extension tab`,
-    icon: Puzzle,
-    keywords: ['extension', 'spindle', tab.extensionId],
-    group: 'Extensions' as const,
-    run: () => useStore.getState().openDrawer(tab.id),
-  }))
-}
 
 // ── Match highlight ────────────────────────────────────────────────────────────
 
@@ -42,7 +29,9 @@ function highlightMatch(text: string, query: string): ReactNode {
 export default function CommandPalette() {
   const isOpen = useStore((s) => s.commandPaletteOpen)
   const close = useStore((s) => s.closeCommandPalette)
+  const userRole = useStore((s) => s.user?.role)
   const drawerTabs = useStore((s) => s.drawerTabs)
+  const extensionCommands = useStore((s) => s.extensionCommands)
   const activeChatId = useStore((s) => s.activeChatId)
   const messageCount = useStore((s) => s.messages.length)
   const streaming = useStore((s) => s.isStreaming)
@@ -82,7 +71,7 @@ export default function CommandPalette() {
   }, [location.pathname, streaming, messageCount])
 
   const { grouped, orderedFlat, flatIndexMap } = useMemo(() => {
-    const allCommands = [...COMMANDS, ...extensionTabsToCommands(drawerTabs)]
+    const allCommands = [...buildCommands(userRole), ...extensionTabsToCommands(drawerTabs), ...extensionCommandsToCommands(extensionCommands)]
     
     let filtered = allCommands.filter((cmd) => {
       const isVisible = activeScopes.has(cmd.scope || 'global')
@@ -130,7 +119,7 @@ export default function CommandPalette() {
     }
 
     return { grouped: groups, orderedFlat: flat, flatIndexMap: idxMap }
-  }, [query, drawerTabs, activeScopes, location.pathname])
+  }, [query, userRole, drawerTabs, extensionCommands, activeScopes, location.pathname])
 
   // Clamp active index when filtered list shrinks
   useEffect(() => {

@@ -69,7 +69,7 @@ export function useSelfWatcher(
     const scheduleRestart = (path: string) => {
       if (pendingRef.current) return;
       pendingRef.current = true;
-      const filename = path.split("/").pop() || path;
+      const filename = path.split(/[/\\]/).pop() || path;
       addLogRef.current(`Runner source changed: ${filename}`, "system");
       setTimeout(() => doRestart(), SELF_RESTART_DEBOUNCE_MS);
     };

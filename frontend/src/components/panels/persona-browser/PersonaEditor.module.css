@@ -135,6 +135,105 @@
   align-items: center;
 }
 
+.pronounSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 4%, var(--lumiverse-fill-subtle));
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 18%, var(--lumiverse-border));
+  border-radius: 8px;
+}
+
+.pronounHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pronounTitle {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  letter-spacing: 0.01em;
+}
+
+.pronounHint {
+  font-size: 10.5px;
+  color: var(--lumiverse-text-dim);
+}
+
+.pronounGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pronounField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  cursor: text;
+}
+
+.pronounLabel {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--lumiverse-text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pronounInputWrap {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color var(--lumiverse-transition-fast),
+              box-shadow var(--lumiverse-transition-fast);
+}
+
+.pronounInputWrap:focus-within {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lumiverse-primary) 30%, transparent);
+}
+
+.pronounMacro {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--lumiverse-primary);
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, var(--lumiverse-border));
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.pronounInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 7px 8px;
+  font-size: 12px;
+  color: var(--lumiverse-text);
+  outline: none;
+}
+
+.pronounInput::placeholder {
+  color: color-mix(in srgb, var(--lumiverse-text-dim) 70%, transparent);
+}
+
 .select {
   flex: 1;
   background: var(--lumiverse-bg);
@@ -279,8 +378,36 @@
   color: var(--lumiverse-primary);
 }
 
+.rebindBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-dim);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.rebindBtn:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-015);
+}
+
 .addonsBtn {
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, var(--lumiverse-bg));
   border-color: color-mix(in srgb, var(--lumiverse-primary) 40%, var(--lumiverse-border));
   color: var(--lumiverse-primary);
+}
+
+@media (max-width: 720px) {
+  .pronounGrid {
+    grid-template-columns: 1fr;
+  }
 }

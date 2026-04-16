@@ -39,6 +39,7 @@ nav = [
     { "OOC Comments" = "chatting/ooc.md" },
     { "Loom Summary" = "chatting/loom-summary.md" },
     { "Long-Term Memory" = "chatting/memory.md" },
+    { "Memory Cortex" = "chatting/memory-cortex.md" },
     { "Guided Generation" = "chatting/guided-generation.md" },
     { "Quick Replies" = "chatting/quick-replies.md" },
     { "Regen Feedback" = "chatting/regen-feedback.md" },
@@ -175,8 +176,6 @@ repo = "lucide/github"
 [project.markdown_extensions.pymdownx.superfences]
 
 [project.markdown_extensions.pymdownx.highlight]
-anchor_linenums = true
-line_spans = "__span"
 pygments_lang_class = true
 
 [project.markdown_extensions.pymdownx.inlinehilite]

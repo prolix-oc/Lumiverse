@@ -50,6 +50,7 @@ export default function RegexPanel() {
   const addRegexScript = useStore((s) => s.addRegexScript)
   const updateRegexScript = useStore((s) => s.updateRegexScript)
   const removeRegexScript = useStore((s) => s.removeRegexScript)
+  const bulkRemoveRegexScripts = useStore((s) => s.bulkRemoveRegexScripts)
   const toggleRegexScript = useStore((s) => s.toggleRegexScript)
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -161,6 +162,25 @@ export default function RegexPanel() {
       toast.error(err.body?.error || err.message)
     }
   }, [removeRegexScript, expandedId])
+
+  const handleDeleteFolder = useCallback(async (scripts: RegexScript[], folderLabel: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (scripts.length === 0) return
+    const confirmMsg = `Delete all ${scripts.length} regex script${scripts.length === 1 ? '' : 's'} in "${folderLabel}"? This cannot be undone.`
+    if (!confirm(confirmMsg)) return
+    const ids = scripts.map((s) => s.id)
+    try {
+      const deleted = await bulkRemoveRegexScripts(ids)
+      if (expandedId && ids.includes(expandedId)) setExpandedId(null)
+      if (deleted < ids.length) {
+        toast.error(`${ids.length - deleted} script${ids.length - deleted === 1 ? '' : 's'} could not be deleted`)
+      } else {
+        toast.success(`Deleted ${deleted} script${deleted === 1 ? '' : 's'}`)
+      }
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message)
+    }
+  }, [bulkRemoveRegexScripts, expandedId])
 
   const handleToggle = useCallback(async (id: string, disabled: boolean, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -309,21 +329,35 @@ export default function RegexPanel() {
           groupedScripts.map((group) => {
             const folderKey = group.folder || '__uncategorized'
             const isCollapsed = collapsedFolders.has(folderKey)
+            const folderLabel = group.folder || 'Uncategorized'
             return (
               <div key={folderKey}>
-                <button
+                <div
                   className={styles.folderHeader}
                   onClick={() => toggleFolder(folderKey)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleFolder(folderKey) }}
                 >
                   <ChevronRight
                     size={12}
                     className={clsx(styles.folderChevron, !isCollapsed && styles.folderChevronOpen)}
                   />
                   <span className={styles.folderName}>
-                    {group.folder || 'Uncategorized'}
+                    {folderLabel}
                   </span>
                   <span className={styles.folderCount}>{group.scripts.length}</span>
-                </button>
+                  {group.folder && (
+                    <button
+                      className={styles.folderDeleteBtn}
+                      onClick={(e) => handleDeleteFolder(group.scripts, folderLabel, e)}
+                      title={`Delete all scripts in "${folderLabel}"`}
+                      aria-label={`Delete all scripts in ${folderLabel}`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
                 {!isCollapsed &&
                   group.scripts.map((script) => (
                     <ScriptRow

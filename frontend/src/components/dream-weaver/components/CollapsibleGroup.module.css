@@ -1,0 +1,86 @@
+.group {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.625rem 1.25rem;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text, #f0e7fc);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.chevron {
+  color: var(--lumiverse-text-secondary, #797384);
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.group[data-open] .chevron {
+  transform: rotate(90deg);
+}
+
+.label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.subtitle {
+  font-size: 0.6875rem;
+  color: var(--lumiverse-text-secondary, #797384);
+}
+
+.headerActions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.actionButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: var(--lumiverse-text-secondary, #797384);
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.actionButton:hover {
+  color: var(--lumiverse-primary, #bd9dff);
+  border-color: rgba(189, 157, 255, 0.2);
+}
+
+.deleteButton:hover {
+  color: #ff6e84;
+  border-color: rgba(255, 110, 132, 0.2);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.body {
+  padding: 0 1.25rem 0.75rem;
+}

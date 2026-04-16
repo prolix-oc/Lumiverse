@@ -1,0 +1,136 @@
+.container {
+  position: relative;
+}
+
+.chipArea {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  cursor: text;
+  min-height: 32px;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.chipArea:focus-within {
+  border-color: var(--lumiverse-primary-muted);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+  font-size: 11px;
+  color: var(--lumiverse-text);
+  line-height: 1.2;
+  animation: chipIn 0.12s ease-out;
+}
+
+@keyframes chipIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.chipLabel {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipRemove {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 2px;
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.chipRemove:hover {
+  color: var(--lumiverse-text);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 60px;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.searchInput::placeholder {
+  color: var(--lumiverse-text-hint);
+}
+
+.chevron {
+  color: var(--lumiverse-text-hint);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--lumiverse-bg-elevated);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  z-index: 10;
+  padding: 4px;
+  box-shadow: var(--lumiverse-shadow-md);
+}
+
+.dropdownItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.dropdownItem:hover {
+  background: var(--lumiverse-primary-010);
+}
+
+.dropdownLabel {
+  font-weight: 500;
+}
+
+.dropdownSlug {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+}
+
+.dropdownEmpty {
+  padding: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}

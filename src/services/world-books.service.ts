@@ -300,6 +300,31 @@ export function listEntries(userId: string, worldBookId: string): WorldBookEntry
   return (getDb().query("SELECT * FROM world_book_entries WHERE world_book_id = ? ORDER BY order_value ASC").all(worldBookId) as any[]).map(rowToEntry);
 }
 
+/**
+ * Batch-load entries for multiple world books in 2 queries (ownership + entries).
+ * Returns a Map from bookId → entries[], preserving per-book grouping.
+ */
+export function listEntriesForBooks(userId: string, bookIds: string[]): Map<string, WorldBookEntry[]> {
+  if (bookIds.length === 0) return new Map();
+  const ph = bookIds.map(() => "?").join(", ");
+  const owned = getDb()
+    .query(`SELECT id FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
+    .all(...bookIds, userId) as { id: string }[];
+  const ownedSet = new Set(owned.map(b => b.id));
+  const validIds = bookIds.filter(id => ownedSet.has(id));
+  if (validIds.length === 0) return new Map();
+  const eph = validIds.map(() => "?").join(", ");
+  const rows = getDb()
+    .query(`SELECT * FROM world_book_entries WHERE world_book_id IN (${eph}) ORDER BY world_book_id, order_value ASC`)
+    .all(...validIds) as any[];
+  const result = new Map<string, WorldBookEntry[]>();
+  for (const id of validIds) result.set(id, []);
+  for (const row of rows) {
+    result.get(row.world_book_id)?.push(rowToEntry(row));
+  }
+  return result;
+}
+
 export function getEntry(userId: string, id: string): WorldBookEntry | null {
   const row = getDb().query(
     "SELECT e.* FROM world_book_entries e JOIN world_books w ON e.world_book_id = w.id WHERE e.id = ? AND w.user_id = ?"

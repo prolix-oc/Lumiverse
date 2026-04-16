@@ -139,7 +139,6 @@
 /* GPU optimization: disable backdrop-filter on all cards during streaming */
 .streaming [data-message-id] {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 
 /* ── Portrait side wrapper — slides tab + panel as a unit ──
@@ -212,7 +211,6 @@
 
 :global([data-glass]) .portraitTab {
   backdrop-filter: blur(var(--lcs-glass-blur));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur));
 }
 
 .portraitTab:hover {

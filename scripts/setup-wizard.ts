@@ -9,8 +9,8 @@
  *   OWNER_USERNAME, OWNER_PASSWORD, PORT, SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES
  */
 
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { createInterface } from "readline";
 import { hashPassword } from "../src/crypto/password";
 import { createIdentityFile, bytesToHex } from "../src/crypto/identity";
@@ -25,6 +25,7 @@ import {
   inputHint,
   theme,
 } from "./ui";
+import { askSecret } from "./input";
 
 // ─── Input helpers ──────────────────────────────────────────────────────────
 
@@ -39,41 +40,7 @@ function ask(question: string, defaultValue?: string): Promise<string> {
   });
 }
 
-function askSecret(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(`${promptLabel(question)} `);
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-
-    if (stdin.isTTY) {
-      stdin.setRawMode(true);
-    }
-
-    let input = "";
-    const onData = (char: Buffer) => {
-      const c = char.toString();
-      if (c === "\n" || c === "\r") {
-        if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
-        stdin.removeListener("data", onData);
-        process.stdout.write("\n");
-        resolve(input);
-      } else if (c === "\u007F" || c === "\b") {
-        if (input.length > 0) {
-          input = input.slice(0, -1);
-          process.stdout.write("\b \b");
-        }
-      } else if (c === "\u0003") {
-        process.stdout.write("\n");
-        process.exit(1);
-      } else {
-        input += c;
-        process.stdout.write(`${theme.muted}*${theme.reset}`);
-      }
-    };
-    stdin.resume();
-    stdin.on("data", onData);
-  });
-}
+// askSecret imported from ./input — byte-level processing, NFC normalization
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -196,7 +163,7 @@ async function main() {
 
   // Hash password and write credentials file
   const passwordHash = await hashPassword(password);
-  writeOwnerCredentials(credentialsPath, username, passwordHash);
+  await writeOwnerCredentials(credentialsPath, username, passwordHash);
 
   // Build .env content (no plaintext credentials!)
   const envLines = [

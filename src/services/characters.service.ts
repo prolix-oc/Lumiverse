@@ -352,6 +352,20 @@ export function getCharacter(userId: string, id: string): Character | null {
   return rowToCharacter(row);
 }
 
+/**
+ * Batch-load multiple characters by ID in a single query.
+ */
+export function getCharactersByIds(userId: string, ids: string[]): Map<string, Character> {
+  if (ids.length === 0) return new Map();
+  const ph = ids.map(() => "?").join(", ");
+  const rows = getDb()
+    .query(`SELECT * FROM characters WHERE id IN (${ph}) AND user_id = ?`)
+    .all(...ids, userId) as any[];
+  const result = new Map<string, Character>();
+  for (const row of rows) result.set(row.id, rowToCharacter(row));
+  return result;
+}
+
 export function createCharacter(userId: string, input: CreateCharacterInput): Character {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);

@@ -40,7 +40,9 @@ export function useSummary() {
   const userName = activePersona?.name || 'User'
 
   // Resolve connection ID for summary generation
+  // 'sidecar' mode omits the ID so the backend resolves via sidecar settings
   const resolveConnectionId = useCallback((): string | undefined => {
+    if (summarization.apiSource === 'sidecar') return undefined
     if (summarization.apiSource === 'dedicated' && summarization.dedicatedConnectionId) {
       return summarization.dedicatedConnectionId
     }
@@ -86,6 +88,8 @@ export function useSummary() {
         messageContext,
         userName,
         characterName,
+        systemPromptOverride: summarization.systemPromptOverride,
+        userPromptOverride: summarization.userPromptOverride,
       })
 
       if (result) {

@@ -26,6 +26,15 @@ await spindle.chat.updateMessage(chatId, messageId, {
 
 // Delete a message
 await spindle.chat.deleteMessage(chatId, messageId)
+
+// Hide a message from chat memory embeddings
+await spindle.chat.setMessageHidden(chatId, messageId, true)
+
+// Bulk-hide a batch of messages (capped at 500 per call)
+await spindle.chat.setMessagesHidden(chatId, [id1, id2, id3], true)
+
+// Read the hidden flag for a single message
+const isHidden = await spindle.chat.isMessageHidden(chatId, messageId)
 ```
 
 ## Methods
@@ -36,6 +45,22 @@ await spindle.chat.deleteMessage(chatId, messageId)
 | `appendMessage(chatId, message)` | `Promise<{ id: string }>` | Add a new message. Fields: `{ role, content, metadata? }` |
 | `updateMessage(chatId, messageId, patch)` | `Promise<void>` | Edit a message. Patch: `{ content?, metadata? }` |
 | `deleteMessage(chatId, messageId)` | `Promise<void>` | Remove a message |
+| `setMessageHidden(chatId, messageId, hidden)` | `Promise<void>` | Toggle the `hidden` flag on one message |
+| `setMessagesHidden(chatId, messageIds, hidden)` | `Promise<void>` | Bulk variant. Up to 500 IDs per call. |
+| `isMessageHidden(chatId, messageId)` | `Promise<boolean>` | Read the current hidden flag |
+
+## Hidden Messages
+
+The `hidden` flag is the same field that the built-in chat UI's "exclude from context" toggle controls. It lives on `message.extra.hidden` and is mirrored on every chat message event (`MESSAGE_SENT` / `MESSAGE_EDITED` / `MESSAGE_SWIPED`) inside the message's `extra` bag.
+
+**What hiding currently does:**
+
+- ✅ **Excludes the message from chat-memory embeddings.** Hidden messages are filtered out before chunking and never contribute to vector retrieval results.
+- ❌ **Does NOT currently exclude the message from prompt-assembly chat history.** A hidden message is still visible to the LLM during normal generation. This asymmetry is intentional in the current build — hiding a message hides it from *retrieval* search but leaves the linear chat history alone.
+
+If you need a guarantee that the LLM never sees a message, use `deleteMessage` or rewrite its `content` via `updateMessage`. Toggling `hidden` is the right tool for retrieval-side curation (e.g. an extension that flags noisy or off-topic messages so they stop polluting recall) but not for hard removal from prompts.
+
+The bulk variant cap of 500 IDs per call mirrors the underlying service limit and exists to keep the SQLite transaction bounded.
 
 ## ChatMessage
 

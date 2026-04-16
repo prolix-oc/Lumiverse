@@ -3,9 +3,11 @@ import { CheckCircle, XCircle, ArrowRight, ArrowLeft, Play, RotateCcw } from 'lu
 import { Spinner } from '@/components/shared/Spinner'
 import { Toggle } from '@/components/shared/Toggle'
 import { useStore } from '@/store'
-import { stMigrationApi, type ValidateResult, type ScanResult, type MigrationScope } from '@/api/st-migration'
+import { stMigrationApi, type ValidateResult, type ScanResult, type MigrationScope, type FileConnectionConfig } from '@/api/st-migration'
+import type { MigrationProgressPayload } from '@/types/ws-events'
 import type { AuthUser } from '@/types/store'
 import DirectoryBrowser from './DirectoryBrowser'
+import ConnectionPicker from './ConnectionPicker'
 import styles from './MigrationSettings.module.css'
 
 type Step = 'browse' | 'stUser' | 'scan' | 'target' | 'confirm' | 'progress'
@@ -25,6 +27,8 @@ export default function MigrationSettings() {
   // Wizard state
   const [step, setStep] = useState<Step>(migrationId && !migrationResult && !migrationError ? 'progress' : 'browse')
   const [currentPath, setCurrentPath] = useState('')
+  const [connection, setConnection] = useState<FileConnectionConfig>({ type: 'local' })
+  const [remoteConnected, setRemoteConnected] = useState(true) // local starts "connected"
   const [validation, setValidation] = useState<ValidateResult | null>(null)
   const [validating, setValidating] = useState(false)
   const [selectedStUser, setSelectedStUser] = useState('')
@@ -50,6 +54,35 @@ export default function MigrationSettings() {
     }
   }, [migrationId, migrationResult, migrationError])
 
+  // Poll /status as fallback in case WS events are missed or delayed
+  useEffect(() => {
+    if (step !== 'progress' || migrationResult || migrationError) return
+
+    const poll = async () => {
+      try {
+        const status = await stMigrationApi.status()
+        if (status.status === 'completed' && status.results) {
+          useStore.getState().setMigrationCompleted({ migrationId: status.migrationId!, durationMs: 0, results: status.results })
+        } else if (status.status === 'failed' && status.error) {
+          useStore.getState().setMigrationFailed({ migrationId: status.migrationId ?? '', error: status.error })
+        } else if (status.status === 'running' && status.phase) {
+          // Only update phase if the backend is ahead of our current state
+          const current = useStore.getState().migrationPhase
+          if (current === 'starting' || current === 'scanning') {
+            if (status.phase !== 'starting' && status.phase !== 'scanning') {
+              useStore.getState().setMigrationProgress({ migrationId: status.migrationId ?? '', phase: status.phase as MigrationProgressPayload['phase'], label: status.phase, current: 0, total: 0 })
+            }
+          }
+        }
+      } catch {
+        // Ignore polling errors
+      }
+    }
+
+    const interval = setInterval(poll, 3000)
+    return () => clearInterval(interval)
+  }, [step, migrationResult, migrationError])
+
   // Auto-scroll logs
   useEffect(() => {
     if (logPanelRef.current) {
@@ -64,6 +97,20 @@ export default function MigrationSettings() {
     }
   }, [user?.role, listUsers])
 
+  const handleConnectionChange = useCallback((config: FileConnectionConfig) => {
+    setConnection(config)
+    setValidation(null)
+    setCurrentPath('')
+  }, [])
+
+  const handleRemoteConnected = useCallback((connected: boolean) => {
+    setRemoteConnected(connected)
+    if (!connected) {
+      setValidation(null)
+      setCurrentPath('')
+    }
+  }, [])
+
   const handlePathNavigate = useCallback((path: string) => {
     setCurrentPath(path)
     setValidation(null)
@@ -73,7 +120,7 @@ export default function MigrationSettings() {
     if (!currentPath) return
     setValidating(true)
     try {
-      const result = await stMigrationApi.validate(currentPath)
+      const result = await stMigrationApi.validate(currentPath, connection)
       setValidation(result)
       if (result.valid && result.stUsers && result.stUsers.length === 1) {
         setSelectedStUser(result.stUsers[0])
@@ -87,10 +134,11 @@ export default function MigrationSettings() {
 
   const getDataDir = (): string => {
     if (!validation?.basePath) return ''
+    const sep = connection.type === 'local' ? '/' : '/'
     if (validation.layout === 'legacy') {
-      return `${validation.basePath}/public`
+      return `${validation.basePath}${sep}public`
     }
-    return `${validation.basePath}/data/${selectedStUser}`
+    return `${validation.basePath}${sep}data${sep}${selectedStUser}`
   }
 
   const handleScan = async () => {
@@ -98,7 +146,7 @@ export default function MigrationSettings() {
     if (!dataDir) return
     setScanning(true)
     try {
-      const result = await stMigrationApi.scan(dataDir)
+      const result = await stMigrationApi.scan(dataDir, connection)
       setScanResult(result)
     } catch {
       setScanResult(null)
@@ -121,7 +169,12 @@ export default function MigrationSettings() {
     if (!dataDir || !targetUserId) return
     setExecuting(true)
     try {
-      const result = await stMigrationApi.execute({ dataDir, targetUserId, scope })
+      const result = await stMigrationApi.execute({
+        dataDir,
+        targetUserId,
+        scope,
+        connection: connection.type !== 'local' ? connection : undefined,
+      })
       setMigrationStarted(result.migrationId)
       setStep('progress')
     } catch (err: any) {
@@ -147,6 +200,16 @@ export default function MigrationSettings() {
     return u.role === 'user'
   })
 
+  const connectionLabel = connection.type === 'local'
+    ? 'Local filesystem'
+    : connection.type === 'sftp'
+      ? `SFTP (${(connection as any).host || '...'})`
+      : connection.type === 'smb'
+        ? `SMB (\\\\${(connection as any).host || '...'}\\${(connection as any).share || '...'})`
+        : connection.type === 'google-drive'
+          ? 'Google Drive'
+          : 'Dropbox'
+
   // Step rendering
   const renderStepIndicator = () => {
     const steps: Step[] = needsStUserStep
@@ -170,9 +233,18 @@ export default function MigrationSettings() {
     <div className={styles.section}>
       <h3 className={styles.title}>Select SillyTavern Directory</h3>
       <p className={styles.subtitle}>
-        Navigate to your SillyTavern installation folder. This is the root directory that contains the <code>data/</code> folder.
+        Choose how to connect to your SillyTavern installation, then navigate to the root directory containing the <code>data/</code> folder.
       </p>
-      <DirectoryBrowser onNavigate={handlePathNavigate} />
+
+      <ConnectionPicker value={connection} onChange={handleConnectionChange} onConnected={handleRemoteConnected} />
+
+      {remoteConnected && (
+        <DirectoryBrowser
+          key={connection.type === 'local' ? 'local' : `${connection.type}-connected`}
+          onNavigate={handlePathNavigate}
+          connection={connection}
+        />
+      )}
 
       <div className={styles.actions}>
         <button type="button" className={styles.btn} onClick={handleValidate} disabled={!currentPath || validating}>
@@ -377,6 +449,10 @@ export default function MigrationSettings() {
         <h3 className={styles.title}>Confirm Migration</h3>
         <div className={styles.summaryCard}>
           <div className={styles.summaryRow}>
+            <span className={styles.summaryLabel}>Connection</span>
+            <span className={styles.summaryValue}>{connectionLabel}</span>
+          </div>
+          <div className={styles.summaryRow}>
             <span className={styles.summaryLabel}>Source</span>
             <span className={styles.summaryValue}>{getDataDir()}</span>
           </div>
@@ -409,6 +485,7 @@ export default function MigrationSettings() {
     const phase = migrationPhase || 'starting'
     const phaseLabels: Record<string, string> = {
       starting: 'Starting...',
+      scanning: 'Scanning data...',
       characters: 'Characters',
       worldBooks: 'World Books',
       personas: 'Personas',

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { Image as ImageIcon, Sparkles, Settings2, Trash2, Plus, X } from 'lucide-react'
+import { Image as ImageIcon, Settings2, Trash2, Plus, X } from 'lucide-react'
+import { IconBrush } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { imageGenApi, type SceneData } from '@/api/image-gen'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
@@ -37,22 +38,147 @@ function toDataRef(file: File): Promise<RefImage> {
   })
 }
 
+/** Combobox for model-component fields backed by a live API fetch. */
+function ModelComboField({
+  label,
+  hint,
+  paramKey,
+  modelSubtype,
+  connectionId,
+  value,
+  onChange,
+}: {
+  label: string
+  hint: string
+  paramKey: string
+  modelSubtype: string
+  connectionId: string | null
+  value: any
+  onChange: (key: string, value: any) => void
+}) {
+  const [models, setModels] = useState<Array<{ id: string; label: string }> | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!connectionId) return
+    setLoading(true)
+    try {
+      const res = await imageGenConnectionsApi.modelsBySubtype(connectionId, modelSubtype)
+      setModels(res.models ?? [])
+      setOpen(true)
+    } catch {
+      setModels([])
+    } finally {
+      setLoading(false)
+    }
+  }, [connectionId, modelSubtype])
+
+  return (
+    <FormField label={label} hint={hint}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <TextInput
+          value={value ?? ''}
+          onChange={(v) => onChange(paramKey, v)}
+          placeholder="(default)"
+          style={{ flex: 1 }}
+        />
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading || !connectionId}
+          title="Browse available models"
+          style={{
+            flexShrink: 0,
+            padding: '0 8px',
+            height: 30,
+            background: 'var(--lumiverse-surface-raised)',
+            border: '1px solid var(--lumiverse-border)',
+            borderRadius: 4,
+            color: 'var(--lumiverse-text)',
+            cursor: 'pointer',
+            fontSize: 12,
+          }}
+        >
+          {loading ? '…' : '↓'}
+        </button>
+      </div>
+      {open && models !== null && (
+        <div
+          style={{
+            marginTop: 4,
+            border: '1px solid var(--lumiverse-border)',
+            borderRadius: 4,
+            background: 'var(--lumiverse-surface-raised)',
+            maxHeight: 160,
+            overflowY: 'auto',
+          }}
+        >
+          <div
+            style={{ padding: '4px 8px', cursor: 'pointer', fontSize: 12, color: 'var(--lumiverse-text-muted)' }}
+            onClick={() => { onChange(paramKey, ''); setOpen(false) }}
+          >
+            (clear / use default)
+          </div>
+          {models.length === 0 ? (
+            <div style={{ padding: '4px 8px', fontSize: 12, color: 'var(--lumiverse-text-muted)' }}>
+              No models found
+            </div>
+          ) : (
+            models.map((m) => (
+              <div
+                key={m.id}
+                style={{
+                  padding: '4px 8px',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  background: value === m.id ? 'var(--lumiverse-accent-muted)' : undefined,
+                }}
+                onClick={() => { onChange(paramKey, m.id); setOpen(false) }}
+              >
+                {m.label}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </FormField>
+  )
+}
+
 /** Render a single parameter from the provider capability schema */
 function ParamField({
   paramKey,
   schema,
   value,
   onChange,
+  connectionId,
 }: {
   paramKey: string
   schema: ImageGenParameterSchema
   value: any
   onChange: (key: string, value: any) => void
+  connectionId?: string | null
 }) {
   const displayName = paramKey
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
     .trim()
+
+  // Model-component fields get a combobox backed by the API
+  if (schema.modelSubtype && schema.type === 'string') {
+    return (
+      <ModelComboField
+        label={displayName}
+        hint={schema.description}
+        paramKey={paramKey}
+        modelSubtype={schema.modelSubtype}
+        connectionId={connectionId ?? null}
+        value={value}
+        onChange={onChange}
+      />
+    )
+  }
 
   switch (schema.type) {
     case 'select':
@@ -184,18 +310,29 @@ export default function ImageGenPanel() {
 
   // Group parameters by their group field
   const paramGroups = useMemo(() => {
-    if (!capabilities) return { main: [], advanced: [], references: [] }
+    if (!capabilities) return { main: [], advanced: [], references: [], extra: [] as Array<{ name: string; params: Array<[string, ImageGenParameterSchema]> }> }
     const groups: Record<string, Array<[string, ImageGenParameterSchema]>> = {
       main: [],
       advanced: [],
       references: [],
     }
+    const KNOWN_GROUPS = new Set(['main', 'advanced', 'references'])
+    const extraGroups: Array<{ name: string; params: Array<[string, ImageGenParameterSchema]> }> = []
+    const extraMap = new Map<string, Array<[string, ImageGenParameterSchema]>>()
+
     for (const [key, schema] of Object.entries(capabilities.parameters)) {
       const group = schema.group || 'main'
-      if (!groups[group]) groups[group] = []
-      groups[group].push([key, schema])
+      if (KNOWN_GROUPS.has(group)) {
+        groups[group].push([key, schema])
+      } else {
+        if (!extraMap.has(group)) extraMap.set(group, [])
+        extraMap.get(group)!.push([key, schema])
+      }
     }
-    return groups
+    for (const [name, params] of extraMap) {
+      extraGroups.push({ name, params })
+    }
+    return { ...groups, extra: extraGroups }
   }, [capabilities])
 
   // Generation parameters stored in imageGeneration.parameters (flat, provider-agnostic)
@@ -293,21 +430,30 @@ export default function ImageGenPanel() {
             <>
               {/* Main parameters */}
               {paramGroups.main.map(([key, schema]) => (
-                <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} />
+                <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
               ))}
 
               {/* Advanced parameters */}
               {paramGroups.advanced.length > 0 && (
                 <EditorSection title="Advanced" Icon={Settings2} defaultExpanded={false}>
                   {paramGroups.advanced.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
                   ))}
                 </EditorSection>
               )}
 
+              {/* Extra parameter groups (e.g. "models" for SwarmUI) */}
+              {paramGroups.extra.map(({ name, params }) => (
+                <EditorSection key={name} title={name.charAt(0).toUpperCase() + name.slice(1)} Icon={Settings2} defaultExpanded={false}>
+                  {params.map(([key, schema]) => (
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                  ))}
+                </EditorSection>
+              ))}
+
               {/* Director References — provider-specific, only for NovelAI and NanoGPT */}
               {supportsRefs && (
-                <EditorSection title="Director References" Icon={Sparkles} defaultExpanded={false}>
+                <EditorSection title="Director References" Icon={IconBrush} defaultExpanded={false}>
                   {providerName === 'novelai' && (
                     <>
                       <ToggleRow
@@ -380,9 +526,9 @@ export default function ImageGenPanel() {
 
               {/* References group parameters from schema (if any future provider declares them) */}
               {paramGroups.references.length > 0 && !supportsRefs && (
-                <EditorSection title="References" Icon={Sparkles} defaultExpanded={false}>
+                <EditorSection title="References" Icon={IconBrush} defaultExpanded={false}>
                   {paramGroups.references.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
                   ))}
                 </EditorSection>
               )}
@@ -391,7 +537,7 @@ export default function ImageGenPanel() {
 
           <input ref={refInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onRefFiles} />
 
-          <EditorSection title="Scene Settings" Icon={Sparkles}>
+          <EditorSection title="Scene Settings" Icon={IconBrush}>
             <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label="Include Characters" />
             <ToggleRow checked={imageGeneration.autoGenerate !== false} onChange={(checked) => updateTop({ autoGenerate: checked })} label="Auto-Generate On Reply" />
             <ToggleRow checked={!!imageGeneration.forceGeneration} onChange={(checked) => updateTop({ forceGeneration: checked })} label="Ignore Scene Change Detection" />
@@ -414,7 +560,7 @@ export default function ImageGenPanel() {
 
           <div className={styles.actions}>
             <Button variant="primary" size="sm" icon={<ImageIcon size={14} />} onClick={() => handleGenerate(false)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>{sceneGenerating ? 'Generating...' : 'Generate Now'}</Button>
-            <Button variant="secondary" size="sm" icon={<Sparkles size={14} />} onClick={() => handleGenerate(true)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>Force Generate</Button>
+            <Button variant="secondary" size="sm" icon={<IconBrush size={14} />} onClick={() => handleGenerate(true)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>Force Generate</Button>
             {sceneBackground && <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => setSceneBackground(null)}>Clear</Button>}
           </div>
 

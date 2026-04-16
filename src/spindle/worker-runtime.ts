@@ -9,6 +9,7 @@ import type {
   WorkerToHost,
   HostToWorker,
   LlmMessageDTO,
+  InterceptorResultDTO,
   SpindleAPI,
   ConnectionProfileDTO,
   PermissionDeniedDetail,
@@ -34,7 +35,7 @@ import type {
 let manifest: SpindleManifest;
 let storagePath: string;
 
-const eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
+const eventHandlers = new Map<string, Set<(payload: unknown, userId?: string) => void>>();
 const pendingResponses = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
@@ -43,13 +44,14 @@ let interceptHandler:
   | ((
       messages: LlmMessageDTO[],
       context: unknown
-    ) => Promise<LlmMessageDTO[]>)
+    ) => Promise<LlmMessageDTO[] | InterceptorResultDTO>)
   | null = null;
 let contextHandlerFn: ((context: unknown) => Promise<unknown>) | null = null;
 let oauthCallbackHandler:
   | ((params: Record<string, string>) => Promise<{ html?: string } | void>)
   | null = null;
 const frontendMessageHandlers = new Set<(payload: unknown, userId: string) => void>();
+const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
 const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
 const grantedPermissions = new Set<string>();
@@ -71,7 +73,7 @@ function request(msg: WorkerToHost & { requestId: string }): Promise<unknown> {
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: SpindleAPI = {
-  on(event: string, handler: (payload: unknown) => void): () => void {
+  on(event: string, handler: (payload: any) => void): () => void {
     if (!eventHandlers.has(event)) {
       eventHandlers.set(event, new Set());
       post({ type: "subscribe_event", event });
@@ -92,18 +94,19 @@ const spindleApi: SpindleAPI = {
       // Function handler — store directly, strip before posting (not serializable)
       extensionMacroHandlers.set(def.name.toLowerCase(), def.handler as (ctx: unknown) => unknown | Promise<unknown>);
     } else if (typeof def.handler === "string" && def.handler.trim()) {
-      try {
-        const compiled = new Function("ctx", `"use strict";\n${def.handler}`) as (
-          ctx: unknown
-        ) => unknown | Promise<unknown>;
-        extensionMacroHandlers.set(def.name.toLowerCase(), compiled);
-      } catch (err: any) {
-        post({
-          type: "log",
-          level: "error",
-          message: `Failed to compile macro ${def.name}: ${err?.message || err}`,
-        });
-      }
+      // String handlers used to be compiled via `new Function(...)`, which is
+      // equivalent to eval() inside the worker context — every macro string
+      // would run with full access to the extension's RPC bridge. That made
+      // the handler value itself an arbitrary-code-execution sink. Refuse to
+      // load string handlers; extensions must export real functions.
+      post({
+        type: "log",
+        level: "error",
+        message: `Macro "${def.name}" was registered with a string handler. ` +
+          `String handlers are no longer supported — return a function from your ` +
+          `module instead. The macro was NOT registered.`,
+      });
+      return;
     }
     // Strip handler before posting — host creates its own RPC handler;
     // functions can't survive structured cloning anyway
@@ -112,7 +115,10 @@ const spindleApi: SpindleAPI = {
       type: "register_macro",
       definition: {
         ...serializableDef,
-        handler: typeof def.handler === "string" ? def.handler : "",
+        // Always send an empty handler over the wire; the host invokes the
+        // worker's resolveMacro() RPC for execution and never trusts the
+        // serialized field.
+        handler: "",
       },
     });
   },
@@ -173,6 +179,76 @@ const spindleApi: SpindleAPI = {
         userId,
       });
       return result as import("lumiverse-spindle-types").DryRunResultDTO;
+    },
+
+    observe(chatId: string): import("lumiverse-spindle-types").GenerationObserver {
+      type StartPayload = import("lumiverse-spindle-types").GenerationStartedPayloadDTO;
+      type TokenPayload = import("lumiverse-spindle-types").StreamTokenPayloadDTO;
+      type EndPayload = import("lumiverse-spindle-types").GenerationEndedPayloadDTO;
+      type StopPayload = import("lumiverse-spindle-types").GenerationStoppedPayloadDTO;
+
+      let startHandlers: Array<(info: StartPayload) => void> = [];
+      let tokenHandlers: Array<(token: TokenPayload) => void> = [];
+      let endHandlers: Array<(result: EndPayload) => void> = [];
+      let stopHandlers: Array<(result: StopPayload) => void> = [];
+
+      let content = "";
+      let reasoning = "";
+      let activeGenerationId: string | null = null;
+
+      const unsubStart = spindleApi.on("GENERATION_STARTED", (payload: unknown) => {
+        const p = payload as StartPayload;
+        if (p.chatId !== chatId) return;
+        activeGenerationId = p.generationId;
+        content = "";
+        reasoning = "";
+        for (const h of startHandlers) h(p);
+      });
+
+      const unsubToken = spindleApi.on("STREAM_TOKEN_RECEIVED", (payload: unknown) => {
+        const p = payload as TokenPayload;
+        if (p.chatId !== chatId) return;
+        if (p.type === "reasoning") {
+          reasoning += p.token;
+        } else {
+          content += p.token;
+        }
+        for (const h of tokenHandlers) h(p);
+      });
+
+      const unsubEnd = spindleApi.on("GENERATION_ENDED", (payload: unknown) => {
+        const p = payload as EndPayload;
+        if (p.chatId !== chatId) return;
+        activeGenerationId = null;
+        for (const h of endHandlers) h(p);
+      });
+
+      const unsubStop = spindleApi.on("GENERATION_STOPPED", (payload: unknown) => {
+        const p = payload as StopPayload;
+        if (p.chatId !== chatId) return;
+        activeGenerationId = null;
+        for (const h of stopHandlers) h(p);
+      });
+
+      return {
+        onStart(handler) { startHandlers.push(handler); },
+        onToken(handler) { tokenHandlers.push(handler); },
+        onEnd(handler) { endHandlers.push(handler); },
+        onStop(handler) { stopHandlers.push(handler); },
+        get content() { return content; },
+        get reasoning() { return reasoning; },
+        get generationId() { return activeGenerationId; },
+        dispose() {
+          unsubStart();
+          unsubToken();
+          unsubEnd();
+          unsubStop();
+          startHandlers = [];
+          tokenHandlers = [];
+          endHandlers = [];
+          stopHandlers = [];
+        },
+      };
     },
   },
 
@@ -503,6 +579,8 @@ const spindleApi: SpindleAPI = {
         role: "system" | "user" | "assistant";
         content: string;
         metadata?: Record<string, unknown>;
+        swipe_id: number;
+        swipes: string[];
       }>;
     },
     async appendMessage(chatId: string, message) {
@@ -533,6 +611,36 @@ const spindleApi: SpindleAPI = {
         chatId,
         messageId,
       });
+    },
+    async setMessageHidden(chatId: string, messageId: string, hidden: boolean): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "chat_set_message_hidden",
+        requestId,
+        chatId,
+        messageId,
+        hidden,
+      });
+    },
+    async setMessagesHidden(chatId: string, messageIds: string[], hidden: boolean): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "chat_set_messages_hidden",
+        requestId,
+        chatId,
+        messageIds,
+        hidden,
+      });
+    },
+    async isMessageHidden(chatId: string, messageId: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "chat_is_message_hidden",
+        requestId,
+        chatId,
+        messageId,
+      });
+      return result as boolean;
     },
   },
 
@@ -626,6 +734,10 @@ const spindleApi: SpindleAPI = {
       const requestId = crypto.randomUUID();
       await request({ type: "theme_apply", requestId, overrides });
     },
+    async applyPalette(palette, userId?: string): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "theme_apply_palette", requestId, palette, userId });
+    },
     async clear(): Promise<void> {
       const requestId = crypto.randomUUID();
       await request({ type: "theme_clear", requestId });
@@ -633,7 +745,7 @@ const spindleApi: SpindleAPI = {
     async getCurrent(userId?: string): Promise<{
       id: string; name: string; mode: "light" | "dark";
       accent: { h: number; s: number; l: number };
-      enableGlass: boolean; radiusScale: number; fontScale: number; characterAware: boolean;
+      enableGlass: boolean; radiusScale: number; fontScale: number; uiScale: number; characterAware: boolean;
     }> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "theme_get_current", requestId, userId });
@@ -643,6 +755,34 @@ const spindleApi: SpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "color_extract", requestId, imageId, userId });
       return result;
+    },
+    async generateVariables(config: {
+      accent: { h: number; s: number; l: number };
+      mode: "dark" | "light";
+      enableGlass?: boolean;
+      radiusScale?: number;
+      fontScale?: number;
+      uiScale?: number;
+      baseColors?: {
+        primary?: string;
+        secondary?: string;
+        background?: string;
+        text?: string;
+        danger?: string;
+        success?: string;
+        warning?: string;
+        speech?: string;
+        thoughts?: string;
+      };
+      statusColors?: {
+        danger?: string;
+        success?: string;
+        warning?: string;
+      };
+    }): Promise<Record<string, string>> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "theme_generate_variables", requestId, config });
+      return result as Record<string, string>;
     },
   },
 
@@ -694,6 +834,31 @@ const spindleApi: SpindleAPI = {
       async has(key: string, userId?: string): Promise<boolean> {
         const requestId = crypto.randomUUID();
         const result = await request({ type: "vars_has_global", requestId, key, userId });
+        return result as boolean;
+      },
+    },
+    chat: {
+      async get(chatId: string, key: string): Promise<string> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_get_chat", requestId, chatId, key });
+        return result as string;
+      },
+      async set(chatId: string, key: string, value: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_set_chat", requestId, chatId, key, value });
+      },
+      async delete(chatId: string, key: string): Promise<void> {
+        const requestId = crypto.randomUUID();
+        await request({ type: "vars_delete_chat", requestId, chatId, key });
+      },
+      async list(chatId: string): Promise<Record<string, string>> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_list_chat", requestId, chatId });
+        return result as Record<string, string>;
+      },
+      async has(chatId: string, key: string): Promise<boolean> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "vars_has_chat", requestId, chatId, key });
         return result as boolean;
       },
     },
@@ -1057,8 +1222,8 @@ const spindleApi: SpindleAPI = {
     post({ type: "register_context_handler", priority });
   },
 
-  sendToFrontend(payload: unknown): void {
-    post({ type: "frontend_message", payload });
+  sendToFrontend(payload: unknown, userId?: string): void {
+    post({ type: "frontend_message", payload, userId });
   },
 
   onFrontendMessage(handler: (payload: unknown, userId: string) => void): () => void {
@@ -1102,12 +1267,15 @@ const spindleApi: SpindleAPI = {
       width?: number;
       maxHeight?: number;
       persistent?: boolean;
+      modalRequestId?: string;
       userId?: string;
-    }): Promise<{ dismissedBy: "user" | "extension" | "cleanup" }> {
+    }): Promise<{ openRequestId: string; dismissedBy: "user" | "extension" | "cleanup" }> {
       const requestId = crypto.randomUUID();
+      const modalRequestId = options.modalRequestId ?? requestId;
       const result = await request({
         type: "modal_open",
         requestId,
+        modalRequestId,
         title: options.title,
         items: options.items,
         width: options.width,
@@ -1115,7 +1283,16 @@ const spindleApi: SpindleAPI = {
         persistent: options.persistent,
         userId: options.userId,
       } as any);
-      return result as { dismissedBy: "user" | "extension" | "cleanup" };
+      return { openRequestId: modalRequestId, ...(result as { dismissedBy: "user" | "extension" | "cleanup" }) };
+    },
+    async close(openRequestId: string, userId?: string): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "modal_close",
+        requestId,
+        openRequestId,
+        userId,
+      } as any);
     },
     async confirm(options: {
       title: string;
@@ -1137,6 +1314,62 @@ const spindleApi: SpindleAPI = {
         userId: options.userId,
       } as any);
       return result as { confirmed: boolean };
+    },
+  },
+
+  prompt: {
+    async input(options: {
+      title: string;
+      message?: string;
+      placeholder?: string;
+      defaultValue?: string;
+      submitLabel?: string;
+      cancelLabel?: string;
+      multiline?: boolean;
+      userId?: string;
+    }): Promise<{ value: string | null; cancelled: boolean }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "input_prompt_open",
+        requestId,
+        title: options.title,
+        message: options.message,
+        placeholder: options.placeholder,
+        defaultValue: options.defaultValue,
+        submitLabel: options.submitLabel,
+        cancelLabel: options.cancelLabel,
+        multiline: options.multiline,
+        userId: options.userId,
+      } as any);
+      return result as { value: string | null; cancelled: boolean };
+    },
+  },
+
+  commands: {
+    register(commands: any[]) {
+      post({ type: "commands_register", commands } as any);
+    },
+    unregister(commandIds?: string[]) {
+      post({ type: "commands_unregister", commandIds: commandIds ?? [] } as any);
+    },
+    onInvoked(handler: (commandId: string, context: any) => void | Promise<void>) {
+      commandInvokedHandlers.add(handler);
+      return () => {
+        commandInvokedHandlers.delete(handler);
+      };
+    },
+  },
+
+  version: {
+    async getBackend(): Promise<string> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "version_get_backend", requestId });
+      return result as string;
+    },
+    async getFrontend(): Promise<string> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "version_get_frontend", requestId });
+      return result as string;
     },
   },
 
@@ -1226,7 +1459,7 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       if (handlers) {
         for (const handler of handlers) {
           try {
-            handler(msg.payload);
+            handler(msg.payload, msg.userId);
           } catch (err: any) {
             post({
               type: "log",
@@ -1243,10 +1476,15 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       if (interceptHandler) {
         try {
           const result = await interceptHandler(msg.messages, msg.context);
+          // Normalize: handler may return LlmMessageDTO[] or { messages, parameters? }
+          const normalized: InterceptorResultDTO = Array.isArray(result)
+            ? { messages: result }
+            : result;
           post({
             type: "intercept_result",
             requestId: msg.requestId,
-            messages: result,
+            messages: normalized.messages,
+            ...(normalized.parameters ? { parameters: normalized.parameters } : {}),
           });
         } catch (err: any) {
           post({
@@ -1441,7 +1679,31 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       break;
     }
 
+    case "command_invoked": {
+      for (const handler of commandInvokedHandlers) {
+        try {
+          handler(msg.commandId, msg.context);
+        } catch (err: any) {
+          post({
+            type: "log",
+            level: "error",
+            message: `Command handler error (${msg.commandId}): ${err?.message ?? err}`,
+          } as any);
+        }
+      }
+      break;
+    }
+
     case "shutdown": {
+      // Signal the host so it doesn't have to wait for the 5s fallback
+      // timeout in WorkerHost.stop(). Posting via the existing log channel
+      // matches the __worker_ready__ pattern and avoids touching the
+      // shared WorkerToHost union type.
+      try {
+        post({ type: "log", level: "info", message: "__worker_shutdown_ack__" });
+      } catch {
+        // If posting fails, the host's 5s fallback terminates us anyway.
+      }
       // Allow extension to clean up
       process.exit(0);
       break;

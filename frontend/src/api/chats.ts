@@ -1,4 +1,4 @@
-import { get, post, put, del } from './client'
+import { get, post, put, patch, del, upload } from './client'
 import type {
   Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
@@ -32,6 +32,16 @@ export const chatsApi = {
 
   update(id: string, input: Partial<{ name: string; metadata: Record<string, any> }>) {
     return put<Chat>(`/chats/${id}`, input)
+  },
+
+  /**
+   * Atomic partial merge of chat metadata. Use this for chat-scoped UI
+   * controls (alternate field selector, world book attachments, author's
+   * note, etc.) so concurrent server-side writers can't clobber the keys
+   * the user just changed. Pass `null` for a key to delete it.
+   */
+  patchMetadata(id: string, partial: Record<string, any>) {
+    return patch<Chat>(`/chats/${id}/metadata`, partial)
   },
 
   delete(id: string) {
@@ -86,6 +96,13 @@ export const chatsApi = {
       messages: exportData.messages,
     })
   },
+
+  importFromSt(characterId: string, file: File) {
+    const fd = new FormData()
+    fd.append('character_id', characterId)
+    fd.append('file', file)
+    return upload<{ chat_id: string; name: string; message_count: number }>('/chats/import-st', fd)
+  },
 }
 
 export const messagesApi = {
@@ -121,6 +138,13 @@ export const messagesApi = {
     return post<{ success: true; updated: number; messages: Message[] }>(
       `/chats/${chatId}/messages/bulk-hide`,
       { message_ids: messageIds, hidden }
+    )
+  },
+
+  bulkDelete(chatId: string, messageIds: string[]) {
+    return post<{ success: true; deleted: number }>(
+      `/chats/${chatId}/messages/bulk-delete`,
+      { message_ids: messageIds }
     )
   },
 }

@@ -14,7 +14,10 @@ function snapshotBlockStates(blocks: PromptBlock[]): Record<string, boolean> {
   return states
 }
 
-export function usePresetProfiles(presetId: string | null, blocks: PromptBlock[] | undefined) {
+export function usePresetProfiles(
+  presetId: string | null,
+  blocks: PromptBlock[] | undefined,
+) {
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const addToast = useStore((s) => s.addToast)

@@ -42,6 +42,8 @@ export interface EnvConfig {
   stMigrationTarget: number;
   /** Re-trigger migration even if one already completed. */
   stForceNewMigration: boolean;
+  /** Optional Pollinations BYOP app key (publishable pk_...) */
+  pollinationsAppKey: string;
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -68,7 +70,13 @@ function parseEphemeralOverrides(raw?: string): Record<string, number> {
 }
 
 export function loadEnv(): EnvConfig {
-  const port = parseInt(process.env.PORT || "7860", 10);
+  // Validate PORT — out-of-range values used to be silently passed to Bun.serve,
+  // which then failed at bind time with a confusing native error.
+  const portRaw = process.env.PORT || "7860";
+  const port = parseInt(portRaw, 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid PORT "${portRaw}": must be an integer in 1..65535`);
+  }
 
   const encryptionKey = process.env.ENCRYPTION_KEY || "";
 
@@ -123,6 +131,8 @@ export function loadEnv(): EnvConfig {
   const stTargetUser = process.env.SILLYTAVERN_TARGET_USER || "default-user";
   const stMigrationTarget = Math.min(5, Math.max(1, parseInt(process.env.SILLYTAVERN_MIGRATION_TARGET || "5", 10) || 5));
   const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
+  // Publishable BYOP app key default used when no per-instance override is set.
+  const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "pk_Y3z2ooD6zSWfLdL3";
 
   return {
     port,
@@ -144,6 +154,7 @@ export function loadEnv(): EnvConfig {
     stTargetUser,
     stMigrationTarget,
     stForceNewMigration,
+    pollinationsAppKey,
   };
 }
 

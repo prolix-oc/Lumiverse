@@ -10,14 +10,364 @@ import {
   collectVectorActivatedWorldInfoDetailed,
   getWorldInfoVectorQueryPreview,
   mergeActivatedWorldInfoEntries,
+  applyVectorPriorityBoost,
 } from "../services/prompt-assembly.service";
-import { activateWorldInfo, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
+import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
+import { activateWorldInfo, finalizeActivatedWorldInfoEntries, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
+import type { WorldBookEntry } from "../types/world-book";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 
-const MAX_IMPORT_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_IMPORT_RESPONSE_BYTES = 100 * 1024 * 1024; // 100 MB
 
 const app = new Hono();
+
+type DiagnosticVectorHitOutcomeCode =
+  | "injected_vector"
+  | "already_keyword"
+  | "blocked_by_group"
+  | "blocked_by_min_priority"
+  | "blocked_by_max_entries"
+  | "blocked_by_token_budget"
+  | "deduplicated"
+  | "blocked_during_final_assembly"
+  | "trimmed_by_top_k"
+  | "rejected_by_rerank_cutoff"
+  | "rejected_by_similarity_threshold";
+
+interface DiagnosticVectorHitOutcome {
+  code: DiagnosticVectorHitOutcomeCode;
+  label: string;
+  reason: string;
+}
+
+type VectorHitEntry = Awaited<ReturnType<typeof collectVectorActivatedWorldInfoDetailed>>["candidateTrace"][number];
+type VectorTraceEntry = Awaited<ReturnType<typeof collectVectorActivatedWorldInfoDetailed>>["candidateTrace"][number];
+
+function formatDiagnosticMetric(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "0.000";
+}
+
+function buildRerankLead(options: {
+  rerankRank?: number | null;
+  finalScore?: number | null;
+  distance?: number | null;
+}): string {
+  const score = typeof options.finalScore === "number" && Number.isFinite(options.finalScore)
+    ? `rerank ${formatDiagnosticMetric(options.finalScore)}`
+    : null;
+  const distance = typeof options.distance === "number" && Number.isFinite(options.distance)
+    ? `distance ${formatDiagnosticMetric(options.distance)}`
+    : null;
+  const metrics = [score, distance].filter((value): value is string => Boolean(value));
+  const metricText = metrics.length > 0 ? ` (${metrics.join(", ")})` : "";
+  if (typeof options.rerankRank === "number" && Number.isFinite(options.rerankRank)) {
+    return `It ranked #${options.rerankRank} after reranking${metricText}.`;
+  }
+  return `This candidate was pulled from vector search${metricText}.`;
+}
+
+function getWorldInfoGroupKey(entry: WorldBookEntry): string | null {
+  const groupName = typeof entry.group_name === "string" ? entry.group_name.trim() : "";
+  return groupName ? groupName.toLowerCase() : null;
+}
+
+function buildDiagnosticVectorOutcome(
+  code: DiagnosticVectorHitOutcomeCode,
+  options: {
+    entry?: WorldBookEntry;
+    maxActivatedEntries?: number;
+    minPriority?: number;
+    conflictingEntry?: WorldBookEntry;
+    conflictingSource?: "keyword" | "vector";
+    keptEntryComment?: string;
+    dedupTier?: "exact" | "near-exact" | "fuzzy";
+    rerankRank?: number | null;
+    finalScore?: number | null;
+    distance?: number | null;
+    topK?: number;
+    rerankCutoff?: number;
+    similarityThreshold?: number;
+  } = {},
+): DiagnosticVectorHitOutcome {
+  const rerankLead = buildRerankLead({
+    rerankRank: options.rerankRank,
+    finalScore: options.finalScore,
+    distance: options.distance,
+  });
+  switch (code) {
+    case "injected_vector":
+      return {
+        code,
+        label: "Made final prompt",
+        reason: `${rerankLead} It survived final prompt assembly as a vector-activated entry.`,
+      };
+    case "already_keyword":
+      return {
+        code,
+        label: "Already keyword-active",
+        reason: `${rerankLead} The same entry was already activated by keyword logic, so vector retrieval did not add a second copy.`,
+      };
+    case "blocked_by_group": {
+      const conflicting = options.conflictingEntry?.comment?.trim() || "another entry";
+      const source = options.conflictingSource === "vector" ? "another vector hit" : "keyword activation";
+      const groupName = options.entry?.group_name?.trim() || "this mutually exclusive group";
+      return {
+        code,
+        label: "Blocked by group rule",
+        reason: `${rerankLead} ${groupName} was already occupied by "${conflicting}" via ${source}.`,
+      };
+    }
+    case "blocked_by_min_priority":
+      return {
+        code,
+        label: "Below minimum priority",
+        reason: `${rerankLead} Its priority (${options.entry?.priority ?? 0}) is below the current World Info minimum priority (${options.minPriority ?? 0}).`,
+      };
+    case "blocked_by_max_entries":
+      return {
+        code,
+        label: "No room under entry cap",
+        reason: `${rerankLead} The final World Info list had already reached the ${options.maxActivatedEntries ?? 0}-entry cap before this entry could be added.`,
+      };
+    case "blocked_by_token_budget":
+      return {
+        code,
+        label: "No room under token budget",
+        reason: `${rerankLead} Adding it would have pushed the World Info prompt past the current token budget, so earlier entries kept the room.`,
+      };
+    case "deduplicated": {
+      const kept = options.keptEntryComment?.trim() || "another entry";
+      const tier = options.dedupTier === "exact"
+        ? "exact duplicate"
+        : options.dedupTier === "near-exact"
+          ? "near-exact duplicate"
+          : "fuzzy duplicate";
+      return {
+        code,
+        label: "Removed as duplicate",
+        reason: `${rerankLead} It initially made the merged set, but it was removed as a ${tier} of "${kept}".`,
+      };
+    }
+    case "trimmed_by_top_k":
+      return {
+        code,
+        label: "Outside returned top-k",
+        reason: `${rerankLead} It cleared the rerank cutoff, but only the top ${options.topK ?? 0} reranked candidates are kept in the shortlist shown here.`,
+      };
+    case "rejected_by_rerank_cutoff":
+      return {
+        code,
+        label: "Below rerank cutoff",
+        reason: `It was pulled from vector search (rerank ${formatDiagnosticMetric(options.finalScore)}, distance ${formatDiagnosticMetric(options.distance)}), but the rerank score stayed below the current cutoff (${formatDiagnosticMetric(options.rerankCutoff)}).`,
+      };
+    case "rejected_by_similarity_threshold":
+      return {
+        code,
+        label: "Above similarity threshold",
+        reason: `It was pulled from vector search at distance ${formatDiagnosticMetric(options.distance)}, but that exceeded the current similarity threshold (${formatDiagnosticMetric(options.similarityThreshold)}), so reranking never got a chance to keep it.`,
+      };
+    case "blocked_during_final_assembly":
+    default:
+      return {
+        code: "blocked_during_final_assembly",
+        label: "Lost during final assembly",
+        reason: `${rerankLead} Later prompt-assembly rules still left no room for it in the final World Info list.`,
+      };
+  }
+}
+
+function traceDiagnosticVectorHitOutcomes(
+  keywordEntries: WorldBookEntry[],
+  vectorEntries: VectorHitEntry[],
+  settingsInput?: Partial<WorldInfoSettings>,
+): Map<string, DiagnosticVectorHitOutcome> {
+  const settings: WorldInfoSettings = {
+    globalScanDepth: null,
+    maxRecursionPasses: 0,
+    maxActivatedEntries: 50,
+    maxTokenBudget: 0,
+    minPriority: 0,
+    ...settingsInput,
+  };
+  const mergedEntries: WorldBookEntry[] = [];
+  const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
+  const seen = new Set<string>();
+  const occupiedGroups = new Map<string, { entry: WorldBookEntry; source: "keyword" | "vector" }>();
+  const outcomes = new Map<string, DiagnosticVectorHitOutcome>();
+  const maxActivatedTarget = settings.maxActivatedEntries > 0
+    ? settings.maxActivatedEntries
+    : Number.POSITIVE_INFINITY;
+
+  for (const entry of keywordEntries) {
+    if (seen.has(entry.id)) continue;
+    mergedEntries.push(entry);
+    seen.add(entry.id);
+    sources.set(entry.id, { source: "keyword" });
+    const groupKey = getWorldInfoGroupKey(entry);
+    if (groupKey) occupiedGroups.set(groupKey, { entry, source: "keyword" });
+  }
+
+  let finalized = finalizeActivatedWorldInfoEntries(mergedEntries, settings, {
+    skipGroupLogic: true,
+    preserveOrder: true,
+  });
+
+  for (const item of vectorEntries) {
+    if (seen.has(item.entry.id)) {
+      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("already_keyword", {
+        entry: item.entry,
+        rerankRank: item.rerankRank,
+        finalScore: item.finalScore,
+        distance: item.distance,
+      }));
+      continue;
+    }
+
+    if (settings.minPriority > 0 && item.entry.priority < settings.minPriority && !item.entry.constant) {
+      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_min_priority", {
+        entry: item.entry,
+        minPriority: settings.minPriority,
+        rerankRank: item.rerankRank,
+        finalScore: item.finalScore,
+        distance: item.distance,
+      }));
+      continue;
+    }
+
+    const groupKey = getWorldInfoGroupKey(item.entry);
+    if (groupKey) {
+      const occupied = occupiedGroups.get(groupKey);
+      if (occupied) {
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_group", {
+          entry: item.entry,
+          conflictingEntry: occupied.entry,
+          conflictingSource: occupied.source,
+          rerankRank: item.rerankRank,
+          finalScore: item.finalScore,
+          distance: item.distance,
+        }));
+        continue;
+      }
+    }
+
+    // Mirror prompt-assembly's merge: when the cap is full, apply a bounded
+    // score-derived priority boost to vector entries so they can compete on
+    // retrieval relevance instead of losing the order_value tiebreaker. See
+    // `applyVectorPriorityBoost` in prompt-assembly.service.ts.
+    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
+    const nextMergedEntries = [...mergedEntries, item.entry];
+    const finalizeInput = budgetFull
+      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
+      : nextMergedEntries;
+    const rawNextFinalized = finalizeActivatedWorldInfoEntries(finalizeInput, settings, {
+      skipGroupLogic: true,
+      preserveOrder: !budgetFull,
+    });
+    const nextFinalized = budgetFull
+      ? {
+          ...rawNextFinalized,
+          activatedEntries: rawNextFinalized.activatedEntries
+            .map((e) => nextMergedEntries.find((orig) => orig.id === e.id))
+            .filter((e): e is WorldBookEntry => !!e),
+        }
+      : rawNextFinalized;
+    const itemSurvived = nextFinalized.activatedEntries.some((entry) => entry.id === item.entry.id);
+    const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
+
+    if (!itemSurvived) {
+      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
+        budgetFull
+          ? "blocked_by_max_entries"
+          : settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
+        {
+          maxActivatedEntries: settings.maxActivatedEntries,
+          rerankRank: item.rerankRank,
+          finalScore: item.finalScore,
+          distance: item.distance,
+        },
+      ));
+      continue;
+    }
+    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
+      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
+        settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
+        {
+          rerankRank: item.rerankRank,
+          finalScore: item.finalScore,
+          distance: item.distance,
+        },
+      ));
+      continue;
+    }
+
+    mergedEntries.push(item.entry);
+    seen.add(item.entry.id);
+    sources.set(item.entry.id, { source: "vector", score: item.finalScore });
+    if (groupKey) occupiedGroups.set(groupKey, { entry: item.entry, source: "vector" });
+    finalized = nextFinalized;
+    outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("injected_vector", {
+      rerankRank: item.rerankRank,
+      finalScore: item.finalScore,
+      distance: item.distance,
+    }));
+  }
+
+  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources);
+  for (const removed of dedupResult.removed) {
+    if (!outcomes.has(removed.removedEntryId)) continue;
+    outcomes.set(removed.removedEntryId, buildDiagnosticVectorOutcome("deduplicated", {
+      keptEntryComment: removed.keptEntryComment,
+      dedupTier: removed.tier,
+    }));
+  }
+
+  return outcomes;
+}
+
+function resolveDiagnosticVectorTraceOutcome(
+  item: VectorTraceEntry,
+  shortlistedOutcomes: Map<string, DiagnosticVectorHitOutcome>,
+  options: {
+    topK: number;
+    rerankCutoff: number;
+    similarityThreshold: number;
+  },
+): DiagnosticVectorHitOutcome {
+  if (item.retrievalStage === "rejected_by_similarity_threshold") {
+    return buildDiagnosticVectorOutcome("rejected_by_similarity_threshold", {
+      entry: item.entry,
+      distance: item.distance,
+      similarityThreshold: options.similarityThreshold,
+    });
+  }
+
+  if (item.retrievalStage === "rejected_by_rerank_cutoff") {
+    return buildDiagnosticVectorOutcome("rejected_by_rerank_cutoff", {
+      entry: item.entry,
+      distance: item.distance,
+      finalScore: item.finalScore,
+      rerankCutoff: options.rerankCutoff,
+    });
+  }
+
+  if (item.retrievalStage === "trimmed_by_top_k") {
+    return buildDiagnosticVectorOutcome("trimmed_by_top_k", {
+      entry: item.entry,
+      rerankRank: item.rerankRank,
+      finalScore: item.finalScore,
+      distance: item.distance,
+      topK: options.topK,
+    });
+  }
+
+  return shortlistedOutcomes.get(item.entry.id) ?? buildDiagnosticVectorOutcome("blocked_during_final_assembly", {
+    entry: item.entry,
+    rerankRank: item.rerankRank,
+    finalScore: item.finalScore,
+    distance: item.distance,
+  });
+}
 
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -159,6 +509,7 @@ app.post("/:id/diagnostics", async (c) => {
     ? await collectVectorActivatedWorldInfoDetailed(userId, [bookId], bookEntries, messages)
       : {
         entries: [],
+        candidateTrace: [],
         queryPreview,
         eligibleCount: 0,
         hitsBeforeThreshold: 0,
@@ -178,6 +529,35 @@ app.post("/:id/diagnostics", async (c) => {
     vectorDetail.entries,
     worldInfoSettings,
   );
+  const vectorHitOutcomes = traceDiagnosticVectorHitOutcomes(
+    wiResult.activatedEntries,
+    vectorDetail.candidateTrace.filter((item) => item.retrievalStage === "shortlisted"),
+    worldInfoSettings,
+  );
+  const vectorTrace = vectorDetail.candidateTrace.map((item) => {
+    const outcome = resolveDiagnosticVectorTraceOutcome(item, vectorHitOutcomes, {
+      topK: vectorDetail.topK,
+      rerankCutoff: embeddings.rerank_cutoff,
+      similarityThreshold: embeddings.similarity_threshold,
+    });
+    return {
+      entry_id: item.entry.id,
+      comment: item.entry.comment || "",
+      score: item.score,
+      distance: item.distance,
+      final_score: item.finalScore,
+      lexical_candidate_score: item.lexicalCandidateScore,
+      matched_primary_keys: item.matchedPrimaryKeys,
+      matched_secondary_keys: item.matchedSecondaryKeys,
+      matched_comment: item.matchedComment,
+      score_breakdown: item.scoreBreakdown,
+      search_text_preview: item.searchTextPreview,
+      rerank_rank: item.rerankRank,
+      final_outcome_code: outcome.code,
+      final_outcome_label: outcome.label,
+      final_outcome_reason: outcome.reason,
+    };
+  });
 
   const keywordHits = mergedWorldInfo.activatedWorldInfo
     .filter((entry) => entry.source === "keyword")
@@ -190,6 +570,11 @@ app.post("/:id/diagnostics", async (c) => {
     (count, item) => count + (keywordHitIds.has(item.entry.id) ? 1 : 0),
     0,
   );
+  const displacedFreshVectorHits = vectorDetail.entries.filter((item) => {
+    if (keywordHitIds.has(item.entry.id)) return false;
+    const outcome = vectorHitOutcomes.get(item.entry.id);
+    return outcome?.code !== "injected_vector";
+  });
 
   if (vectorDetail.thresholdRejected > 0 && vectorDetail.entries.length === 0) {
     blockerMessages.push("Vector matches were found, but all of them were rejected by the current similarity threshold.");
@@ -219,7 +604,7 @@ app.post("/:id/diagnostics", async (c) => {
     mergedWorldInfo.vectorActivated === 0 &&
     mergedWorldInfo.evictedByBudget > 0
   ) {
-    blockerMessages.push("Semantic matches were found, but the World Info max-activated or token budget limits left no room for them after keyword activation.");
+    blockerMessages.push("Vector matches were found, but the World Info max-activated or token budget limits left no room for them after keyword activation.");
   }
 
   if (
@@ -237,7 +622,26 @@ app.post("/:id/diagnostics", async (c) => {
     mergedWorldInfo.evictedByBudget === 0 &&
     vectorKeywordOverlapCount === vectorDetail.entries.length
   ) {
-    blockerMessages.push("Semantic matches were found, but the top vector hits were already activated by keyword, so the final list still counts them as keyword entries.");
+    blockerMessages.push("Vector matches were found, but the top vector hits were already activated by keyword, so the final list still counts them as keyword entries.");
+  }
+
+  if (mergedWorldInfo.deduplicationDetails.some(d => d.removedEntryBookId === bookId)) {
+    const dedupCount = mergedWorldInfo.deduplicationDetails.filter(d => d.removedEntryBookId === bookId).length;
+    blockerMessages.push(`${dedupCount} entry/entries from this book were removed as content duplicates of entries from other books.`);
+  }
+
+  if (displacedFreshVectorHits.length > 0) {
+    const grouped = new Map<string, { outcome: DiagnosticVectorHitOutcome; count: number }>();
+    for (const item of displacedFreshVectorHits) {
+      const outcome = vectorHitOutcomes.get(item.entry.id);
+      if (!outcome) continue;
+      const existing = grouped.get(outcome.code);
+      if (existing) existing.count += 1;
+      else grouped.set(outcome.code, { outcome, count: 1 });
+    }
+    for (const { outcome, count } of grouped.values()) {
+      blockerMessages.push(`${count} fresh vector candidate${count === 1 ? "" : "s"}: ${outcome.reason}`);
+    }
   }
 
   return c.json({
@@ -265,20 +669,24 @@ app.post("/:id/diagnostics", async (c) => {
       rerank_rejected: vectorDetail.rerankRejected,
     },
     keyword_hits: keywordHits,
-    vector_hits: vectorDetail.entries.map((item) => ({
-      entry_id: item.entry.id,
-      comment: item.entry.comment || "",
-      score: item.score,
-      distance: item.distance,
-      final_score: item.finalScore,
-      lexical_candidate_score: item.lexicalCandidateScore,
-      matched_primary_keys: item.matchedPrimaryKeys,
-      matched_secondary_keys: item.matchedSecondaryKeys,
-      matched_comment: item.matchedComment,
-      score_breakdown: item.scoreBreakdown,
-      search_text_preview: item.searchTextPreview,
-    })),
+    vector_hits: vectorTrace.filter((item) =>
+      item.final_outcome_code !== "rejected_by_similarity_threshold" &&
+      item.final_outcome_code !== "rejected_by_rerank_cutoff" &&
+      item.final_outcome_code !== "trimmed_by_top_k"
+    ),
+    vector_trace: vectorTrace,
     blocker_messages: Array.from(new Set(blockerMessages)),
+    deduplication: mergedWorldInfo.deduplicated > 0 ? {
+      removed_count: mergedWorldInfo.deduplicated,
+      removed: mergedWorldInfo.deduplicationDetails.map(d => ({
+        removed_entry_id: d.removedEntryId,
+        removed_entry_comment: d.removedEntryComment,
+        kept_entry_id: d.keptEntryId,
+        kept_entry_comment: d.keptEntryComment,
+        tier: d.tier,
+        similarity: d.similarity,
+      })),
+    } : undefined,
     stats: {
       ...wiResult.stats,
       activatedBeforeBudget: mergedWorldInfo.activatedBeforeBudget,
@@ -288,6 +696,7 @@ app.post("/:id/diagnostics", async (c) => {
       keywordActivated: mergedWorldInfo.keywordActivated,
       vectorActivated: mergedWorldInfo.vectorActivated,
       totalActivated: mergedWorldInfo.totalActivated,
+      deduplicated: mergedWorldInfo.deduplicated,
       queryPreview: vectorDetail.queryPreview || queryPreview,
     },
   });

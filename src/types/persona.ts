@@ -11,6 +11,9 @@ export interface Persona {
   name: string;
   title: string;
   description: string;
+  subjective_pronoun: string;
+  objective_pronoun: string;
+  possessive_pronoun: string;
   avatar_path: string | null;
   image_id: string | null;
   attached_world_book_id: string | null;
@@ -25,6 +28,9 @@ export interface CreatePersonaInput {
   name: string;
   title?: string;
   description?: string;
+  subjective_pronoun?: string;
+  objective_pronoun?: string;
+  possessive_pronoun?: string;
   folder?: string;
   is_default?: boolean;
   attached_world_book_id?: string;
@@ -32,3 +38,22 @@ export interface CreatePersonaInput {
 }
 
 export type UpdatePersonaInput = Partial<CreatePersonaInput>;
+
+export interface GlobalAddon {
+  id: string;
+  label: string;
+  content: string;
+  sort_order: number;
+  metadata: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateGlobalAddonInput {
+  label: string;
+  content?: string;
+  sort_order?: number;
+  metadata?: Record<string, any>;
+}
+
+export type UpdateGlobalAddonInput = Partial<CreateGlobalAddonInput>;

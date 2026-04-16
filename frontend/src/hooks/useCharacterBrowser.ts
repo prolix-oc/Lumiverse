@@ -53,6 +53,9 @@ export function useCharacterBrowser() {
   // Shuffle state
   const [shuffleSeed, setShuffleSeed] = useState(() => Math.floor(Date.now() / 86_400_000))
 
+  // Fetch version — bumped to force a re-fetch of server-paginated browser items
+  const [fetchVersion, setFetchVersion] = useState(0)
+
   // Local state
   const [loading, setLoading] = useState(false)
   const [importProgress, setImportProgress] = useState<{
@@ -95,6 +98,13 @@ export function useCharacterBrowser() {
       },
     )
   }, [!!importProgress])
+
+  // Refresh gallery when LumiHub install completes (external mutation)
+  useEffect(() => {
+    return wsClient.on(EventType.LUMIHUB_INSTALL_COMPLETED, () => {
+      setFetchVersion((v) => v + 1)
+    })
+  }, [])
 
   // ─── Server-side paginated summaries (the fast path) ────────────────────
   const [browserItems, setBrowserItems] = useState<CharacterSummary[]>([])
@@ -161,7 +171,7 @@ export function useCharacterBrowser() {
       })
 
     return () => { cancelled = true }
-  }, [currentPage, charactersPerPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, filterTab, favorites])
+  }, [currentPage, charactersPerPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, filterTab, favorites, fetchVersion])
 
   // ─── Load tags once ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -235,9 +245,10 @@ export function useCharacterBrowser() {
           )
         })
         addCharacter(result.character)
-        // Refresh browser page to show new character
         setBrowserTotal((t) => t + 1)
-        if (result.character.extensions?.character_book?.entries?.length > 0) {
+        setFetchVersion((v) => v + 1)
+        if (result.character.extensions?.character_book?.entries?.length > 0
+            && !(result.character.extensions?.world_book_ids?.length > 0)) {
           setPendingLorebookImport(result.character)
         }
       } catch (err: any) {
@@ -268,8 +279,15 @@ export function useCharacterBrowser() {
     (imported: Character[], lorebooks: LorebookInfo[]) => {
       if (imported.length > 0) addCharacters(imported)
       setBrowserTotal((t) => t + imported.length)
-      if (lorebooks.length > 0) {
-        setPendingLorebooks(lorebooks)
+      setFetchVersion((v) => v + 1)
+      // Only show lorebook modal for books that weren't auto-imported by the backend
+      const importedMap = new Map(imported.map((c) => [c.id, c]))
+      const unlinked = lorebooks.filter((l) => {
+        const char = importedMap.get(l.characterId)
+        return char && !(char.extensions?.world_book_ids?.length > 0)
+      })
+      if (unlinked.length > 0) {
+        setPendingLorebooks(unlinked)
       }
     },
     [addCharacters]
@@ -318,8 +336,10 @@ export function useCharacterBrowser() {
         const result = await charactersApi.importUrl(url)
         addCharacter(result.character)
         setBrowserTotal((t) => t + 1)
+        setFetchVersion((v) => v + 1)
         toast.success(`${result.character.name} was imported`)
-        if (result.character.extensions?.character_book?.entries?.length > 0) {
+        if (result.character.extensions?.character_book?.entries?.length > 0
+            && !(result.character.extensions?.world_book_ids?.length > 0)) {
           setPendingLorebookImport(result.character)
         }
       } catch (err: any) {
@@ -357,6 +377,7 @@ export function useCharacterBrowser() {
       }
       setBatchMode(false)
       setBatchDeleteProgress(null)
+      setFetchVersion((v) => v + 1)
     },
     [batchSelected, removeCharacters, setBatchMode]
   )
@@ -367,6 +388,7 @@ export function useCharacterBrowser() {
       const character = await charactersApi.create({ name: 'New Character' })
       addCharacter(character)
       setBrowserTotal((t) => t + 1)
+      setFetchVersion((v) => v + 1)
       return character
     },
     [addCharacter]
@@ -388,6 +410,7 @@ export function useCharacterBrowser() {
       const character = await charactersApi.duplicate(id)
       addCharacter(character)
       setBrowserTotal((t) => t + 1)
+      setFetchVersion((v) => v + 1)
       return character
     },
     [addCharacter]
@@ -409,6 +432,7 @@ export function useCharacterBrowser() {
       await charactersApi.delete(id)
       removeCharacters([id])
       setBrowserTotal((t) => Math.max(0, t - 1))
+      setFetchVersion((v) => v + 1)
     },
     [removeCharacters]
   )
@@ -508,11 +532,7 @@ export function useCharacterBrowser() {
 
   // ─── Trigger a re-fetch of the current browser page ─────────────────────
   const refreshBrowser = useCallback(() => {
-    // Bump a counter or toggle to force the useEffect to re-run
-    setCurrentPage((p) => p)
-    // Force re-fetch by toggling loading
-    setBrowserItems([])
-    setBrowserTotal(0)
+    setFetchVersion((v) => v + 1)
   }, [])
 
   return {

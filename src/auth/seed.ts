@@ -1,5 +1,5 @@
-import { join, resolve } from "path";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { join, resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hashPassword } from "../crypto/password";
 import { getDb } from "../db/connection";
 import { env } from "../env";
@@ -42,19 +42,25 @@ function seedOwnerDirectly(db: ReturnType<typeof getDb>, username: string, passw
   const userId = crypto.randomUUID();
   const accountId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-  const email = `${username}@lumiverse.local`;
+  const normalizedUsername = username.toLowerCase();
+  const email = `${normalizedUsername}@lumiverse.local`;
 
-  db.run(
-    `INSERT INTO "user" (id, name, email, emailVerified, username, displayUsername, role, createdAt, updatedAt)
-     VALUES (?, ?, ?, 1, ?, ?, 'owner', ?, ?)`,
-    [userId, username, email, username, username, now, now]
-  );
+  // Wrap both inserts in a transaction so a failure on the account row doesn't
+  // leave a stranded user row that blocks future re-seeding (the count-guard in
+  // seedOwner skips when any user exists).
+  db.transaction(() => {
+    db.run(
+      `INSERT INTO "user" (id, name, email, emailVerified, username, displayUsername, role, createdAt, updatedAt)
+       VALUES (?, ?, ?, 1, ?, ?, 'owner', ?, ?)`,
+      [userId, username, email, normalizedUsername, username, now, now]
+    );
 
-  db.run(
-    `INSERT INTO "account" (id, accountId, providerId, userId, password, createdAt, updatedAt)
-     VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
-    [accountId, userId, userId, passwordHash, now, now]
-  );
+    db.run(
+      `INSERT INTO "account" (id, accountId, providerId, userId, password, createdAt, updatedAt)
+       VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
+      [accountId, userId, userId, passwordHash, now, now]
+    );
+  })();
 
   return userId;
 }
@@ -107,7 +113,7 @@ async function migrateOwnerPassword(credentialsPath: string): Promise<boolean> {
   const envPath = resolve(process.cwd(), ".env");
 
   // Already migrated — just clean up .env if the key is still lingering
-  if (ownerCredentialsExist(credentialsPath)) {
+  if (await ownerCredentialsExist(credentialsPath)) {
     if (stripEnvKey(envPath, "OWNER_PASSWORD")) {
       console.log("[Auth] Removed lingering OWNER_PASSWORD from .env (already migrated).");
     }
@@ -116,7 +122,7 @@ async function migrateOwnerPassword(credentialsPath: string): Promise<boolean> {
 
   console.log("[Auth] Migrating OWNER_PASSWORD to owner.credentials...");
   const hash = await hashPassword(env.ownerPassword);
-  writeOwnerCredentials(credentialsPath, env.ownerUsername, hash);
+  await writeOwnerCredentials(credentialsPath, env.ownerUsername, hash);
 
   if (stripEnvKey(envPath, "OWNER_PASSWORD")) {
     console.log("[Auth] Removed OWNER_PASSWORD from .env file.");
@@ -169,7 +175,7 @@ export async function seedOwner(): Promise<void> {
     // Users exist — skip initial seed but still enforce the owner role below.
   } else {
     // First run: create the owner account from the credentials file.
-    if (!ownerCredentialsExist(credentialsPath)) {
+    if (!(await ownerCredentialsExist(credentialsPath))) {
       console.error("");
       console.error("[Auth] No owner credentials found and no users exist.");
       console.error(`[Auth] Expected credentials at: ${credentialsPath}`);
@@ -182,7 +188,7 @@ export async function seedOwner(): Promise<void> {
 
     let creds;
     try {
-      creds = readOwnerCredentials(credentialsPath);
+      creds = await readOwnerCredentials(credentialsPath);
     } catch (err) {
       console.error(`[Auth] Credentials file exists but could not be read: ${err}`);
       console.error("[Auth] The file may be corrupted. Run: bun run reset-password");
@@ -210,15 +216,16 @@ export async function seedOwner(): Promise<void> {
   //   3. First-created user (user 0) — guaranteed owner for single-user installs
   type UserRow = { id: string; role: string; username: string };
 
-  const ownerUsername = ownerCredentialsExist(credentialsPath)
-    ? readOwnerCredentials(credentialsPath).username
+  const ownerUsername = (await ownerCredentialsExist(credentialsPath))
+    ? (await readOwnerCredentials(credentialsPath)).username
     : env.ownerUsername;
 
   let owner: UserRow | null = db
     .query('SELECT id, role, username FROM "user" WHERE username = ?')
-    .get(ownerUsername) as UserRow | null;
+    .get(ownerUsername.toLowerCase()) as UserRow | null;
 
   if (!owner) {
+    // Fallback: case-insensitive match for pre-normalization accounts
     owner = db
       .query('SELECT id, role, username FROM "user" WHERE LOWER(username) = LOWER(?)')
       .get(ownerUsername) as UserRow | null;

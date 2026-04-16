@@ -268,3 +268,33 @@ export async function listConnectionModels(
     return { models: [], provider: profile.provider, error: err.message || "Failed to fetch models" };
   }
 }
+
+export async function listConnectionModelsBySubtype(
+  userId: string,
+  id: string,
+  subtype: string,
+): Promise<{ models: Array<{ id: string; label: string }>; provider: string; error?: string }> {
+  const profile = getConnection(userId, id);
+  if (!profile) return { models: [], provider: "", error: "Connection not found" };
+
+  const provider = getImageProvider(profile.provider);
+  if (!provider) {
+    return { models: [], provider: profile.provider, error: `Unknown provider: ${profile.provider}` };
+  }
+
+  if (!provider.listModelsBySubtype) {
+    return { models: [], provider: profile.provider, error: "Provider does not support subtype model listing" };
+  }
+
+  const apiKey = await secretsSvc.getSecret(userId, imageGenConnectionSecretKey(id));
+  if (!apiKey && provider.capabilities.apiKeyRequired) {
+    return { models: [], provider: profile.provider, error: "No API key" };
+  }
+
+  try {
+    const models = await provider.listModelsBySubtype(apiKey || "", profile.api_url || "", subtype);
+    return { models, provider: profile.provider };
+  } catch (err: any) {
+    return { models: [], provider: profile.provider, error: err.message || "Failed to fetch models" };
+  }
+}

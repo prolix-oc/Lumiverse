@@ -18,9 +18,9 @@ app.put("/settings", async (c) => {
 });
 
 // GET /api/v1/council/tools
-app.get("/tools", (c) => {
+app.get("/tools", async (c) => {
   const userId = c.get("userId");
-  const tools = councilSettingsSvc.getAvailableTools(userId);
+  const tools = await councilSettingsSvc.getAvailableTools(userId);
   return c.json(tools);
 });
 

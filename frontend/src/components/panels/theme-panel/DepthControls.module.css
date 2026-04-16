@@ -20,31 +20,20 @@
 
 .slider {
   flex: 1;
-  height: 6px;
-  -webkit-appearance: none;
-  appearance: none;
-  border-radius: 3px;
-  background: var(--lumiverse-fill-medium);
   outline: none;
-  cursor: pointer;
-  accent-color: var(--lumiverse-primary);
-}
-
-.slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--lumiverse-primary);
-  border: 2px solid var(--lumiverse-bg);
-  box-shadow: 0 0 0 1px var(--lumiverse-primary-020), 0 1px 4px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
 }
 
 .slider::-webkit-slider-runnable-track {
   height: 6px;
   border-radius: 3px;
+  background: var(--slider-fill, var(--lumiverse-fill-medium));
+}
+
+.slider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--slider-fill, var(--lumiverse-fill-medium));
+  border: none;
 }
 
 .value {

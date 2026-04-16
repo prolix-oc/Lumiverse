@@ -21,19 +21,73 @@ unsub()
 | `MESSAGE_SENT` | `{ chatId, message }` |
 | `MESSAGE_EDITED` | `{ chatId, message }` |
 | `MESSAGE_DELETED` | `{ chatId, messageId }` |
-| `MESSAGE_SWIPED` | `{ chatId, messageId, swipeId }` |
+| `MESSAGE_SWIPED` | `MessageSwipedPayloadDTO` — see below |
 | `CHAT_CHANGED` | `{ chatId }` |
 | `CHARACTER_MESSAGE_RENDERED` | `{ chatId, messageId }` |
 | `USER_MESSAGE_RENDERED` | `{ chatId, messageId }` |
 
 ### Generation
 
-| Event | Payload |
-|-------|---------|
-| `GENERATION_STARTED` | `{ generationId, chatId, model }` |
-| `GENERATION_ENDED` | `{ generationId, chatId, messageId, content }` |
-| `GENERATION_STOPPED` | `{ generationId, chatId, content }` |
-| `STREAM_TOKEN_RECEIVED` | `{ generationId, chatId, token }` |
+!!! warning "Permission required: `generation`"
+    Subscribing to generation events requires the `generation` permission. Without it, the subscription is rejected and a `permission_denied` notification is sent to the extension.
+
+| Event | Typed Payload | Description |
+|-------|---------------|-------------|
+| `GENERATION_STARTED` | `GenerationStartedPayloadDTO` | A generation has begun |
+| `STREAM_TOKEN_RECEIVED` | `StreamTokenPayloadDTO` | A token was received from the LLM |
+| `GENERATION_ENDED` | `GenerationEndedPayloadDTO` | Generation completed (success or error) |
+| `GENERATION_STOPPED` | `GenerationStoppedPayloadDTO` | User stopped the generation |
+
+These events have typed overloads — payloads are automatically narrowed when using `lumiverse-spindle-types`:
+
+```ts
+spindle.on('STREAM_TOKEN_RECEIVED', (payload) => {
+  // payload: StreamTokenPayloadDTO — fully typed
+  console.log(payload.token, payload.seq, payload.type)
+})
+```
+
+See [Generation > Stream Observation](generation.md#stream-observation) for the high-level `observe()` helper and full payload field reference.
+
+### Swipe Events
+
+`MESSAGE_SWIPED` is emitted by all four swipe operations (`addSwipe`, `updateSwipe`, `deleteSwipe`, `cycleSwipe`). The `action` discriminator and the `swipeId` field let you tell them apart and maintain swipe-keyed state without diffing the `swipes` array.
+
+```ts
+spindle.on('MESSAGE_SWIPED', (payload) => {
+  // payload: MessageSwipedPayloadDTO — fully typed
+  switch (payload.action) {
+    case 'added':
+      // payload.swipeId === payload.message.swipe_id (the new variant)
+      break
+    case 'updated':
+      // payload.swipeId is the edited slot (may not be the active one)
+      break
+    case 'deleted':
+      // payload.swipeId is the removed slot (no longer in message.swipes)
+      // payload.previousSwipeId tells you the active slot before deletion
+      if (payload.previousSwipeId === payload.swipeId) {
+        // the active swipe was the one removed
+      }
+      break
+    case 'navigated':
+      // payload.swipeId === payload.message.swipe_id (the destination)
+      // payload.previousSwipeId tells you which direction the user came from
+      break
+  }
+})
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `chatId` | `string` | |
+| `message` | `ChatMessageDTO` | The full message after the mutation. Use `message.swipes[]` for the current swipe set. |
+| `action` | `'added' \| 'updated' \| 'deleted' \| 'navigated'` | Discriminator for the swipe operation. |
+| `swipeId` | `number` | The swipe index this event concerns. For `deleted`, the slot is no longer present in `message.swipes`; for the other actions, `message.swipes[swipeId]` is the affected variant. |
+| `previousSwipeId` | `number?` | Active swipe index *before* the change. Present for `navigated` and `deleted`; omitted for `added` and `updated`. |
+
+!!! note "Backwards compatibility"
+    Subscribers that only read `payload.chatId` and `payload.message` keep working unchanged — the discriminator fields are purely additive.
 
 ### Entities
 

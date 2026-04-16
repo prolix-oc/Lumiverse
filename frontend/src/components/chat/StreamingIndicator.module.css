@@ -10,7 +10,7 @@
   height: 5px;
   border-radius: 50%;
   background: var(--lumiverse-primary);
-  animation: lcs-bounce 1.2s ease-in-out infinite;
+  animation: bounce 1.2s ease-in-out infinite;
 }
 
 .dot:nth-child(2) {
@@ -19,4 +19,15 @@
 
 .dot:nth-child(3) {
   animation-delay: 0.3s;
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
 }

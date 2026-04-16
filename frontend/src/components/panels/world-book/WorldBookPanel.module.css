@@ -58,8 +58,7 @@
 
 .globalPopover {
   position: fixed;
-  transform: translateX(-100%);
-  min-width: 200px;
+  box-sizing: border-box;
   max-height: 240px;
   overflow-y: auto;
   background: var(--lumiverse-bg);
@@ -265,8 +264,7 @@
 
 .chatPopover {
   position: fixed;
-  transform: translateX(-100%);
-  min-width: 200px;
+  box-sizing: border-box;
   max-height: 240px;
   overflow-y: auto;
   background: var(--lumiverse-bg);
@@ -1063,32 +1061,15 @@
 
 .wiRange {
   flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  background: var(--lumiverse-border);
-  border-radius: 2px;
   outline: none;
 }
 
-.wiRange::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--lumiverse-primary);
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+.wiRange::-webkit-slider-runnable-track {
+  background: var(--lumiverse-border);
 }
 
-.wiRange::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: none;
-  background: var(--lumiverse-primary);
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+.wiRange::-moz-range-track {
+  background: var(--lumiverse-border);
 }
 
 .wiRangeValue {

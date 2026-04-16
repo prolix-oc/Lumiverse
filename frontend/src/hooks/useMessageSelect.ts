@@ -13,6 +13,7 @@ export function useMessageSelect(chatId: string) {
   const clearMessageSelection = useStore((s) => s.clearMessageSelection)
   const selectMessageRange = useStore((s) => s.selectMessageRange)
   const updateMessage = useStore((s) => s.updateMessage)
+  const removeMessage = useStore((s) => s.removeMessage)
 
   const selectedCount = selectedMessageIds.length
   const totalCount = messages.length
@@ -56,6 +57,21 @@ export function useMessageSelect(chatId: string) {
     }
   }, [chatId, selectedMessageIds, updateMessage, setMessageSelectMode])
 
+  const bulkDelete = useCallback(async () => {
+    if (selectedMessageIds.length === 0) return
+    try {
+      const result = await messagesApi.bulkDelete(chatId, selectedMessageIds)
+      for (const id of selectedMessageIds) {
+        removeMessage(id)
+      }
+      toast.success(`${result.deleted} message${result.deleted !== 1 ? 's' : ''} deleted`)
+      setMessageSelectMode(false)
+    } catch (err) {
+      console.error('[useMessageSelect] Bulk delete failed:', err)
+      toast.error('Failed to delete messages')
+    }
+  }, [chatId, selectedMessageIds, removeMessage, setMessageSelectMode])
+
   return {
     messageSelectMode,
     selectedMessageIds,
@@ -70,5 +86,6 @@ export function useMessageSelect(chatId: string) {
     clearMessageSelection,
     selectMessageRange,
     bulkHide,
+    bulkDelete,
   }
 }

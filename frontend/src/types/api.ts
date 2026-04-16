@@ -231,8 +231,21 @@ export interface ConnectionTestResult {
 
 export interface ConnectionModelsResult {
   models: string[]
+  model_labels?: Record<string, string>
   provider: string
   error?: string
+}
+
+export interface PollinationsAuthUrlRequest {
+  redirect_url: string;
+  models?: string;
+  budget?: number;
+  expiry?: number;
+  permissions?: string;
+}
+
+export interface PollinationsAuthUrlResponse {
+  auth_url: string;
 }
 
 // ---- Image Gen Connection Profile ----
@@ -285,6 +298,8 @@ export interface ImageGenParameterSchema {
   required?: boolean;
   options?: Array<{ id: string; label: string }>;
   group?: string;
+  /** When set, the UI fetches models from GET /image-gen-connections/:id/models/:modelSubtype */
+  modelSubtype?: string;
 }
 
 export interface ImageGenProviderCapabilities {
@@ -301,6 +316,93 @@ export interface ImageGenProviderInfo {
   capabilities: ImageGenProviderCapabilities;
 }
 
+// ---- TTS Connection ----
+export interface TtsConnectionProfile {
+  id: string;
+  name: string;
+  provider: string;
+  api_url: string;
+  model: string;
+  voice: string;
+  is_default: boolean;
+  has_api_key: boolean;
+  default_parameters: Record<string, any>;
+  metadata: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateTtsConnectionInput {
+  name: string;
+  provider: string;
+  api_url?: string;
+  model?: string;
+  voice?: string;
+  is_default?: boolean;
+  default_parameters?: Record<string, any>;
+  metadata?: Record<string, any>;
+  api_key?: string;
+}
+
+export type UpdateTtsConnectionInput = Partial<CreateTtsConnectionInput>;
+
+export interface TtsConnectionTestResult {
+  success: boolean;
+  message: string;
+  provider: string;
+}
+
+export interface TtsConnectionModelsResult {
+  models: Array<{ id: string; label: string }>;
+  provider: string;
+  error?: string;
+}
+
+export interface TtsVoice {
+  id: string;
+  name: string;
+  language?: string;
+  gender?: string;
+  previewUrl?: string;
+}
+
+export interface TtsConnectionVoicesResult {
+  voices: TtsVoice[];
+  provider: string;
+  error?: string;
+}
+
+export interface TtsParameterSchema {
+  type: 'number' | 'integer' | 'boolean' | 'string' | 'select';
+  default?: any;
+  min?: number;
+  max?: number;
+  step?: number;
+  description: string;
+  required?: boolean;
+  options?: Array<{ id: string; label: string }>;
+  group?: string;
+}
+
+export interface TtsProviderCapabilities {
+  parameters: Record<string, TtsParameterSchema>;
+  apiKeyRequired: boolean;
+  voiceListStyle: 'static' | 'dynamic';
+  staticVoices?: TtsVoice[];
+  modelListStyle: 'static' | 'dynamic';
+  staticModels?: Array<{ id: string; label: string }>;
+  supportsStreaming: boolean;
+  supportedFormats: string[];
+  defaultUrl: string;
+  defaultFormat: string;
+}
+
+export interface TtsProviderInfo {
+  id: string;
+  name: string;
+  capabilities: TtsProviderCapabilities;
+}
+
 // ---- Persona ----
 export interface PersonaAddon {
   id: string
@@ -310,11 +412,34 @@ export interface PersonaAddon {
   sort_order: number
 }
 
+export interface GlobalAddon {
+  id: string
+  label: string
+  content: string
+  sort_order: number
+  metadata: Record<string, any>
+  created_at: number
+  updated_at: number
+}
+
+export interface AttachedGlobalAddon {
+  id: string
+  enabled: boolean
+}
+
+export interface CharacterPersonaBinding {
+  personaId: string
+  addonStates?: Record<string, boolean>
+}
+
 export interface Persona {
   id: string;
   name: string;
   title: string;
   description: string;
+  subjective_pronoun: string;
+  objective_pronoun: string;
+  possessive_pronoun: string;
   avatar_path: string | null;
   image_id: string | null;
   attached_world_book_id: string | null;
@@ -329,6 +454,9 @@ export interface CreatePersonaInput {
   name: string;
   title?: string;
   description?: string;
+  subjective_pronoun?: string;
+  objective_pronoun?: string;
+  possessive_pronoun?: string;
   folder?: string;
   is_default?: boolean;
   attached_world_book_id?: string;
@@ -518,6 +646,7 @@ export interface WorldBookDiagnostics {
     matched_comment: string | null;
     score_breakdown: {
       vectorSimilarity: number;
+      lexicalContentBoost: number;
       primaryExact: number;
       primaryPartial: number;
       secondaryExact: number;
@@ -530,6 +659,62 @@ export interface WorldBookDiagnostics {
       focusMissPenalty: number;
     };
     search_text_preview: string;
+    rerank_rank: number | null;
+    final_outcome_code:
+      | 'injected_vector'
+      | 'already_keyword'
+      | 'blocked_by_group'
+      | 'blocked_by_min_priority'
+      | 'blocked_by_max_entries'
+      | 'blocked_by_token_budget'
+      | 'deduplicated'
+      | 'blocked_during_final_assembly'
+      | 'trimmed_by_top_k'
+      | 'rejected_by_rerank_cutoff'
+      | 'rejected_by_similarity_threshold';
+    final_outcome_label: string;
+    final_outcome_reason: string;
+  }>;
+  vector_trace: Array<{
+    entry_id: string;
+    comment: string;
+    score: number;
+    distance: number;
+    final_score: number;
+    lexical_candidate_score: number | null;
+    matched_primary_keys: string[];
+    matched_secondary_keys: string[];
+    matched_comment: string | null;
+    score_breakdown: {
+      vectorSimilarity: number;
+      lexicalContentBoost: number;
+      primaryExact: number;
+      primaryPartial: number;
+      secondaryExact: number;
+      secondaryPartial: number;
+      commentExact: number;
+      commentPartial: number;
+      focusBoost: number;
+      priority: number;
+      broadPenalty: number;
+      focusMissPenalty: number;
+    };
+    search_text_preview: string;
+    rerank_rank: number | null;
+    final_outcome_code:
+      | 'injected_vector'
+      | 'already_keyword'
+      | 'blocked_by_group'
+      | 'blocked_by_min_priority'
+      | 'blocked_by_max_entries'
+      | 'blocked_by_token_budget'
+      | 'deduplicated'
+      | 'blocked_during_final_assembly'
+      | 'trimmed_by_top_k'
+      | 'rejected_by_rerank_cutoff'
+      | 'rejected_by_similarity_threshold';
+    final_outcome_label: string;
+    final_outcome_reason: string;
   }>;
   blocker_messages: string[];
   stats: WorldInfoStats;
@@ -594,7 +779,12 @@ export interface EmbeddingConfig {
   vectorize_chat_messages: boolean;
   vectorize_chat_documents: boolean;
   chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
+  request_timeout: number;
   has_api_key: boolean;
+  /** True when the server owner has enabled a shared embedding config and the
+   *  current user is a non-owner inheriting it. The form should be read-only
+   *  and the config is not user-editable while this flag is set. */
+  inherited?: boolean;
 }
 
 export interface ChatMemorySettings {

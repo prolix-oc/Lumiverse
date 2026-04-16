@@ -4,7 +4,8 @@ import { chatsApi } from '@/api/chats'
 import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
-import { Plus, Zap, VolumeX, Volume2, UserMinus } from 'lucide-react'
+import { Plus, VolumeX, Volume2, UserMinus } from 'lucide-react'
+import { IconBolt } from '@tabler/icons-react'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
 import styles from './GroupChatMemberBar.module.css'
@@ -135,7 +136,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
       {
         key: 'force-gen',
         label: 'Force Generate',
-        icon: <Zap size={13} />,
+        icon: <IconBolt size={13} />,
         onClick: () => handleForceGenerateFromMenu(cid),
         disabled: isStreaming || contextIsMuted,
       },

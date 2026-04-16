@@ -43,6 +43,36 @@ export function registerCharacterMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    name: "sub",
+    category: "Character",
+    description: "Persona subjective pronoun",
+    returnType: "string",
+    aliases: ["subjectivePronoun", "personaSubjectivePronoun"],
+    handler: (ctx) => ctx.env.character.personaSubjectivePronoun,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "obj",
+    category: "Character",
+    description: "Persona objective pronoun",
+    returnType: "string",
+    aliases: ["objectivePronoun", "personaObjectivePronoun"],
+    handler: (ctx) => ctx.env.character.personaObjectivePronoun,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "poss",
+    category: "Character",
+    description: "Persona possessive pronoun",
+    returnType: "string",
+    aliases: ["possessivePronoun", "personaPossessivePronoun"],
+    handler: (ctx) => ctx.env.character.personaPossessivePronoun,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
     name: "mesExamples",
     category: "Character",
     description: "Character example dialogue messages",

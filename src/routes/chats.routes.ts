@@ -3,6 +3,7 @@ import * as svc from "../services/chats.service";
 import * as personasSvc from "../services/personas.service";
 import { parsePagination } from "../services/pagination";
 import { RECENT_CHATS_DEFAULT_LIMIT } from "../types/pagination";
+import { parseDateString, parseMessageDate } from "../migration/st-reader";
 
 const app = new Hono();
 
@@ -103,6 +104,35 @@ app.put("/:id", async (c) => {
   return c.json(updated);
 });
 
+/**
+ * Atomic partial metadata merge. Re-reads the latest chat row inside the
+ * service so concurrent writers (post-generation expression detection,
+ * council caching, deferred WI/chat var persistence, etc.) cannot clobber
+ * the keys the caller is updating. Pass `null` for a key to delete it.
+ *
+ * Used by chat-scoped UI controls (alternate field selector, world book
+ * attachments, author's note) that previously did GET-then-PUT and lost
+ * concurrent edits.
+ */
+app.patch("/:id/metadata", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("id");
+  const chat = svc.getChat(userId, chatId);
+  if (!chat) return c.json({ error: "Not found" }, 404);
+  const body = await c.req.json();
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Body must be an object of metadata keys" }, 400);
+  }
+  // Translate `null` sentinels to `undefined` so mergeChatMetadata deletes them.
+  const partial: Record<string, any> = {};
+  for (const [key, value] of Object.entries(body)) {
+    partial[key] = value === null ? undefined : value;
+  }
+  const updated = svc.mergeChatMetadata(userId, chatId, partial);
+  if (!updated) return c.json({ error: "Not found" }, 404);
+  return c.json(updated);
+});
+
 app.delete("/:id", (c) => {
   const userId = c.get("userId");
   const deleted = svc.deleteChat(userId, c.req.param("id"));
@@ -144,6 +174,111 @@ app.post("/import", async (c) => {
 
     const msgCount = svc.bulkInsertMessages(chat.id, bulkMessages);
 
+    return c.json({ chat_id: chat.id, name: chat.name, message_count: msgCount }, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || "Import failed" }, 500);
+  }
+});
+
+app.post("/import-st", async (c) => {
+  const userId = c.get("userId");
+
+  let formData: FormData;
+  try {
+    formData = await c.req.formData();
+  } catch {
+    return c.json({ error: "Expected multipart/form-data" }, 400);
+  }
+
+  const characterId = formData.get("character_id") as string | null;
+  const file = formData.get("file") as File | null;
+
+  if (!characterId) {
+    return c.json({ error: "character_id is required" }, 400);
+  }
+  if (!file) {
+    return c.json({ error: "file is required" }, 400);
+  }
+
+  const text = await file.text();
+  const lines = text.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return c.json({ error: "File is empty" }, 400);
+
+  // Detect and parse optional ST metadata header (line 0)
+  let chatName = (file.name || "import").replace(/\.jsonl$/i, "");
+  let chatCreatedAt: number | undefined;
+
+  try {
+    const meta = JSON.parse(lines[0]);
+    if (meta.chat_metadata || meta.user_name !== undefined) {
+      chatName = meta.chat_metadata?.name || chatName;
+      if (meta.create_date) {
+        const ts = parseDateString(meta.create_date);
+        if (ts) chatCreatedAt = ts;
+      }
+    }
+  } catch { /* not a metadata line */ }
+
+  const startLine = (() => {
+    try {
+      const first = JSON.parse(lines[0]);
+      if (first.user_name !== undefined || first.chat_metadata) return 1;
+    } catch { /* ignore */ }
+    return 0;
+  })();
+
+  const messages: {
+    is_user: boolean;
+    name: string;
+    content: string;
+    send_date: number;
+    swipes?: string[];
+    swipe_id?: number;
+    extra?: Record<string, any>;
+  }[] = [];
+
+  for (let i = startLine; i < lines.length; i++) {
+    try {
+      const msg = JSON.parse(lines[i]);
+      const msgSwipes: string[] | undefined = Array.isArray(msg.swipes) ? msg.swipes : undefined;
+      const swipeId: number | undefined = typeof msg.swipe_id === "number" ? msg.swipe_id : undefined;
+
+      // ST sometimes leaves `mes` empty when the active swipe holds the content.
+      // Resolve: mes → swipes[swipe_id] → swipes[0] → "".
+      const content =
+        msg.mes ||
+        msg.content ||
+        (msgSwipes && swipeId !== undefined ? msgSwipes[swipeId] : undefined) ||
+        (msgSwipes ? msgSwipes[0] : undefined) ||
+        "";
+
+      if (!content && !msg.name) continue;
+
+      messages.push({
+        is_user: !!msg.is_user,
+        name: msg.name || (msg.is_user ? "User" : "Character"),
+        content,
+        send_date: parseMessageDate(msg),
+        swipes: msgSwipes,
+        swipe_id: swipeId,
+        extra: msg.extra || undefined,
+      });
+    } catch { /* skip unparseable lines */ }
+  }
+
+  if (messages.length === 0) {
+    return c.json({ error: "No valid messages found in file" }, 400);
+  }
+
+  try {
+    const chat = svc.createChatRaw(userId, {
+      character_id: characterId,
+      name: chatName,
+      metadata: {},
+      ...(chatCreatedAt ? { created_at: chatCreatedAt } : {}),
+    });
+
+    const msgCount = svc.bulkInsertMessages(chat.id, messages);
     return c.json({ chat_id: chat.id, name: chat.name, message_count: msgCount }, 201);
   } catch (err: any) {
     return c.json({ error: err.message || "Import failed" }, 500);
@@ -232,6 +367,25 @@ app.post("/:chatId/messages/bulk-hide", async (c) => {
   try {
     const messages = svc.bulkSetHidden(userId, chatId, body.message_ids, body.hidden);
     return c.json({ success: true, updated: messages.length, messages });
+  } catch (e: any) {
+    if (e.message === "Chat not found") return c.json({ error: e.message }, 404);
+    if (e.message.includes("Maximum")) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
+app.post("/:chatId/messages/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const body = await c.req.json();
+
+  if (!Array.isArray(body.message_ids) || body.message_ids.length === 0) {
+    return c.json({ error: "message_ids must be a non-empty array" }, 400);
+  }
+
+  try {
+    const deleted = svc.bulkDeleteMessages(userId, chatId, body.message_ids);
+    return c.json({ success: true, deleted });
   } catch (e: any) {
     if (e.message === "Chat not found") return c.json({ error: e.message }, 404);
     if (e.message.includes("Maximum")) return c.json({ error: e.message }, 400);

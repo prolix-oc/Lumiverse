@@ -15,6 +15,8 @@ import type {
   DryRunResultDTO,
   ChatMemoryResultDTO,
   ThemeOverrideDTO,
+  SpindleCommandDTO,
+  SpindleCommandContextDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
@@ -22,7 +24,7 @@ import { createOAuthState } from "./oauth-state";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
-import { interceptorPipeline } from "./interceptor-pipeline";
+import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
 import { contextHandlerChain } from "./context-handler";
 import { toolRegistry } from "./tool-registry";
 import * as managerSvc from "./manager.service";
@@ -30,10 +32,15 @@ import * as generateSvc from "../services/generate.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as charactersSvc from "../services/characters.service";
 import * as chatsSvc from "../services/chats.service";
+import {
+  getCharacterWorldBookIds,
+  setCharacterWorldBookIds,
+} from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
 import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
 import * as colorExtractionSvc from "../services/color-extraction.service";
+import { generateThemeVariables as generateThemeVariablesFn } from "../utils/theme-engine";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as imageGenConnSvc from "../services/image-gen-connections.service";
@@ -72,7 +79,115 @@ import { join, resolve, relative, sep } from "path";
 
 const EPHEMERAL_MAX_FILES = 250;
 
+let cachedBackendVersion: string | null = null;
+let cachedFrontendVersion: string | null = null;
+
+async function readPackageVersion(relativePath: string): Promise<string> {
+  const raw = await Bun.file(join(import.meta.dir, relativePath)).text();
+  const pkg = JSON.parse(raw);
+  const version = typeof pkg.version === "string" ? pkg.version : null;
+  if (!version) throw new Error(`No version field in ${relativePath}`);
+  return version;
+}
+
+async function getBackendVersion(): Promise<string> {
+  if (cachedBackendVersion) return cachedBackendVersion;
+  cachedBackendVersion = await readPackageVersion("../../package.json");
+  return cachedBackendVersion;
+}
+
+async function getFrontendVersion(): Promise<string> {
+  if (cachedFrontendVersion) return cachedFrontendVersion;
+  cachedFrontendVersion = await readPackageVersion("../../frontend/package.json");
+  return cachedFrontendVersion;
+}
+
 const CORS_PROXY_TIMEOUT_MS = 30_000;
+const CORS_PROXY_MAX_BODY_BYTES = 25 * 1024 * 1024; // 25 MB
+
+const MAX_CSS_VALUE_LENGTH = 1024;
+
+/**
+ * Reject CSS variable values that could exfiltrate data, deface the UI in
+ * surprising ways, or chain into a CSS-injection attack. We accept ordinary
+ * literals (colors, lengths, shadows, gradients, font lists, transforms) and
+ * reject things like `url(javascript:...)`, `expression(...)`, `@import`, and
+ * embedded HTML/JS — everything you'd expect a Lumiverse theme variable to
+ * never contain.
+ */
+function validateCssValue(value: unknown): string | null {
+  if (value === undefined || value === null) return "value must be a string";
+  if (typeof value !== "string") return "value must be a string";
+  if (value.length > MAX_CSS_VALUE_LENGTH) return `value exceeds ${MAX_CSS_VALUE_LENGTH} characters`;
+  if (value.length === 0) return null; // empty string clears the var, which is fine
+
+  const trimmed = value.trim();
+  // Strip any backslash escapes so attackers can't smuggle disallowed tokens
+  // like `expr\ession(...)`. We're checking the literal characters the browser
+  // would interpret.
+  const lowered = trimmed.toLowerCase().replace(/\\/g, "");
+
+  // Disallow control characters and unbalanced delimiters.
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) return "control characters not allowed";
+  if (/[<>]/.test(value)) return "angle brackets not allowed";
+  if (value.includes("{") || value.includes("}") || value.includes(";")) {
+    return "must be a single property value (no { } ; )";
+  }
+
+  // Block CSS sinks that can execute or exfiltrate.
+  if (lowered.includes("javascript:")) return "javascript: URLs not allowed";
+  if (lowered.includes("vbscript:")) return "vbscript: URLs not allowed";
+  if (lowered.includes("data:text/html")) return "data:text/html URLs not allowed";
+  if (lowered.includes("expression(")) return "CSS expression() not allowed";
+  if (lowered.startsWith("@")) return "at-rules not allowed in variable values";
+  if (/^url\(\s*['"]?\s*(?!https?:|data:image\/)/i.test(trimmed)) {
+    return "url() must point to https: or a data:image/* payload";
+  }
+  // Block image-attribute selector exfil patterns (`image-set("https://...")`)
+  // unless they are HTTPS or safe data: image URLs — same rule as url().
+  if (/image-set\(/i.test(trimmed)) {
+    if (!/image-set\(\s*['"]?\s*(https?:|data:image\/)/i.test(trimmed)) {
+      return "image-set() must point to https: or a data:image/* payload";
+    }
+  }
+  return null;
+}
+
+/**
+ * Drain a fetch response body up to `maxBytes`, throwing if the cap is hit.
+ * Using `.text()` would buffer the entire body unconditionally, so an attacker
+ * could ship a multi-GB response and exhaust process memory.
+ */
+async function readResponseBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      throw new Error(
+        `CORS proxy response exceeded ${maxBytes} bytes`,
+      );
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(concatChunks(chunks, total));
+}
+
+function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
 
 function requestWithAddressFamily(
   url: string,
@@ -125,6 +240,40 @@ function requestWithAddressFamily(
 }
 
 export class WorkerHost {
+  private static readonly FULL_THEME_SENTINEL_KEYS = [
+    "--lumiverse-primary",
+    "--lumiverse-bg",
+    "--lumiverse-text",
+    "--lumiverse-border",
+    "--lumiverse-fill",
+    "--lcs-glass-bg",
+  ] as const;
+  private static readonly FULL_THEME_MIN_KEYS = 40;
+
+  /** Keys that represent user preferences, not theme colors.
+   *  applyPalette strips these so it only changes colors — glass, radii,
+   *  fonts, scale, and transitions are always owned by the user's config. */
+  private static readonly USER_PREFERENCE_KEYS = new Set([
+    "--lcs-glass-blur",
+    "--lcs-glass-soft-blur",
+    "--lcs-glass-strong-blur",
+    "--lcs-radius",
+    "--lcs-radius-sm",
+    "--lcs-radius-xs",
+    "--lcs-transition",
+    "--lcs-transition-fast",
+    "--lumiverse-radius",
+    "--lumiverse-radius-sm",
+    "--lumiverse-radius-md",
+    "--lumiverse-radius-lg",
+    "--lumiverse-radius-xl",
+    "--lumiverse-font-family",
+    "--lumiverse-font-mono",
+    "--lumiverse-font-scale",
+    "--lumiverse-ui-scale",
+    "--lumiverse-transition",
+    "--lumiverse-transition-fast",
+  ]);
   private worker: Worker | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
@@ -138,7 +287,11 @@ export class WorkerHost {
   private toastTimestamps: number[] = [];
   private static readonly TOAST_RATE_LIMIT = 5;
   private static readonly TOAST_RATE_WINDOW_MS = 10_000;
+  private registeredCommands: SpindleCommandDTO[] = [];
+  private static readonly MAX_COMMANDS_PER_EXTENSION = 20;
+  private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
   private onWorkerReady: (() => void) | null = null;
+  private onWorkerShutdownAck: (() => void) | null = null;
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
 
@@ -181,7 +334,7 @@ export class WorkerHost {
   }
 
   async start(): Promise<void> {
-    const entryPath = managerSvc.getBackendEntryPath(this.manifest.identifier);
+    const entryPath = await managerSvc.getBackendEntryPath(this.manifest.identifier);
     if (!entryPath) {
       console.log(
         `[Spindle:${this.manifest.identifier}] No backend entry, skipping worker`
@@ -254,27 +407,41 @@ export class WorkerHost {
   async stop(): Promise<void> {
     if (!this.worker) return;
 
-    // Send shutdown
-    this.postToWorker({ type: "shutdown" });
-
-    // Wait up to 5 seconds then terminate
+    // Wait for the worker to acknowledge shutdown (posted right before
+    // process.exit(0) in worker-runtime.ts) — or fall back to terminate()
+    // after 5s if the worker is wedged. Resolving early is important for
+    // the bulk-update path: without it, every extension stop burned the
+    // full 5s fallback before the next step could run.
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        this.worker?.terminate();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.onWorkerShutdownAck = null;
         resolve();
-      }, 5000);
-
-      // If the worker terminates naturally, clear the timer
-      const origOnMessage = this.worker!.onmessage;
-      this.worker!.onmessage = (event) => {
-        if (origOnMessage) (origOnMessage as any)(event);
       };
 
-      setTimeout(() => {
-        clearTimeout(timer);
-        this.worker?.terminate();
-        resolve();
+      this.onWorkerShutdownAck = finish;
+
+      const timer = setTimeout(() => {
+        // Fallback: worker never acknowledged. Force-terminate.
+        try {
+          this.worker?.terminate();
+        } catch {
+          // ignore — terminate is best-effort
+        }
+        finish();
       }, 5000);
+
+      // Actually send the shutdown after the listener is installed so we
+      // can never miss the ack due to a fast worker exit.
+      try {
+        this.postToWorker({ type: "shutdown" });
+      } catch {
+        // Worker already gone — finish immediately.
+        finish();
+      }
     });
 
     this.cleanup();
@@ -305,6 +472,12 @@ export class WorkerHost {
     this.registeredMacroNames.clear();
     this.macroValueCache.clear();
     this.toastTimestamps = [];
+
+    // Clear commands and broadcast removal
+    if (this.registeredCommands.length > 0) {
+      this.registeredCommands = [];
+      this.broadcastCommandsChanged();
+    }
 
     // Clear theme overrides
     this.clearThemeOverrides();
@@ -350,11 +523,21 @@ export class WorkerHost {
   ): Promise<string> {
     const requestId = crypto.randomUUID();
 
+    // Defensive strip: never forward authentication-style metadata to the
+    // worker. Even if a caller leaks `__userId` or similar in args, the
+    // extension handler must not see it — extensions identify themselves via
+    // their worker context, not a string parameter they could exfiltrate.
+    const sanitizedArgs: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(args)) {
+      if (key === "__userId" || key === "__user_id" || key === "userId") continue;
+      sanitizedArgs[key] = value;
+    }
+
     this.postToWorker({
       type: "tool_invocation",
       requestId,
       toolName,
-      args,
+      args: sanitizedArgs,
     });
 
     return new Promise((resolve, reject) => {
@@ -444,9 +627,20 @@ export class WorkerHost {
       case "register_interceptor":
         this.handleRegisterInterceptor(msg.priority);
         break;
-      case "intercept_result":
-        this.resolveRequest(msg.requestId, msg.messages);
+      case "intercept_result": {
+        // Strip parameters if the extension lacks the generation_parameters permission
+        let interceptParams = msg.parameters;
+        if (interceptParams && Object.keys(interceptParams).length > 0) {
+          if (!managerSvc.hasPermission(this.manifest.identifier, "generation_parameters")) {
+            console.warn(
+              `[Spindle:${this.manifest.identifier}] Stripping interceptor parameters — generation_parameters permission not granted`
+            );
+            interceptParams = undefined;
+          }
+        }
+        this.resolveRequest(msg.requestId, { messages: msg.messages, parameters: interceptParams });
         break;
+      }
       case "register_tool":
         this.handleRegisterTool(msg.tool);
         break;
@@ -566,6 +760,15 @@ export class WorkerHost {
       case "chat_delete_message":
         this.handleChatDeleteMessage(msg.requestId, msg.chatId, msg.messageId);
         break;
+      case "chat_set_message_hidden":
+        this.handleChatSetMessageHidden(msg.requestId, msg.chatId, msg.messageId, msg.hidden);
+        break;
+      case "chat_set_messages_hidden":
+        this.handleChatSetMessagesHidden(msg.requestId, msg.chatId, msg.messageIds, msg.hidden);
+        break;
+      case "chat_is_message_hidden":
+        this.handleChatIsMessageHidden(msg.requestId, msg.chatId, msg.messageId);
+        break;
       case "events_track":
         this.handleEventsTrack(msg.requestId, msg.eventName, msg.payload, msg.options);
         break;
@@ -634,7 +837,18 @@ export class WorkerHost {
       case "enclave_list":
         this.handleEnclaveList(msg.requestId, msg.userId);
         break;
-      case "frontend_message":
+      case "frontend_message": {
+        // User-scoped extensions can only ever target their installer; the
+        // worker-supplied userId is ignored to prevent cross-user delivery.
+        // Operator-scoped extensions may pass an explicit userId to route the
+        // message to a single connected user — when omitted we fall back to
+        // the legacy broadcast behaviour for backwards compatibility.
+        const targetUserId =
+          this.installScope === "user"
+            ? this.installedByUserId ?? undefined
+            : typeof msg.userId === "string" && msg.userId.length > 0
+              ? msg.userId
+              : undefined;
         eventBus.emit(
           EventType.SPINDLE_FRONTEND_MSG,
           {
@@ -642,9 +856,10 @@ export class WorkerHost {
             identifier: this.manifest.identifier,
             data: msg.payload,
           },
-          this.installScope === "user" ? this.installedByUserId ?? undefined : undefined
+          targetUserId
         );
         break;
+      }
       case "oauth_callback_result":
         if (msg.error) {
           this.rejectRequest(msg.requestId, new Error(msg.error));
@@ -685,6 +900,21 @@ export class WorkerHost {
         break;
       case "vars_has_global":
         this.handleVarsHasGlobal(msg.requestId, msg.key, msg.userId);
+        break;
+      case "vars_get_chat":
+        this.handleVarsGetChat(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_set_chat":
+        this.handleVarsSetChat(msg.requestId, msg.chatId, msg.key, msg.value);
+        break;
+      case "vars_delete_chat":
+        this.handleVarsDeleteChat(msg.requestId, msg.chatId, msg.key);
+        break;
+      case "vars_list_chat":
+        this.handleVarsListChat(msg.requestId, msg.chatId);
+        break;
+      case "vars_has_chat":
+        this.handleVarsHasChat(msg.requestId, msg.chatId, msg.key);
         break;
       // ─── Characters (gated: "characters") ─────────────────────────────
       case "characters_list":
@@ -793,6 +1023,20 @@ export class WorkerHost {
       case "log":
         this.handleLog(msg.level, msg.message);
         break;
+      // ─── Commands (free tier) ─────────────────────────────────────────
+      case "commands_register":
+        this.handleCommandsRegister(msg.commands);
+        break;
+      case "commands_unregister":
+        this.handleCommandsUnregister(msg.commandIds);
+        break;
+      // ─── Version (free tier) ─────────────────────────────────────────
+      case "version_get_backend":
+        this.handleVersionGetBackend(msg.requestId);
+        break;
+      case "version_get_frontend":
+        this.handleVersionGetFrontend(msg.requestId);
+        break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
       case "push_send":
         this.handlePushSend(msg.requestId, msg.title, msg.body, msg.tag, msg.url, msg.userId, msg.icon, msg.rawTitle, msg.image);
@@ -810,10 +1054,16 @@ export class WorkerHost {
         break;
       // ─── Modal (free tier — no permission needed) ─────────────────────
       case "modal_open":
-        this.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId);
+        this.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId, (msg as any).modalRequestId);
+        break;
+      case "modal_close":
+        this.handleModalClose(msg.requestId, msg.openRequestId, msg.userId);
         break;
       case "confirm_open":
         this.handleConfirmOpen(msg.requestId, msg.title, msg.message, msg.variant, msg.confirmLabel, msg.cancelLabel, msg.userId);
+        break;
+      case "input_prompt_open":
+        this.handleInputPromptOpen(msg.requestId, msg.title, msg.message, msg.placeholder, msg.defaultValue, msg.submitLabel, msg.cancelLabel, msg.multiline, msg.userId);
         break;
       // ─── Macro Resolution (free tier — no permission needed) ────────────
       case "macros_resolve":
@@ -839,6 +1089,9 @@ export class WorkerHost {
       case "theme_apply":
         this.handleThemeApply(msg.requestId, msg.overrides, msg.userId);
         break;
+      case "theme_apply_palette":
+        this.handleThemeApplyPalette((msg as any).requestId, (msg as any).palette, (msg as any).userId);
+        break;
       case "theme_clear":
         this.handleThemeClear(msg.requestId, msg.userId);
         break;
@@ -848,10 +1101,32 @@ export class WorkerHost {
       case "color_extract":
         this.handleColorExtract(msg.requestId, msg.imageId, msg.userId);
         break;
+      case "theme_generate_variables":
+        this.handleThemeGenerateVariables(msg.requestId, msg.config);
+        break;
+      default:
+        // Fail fast for unrecognized message types so the worker's
+        // await request(...) doesn't hang indefinitely.
+        if ((msg as any).requestId) {
+          this.postToWorker({
+            type: "response",
+            requestId: (msg as any).requestId,
+            error: `Unrecognized message type: "${(msg as any).type}"`,
+          });
+        }
+        break;
     }
   }
 
   // ─── Event subscription ──────────────────────────────────────────────
+
+  /** Generation-related events that require the `generation` permission. */
+  private static readonly GENERATION_EVENTS = new Set([
+    EventType.GENERATION_STARTED,
+    EventType.GENERATION_ENDED,
+    EventType.GENERATION_STOPPED,
+    EventType.STREAM_TOKEN_RECEIVED,
+  ]);
 
   private handleSubscribeEvent(event: string): void {
     const eventType = (EventType as any)[event];
@@ -859,6 +1134,22 @@ export class WorkerHost {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Unknown event: ${event}`
       );
+      return;
+    }
+
+    // Generation lifecycle/streaming events require the generation permission
+    if (
+      WorkerHost.GENERATION_EVENTS.has(eventType) &&
+      !managerSvc.hasPermission(this.manifest.identifier, "generation")
+    ) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Generation permission required for event: ${event}`
+      );
+      this.postToWorker({
+        type: "permission_denied",
+        permission: "generation",
+        operation: `subscribe_event:${event}`,
+      });
       return;
     }
 
@@ -877,6 +1168,7 @@ export class WorkerHost {
         type: "event",
         event,
         payload: msg.payload,
+        userId: msg.userId,
       });
     });
     this.eventUnsubscribers.set(event, unsub);
@@ -983,6 +1275,7 @@ export class WorkerHost {
             variables: {
               local: Object.fromEntries(ctx.env.variables.local),
               global: Object.fromEntries(ctx.env.variables.global),
+              chat: Object.fromEntries(ctx.env.variables.chat),
             },
             dynamicMacros: Object.fromEntries(
               Object.entries(ctx.env.dynamicMacros).filter(
@@ -1072,7 +1365,7 @@ export class WorkerHost {
           context,
         });
 
-        return new Promise<LlmMessageDTO[]>((resolve, reject) => {
+        return new Promise<InterceptorResult>((resolve, reject) => {
           const timeout = setTimeout(() => {
             this.pendingRequests.delete(requestId);
             reject(
@@ -1085,7 +1378,7 @@ export class WorkerHost {
           this.pendingRequests.set(requestId, {
             resolve: (val) => {
               clearTimeout(timeout);
-              resolve(val as LlmMessageDTO[]);
+              resolve(val as InterceptorResult);
             },
             reject: (err) => {
               clearTimeout(timeout);
@@ -1964,8 +2257,8 @@ export class WorkerHost {
     return existing.length - kept.length;
   }
 
-  private getExtensionEphemeralMaxBytes(identifier: string): number {
-    const cfg = getEphemeralPoolConfig();
+  private async getExtensionEphemeralMaxBytes(identifier: string): Promise<number> {
+    const cfg = await getEphemeralPoolConfig();
     return cfg.extensionMaxOverrides[identifier] ?? cfg.extensionDefaultMaxBytes;
   }
 
@@ -2099,11 +2392,11 @@ export class WorkerHost {
     return { usedBytes, reservedBytes };
   }
 
-  private getGlobalEphemeralPoolUsage(): {
+  private async getGlobalEphemeralPoolUsage(): Promise<{
     usedBytes: number;
     reservedBytes: number;
-  } {
-    const extensions = managerSvc.list();
+  }> {
+    const extensions = await managerSvc.list();
     let usedBytes = 0;
     let reservedBytes = 0;
 
@@ -2137,18 +2430,18 @@ export class WorkerHost {
     return removed;
   }
 
-  private enforceEphemeralQuota(
+  private async enforceEphemeralQuota(
     pathKey: string,
     incomingSizeBytes: number,
     reservationId?: string
-  ): { reservedConsumptionBytes: number } {
+  ): Promise<{ reservedConsumptionBytes: number }> {
     this.clearExpiredEphemeralEntriesInternal();
     this.clearExpiredReservations();
 
     const usage = this.collectEphemeralUsage();
-    const global = this.getGlobalEphemeralPoolUsage();
-    const extensionMax = this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
-    const globalMax = getEphemeralPoolConfig().globalMaxBytes;
+    const global = await this.getGlobalEphemeralPoolUsage();
+    const extensionMax = await this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
+    const globalMax = (await getEphemeralPoolConfig()).globalMaxBytes;
 
     const existingSize = usage.filesByPath.get(pathKey)?.sizeBytes || 0;
     const isNewFile = !usage.filesByPath.has(pathKey);
@@ -2225,18 +2518,18 @@ export class WorkerHost {
     }
   }
 
-  private handleEphemeralWrite(
+  private async handleEphemeralWrite(
     requestId: string,
     path: string,
     data: string,
     ttlMs?: number,
     reservationId?: string
-  ): void {
+  ): Promise<void> {
     try {
       const fullPath = this.resolveEphemeralPath(path);
       const pathKey = this.getEphemeralPathKey(fullPath);
       const sizeBytes = Buffer.byteLength(data, "utf-8");
-      const quota = this.enforceEphemeralQuota(pathKey, sizeBytes, reservationId);
+      const quota = await this.enforceEphemeralQuota(pathKey, sizeBytes, reservationId);
       mkdirSync(resolve(fullPath, ".."), { recursive: true });
       writeFileSync(fullPath, data, "utf-8");
       this.upsertEphemeralIndex(pathKey, sizeBytes, ttlMs);
@@ -2267,17 +2560,17 @@ export class WorkerHost {
     }
   }
 
-  private handleEphemeralWriteBinary(
+  private async handleEphemeralWriteBinary(
     requestId: string,
     path: string,
     data: Uint8Array,
     ttlMs?: number,
     reservationId?: string
-  ): void {
+  ): Promise<void> {
     try {
       const fullPath = this.resolveEphemeralPath(path);
       const pathKey = this.getEphemeralPathKey(fullPath);
-      const quota = this.enforceEphemeralQuota(
+      const quota = await this.enforceEphemeralQuota(
         pathKey,
         data.byteLength,
         reservationId
@@ -2374,15 +2667,15 @@ export class WorkerHost {
     }
   }
 
-  private handleEphemeralPoolStatus(requestId: string): void {
+  private async handleEphemeralPoolStatus(requestId: string): Promise<void> {
     try {
       this.clearExpiredEphemeralEntriesInternal();
       this.clearExpiredReservations();
 
       const extensionUsage = this.collectEphemeralUsage();
-      const globalUsage = this.getGlobalEphemeralPoolUsage();
-      const extensionMax = this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
-      const globalMax = getEphemeralPoolConfig().globalMaxBytes;
+      const globalUsage = await this.getGlobalEphemeralPoolUsage();
+      const extensionMax = await this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
+      const globalMax = (await getEphemeralPoolConfig()).globalMaxBytes;
 
       this.postToWorker({
         type: "response",
@@ -2411,19 +2704,19 @@ export class WorkerHost {
     }
   }
 
-  private handleEphemeralRequestBlock(
+  private async handleEphemeralRequestBlock(
     requestId: string,
     sizeBytes: number,
     ttlMs?: number,
     reason?: string
-  ): void {
+  ): Promise<void> {
     try {
       if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
         throw new Error("sizeBytes must be a positive number");
       }
 
       const now = Date.now();
-      const cfg = getEphemeralPoolConfig();
+      const cfg = await getEphemeralPoolConfig();
       const effectiveTtlMs =
         ttlMs && ttlMs > 0 ? ttlMs : cfg.reservationTtlMs;
       const expiresAt = new Date(now + effectiveTtlMs).toISOString();
@@ -2432,8 +2725,8 @@ export class WorkerHost {
       this.clearExpiredReservations();
 
       const extensionUsage = this.collectEphemeralUsage();
-      const globalUsage = this.getGlobalEphemeralPoolUsage();
-      const extensionMax = this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
+      const globalUsage = await this.getGlobalEphemeralPoolUsage();
+      const extensionMax = await this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
       const globalMax = cfg.globalMaxBytes;
 
       const extensionAvailable =
@@ -2537,11 +2830,17 @@ export class WorkerHost {
             ? (extra.spindle_metadata as Record<string, unknown>)
             : undefined;
 
+        const swipes = Array.isArray(m.swipes) ? m.swipes.slice() : [];
+        const swipeId =
+          typeof m.swipe_id === "number" && Number.isFinite(m.swipe_id) ? m.swipe_id : 0;
+
         return {
           id: m.id,
           role,
           content: m.content,
           metadata,
+          swipe_id: swipeId,
+          swipes,
         };
       });
 
@@ -2657,6 +2956,88 @@ export class WorkerHost {
 
       deleteChatMessage(userId, messageId);
       this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatSetMessageHidden(
+    requestId: string,
+    chatId: string,
+    messageId: string,
+    hidden: boolean,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+
+      const current = getChatMessage(userId, messageId);
+      if (!current || current.chat_id !== chatId) {
+        throw new Error("Message not found");
+      }
+
+      chatsSvc.bulkSetHidden(userId, chatId, [messageId], !!hidden);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatSetMessagesHidden(
+    requestId: string,
+    chatId: string,
+    messageIds: string[],
+    hidden: boolean,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+
+      if (!Array.isArray(messageIds)) {
+        throw new Error("messageIds must be an array of strings");
+      }
+      // Filter to defensively-typed strings; the underlying service caps the
+      // batch at 500 and will throw past that.
+      const filtered = messageIds.filter((id): id is string => typeof id === "string" && !!id);
+
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+
+      chatsSvc.bulkSetHidden(userId, chatId, filtered, !!hidden);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleChatIsMessageHidden(
+    requestId: string,
+    chatId: string,
+    messageId: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+
+      const userId = this.getChatOwnerId(chatId);
+      if (!userId) throw new Error("Chat not found");
+      this.enforceScopedUser(userId);
+
+      const current = getChatMessage(userId, messageId);
+      if (!current || current.chat_id !== chatId) {
+        throw new Error("Message not found");
+      }
+
+      const extra = (current.extra || {}) as Record<string, unknown>;
+      this.postToWorker({ type: "response", requestId, result: extra.hidden === true });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -2880,12 +3261,28 @@ export class WorkerHost {
       await validateHost(parsed.hostname);
 
       try {
-        const response = await fetch(url, {
-          method: options.method || "GET",
-          headers: options.headers,
-          body: options.body,
-        });
-        const text = await response.text();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), CORS_PROXY_TIMEOUT_MS);
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            method: options.method || "GET",
+            headers: options.headers,
+            body: options.body,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+        // Reject obvious oversize responses up-front; for unknown lengths we
+        // still cap the buffered body below.
+        const declared = response.headers.get("content-length");
+        if (declared && parseInt(declared, 10) > CORS_PROXY_MAX_BODY_BYTES) {
+          throw new Error(
+            `CORS proxy response too large (declared ${declared} bytes, max ${CORS_PROXY_MAX_BODY_BYTES})`,
+          );
+        }
+        const text = await readResponseBodyCapped(response, CORS_PROXY_MAX_BODY_BYTES);
         this.postToWorker({
           type: "response",
           requestId,
@@ -3128,6 +3525,75 @@ export class WorkerHost {
     }
   }
 
+  // ─── Chat-Scoped Persisted Variables (free tier) ────────────────────
+
+  private getChatVars(chatId: string): Record<string, string> {
+    const userId = this.getChatOwnerId(chatId);
+    if (!userId) throw new Error("Chat not found");
+    this.enforceScopedUser(userId);
+    const chat = chatsSvc.getChat(userId, chatId);
+    if (!chat) throw new Error("Chat not found");
+    return (chat.metadata?.chat_variables as Record<string, string>) || {};
+  }
+
+  private setChatVars(chatId: string, vars: Record<string, string>): void {
+    const userId = this.getChatOwnerId(chatId);
+    if (!userId) throw new Error("Chat not found");
+    const chat = chatsSvc.getChat(userId, chatId);
+    if (!chat) throw new Error("Chat not found");
+    const metadata = { ...chat.metadata, chat_variables: vars };
+    chatsSvc.updateChat(userId, chatId, { metadata });
+  }
+
+  private handleVarsGetChat(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsSetChat(requestId: string, chatId: string, key: string, value: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      vars[key] = value;
+      this.setChatVars(chatId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsDeleteChat(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      delete vars[key];
+      this.setChatVars(chatId, vars);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsListChat(requestId: string, chatId: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleVarsHasChat(requestId: string, chatId: string, key: string): void {
+    try {
+      const vars = this.getChatVars(chatId);
+      this.postToWorker({ type: "response", requestId, result: key in vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   // ─── Characters (gated: "characters") ──────────────────────────────
 
   private toCharacterDTO(c: any): CharacterDTO {
@@ -3146,9 +3612,27 @@ export class WorkerHost {
       alternate_greetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings : [],
       creator: c.creator || "",
       image_id: c.image_id || null,
+      world_book_ids: getCharacterWorldBookIds(c.extensions),
       created_at: c.created_at,
       updated_at: c.updated_at,
     };
+  }
+
+  /**
+   * Normalize and dedupe a `world_book_ids` input from an extension. Filters
+   * out non-string and empty entries, deduplicates while preserving order.
+   */
+  private sanitizeWorldBookIds(input: unknown): string[] {
+    if (!Array.isArray(input)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of input) {
+      if (typeof id !== "string" || !id.trim()) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
   }
 
   private handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
@@ -3210,7 +3694,7 @@ export class WorkerHost {
         throw new Error("Character name is required");
       }
 
-      const c = charactersSvc.createCharacter(resolvedUserId, {
+      const createInput: any = {
         name: input.name,
         description: input.description,
         personality: input.personality,
@@ -3223,7 +3707,12 @@ export class WorkerHost {
         tags: input.tags,
         alternate_greetings: input.alternate_greetings,
         creator: input.creator,
-      });
+      };
+      if (input.world_book_ids !== undefined) {
+        const ids = this.sanitizeWorldBookIds(input.world_book_ids);
+        createInput.extensions = setCharacterWorldBookIds({}, ids);
+      }
+      const c = charactersSvc.createCharacter(resolvedUserId, createInput);
       this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -3239,7 +3728,27 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const c = charactersSvc.updateCharacter(resolvedUserId, characterId, input || {});
+      // Whitelist allowed update fields. The raw `extensions` blob is never
+      // accepted from extensions — only structured fields like `world_book_ids`
+      // are allowed to mutate it, and only via the dedicated helper.
+      const update: any = {};
+      const passthroughFields = [
+        "name", "description", "personality", "scenario", "first_mes",
+        "mes_example", "creator_notes", "system_prompt", "post_history_instructions",
+        "tags", "alternate_greetings", "creator",
+      ] as const;
+      for (const field of passthroughFields) {
+        if (input?.[field] !== undefined) update[field] = input[field];
+      }
+
+      if (input?.world_book_ids !== undefined) {
+        const existing = charactersSvc.getCharacter(resolvedUserId, characterId);
+        if (!existing) throw new Error("Character not found");
+        const ids = this.sanitizeWorldBookIds(input.world_book_ids);
+        update.extensions = setCharacterWorldBookIds(existing.extensions || {}, ids);
+      }
+
+      const c = charactersSvc.updateCharacter(resolvedUserId, characterId, update);
       if (!c) throw new Error("Character not found");
       this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
     } catch (err: any) {
@@ -4049,6 +4558,92 @@ export class WorkerHost {
     );
   }
 
+  // ─── Commands (free tier) ─────────────────────────────────────────────
+
+  private handleCommandsRegister(commands: SpindleCommandDTO[]): void {
+    if (!Array.isArray(commands)) {
+      console.warn(`[Spindle:${this.manifest.identifier}] commands_register: expected array`);
+      return;
+    }
+
+    if (commands.length > WorkerHost.MAX_COMMANDS_PER_EXTENSION) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Command limit exceeded (${commands.length}/${WorkerHost.MAX_COMMANDS_PER_EXTENSION}), truncating`,
+      );
+      commands = commands.slice(0, WorkerHost.MAX_COMMANDS_PER_EXTENSION);
+    }
+
+    // Validate and sanitize each command
+    const validated: SpindleCommandDTO[] = [];
+    const seenIds = new Set<string>();
+    const validScopes = ["global", "chat", "chat-idle", "landing", "character"];
+
+    for (const cmd of commands) {
+      if (!cmd || typeof cmd.id !== "string" || !cmd.id.trim()) continue;
+      if (!cmd.label || typeof cmd.label !== "string") continue;
+      if (seenIds.has(cmd.id)) continue;
+      seenIds.add(cmd.id);
+
+      validated.push({
+        id: cmd.id.slice(0, 100),
+        label: (cmd.label || "").slice(0, 80),
+        description: (cmd.description || "").slice(0, 200),
+        keywords: Array.isArray(cmd.keywords)
+          ? cmd.keywords.filter((k): k is string => typeof k === "string").slice(0, 10).map((k) => k.slice(0, 30))
+          : undefined,
+        scope: validScopes.includes(cmd.scope as string) ? cmd.scope : undefined,
+      });
+    }
+
+    this.registeredCommands = validated;
+    this.broadcastCommandsChanged();
+  }
+
+  private handleCommandsUnregister(commandIds: string[]): void {
+    if (!Array.isArray(commandIds) || commandIds.length === 0) {
+      // Remove all commands
+      this.registeredCommands = [];
+    } else {
+      const idsToRemove = new Set(commandIds.filter((id) => typeof id === "string"));
+      this.registeredCommands = this.registeredCommands.filter((c) => !idsToRemove.has(c.id));
+    }
+    this.broadcastCommandsChanged();
+  }
+
+  private broadcastCommandsChanged(): void {
+    eventBus.emit(
+      EventType.SPINDLE_COMMANDS_CHANGED,
+      {
+        extensionId: this.extensionId,
+        extensionName: this.manifest.name,
+        commands: this.registeredCommands,
+      },
+      this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+    );
+  }
+
+  /** Called by the WS handler when the frontend invokes a command. */
+  invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string): void {
+    if (!this.worker) return;
+    if (!this.registeredCommands.some((c) => c.id === commandId)) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Command "${commandId}" not registered`,
+      );
+      return;
+    }
+    this.postToWorker({
+      type: "command_invoked",
+      commandId,
+      context,
+      userId,
+    });
+  }
+
+  /** Expose registered commands for lookup from the WS handler. */
+  getRegisteredCommands(): SpindleCommandDTO[] {
+    return this.registeredCommands;
+  }
+
   // ─── Logging ─────────────────────────────────────────────────────────
 
   private handleLog(level: "info" | "warn" | "error", message: string): void {
@@ -4056,6 +4651,14 @@ export class WorkerHost {
     if (message === "__worker_ready__") {
       this.onWorkerReady?.();
       this.onWorkerReady = null;
+      return;
+    }
+
+    // Detect the shutdown acknowledgement so stop() can resolve promptly
+    // instead of always waiting for the 5s fallback timeout.
+    if (message === "__worker_shutdown_ack__") {
+      this.onWorkerShutdownAck?.();
+      this.onWorkerShutdownAck = null;
       return;
     }
 
@@ -4207,6 +4810,26 @@ export class WorkerHost {
     }
   }
 
+  // ─── Version (free tier) ────────────────────────────────────────────
+
+  private async handleVersionGetBackend(requestId: string): Promise<void> {
+    try {
+      const version = await getBackendVersion();
+      this.postToWorker({ type: "response", requestId, result: version });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleVersionGetFrontend(requestId: string): Promise<void> {
+    try {
+      const version = await getFrontendVersion();
+      this.postToWorker({ type: "response", requestId, result: version });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   // ─── Text Editor (free tier) ────────────────────────────────────────
 
   private handleTextEditorOpen(
@@ -4263,12 +4886,15 @@ export class WorkerHost {
     maxHeight?: number,
     persistent?: boolean,
     userId?: string,
+    callerModalRequestId?: string,
   ): void {
     try {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
 
-      const modalRequestId = `spindle-modal:${this.extensionId}:${requestId}`;
+      const modalRequestId = callerModalRequestId
+        ? `spindle-modal:${this.extensionId}:${callerModalRequestId}`
+        : `spindle-modal:${this.extensionId}:${requestId}`;
 
       const unsub = eventBus.on(EventType.SPINDLE_MODAL_RESULT, (msg) => {
         if (msg.payload?.requestId !== modalRequestId) return;
@@ -4295,6 +4921,29 @@ export class WorkerHost {
         resolvedUserId,
       );
     } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleModalClose(
+    requestId: string,
+    openRequestId: string,
+    userId?: string,
+  ): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+
+      const modalRequestId = `spindle-modal:${this.extensionId}:${openRequestId}`;
+
+      eventBus.emit(
+        EventType.SPINDLE_MODAL_RESULT,
+        { requestId: modalRequestId, dismissedBy: "extension" },
+        resolvedUserId,
+      );
+
+      this.postToWorker({ type: "response", requestId, result: undefined });
+      } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
@@ -4335,6 +4984,57 @@ export class WorkerHost {
           variant: variant ?? "info",
           confirmLabel: confirmLabel ?? "Confirm",
           cancelLabel: cancelLabel ?? "Cancel",
+        },
+        resolvedUserId,
+      );
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleInputPromptOpen(
+    requestId: string,
+    title: string,
+    message?: string,
+    placeholder?: string,
+    defaultValue?: string,
+    submitLabel?: string,
+    cancelLabel?: string,
+    multiline?: boolean,
+    userId?: string,
+  ): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+
+      const promptRequestId = `spindle-input-prompt:${this.extensionId}:${requestId}`;
+
+      const unsub = eventBus.on(EventType.SPINDLE_INPUT_PROMPT_RESULT, (msg) => {
+        if (msg.payload?.requestId !== promptRequestId) return;
+        unsub();
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            value: msg.payload.cancelled ? null : (msg.payload.value ?? null),
+            cancelled: !!msg.payload.cancelled,
+          },
+        });
+      });
+
+      eventBus.emit(
+        EventType.SPINDLE_INPUT_PROMPT_OPEN,
+        {
+          requestId: promptRequestId,
+          extensionId: this.extensionId,
+          extensionName: this.manifest.name,
+          title,
+          message,
+          placeholder,
+          defaultValue,
+          submitLabel: submitLabel ?? "Submit",
+          cancelLabel: cancelLabel ?? "Cancel",
+          multiline: !!multiline,
         },
         resolvedUserId,
       );
@@ -4421,6 +5121,9 @@ export class WorkerHost {
           },
           character: {
             name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",
+            personaSubjectivePronoun: persona?.subjective_pronoun || "",
+            personaObjectivePronoun: persona?.objective_pronoun || "",
+            personaPossessivePronoun: persona?.possessive_pronoun || "",
             mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "",
             depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "",
           },
@@ -4432,7 +5135,7 @@ export class WorkerHost {
             model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
             lastGenerationType: "normal", isMobile: false,
           },
-          variables: { local: new Map(), global: new Map() },
+          variables: { local: new Map(), global: new Map(), chat: new Map() },
           dynamicMacros: {},
           extra: {},
         };
@@ -4467,10 +5170,15 @@ export class WorkerHost {
           this.postToWorker({ type: "response", requestId, error: "overrides.variables must be an object" });
           return;
         }
-        // Only allow CSS custom property keys (--*)
-        for (const key of Object.keys(overrides.variables)) {
+        // Only allow CSS custom property keys (--*) and validate each value
+        for (const [key, value] of Object.entries(overrides.variables)) {
           if (!key.startsWith("--")) {
             this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key: "${key}" (must start with --)` });
+            return;
+          }
+          const issue = validateCssValue(value);
+          if (issue) {
+            this.postToWorker({ type: "response", requestId, error: `Invalid CSS value for "${key}": ${issue}` });
             return;
           }
         }
@@ -4490,9 +5198,14 @@ export class WorkerHost {
               this.postToWorker({ type: "response", requestId, error: `variablesByMode.${modeKey} must be an object` });
               return;
             }
-            for (const key of Object.keys(modeVars)) {
+            for (const [key, value] of Object.entries(modeVars)) {
               if (!key.startsWith("--")) {
                 this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key in variablesByMode.${modeKey}: "${key}"` });
+                return;
+              }
+              const issue = validateCssValue(value);
+              if (issue) {
+                this.postToWorker({ type: "response", requestId, error: `Invalid CSS value in variablesByMode.${modeKey}["${key}"]: ${issue}` });
                 return;
               }
             }
@@ -4500,33 +5213,102 @@ export class WorkerHost {
         }
       }
 
-      // Merge with existing overrides
-      const existingByMode = this.themeOverrides?.variablesByMode ?? {};
-      this.themeOverrides = {
-        variables: {
-          ...(this.themeOverrides?.variables ?? {}),
-          ...(overrides.variables ?? {}),
-        },
-        variablesByMode: (overrides.variablesByMode || existingByMode.dark || existingByMode.light) ? {
-          dark: { ...existingByMode.dark, ...overrides.variablesByMode?.dark },
-          light: { ...existingByMode.light, ...overrides.variablesByMode?.light },
-        } : undefined,
-      };
-
-      // Broadcast to frontend
-      eventBus.emit(
-        EventType.SPINDLE_THEME_OVERRIDES,
-        {
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          overrides: this.themeOverrides,
-        },
-        this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
-      );
+      this.commitThemeOverrides(overrides);
 
       this.postToWorker({ type: "response", requestId, result: true });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private shouldReplaceThemeScope(vars?: Record<string, string>): boolean {
+    if (!vars) return false;
+
+    const keys = Object.keys(vars);
+    if (keys.length >= WorkerHost.FULL_THEME_MIN_KEYS) {
+      return true;
+    }
+
+    return WorkerHost.FULL_THEME_SENTINEL_KEYS.every((key) => key in vars);
+  }
+
+  private commitThemeOverrides(overrides: ThemeOverrideDTO): void {
+    const existingByMode = this.themeOverrides?.variablesByMode ?? {};
+    const nextVariables = this.shouldReplaceThemeScope(overrides.variables)
+      ? { ...(overrides.variables ?? {}) }
+      : {
+          ...(this.themeOverrides?.variables ?? {}),
+          ...(overrides.variables ?? {}),
+        };
+    const nextDarkVars = overrides.variablesByMode?.dark
+      ? this.shouldReplaceThemeScope(overrides.variablesByMode.dark)
+        ? { ...overrides.variablesByMode.dark }
+        : { ...existingByMode.dark, ...overrides.variablesByMode.dark }
+      : existingByMode.dark;
+    const nextLightVars = overrides.variablesByMode?.light
+      ? this.shouldReplaceThemeScope(overrides.variablesByMode.light)
+        ? { ...overrides.variablesByMode.light }
+        : { ...existingByMode.light, ...overrides.variablesByMode.light }
+      : existingByMode.light;
+
+    this.themeOverrides = {
+      variables: nextVariables,
+      variablesByMode: (nextDarkVars || nextLightVars)
+        ? {
+            dark: nextDarkVars,
+            light: nextLightVars,
+          }
+        : undefined,
+    };
+
+    eventBus.emit(
+      EventType.SPINDLE_THEME_OVERRIDES,
+      {
+        extensionId: this.extensionId,
+        extensionName: this.manifest.name,
+        overrides: this.themeOverrides,
+      },
+      this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
+    );
+  }
+
+  private handleThemeApplyPalette(
+    requestId: string,
+    palette: { accent?: { h?: number; s?: number; l?: number } } | null | undefined,
+    userId?: string,
+  ): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme palette application requires the app_manipulation permission`,
+      });
+      return;
+    }
+
+    try {
+      if (!palette?.accent || typeof palette.accent.h !== "number" || typeof palette.accent.s !== "number" || typeof palette.accent.l !== "number") {
+        this.postToWorker({ type: "response", requestId, error: "palette.accent must be { h: number, s: number, l: number }" });
+        return;
+      }
+      const accent: { h: number; s: number; l: number } = {
+        h: palette.accent.h,
+        s: palette.accent.s,
+        l: palette.accent.l,
+      };
+
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+        return;
+      }
+      this.enforceScopedUser(resolvedUserId);
+
+      this.emitPaletteColorOverrides(accent);
+
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message || "Theme palette application failed" });
     }
   }
 
@@ -4557,6 +5339,49 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result: true });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  /**
+   * Generate color-only theme variables from an accent and emit per-user.
+   *
+   * Each user's `enableGlass` is read so color variables that encode
+   * glass-dependent alpha (--lumiverse-bg, --lcs-glass-bg, etc.) get the
+   * correct opacity. User preference keys (blur, radii, fonts, scale,
+   * transitions) are stripped — applyPalette only changes colors.
+   */
+  private emitPaletteColorOverrides(accent: { h: number; s: number; l: number }): void {
+    const strip = (vars: Record<string, string>) => {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(vars)) {
+        if (!WorkerHost.USER_PREFERENCE_KEYS.has(k)) out[k] = v;
+      }
+      return out;
+    };
+
+    const connectedUserIds = this.installScope === "operator"
+      ? eventBus.getConnectedUserIds()
+      : (this.installedByUserId ? [this.installedByUserId] : []);
+
+    for (const uid of connectedUserIds) {
+      const themeSetting = settingsSvc.getSetting(uid, "theme");
+      const enableGlass = typeof themeSetting?.value?.enableGlass === "boolean"
+        ? themeSetting.value.enableGlass : true;
+
+      const base = { accent, enableGlass };
+      const overrides = {
+        paletteAccent: accent,
+        variablesByMode: {
+          dark: strip(generateThemeVariablesFn({ ...base, mode: "dark" })),
+          light: strip(generateThemeVariablesFn({ ...base, mode: "light" })),
+        },
+      } as ThemeOverrideDTO & { paletteAccent: { h: number; s: number; l: number } };
+
+      eventBus.emit(
+        EventType.SPINDLE_THEME_OVERRIDES,
+        { extensionId: this.extensionId, extensionName: this.manifest.name, overrides },
+        uid,
+      );
     }
   }
 
@@ -4594,6 +5419,7 @@ export class WorkerHost {
           enableGlass: themeConfig?.enableGlass ?? true,
           radiusScale: themeConfig?.radiusScale ?? 1,
           fontScale: themeConfig?.fontScale ?? 1,
+          uiScale: themeConfig?.uiScale ?? 1,
           characterAware: !!themeConfig?.characterAware,
         },
       });
@@ -4617,6 +5443,37 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message || "Color extraction failed" });
+    }
+  }
+
+  private handleThemeGenerateVariables(requestId: string, config: any): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme variable generation requires the app_manipulation permission`,
+      });
+      return;
+    }
+
+    try {
+      if (!config || typeof config !== "object") {
+        this.postToWorker({ type: "response", requestId, error: "config is required" });
+        return;
+      }
+      if (!config.accent || typeof config.accent.h !== "number" || typeof config.accent.s !== "number" || typeof config.accent.l !== "number") {
+        this.postToWorker({ type: "response", requestId, error: "config.accent must be { h: number, s: number, l: number }" });
+        return;
+      }
+      if (config.mode !== "dark" && config.mode !== "light") {
+        this.postToWorker({ type: "response", requestId, error: 'config.mode must be "dark" or "light"' });
+        return;
+      }
+
+      const vars = generateThemeVariablesFn(config);
+      this.postToWorker({ type: "response", requestId, result: vars });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message || "Variable generation failed" });
     }
   }
 

@@ -3,6 +3,8 @@ import { getConnInfo } from "hono/bun";
 import type { Context, Next } from "hono";
 import * as svc from "../services/generate.service";
 import * as breakdownSvc from "../services/breakdown.service";
+import * as poolSvc from "../services/generation-pool.service";
+import { getSummarizationPromptDefaults } from "../services/summarization-prompts.service";
 
 const LOCALHOST_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
@@ -47,6 +49,74 @@ app.post("/stop", async (c) => {
   return c.json({ stopped: true });
 });
 
+// --- Generation status / recovery ---
+
+app.get("/active", (c) => {
+  const userId = c.get("userId");
+  const entries = poolSvc.getChatHeadPoolsForUser(userId);
+  return c.json(entries.map((e) => ({
+    generationId: e.generationId,
+    chatId: e.chatId,
+    status: e.status,
+    generationType: e.generationType,
+    characterName: e.characterName,
+    characterId: e.characterId,
+    model: e.model,
+    startedAt: e.startedAt,
+    councilRetryPending: e.councilRetryPending || false,
+  })));
+});
+
+app.post("/acknowledge", async (c) => {
+  const userId = c.get("userId");
+  const { chatId } = await c.req.json<{ chatId: string }>();
+  if (!chatId) return c.json({ error: "chatId required" }, 400);
+  poolSvc.acknowledgeChat(userId, chatId);
+  return c.json({ acknowledged: true });
+});
+
+app.get("/status/:chatId", (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const entry = poolSvc.getPoolForChat(userId, chatId);
+  if (!entry) return c.json({ active: false });
+  const active = entry.status === "assembling" || entry.status === "council" || entry.status === "streaming";
+  return c.json({
+    active,
+    generationId: entry.generationId,
+    status: entry.status,
+    content: entry.content,
+    reasoning: entry.reasoning,
+    tokenSeq: entry.tokenSeq,
+    generationType: entry.generationType,
+    targetMessageId: entry.targetMessageId,
+    characterName: entry.characterName,
+    characterId: entry.characterId,
+    model: entry.model,
+    startedAt: entry.startedAt,
+    reasoningStartedAt: entry.reasoningStartedAt,
+    reasoningDurationMs: entry.reasoningDurationMs,
+    completedMessageId: entry.completedMessageId,
+    completedAt: entry.completedAt,
+    error: entry.error,
+  });
+});
+
+// --- Council retry decision ---
+
+app.post("/council-retry", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body.generation_id) return c.json({ error: "generation_id is required" }, 400);
+  const decision = body.decision as string;
+  if (decision !== "continue" && decision !== "retry") {
+    return c.json({ error: "decision must be 'continue' or 'retry'" }, 400);
+  }
+  const resolved = svc.resolveCouncilRetry(userId, body.generation_id, decision);
+  if (!resolved) return c.json({ error: "No pending council retry for this generation" }, 404);
+  return c.json({ resolved: true });
+});
+
 // --- Breakdown retrieval ---
 
 app.get("/breakdown/:messageId", async (c) => {
@@ -55,6 +125,28 @@ app.get("/breakdown/:messageId", async (c) => {
   const data = breakdownSvc.getBreakdown(userId, messageId);
   if (!data) return c.json({ error: "No breakdown found for this message" }, 404);
   return c.json(data);
+});
+
+// --- Summarize endpoint (browser-accessible, uses sidecar connection fallback) ---
+
+app.get("/summarize/prompt-defaults", (c) => {
+  return c.json(getSummarizationPromptDefaults());
+});
+
+app.post("/summarize", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+    return c.json({ error: "messages array is required" }, 400);
+  }
+
+  try {
+    const result = await svc.summarizeGenerate(userId, body);
+    return c.json(result);
+  } catch (err: any) {
+    const status = err.message.includes("No connection") || err.message.includes("Unknown provider") || err.message.includes("No API key") ? 400 : 502;
+    return c.json({ error: err.message }, status);
+  }
 });
 
 // --- Extension endpoints (localhost-only, synchronous, stateless) ---

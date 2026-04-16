@@ -11,7 +11,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   drawerOpen: false,
   drawerTab: null,
   settingsModalOpen: false,
-  settingsActiveView: 'general',
+  settingsActiveView: 'display',
   portraitPanelOpen: false,
   commandPaletteOpen: false,
   toasts: [],
@@ -30,7 +30,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   closeDrawer: () => set({ drawerOpen: false }),
   setDrawerTab: (tab) => set({ drawerTab: tab }),
 
-  openSettings: (view = 'general') =>
+  openSettings: (view = 'display') =>
     set({ settingsModalOpen: true, settingsActiveView: view }),
   closeSettings: () => set({ settingsModalOpen: false }),
 
@@ -55,4 +55,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
 
   incrementBadgeCount: () => set((state) => ({ badgeCount: state.badgeCount + 1 })),
   resetBadgeCount: () => set({ badgeCount: 0 }),
+
+  lastRegenFeedback: '',
+  setLastRegenFeedback: (text) => set({ lastRegenFeedback: text }),
 })

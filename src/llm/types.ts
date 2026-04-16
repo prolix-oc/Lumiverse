@@ -1,3 +1,5 @@
+import type { MacroEnv } from "../macros/types";
+
 // --- Multi-part content types (for multimodal messages) ---
 
 export interface LlmTextPart {
@@ -121,12 +123,40 @@ export interface AssemblyContext {
   /** Pre-computed vector-activated world info entries from the generation pipeline.
    *  When provided, assembly reuses these instead of re-running vector retrieval. */
   precomputedVectorEntries?: import("../services/prompt-assembly.service").VectorActivatedEntry[];
-  /** Pipeline results from Lumi sidecar execution. */
-  lumiPipelineResults?: import("../types/lumi-engine").LumiPipelineResult;
   /** User-provided feedback text for regeneration guidance. */
   regenFeedback?: string;
   /** Where to inject regen feedback: 'system' (last system msg) or 'user' (last user msg). */
   regenFeedbackPosition?: "system" | "user";
+  /** Pre-fetched data to avoid redundant DB calls during assembly.
+   *  When provided, assembly reads from this instead of querying DB. */
+  prefetched?: PrefetchedData;
+}
+
+/**
+ * Batch-prefetched data for the assembly pipeline. Every field here replaces
+ * one or more individual DB queries inside `assemblePrompt()`.
+ */
+export interface PrefetchedData {
+  chat: import("../types/chat").Chat;
+  messages: import("../types/message").Message[];
+  character: import("../types/character").Character;
+  persona: import("../types/persona").Persona | null;
+  connection: import("../types/connection-profile").ConnectionProfile | null;
+  preset: import("../types/preset").Preset | null;
+  /** All settings keys the pipeline needs, in one batch. */
+  allSettings: Map<string, any>;
+  /** Embedding config resolved once (includes secret validation). */
+  embeddingConfig: import("../services/embeddings.service").EmbeddingConfigWithStatus;
+  /** World info entries from all attached books, batch-loaded. */
+  worldInfoSources: {
+    entries: import("../types/world-book").WorldBookEntry[];
+    worldBookIds: string[];
+    bookSourceMap: Map<string, import("../services/prompt-assembly.service").BookSource>;
+  };
+  /** Group chat members, batch-loaded. */
+  groupCharacters?: Map<string, import("../types/character").Character>;
+  /** Memory cortex config (derived from allSettings). */
+  cortexConfig: import("../services/memory-cortex").MemoryCortexConfig;
 }
 
 /** Lightweight summary of a council tool result for macro access (avoids importing spindle-types). */
@@ -189,18 +219,34 @@ export interface AssemblyResult {
     keywordActivated: number;
     vectorActivated: number;
     totalActivated: number;
+    deduplicated: number;
     queryPreview: string;
+    /** Diagnostic details from the vector retrieval pipeline. */
+    vectorRetrieval?: {
+      eligibleCount: number;
+      hitsBeforeThreshold: number;
+      hitsAfterThreshold: number;
+      thresholdRejected: number;
+      hitsAfterRerankCutoff: number;
+      rerankRejected: number;
+      topK: number;
+      blockerMessages: string[];
+    };
   };
   /** Statistics from long-term memory retrieval. */
   memoryStats?: MemoryStats;
-  /** Deferred WI state to persist after generation completes. */
-  deferredWiState?: { chatId: string; metadata: Record<string, any> };
+  /** Deferred WI state to persist after generation completes. Only the keys
+   *  this writer owns; merged via mergeChatMetadata so concurrent user edits
+   *  to chat metadata are not clobbered. */
+  deferredWiState?: { chatId: string; partial: Record<string, any> };
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
   deliberationHandledByMacro?: boolean;
+  /** The macro environment built during assembly — used downstream for regex script macro substitution. */
+  macroEnv?: MacroEnv;
 }
 
 export interface AssemblyBreakdownEntry {
-  type: 'block' | 'chat_history' | 'separator' | 'utility' | 'world_info' | 'authors_note' | 'append' | 'long_term_memory' | 'sidecar';
+  type: 'block' | 'chat_history' | 'separator' | 'utility' | 'world_info' | 'authors_note' | 'append' | 'long_term_memory' | 'sidecar' | 'databank' | 'databank_mention';
   name: string;
   role?: string;
   content?: string;

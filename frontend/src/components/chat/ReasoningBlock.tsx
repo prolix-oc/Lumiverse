@@ -8,6 +8,8 @@ import clsx from 'clsx'
 interface ReasoningBlockProps {
   reasoning: string
   reasoningDuration?: number
+  /** Server-side timestamp (epoch ms) when reasoning began — used to resume timer after navigation */
+  reasoningStartedAt?: number | null
   isStreaming: boolean
   variant?: 'default' | 'bubble'
   align?: 'left' | 'right'
@@ -32,7 +34,7 @@ function formatDuration(ms: number) {
   return remainMins > 0 ? `${hours}h ${remainMins}m` : `${hours}h`
 }
 
-export default function ReasoningBlock({ reasoning, reasoningDuration, isStreaming, variant = 'default', align }: ReasoningBlockProps) {
+export default function ReasoningBlock({ reasoning, reasoningDuration, reasoningStartedAt, isStreaming, variant = 'default', align }: ReasoningBlockProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [liveElapsed, setLiveElapsed] = useState(0)
   const timerRef = useRef<number | null>(null)
@@ -52,7 +54,12 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, isStreami
       return
     }
 
-    if (!startTimeRef.current) {
+    // Prefer the server-side timestamp (e.g. after navigation recovery) so the
+    // timer reflects the true elapsed time, not time-since-remount. If the prop
+    // arrives after mount (Zustand updates may not batch), override the fallback.
+    if (reasoningStartedAt) {
+      startTimeRef.current = reasoningStartedAt
+    } else if (!startTimeRef.current) {
       startTimeRef.current = Date.now()
     }
 
@@ -69,7 +76,7 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, isStreami
       if (timerRef.current) window.clearInterval(timerRef.current)
       timerRef.current = null
     }
-  }, [isStreaming, reasoningDuration])
+  }, [isStreaming, reasoningDuration, reasoningStartedAt])
 
   const label = reasoningDuration
     ? `Thought for ${formatDuration(reasoningDuration)}`

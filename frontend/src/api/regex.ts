@@ -29,6 +29,10 @@ export const regexApi = {
     return del<void>(`/regex-scripts/${id}`)
   },
 
+  bulkRemove(ids: string[]) {
+    return post<{ deleted: string[]; count: number }>('/regex-scripts/bulk-delete', { ids })
+  },
+
   duplicate(id: string) {
     return post<RegexScript>(`/regex-scripts/${id}/duplicate`)
   },

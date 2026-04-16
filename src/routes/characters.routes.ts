@@ -14,6 +14,7 @@ import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/cha
 import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import { buildSlug } from "../lumihub/manifest";
 
 const app = new Hono();
 
@@ -42,6 +43,34 @@ async function importRisuExpressionAssets(
   if (!assets.length) return 0;
   const config = await exprSvc.importFromAssets(userId, characterId, assets);
   return Object.keys(config.mappings).length;
+}
+
+// ─── Auto-import embedded character book as world book ───────────────────
+
+function autoImportEmbeddedWorldbook(userId: string, characterId: string): void {
+  const character = svc.getCharacter(userId, characterId);
+  if (!character) return;
+
+  const charBook = character.extensions?.character_book;
+  const entries = Array.isArray(charBook?.entries)
+    ? charBook.entries
+    : Object.values(charBook?.entries || {});
+  if (entries.length === 0) return;
+
+  // Skip if world books are already linked (e.g. from Lumiverse modules)
+  const existingIds = getCharacterWorldBookIds(character.extensions);
+  if (existingIds.length > 0) return;
+
+  try {
+    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, character.name, charBook);
+    const nextExtensions = setCharacterWorldBookIds(
+      { ...(character.extensions || {}) },
+      [...existingIds, worldBook.id],
+    );
+    svc.updateCharacter(userId, characterId, { extensions: nextExtensions });
+  } catch {
+    // Non-critical — character is still imported without the world book
+  }
 }
 
 // ─── URL parsing helpers ──────────────────────────────────────────────────
@@ -86,7 +115,7 @@ function parseJannyUrl(url: string): string | null {
 // ─── Chub.ai character fetcher ────────────────────────────────────────────
 
 async function fetchChubCharacter(chubPath: string, userId: string) {
-  const apiUrl = `https://api.chub.ai/api/characters/${chubPath}?full=true`;
+  const apiUrl = `https://gateway.chub.ai/api/characters/${chubPath}?full=true`;
   const res = await safeFetch(apiUrl, {
     timeoutMs: 15_000,
     headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
@@ -144,7 +173,7 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
   const avatarUrl = node.max_res_url || node.avatar_url;
   if (avatarUrl) {
     try {
-      const imgRes = await safeFetch(avatarUrl, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+      const imgRes = await safeFetch(avatarUrl, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
       if (imgRes.ok) {
         const buf = await imgRes.arrayBuffer();
         const contentType = imgRes.headers.get("content-type") || "image/png";
@@ -159,6 +188,25 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
     }
   }
 
+  // Stamp install source so LumiHub manifest can track this card for updates
+  try {
+    const freshChar = svc.getCharacter(userId, character.id);
+    if (freshChar) {
+      const slug = buildSlug(freshChar.creator, freshChar.name);
+      svc.updateCharacter(userId, character.id, {
+        extensions: {
+          ...(freshChar.extensions || {}),
+          _lumiverse_install_source: "chub",
+          _lumiverse_install_slug: slug,
+          _lumiverse_chub_slug: chubPath.toLowerCase(),
+        },
+      });
+    }
+  } catch {
+    // Non-critical — manifest will still work via creator/name derivation
+  }
+
+  autoImportEmbeddedWorldbook(userId, character.id);
   return svc.getCharacter(userId, character.id)!;
 }
 
@@ -183,8 +231,13 @@ async function fetchJannyCharacter(uuid: string, userId: string) {
     throw new Error(result.error || "JannyAI download failed");
   }
 
-  // Download the PNG card from the provided URL
-  const pngRes = await safeFetch(result.downloadUrl, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+  // Download the PNG card from the provided URL.
+  // Use plain fetch (not safeFetch) — the download URL is a CDN/presigned URL from
+  // JannyAI's own API. safeFetch's manual redirect handling breaks CDN redirects.
+  // This matches SillyTavern's approach.
+  const downloadUrl = new URL(result.downloadUrl);
+  await validateHost(downloadUrl.hostname);
+  const pngRes = await fetch(result.downloadUrl, { signal: AbortSignal.timeout(15_000) });
   if (!pngRes.ok) {
     throw new Error(`Failed to download JannyAI character image: ${pngRes.status}`);
   }
@@ -200,13 +253,14 @@ async function fetchJannyCharacter(uuid: string, userId: string) {
   svc.setCharacterImage(userId, character.id, image.id);
   svc.setCharacterAvatar(userId, character.id, image.filename);
 
+  autoImportEmbeddedWorldbook(userId, character.id);
   return svc.getCharacter(userId, character.id)!;
 }
 
 // ─── Generic URL fetcher (PNG or JSON) ────────────────────────────────────
 
 async function fetchGenericCharacter(url: string, userId: string) {
-  const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+  const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 100 * 1024 * 1024 });
   if (!res.ok) throw new Error(`Failed to fetch URL: ${res.status}`);
 
   const contentType = res.headers.get("content-type") || "";
@@ -221,6 +275,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
     svc.setCharacterImage(userId, character.id, image.id);
     svc.setCharacterAvatar(userId, character.id, image.filename);
 
+    autoImportEmbeddedWorldbook(userId, character.id);
     return svc.getCharacter(userId, character.id)!;
   }
 
@@ -246,6 +301,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
     importRisuModuleRegexScripts(userId, character.id, risuModule);
     await importRisuExpressionAssets(userId, character.id, expressionAssets);
 
+    autoImportEmbeddedWorldbook(userId, character.id);
     return svc.getCharacter(userId, character.id)!;
   }
 
@@ -260,6 +316,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
 
   const cardInput = cardSvc.parseCardJson(json);
   const character = svc.createCharacter(userId, cardInput);
+  autoImportEmbeddedWorldbook(userId, character.id);
   return svc.getCharacter(userId, character.id)!;
 }
 
@@ -398,7 +455,7 @@ app.get("/:id/avatar", async (c) => {
   }
 
   if (info.avatar_path) {
-    const filepath = files.getAvatarPath(info.avatar_path);
+    const filepath = await files.getAvatarPath(info.avatar_path);
     if (filepath) {
       return createAvatarResolverResponse(
         filepath,
@@ -472,7 +529,7 @@ app.post("/:id/avatar", async (c) => {
 
   // Clean up old image if present
   if (char.image_id) images.deleteImage(userId, char.image_id);
-  if (char.avatar_path) files.deleteAvatar(char.avatar_path);
+  if (char.avatar_path) await files.deleteAvatar(char.avatar_path);
 
   const image = await images.uploadImage(userId, file);
   svc.setCharacterImage(userId, char.id, image.id);
@@ -511,19 +568,33 @@ app.post("/import-bulk", async (c) => {
         let cardInput;
         let avatarFile: File | null = null;
         let charxGalleryFiles: File[] = [];
+        let charxAssetFiles: Map<string, File> | null = null;
         let risuModule: cardSvc.RisuModule | null = null;
         let expressionAssets: cardSvc.CharxExpressionAsset[] = [];
+
+        // Detect JPEG+ZIP polyglot (RisuAI card format)
+        const isJpeg = /\.jpe?g$/i.test(filenameLower) || file.type === "image/jpeg";
+        let isJpegPolyglot = false;
+        if (isJpeg) {
+          const peek = new Uint8Array(await file.slice(0, Math.min(file.size, 5_000_000)).arrayBuffer());
+          isJpegPolyglot = cardSvc.looksLikeJpegZipPolyglot(peek);
+        }
 
         if (file.type === "image/png" || filenameLower.endsWith(".png")) {
           cardInput = await cardSvc.extractCardFromPng(file);
           avatarFile = file;
-        } else if (filenameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed") {
+        } else if (filenameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed" || isJpegPolyglot) {
           const charxResult = await cardSvc.extractCardFromCharx(file);
           cardInput = charxResult.card;
           avatarFile = charxResult.avatarFile;
           charxGalleryFiles = charxResult.galleryFiles;
+          charxAssetFiles = charxResult.assetFiles;
           risuModule = charxResult.risuModule;
           expressionAssets = charxResult.expressionAssets;
+        } else if (isJpeg) {
+          // Plain JPEG with no embedded data — skip
+          results.push({ filename, success: false, error: "JPEG file does not contain embedded character card data" });
+          continue;
         } else {
           const text = await file.text();
           const json = JSON.parse(text);
@@ -563,16 +634,63 @@ app.post("/import-bulk", async (c) => {
           svc.setCharacterAvatar(userId, character.id, image.filename);
         }
 
-        if (charxGalleryFiles.length > 3) {
-          await gallerySvc.uploadBulkToGallery(userId, character.id, charxGalleryFiles);
+        // Upload gallery images, tracking archive path → image ID for inline asset resolution
+        const bulkAssetImageMap = new Map<string, string>();
+        if (charxAssetFiles) {
+          for (const [path, gf] of charxAssetFiles) {
+            if (avatarFile && gf.name === avatarFile.name) continue;
+            if (!/^assets\/(icon|other)\//i.test(path)) continue;
+            try {
+              const img = await images.uploadImage(userId, gf);
+              gallerySvc.addToGallery(userId, character.id, img.id);
+              bulkAssetImageMap.set(path, img.id);
+            } catch { /* skip */ }
+          }
         } else {
           for (const gf of charxGalleryFiles) {
             try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
           }
         }
 
+        // Resolve inline asset references in character text fields
+        if (bulkAssetImageMap.size > 0) {
+          const resolvedFields = cardSvc.resolveInlineAssetReferences(
+            {
+              first_mes: character.first_mes,
+              description: character.description,
+              personality: character.personality,
+              scenario: character.scenario,
+              mes_example: character.mes_example,
+              system_prompt: character.system_prompt,
+              post_history_instructions: character.post_history_instructions,
+              creator_notes: character.creator_notes,
+              alternate_greetings: character.alternate_greetings,
+            },
+            bulkAssetImageMap,
+          );
+          if (Object.keys(resolvedFields).length > 0) {
+            svc.updateCharacter(userId, character.id, resolvedFields);
+          }
+
+          // Store Risu asset name → image ID mapping for display-time resolution
+          const risuAssetMap: Record<string, string> = {};
+          for (const [archivePath, imageId] of bulkAssetImageMap) {
+            const stem = cardSvc.fileStem(archivePath);
+            if (!risuAssetMap[stem]) risuAssetMap[stem] = imageId;
+          }
+          if (Object.keys(risuAssetMap).length > 0) {
+            const char = svc.getCharacter(userId, character.id);
+            if (char) {
+              svc.updateCharacter(userId, character.id, {
+                extensions: { ...(char.extensions || {}), risu_asset_map: risuAssetMap },
+              });
+            }
+          }
+        }
+
         importRisuModuleRegexScripts(userId, character.id, risuModule);
         await importRisuExpressionAssets(userId, character.id, expressionAssets);
+        autoImportEmbeddedWorldbook(userId, character.id);
 
         const imported = svc.getCharacter(userId, character.id)!;
 
@@ -620,20 +738,37 @@ app.post("/import", async (c) => {
       if (!file) return c.json({ error: "file is required" }, 400);
 
       const nameLower = file.name?.toLowerCase() ?? "";
-      if (file.type === "image/png" || nameLower.endsWith(".png")) {
+
+      // Detect file format — JPEG+ZIP polyglots (RisuAI card format) route to the CharX pipeline
+      const isPng = file.type === "image/png" || nameLower.endsWith(".png");
+      const isCharx = nameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
+      const isJpeg = /\.jpe?g$/i.test(nameLower) || file.type === "image/jpeg";
+      let isJpegPolyglot = false;
+      if (isJpeg && !isPng && !isCharx) {
+        const peek = new Uint8Array(await file.slice(0, Math.min(file.size, 5_000_000)).arrayBuffer());
+        isJpegPolyglot = cardSvc.looksLikeJpegZipPolyglot(peek);
+        if (!isJpegPolyglot) {
+          return c.json({ error: "JPEG file does not contain embedded character card data" }, 400);
+        }
+      }
+
+      if (isPng) {
         // PNG card — extract embedded JSON + use as avatar
         const cardInput = await cardSvc.extractCardFromPng(file);
         const character = svc.createCharacter(userId, cardInput);
         const image = await images.uploadImage(userId, file);
         svc.setCharacterImage(userId, character.id, image.id);
         svc.setCharacterAvatar(userId, character.id, image.filename);
+        autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
         return c.json({ character: imported }, 201);
-      } else if (nameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed") {
-        // CHARX archive — ZIP with card.json + optional avatar + gallery images + modules
+      } else if (isCharx || isJpegPolyglot) {
+        // CHARX archive (or JPEG+ZIP polyglot) — ZIP with card.json + optional avatar + gallery images + modules
         const charxResult = await cardSvc.extractCardFromCharx(file);
-        const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles } = charxResult;
+        const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles, expressionGroupAnalysis } = charxResult;
         const character = svc.createCharacter(userId, cardInput);
+        // Track archive-path → image-id for resolving inline asset references in text fields
+        const assetImageMap = new Map<string, string>();
         if (avatarFile) {
           const image = await images.uploadImage(userId, avatarFile);
           svc.setCharacterImage(userId, character.id, image.id);
@@ -656,6 +791,7 @@ app.post("/import", async (c) => {
                 const img = await images.uploadImage(userId, assetFile);
                 exprMappings[label] = img.id;
                 consumedPaths.add(archivePath);
+                assetImageMap.set(archivePath, img.id);
               }
             }
             if (Object.keys(exprMappings).length > 0) {
@@ -664,6 +800,31 @@ app.post("/import", async (c) => {
                 defaultExpression: lumiverseModules.expressions.defaultExpression,
                 mappings: exprMappings,
               };
+            }
+          }
+
+          // Import expression groups from Lumiverse modules (multi-character)
+          if (lumiverseModules.expression_groups?.groups) {
+            const expressionGroups: Record<string, Record<string, string>> = {};
+
+            for (const [groupName, labelMap] of Object.entries(lumiverseModules.expression_groups.groups)) {
+              const groupMappings: Record<string, string> = {};
+              for (const [label, archivePath] of Object.entries(labelMap)) {
+                const assetFile = assetFiles.get(archivePath);
+                if (assetFile) {
+                  const img = await images.uploadImage(userId, assetFile);
+                  groupMappings[label] = img.id;
+                  consumedPaths.add(archivePath);
+                  assetImageMap.set(archivePath, img.id);
+                }
+              }
+              if (Object.keys(groupMappings).length > 0) {
+                expressionGroups[groupName] = groupMappings;
+              }
+            }
+
+            if (Object.keys(expressionGroups).length > 0) {
+              extensions.expression_groups = expressionGroups;
             }
           }
 
@@ -681,6 +842,7 @@ app.post("/import", async (c) => {
                 const img = await images.uploadImage(userId, assetFile);
                 altAvatars.push({ id: av.id || crypto.randomUUID(), image_id: img.id, label: av.label });
                 consumedPaths.add(av.path);
+                assetImageMap.set(av.path, img.id);
               }
             }
             if (altAvatars.length > 0) {
@@ -724,25 +886,105 @@ app.post("/import", async (c) => {
           };
         }
 
-        // Upload remaining unconsumed asset images to gallery
-        const remainingGalleryFiles: File[] = [];
+        // Upload remaining unconsumed asset images to gallery, tracking archive path → image ID
+        const remainingGalleryEntries: Array<{ path: string; file: File }> = [];
         for (const [path, assetFile] of assetFiles) {
           if (consumedPaths.has(path)) continue;
           if (avatarFile && assetFile.name === avatarFile.name) continue;
           if (/^assets\/(icon|other)\//i.test(path)) {
-            remainingGalleryFiles.push(assetFile);
+            remainingGalleryEntries.push({ path, file: assetFile });
           }
         }
-        if (remainingGalleryFiles.length > 3) {
-          await gallerySvc.uploadBulkToGallery(userId, character.id, remainingGalleryFiles);
-        } else {
-          for (const gf of remainingGalleryFiles) {
-            try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
+        const galleryTotal = remainingGalleryEntries.length;
+        for (let i = 0; i < galleryTotal; i++) {
+          const { path, file: gf } = remainingGalleryEntries[i];
+          if (galleryTotal > 3) {
+            eventBus.emit(
+              EventType.IMPORT_GALLERY_PROGRESS,
+              { characterId: character.id, current: i + 1, total: galleryTotal, filename: gf.name },
+              userId,
+            );
+          }
+          try {
+            const img = await images.uploadImage(userId, gf);
+            gallerySvc.addToGallery(userId, character.id, img.id);
+            assetImageMap.set(path, img.id);
+          } catch { /* skip individual failures */ }
+        }
+
+        // Resolve inline asset references (embeded://, relative filenames, Risu <img="...">) in character text fields
+        const risuAssetMap: Record<string, string> = {};
+        if (assetImageMap.size > 0) {
+          const resolvedFields = cardSvc.resolveInlineAssetReferences(
+            {
+              first_mes: character.first_mes,
+              description: character.description,
+              personality: character.personality,
+              scenario: character.scenario,
+              mes_example: character.mes_example,
+              system_prompt: character.system_prompt,
+              post_history_instructions: character.post_history_instructions,
+              creator_notes: character.creator_notes,
+              alternate_greetings: character.alternate_greetings,
+            },
+            assetImageMap,
+          );
+          if (Object.keys(resolvedFields).length > 0) {
+            svc.updateCharacter(userId, character.id, resolvedFields);
+          }
+
+          // Store Risu asset name → image ID mapping for display-time resolution of
+          // AI-generated <img="AssetName"> tags (mirrors RisuAI's display-time asset lookup)
+          for (const [archivePath, imageId] of assetImageMap) {
+            const stem = cardSvc.fileStem(archivePath);
+            if (!risuAssetMap[stem]) risuAssetMap[stem] = imageId;
+          }
+          if (Object.keys(risuAssetMap).length > 0) {
+            const char = svc.getCharacter(userId, character.id);
+            if (char) {
+              svc.updateCharacter(userId, character.id, {
+                extensions: { ...(char.extensions || {}), risu_asset_map: risuAssetMap },
+              });
+            }
           }
         }
 
         importRisuModuleRegexScripts(userId, character.id, risuModule);
-        await importRisuExpressionAssets(userId, character.id, expressionAssets);
+
+        // Multi-character expression handling: when expression assets span multiple
+        // characters (detected by prefix grouping), store structured expression_groups
+        // instead of a flat expression mapping. Display-time resolution uses risu_asset_map.
+        // Skip if Lumiverse modules already imported expression_groups.
+        const charForExprCheck = svc.getCharacter(userId, character.id);
+        const hasLumiverseGroups = !!charForExprCheck?.extensions?.expression_groups;
+        if (!hasLumiverseGroups && expressionGroupAnalysis?.isMultiCharacter && Object.keys(risuAssetMap).length > 0) {
+          const expressionGroups: Record<string, Record<string, string>> = {};
+          for (const [groupName, labelMap] of Object.entries(expressionGroupAnalysis.groups)) {
+            const groupMappings: Record<string, string> = {};
+            for (const [cleanLabel, originalLabel] of Object.entries(labelMap)) {
+              const imageId = risuAssetMap[originalLabel];
+              if (imageId) {
+                groupMappings[cleanLabel] = imageId;
+              }
+            }
+            if (Object.keys(groupMappings).length > 0) {
+              expressionGroups[groupName] = groupMappings;
+            }
+          }
+
+          if (Object.keys(expressionGroups).length > 0) {
+            const char = svc.getCharacter(userId, character.id);
+            if (char) {
+              svc.updateCharacter(userId, character.id, {
+                extensions: { ...(char.extensions || {}), expression_groups: expressionGroups },
+              });
+            }
+          }
+        } else {
+          await importRisuExpressionAssets(userId, character.id, expressionAssets);
+        }
+
+        autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
         return c.json({
           character: imported,
@@ -759,7 +1001,9 @@ app.post("/import", async (c) => {
         }
         const cardInput = cardSvc.parseCardJson(json);
         const character = svc.createCharacter(userId, cardInput);
-        return c.json({ character }, 201);
+        autoImportEmbeddedWorldbook(userId, character.id);
+        const imported = svc.getCharacter(userId, character.id)!;
+        return c.json({ character: imported }, 201);
       }
     } else {
       // Raw JSON body — support both card-spec wrapper and flat input
@@ -767,7 +1011,9 @@ app.post("/import", async (c) => {
       const input = (body.spec && body.data) ? cardSvc.parseCardJson(body) : body;
       if (!input.name) return c.json({ error: "name is required" }, 400);
       const character = svc.createCharacter(userId, input);
-      return c.json({ character }, 201);
+      autoImportEmbeddedWorldbook(userId, character.id);
+      const imported = svc.getCharacter(userId, character.id)!;
+      return c.json({ character: imported }, 201);
     }
   } catch (err: any) {
     return c.json({ error: err.message || "Failed to import character card" }, 400);

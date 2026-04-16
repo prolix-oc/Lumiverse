@@ -22,6 +22,9 @@ import {
   detectSupportedParams,
   getAvailableMacros,
   importFromSTPreset,
+  exportToSTPreset,
+  normalizeCategoryBlockState,
+  toggleBlockWithCategoryRules,
 } from '@/lib/loom/service'
 
 export function useLoomBuilder() {
@@ -145,18 +148,38 @@ export function useLoomBuilder() {
     }
   }, [])
 
-  // Save blocks — immediate state update, immediate API save (blocks are structural)
-  const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {
+  const saveStructure = useCallback(async (
+    blocks: PromptBlock[],
+  ) => {
     if (!activePreset) return
-    const updated = { ...activePreset, blocks, updatedAt: Date.now() }
+    const normalizedBlocks = normalizeCategoryBlockState(blocks)
+    const updated = {
+      ...activePreset,
+      blocks: normalizedBlocks,
+      updatedAt: Date.now(),
+    }
     setActivePreset(updated)
     try {
       await presetsApi.update(updated.id, marshalUpdate(updated))
       refreshRegistry()
     } catch (err) {
-      console.warn('[LoomBuilder] Failed to save blocks:', err)
+      console.warn('[LoomBuilder] Failed to save preset structure:', err)
     }
   }, [activePreset, refreshRegistry])
+
+  // Save blocks
+  const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {
+    await saveStructure(blocks)
+  }, [saveStructure])
+
+  // Rename a preset
+  const renamePreset = useCallback(async (presetId: string, newName: string) => {
+    await presetsApi.update(presetId, { name: newName })
+    await refreshRegistry()
+    if (activePreset && presetId === activeLoomPresetId) {
+      setActivePreset({ ...activePreset, name: newName })
+    }
+  }, [activePreset, activeLoomPresetId, refreshRegistry])
 
   // Delete a preset
   const deletePreset = useCallback(async (presetId: string) => {
@@ -227,9 +250,7 @@ export function useLoomBuilder() {
 
   const toggleBlock = useCallback((blockId: string) => {
     if (!activePreset) return
-    const blocks = activePreset.blocks.map(b =>
-      b.id === blockId ? { ...b, enabled: !b.enabled } : b
-    )
+    const blocks = toggleBlockWithCategoryRules(activePreset.blocks, blockId)
     saveBlocks(blocks)
   }, [activePreset, saveBlocks])
 
@@ -301,11 +322,11 @@ export function useLoomBuilder() {
       setActiveLoomPreset(created.id)
       setActivePreset(newLoom)
 
-      // Import embedded regex scripts if present
+      // Import embedded regex scripts if present, filed under the preset name
       const embeddedRegex = stData.extensions?.regex_scripts
       if (Array.isArray(embeddedRegex) && embeddedRegex.length > 0) {
         try {
-          const regexResult = await regexApi.importScripts(embeddedRegex)
+          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: name, preset_id: created.id })
           if (regexResult.imported > 0) {
             const { loadRegexScripts } = useStore.getState() as any
             if (loadRegexScripts) await loadRegexScripts()
@@ -353,6 +374,12 @@ export function useLoomBuilder() {
   // Export internal JSON
   const exportInternal = useCallback(() => {
     return activePreset
+  }, [activePreset])
+
+  // Export as legacy (SillyTavern) JSON
+  const exportLegacy = useCallback(() => {
+    if (!activePreset) return null
+    return exportToSTPreset(activePreset)
   }, [activePreset])
 
   // Available macros for the inserter — fetched from API, with local fallback
@@ -434,6 +461,7 @@ export function useLoomBuilder() {
     saveBlocks,
     deletePreset,
     duplicatePreset,
+    renamePreset,
     refreshRegistry,
 
     // Block manipulation
@@ -456,5 +484,6 @@ export function useLoomBuilder() {
     importFromFile,
     importFromST,
     exportInternal,
+    exportLegacy,
   }
 }

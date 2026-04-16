@@ -70,7 +70,7 @@ spindle.oauth.onCallback(async (params) => {
 })
 
 // Start the OAuth flow (triggered by frontend message)
-spindle.onFrontendMessage(async (msg: any) => {
+spindle.onFrontendMessage(async (msg: any, userId) => {
   if (msg.type === 'connect') {
     const verifier = generateCodeVerifier()
     const challenge = await generateCodeChallenge(verifier)
@@ -79,7 +79,7 @@ spindle.onFrontendMessage(async (msg: any) => {
     const redirectUri = msg.serverBaseUrl + spindle.oauth.getCallbackUrl()
     const authUrl = `https://accounts.example.com/authorize?response_type=code&client_id=${msg.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${challenge}&code_challenge_method=S256`
 
-    spindle.sendToFrontend({ type: 'auth_url', url: authUrl })
+    spindle.sendToFrontend({ type: 'auth_url', url: authUrl }, userId)
   }
 })
 ```

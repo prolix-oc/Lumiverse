@@ -66,6 +66,16 @@ function syncViewportVars() {
   root.style.setProperty('--app-viewport-offset-left', `${offsetLeft}px`)
   root.style.setProperty('--app-keyboard-inset-bottom', `${keyboardInsetBottom}px`)
   root.style.setProperty('--app-screen-height', `${Math.round(window.innerHeight)}px`)
+
+  // Compensate --app-shell-height for CSS zoom on body. Inside the zoomed
+  // coordinate system, the available space is viewport_size / zoom_factor.
+  // Raw --app-viewport-height is kept unmodified for body/PWA CSS rules that
+  // do their own division. Skip on PWA — those modes define --app-shell-height
+  // via CSS (percentage or viewport-unit based) and the body rule compensates.
+  if (!root.hasAttribute('data-pwa')) {
+    const uiScale = parseFloat(root.style.getPropertyValue('--lumiverse-ui-scale')) || 1
+    root.style.setProperty('--app-shell-height', `${Math.round(height / uiScale)}px`)
+  }
 }
 
 let viewportSyncFrame = 0
@@ -88,13 +98,41 @@ window.addEventListener('orientationchange', () => {
 window.visualViewport?.addEventListener('resize', scheduleViewportSync)
 window.visualViewport?.addEventListener('scroll', scheduleViewportSync)
 
+// Utility: walk up the DOM to find the nearest ancestor that is currently
+// scrollable (has overflow AND content exceeds container). Used by the
+// overscroll prevention touch handler. Returns the element and whether it
+// scrolls horizontally (so the touch handler can let horizontal swipes through).
+function findScrollableAncestor(el: HTMLElement | null): { el: HTMLElement; horizontal: boolean } | null {
+  while (el && el !== document.body && el !== document.documentElement) {
+    const style = getComputedStyle(el)
+    const scrollableY = (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight
+    const scrollableX = (style.overflowX === 'auto' || style.overflowX === 'scroll') && el.scrollWidth > el.clientWidth
+    if (scrollableY || scrollableX) {
+      return { el, horizontal: scrollableX && !scrollableY }
+    }
+    el = el.parentElement
+  }
+  return null
+}
+
+// Utility: find the nearest ancestor with overflow-y: auto or scroll,
+// regardless of whether content currently overflows. Used by the focusin
+// handler to find containers that can be given scroll room via CSS padding.
+function findScrollContainer(el: HTMLElement | null): HTMLElement | null {
+  while (el && el !== document.body && el !== document.documentElement) {
+    const { overflowY } = getComputedStyle(el)
+    if (overflowY === 'auto' || overflowY === 'scroll') return el
+    el = el.parentElement
+  }
+  return null
+}
+
 // ── iOS PWA: counteract visual viewport scroll ──
 // When the virtual keyboard opens in standalone mode, iOS scrolls the visual
-// viewport upward to reveal the focused input. This shifts the entire layout.
-// We counteract by scrolling back to 0 — the input bar repositions itself
-// above the keyboard via --app-keyboard-inset-bottom instead.
-// Guard with maxTouchPoints > 0 to skip macOS Safari "Add to Dock" apps,
-// which also set navigator.standalone but don't have this keyboard behavior.
+// viewport upward to reveal the focused input. This shifts the entire layout
+// (tabs, headers, etc. behind the Dynamic Island). We counteract fully —
+// scrollTo(0, 0) keeps the layout stable. Focused inputs in scroll containers
+// are revealed via container-level scroll instead (see focusin handler below).
 window.visualViewport?.addEventListener('scroll', () => {
   if ((window.navigator as any).standalone && navigator.maxTouchPoints > 0 && window.visualViewport?.offsetTop) {
     window.scrollTo(0, 0)
@@ -169,6 +207,80 @@ document.addEventListener('touchmove', (e) => {
 document.addEventListener('wheel', (e) => {
   if (e.ctrlKey) e.preventDefault()
 }, { passive: false })
+
+// ── iOS PWA: prevent overscroll snap-back and body scroll ──
+// Two WebKit bugs cause scrolling issues in standalone mode:
+// 1. Overscroll chaining — touching the boundary of a scroll container causes
+//    the entire PWA to rubber-band, snapping back and making bottom content
+//    in panels/modals unreachable.
+// 2. Bug #240860 — body with overflow:hidden becomes scrollable when the
+//    visual viewport is smaller than the layout viewport (keyboard open),
+//    causing scroll containers to fight with body scroll.
+// Fix: intercept single-finger touchmove at document level. Allow scrolling
+// within scrollable containers, but prevent the default (which triggers
+// page-level overscroll) at scroll boundaries and outside scroll containers.
+if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 0) {
+  let touchStartY = 0
+  let touchStartX = 0
+  let scrollTarget: { el: HTMLElement; horizontal: boolean } | null = null
+
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      touchStartY = e.touches[0].clientY
+      touchStartX = e.touches[0].clientX
+      scrollTarget = findScrollableAncestor(e.target as HTMLElement)
+    }
+  }, { passive: true })
+
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 1) return
+
+    const deltaY = touchStartY - e.touches[0].clientY
+    const deltaX = touchStartX - e.touches[0].clientX
+
+    // Don't interfere with horizontal scrolling (carousels, tab bars, sliders)
+    if (Math.abs(deltaX) > Math.abs(deltaY) + 5) return
+
+    // Touch started inside a horizontal-only scroll container — let it through
+    if (scrollTarget?.horizontal) return
+
+    if (scrollTarget) {
+      const { el } = scrollTarget
+      const atTop = el.scrollTop <= 0 && deltaY < 0
+      const atBottom =
+        el.scrollTop + el.clientHeight >=
+        el.scrollHeight - 1 && deltaY > 0
+      if (atTop || atBottom) e.preventDefault()
+    } else {
+      e.preventDefault()
+    }
+  }, { passive: false })
+
+  // ── Scroll focused inputs above the keyboard via container scroll ──
+  // Since we always counteract iOS's visual viewport scroll (scrollTo 0),
+  // the layout never shifts — tabs and headers stay in place. To reveal
+  // focused inputs behind the keyboard, we scroll the nearest scroll
+  // container (panelContent, modal content). Keyboard-height padding-bottom
+  // on these containers (set via CSS) creates scroll room even when the
+  // actual content is shorter than the container.
+  document.addEventListener('focusin', (e) => {
+    const target = e.target
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+          (target instanceof HTMLElement && target.isContentEditable))) return
+
+    const container = findScrollContainer((target as HTMLElement).parentElement)
+    if (!container) return
+
+    setTimeout(() => {
+      const rect = (target as HTMLElement).getBoundingClientRect()
+      const vvBottom = window.visualViewport?.height ?? window.innerHeight
+      // If the input's bottom is behind the keyboard, scroll just enough
+      if (rect.bottom > vvBottom - 30) {
+        container.scrollBy({ top: rect.bottom - vvBottom + 60, behavior: 'smooth' })
+      }
+    }, 350)
+  })
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

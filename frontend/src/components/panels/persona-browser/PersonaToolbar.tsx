@@ -13,6 +13,7 @@ import {
   FolderPlus,
   Check,
   RefreshCw,
+  Globe,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import type { PersonaFilterType, PersonaSortField, PersonaSortDirection, PersonaViewMode } from '@/types/store'
@@ -33,6 +34,7 @@ interface PersonaToolbarProps {
   onCreateClick: () => void
   onCreateFolder: (name: string) => void
   onRefresh: () => void
+  onGlobalLibraryClick: () => void
   filteredCount: number
   totalCount: number
 }
@@ -56,6 +58,7 @@ export default function PersonaToolbar({
   onCreateClick,
   onCreateFolder,
   onRefresh,
+  onGlobalLibraryClick,
   filteredCount,
   totalCount,
 }: PersonaToolbarProps) {
@@ -263,6 +266,15 @@ export default function PersonaToolbar({
           title={viewMode === 'grid' ? 'Switch to list' : 'Switch to grid'}
         >
           {viewMode === 'grid' ? <List size={14} /> : <LayoutGrid size={14} />}
+        </button>
+
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={onGlobalLibraryClick}
+          title="Global add-ons library"
+        >
+          <Globe size={14} />
         </button>
 
         <button

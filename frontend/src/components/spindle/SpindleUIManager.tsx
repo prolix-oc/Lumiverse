@@ -8,6 +8,7 @@ import SpindleDockPanel from './SpindleDockPanel'
 import SpindleAppMount from './SpindleAppMount'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { InputPromptModal } from '@/components/shared/InputPromptModal'
 import ContextMenu, { type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import type { SpindleModalItem } from '@/types/store'
 
@@ -81,6 +82,7 @@ export default function SpindleUIManager() {
       <SpindleTextEditor />
       <SpindleModal />
       <SpindleConfirm />
+      <SpindleInputPrompt />
       <SpindleContextMenu />
     </>
   )
@@ -200,6 +202,30 @@ function SpindleConfirm() {
       cancelText={req.cancelLabel}
       onConfirm={() => closeConfirm(req.requestId, true)}
       onCancel={() => closeConfirm(req.requestId, false)}
+      zIndex={10004}
+    />
+  )
+}
+
+function SpindleInputPrompt() {
+  const req = useStore((s) => s.pendingInputPrompt)
+  const closeInputPrompt = useStore((s) => s.closeInputPrompt)
+
+  if (!req) return null
+
+  return (
+    <InputPromptModal
+      isOpen={true}
+      title={req.title}
+      attribution={req.extensionName}
+      message={req.message}
+      placeholder={req.placeholder}
+      defaultValue={req.defaultValue}
+      submitLabel={req.submitLabel}
+      cancelLabel={req.cancelLabel}
+      multiline={req.multiline}
+      onSubmit={(value) => closeInputPrompt(req.requestId, value)}
+      onCancel={() => closeInputPrompt(req.requestId, null)}
       zIndex={10004}
     />
   )

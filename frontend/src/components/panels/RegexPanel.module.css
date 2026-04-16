@@ -324,6 +324,30 @@
   color: var(--lumiverse-text-dim);
 }
 
+.folderDeleteBtn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast);
+}
+
+.folderHeader:hover .folderDeleteBtn {
+  opacity: 1;
+}
+
+.folderDeleteBtn:hover {
+  color: var(--lumiverse-danger, #ef4444);
+  background: var(--lumiverse-surface-hover);
+}
+
 /* ── Create Popover ──────────────────────────────── */
 
 .createPopoverWrapper {

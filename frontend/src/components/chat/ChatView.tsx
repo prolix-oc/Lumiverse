@@ -4,19 +4,23 @@ import { UserRound, ListChecks } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
+import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
 import { charactersApi } from '@/api/characters'
 import { imagesApi } from '@/api/images'
 import { expressionsApi } from '@/api/expressions'
+import { personasApi } from '@/api/personas'
+import { resolveBinding } from '@/store/slices/personas'
 import type { WallpaperRef } from '@/types/store'
+import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
 import ScrollToBottom from './ScrollToBottom'
 import CouncilPill from './CouncilPill'
-import LumiPill from './LumiPill'
 import PortraitPanel from './PortraitPanel'
 import ExpressionDisplay from './expressions/ExpressionDisplay'
+import FloatingAvatarViewer from './FloatingAvatarViewer'
 import styles from './ChatView.module.css'
 import clsx from 'clsx'
 
@@ -41,6 +45,8 @@ export default function ChatView() {
   const toggleSelectMode = useCallback(() => {
     setMessageSelectMode(!messageSelectMode)
   }, [messageSelectMode, setMessageSelectMode])
+
+  useSwipeKeyboard()
 
   const innerStyle = useMemo(() => {
     switch (chatWidthMode) {
@@ -71,15 +77,92 @@ export default function ChatView() {
         setActiveChat(chatId, chat.character_id)
         setMessages(msgPage.data, msgPage.total)
 
+        // Clear completed/stopped chat heads — but keep active ones so they
+        // reappear if the user navigates away again while still generating
+        const existingHead = useStore.getState().chatHeads.find((h) => h.chatId === chatId)
+        if (existingHead && (existingHead.status === 'completed' || existingHead.status === 'stopped' || existingHead.status === 'error')) {
+          useStore.getState().removeChatHead(chatId)
+        }
+
+        // If there's a pending council tools failure for this chat, show the retry modal now
+        const pendingFailure = useStore.getState().councilToolsFailure
+        if (pendingFailure && pendingFailure.chatId === chatId) {
+          // Lazy import to avoid circular deps
+          const { showCouncilRetryModal } = await import('@/hooks/useCouncilEvents')
+          showCouncilRetryModal(pendingFailure)
+        }
+
+        // Check for an active or recently-completed generation to recover
+        try {
+          const genStatus = await generateApi.getStatus(chatId)
+          if (cancelled) return
+          if (genStatus.active && genStatus.generationId && genStatus.status === 'streaming') {
+            // Resume streaming from pooled tokens
+            const state = useStore.getState()
+            state.startStreaming(genStatus.generationId, genStatus.targetMessageId)
+            if (genStatus.content) state.replaceStreamContent(genStatus.content)
+            if (genStatus.reasoning) state.replaceStreamReasoning(genStatus.reasoning)
+            if (genStatus.tokenSeq != null) state.setLastPooledSeq(genStatus.tokenSeq)
+            // Restore reasoning timer state:
+            if (genStatus.reasoningDurationMs) {
+              // Reasoning already finished — set the finalized duration directly
+              // so the label shows "Thought for Xs" instead of a running timer
+              useStore.setState({ streamingReasoningDuration: genStatus.reasoningDurationMs })
+            } else if (genStatus.reasoningStartedAt) {
+              // Reasoning is still ongoing — restore the start timestamp so the
+              // live timer and the closure variable continue from the correct point
+              state.setStreamingReasoningStartedAt(genStatus.reasoningStartedAt)
+            }
+          } else if (genStatus.active && genStatus.generationId) {
+            // Generation is in council/assembling — just wire up the generation ID
+            // so WS events are processed when streaming begins
+            useStore.getState().startStreaming(genStatus.generationId, genStatus.targetMessageId)
+          } else if (!genStatus.active && genStatus.completedMessageId) {
+            // Generation completed while we were away — refetch messages to include it
+            const freshMsgs = await messagesApi.list(chatId, { limit: pageSize, tail: true })
+            if (!cancelled) setMessages(freshMsgs.data, freshMsgs.total)
+          }
+        } catch { /* generation status check is best-effort */ }
+
         // Auto-switch persona if this character has a binding
         if (chat.character_id) {
           const { characterPersonaBindings, personas: allPersonas, setActivePersona } = useStore.getState()
-          const boundPersonaId = characterPersonaBindings[chat.character_id]
-          if (boundPersonaId && allPersonas.some((p) => p.id === boundPersonaId)) {
-            const boundPersona = allPersonas.find((p) => p.id === boundPersonaId)
-            setActivePersona(boundPersonaId)
-            if (boundPersona) {
-              toast.info(`Switched to persona: ${boundPersona.name}`)
+          const rawBinding = characterPersonaBindings[chat.character_id]
+          if (rawBinding) {
+            const binding = resolveBinding(rawBinding)
+            if (allPersonas.some((p) => p.id === binding.personaId)) {
+              const boundPersona = allPersonas.find((p) => p.id === binding.personaId)
+              setActivePersona(binding.personaId)
+              if (boundPersona) {
+                toast.info(`Switched to persona: ${boundPersona.name}`)
+              }
+              // Apply bound addon states to the persona
+              if (binding.addonStates && Object.keys(binding.addonStates).length > 0) {
+                try {
+                  const p = await personasApi.get(binding.personaId)
+                  const addons = Array.isArray(p.metadata?.addons) ? p.metadata.addons.map((a: any) => ({ ...a })) : []
+                  const globalRefs = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons.map((r: any) => ({ ...r })) : []
+                  let changed = false
+                  for (const a of addons) {
+                    if (a.id in binding.addonStates && a.enabled !== binding.addonStates[a.id]) {
+                      a.enabled = binding.addonStates[a.id]
+                      changed = true
+                    }
+                  }
+                  for (const r of globalRefs) {
+                    if (r.id in binding.addonStates && r.enabled !== binding.addonStates[r.id]) {
+                      r.enabled = binding.addonStates[r.id]
+                      changed = true
+                    }
+                  }
+                  if (changed) {
+                    const updated = await personasApi.update(binding.personaId, {
+                      metadata: { ...p.metadata, addons, attached_global_addons: globalRefs },
+                    })
+                    useStore.getState().updatePersona(binding.personaId, updated)
+                  }
+                } catch { /* addon state application is best-effort */ }
+              }
             }
           }
         }
@@ -209,10 +292,26 @@ export default function ChatView() {
     return () => root.removeAttribute('data-chat-bg')
   }, [hasAnyBackground])
 
+  // Sync bubble opt-out attributes so CSS can suppress effects.
+  const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
+  const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
+  useEffect(() => {
+    const root = document.documentElement
+    if (bubbleDisableHover) root.setAttribute('data-no-bubble-hover', '')
+    else root.removeAttribute('data-no-bubble-hover')
+    if (bubbleHideAvatarBg) root.setAttribute('data-no-bubble-avatar-bg', '')
+    else root.removeAttribute('data-no-bubble-avatar-bg')
+    return () => {
+      root.removeAttribute('data-no-bubble-hover')
+      root.removeAttribute('data-no-bubble-avatar-bg')
+    }
+  }, [bubbleDisableHover, bubbleHideAvatarBg])
+
   if (!chatId) return null
 
   return (
     <div
+      data-component="ChatView"
       className={clsx(
         styles.container,
         isStreaming && styles.streaming,
@@ -292,7 +391,6 @@ export default function ChatView() {
             </div>
             <MessageList messages={messages} chatId={chatId} isStreaming={isStreaming} />
             <ScrollToBottom />
-            <LumiPill />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
             <InputArea chatId={chatId} />
@@ -314,6 +412,7 @@ export default function ChatView() {
         )}
       </div>
       <ExpressionDisplay />
+      <FloatingAvatarViewer />
     </div>
   )
 }

@@ -13,23 +13,25 @@ import {
   injectReasoningParams,
   collectVectorActivatedWorldInfo,
   mergeActivatedWorldInfoEntries,
+  isChatHistoryMessage,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
-import { executeLumiPipeline } from "./lumi/lumi-pipeline.service";
-import type { LumiPresetMetadata, LumiPipelineResult } from "../types/lumi-engine";
 import * as charactersSvc from "./characters.service";
-import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationResponse, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
+import { getEffectiveCharacterName } from "../types/character";
+import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationRequest, type GenerationResponse, type StreamChunk, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
 import { contextHandlerChain } from "../spindle/context-handler";
-import { executeCouncil, collectWorldInfoForCouncil, type CouncilEnrichment } from "./council/council-execution.service";
+import { executeCouncil, collectWorldInfoForCouncil, formatDeliberation, type CouncilEnrichment } from "./council/council-execution.service";
 import { activateWorldInfo } from "./world-info-activation.service";
-import type { CouncilExecutionResult } from "lumiverse-spindle-types";
+import type { CouncilExecutionResult, CachedCouncilResult } from "lumiverse-spindle-types";
 import { getCouncilSettings, getAvailableTools } from "./council/council-settings.service";
 import * as tokenizerSvc from "./tokenizer.service";
 import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
-import { detectExpression, getExpressionDetectionSettings } from "./expression-detection.service";
-import { hasExpressions, getExpressionConfig } from "./expressions.service";
+import * as pool from "./generation-pool.service";
+import { detectExpression, detectMultiCharacterExpression, getExpressionDetectionSettings } from "./expression-detection.service";
+import { hasExpressions, getExpressionConfig, getExpressionGroups } from "./expressions.service";
+import { getSidecarSettings } from "./sidecar-settings.service";
 
 interface GenerateInput {
   userId: string;
@@ -45,6 +47,7 @@ interface GenerateInput {
   target_character_id?: string;
   regen_feedback?: string;
   regen_feedback_position?: "system" | "user";
+  retain_council?: boolean;
 }
 
 /** Lifecycle context passed from startGeneration → runGeneration */
@@ -105,6 +108,8 @@ export interface QuietGenerateInput {
   parameters?: GenerationParameters;
   /** Optional tool/function definitions for inline function calling. */
   tools?: ToolDefinition[];
+  /** Optional abort signal — when fired, cancels the in-flight HTTP request. */
+  signal?: AbortSignal;
 }
 
 export interface DryRunResult {
@@ -132,6 +137,16 @@ export interface DryRunResult {
     vectorActivated: number;
     totalActivated: number;
     queryPreview: string;
+    vectorRetrieval?: {
+      eligibleCount: number;
+      hitsBeforeThreshold: number;
+      hitsAfterThreshold: number;
+      thresholdRejected: number;
+      hitsAfterRerankCutoff: number;
+      rerankRejected: number;
+      topK: number;
+      blockerMessages: string[];
+    };
   };
   memoryStats?: import("../llm/types").MemoryStats;
 }
@@ -174,10 +189,12 @@ interface PromptPipelineResult {
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   worldInfoStats?: DryRunResult["worldInfoStats"];
   memoryStats?: import("../llm/types").MemoryStats;
-  deferredWiState?: { chatId: string; metadata: any };
+  deferredWiState?: { chatId: string; partial: Record<string, any> };
   spindleContext: SpindleContext;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
   deliberationHandledByMacro?: boolean;
+  /** The macro environment built during assembly — used for regex script macro substitution. */
+  macroEnv?: import("../macros/types").MacroEnv;
 }
 
 /**
@@ -206,6 +223,22 @@ function closeUnterminatedReasoningTags(userId: string, content: string): string
   return content;
 }
 
+/**
+ * Safely extract a human-readable message from a thrown value.
+ * Bun's fetch/stream internals on Windows can reject with `null` when an
+ * abort signal fires mid-stream, so `err.message` would throw a TypeError
+ * and crash the server. Handles null, undefined, strings, and non-Error
+ * objects gracefully.
+ */
+function errorMessage(err: unknown): string {
+  if (err == null) return "Unknown error";
+  if (typeof err === "string") return err;
+  if (typeof err === "object" && "message" in err && typeof (err as any).message === "string") {
+    return (err as any).message;
+  }
+  try { return String(err); } catch { return "Unknown error"; }
+}
+
 // Track active generations for stop support
 const activeGenerations = new Map<string, { controller: AbortController; userId: string; chatId: string; startedAt: number }>();
 
@@ -213,6 +246,40 @@ const activeGenerations = new Map<string, { controller: AbortController; userId:
 // Keyed by `${userId}:${chatId}` → generationId. Registered BEFORE council execution so that
 // a second request for the same chat will abort the in-flight one (including its council tools).
 const activeChatGenerations = new Map<string, string>();
+
+// Pending council retry decisions: when council tools partially fail, the generation
+// pauses and waits for the user to decide whether to continue or retry. Keyed by
+// generationId → { resolve, timeout }. The user responds via POST /generate/council-retry.
+/** Safety cap: auto-continue after 10 minutes to prevent permanent resource hangs */
+const COUNCIL_RETRY_SAFETY_CAP_MS = 10 * 60 * 1000;
+
+const pendingCouncilRetries = new Map<string, {
+  userId: string;
+  resolve: (decision: "continue" | "retry") => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
+
+/**
+ * Called from the council-retry route to resolve a pending decision. Verifies
+ * the generation belongs to the caller — without this check, any authenticated
+ * user could approve/retry another user's pending generation by guessing IDs.
+ */
+export function resolveCouncilRetry(
+  userId: string,
+  generationId: string,
+  decision: "continue" | "retry",
+): boolean {
+  const pending = pendingCouncilRetries.get(generationId);
+  if (!pending) return false;
+  if (pending.userId !== userId) return false;
+  clearTimeout(pending.timeout);
+  pendingCouncilRetries.delete(generationId);
+  // Clear the pool flag
+  const poolEntry = pool.getPoolEntry(generationId);
+  if (poolEntry) poolEntry.councilRetryPending = false;
+  pending.resolve(decision);
+  return true;
+}
 
 /** Resolve connection profile by ID or fall back to the user's default. */
 function resolveConnection(userId: string, connectionId?: string) {
@@ -267,7 +334,6 @@ async function runPromptPipeline(opts: {
   councilToolResults?: any[];
   councilNamedResults?: Record<string, string>;
   precomputedVectorEntries?: VectorActivatedEntry[];
-  lumiPipelineResults?: LumiPipelineResult;
   regenFeedback?: string;
   regenFeedbackPosition?: "system" | "user";
 }): Promise<PromptPipelineResult> {
@@ -290,13 +356,28 @@ async function runPromptPipeline(opts: {
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
-  let deferredWiState: { chatId: string; metadata: any } | undefined;
+  let deferredWiState: { chatId: string; partial: Record<string, any> } | undefined;
+  let macroEnv: import("../macros/types").MacroEnv | undefined;
 
   let deliberationHandledByMacro = false;
 
   if (opts.inputMessages) {
     messages = opts.inputMessages;
   } else {
+    // Batch-prefetch all data the assembly pipeline needs in ~7 queries
+    // instead of the ~35-40 scattered individual calls inside assemblePrompt
+    const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
+    const prefetched = await prefetchAssemblyData({
+      userId: opts.userId,
+      chatId: opts.chatId,
+      connectionId: opts.connectionId,
+      presetId: opts.presetId,
+      personaId: opts.personaId,
+      generationType: opts.generationType as GenerationType,
+      excludeMessageId: opts.excludeMessageId,
+      targetCharacterId: opts.targetCharacterId,
+    });
+
     // All presets (classic and lumi) go through the same assembly path
     const assemblyResult = await assemblePrompt({
       userId: opts.userId,
@@ -311,9 +392,9 @@ async function runPromptPipeline(opts: {
       councilToolResults: opts.councilToolResults,
       councilNamedResults: opts.councilNamedResults,
       precomputedVectorEntries: opts.precomputedVectorEntries,
-      lumiPipelineResults: opts.lumiPipelineResults,
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
+      prefetched,
     });
 
     messages = assemblyResult.messages;
@@ -325,20 +406,20 @@ async function runPromptPipeline(opts: {
     memoryStats = assemblyResult.memoryStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
+    macroEnv = assemblyResult.macroEnv;
   }
 
   // Snapshot chat history messages BEFORE interceptors/post-processing can
   // splice, merge, or reorder the array.  This snapshot is the shared
   // tokenization source used by both dry-run and generation breakdowns.
+  // Filter by the chat-history identity marker rather than slicing by
+  // breakdown bounds: depth-injected blocks (WI depth, Author's Note, depth
+  // blocks, EM/AN-after) can splice non-history messages INTO the chat
+  // history range, which would corrupt a slice-based snapshot.
   let chatHistoryMessages: LlmMessage[] | undefined;
   if (breakdown) {
-    const chEntry = breakdown.find(e => e.type === "chat_history");
-    if (chEntry?.firstMessageIndex != null && chEntry.messageCount && chEntry.messageCount > 0) {
-      chatHistoryMessages = messages.slice(
-        chEntry.firstMessageIndex,
-        chEntry.firstMessageIndex + chEntry.messageCount,
-      );
-    }
+    const filtered = messages.filter(isChatHistoryMessage);
+    if (filtered.length > 0) chatHistoryMessages = filtered;
   }
 
   // Expose activated world info to spindle context
@@ -349,12 +430,15 @@ async function runPromptPipeline(opts: {
   // Run Spindle interceptor pipeline on assembled messages
   // The pipeline uses LlmMessageDTO (string-only content) — at this stage
   // multimodal parts have already been serialised so the cast is safe.
+  let interceptorParameters: Record<string, unknown> | undefined;
   if (interceptorPipeline.count > 0) {
-    messages = await interceptorPipeline.run(
+    const interceptorResult = await interceptorPipeline.run(
       messages as import("lumiverse-spindle-types").LlmMessageDTO[],
       spindleContext,
       opts.userId
-    ) as unknown as LlmMessage[];
+    );
+    messages = interceptorResult.messages as unknown as LlmMessage[];
+    interceptorParameters = interceptorResult.parameters;
   }
 
   // Apply promptPostProcessing
@@ -369,10 +453,20 @@ async function runPromptPipeline(opts: {
     const characterId = opts.targetCharacterId || chatForRegex?.character_id;
     const promptScripts = regexScriptsSvc.getActiveScripts(opts.userId, { characterId, chatId: opts.chatId, target: "prompt" });
     if (promptScripts.length > 0) {
-      // Determine chat history bounds for depth calculation
-      const chEntry = breakdown?.find(e => e.type === "chat_history");
-      const chatHistoryStart = chEntry?.firstMessageIndex ?? 0;
-      const chatHistoryCount = chEntry?.messageCount ?? messages.length;
+      // Build a per-index depth map from the chat-history marker. Walk
+      // messages in order, collect indices that carry the marker, then assign
+      // depth = (totalChatHistory - 1 - positionInHistory) so the latest chat
+      // history message gets depth 0 and the oldest gets depth N-1. This
+      // works regardless of contiguity — depth-injected blocks splicing into
+      // the chat history range no longer skew depth values.
+      const chatHistoryDepth = new Map<number, number>();
+      const chIndices: number[] = [];
+      for (let i = 0; i < messages.length; i++) {
+        if (isChatHistoryMessage(messages[i])) chIndices.push(i);
+      }
+      for (let pos = 0; pos < chIndices.length; pos++) {
+        chatHistoryDepth.set(chIndices[pos], chIndices.length - 1 - pos);
+      }
 
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
@@ -380,30 +474,28 @@ async function runPromptPipeline(opts: {
           : msg.role === "assistant" ? "ai_output" as const
           : "world_info" as const;
 
-        // Depth: distance from end of chat history portion (0 = latest)
-        const isChatHistory = i >= chatHistoryStart && i < chatHistoryStart + chatHistoryCount;
-        const depth = isChatHistory ? (chatHistoryStart + chatHistoryCount - 1 - i) : undefined;
+        const depth = chatHistoryDepth.get(i);
 
         if (typeof msg.content === "string") {
-          messages[i] = { ...msg, content: regexScriptsSvc.applyRegexScripts(msg.content, promptScripts, placement, depth) };
+          messages[i] = { ...msg, content: await regexScriptsSvc.applyRegexScripts(msg.content, promptScripts, placement, depth, macroEnv) };
         } else if (Array.isArray(msg.content)) {
-          messages[i] = {
-            ...msg,
-            content: msg.content.map((part: any) =>
+          const resolvedParts = await Promise.all(
+            msg.content.map(async (part: any) =>
               part.type === "text"
-                ? { ...part, text: regexScriptsSvc.applyRegexScripts(part.text, promptScripts, placement, depth) }
+                ? { ...part, text: await regexScriptsSvc.applyRegexScripts(part.text, promptScripts, placement, depth, macroEnv) }
                 : part
             ),
-          };
+          );
+          messages[i] = { ...msg, content: resolvedParts };
         }
       }
     }
   }
 
-  // Merge parameters: assembled (from preset) < request overrides
-  const parameters: GenerationParameters = { ...assembledParams, ...opts.inputParameters };
+  // Merge parameters: assembled (from preset) < interceptor overrides < request overrides
+  const parameters: GenerationParameters = { ...assembledParams, ...interceptorParameters, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro };
+  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -494,7 +586,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   const targetCharId = input.target_character_id || chat?.character_id;
   if (targetCharId) {
     const character = charactersSvc.getCharacter(input.userId, targetCharId);
-    if (character) characterName = character.name;
+    if (character) characterName = getEffectiveCharacterName(character);
   }
 
   // Resolve persona_id from settings if not provided by the frontend, so the
@@ -515,7 +607,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     generationType: genType,
     personaId: resolvedPersona?.id,
     personaName: resolvedPersona?.name || "User",
-    targetCharacterId: input.target_character_id,
+    targetCharacterId: targetCharId,
   };
 
   let excludeMessageId: string | undefined;
@@ -531,6 +623,14 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       // before council/assembly begins (MESSAGE_SWIPED event fires now).
       const withBlank = chatsSvc.addSwipe(input.userId, targetMsg.id, "");
       lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
+      // Clear stale generation metrics from the previous swipe so the pill
+      // doesn't display outdated values while the new generation runs.
+      // Uses patchMessageExtra to avoid triggering chunk rebuilds / WS events.
+      const prevExtra = targetMsg.extra;
+      if (prevExtra && (prevExtra.tokenCount != null || prevExtra.generationMetrics || prevExtra.usage || prevExtra.reasoning || prevExtra.reasoningDuration)) {
+        const { tokenCount: _, generationMetrics: _gm, usage: _u, reasoning: _r, reasoningDuration: _rd, ...cleanExtra } = prevExtra;
+        chatsSvc.patchMessageExtra(input.userId, targetMsg.id, cleanExtra);
+      }
     }
   } else if (genType === "continue") {
     const lastMsg = chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
@@ -545,6 +645,53 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     }
   }
 
+  // Register pool entry for recovery — at this point we have all the metadata
+  pool.createPoolEntry({
+    generationId,
+    userId: input.userId,
+    chatId: input.chat_id,
+    generationType: genType,
+    characterName,
+    characterId: targetCharId,
+    model: connection.model,
+    targetMessageId: lifecycle.targetMessageId,
+  });
+
+  // Emit GENERATION_STARTED immediately so the frontend can show a chat head
+  // and streaming indicator BEFORE prompt assembly (which may involve slow
+  // embedding calls, council sidecar, etc.). Without this, navigating away
+  // during assembly leaves no chat head and the UI appears stuck.
+  eventBus.emit(EventType.GENERATION_STARTED, {
+    generationId,
+    chatId: input.chat_id,
+    model: connection.model,
+    targetMessageId: lifecycle.targetMessageId,
+    characterId: targetCharId,
+    characterName,
+  }, input.userId);
+
+  // ── Return the HTTP response NOW ──────────────────────────────────────
+  // Council execution, prompt assembly, and embedding calls can take 10-60s+.
+  // Holding the HTTP response open for that duration blocks the frontend's
+  // connection pool and makes the UI appear frozen when the user navigates
+  // away. By returning immediately, the frontend gets the generationId and
+  // can track progress via WS events + the pool status endpoint.
+  //
+  // The remaining heavy work (council → assembly → streaming) runs as a
+  // detached async continuation. Errors are surfaced via GENERATION_ENDED
+  // with an error payload.
+  void (async () => {
+    // Yield to the macro task queue IMMEDIATELY so that the HTTP response
+    // (`return { generationId, status: "streaming" }` below) is sent before
+    // any assembly work begins.  Without this, JavaScript's async execution
+    // model runs everything between here and the first internal `await`
+    // synchronously — which can include council settings, all DB prefetch
+    // queries, world-info activation, and more — blocking the event loop
+    // and delaying the response (and every other request) until that first
+    // internal `await` yields.
+    await new Promise<void>(r => setTimeout(r, 0));
+    try {
+
   // Execute council if enabled (before prompt assembly so it doesn't slow the critical path visibly)
   const councilSettings = getCouncilSettings(input.userId);
   let councilResult: CouncilExecutionResult | null = null;
@@ -558,6 +705,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     && councilSettings.members.some((m) => m.tools.length > 0);
 
   if (councilHasTools) {
+    pool.setPoolStatus(generationId, "council");
     if (councilSettings.toolsSettings.mode === "inline") {
       // Inline mode requires enableFunctionCalling in the preset's completion
       // settings — the tools are registered as native function calls with the
@@ -568,7 +716,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       if (completionSettings?.enableFunctionCalling === false) {
         console.warn("[council] Inline tools skipped: enableFunctionCalling is disabled in preset '%s'", preset?.name);
       } else {
-        const availableTools = getAvailableTools(input.userId);
+        const availableTools = await getAvailableTools(input.userId);
         const activeMembers = councilSettings.members.filter((m) => m.tools.length > 0);
         inlineTools = [];
         for (const member of activeMembers) {
@@ -585,91 +733,202 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         if (inlineTools.length === 0) inlineTools = undefined;
       }
     } else {
-      // Sidecar mode: stage an empty assistant message BEFORE council execution
-      // so the frontend has a real message bubble to stream tokens into. Without
-      // this, the HTTP response (and thus startStreaming) arrives after council
-      // completes, racing with WS events that may have already finished.
-      if (genType === "normal" || genType === "swipe") {
-        const extra: Record<string, any> = {};
-        if (input.target_character_id) extra.character_id = input.target_character_id;
-        const stagedMsg = chatsSvc.createMessage(input.chat_id, {
-          is_user: false,
-          name: characterName,
-          content: "",
-          extra: Object.keys(extra).length > 0 ? extra : undefined,
-        }, input.userId);
-        // Park the staged message ID so runGeneration updates it instead of
-        // creating a second message. targetMessageId without targetSwipeIdx
-        // signals a staged-message update (as opposed to regeneration).
-        stagedMessageId = stagedMsg.id;
+      // Check if we can reuse cached council results for regens/swipes/continues
+      const shouldRetain = councilSettings.toolsSettings.retainResultsForRegens
+        && (genType === "regenerate" || genType === "swipe" || genType === "continue" || input.retain_council);
+      const cached = shouldRetain
+        ? (chat?.metadata?.last_council_results as CachedCouncilResult | undefined)
+        : undefined;
+
+      if (cached?.results?.length) {
+        // Reuse cached council results — skip execution entirely
+        console.debug(
+          "[council] Reusing cached results for %s (cachedAt=%d, results=%d)",
+          genType,
+          cached.cachedAt,
+          cached.results.length,
+        );
+        councilResult = {
+          results: cached.results,
+          deliberationBlock: cached.deliberationBlock,
+          totalDurationMs: 0,
+        };
+      } else {
+        // Sidecar mode: stage an empty assistant message BEFORE council execution
+        // so the frontend has a real message bubble to stream tokens into. Without
+        // this, the HTTP response (and thus startStreaming) arrives after council
+        // completes, racing with WS events that may have already finished.
+        if (genType === "normal" || genType === "swipe") {
+          const extra: Record<string, any> = {};
+          if (input.target_character_id) extra.character_id = input.target_character_id;
+          const stagedMsg = chatsSvc.createMessage(input.chat_id, {
+            is_user: false,
+            name: characterName,
+            content: "",
+            extra: Object.keys(extra).length > 0 ? extra : undefined,
+          }, input.userId);
+          // Park the staged message ID so runGeneration updates it instead of
+          // creating a second message. targetMessageId without targetSwipeIdx
+          // signals a staged-message update (as opposed to regeneration).
+          stagedMessageId = stagedMsg.id;
+        }
+
+        checkAborted();
+
+        // Yield before the heavy council enrichment phase — the next section
+        // loads all messages, collects world info entries, and runs keyword
+        // activation synchronously. Without a yield here the event loop is
+        // blocked from the setTimeout at the top of the IIFE through all of
+        // this sync work until the first real `await` (embedding API call).
+        await new Promise<void>(r => setTimeout(r, 0));
+        checkAborted();
+
+        // Pre-compute enrichment for council tools — resolve world info at the
+        // top of the generation chain so tools receive proper world book context.
+        // Also filters out the staged empty message and excluded (regenerated)
+        // message so council doesn't see blank assistant turns.
+        const fullCharacter = chat
+          ? charactersSvc.getCharacter(input.userId, targetCharId || chat.character_id)
+          : null;
+        const councilMessages = chatsSvc.getMessages(input.userId, input.chat_id)
+          .filter(m => m.id !== excludeMessageId && m.id !== stagedMessageId);
+        const { entries: wiEntries, worldBookIds: wiBookIds } = collectWorldInfoForCouncil(input.userId, fullCharacter, resolvedPersona, input.chat_id);
+        let councilWiActivated = wiEntries.length > 0
+          ? activateWorldInfo({
+              entries: wiEntries,
+              messages: councilMessages,
+              chatTurn: councilMessages.length,
+              wiState: {},
+            }).activatedEntries
+          : [];
+
+        // Run vector retrieval so council also sees vectorized world info entries.
+        // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
+        const vectorActivated = await collectVectorActivatedWorldInfo(
+          input.userId,
+          wiBookIds,
+          wiEntries,
+          councilMessages,
+        );
+        councilWiActivated = mergeActivatedWorldInfoEntries(
+          councilWiActivated,
+          vectorActivated,
+        ).activatedEntries;
+
+        // Cache for assembly to reuse
+        precomputedVectorEntries = vectorActivated;
+
+        console.debug(
+          "[generate] Council enrichment: char=%s, persona=%s, messages=%d, wi=%d/%d, vector=%d",
+          fullCharacter?.name ?? "none",
+          resolvedPersona?.name ?? "none",
+          councilMessages.length,
+          councilWiActivated.length,
+          wiEntries.length,
+          vectorActivated.length,
+        );
+
+        const councilEnrichment: CouncilEnrichment = {
+          character: fullCharacter,
+          persona: resolvedPersona,
+          messages: councilMessages,
+          activatedWorldInfoEntries: councilWiActivated,
+        };
+
+        // Execute pre-generation tool calls (abort-aware)
+        councilResult = await executeCouncil({
+          userId: input.userId,
+          chatId: input.chat_id,
+          personaId: input.persona_id,
+          connectionId: input.connection_id,
+          settings: councilSettings,
+          signal: abortController.signal,
+          enrichment: councilEnrichment,
+        });
+
+        checkAborted();
+
+        // Check for partial failures — if some tools failed, ask the user whether
+        // to continue with partial results or retry the broken tools.
+        if (councilResult) {
+          const failedResults = councilResult.results.filter((r) => !r.success);
+          if (failedResults.length > 0 && failedResults.length < councilResult.results.length) {
+            // Partial failure — emit event and wait for user decision
+            eventBus.emit(EventType.COUNCIL_TOOLS_FAILED, {
+              generationId,
+              chatId: input.chat_id,
+              failedTools: failedResults.map((r) => ({
+                memberId: r.memberId,
+                memberName: r.memberName,
+                toolName: r.toolName,
+                toolDisplayName: r.toolDisplayName,
+                error: r.error,
+              })),
+              successCount: councilResult.results.length - failedResults.length,
+              failedCount: failedResults.length,
+            }, input.userId);
+
+            // Mark pool entry so the active endpoint surfaces the pending state to chat heads
+            const poolEntry = pool.getPoolEntry(generationId);
+            if (poolEntry) poolEntry.councilRetryPending = true;
+
+            // Pause indefinitely — no short timer. The frontend controls when to
+            // show the modal (only when the user navigates to this chat). A 10-minute
+            // safety cap prevents permanent resource hangs if the user never responds.
+            const decision = await new Promise<"continue" | "retry">((resolve) => {
+              const timeout = setTimeout(() => {
+                console.debug("[council] Safety cap reached for %s — auto-continuing", generationId);
+                pendingCouncilRetries.delete(generationId);
+                if (poolEntry) poolEntry.councilRetryPending = false;
+                resolve("continue");
+              }, COUNCIL_RETRY_SAFETY_CAP_MS);
+              pendingCouncilRetries.set(generationId, { userId: input.userId, resolve, timeout });
+            });
+
+            checkAborted();
+
+            if (decision === "retry") {
+              console.debug("[council] User chose retry — re-executing %d failed tools", failedResults.length);
+              // Re-execute only the failed tools by creating a retry run
+              const retryResult = await executeCouncil({
+                userId: input.userId,
+                chatId: input.chat_id,
+                personaId: input.persona_id,
+                connectionId: input.connection_id,
+                settings: councilSettings,
+                signal: abortController.signal,
+                enrichment: councilEnrichment,
+                retryToolNames: failedResults.map((r) => r.toolName),
+              });
+
+              checkAborted();
+
+              if (retryResult) {
+                // Merge: replace failed results with retry results, keep original successes
+                const retryResultMap = new Map(retryResult.results.map((r) => [`${r.memberId}:${r.toolName}`, r]));
+                const mergedResults = councilResult.results.map((r) => {
+                  if (!r.success) {
+                    const retried = retryResultMap.get(`${r.memberId}:${r.toolName}`);
+                    return retried ?? r;
+                  }
+                  return r;
+                });
+
+                // Rebuild the deliberation block from the full merged result set
+                const allTools = await getAvailableTools(input.userId);
+                const toolsMap = new Map(allTools.map((t) => [t.name, t]));
+                councilResult = {
+                  results: mergedResults,
+                  deliberationBlock: formatDeliberation(mergedResults, toolsMap),
+                  totalDurationMs: councilResult.totalDurationMs + retryResult.totalDurationMs,
+                };
+              }
+            } else {
+              console.debug("[council] User chose continue — proceeding with %d successful results", councilResult.results.length - failedResults.length);
+            }
+          }
+        }
       }
-
-      checkAborted();
-
-      // Pre-compute enrichment for council tools — resolve world info at the
-      // top of the generation chain so tools receive proper world book context.
-      // Also filters out the staged empty message and excluded (regenerated)
-      // message so council doesn't see blank assistant turns.
-      const fullCharacter = chat
-        ? charactersSvc.getCharacter(input.userId, targetCharId || chat.character_id)
-        : null;
-      const councilMessages = chatsSvc.getMessages(input.userId, input.chat_id)
-        .filter(m => m.id !== excludeMessageId && m.id !== stagedMessageId);
-      const { entries: wiEntries, worldBookIds: wiBookIds } = collectWorldInfoForCouncil(input.userId, fullCharacter, resolvedPersona, input.chat_id);
-      let councilWiActivated = wiEntries.length > 0
-        ? activateWorldInfo({
-            entries: wiEntries,
-            messages: councilMessages,
-            chatTurn: councilMessages.length,
-            wiState: {},
-          }).activatedEntries
-        : [];
-
-      // Run vector retrieval so council also sees vectorized world info entries.
-      // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
-      const vectorActivated = await collectVectorActivatedWorldInfo(
-        input.userId,
-        wiBookIds,
-        wiEntries,
-        councilMessages,
-      );
-      councilWiActivated = mergeActivatedWorldInfoEntries(
-        councilWiActivated,
-        vectorActivated,
-      ).activatedEntries;
-
-      // Cache for assembly to reuse
-      precomputedVectorEntries = vectorActivated;
-
-      console.debug(
-        "[generate] Council enrichment: char=%s, persona=%s, messages=%d, wi=%d/%d, vector=%d",
-        fullCharacter?.name ?? "none",
-        resolvedPersona?.name ?? "none",
-        councilMessages.length,
-        councilWiActivated.length,
-        wiEntries.length,
-        vectorActivated.length,
-      );
-
-      const councilEnrichment: CouncilEnrichment = {
-        character: fullCharacter,
-        persona: resolvedPersona,
-        messages: councilMessages,
-        activatedWorldInfoEntries: councilWiActivated,
-      };
-
-      // Execute pre-generation tool calls (abort-aware)
-      councilResult = await executeCouncil({
-        userId: input.userId,
-        chatId: input.chat_id,
-        personaId: input.persona_id,
-        connectionId: input.connection_id,
-        settings: councilSettings,
-        signal: abortController.signal,
-        enrichment: councilEnrichment,
-      });
-
-      checkAborted();
     }
   }
 
@@ -694,52 +953,33 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         councilNamedResults[(r as any).resultVariable] = r.content;
       }
     }
-  }
 
-  // Execute Lumi pipeline if preset uses the lumi engine
-  let lumiPipelineResults: LumiPipelineResult | undefined;
-  {
-    const presetId = input.preset_id || connection.preset_id;
-    const preset = presetId ? presetsSvc.getPreset(input.userId, presetId) : null;
-    console.log("[lumi] Preset lookup: id=%s engine=%s", presetId, preset?.engine);
-    if (preset?.engine === "lumi") {
-      const lumiMeta = preset.metadata as LumiPresetMetadata;
-      console.log("[lumi] Metadata: pipelines=%d sidecar.connectionProfileId=%s", lumiMeta?.pipelines?.length ?? 0, lumiMeta?.sidecar?.connectionProfileId);
-      // Resolve character and messages for pipeline context
-      const pipelineCharacter = charactersSvc.getCharacter(
-        input.userId,
-        input.target_character_id || chat?.character_id || "",
-      );
-      const pipelineMessages = chatsSvc.getMessages(input.userId, input.chat_id)
-        .filter((m) => m.id !== excludeMessageId && m.id !== stagedMessageId);
-
-      if (pipelineCharacter && chat && lumiMeta?.pipelines) {
-        console.log("[lumi] Executing pipeline with %d messages for context", pipelineMessages.length);
-        lumiPipelineResults = await executeLumiPipeline({
-          userId: input.userId,
-          chatId: input.chat_id,
-          pipelines: lumiMeta.pipelines,
-          sidecar: lumiMeta.sidecar || { connectionProfileId: null, model: null, temperature: 0.3, topP: 0.9, maxTokensPerModule: 512, contextWindow: 2048 },
-          messages: pipelineMessages,
-          character: pipelineCharacter,
-          persona: resolvedPersona,
-          chat,
-          signal: abortController.signal,
+    // Persist council results to chat metadata for potential reuse on regens/swipes.
+    // Only cache when results were freshly executed (totalDurationMs > 0 distinguishes
+    // a live execution from a cache hit which sets totalDurationMs to 0).
+    if (councilResult.totalDurationMs > 0) {
+      const cachedResult: CachedCouncilResult = {
+        results: councilResult.results,
+        deliberationBlock: councilResult.deliberationBlock,
+        namedResults: councilNamedResults,
+        cachedAt: Date.now(),
+      };
+      try {
+        // Atomic merge so we don't clobber concurrent user edits to chat
+        // metadata (alternate field selections, world book attachments, etc.)
+        // that landed while the council was running.
+        chatsSvc.mergeChatMetadata(input.userId, input.chat_id, {
+          last_council_results: cachedResult,
         });
-        console.log("[lumi] Pipeline done: %d results", lumiPipelineResults?.size ?? 0);
-        if (lumiPipelineResults && lumiPipelineResults.size > 0) {
-          for (const [k, v] of lumiPipelineResults) {
-            console.log("[lumi]   module '%s': %d chars", k, v.content.length);
-          }
-        }
-        checkAborted();
-      } else {
-        console.warn("[lumi] Skipped: character=%s chat=%s pipelines=%s", !!pipelineCharacter, !!chat, !!lumiMeta?.pipelines);
+      } catch (err) {
+        console.warn("[council] Failed to cache results to chat metadata:", err);
       }
     }
   }
 
-  // Run shared prompt pipeline
+  checkAborted();
+
+  // Run shared prompt pipeline — cortex retrieval runs concurrently inside assembly.
   const pipeline = await runPromptPipeline({
     userId: input.userId,
     chatId: input.chat_id,
@@ -755,7 +995,6 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     councilToolResults,
     councilNamedResults,
     precomputedVectorEntries,
-    lumiPipelineResults,
     regenFeedback: input.regen_feedback,
     regenFeedbackPosition: input.regen_feedback_position,
   });
@@ -763,24 +1002,22 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   let { messages } = pipeline;
   const { parameters: mergedParams, breakdown, activatedWorldInfo, deliberationHandledByMacro } = pipeline;
 
-  // Inject sidecar breakdown entries for token visibility
-  if (breakdown && lumiPipelineResults && lumiPipelineResults.size > 0) {
-    for (const [key, result] of lumiPipelineResults) {
-      breakdown.push({
-        type: 'sidecar',
-        name: `Sidecar: ${key}`,
-        role: 'system',
-        preCountedTokens: result.usage?.total_tokens,
-        excludeFromTotal: true,
-      });
+  // Persist deferred WI state and dirty chat variables after assembly.
+  // Both go through mergeChatMetadata so that any user-driven metadata edits
+  // (alternate field selections, world book attachments, etc.) that landed
+  // during generation survive these background writes.
+  {
+    const partial: Record<string, any> = { ...(pipeline.deferredWiState?.partial ?? {}) };
+    if (pipeline.macroEnv?._chatVarsDirty) {
+      partial.chat_variables = Object.fromEntries(pipeline.macroEnv.variables.chat);
     }
-  }
-
-  // Persist deferred WI state after assembly
-  if (pipeline.deferredWiState) {
-    chatsSvc.updateChat(input.userId, pipeline.deferredWiState.chatId, {
-      metadata: pipeline.deferredWiState.metadata,
-    });
+    if (Object.keys(partial).length > 0) {
+      chatsSvc.mergeChatMetadata(
+        input.userId,
+        pipeline.deferredWiState?.chatId ?? input.chat_id,
+        partial,
+      );
+    }
   }
 
   // Emit activated world info event (always emit so UI can clear stale entries)
@@ -818,6 +1055,11 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     mergedParams.use_responses_api = true;
   }
 
+  // Inject OpenRouter-specific settings from connection metadata
+  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+    mergedParams._openrouter = connection.metadata.openrouter;
+  }
+
   // Resolve preset name for breakdown display
   const presetId = input.preset_id || connection.preset_id;
   if (presetId) {
@@ -826,33 +1068,56 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   }
 
   // Run generation in the background
-  runGeneration(generationId, provider, apiKey, apiUrl, connection.model, messages, mergedParams, input.userId, input.chat_id, lifecycle, abortController.signal, inlineTools, pipeline.assistantPrefill);
+  runGeneration(generationId, provider, apiKey, apiUrl, connection.model, messages, mergedParams, input.userId, input.chat_id, lifecycle, abortController.signal, inlineTools, pipeline.assistantPrefill, pipeline.macroEnv);
+
+    } catch (err: any) {
+      // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted
+      activeGenerations.delete(generationId);
+      activeChatGenerations.delete(chatKey);
+
+      // Clean up any pending council retry decision
+      const pendingRetry = pendingCouncilRetries.get(generationId);
+      if (pendingRetry) {
+        clearTimeout(pendingRetry.timeout);
+        pendingCouncilRetries.delete(generationId);
+      }
+
+      // If this was a user-initiated abort (stop request), emit proper events so the
+      // frontend can reset its streaming state and clean up.
+      if (abortController.signal.aborted) {
+        // Clean up staged message if one was created (sidecar council mode)
+        if (stagedMessageId) {
+          try {
+            chatsSvc.deleteMessage(input.userId, stagedMessageId);
+          } catch { /* best-effort cleanup */ }
+        }
+        pool.stopPool(generationId);
+        eventBus.emit(EventType.GENERATION_STOPPED, {
+          generationId,
+          chatId: input.chat_id,
+          content: "",
+        }, input.userId);
+        return;
+      }
+
+      const msg = errorMessage(err);
+      pool.errorPool(generationId, msg);
+      eventBus.emit(EventType.GENERATION_ENDED, {
+        generationId,
+        chatId: input.chat_id,
+        error: msg,
+      }, input.userId);
+    }
+  })();
 
   return { generationId, status: "streaming" };
 
   } catch (err: any) {
-    // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted
+    // Early setup failure (before the async continuation) — connection
+    // resolution, character lookup, swipe creation, etc.
     activeGenerations.delete(generationId);
     activeChatGenerations.delete(chatKey);
-
-    // If this was a user-initiated abort (stop request), emit proper events so the
-    // frontend can reset its streaming state and clean up.
-    if (abortController.signal.aborted) {
-      // Clean up staged message if one was created (sidecar council mode)
-      if (stagedMessageId) {
-        try {
-          chatsSvc.deleteMessage(input.userId, stagedMessageId);
-        } catch { /* best-effort cleanup */ }
-      }
-      eventBus.emit(EventType.GENERATION_STOPPED, {
-        generationId,
-        chatId: input.chat_id,
-        content: "",
-      }, input.userId);
-      // Return a stopped status instead of throwing, so the HTTP response is clean
-      return { generationId, status: "stopped" };
-    }
-
+    pool.errorPool(generationId, errorMessage(err));
     throw err;
   }
 }
@@ -936,7 +1201,11 @@ async function runGeneration(
   signal: AbortSignal,
   tools?: ToolDefinition[],
   assistantPrefill?: string,
+  macroEnv?: import("../macros/types").MacroEnv,
 ): Promise<void> {
+  // GENERATION_STARTED was already emitted when the pool entry was created
+  // (before assembly). Now update to streaming status and push breakdown data.
+  pool.setPoolStatus(generationId, "streaming");
   eventBus.emit(EventType.GENERATION_STARTED, {
     generationId, chatId, model,
     breakdown: lifecycle.breakdown,
@@ -947,16 +1216,6 @@ async function runGeneration(
 
   let fullContent = "";
   let fullReasoning = "";
-
-  // Prepend assistant prefill to content: the model continues *after* the prefill,
-  // so the prefill text is not included in the model's output. Emit it as the first
-  // content token so the frontend sees it, and include it in the saved content.
-  if (assistantPrefill) {
-    fullContent = assistantPrefill;
-    eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: assistantPrefill,
-    }, userId);
-  }
 
   let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
   let reasoningStartedAt = 0;
@@ -986,8 +1245,9 @@ async function runGeneration(
       reasoningDurationMs = Date.now() - reasoningStartedAt;
     }
     fullContent += text;
+    const seq = pool.appendPoolContent(generationId, text);
     eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: text,
+      generationId, chatId, token: text, seq,
     }, userId);
   }
 
@@ -995,8 +1255,9 @@ async function runGeneration(
     if (!text) return;
     if (!reasoningStartedAt) reasoningStartedAt = Date.now();
     fullReasoning += text;
+    const seq = pool.appendPoolReasoning(generationId, text);
     eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-      generationId, chatId, token: text, type: "reasoning",
+      generationId, chatId, token: text, type: "reasoning", seq,
     }, userId);
   }
 
@@ -1021,7 +1282,34 @@ async function runGeneration(
 
   function processContentToken(token: string) {
     if (cotPhase === "content") {
-      emitContentToken(token);
+      if (!cotPrefix) {
+        emitContentToken(token);
+        return;
+      }
+      // Scan content for reasoning prefix re-entry (handles mid-response thinking tags)
+      cotDetectBuffer += token;
+      const prefixIdx = cotDetectBuffer.indexOf(cotPrefix);
+      if (prefixIdx !== -1) {
+        // Full prefix found — emit content before it, switch to reasoning
+        if (prefixIdx > 0) emitContentToken(cotDetectBuffer.slice(0, prefixIdx));
+        cotPhase = "reasoning";
+        const afterPrefix = cotDetectBuffer.slice(prefixIdx + cotPrefix.length);
+        cotDetectBuffer = "";
+        if (afterPrefix) processReasoningChunk(afterPrefix);
+        return;
+      }
+      // Check if the buffer tail could be the start of the prefix (partial match)
+      let partialLen = Math.min(cotDetectBuffer.length, cotPrefix.length - 1);
+      while (partialLen > 0) {
+        if (cotPrefix.startsWith(cotDetectBuffer.slice(-partialLen))) break;
+        partialLen--;
+      }
+      // Emit everything that's definitely content (not a potential prefix start)
+      const safeLen = cotDetectBuffer.length - partialLen;
+      if (safeLen > 0) {
+        emitContentToken(cotDetectBuffer.slice(0, safeLen));
+        cotDetectBuffer = cotDetectBuffer.slice(safeLen);
+      }
       return;
     }
     if (cotPhase === "detecting") {
@@ -1035,9 +1323,11 @@ async function runGeneration(
       } else if (cotPrefix.startsWith(trimmed)) {
         // Partial match — keep buffering
       } else {
+        // No prefix at response start — switch to content which also scans for prefix
         cotPhase = "content";
-        emitContentToken(cotDetectBuffer);
+        const buf = cotDetectBuffer;
         cotDetectBuffer = "";
+        processContentToken(buf);
       }
       return;
     }
@@ -1045,77 +1335,124 @@ async function runGeneration(
   }
 
   function flushCotBuffers() {
-    if (cotPhase === "detecting" && cotDetectBuffer) {
-      emitContentToken(cotDetectBuffer);
+    if (cotDetectBuffer) {
+      if (cotPhase === "reasoning") {
+        emitReasoningToken(cotDetectBuffer);
+      } else {
+        emitContentToken(cotDetectBuffer);
+      }
       cotDetectBuffer = "";
-    } else if (cotPhase === "reasoning" && cotSuffixBuffer) {
+    }
+    if (cotPhase === "reasoning" && cotSuffixBuffer) {
       emitReasoningToken(cotSuffixBuffer);
       cotSuffixBuffer = "";
     }
     cotPhase = "content";
   }
 
+  // Persist whatever was streamed before termination. Shared between user-
+  // initiated abort and mid-stream errors (e.g. socket close) so the UI never
+  // loses content that the user already saw. Routes to the same targets the
+  // success path uses (regen swipe, continue merge, staged slot, or new row).
+  async function persistPartialContent(): Promise<{ messageId?: string; content: string }> {
+    flushCotBuffers();
+    let closedContent = closeUnterminatedReasoningTags(userId, fullContent);
+
+    const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
+      characterId: lifecycle.targetCharacterId,
+      chatId,
+      target: "response",
+    });
+    if (responseScripts.length > 0) {
+      closedContent = await regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0, macroEnv);
+      if (fullReasoning) {
+        fullReasoning = await regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0, macroEnv);
+      }
+    }
+
+    let messageId: string | undefined;
+    if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
+      const updated = chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, closedContent);
+      messageId = updated?.id ?? lifecycle.targetMessageId;
+      if (fullReasoning) {
+        const existingExtra = chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
+        chatsSvc.patchMessageExtra(userId, lifecycle.targetMessageId, { ...existingExtra, reasoning: fullReasoning });
+      }
+    } else if (lifecycle.stagedMessageId) {
+      const existingStagedExtra = chatsSvc.getMessage(userId, lifecycle.stagedMessageId)?.extra || {};
+      const partialExtra = fullReasoning ? { ...existingStagedExtra, reasoning: fullReasoning } : existingStagedExtra;
+      chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
+        content: closedContent,
+        ...(Object.keys(partialExtra).length > 0 ? { extra: partialExtra } : {}),
+      });
+      messageId = lifecycle.stagedMessageId;
+    } else if (lifecycle.continueMessageId && closedContent) {
+      const combined = (lifecycle.continueOriginalContent ?? "") + (lifecycle.continuePostfix ?? "") + closedContent;
+      const existingContinueExtra = chatsSvc.getMessage(userId, lifecycle.continueMessageId)?.extra;
+      const continueExtra = fullReasoning ? { ...existingContinueExtra, reasoning: fullReasoning } : undefined;
+      chatsSvc.updateMessage(userId, lifecycle.continueMessageId, {
+        content: combined,
+        ...(continueExtra ? { extra: continueExtra } : {}),
+      });
+      messageId = lifecycle.continueMessageId;
+    } else if (closedContent) {
+      const isImpersonate = lifecycle.generationType === "impersonate";
+      const extra: Record<string, any> = {};
+      if (isImpersonate && lifecycle.personaId) extra.persona_id = lifecycle.personaId;
+      if (!isImpersonate && lifecycle.targetCharacterId) extra.character_id = lifecycle.targetCharacterId;
+      if (fullReasoning) extra.reasoning = fullReasoning;
+      const created = chatsSvc.createMessage(chatId, {
+        is_user: isImpersonate,
+        name: isImpersonate ? (lifecycle.personaName || "User") : lifecycle.characterName,
+        content: closedContent,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+      }, userId);
+      messageId = created.id;
+    }
+
+    return { messageId, content: closedContent };
+  }
+
+  // Route the assistant prefill ("Start Reply With") through the CoT detection
+  // state machine before the model's stream begins. The model continues *after*
+  // the prefill, so the prefill text is not included in the model's output —
+  // we still need to surface it to the frontend and include it in the saved
+  // content/reasoning. Running it through processContentToken ensures that if
+  // the prefill is (or starts with) the configured reasoning prefix, it's
+  // classified as reasoning from the first token instead of leaking into the
+  // content bubble and then being re-extracted by the post-parse safety net.
+  if (assistantPrefill) {
+    processContentToken(assistantPrefill);
+  }
+
+  // Determine streaming mode from _streaming parameter (defaults to true)
+  const useStreaming = parameters._streaming !== false;
+  delete parameters._streaming;
+
+  // Record streaming mode on the pool entry for metrics
+  const poolEntry = pool.getPoolEntry(generationId);
+  if (poolEntry) poolEntry.wasStreaming = useStreaming;
+
   try {
-    const stream = provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools });
+    // Non-streaming path: call generate() once, then synthesize a single-chunk stream
+    const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
+      ? provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools, signal })
+      : (async function* () {
+          const result = await provider.generate(apiKey, apiUrl, { messages, model, parameters, stream: false, tools, signal });
+          yield {
+            token: result.content,
+            reasoning: result.reasoning,
+            finish_reason: result.finish_reason,
+            tool_calls: result.tool_calls,
+            usage: result.usage,
+          };
+        })();
 
     for await (const chunk of stream) {
       if (signal.aborted) {
-        // Flush any buffered CoT tokens before saving partial content
-        flushCotBuffers();
-        // Close unclosed reasoning tags so the frontend can properly collapse them
-        let closedContent = closeUnterminatedReasoningTags(userId, fullContent);
-
-        // Apply regex scripts (response target) to partial content on abort
-        {
-          const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
-            characterId: lifecycle.targetCharacterId,
-            chatId,
-            target: "response",
-          });
-          if (responseScripts.length > 0) {
-            closedContent = regexScriptsSvc.applyRegexScripts(closedContent, responseScripts, "ai_output", 0);
-            if (fullReasoning) {
-              fullReasoning = regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0);
-            }
-          }
-        }
-
-        if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
-          chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, closedContent);
-          // Persist partial reasoning on abort for regenerate
-          if (fullReasoning) {
-            const existingExtra = chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
-            chatsSvc.updateMessage(userId, lifecycle.targetMessageId, { extra: { ...existingExtra, reasoning: fullReasoning } });
-          }
-        } else if (lifecycle.stagedMessageId) {
-          // Preserve existing extra (character_id etc.) and save partial reasoning
-          const existingStagedExtra = chatsSvc.getMessage(userId, lifecycle.stagedMessageId)?.extra || {};
-          const abortExtra = fullReasoning ? { ...existingStagedExtra, reasoning: fullReasoning } : existingStagedExtra;
-          chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
-            content: closedContent,
-            ...(Object.keys(abortExtra).length > 0 ? { extra: abortExtra } : {}),
-          });
-        } else if (lifecycle.continueMessageId && closedContent) {
-          // Continue aborted: merge partial content into existing assistant message
-          const abortCombined = (lifecycle.continueOriginalContent ?? "") + (lifecycle.continuePostfix ?? "") + closedContent;
-          const existingContinueExtra = chatsSvc.getMessage(userId, lifecycle.continueMessageId)?.extra;
-          const continueAbortExtra = fullReasoning ? { ...existingContinueExtra, reasoning: fullReasoning } : undefined;
-          chatsSvc.updateMessage(userId, lifecycle.continueMessageId, { content: abortCombined, ...(continueAbortExtra ? { extra: continueAbortExtra } : {}) });
-        } else if (closedContent) {
-          // Normal generation with no staged message — save partial content as a new message
-          const isImpersonate = lifecycle.generationType === "impersonate";
-          const extra: Record<string, any> = {};
-          if (isImpersonate && lifecycle.personaId) extra.persona_id = lifecycle.personaId;
-          if (!isImpersonate && lifecycle.targetCharacterId) extra.character_id = lifecycle.targetCharacterId;
-          if (fullReasoning) extra.reasoning = fullReasoning;
-          chatsSvc.createMessage(chatId, {
-            is_user: isImpersonate,
-            name: isImpersonate ? (lifecycle.personaName || "User") : lifecycle.characterName,
-            content: closedContent,
-            extra: Object.keys(extra).length > 0 ? extra : undefined,
-          }, userId);
-        }
-        eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: closedContent }, userId);
+        const persisted = await persistPartialContent();
+        pool.stopPool(generationId);
+        eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: persisted.content }, userId);
         break;
       }
 
@@ -1123,11 +1460,13 @@ async function runGeneration(
       if (chunk.reasoning) {
         if (!reasoningStartedAt) reasoningStartedAt = Date.now();
         fullReasoning += chunk.reasoning;
+        const seq = pool.appendPoolReasoning(generationId, chunk.reasoning);
         eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
           generationId,
           chatId,
           token: chunk.reasoning,
           type: "reasoning",
+          seq,
         }, userId);
       }
 
@@ -1149,6 +1488,37 @@ async function runGeneration(
       // Flush any remaining CoT detection buffers before saving
       flushCotBuffers();
 
+      // Post-parse: extract any reasoning tags that slipped through streaming
+      // detection. Handles edge cases where prefix/suffix split across chunks
+      // in ways the streaming state machine didn't catch, and ensures the
+      // saved message content is always clean of reasoning tag markup.
+      {
+        const ppPrefix = ((reasoningSetting?.value?.prefix as string) || "<think>\n").replace(/^\n+|\n+$/g, "");
+        const ppSuffix = ((reasoningSetting?.value?.suffix as string) || "\n</think>").replace(/^\n+|\n+$/g, "");
+        if (ppPrefix && ppSuffix && fullContent.includes(ppPrefix)) {
+          let cleaned = fullContent;
+          let extracted = "";
+          let idx = cleaned.indexOf(ppPrefix);
+          while (idx !== -1) {
+            const endIdx = cleaned.indexOf(ppSuffix, idx + ppPrefix.length);
+            if (endIdx !== -1) {
+              extracted += cleaned.slice(idx + ppPrefix.length, endIdx);
+              cleaned = cleaned.slice(0, idx) + cleaned.slice(endIdx + ppSuffix.length);
+            } else {
+              // Unclosed tag — extract everything after prefix
+              extracted += cleaned.slice(idx + ppPrefix.length);
+              cleaned = cleaned.slice(0, idx);
+              break;
+            }
+            idx = cleaned.indexOf(ppPrefix);
+          }
+          if (extracted) {
+            fullContent = cleaned;
+            fullReasoning = (fullReasoning ? fullReasoning + "\n" : "") + extracted;
+          }
+        }
+      }
+
       // Apply regex scripts (response target) to completed content
       {
         const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
@@ -1157,9 +1527,9 @@ async function runGeneration(
           target: "response",
         });
         if (responseScripts.length > 0) {
-          fullContent = regexScriptsSvc.applyRegexScripts(fullContent, responseScripts, "ai_output", 0);
+          fullContent = await regexScriptsSvc.applyRegexScripts(fullContent, responseScripts, "ai_output", 0, macroEnv);
           if (fullReasoning) {
-            fullReasoning = regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0);
+            fullReasoning = await regexScriptsSvc.applyRegexScripts(fullReasoning, responseScripts, "reasoning", 0, macroEnv);
           }
         }
       }
@@ -1170,10 +1540,6 @@ async function runGeneration(
         // Regenerate: fill in the blank swipe that was created at generation start
         const updated = chatsSvc.updateSwipe(userId, lifecycle.targetMessageId, lifecycle.targetSwipeIdx, fullContent);
         messageId = updated?.id ?? lifecycle.targetMessageId;
-        // Persist API reasoning in message extra
-        if (fullReasoning) {
-          chatsSvc.updateMessage(userId, messageId, { extra: { ...chatsSvc.getMessage(userId, messageId)?.extra, reasoning: fullReasoning } });
-        }
       } else if (lifecycle.continueMessageId) {
         // Continue: append generated text to existing assistant message,
         // inserting the continuePostfix separator (e.g. newline, double newline)
@@ -1208,20 +1574,63 @@ async function runGeneration(
         messageId = message.id;
       }
 
-      // Persist provider usage (token counts) in message extra when available
-      if (streamUsage) {
-        const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-        chatsSvc.updateMessage(userId, messageId, { extra: { ...existing, usage: streamUsage } });
-      }
-
       // Compute reasoning duration if content tokens never arrived (reasoning-only response)
       if (reasoningStartedAt && !reasoningDurationMs) {
         reasoningDurationMs = Date.now() - reasoningStartedAt;
       }
-      // Persist reasoning duration in message extra when reasoning was detected
-      if (reasoningDurationMs > 0) {
-        const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-        chatsSvc.updateMessage(userId, messageId, { extra: { ...existing, reasoningDuration: reasoningDurationMs } });
+
+      // ── Generation metrics (tokenCount, TTFT, TPS) ─────────────────────
+      const finalPoolEntry = pool.getPoolEntry(generationId);
+      // Total output token count via model's tokenizer (content + reasoning)
+      let resolvedTokenCount: number | undefined;
+      const fullOutput = (fullReasoning ? fullReasoning + fullContent : fullContent);
+      if (fullOutput.length > 0) {
+        try {
+          resolvedTokenCount = (await tokenizerSvc.countForModel(model, fullOutput)) ?? undefined;
+        } catch { /* non-fatal */ }
+      }
+
+      let generationMetrics: { ttft?: number; tps?: number; durationMs: number; wasStreaming: boolean } | undefined;
+      if (finalPoolEntry) {
+        const wasStreaming = finalPoolEntry.wasStreaming ?? true;
+        const streamStart = finalPoolEntry.streamingStartedAt;
+        const now = Date.now();
+        const durationMs = streamStart ? now - streamStart : 0;
+        let ttft: number | undefined;
+        let tps: number | undefined;
+
+        if (wasStreaming && streamStart) {
+          // TTFT: time from LLM request to first token (content or reasoning)
+          if (finalPoolEntry.firstTokenAt) {
+            ttft = finalPoolEntry.firstTokenAt - streamStart;
+          }
+          // TPS: total output tokens over total streaming duration (first token → completion)
+          if (finalPoolEntry.firstTokenAt && resolvedTokenCount && resolvedTokenCount > 1) {
+            const streamDurationSec = (now - finalPoolEntry.firstTokenAt) / 1000;
+            if (streamDurationSec > 0) {
+              tps = Math.round((resolvedTokenCount / streamDurationSec) * 10) / 10;
+            }
+          }
+        }
+
+        generationMetrics = { durationMs, wasStreaming, ...(ttft != null ? { ttft } : {}), ...(tps != null ? { tps } : {}) };
+      }
+
+      // Persist all generation metadata (reasoning, usage, metrics) in a single
+      // patchMessageExtra call to avoid triggering redundant chunk rebuilds,
+      // cache invalidation, and MESSAGE_EDITED events for each field.
+      {
+        const metaExtra: Record<string, any> = {};
+        if (fullReasoning) metaExtra.reasoning = fullReasoning;
+        if (streamUsage) metaExtra.usage = streamUsage;
+        if (reasoningDurationMs > 0) metaExtra.reasoningDuration = reasoningDurationMs;
+        if (resolvedTokenCount) metaExtra.tokenCount = resolvedTokenCount;
+        if (generationMetrics) metaExtra.generationMetrics = generationMetrics;
+
+        if (Object.keys(metaExtra).length > 0) {
+          const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
+          chatsSvc.patchMessageExtra(userId, messageId, { ...existing, ...metaExtra });
+        }
       }
 
       // Compute and store breakdown for the generated message
@@ -1244,6 +1653,7 @@ async function runGeneration(
         }
       }
 
+      pool.completePool(generationId, messageId);
       eventBus.emit(EventType.GENERATION_ENDED, {
         generationId,
         chatId,
@@ -1251,17 +1661,46 @@ async function runGeneration(
         content: fullContent,
         breakdown: breakdownPayload,
         usage: streamUsage,
+        tokenCount: resolvedTokenCount,
+        generationMetrics,
       }, userId);
 
       // Fire-and-forget expression detection after successful generation
       fireExpressionDetection(userId, chatId, lifecycle).catch(() => {});
     }
-  } catch (err: any) {
-    eventBus.emit(EventType.GENERATION_ENDED, {
-      generationId,
-      chatId,
-      error: err.message,
-    }, userId);
+  } catch (err: unknown) {
+    // If the stream iterator threw because the abort signal fired (rather than
+    // the in-loop `signal.aborted` branch catching it first), treat this as a
+    // user-initiated stop, not an error. On Bun for Windows the thrown value
+    // may be `null` in this case, which is why errorMessage() is used.
+    if (signal.aborted) {
+      pool.stopPool(generationId);
+      eventBus.emit(EventType.GENERATION_STOPPED, {
+        generationId,
+        chatId,
+        content: fullContent,
+      }, userId);
+    } else {
+      const msg = errorMessage(err);
+      // Socket drops, provider 5xx mid-stream, etc. — persist whatever was
+      // already streamed so the user keeps the visible content rather than
+      // having the streaming bubble wiped on error.
+      let savedMessageId: string | undefined;
+      let savedContent = fullContent;
+      try {
+        const persisted = await persistPartialContent();
+        savedMessageId = persisted.messageId;
+        savedContent = persisted.content;
+      } catch { /* best-effort; never let save failure shadow the original error */ }
+      pool.errorPool(generationId, msg);
+      eventBus.emit(EventType.GENERATION_ENDED, {
+        generationId,
+        chatId,
+        messageId: savedMessageId,
+        content: savedContent,
+        error: msg,
+      }, userId);
+    }
   } finally {
     activeGenerations.delete(generationId);
     // Clean up per-chat lock (only if this generation still owns it — a newer
@@ -1288,7 +1727,38 @@ async function fireExpressionDetection(
   if (!chat) return;
 
   const characterId = lifecycle.targetCharacterId || chat.character_id;
-  if (!characterId || !hasExpressions(userId, characterId)) return;
+  if (!characterId) return;
+
+  // ── Multi-character expression groups ──────────────────────────────────────
+  // Cards with expression_groups (e.g., multi-character RisuAI imports) use a
+  // two-stage pipeline: identify the focus character, then detect expression
+  // within that character's label set.
+  const expressionGroups = getExpressionGroups(userId, characterId);
+  if (expressionGroups && Object.keys(expressionGroups).length > 0) {
+    const detectionSettings = getExpressionDetectionSettings(userId);
+    if (detectionSettings.mode === "off") return;
+
+    const allMessages = chatsSvc.getMessages(userId, chatId);
+    const recentMessages: LlmMessage[] = allMessages
+      .slice(-detectionSettings.contextWindow)
+      .map((m) => ({ role: m.is_user ? "user" as const : "assistant" as const, content: m.content }));
+
+    const result = await detectMultiCharacterExpression({
+      userId,
+      chatId,
+      characterId,
+      groups: expressionGroups,
+      recentMessages,
+    }, rawGenerate);
+
+    if (result) {
+      emitExpressionChanged(userId, chatId, chat, characterId, result.expression, result.imageId, result.characterGroup);
+    }
+    return;
+  }
+
+  // ── Single-character expression detection (existing path) ─────────────────
+  if (!hasExpressions(userId, characterId)) return;
 
   const expressionConfig = getExpressionConfig(userId, characterId);
   if (!expressionConfig?.enabled) return;
@@ -1334,28 +1804,40 @@ function emitExpressionChanged(
   chat: { metadata: any },
   characterId: string,
   label: string,
-  imageId: string
+  imageId: string,
+  expressionGroup?: string,
 ): void {
   const isGroup = chat.metadata?.group === true;
-  const metaUpdate: Record<string, any> = { ...chat.metadata };
+
+  // Build only the keys this writer owns. The merge helper re-reads current
+  // chat metadata so any user-driven changes that landed during generation
+  // (alternate field selections, world books, etc.) are preserved.
+  const partial: Record<string, any> = { active_expression: label };
+
+  // Track which character group the expression belongs to (multi-character cards)
+  if (expressionGroup) {
+    partial.active_expression_group = expressionGroup;
+  }
 
   if (isGroup) {
-    // Persist per-character expression map for group chats
-    const groupExpressions: Record<string, { label: string; imageId: string }> =
-      metaUpdate.group_expressions ? { ...metaUpdate.group_expressions } : {};
-    groupExpressions[characterId] = { label, imageId };
-    metaUpdate.group_expressions = groupExpressions;
+    // Re-read current group_expressions so we don't drop entries written by
+    // concurrent expression detections for other group members.
+    const latest = chatsSvc.getChat(userId, chatId);
+    const existingGroup = (latest?.metadata?.group_expressions ?? {}) as Record<
+      string,
+      { label: string; imageId: string }
+    >;
+    partial.group_expressions = { ...existingGroup, [characterId]: { label, imageId } };
   }
-  // Always persist the latest expression as active_expression (for single chats / backward compat)
-  metaUpdate.active_expression = label;
 
-  chatsSvc.updateChat(userId, chatId, { metadata: metaUpdate });
+  chatsSvc.mergeChatMetadata(userId, chatId, partial);
   // Emit to frontend
   eventBus.emit(EventType.EXPRESSION_CHANGED, {
     chatId,
     characterId,
     label,
     imageId,
+    expressionGroup,
   }, userId);
 }
 
@@ -1391,6 +1873,15 @@ export function stopAllGenerations(): void {
   activeChatGenerations.clear();
 }
 
+/** Returns the active generationId for a chat, if any. */
+export function getActiveChatGeneration(userId: string, chatId: string): string | undefined {
+  return activeChatGenerations.get(`${userId}:${chatId}`);
+}
+
+export function getActiveGenerationCount(): number {
+  return activeGenerations.size;
+}
+
 // Periodically abort generations that have been running too long (provider hung, broken stream)
 const GENERATION_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
 let _generationSweepTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
@@ -1410,18 +1901,57 @@ export function stopGenerationSweep(): void {
   }
 }
 
+// --- Stream-to-response helper ---
+// Some providers (especially with tool calling) work better with streaming.
+// This helper consumes a stream and produces a full GenerationResponse,
+// properly accumulating tool call deltas.
+
+async function consumeStream(
+  stream: AsyncGenerator<StreamChunk, void, unknown>,
+): Promise<GenerationResponse> {
+  let content = "";
+  let reasoning = "";
+  let finishReason = "stop";
+  let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
+  let usage: GenerationResponse["usage"];
+
+  for await (const chunk of stream) {
+    if (chunk.token) content += chunk.token;
+    if (chunk.reasoning) reasoning += chunk.reasoning;
+    if (chunk.usage) usage = chunk.usage;
+    if (chunk.finish_reason) finishReason = chunk.finish_reason;
+    if (chunk.tool_calls) toolCalls = chunk.tool_calls;
+  }
+
+  return {
+    content,
+    reasoning: reasoning || undefined,
+    finish_reason: finishReason,
+    tool_calls: toolCalls,
+    usage,
+  };
+}
+
 // --- Extension generation (stateless, synchronous, no WS events) ---
 
 export async function rawGenerate(userId: string, input: RawGenerateInput & { signal?: AbortSignal }): Promise<GenerationResponse> {
   const { provider, apiKey, apiUrl } = await resolveRawProviderAndKey(userId, input);
-  return provider.generate(apiKey, apiUrl, {
+  const request: GenerationRequest = {
     messages: input.messages,
     model: input.model,
     parameters: input.parameters,
     tools: input.tools,
-    stream: false,
     signal: input.signal,
-  });
+  };
+
+  // Use streaming when tools are present — some providers only emit tool call
+  // deltas correctly via the streaming path. Consume the stream internally to
+  // produce a complete response.
+  if (input.tools && input.tools.length > 0) {
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+  }
+
+  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
 }
 
 export async function quietGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
@@ -1451,13 +1981,95 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
     mergedParams.use_responses_api = true;
   }
 
-  return provider.generate(apiKey, apiUrl, {
+  // Inject OpenRouter-specific settings from connection metadata
+  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+    mergedParams._openrouter = connection.metadata.openrouter;
+  }
+
+  // Allow callers (e.g. Memory Cortex sidecar) to override the model without
+  // swapping connection profiles. Strip the key from parameters so it doesn't
+  // leak into provider-specific request bodies as an unknown field.
+  const paramModel = typeof (mergedParams as any).model === "string"
+    ? (mergedParams as any).model.trim()
+    : "";
+  if ("model" in mergedParams) delete (mergedParams as any).model;
+
+  const request: GenerationRequest = {
     messages: input.messages,
-    model: connection.model,
+    model: paramModel || connection.model,
     parameters: mergedParams,
     tools: input.tools,
-    stream: false,
-  });
+    signal: input.signal,
+  };
+
+  // Use streaming when tools are present — some providers only emit tool call
+  // deltas correctly via the streaming path.
+  if (input.tools && input.tools.length > 0) {
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+  }
+
+  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+}
+
+/**
+ * Summarize generation — used by the Loom Summary feature.
+ * Resolves connection via: explicit connection_id → sidecar settings → default.
+ * When using sidecar, applies sidecar model/temperature/maxTokens overrides.
+ */
+export async function summarizeGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
+  let connectionId = input.connection_id;
+  let sidecarModel: string | undefined;
+  let sidecarParams: Record<string, unknown> = {};
+
+  // If no explicit connection, resolve via shared sidecar settings
+  if (!connectionId) {
+    const sidecar = getSidecarSettings(userId);
+    if (sidecar.connectionProfileId) {
+      connectionId = sidecar.connectionProfileId;
+      if (sidecar.model) sidecarModel = sidecar.model;
+      sidecarParams = {
+        temperature: sidecar.temperature,
+        top_p: sidecar.topP,
+        max_tokens: sidecar.maxTokens,
+      };
+    }
+  }
+
+  const connection = resolveConnection(userId, connectionId);
+  const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
+
+  // Merge: preset defaults < sidecar overrides < request overrides
+  let mergedParams: GenerationParameters = {};
+  if (connection.preset_id) {
+    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    if (preset) {
+      mergedParams = { ...preset.parameters };
+    }
+  }
+  mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
+
+  // Inject connection-level metadata flags
+  if (connection.metadata?.use_responses_api) {
+    mergedParams.use_responses_api = true;
+  }
+  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+    mergedParams._openrouter = connection.metadata.openrouter;
+  }
+
+  const request: GenerationRequest = {
+    messages: input.messages,
+    model: sidecarModel || connection.model,
+    parameters: mergedParams,
+    tools: input.tools,
+  };
+
+  // Use streaming when tools are present — some providers only emit tool call
+  // deltas correctly via the streaming path.
+  if (input.tools && input.tools.length > 0) {
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+  }
+
+  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
 }
 
 /**
@@ -1501,8 +2113,8 @@ export async function batchGenerate(userId: string, input: BatchGenerateInput): 
         finish_reason: result.finish_reason,
         usage: result.usage,
       };
-    } catch (err: any) {
-      return { index, success: false, error: err.message };
+    } catch (err: unknown) {
+      return { index, success: false, error: errorMessage(err) };
     }
   };
 

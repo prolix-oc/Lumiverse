@@ -13,13 +13,17 @@ import GroupChatCreatorModal from './GroupChatCreatorModal'
 import AddGroupMemberModal from '@/components/chat/AddGroupMemberModal'
 import ManageChatsModal from './ManageChatsModal'
 import ChatPickerModal from './ChatPickerModal'
+import MemoryCortexDiagnosticsModal from './MemoryCortexDiagnosticsModal'
 import PermissionRequestModal from './PermissionRequestModal'
 import CommandPalette from './CommandPalette'
 import RegexEditorModal from './RegexEditorModal'
 import RegexImportModal from './RegexImportModal'
 import RegenFeedbackModal from './RegenFeedbackModal'
 import PersonaAddonsModal from './PersonaAddonsModal'
+import GlobalAddonsLibraryModal from './GlobalAddonsLibraryModal'
 import GroupSettingsModal from './GroupSettingsModal'
+import CustomCSSModal from './CustomCSSModal'
+import { DreamWeaverStudio } from '@/components/dream-weaver/DreamWeaverStudio'
 
 export default function ModalContainer() {
   const settingsModalOpen = useStore((s) => s.settingsModalOpen)
@@ -52,7 +56,10 @@ export default function ModalContainer() {
             modalProps.onConfirm?.()
             closeModal()
           }}
-          onCancel={closeModal}
+          onCancel={() => {
+            modalProps.onCancel?.()
+            closeModal()
+          }}
           secondaryText={modalProps.secondaryText}
           onSecondary={modalProps.onSecondary ? () => {
             modalProps.onSecondary?.()
@@ -97,20 +104,35 @@ export default function ModalContainer() {
       {activeModal === 'regexEditor' && <RegexEditorModal />}
       {activeModal === 'regexImport' && <RegexImportModal />}
       {activeModal === 'personaAddons' && <PersonaAddonsModal />}
+      {activeModal === 'globalAddonsLibrary' && <GlobalAddonsLibraryModal />}
       {activeModal === 'groupSettings' && <GroupSettingsModal />}
+      {activeModal === 'memoryCortexDiagnostics' && (
+        <MemoryCortexDiagnosticsModal
+          chatId={modalProps.chatId}
+          onClose={closeModal}
+        />
+      )}
 
       {activeModal === 'regenFeedback' && (
         <RegenFeedbackModal
+          defaultValue={useStore.getState().lastRegenFeedback}
           onSubmit={(feedback) => {
+            useStore.getState().setLastRegenFeedback(feedback)
             modalProps.onSubmit?.(feedback)
             closeModal()
           }}
           onSkip={() => {
+            useStore.getState().setLastRegenFeedback('')
             modalProps.onSkip?.()
             closeModal()
           }}
           onCancel={closeModal}
         />
+      )}
+
+      {activeModal === 'customCSS' && <CustomCSSModal />}
+      {activeModal === 'dreamWeaverStudio' && modalProps.sessionId && (
+        <DreamWeaverStudio sessionId={modalProps.sessionId} />
       )}
 
       <PermissionRequestModal />

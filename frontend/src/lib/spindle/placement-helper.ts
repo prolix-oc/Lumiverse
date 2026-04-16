@@ -49,6 +49,9 @@ export function createDrawerTabHandle(
     setTitle(title: string) {
       getStore().updateDrawerTab(tabId, { title })
     },
+    setShortName(shortName: string) {
+      getStore().updateDrawerTab(tabId, { shortName })
+    },
     setBadge(text: string | null) {
       getStore().updateDrawerTab(tabId, { badge: text })
     },

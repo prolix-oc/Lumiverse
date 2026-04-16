@@ -16,8 +16,31 @@ const tickets = new Map<string, WsTicket>();
 const TICKET_TTL_MS = 30_000; // 30 seconds
 const SWEEP_INTERVAL_MS = 60_000;
 
+// The sweep timer is started lazily on first ticket issuance instead of at
+// module-import time. The previous unconditional setInterval kept Node/Bun
+// from exiting cleanly in test runs that imported the module but never called
+// stopTicketSweep().
+let _sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureSweepTimer(): void {
+  if (_sweepTimer) return;
+  _sweepTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of tickets) {
+      if (now > entry.expires) {
+        tickets.delete(key);
+      }
+    }
+  }, SWEEP_INTERVAL_MS);
+  // Don't keep the process alive on this timer alone.
+  if (typeof (_sweepTimer as { unref?: () => void }).unref === "function") {
+    (_sweepTimer as { unref: () => void }).unref();
+  }
+}
+
 /** Issue a new single-use ticket for the given user. */
 export function issueTicket(userId: string): string {
+  ensureSweepTimer();
   const ticket = crypto.randomUUID();
   tickets.set(ticket, { userId, expires: Date.now() + TICKET_TTL_MS });
   return ticket;
@@ -34,16 +57,6 @@ export function consumeTicket(ticket: string): string | null {
   if (Date.now() > entry.expires) return null;
   return entry.userId;
 }
-
-// Periodically sweep expired tickets to prevent memory leaks
-let _sweepTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of tickets) {
-    if (now > entry.expires) {
-      tickets.delete(key);
-    }
-  }
-}, SWEEP_INTERVAL_MS);
 
 export function stopTicketSweep(): void {
   if (_sweepTimer) {

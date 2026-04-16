@@ -9,7 +9,6 @@
 # Stage 1: Build frontend (Vite + TypeScript)
 # ---------------------------------------------------------------------------
 FROM oven/bun:1-slim AS frontend-build
-
 WORKDIR /app/frontend
 
 # Install dependencies first (cache layer)
@@ -34,6 +33,26 @@ RUN bun install --production --frozen-lockfile 2>/dev/null || bun install --prod
 # Stage 3: Runtime
 # ---------------------------------------------------------------------------
 FROM oven/bun:1-slim
+
+# CA_REFRESH: cache-busting marker for the apt layer below. Bump (or pass via
+# --build-arg) to force apt-get to re-fetch the `ca-certificates` package so the
+# image's TLS trust store stays current. The scheduled CI job passes an ISO
+# week value (e.g., "2026-W15") so this layer is rebuilt at least weekly, which
+# keeps Mozilla root CA updates flowing through without requiring a Lumiverse
+# version bump. Bun reads /etc/ssl/certs/ca-certificates.crt for outbound TLS,
+# so keeping that file fresh is what fixes "unable to verify the first
+# certificate" and similar failures talking to LLM / MCP / OAuth endpoints.
+ARG CA_REFRESH=unset
+RUN echo "ca-refresh: ${CA_REFRESH}" \
+    && apt-get update \
+    && apt-get install --no-install-recommends --no-install-suggests -y \
+         git \
+         ca-certificates \
+    && update-ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
 
 LABEL org.opencontainers.image.title="Lumiverse"
 LABEL org.opencontainers.image.description="AI chat application server"

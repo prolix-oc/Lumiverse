@@ -66,6 +66,7 @@ export default function RegexEditorModal() {
 
   // Local state mirrors script for editing
   const [name, setName] = useState('')
+  const [userScriptId, setUserScriptId] = useState('')
   const [findRegex, setFindRegex] = useState('')
   const [replaceString, setReplaceString] = useState('')
   const [flags, setFlags] = useState('gi')
@@ -89,6 +90,7 @@ export default function RegexEditorModal() {
   useEffect(() => {
     if (script) {
       setName(script.name)
+      setUserScriptId(script.script_id || '')
       setFindRegex(script.find_regex)
       setReplaceString(script.replace_string)
       setFlags(script.flags)
@@ -127,6 +129,7 @@ export default function RegexEditorModal() {
     try {
       await updateRegexScript(scriptId, {
         name: name.trim(),
+        script_id: userScriptId,
         find_regex: findRegex,
         replace_string: replaceString,
         flags,
@@ -145,7 +148,7 @@ export default function RegexEditorModal() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message)
     }
-  }, [scriptId, name, findRegex, replaceString, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal])
+  }, [scriptId, name, userScriptId, findRegex, replaceString, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal])
 
   if (!script) return null
 
@@ -175,6 +178,22 @@ export default function RegexEditorModal() {
             <div className={clsx(styles.field, styles.fieldGrow)}>
               <label className={styles.fieldLabel}>Name</label>
               <input className={styles.fieldInput} value={name} onChange={(e) => setName(e.target.value)} placeholder="Script name" />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>
+                Script ID
+                <span className={styles.fieldHint}>for macros</span>
+              </label>
+              <input
+                className={clsx(styles.fieldInput, styles.monoText)}
+                value={userScriptId}
+                onChange={(e) => setUserScriptId(
+                  e.target.value.toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '')
+                )}
+                placeholder="e.g. censor"
+                spellCheck={false}
+                autoComplete="off"
+              />
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Folder</label>

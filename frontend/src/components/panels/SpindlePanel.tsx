@@ -1,12 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal, GitBranch } from 'lucide-react'
+import { RefreshCw, RotateCw, Trash2, Github, Plus, ChevronDown, Download, FolderOpen, SlidersHorizontal } from 'lucide-react'
+import { IconVersions } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { toast } from '@/lib/toast'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
 
@@ -42,6 +45,9 @@ export default function SpindlePanel() {
   const spindlePrivileged = useStore((s) => s.spindlePrivileged)
 
   const extensionOperationStatus = useStore((s) => s.extensionOperationStatus)
+  const setOperationStatus = useStore((s) => s.setExtensionOperationStatus)
+  const bulkUpdateStatus = useStore((s) => s.bulkUpdateStatus)
+  const updateAllExtensions = useStore((s) => s.updateAllExtensions)
 
   const isPrivileged = spindlePrivileged || user?.role === 'owner' || user?.role === 'admin'
 
@@ -50,9 +56,11 @@ export default function SpindlePanel() {
   const [installing, setInstalling] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
   const [loadingAction, setLoadingAction] = useState<string | null>(null)
+
   const [importingLocal, setImportingLocal] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const [confirmUpdateAllOpen, setConfirmUpdateAllOpen] = useState(false)
 
   // Branch selection for install
   const [installBranches, setInstallBranches] = useState<string[]>([])
@@ -71,6 +79,13 @@ export default function SpindlePanel() {
   })
   const addMenuRef = useRef<HTMLDivElement | null>(null)
   const addMenuButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  /** True when any operation (local or WS-driven) is in progress for this extension */
+  const isExtBusy = useCallback((id: string) =>
+    loadingAction === id ||
+    (extensionOperationStatus?.extensionId === id && extensionOperationStatus.operation.endsWith('ing')),
+    [loadingAction, extensionOperationStatus]
+  )
 
   useEffect(() => {
     loadExtensions()
@@ -179,15 +194,17 @@ export default function SpindlePanel() {
   }, [enableExtension, disableExtension])
 
   const handleUpdate = useCallback(async (ext: ExtensionInfo) => {
-    setLoadingAction(ext.id)
+    // Set status optimistically — don't wait for the WS round-trip from the
+    // backend, which may be blocked by heavy git/npm work on the event loop.
+    setOperationStatus(ext.id, 'updating', ext.name)
     try {
       await updateExtension(ext.id)
+      setOperationStatus(ext.id, 'updated', ext.name)
     } catch (err: any) {
       console.error('[Spindle] Update failed:', err)
-    } finally {
-      setLoadingAction(null)
+      setOperationStatus(ext.id, 'failed', ext.name)
     }
-  }, [updateExtension])
+  }, [updateExtension, setOperationStatus])
 
   const handleRestart = useCallback(async (ext: ExtensionInfo) => {
     setLoadingAction(ext.id)
@@ -260,6 +277,44 @@ export default function SpindlePanel() {
     }
   }, [grantPermission, revokePermission])
 
+  // Extensions the current user is allowed to update. Matches the backend's
+  // canManageExtension rule: owner/admin can update everything, regular users
+  // can only update their own user-scoped installs.
+  const manageableExtensions = extensions.filter((ext) => {
+    const meta = (ext.metadata as any) || {}
+    const scope = (meta.install_scope || 'operator') as 'operator' | 'user'
+    const installedBy = (meta.installed_by_user_id || null) as string | null
+    return isPrivileged || (scope === 'user' && !!user?.id && installedBy === user.id)
+  })
+  const manageableCount = manageableExtensions.length
+
+  const bulkUpdating = !!bulkUpdateStatus && !bulkUpdateStatus.done
+  const bulkProcessed = bulkUpdateStatus
+    ? bulkUpdateStatus.completed + bulkUpdateStatus.failed
+    : 0
+  // While an extension is actively being updated, show its 1-indexed
+  // position (e.g. "1/3" when the first is in flight) rather than the
+  // count-of-finished (which would start at 0). Once everything is done,
+  // fall back to the finished count.
+  const bulkDisplayIndex = bulkUpdateStatus?.currentName
+    ? Math.min(bulkProcessed + 1, bulkUpdateStatus.total)
+    : bulkProcessed
+
+  const handleUpdateAll = useCallback(() => {
+    if (manageableCount === 0) return
+    setConfirmUpdateAllOpen(true)
+  }, [manageableCount])
+
+  const handleConfirmUpdateAll = useCallback(async () => {
+    setConfirmUpdateAllOpen(false)
+    try {
+      await updateAllExtensions()
+    } catch (err: any) {
+      const msg = err?.body?.error || err?.message || 'Failed to start bulk update'
+      toast.error(msg, { title: 'Update All' })
+    }
+  }, [updateAllExtensions])
+
   const handleImportLocal = useCallback(async () => {
     setImportingLocal(true)
     setImportSummary(null)
@@ -317,9 +372,33 @@ export default function SpindlePanel() {
       <SpindleUIControlPanel />
 
       {/* Extensions list */}
-      <span className={styles.sectionLabel}>
-        Installed ({extensions.length})
-      </span>
+      <div className={styles.listHeaderRow}>
+        <span className={styles.sectionLabel}>
+          Installed ({extensions.length})
+        </span>
+        {manageableCount > 0 && (
+          <button
+            type="button"
+            className={styles.updateAllBtn}
+            onClick={handleUpdateAll}
+            disabled={bulkUpdating}
+            title={bulkUpdating ? 'Bulk update in progress' : 'Pull + rebuild every manageable extension'}
+          >
+            {bulkUpdating ? (
+              <>
+                <Spinner size={12} fast />
+                Updating {bulkDisplayIndex}/{bulkUpdateStatus?.total ?? manageableCount}
+                {bulkUpdateStatus?.currentName ? `: ${bulkUpdateStatus.currentName}` : '…'}
+              </>
+            ) : (
+              <>
+                <RefreshCw size={12} />
+                Update All
+              </>
+            )}
+          </button>
+        )}
+      </div>
 
       {extensions.length === 0 ? (
         <div className={styles.emptyState}>
@@ -365,7 +444,7 @@ export default function SpindlePanel() {
                     {scopeLabel}
                     {isNonDefaultBranch && (
                       <span className={styles.branchBadge}>
-                        <GitBranch size={10} /> {extBranch}
+                        <IconVersions size={10} /> {extBranch}
                       </span>
                     )}
                   </span>
@@ -378,7 +457,7 @@ export default function SpindlePanel() {
                       ext.enabled ? styles.toggleOn : styles.toggleOff
                     )}
                     onClick={() => handleToggle(ext)}
-                    disabled={loadingAction === ext.id || !canManage}
+                    disabled={isExtBusy(ext.id) || !canManage}
                     title={canManage ? (ext.enabled ? 'Disable' : 'Enable') : 'Managed by operator'}
                   />
                 </div>
@@ -437,18 +516,18 @@ export default function SpindlePanel() {
                 <Button
                   size="icon" variant="ghost"
                   onClick={() => handleUpdate(ext)}
-                  disabled={loadingAction === ext.id || !canManage}
+                  disabled={isExtBusy(ext.id) || !canManage}
                   title={canManage ? 'Update' : 'Managed by operator'}
-                  icon={loadingAction === ext.id && extensionOperationStatus?.operation === 'updating'
+                  icon={extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'updating'
                     ? <Spinner size={14} fast />
                     : <RefreshCw size={14} />}
                 />
                 <Button
                   size="icon" variant="ghost"
                   onClick={() => handleRestart(ext)}
-                  disabled={loadingAction === ext.id || !ext.enabled}
+                  disabled={isExtBusy(ext.id) || !ext.enabled}
                   title={ext.enabled ? 'Restart extension' : 'Extension is not enabled'}
-                  icon={loadingAction === ext.id && extensionOperationStatus?.operation === 'restarting'
+                  icon={extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'restarting'
                     ? <Spinner size={14} fast />
                     : <RotateCw size={14} />}
                 />
@@ -468,9 +547,9 @@ export default function SpindlePanel() {
                     size="icon" variant="ghost"
                     className={clsx(branchMenuExtId === ext.id && styles.actionBtnActive)}
                     onClick={() => handleOpenBranchMenu(ext)}
-                    disabled={loadingAction === ext.id}
+                    disabled={isExtBusy(ext.id)}
                     title="Switch branch"
-                    icon={<GitBranch size={14} />}
+                    icon={<IconVersions size={14} />}
                   />
                 )}
                 <Button
@@ -483,7 +562,7 @@ export default function SpindlePanel() {
                 <Button
                   size="icon" variant="danger-ghost"
                   onClick={() => handleRemove(ext)}
-                  disabled={loadingAction === ext.id || !canManage}
+                  disabled={isExtBusy(ext.id) || !canManage}
                   title={canManage ? 'Remove' : 'Managed by operator'}
                   icon={<Trash2 size={14} />}
                 />
@@ -505,9 +584,9 @@ export default function SpindlePanel() {
                           b === branchMenuCurrent && styles.branchMenuItemCurrent
                         )}
                         onClick={() => b !== branchMenuCurrent && handleSwitchBranch(ext, b)}
-                        disabled={b === branchMenuCurrent || loadingAction === ext.id}
+                        disabled={b === branchMenuCurrent || isExtBusy(ext.id)}
                       >
-                        <GitBranch size={12} />
+                        <IconVersions size={12} />
                         {b}
                         {b === branchMenuCurrent && <span className={styles.branchCurrentLabel}>current</span>}
                       </button>
@@ -560,7 +639,7 @@ export default function SpindlePanel() {
         {!fetchingBranches && installBranches.length > 1 && (
           <div className={styles.branchSelect}>
             <label className={styles.branchSelectLabel}>
-              <GitBranch size={11} /> Branch
+              <IconVersions size={11} /> Branch
             </label>
             <select
               className={styles.branchSelectInput}
@@ -588,6 +667,22 @@ export default function SpindlePanel() {
       </div>,
       document.body
     )}
+    <ConfirmationModal
+      isOpen={confirmUpdateAllOpen}
+      onConfirm={handleConfirmUpdateAll}
+      onCancel={() => setConfirmUpdateAllOpen(false)}
+      title={`Update ${manageableCount} extension${manageableCount === 1 ? '' : 's'}?`}
+      message={
+        <>
+          Each extension will fetch and rebuild from its remote. This can take a
+          while — you can keep using the app while it runs, and progress will
+          show in this panel. Any currently-disabled extensions will still be
+          updated but will stay disabled.
+        </>
+      }
+      variant="safe"
+      confirmText="Update All"
+    />
     </>
   )
 }

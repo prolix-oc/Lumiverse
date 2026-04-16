@@ -93,6 +93,7 @@ export const DEFAULT_SAMPLER_OVERRIDES: SamplerOverrides = {
   frequencyPenalty: null,
   presencePenalty: null,
   repetitionPenalty: null,
+  streaming: true,
 }
 
 export const DEFAULT_CUSTOM_BODY: CustomBody = {
@@ -149,25 +150,33 @@ export const SAMPLER_PARAMS: SamplerParam[] = [
 // PROVIDER PARAMETER SUPPORT
 // ============================================================================
 
+// Keyed on canonical Lumiverse provider IDs (matches `profile.provider` from
+// connection profiles and each backend provider's registration ID). Each set
+// must mirror that provider's `capabilities.parameters` allowlist in
+// `src/llm/providers/*.ts` — parameters not in the backend allowlist are
+// dropped silently before reaching the API, so surfacing them in the UI would
+// be misleading.
 export const PROVIDER_PARAMS: Record<string, Set<string>> = {
   openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
-  azure_openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
-  claude: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
-  makersuite: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
-  vertexai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
+  anthropic: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
+  google: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
+  google_vertex: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
   openrouter: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
-  custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
-  mistralai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
-  cohere: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
-  perplexity: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
-  groq: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   deepseek: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
-  xai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
-  zai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
-  chutes: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'repetitionPenalty']),
-  nanogpt: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'repetitionPenalty']),
+  chutes: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  nanogpt: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  zai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  moonshot: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  mistral: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'minP', 'frequencyPenalty', 'presencePenalty']),
+  ai21: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  perplexity: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  groq: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  xai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   electronhub: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
-  ai21: new Set(['maxTokens', 'contextSize', 'temperature', 'topP']),
+  fireworks: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty']),
+  pollinations: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  siliconflow: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
 }
 
 export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty'])
@@ -176,27 +185,28 @@ export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'tem
 // PROVIDER DISPLAY NAMES
 // ============================================================================
 
+// Keyed on canonical Lumiverse provider IDs (same as PROVIDER_PARAMS above).
 export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   openai: 'OpenAI',
-  azure_openai: 'Azure OpenAI',
-  claude: 'Claude',
-  makersuite: 'Google AI Studio',
-  vertexai: 'Vertex AI',
+  anthropic: 'Claude',
+  google: 'Google AI Studio',
+  google_vertex: 'Vertex AI',
   openrouter: 'OpenRouter',
-  custom: 'Custom',
-  mistralai: 'Mistral',
-  cohere: 'Cohere',
-  perplexity: 'Perplexity',
-  groq: 'Groq',
   deepseek: 'DeepSeek',
-  xai: 'xAI',
   chutes: 'Chutes',
   nanogpt: 'NanoGPT',
-  electronhub: 'ElectronHub',
+  zai: 'Z.AI',
+  moonshot: 'Moonshot',
+  mistral: 'Mistral',
   ai21: 'AI21',
-  textgenerationwebui: 'Text Gen WebUI',
-  kobold: 'KoboldAI',
-  novel: 'NovelAI',
+  perplexity: 'Perplexity',
+  groq: 'Groq',
+  xai: 'xAI',
+  electronhub: 'ElectronHub',
+  fireworks: 'Fireworks',
+  pollinations: 'Pollinations',
+  siliconflow: 'SiliconFlow',
+  custom: 'Custom',
 }
 
 // ============================================================================
@@ -220,6 +230,14 @@ export const PROMPT_TEMPLATES: PromptTemplateItem[] = [
   { name: 'Council Instructions', content: '{{lumiaCouncilInst}}', role: 'system', description: 'Council mode instructions' },
   { name: 'Council Deliberation', content: '{{lumiaCouncilDeliberation}}', role: 'system', description: 'Tool execution results' },
   { name: 'State Synthesis', content: '{{lumiaStateSynthesis}}', role: 'system', description: 'Member state synthesis' },
+  { section: 'Long-Term Memory' },
+  { name: 'Chat Memories', content: '{{memories}}', role: 'system', description: 'Retrieved memory chunks with header' },
+  { name: 'Chat Memories (Raw)', content: '{{memoriesRaw}}', role: 'system', description: 'Memory chunks without header wrapper' },
+  { section: 'Memory Cortex' },
+  { name: 'Entity Snapshots', content: '{{entities}}', role: 'system', description: 'Active entities with facts and relationships' },
+  { name: 'Relationships', content: '{{relationships}}', role: 'system', description: 'Active relationship edges between entities' },
+  { name: 'Story Arc', content: '{{arc}}', role: 'system', description: 'Current narrative arc summary' },
+  { name: 'Top Salience Memory', content: '{{memorySalience}}', role: 'system', description: 'Highest-importance memory from retrieval' },
   { section: 'Character Card' },
   { name: 'Scenario', content: '{{scenario}}', role: 'system', description: 'Character scenario' },
   { name: 'Character Description', content: '{{description}}', role: 'system', description: 'Physical description' },

@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
 import { useStore } from '@/store'
 import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById } from '@/lib/avatarUrls'
@@ -20,10 +21,15 @@ interface MessageListProps {
   isStreaming: boolean
 }
 
+const TOP_LOAD_THRESHOLD = 96
+const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
+
 export default function MessageList({ messages, chatId, isStreaming }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
+  const isProgrammaticScrollRef = useRef(false)
+  const topLoadArmedRef = useRef(true)
   const rafRef = useRef<number>(0)
   const { visibleMessages, hasMore, loadMore, loadingOlder, justPrependedRef } = useChunkedMessages(messages, chatId)
   const lastScrollHeightRef = useRef(0)
@@ -35,6 +41,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (chatId !== prevChatIdRef.current) {
       prevChatIdRef.current = chatId
       setRevealed(false)
+      topLoadArmedRef.current = true
     }
   }, [chatId])
 
@@ -47,6 +54,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingReasoning = useStore((s) => s.streamingReasoning)
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
+  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const streamingError = useStore((s) => s.streamingError)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const autoParse = useStore((s) => s.reasoningSettings.autoParse)
@@ -54,7 +62,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const activePersonaId = useStore((s) => s.activePersonaId)
   const personas = useStore((s) => s.personas)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
+  const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const isImpersonateStream = streamingGenerationType === 'impersonate'
+  const impersonateUserLeft = isImpersonateStream && bubbleUserAlign === 'left'
 
   // The store's appendStreamToken state machine already separates reasoning
   // from content during streaming. Skip the redundant per-frame regex scan
@@ -90,6 +100,42 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const getCharAvatar = isBubble ? getCharacterAvatarLargeUrlById : getCharacterAvatarThumbUrlById
   const getPersonaAvatar = isBubble ? getPersonaAvatarLargeUrlById : getPersonaAvatarThumbUrlById
   const getImgUrl = isBubble ? imagesApi.largeUrl : imagesApi.smallUrl
+  const estimateSize = isBubble ? 260 : 180
+
+  const getItemKey = useCallback(
+    (index: number) => {
+      const message = visibleMessages[index]
+      return message ? `${message.id}:${message.index_in_chat}` : index
+    },
+    [visibleMessages]
+  )
+
+  const rowVirtualizer = useVirtualizer({
+    count: visibleMessages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => estimateSize,
+    overscan: 6,
+    getItemKey,
+  })
+
+  const virtualItems = rowVirtualizer.getVirtualItems()
+  const rangeKey = `${virtualItems[0]?.index ?? -1}:${virtualItems[virtualItems.length - 1]?.index ?? -1}`
+
+  const scrollToHistoryBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = scrollRef.current
+    if (!el || visibleMessages.length === 0) return
+
+    isNearBottomRef.current = true
+    isProgrammaticScrollRef.current = true
+    rowVirtualizer.scrollToIndex(visibleMessages.length - 1, { align: 'end', behavior })
+
+    requestAnimationFrame(() => {
+      const latest = scrollRef.current
+      if (!latest) return
+      isProgrammaticScrollRef.current = true
+      latest.scrollTop = latest.scrollHeight
+    })
+  }, [rowVirtualizer, visibleMessages.length])
 
   const avatarUrl = isImpersonateStream
     ? getPersonaAvatar(activePersonaId, activePersona?.image_id ?? null)
@@ -97,32 +143,30 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       ? getImgUrl(activeChatAvatarId)
       : getCharAvatar(streamCharacterId, streamCharacter?.image_id ?? null)
 
-  // Intersection observer for loading more
-  const sentinelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const sentinel = sentinelRef.current
-    if (!sentinel || !hasMore) return
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) loadMore()
-      },
-      { root: scrollRef.current, rootMargin: '200px' }
-    )
-
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [hasMore, loadMore])
-
-  // Track if user is near bottom
+  // Track if user is near bottom — only update pin state for user-initiated
+  // scrolls so that programmatic auto-scrolls don't fight user intent.
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    const threshold = 150
+
+    if (isProgrammaticScrollRef.current) {
+      isProgrammaticScrollRef.current = false
+      return
+    }
+
+    const threshold = 30
     isNearBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold
-  }, [])
+
+    if (el.scrollTop > TOP_LOAD_THRESHOLD) {
+      topLoadArmedRef.current = true
+    }
+
+    if (el.scrollTop <= TOP_LOAD_THRESHOLD && topLoadArmedRef.current && hasMore && !loadingOlder) {
+      topLoadArmedRef.current = false
+      loadMore()
+    }
+  }, [hasMore, loadingOlder, loadMore])
 
   // Scroll anchoring: when older messages are prepended, adjust scrollTop so
   // the user's viewport stays on the same content instead of jumping to the top.
@@ -134,14 +178,28 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       justPrependedRef.current = false
       const heightDiff = el.scrollHeight - lastScrollHeightRef.current
       if (heightDiff > 0 && lastScrollHeightRef.current > 0) {
+        isProgrammaticScrollRef.current = true
         el.scrollTop += heightDiff
       }
     }
 
     lastScrollHeightRef.current = el.scrollHeight
-  })
 
-  // RAF-batched auto-scroll during streaming
+    if (el.scrollTop > TOP_LOAD_THRESHOLD) {
+      topLoadArmedRef.current = true
+    }
+
+    // If the viewport is still effectively unfilled after prepending a page,
+    // fetch one more page without waiting for another user scroll.
+    if (!loadingOlder && hasMore && el.scrollHeight <= el.clientHeight + TOP_LOAD_THRESHOLD) {
+      topLoadArmedRef.current = false
+      requestAnimationFrame(() => {
+        loadMore()
+      })
+    }
+  }, [virtualItems, justPrependedRef, hasMore, loadingOlder, loadMore])
+
+  // RAF-batched auto-scroll during streaming — skipped when user scrolls up
   useEffect(() => {
     if (!isNearBottomRef.current) return
 
@@ -149,6 +207,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     rafRef.current = requestAnimationFrame(() => {
       const el = scrollRef.current
       if (el) {
+        isProgrammaticScrollRef.current = true
         el.scrollTop = el.scrollHeight
       }
     })
@@ -156,13 +215,95 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     return () => cancelAnimationFrame(rafRef.current)
   }, [messages.length, streamingContent])
 
-  // Scroll to bottom on chat change
+  // The virtualizer renders each row at estimateSize first and measures its
+  // real height asynchronously via ResizeObserver. When the measured height
+  // exceeds the estimate (common for long messages), totalSize grows after
+  // the pin-to-bottom effect above already ran — leaving the tail of the
+  // last message behind the input bar. Re-pin whenever the virtual total
+  // size changes while the user is anchored to the bottom.
+  const virtualTotalSize = rowVirtualizer.getTotalSize()
+  useLayoutEffect(() => {
+    if (!isNearBottomRef.current) return
+    const el = scrollRef.current
+    if (!el) return
+    isProgrammaticScrollRef.current = true
+    el.scrollTop = el.scrollHeight - el.clientHeight
+  }, [virtualTotalSize])
+
+  // Re-pin to bottom when the input safe-zone changes — keyboard opening on
+  // mobile/iOS PWA grows --lcs-input-safe-zone (set as inline style on the
+  // parent chatColumnInner by InputArea's ResizeObserver). Without this, the
+  // last message would stay behind the newly-raised input bar. Also covers
+  // textarea auto-grow and any other input-driven safe-zone changes.
+  useEffect(() => {
+    const el = scrollRef.current
+    const parent = el?.parentElement
+    if (!el || !parent) return
+
+    const settleTimers: number[] = []
+    const clearSettleTimers = () => {
+      while (settleTimers.length) {
+        window.clearTimeout(settleTimers.shift())
+      }
+    }
+
+    const pinToBottom = () => {
+      if (!isNearBottomRef.current) return
+      const latest = scrollRef.current
+      if (!latest) return
+      isProgrammaticScrollRef.current = true
+      latest.scrollTop = latest.scrollHeight - latest.clientHeight
+    }
+
+    // iOS keyboard animation (~250-350ms) fires multiple visualViewport
+    // resize events. A single rAF-pin can land mid-animation, so we pin
+    // immediately AND schedule settling retries to catch the final layout
+    // once the keyboard and safe-zone have settled.
+    const repinIfAnchored = () => {
+      if (!isNearBottomRef.current) return
+      requestAnimationFrame(pinToBottom)
+      clearSettleTimers()
+      settleTimers.push(window.setTimeout(pinToBottom, 180))
+      settleTimers.push(window.setTimeout(pinToBottom, 420))
+    }
+
+    // Inline-style mutations on chatColumnInner carry --lcs-input-safe-zone
+    // updates (set by InputArea's ResizeObserver + visualViewport listener).
+    const mo = new MutationObserver(repinIfAnchored)
+    mo.observe(parent, { attributes: true, attributeFilter: ['style'] })
+
+    // visualViewport resize catches the keyboard directly, in case the
+    // safe-zone lands at the same computed value (e.g., the keyboard's
+    // inset already equals the default fallback).
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', repinIfAnchored)
+    // visualViewport scroll fires on iOS when the page offsets itself to
+    // keep the focused input in view — another moment worth re-pinning.
+    vv?.addEventListener('scroll', repinIfAnchored)
+
+    return () => {
+      mo.disconnect()
+      vv?.removeEventListener('resize', repinIfAnchored)
+      vv?.removeEventListener('scroll', repinIfAnchored)
+      clearSettleTimers()
+    }
+  }, [])
+
+  // Scroll to bottom on chat change — always pin when switching chats
   useEffect(() => {
     const el = scrollRef.current
     if (el) {
+      isNearBottomRef.current = true
+      isProgrammaticScrollRef.current = true
       el.scrollTop = el.scrollHeight
     }
   }, [chatId])
+
+  useEffect(() => {
+    const handleScrollToBottom = () => scrollToHistoryBottom('smooth')
+    window.addEventListener(CHAT_SCROLL_TO_BOTTOM_EVENT, handleScrollToBottom)
+    return () => window.removeEventListener(CHAT_SCROLL_TO_BOTTOM_EVENT, handleScrollToBottom)
+  }, [scrollToHistoryBottom])
 
   // Viewport observer — gate expensive effects (box-shadow, backdrop-filter) to visible cards.
   // When glass is disabled, skip the observer entirely — the backdrop-filter rules won't apply
@@ -198,34 +339,50 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     cards.forEach((card) => observer.observe(card))
 
     return () => observer.disconnect()
-  }, [visibleMessages.length, glassEnabled])
+  }, [glassEnabled, rangeKey])
 
   return (
-    <div className={`${styles.list} ${revealed ? styles.listRevealed : styles.listHidden}`} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
+    <div data-component="MessageList" className={`${styles.list} ${revealed ? styles.listRevealed : styles.listHidden}`} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
-      {hasMore && <div ref={sentinelRef} className={styles.sentinel} />}
       {loadingOlder && (
         <div className={styles.loadingOlder}>Loading older messages...</div>
       )}
-      {visibleMessages.map((message, i) => (
-        <MessageCard
-          key={`${message.id}:${message.index_in_chat}`}
-          message={message}
-          chatId={chatId}
-          depth={visibleMessages.length - 1 - i}
-        />
-      ))}
+      <div
+        className={styles.virtualSpace}
+        style={{ height: rowVirtualizer.getTotalSize() }}
+      >
+        {virtualItems.map((virtualRow) => {
+          const message = visibleMessages[virtualRow.index]
+          if (!message) return null
+
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={rowVirtualizer.measureElement}
+              className={styles.virtualRow}
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
+            >
+              <MessageCard
+                message={message}
+                chatId={chatId}
+                depth={visibleMessages.length - 1 - virtualRow.index}
+              />
+            </div>
+          )
+        })}
+      </div>
 
       {/* Group chat progress bar during nudge loop */}
       {isGroupChat && isNudgeLoopActive && <GroupChatProgressBar />}
 
-      {/* Streaming message bubble — shows tokens as they arrive (only for new messages, not regeneration) */}
-      {isStreaming && !regeneratingMessageId && (streamDisplay || !streamingError) && (() => {
+      {/* Streaming message bubble — shows tokens as they arrive (only for new messages, not regeneration or continue) */}
+      {isStreaming && !regeneratingMessageId && streamingGenerationType !== 'continue' && (streamDisplay || !streamingError) && (() => {
         const bubbleName = isImpersonateStream ? userName : streamDisplayName
         const bubbleStyleClass = isImpersonateStream ? bubbleStyles.user : bubbleStyles.character
         const nameStyleClass = isImpersonateStream ? bubbleStyles.nameUser : bubbleStyles.nameChar
         return (
-          <div className={`${bubbleStyles.card} ${bubbleStyleClass} ${bubbleStyles.streaming}`} data-in-viewport>
+          <div className={`${bubbleStyles.card} ${bubbleStyleClass} ${impersonateUserLeft ? bubbleStyles.userLeft : ''} ${bubbleStyles.streaming}`} data-in-viewport>
             <div className={bubbleStyles.bubble}>
               <div className={bubbleStyles.header}>
                 <div className={bubbleStyles.headerLeft}>
@@ -257,9 +414,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
                 <ReasoningBlock
                   reasoning={streamingReasoning}
                   reasoningDuration={streamingReasoningDuration ?? undefined}
+                  reasoningStartedAt={streamingReasoningStartedAt}
                   isStreaming
                   variant="bubble"
-                  align={isImpersonateStream ? 'right' : undefined}
+                  align={isImpersonateStream && !impersonateUserLeft ? 'right' : undefined}
                 />
               )}
               <div className={bubbleStyles.content}>

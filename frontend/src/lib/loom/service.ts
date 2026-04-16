@@ -41,6 +41,7 @@ export function createBlock(overrides: Partial<PromptBlock> = {}): PromptBlock {
     isLocked: false,
     color: null,
     injectionTrigger: [],
+    categoryMode: null,
     ...overrides,
   }
 }
@@ -74,9 +75,78 @@ function migratePreset(preset: LoomPreset): LoomPreset {
       if (!Array.isArray(block.injectionTrigger)) {
         block.injectionTrigger = []
       }
+      block.categoryMode = block.marker === 'category'
+        ? coerceCategoryMode(block.categoryMode)
+        : null
     }
   }
+  preset.blocks = normalizeCategoryBlockState(preset.blocks || [])
   return preset
+}
+
+function coerceCategoryMode(mode: unknown): PromptBlock['categoryMode'] {
+  return mode === 'radio' || mode === 'checkbox' ? mode : null
+}
+
+export function normalizeCategoryBlockState(
+  blocks: PromptBlock[],
+  preferredBlockIdByCategory?: Map<string, string>,
+): PromptBlock[] {
+  const normalizedBlocks = blocks.map((block) => ({
+    ...block,
+    categoryMode: block.marker === 'category'
+      ? coerceCategoryMode(block.categoryMode)
+      : null,
+  }))
+
+  for (const group of computeGroups(normalizedBlocks)) {
+    if (!group.categoryBlock || group.categoryBlock.categoryMode !== 'radio') continue
+
+    const enabledChildren = group.children.filter((block) => block.enabled)
+    if (enabledChildren.length <= 1) continue
+
+    const preferredId = preferredBlockIdByCategory?.get(group.categoryBlock.id)
+    const keepId = preferredId && enabledChildren.some((block) => block.id === preferredId)
+      ? preferredId
+      : enabledChildren[0].id
+
+    for (let index = 0; index < normalizedBlocks.length; index += 1) {
+      const block = normalizedBlocks[index]
+      if (
+        block.id !== keepId &&
+        group.children.some((child) => child.id === block.id) &&
+        block.enabled
+      ) {
+        normalizedBlocks[index] = { ...block, enabled: false }
+      }
+    }
+  }
+
+  return normalizedBlocks
+}
+
+export function toggleBlockWithCategoryRules(
+  blocks: PromptBlock[],
+  blockId: string,
+): PromptBlock[] {
+  const target = blocks.find((block) => block.id === blockId)
+  if (!target) return blocks
+
+  const categoryGroup = computeGroups(blocks).find((group) => (
+    group.categoryBlock?.categoryMode === 'radio' &&
+    group.children.some((child) => child.id === blockId)
+  ))
+
+  if (!categoryGroup?.categoryBlock) {
+    return blocks.map((block) => (
+      block.id === blockId ? { ...block, enabled: !block.enabled } : block
+    ))
+  }
+
+  return blocks.map((block) => {
+    if (!categoryGroup.children.some((child) => child.id === block.id)) return block
+    return { ...block, enabled: block.id === blockId }
+  })
 }
 
 // ============================================================================
@@ -84,6 +154,7 @@ function migratePreset(preset: LoomPreset): LoomPreset {
 // ============================================================================
 
 export function marshalPreset(loom: LoomPreset): CreatePresetInput {
+  const blocks = normalizeCategoryBlockState(loom.blocks)
   return {
     name: loom.name,
     provider: 'loom',
@@ -91,7 +162,7 @@ export function marshalPreset(loom: LoomPreset): CreatePresetInput {
       samplerOverrides: loom.samplerOverrides,
       customBody: loom.customBody,
     },
-    prompt_order: loom.blocks,
+    prompt_order: blocks,
     prompts: {
       promptBehavior: loom.promptBehavior,
       completionSettings: loom.completionSettings,
@@ -136,13 +207,14 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
 }
 
 export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
+  const blocks = normalizeCategoryBlockState(loom.blocks)
   return {
     name: loom.name,
     parameters: {
       samplerOverrides: loom.samplerOverrides,
       customBody: loom.customBody,
     },
-    prompt_order: loom.blocks,
+    prompt_order: blocks,
     prompts: {
       promptBehavior: loom.promptBehavior,
       completionSettings: loom.completionSettings,
@@ -490,6 +562,129 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
   }
 }
 
+
+/**
+ * Export a Loom preset to SillyTavern-compatible JSON format.
+ * Reverse of importFromSTPreset — maps blocks back to ST prompts/prompt_order
+ * and flattens behavior/sampler settings to ST root-level fields.
+ */
+export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
+  const prompts: Array<Record<string, any>> = []
+  const orderEntries: Array<{ identifier: string; enabled: boolean }> = []
+
+  for (const block of loom.blocks) {
+    // Determine ST identifier — well-known markers use their ST name,
+    // everything else (custom blocks, categories) uses the block's own UUID
+    const markerMapping = block.marker && block.marker !== 'category'
+      ? MARKER_TO_ST_IDENTIFIER[block.marker]
+      : undefined
+    const identifier = markerMapping ?? block.id
+    const isWellKnown = !!markerMapping
+
+    // Map position → injection_position / injection_depth
+    let injection_position = 0
+    let injection_depth = 4
+    if (block.position === 'in_history') {
+      injection_position = 1
+      injection_depth = block.depth
+    } else if (block.position === 'post_history') {
+      injection_position = 1
+      injection_depth = 0
+    }
+
+    // Map role (user_append/assistant_append → base role for ST)
+    const role = block.role === 'user_append' ? 'user'
+      : block.role === 'assistant_append' ? 'assistant'
+      : block.role
+
+    // Build ST prompt entry
+    const stPrompt: Record<string, any> = {
+      identifier,
+      name: block.marker === 'category' && !block.name.startsWith(CATEGORY_MARKER)
+        ? `${CATEGORY_MARKER}${block.name}`
+        : block.name,
+      content: block.content || '',
+      role,
+      enabled: block.enabled,
+      system_prompt: false,
+      marker: isWellKnown,
+      injection_position,
+      injection_depth,
+      injection_order: 100,
+      forbid_overrides: false,
+    }
+
+    // Include injection_trigger for non-marker prompts (maps 1:1 with ST)
+    if (!isWellKnown) {
+      stPrompt.injection_trigger = block.injectionTrigger ?? []
+    }
+
+    prompts.push(stPrompt)
+    orderEntries.push({ identifier, enabled: block.enabled })
+  }
+
+  // Build root-level sampler values
+  const samplers = loom.samplerOverrides ?? DEFAULT_SAMPLER_OVERRIDES
+  const behavior = loom.promptBehavior ?? DEFAULT_PROMPT_BEHAVIOR
+  const completion = loom.completionSettings ?? DEFAULT_COMPLETION_SETTINGS
+  const advanced = loom.advancedSettings ?? DEFAULT_ADVANCED_SETTINGS
+
+  return {
+    // Sampler params at root level (ST convention: these come first)
+    temperature: samplers.temperature ?? 1,
+    frequency_penalty: samplers.frequencyPenalty ?? 0,
+    presence_penalty: samplers.presencePenalty ?? 0,
+    top_p: samplers.topP ?? 1,
+    top_k: samplers.topK ?? 0,
+    top_a: 0,
+    min_p: samplers.minP ?? 0,
+    repetition_penalty: samplers.repetitionPenalty ?? 1,
+    max_context_unlocked: false,
+    openai_max_context: samplers.contextSize ?? 128000,
+    openai_max_tokens: samplers.maxTokens ?? 4096,
+
+    // Behavior prompts
+    names_behavior: completion.namesBehavior ?? 0,
+    send_if_empty: behavior.sendIfEmpty ?? '',
+    impersonation_prompt: behavior.impersonationPrompt ?? '',
+    new_chat_prompt: behavior.newChatPrompt ?? '',
+    new_group_chat_prompt: behavior.newGroupChatPrompt ?? '',
+    new_example_chat_prompt: '',
+    continue_nudge_prompt: behavior.continueNudge ?? '',
+    group_nudge_prompt: behavior.groupNudge ?? '',
+
+    // ST formatting defaults
+    bias_preset_selected: 'Default (none)',
+    wi_format: '{0}',
+    scenario_format: '{{scenario}}',
+    personality_format: '{{personality}}',
+
+    stream_openai: true,
+
+    // Prompt blocks + ordering
+    name: loom.name,
+    prompts,
+    prompt_order: [{ character_id: 100001, order: orderEntries }],
+
+    // Completion settings
+    assistant_prefill: completion.assistantPrefill ?? '',
+    assistant_impersonation: completion.assistantImpersonation ?? '',
+    use_sysprompt: completion.useSystemPrompt ?? true,
+    squash_system_messages: completion.squashSystemMessages ?? false,
+    continue_prefill: completion.continuePrefill ?? false,
+    continue_postfix: completion.continuePostfix ?? ' ',
+    function_calling: completion.enableFunctionCalling ?? false,
+    enable_web_search: completion.enableWebSearch ?? false,
+    media_inlining: completion.sendInlineMedia ?? false,
+
+    // Advanced
+    seed: advanced.seed ?? -1,
+    n: 1,
+    ...(advanced.customStopStrings?.length && {
+      custom_stopping_strings: JSON.stringify(advanced.customStopStrings),
+    }),
+  }
+}
 
 // ============================================================================
 // NEW PRESET FACTORY

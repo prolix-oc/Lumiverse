@@ -118,7 +118,7 @@ async function importGalleryFromUrls(userId: string, characterId: string, urls: 
   const files: File[] = [];
   for (const url of urls) {
     try {
-      const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+      const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
       if (!res.ok) continue;
       const buf = await res.arrayBuffer();
       const contentType = res.headers.get("content-type") || "image/webp";
@@ -238,7 +238,7 @@ async function installFromUrl(
 
   const res = await safeFetch(url, {
     timeoutMs: 30_000,
-    maxBytes: 50 * 1024 * 1024, // 50MB for .charx
+    maxBytes: 100 * 1024 * 1024, // 100MB for .charx
   });
   if (!res.ok) {
     return { requestId, success: false, error: `Failed to fetch URL: ${res.status}`, errorCode: "UNKNOWN" };
@@ -460,7 +460,7 @@ async function installFromChub(
   }
 
   // Fetch from Chub API (same logic as characters.routes.ts fetchChubCharacter)
-  const apiUrl = `https://api.chub.ai/api/characters/${chubPath}?full=true`;
+  const apiUrl = `https://gateway.chub.ai/api/characters/${chubPath}?full=true`;
   const res = await safeFetch(apiUrl, {
     timeoutMs: 15_000,
     headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
@@ -514,7 +514,7 @@ async function installFromChub(
   const avatarUrl = node.max_res_url || node.avatar_url;
   if (avatarUrl) {
     try {
-      const imgRes = await safeFetch(avatarUrl, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024 });
+      const imgRes = await safeFetch(avatarUrl, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
       if (imgRes.ok) {
         const buf = await imgRes.arrayBuffer();
         const contentType = imgRes.headers.get("content-type") || "image/png";
@@ -569,7 +569,7 @@ export async function installWorldbook(
       const resp = await safeFetch(payload.importUrl, {
         headers: { Accept: "application/json" },
         timeoutMs: 15_000,
-        maxBytes: 10 * 1024 * 1024,
+        maxBytes: 100 * 1024 * 1024,
       });
 
       if (!resp.ok) {

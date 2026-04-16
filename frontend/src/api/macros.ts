@@ -27,8 +27,24 @@ export interface MacroCatalogResponse {
   categories: { category: string; macros: MacroCatalogEntry[] }[]
 }
 
+export interface MacroBatchResolveRequest {
+  templates: Record<string, string>
+  chat_id?: string
+  character_id?: string
+  persona_id?: string
+  connection_id?: string
+}
+
+export interface MacroBatchResolveResponse {
+  resolved: Record<string, string>
+}
+
 export function resolveMacros(req: MacroResolveRequest): Promise<MacroResolveResponse> {
   return post('/macros/resolve', req)
+}
+
+export function resolveMacrosBatch(req: MacroBatchResolveRequest): Promise<MacroBatchResolveResponse> {
+  return post('/macros/resolve-batch', req)
 }
 
 export function getMacroCatalog(): Promise<MacroCatalogResponse> {

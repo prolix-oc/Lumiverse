@@ -7,6 +7,7 @@
  */
 
 import { lookup, resolve4, resolve6 } from "dns/promises";
+import { dns as bunDns } from "bun";
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -15,6 +16,23 @@ export class SSRFError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SSRFError";
+  }
+}
+
+/**
+ * Pin Bun's fetch DNS cache to the IPs we just validated. Without this,
+ * validateHost() and the subsequent fetch() perform two independent DNS
+ * lookups, leaving a TOCTOU window where a short-TTL record can flip a
+ * public hostname to a private IP between checks. `Bun.dns.prefetch`
+ * populates the same cache that fetch consults, closing that window for
+ * the lifetime of the cached entry.
+ */
+function pinDnsCache(hostname: string, port: number): void {
+  try {
+    bunDns.prefetch(hostname, port);
+  } catch {
+    // prefetch is documented as experimental; if it ever throws (e.g. on
+    // bare IPs), validation has already happened so we just skip pinning.
   }
 }
 
@@ -176,6 +194,15 @@ export async function safeFetch(
     }
 
     await validateHost(parsed.hostname);
+    // Warm Bun's DNS cache with the validated answer so the connect() that
+    // fetch performs immediately below does not re-resolve and potentially
+    // hit a flipped record.
+    const port = parsed.port
+      ? parseInt(parsed.port, 10)
+      : parsed.protocol === "https:"
+        ? 443
+        : 80;
+    pinDnsCache(parsed.hostname, port);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

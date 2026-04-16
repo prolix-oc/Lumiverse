@@ -4,7 +4,7 @@ import { getTextContent, type GenerationRequest, type GenerationResponse, type S
 
 // ── Service account JWT → OAuth2 access token ──────────────────────────────
 
-interface ServiceAccountCredentials {
+export interface ServiceAccountCredentials {
   type: string;
   project_id: string;
   private_key_id: string;
@@ -24,6 +24,37 @@ const TOKEN_REFRESH_MARGIN = 300; // refresh 5 min before expiry
 
 /** Per-connection token cache keyed by client_email. */
 const tokenCache = new Map<string, CachedToken>();
+
+/**
+ * Cap on cached tokens. Long-running deployments that rotate through many
+ * service accounts (e.g. a multi-tenant Vertex setup) used to grow this map
+ * without bound. We evict the oldest entry by insertion order when the cap
+ * is hit, and a periodic sweep drops entries that have already expired so
+ * idle accounts don't squat on cache slots.
+ */
+const TOKEN_CACHE_MAX = 256;
+const TOKEN_CACHE_SWEEP_MS = 5 * 60 * 1000;
+let _vertexSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureVertexCacheSweep(): void {
+  if (_vertexSweepTimer) return;
+  _vertexSweepTimer = setInterval(() => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [key, entry] of tokenCache) {
+      if (entry.expiresAt <= now) tokenCache.delete(key);
+    }
+  }, TOKEN_CACHE_SWEEP_MS);
+  if (typeof (_vertexSweepTimer as { unref?: () => void }).unref === "function") {
+    (_vertexSweepTimer as { unref: () => void }).unref();
+  }
+}
+
+export function stopVertexTokenSweep(): void {
+  if (_vertexSweepTimer) {
+    clearInterval(_vertexSweepTimer);
+    _vertexSweepTimer = null;
+  }
+}
 
 function base64urlEncode(input: string | ArrayBuffer): string {
   const bytes = typeof input === "string"
@@ -74,7 +105,8 @@ async function createSignedJwt(sa: ServiceAccountCredentials): Promise<string> {
   return `${signingInput}.${base64urlEncode(signature)}`;
 }
 
-async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
+export async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
+  ensureVertexCacheSweep();
   const now = Math.floor(Date.now() / 1000);
   const cached = tokenCache.get(sa.client_email);
   if (cached && now < cached.expiresAt - TOKEN_REFRESH_MARGIN) {
@@ -99,12 +131,20 @@ async function getAccessToken(sa: ServiceAccountCredentials): Promise<string> {
     accessToken: data.access_token,
     expiresAt: now + data.expires_in,
   };
+  // FIFO eviction once we hit the cap. We refresh the entry below so a
+  // currently-active service account never gets evicted in favor of a colder
+  // one (we delete then re-set, which moves to the back of insertion order).
+  if (tokenCache.size >= TOKEN_CACHE_MAX && !tokenCache.has(sa.client_email)) {
+    const oldest = tokenCache.keys().next();
+    if (!oldest.done) tokenCache.delete(oldest.value);
+  }
+  tokenCache.delete(sa.client_email);
   tokenCache.set(sa.client_email, token);
   return token.accessToken;
 }
 
 /** Parse the service account JSON stored as the "API key" secret. */
-function parseServiceAccount(apiKey: string): ServiceAccountCredentials {
+export function parseServiceAccount(apiKey: string): ServiceAccountCredentials {
   try {
     const sa = JSON.parse(apiKey);
     if (!sa.private_key || !sa.client_email || !sa.project_id) {
@@ -114,6 +154,55 @@ function parseServiceAccount(apiKey: string): ServiceAccountCredentials {
   } catch (e: any) {
     throw new Error(`Invalid service account JSON: ${e.message}`);
   }
+}
+
+/**
+ * Resolve the API hostname for a given Vertex AI location.
+ *
+ * Per Google's @google/genai SDK (`_api_client.ts`):
+ *   - `global`  → `https://aiplatform.googleapis.com/` (un-prefixed)
+ *   - regional  → `https://{location}-aiplatform.googleapis.com/`
+ *
+ * There is no `global-aiplatform.googleapis.com` host — that was an
+ * incorrect guess. All Vertex operations (generate, stream, list publishers)
+ * use the same host pattern.
+ */
+export function vertexHostForLocation(location: string): string {
+  if (!location || location === "global") return "https://aiplatform.googleapis.com";
+  return `https://${location}-aiplatform.googleapis.com`;
+}
+
+/**
+ * List Vertex AI locations available to the service account's project.
+ * Uses the global endpoint since the caller doesn't have a region yet.
+ */
+export async function listVertexLocations(apiKey: string): Promise<string[]> {
+  const sa = parseServiceAccount(apiKey);
+  const accessToken = await getAccessToken(sa);
+  const allLocations: string[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams();
+    if (pageToken) params.set("pageToken", pageToken);
+    const url = `https://aiplatform.googleapis.com/v1/projects/${sa.project_id}/locations${params.toString() ? `?${params}` : ""}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Failed to list Vertex AI locations (${res.status}): ${err}`);
+    }
+    const data = (await res.json()) as any;
+    const locations: any[] = data.locations || [];
+    for (const loc of locations) {
+      const id: string = loc.locationId || loc.name?.split("/").pop() || "";
+      if (id) allLocations.push(id);
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return allLocations.sort();
 }
 
 // ── Provider implementation ────────────────────────────────────────────────
@@ -138,34 +227,32 @@ export class GoogleVertexProvider implements LlmProvider {
     modelListStyle: "none", // Vertex model list requires project/location — handled in listModels()
   };
 
-  /** Build the Vertex AI base URL (global endpoint). */
-  private endpointBase(apiUrl: string, projectId: string, location: string): string {
-    let base = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
-    // Strip any path the user may have appended
-    base = base.replace(/\/v1(beta1)?\/projects(\/.*)?$/, "");
-    base = base.replace(/\/v1(beta1)?$/, "");
-    return `${base}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
+  /** Build the Vertex AI base URL for model operations (generate, stream, etc.). */
+  private endpointBase(projectId: string, location: string): string {
+    const host = vertexHostForLocation(location);
+    return `${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
   }
 
-  /** Extract project_id and location from the connection metadata stored alongside the service account. */
+  /** Strip resource-name prefixes so only the bare model ID hits the URL path. */
+  private sanitizeModelId(model: string): string {
+    return model
+      .replace(/^publishers\/google\/models\//, "")
+      .replace(/^projects\/[^/]+\/locations\/[^/]+\/publishers\/google\/models\//, "")
+      .replace(/^models\//, "");
+  }
+
+  /** Extract project_id and location from the resolved API URL. */
   private resolveProjectConfig(apiKey: string, apiUrl: string): { sa: ServiceAccountCredentials; projectId: string; location: string } {
     const sa = parseServiceAccount(apiKey);
-    // The connection's api_url may encode location as metadata, or we default to us-central1.
-    // Convention: users can store location in the api_url query string ?location=xxx
-    // or we parse it from the URL if it matches the regional pattern.
-    let location = "us-central1";
+    // Location is encoded in the URL by resolveEffectiveApiUrl (from metadata.vertex_region).
+    // Regional: https://{location}-aiplatform.googleapis.com  →  extract location
+    // Global:   https://aiplatform.googleapis.com             →  "global" (default)
+    let location = "global";
     const parsedUrl = apiUrl || this.defaultUrl;
-    // Check for regional endpoint pattern: https://{location}-aiplatform.googleapis.com
     const regionalMatch = parsedUrl.match(/^https?:\/\/([a-z0-9-]+)-aiplatform\.googleapis\.com/);
     if (regionalMatch) {
       location = regionalMatch[1];
     }
-    // Also allow explicit ?location= query param override
-    try {
-      const u = new URL(parsedUrl);
-      const locParam = u.searchParams.get("location");
-      if (locParam) location = locParam;
-    } catch { /* not a valid URL, use default */ }
 
     return { sa, projectId: sa.project_id, location };
   }
@@ -173,8 +260,9 @@ export class GoogleVertexProvider implements LlmProvider {
   async generate(apiKey: string, apiUrl: string, request: GenerationRequest): Promise<GenerationResponse> {
     const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
     const accessToken = await getAccessToken(sa);
-    const base = this.endpointBase(apiUrl, projectId, location);
-    const url = `${base}/${request.model}:generateContent`;
+    const base = this.endpointBase(projectId, location);
+    const model = this.sanitizeModelId(request.model);
+    const url = `${base}/${model}:generateContent`;
     const body = this.buildBody(request);
 
     const res = await fetch(url, {
@@ -233,8 +321,9 @@ export class GoogleVertexProvider implements LlmProvider {
   ): AsyncGenerator<StreamChunk, void, unknown> {
     const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
     const accessToken = await getAccessToken(sa);
-    const base = this.endpointBase(apiUrl, projectId, location);
-    const url = `${base}/${request.model}:streamGenerateContent?alt=sse`;
+    const base = this.endpointBase(projectId, location);
+    const model = this.sanitizeModelId(request.model);
+    const url = `${base}/${model}:streamGenerateContent?alt=sse`;
     const body = this.buildBody(request);
 
     const res = await fetch(url, {
@@ -321,41 +410,70 @@ export class GoogleVertexProvider implements LlmProvider {
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
-      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      const base = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
-      // Test with a lightweight models list call
-      const url = `${base}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
+      const host = vertexHostForLocation(location);
+      // See listModels() for URL rationale. The publisher-list endpoint is
+      // un-prefixed (no project/location in the path) and lives at v1beta1.
+      const url = `${host}/v1beta1/publishers/google/models?pageSize=1`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
+      if (!res.ok) {
+        const err = await res.text();
+        console.error(`[Vertex AI] validateKey failed (${res.status}): ${err}`);
+      }
       return res.ok;
-    } catch {
+    } catch (e) {
+      console.error("[Vertex AI] validateKey error:", e);
       return false;
     }
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
     try {
-      const { sa, projectId, location } = this.resolveProjectConfig(apiKey, apiUrl);
+      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
       const accessToken = await getAccessToken(sa);
-      const base = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
-      const url = `${base}/v1/projects/${projectId}/locations/${location}/publishers/google/models`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!res.ok) return [];
-      const data = (await res.json()) as any;
-      return (data.models || [])
-        .map((m: any) => {
-          // Vertex returns full resource names like "publishers/google/models/gemini-2.5-flash"
+      const host = vertexHostForLocation(location);
+      const allModels: string[] = [];
+      let pageToken: string | undefined;
+
+      do {
+        const params = new URLSearchParams();
+        if (pageToken) params.set("pageToken", pageToken);
+        // List base (publisher) models. Per Google's @google/genai SDK
+        // (`_api_client.ts` → `shouldPrependVertexProjectPath`):
+        //   "For base models Vertex does not accept a project/location
+        //    prefix (for tuned models the prefix is required)."
+        // So the URL is un-prefixed and sits at v1beta1 (the SDK's default
+        // version for Vertex; the v1 surface does not expose this list).
+        //   →  {host}/v1beta1/publishers/google/models
+        const url = `${host}/v1beta1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          console.error(`[Vertex AI] listModels failed (${res.status}): ${err}`);
+          break;
+        }
+        const data = (await res.json()) as any;
+        // Response may use `publisherModels`, `models`, or `tunedModels`
+        // depending on the surface — mirrors tExtractModels() in the SDK.
+        const models: any[] = data.publisherModels || data.models || data.tunedModels || [];
+        for (const m of models) {
+          // Names are "publishers/google/models/{id}".
           const name: string = m.name || "";
-          const shortName = name.replace(/^publishers\/google\/models\//, "").replace(/^models\//, "");
-          return shortName || name;
-        })
-        .filter((n: string) => n.includes("gemini"))
-        .sort();
-    } catch {
+          const shortName = name.replace(/^publishers\/google\/models\//, "");
+          const id = shortName || name;
+          if (id) allModels.push(id);
+        }
+        pageToken = data.nextPageToken;
+      } while (pageToken);
+
+      return allModels.sort();
+    } catch (e) {
+      console.error("[Vertex AI] listModels error:", e);
       return [];
     }
   }
@@ -377,7 +495,7 @@ export class GoogleVertexProvider implements LlmProvider {
     });
   }
 
-  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage"]);
+  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming"]);
 
   private static readonly HANDLED_PARAMS = new Set([
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",
@@ -436,13 +554,13 @@ export class GoogleVertexProvider implements LlmProvider {
 
     // Default safety settings: disable all content filters unless the user
     // has already provided their own safetySettings via passthrough.
+    // Vertex AI uses "OFF" (not "BLOCK_NONE" which is the AI Studio value).
     if (!body.safetySettings) {
       body.safetySettings = [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
       ];
     }
 
@@ -454,16 +572,6 @@ export class GoogleVertexProvider implements LlmProvider {
           parameters: t.parameters,
         })),
       }];
-    } else {
-      // Insert dummy thought signature on model parts when tools are NOT in use.
-      // This bypasses Google's thought signature validator for non-tool contexts.
-      for (const entry of body.contents) {
-        if (entry.role === "model") {
-          for (const part of entry.parts) {
-            part.thoughtSignature = "context_engineering_is_the_way_to_go";
-          }
-        }
-      }
     }
 
     return body;

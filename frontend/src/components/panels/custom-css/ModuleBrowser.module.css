@@ -1,0 +1,120 @@
+.browser {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.headerLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--lumiverse-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chevron {
+  color: var(--lumiverse-text-dim);
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.searchInput {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-sm);
+  background: var(--lumiverse-bg-deep);
+  color: var(--lumiverse-text);
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--lumiverse-transition-fast);
+}
+
+.searchInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.searchInput::placeholder {
+  color: var(--lumiverse-text-hint);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.categoryLabel {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--lumiverse-text-hint);
+  padding: 6px 0 2px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: var(--lumiverse-radius-sm);
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.item:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.itemLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.itemName {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lumiverse-text);
+  font-family: var(--lumiverse-font-mono);
+}
+
+.itemDesc {
+  font-size: 10px;
+  color: var(--lumiverse-text-dim);
+}
+
+.parts {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.partBadge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--lumiverse-fill-light);
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono);
+}

@@ -9,6 +9,9 @@ export interface ExpressionSlot {
   imageId: string
 }
 
+/** Multi-character expression groups: characterName → { cleanLabel → imageId } */
+export type ExpressionGroups = Record<string, Record<string, string>>
+
 export type ExpressionDisplaySize = 'small' | 'medium' | 'large' | 'custom'
 
 export const EXPRESSION_SIZE_PRESETS: Record<

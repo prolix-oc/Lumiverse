@@ -210,6 +210,79 @@
   color: var(--lumiverse-text-hint);
 }
 
+/* ── Multi-character group tabs ──────────────────────────────────────────── */
+
+.groupTabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  scrollbar-width: thin;
+}
+
+.groupTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.groupTab:hover {
+  color: var(--lumiverse-text);
+}
+
+.groupTabActive {
+  composes: groupTab;
+  color: var(--lumiverse-text);
+  border-bottom-color: var(--lumiverse-primary);
+}
+
+.groupTabCount {
+  font-size: 10px;
+  color: var(--lumiverse-text-hint);
+  background: var(--lumiverse-fill);
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.groupDeleteBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.groupDeleteBtn:hover {
+  border-color: var(--lumiverse-danger, #e53e3e);
+  color: var(--lumiverse-danger, #e53e3e);
+}
+
 .uploading {
   font-size: 11px;
   color: var(--lumiverse-primary);

@@ -37,6 +37,14 @@ export interface CreateCharacterInput {
 
 export type UpdateCharacterInput = Partial<CreateCharacterInput>;
 
+/**
+ * Returns the effective name used for prompt/macro resolution.
+ * Uses `extensions.alternate_character_name` if set, otherwise falls back to the true name.
+ */
+export function getEffectiveCharacterName(character: Character): string {
+  return (character.extensions?.alternate_character_name as string)?.trim() || character.name;
+}
+
 export interface CharacterSummary {
   id: string;
   name: string;

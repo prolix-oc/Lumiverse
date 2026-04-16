@@ -11,6 +11,7 @@ class EventBus {
   private listeners = new Map<EventType, Set<Listener>>();
   /** Per-user visibility: true if at least one session reports visible. */
   private userVisibility = new Map<string, Map<string, boolean>>();
+  private userAllHiddenSince = new Map<string, number>();
 
   /** Store the Bun server reference so we can use native publish(). */
   setServer(server: import("bun").Server<unknown>): void {
@@ -119,6 +120,7 @@ class EventBus {
       this.userVisibility.set(userId, new Map());
     }
     this.userVisibility.get(userId)!.set(sessionId, visible);
+    this.updateUserVisibilityState(userId);
   }
 
   /**
@@ -127,9 +129,13 @@ class EventBus {
    */
   removeSessionVisibility(userId: string, sessionId: string): void {
     const sessions = this.userVisibility.get(userId);
-    if (!sessions) return;
+    if (!sessions) {
+      this.userAllHiddenSince.set(userId, Date.now());
+      return;
+    }
     sessions.delete(sessionId);
     if (sessions.size === 0) this.userVisibility.delete(userId);
+    this.updateUserVisibilityState(userId);
   }
 
   /**
@@ -145,8 +151,58 @@ class EventBus {
     return false;
   }
 
+  getUserVisibilitySnapshot(userId: string): {
+    totalSessions: number;
+    visibleSessions: number;
+    hiddenSessions: number;
+    isVisible: boolean;
+    allHiddenSince: number | null;
+  } {
+    const sessions = this.userVisibility.get(userId);
+    const totalSessions = sessions?.size ?? 0;
+    let visibleSessions = 0;
+    if (sessions) {
+      for (const visible of sessions.values()) {
+        if (visible) visibleSessions++;
+      }
+    }
+
+    // No write here — `allHiddenSince` is set by updateUserVisibilityState
+    // whenever a session transitions to hidden. Reading the snapshot used to
+    // also stamp the timer, which mixed observation and mutation in the same
+    // call and left subtle behavior depending on who polled first.
+    let allHiddenSince: number | null = null;
+    if (visibleSessions === 0) {
+      allHiddenSince = this.userAllHiddenSince.get(userId) ?? null;
+    }
+
+    return {
+      totalSessions,
+      visibleSessions,
+      hiddenSessions: Math.max(totalSessions - visibleSessions, 0),
+      isVisible: visibleSessions > 0,
+      allHiddenSince,
+    };
+  }
+
+  private updateUserVisibilityState(userId: string): void {
+    if (this.isUserVisible(userId)) {
+      this.userAllHiddenSince.delete(userId);
+      return;
+    }
+
+    if (!this.userAllHiddenSince.has(userId)) {
+      this.userAllHiddenSince.set(userId, Date.now());
+    }
+  }
+
   get clientCount(): number {
     return this.clientToUser.size;
+  }
+
+  /** Returns the set of unique user IDs with at least one active WS connection. */
+  getConnectedUserIds(): string[] {
+    return [...new Set(this.clientToUser.values())];
   }
 }
 

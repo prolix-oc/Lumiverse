@@ -218,18 +218,30 @@
   background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.25));
 }
 
+.categoryMeta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  cursor: pointer;
+}
+
 .categoryName {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--lumiverse-text-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .categoryCount {
   font-size: 10px;
   color: var(--lumiverse-text-dim);
-  margin-left: 4px;
+  flex-shrink: 0;
 }
 
 /* ============================================================================
@@ -291,6 +303,19 @@
   color: var(--lumiverse-primary-muted);
   line-height: 1;
   border: 1px solid var(--lumiverse-primary-010);
+}
+
+.groupBadge {
+  font-size: 8px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text-dim);
+  border: 1px solid var(--lumiverse-border);
+  line-height: 1.2;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ============================================================================
@@ -673,6 +698,13 @@
   touch-action: none;
 }
 
+/* Invisible hit area — 44px min touch target (Apple HIG / WCAG 2.5.8) */
+.sliderTrack::before {
+  content: '';
+  position: absolute;
+  inset: -19px 0;
+}
+
 .sliderFill {
   position: absolute;
   top: 0;
@@ -965,6 +997,24 @@
   color: var(--lumiverse-primary);
 }
 
+.profileBtnDismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 1px 2px;
+  border-radius: 3px;
+  opacity: 0.5;
+  transition: all var(--lumiverse-transition-fast);
+  cursor: pointer;
+}
+
+.profileBtnDismiss:hover {
+  opacity: 1;
+  background: var(--lumiverse-danger-010, rgba(239, 68, 68, 0.12));
+  color: var(--lumiverse-danger, #ef4444);
+}
+
 .profileSourceBadge {
   font-size: 9px;
   font-weight: 600;
@@ -1017,30 +1067,124 @@
    CREATE PRESET MODAL
    ============================================================================ */
 
-.createOverlay {
-  position: fixed;
-  inset: 0;
-  bottom: calc(0px - var(--ios-viewport-offset, 0px));
-  background: var(--lumiverse-modal-backdrop);
+/* ── Preset Name Modal (create / rename) ── */
+
+.presetNameModal {
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 40px var(--lumiverse-primary-020);
+}
+
+.presetNameHeader {
   display: flex;
   align-items: center;
-  justify-content: center;
-  z-index: 10000;
+  gap: 10px;
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
 }
 
-.createDialog {
-  background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
+.presetNameTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--lumiverse-text);
+  letter-spacing: -0.01em;
+}
+
+.presetNameBody {
+  padding: 16px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.presetNameInput {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--lcs-radius-sm, 8px);
   border: 1px solid var(--lumiverse-border);
-  border-radius: 16px;
-  padding: 24px;
-  width: 340px;
-  box-shadow: var(--lumiverse-shadow-lg);
+  background: var(--lumiverse-bg-dark);
+  color: var(--lumiverse-text);
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  transition: border-color var(--lumiverse-transition-fast);
+  box-sizing: border-box;
 }
 
-.createTitle {
-  margin: 0 0 16px;
-  font-size: 16px;
+.presetNameInput::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.presetNameInput:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+}
+
+.presetNameActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.presetNameBtn {
+  padding: 8px 18px;
+  border-radius: var(--lcs-radius-sm, 8px);
+  font-size: 12.5px;
   font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--lumiverse-border);
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.presetNameBtnCancel {
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+}
+
+.presetNameBtnCancel:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--lumiverse-text);
+}
+
+.presetNameBtnSubmit {
+  background: var(--lumiverse-primary-015, rgba(147, 112, 219, 0.15));
+  color: var(--lumiverse-primary-text, #c4b5fd);
+  border-color: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+}
+
+.presetNameBtnSubmit:hover {
+  background: var(--lumiverse-primary-025, rgba(147, 112, 219, 0.25));
+  border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+}
+
+.presetNameBtnSubmit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (max-width: 480px) {
+  .presetNameModal {
+    border-radius: 14px 14px 0 0;
+  }
+
+  .presetNameHeader {
+    padding: 16px 18px 12px;
+  }
+
+  .presetNameBody {
+    padding: 12px 18px 18px;
+  }
+
+  .presetNameActions {
+    flex-direction: column-reverse;
+  }
+
+  .presetNameActions .presetNameBtn {
+    width: 100%;
+    text-align: center;
+  }
 }
 
 /* ============================================================================
@@ -1215,4 +1359,5 @@
   align-items: center;
   gap: 4px;
 }
+
 

@@ -23,7 +23,7 @@ An external API bridge that fetches data through the CORS proxy and displays res
 ```ts
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 
-spindle.onFrontendMessage(async (payload: any) => {
+spindle.onFrontendMessage(async (payload: any, userId) => {
   if (payload.type === 'fetch_external') {
     try {
       const result = await spindle.cors(payload.url, {
@@ -34,13 +34,13 @@ spindle.onFrontendMessage(async (payload: any) => {
         type: 'external_result',
         requestId: payload.requestId,
         data: result,
-      })
+      }, userId)
     } catch (err: any) {
       spindle.sendToFrontend({
         type: 'external_error',
         requestId: payload.requestId,
         error: err.message,
-      })
+      }, userId)
     }
   }
 })

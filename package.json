@@ -1,39 +1,50 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.7.6",
-  "type": "module",
-  "scripts": {
-    "dev": "bun run --watch src/index.ts",
-    "start": "bun run src/index.ts",
-    "setup": "bun run scripts/setup-wizard.ts",
-    "runner": "bun run scripts/runner.tsx",
-    "runner:dev": "bun run scripts/runner.tsx -- --dev",
-    "start:all": "bun run build:frontend && FRONTEND_DIR=$(cd ../LumiverseFrontend/dist && pwd) bun run start",
-    "build:frontend": "cd frontend && bun install && bun run build",
-    "reset-password": "bun run scripts/reset-password.ts",
-    "migrate:st": "bun run scripts/migrate-sillytavern.ts",
-    "release": "bash scripts/release.sh",
-    "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts"
-  },
+  "version": "0.9.0",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "@lenml/tokenizer-claude": "^3.7.2",
     "@lenml/tokenizers": "^3.7.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@mozilla/readability": "^0.6.0",
     "@msgpack/msgpack": "^3.1.2",
+    "@opentelemetry/api": "^1.9.1",
     "@pushforge/builder": "^2.0.1",
+    "apache-arrow": "^21.1.0",
     "better-auth": "^1.5.3",
     "fflate": "^0.8.2",
     "gpt-tokenizer": "^2.8.1",
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.16",
-    "lumiverse-spindle-types": "0.3.7",
-    "sharp": "^0.34.5"
+    "jsdom": "^29.0.1",
+    "lumiverse-spindle-types": "0.4.21",
+    "sharp": "^0.34.5",
+    "ssh2-sftp-client": "^12.1.1"
   },
   "devDependencies": {
-    "@inkjs/ui": "^2.0.0",
-    "@types/react": "^19.2.14",
-    "bun-types": "^1.3.10",
-    "ink": "^6.8.0",
-    "react": "^19.2.4"
-  }
+    "@types/jsdom": "^28.0.1",
+    "@types/ssh2-sftp-client": "^9.0.6",
+    "bun-types": "^1.3.10"
+  },
+  "overrides": {
+    "lru-cache": "11.2.7"
+  },
+  "resolutions": {
+    "lru-cache": "11.2.7"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "setup": "bun run scripts/setup-wizard.ts",
+    "runner": "bun run scripts/runner.ts",
+    "runner:dev": "bun run scripts/runner.ts -- --dev",
+    "start:all": "bun run build:frontend && FRONTEND_DIR=$(cd ../LumiverseFrontend/dist && pwd) bun run start",
+    "build:frontend": "cd frontend && bun install && bun run build:checked",
+    "build:frontend:fast": "cd frontend && bun install && bun run build",
+    "reset-password": "bun run scripts/reset-password.ts",
+    "migrate:st": "bun run scripts/migrate-sillytavern.ts",
+    "release": "bash scripts/release.sh",
+    "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts"
+  },
+  "type": "module"
 }

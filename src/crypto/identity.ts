@@ -16,10 +16,14 @@
  * To recover the key the backend reverses the XOR mask and verifies the HMAC.
  * Without knowledge of the derivation tag the file is indistinguishable from
  * 104 bytes of random data.
+ *
+ * All file I/O uses Bun-native APIs (Bun.file / Bun.write) for reliable
+ * cross-platform behavior, including Termux/Android where Node's fs module
+ * with explicit mode flags can fail on non-POSIX filesystems.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { mkdirSync, chmodSync } from "node:fs";
+import { dirname } from "node:path";
 
 const MAGIC = new Uint8Array([0x89, 0x4c, 0x4d, 0x56]); // \x89LMV
 const VERSION = 0x01;
@@ -102,7 +106,23 @@ export async function createIdentityFile(filePath: string, rawKey?: Uint8Array):
   file.set(integrity, 72);
 
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, file, { mode: 0o600 });
+  await Bun.write(filePath, file);
+
+  // Set restrictive permissions where the filesystem supports it.
+  // Android/Termux storage and other non-POSIX filesystems may not honor chmod.
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {
+    // Non-fatal: filesystem doesn't support Unix permissions
+  }
+
+  // Verify the write actually persisted
+  const written = Bun.file(filePath);
+  if (!(await written.exists()) || written.size !== FILE_SIZE) {
+    throw new Error(
+      `Failed to write identity file — expected ${FILE_SIZE} bytes, got ${written.size}: ${filePath}`
+    );
+  }
 
   return key;
 }
@@ -112,7 +132,13 @@ export async function createIdentityFile(filePath: string, rawKey?: Uint8Array):
  * Throws on corruption, wrong version, or integrity failure.
  */
 export async function readIdentityFile(filePath: string): Promise<Uint8Array> {
-  const file = new Uint8Array(readFileSync(filePath));
+  const bunFile = Bun.file(filePath);
+  if (!(await bunFile.exists())) {
+    throw new Error(`Identity file not found: ${filePath}`);
+  }
+
+  const buffer = await bunFile.arrayBuffer();
+  const file = new Uint8Array(buffer);
 
   if (file.length !== FILE_SIZE) {
     throw new Error(`Identity file is ${file.length} bytes, expected ${FILE_SIZE}`);
@@ -203,7 +229,7 @@ export interface ResolvedIdentity {
  */
 export async function resolveIdentity(identityPath: string, envKeyHex: string): Promise<ResolvedIdentity> {
   // 1. Identity file exists
-  if (existsSync(identityPath)) {
+  if (await Bun.file(identityPath).exists()) {
     const key = await readIdentityFile(identityPath);
     return { key, keyHex: bytesToHex(key), source: "file" };
   }

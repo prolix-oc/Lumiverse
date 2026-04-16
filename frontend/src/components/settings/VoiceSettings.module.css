@@ -1,0 +1,181 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Section cards ─────────────────────────────────────────────────── */
+
+.section {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--lumiverse-fill-subtle);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.sectionHeaderActions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+/* ── Rows inside sections ──────────────────────────────────────────── */
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  border-top: 1px solid var(--lumiverse-border);
+  gap: 12px;
+}
+
+.rowVertical {
+  display: flex;
+  flex-direction: column;
+  padding: 9px 14px;
+  border-top: 1px solid var(--lumiverse-border);
+  gap: 6px;
+}
+
+.toggleRow {
+  padding: 9px 14px;
+  border-top: 1px solid var(--lumiverse-border);
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.toggleRow:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.toggleRowDisabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ── Labels ────────────────────────────────────────────────────────── */
+
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lumiverse-text-muted);
+  flex-shrink: 0;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+  margin-top: 2px;
+}
+
+/* ── Form controls ─────────────────────────────────────────────────── */
+
+.select {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary);
+}
+
+.rangeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  max-width: 220px;
+}
+
+.rangeSlider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--lumiverse-primary);
+  height: 4px;
+}
+
+.rangeValue {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* ── Action buttons ────────────────────────────────────────────────── */
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.actionBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.actionBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.actionBtnPrimary {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.actionBtnPrimary:hover {
+  background: rgba(147, 112, 219, 0.08);
+  color: var(--lumiverse-primary);
+}
+
+/* ── Subsection title ──────────────────────────────────────────────── */
+
+.subHeader {
+  padding: 8px 14px 4px;
+  border-top: 1px solid var(--lumiverse-border);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--lumiverse-text-dim);
+}
+
+/* ── Empty / info ──────────────────────────────────────────────────── */
+
+.infoBox {
+  padding: 12px 14px;
+  border-top: 1px solid var(--lumiverse-border);
+  font-size: 12px;
+  color: var(--lumiverse-text-dim);
+  line-height: 1.5;
+}

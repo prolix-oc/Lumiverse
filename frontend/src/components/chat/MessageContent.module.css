@@ -94,7 +94,6 @@
 
 :global([data-glass]) .codeBlock {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .codeHeader {
@@ -351,8 +350,8 @@
 .proseImageWrap {
   display: inline-block;
   margin: 8px 0;
-  max-width: 240px;
-  max-height: 240px;
+  max-width: var(--prose-image-max-width, 240px);
+  max-height: var(--prose-image-max-height, 240px);
   overflow: hidden;
   border-radius: var(--lcs-radius-sm);
   border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
@@ -374,7 +373,7 @@
 .prose img {
   display: block;
   max-width: 100%;
-  max-height: 240px;
+  max-height: var(--prose-image-max-height, 240px);
   object-fit: contain;
   border-radius: var(--lcs-radius-sm);
   cursor: pointer;

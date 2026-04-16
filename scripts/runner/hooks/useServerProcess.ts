@@ -28,7 +28,7 @@ let _activeProc: ReturnType<typeof Bun.spawn> | null = null;
 export function killServerProcess(): void {
   if (_activeProc) {
     try {
-      _activeProc.kill("SIGTERM");
+      _activeProc.kill();
     } catch {
       // Process may already be dead
     }
@@ -59,7 +59,7 @@ export function useServerProcess(
       const proc = procRef.current;
       if (proc) {
         try {
-          proc.kill("SIGTERM");
+          proc.kill();
         } catch {
           // already dead
         }
@@ -168,13 +168,13 @@ export function useServerProcess(
     setState("stopping");
     addLog("Stopping server...", "system");
 
-    proc.kill("SIGTERM");
+    proc.kill();
 
     // Force kill after timeout
     const timeout = setTimeout(() => {
       if (procRef.current) {
         addLog("Force killing server (timeout)...", "system");
-        procRef.current.kill("SIGKILL");
+        procRef.current.kill();
       }
     }, STOP_FORCE_KILL_MS);
 

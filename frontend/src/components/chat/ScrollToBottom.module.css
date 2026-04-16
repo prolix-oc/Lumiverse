@@ -29,7 +29,6 @@
 
 :global([data-glass]) .btn {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 :global([data-select-mode]) .btn {

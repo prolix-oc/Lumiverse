@@ -6,7 +6,7 @@ import { EventType } from "../ws/events";
 const runningExtensions = new Map<string, WorkerHost>();
 
 export async function startAllExtensions(): Promise<void> {
-  const extensions = managerSvc.getEnabledExtensions();
+  const extensions = await managerSvc.getEnabledExtensions();
   console.log(`[Spindle] Starting ${extensions.length} extension(s)...`);
 
   for (const ext of extensions) {
@@ -46,16 +46,16 @@ export async function startExtension(id: string): Promise<void> {
     return;
   }
 
-  const ext = managerSvc.getExtension(id);
+  const ext = await managerSvc.getExtension(id);
   if (!ext) throw new Error(`Extension not found: ${id}`);
 
   // Sync manifest from disk → DB before starting (picks up spindle.json edits)
-  managerSvc.syncManifestToDb(ext.identifier);
+  await managerSvc.syncManifestToDb(ext.identifier);
 
   try {
     // Re-fetch after sync in case permissions/metadata changed
-    const freshExt = managerSvc.getExtension(id) ?? ext;
-    const manifest = managerSvc.getManifest(freshExt.identifier);
+    const freshExt = (await managerSvc.getExtension(id)) ?? ext;
+    const manifest = await managerSvc.getManifest(freshExt.identifier);
     const host = new WorkerHost(freshExt.id, manifest, freshExt);
     await host.start();
     runningExtensions.set(id, host);

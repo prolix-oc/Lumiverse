@@ -4,8 +4,12 @@ import type { CreateCharacterInput } from "../types/character";
 import type { CreateRegexScriptInput, RegexTarget } from "../types/regex-script";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024; // 10 MB (PNG text chunks)
-const MAX_CHARX_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024; // 100 MB (PNG text chunks)
+const MAX_CHARX_SIZE = 1000 * 1024 * 1024; // 1000 MB
+// Cap on the total bytes produced by .charx ZIP decompression. fflate's
+// unzipSync has no built-in output cap, so a 1 KB compressed file with a 4 GB
+// decompressed payload would otherwise OOM the process.
+const MAX_CHARX_DECOMPRESSED_SIZE = 500 * 1024 * 1024; // 500 MB
 
 /**
  * Reads PNG chunks and extracts the text value for a given keyword.
@@ -88,6 +92,47 @@ function extractPngTextChunk(buffer: Buffer, keyword: string): string | null {
 // ── Image type detection ────────────────────────────────────────────────────
 
 const IMAGE_EXTENSIONS = /\.(png|jpg|jpeg|gif|webp|avif|bmp|svg)$/i;
+
+// ── JPEG+ZIP polyglot detection (RisuAI card format) ─────────────────────────
+
+/**
+ * Scans for a JPEG image followed by an appended ZIP archive (polyglot format).
+ * Returns the byte offset where the ZIP data begins, or -1 if not a polyglot.
+ *
+ * RisuAI stores character cards as JPEG+ZIP polyglots: a small JPEG preview
+ * image is prepended to the ZIP archive. Standard image viewers see the JPEG;
+ * ZIP tools read the central directory from the end and see the archive.
+ * fflate cannot parse these directly — the JPEG prefix must be stripped first.
+ */
+export function findJpegZipBoundary(data: Uint8Array): number {
+  // Must start with JPEG SOI + marker (FF D8 FF)
+  if (data.length < 10 || data[0] !== 0xFF || data[1] !== 0xD8 || data[2] !== 0xFF) {
+    return -1;
+  }
+
+  // Scan for JPEG EOI (FF D9) immediately followed by ZIP local file header (PK\x03\x04).
+  // JPEG portion is typically small (< 5 MB), so cap the scan range.
+  const limit = Math.min(data.length - 5, 10_000_000);
+  for (let i = 2; i < limit; i++) {
+    if (
+      data[i] === 0xFF && data[i + 1] === 0xD9 &&
+      data[i + 2] === 0x50 && data[i + 3] === 0x4B &&
+      data[i + 4] === 0x03 && data[i + 5] === 0x04
+    ) {
+      return i + 2; // ZIP starts right after the EOI marker
+    }
+  }
+
+  return -1;
+}
+
+/**
+ * Lightweight pre-filter: returns true if the buffer starts with a JPEG+ZIP polyglot.
+ * Accepts a partial buffer (first N bytes) for cheap detection before reading the full file.
+ */
+export function looksLikeJpegZipPolyglot(header: Uint8Array): boolean {
+  return findJpegZipBoundary(header) >= 0;
+}
 
 // ── RPack decode (RisuAI byte-substitution obfuscation) ──────────────────────
 
@@ -355,6 +400,115 @@ export interface CharxExpressionAsset {
   file: File;
 }
 
+// ── Multi-character expression group analysis ────────────────────────────────
+
+export interface ExpressionGroupAnalysis {
+  /** True when multiple distinct character groups are detected in the expression assets. */
+  isMultiCharacter: boolean;
+  /**
+   * Character name → { cleanLabel → originalAssetLabel }.
+   * `cleanLabel` is the expression/outfit portion (e.g., "Clothed_angry").
+   * `originalAssetLabel` is the full asset name for risuAssetMap lookup (e.g., "Zhu Yuan_Clothed_angry.webp").
+   * The special key `_default` holds labels that had no character prefix (just outfit_expression).
+   */
+  groups: Record<string, Record<string, string>>;
+}
+
+/**
+ * Analyzes expression asset labels for multi-character grouping patterns.
+ *
+ * Naming convention (RisuAI): `{CharacterName}_{Outfit}_{Expression}.ext`
+ * where character names use spaces (not underscores) and fields are separated by `_`.
+ *
+ * Detection heuristic: split each label on the first `_` and group by prefix.
+ * If ≥3 prefixes share the same suffix count, they are character groups.
+ * Prefixes that also appear as sub-prefixes within other groups' suffixes
+ * are outfit names (e.g., "Nude", "Clothed"), not character names.
+ */
+export function analyzeExpressionGroups(labels: string[]): ExpressionGroupAnalysis {
+  const empty: ExpressionGroupAnalysis = { isMultiCharacter: false, groups: {} };
+  if (labels.length < 10) return empty;
+
+  // First pass: split on first underscore, group by prefix
+  const prefixGroups = new Map<string, string[]>();
+  for (const label of labels) {
+    const idx = label.indexOf("_");
+    if (idx > 0) {
+      const prefix = label.slice(0, idx);
+      const suffix = label.slice(idx + 1);
+      if (!prefixGroups.has(prefix)) prefixGroups.set(prefix, []);
+      prefixGroups.get(prefix)!.push(suffix);
+    }
+  }
+
+  if (prefixGroups.size < 3) return empty;
+
+  // Detect outfit-only prefixes: a prefix P is an outfit if it appears
+  // as a sub-prefix within another group's suffixes (e.g., "Nude" appears
+  // in "Zhu Yuan"'s suffixes as "Nude_angry.webp")
+  const outfitPrefixes = new Set<string>();
+  for (const [, suffixes] of prefixGroups) {
+    for (const suffix of suffixes) {
+      const subIdx = suffix.indexOf("_");
+      if (subIdx > 0) {
+        const subPrefix = suffix.slice(0, subIdx);
+        if (prefixGroups.has(subPrefix)) {
+          outfitPrefixes.add(subPrefix);
+        }
+      }
+    }
+  }
+
+  // Count group sizes to find the dominant pattern (character groups share a size)
+  const sizeToPrefix = new Map<number, string[]>();
+  for (const [prefix, suffixes] of prefixGroups) {
+    if (outfitPrefixes.has(prefix)) continue; // skip outfit-only prefixes
+    const size = suffixes.length;
+    if (!sizeToPrefix.has(size)) sizeToPrefix.set(size, []);
+    sizeToPrefix.get(size)!.push(prefix);
+  }
+
+  // Find the largest cluster of prefixes that share the same suffix count
+  let characterPrefixes: string[] = [];
+  for (const [, prefixes] of sizeToPrefix) {
+    if (prefixes.length > characterPrefixes.length) {
+      characterPrefixes = prefixes;
+    }
+  }
+
+  if (characterPrefixes.length < 3) return empty;
+
+  // Build groups: characterName → { cleanLabel → originalAssetLabel }
+  const characterSet = new Set(characterPrefixes);
+  const groups: Record<string, Record<string, string>> = {};
+
+  for (const [prefix, suffixes] of prefixGroups) {
+    if (!characterSet.has(prefix)) continue;
+    const mapping: Record<string, string> = {};
+    for (const suffix of suffixes) {
+      const cleanLabel = suffix.replace(/\.\w+$/, ""); // strip file extension
+      mapping[cleanLabel] = `${prefix}_${suffix}`;
+    }
+    groups[prefix] = mapping;
+  }
+
+  // Outfit-only labels (no character prefix) → _default group
+  if (outfitPrefixes.size > 0) {
+    const defaultMapping: Record<string, string> = {};
+    for (const outfit of outfitPrefixes) {
+      for (const suffix of prefixGroups.get(outfit) || []) {
+        const cleanLabel = `${outfit}_${suffix}`.replace(/\.\w+$/, "");
+        defaultMapping[cleanLabel] = `${outfit}_${suffix}`;
+      }
+    }
+    if (Object.keys(defaultMapping).length > 0) {
+      groups["_default"] = defaultMapping;
+    }
+  }
+
+  return { isMultiCharacter: true, groups };
+}
+
 export interface BundledRegexScript {
   name: string;
   find_regex: string;
@@ -384,6 +538,10 @@ export interface LumiverseModules {
     defaultExpression: string;
     mappings: Record<string, string>; // label → archive path
   };
+  /** Multi-character expression groups: characterName → { label → archivePath }. */
+  expression_groups?: {
+    groups: Record<string, Record<string, string>>;
+  };
   alternate_fields?: Record<string, Array<{ id: string; label: string; content: string }>>;
   alternate_avatars?: Array<{ id: string; label: string; path: string }>;
   world_books?: Record<string, any>[];
@@ -404,6 +562,10 @@ export interface CharxResult {
   lumiverseModules: LumiverseModules | null;
   /** All image files keyed by their archive path (for Lumiverse module asset lookup). */
   assetFiles: Map<string, File>;
+  /** Multi-character expression grouping analysis, if expression assets were detected. */
+  expressionGroupAnalysis: ExpressionGroupAnalysis | null;
+  /** For JPEG+ZIP polyglots: the JPEG portion as a fallback avatar image. */
+  polyglotJpegAvatar: File | null;
 }
 
 /**
@@ -422,15 +584,42 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
     throw new Error(`CHARX file too large (${(arrayBuf.byteLength / 1024 / 1024).toFixed(1)} MB, max ${MAX_CHARX_SIZE / 1024 / 1024} MB)`);
   }
 
-  const data = new Uint8Array(arrayBuf);
+  let data = new Uint8Array(arrayBuf);
+
+  // Handle JPEG+ZIP polyglot (e.g., RisuAI card files where a JPEG preview
+  // is prepended to the ZIP archive). fflate cannot parse these directly —
+  // the JPEG prefix must be stripped first.
+  let polyglotJpegAvatar: File | null = null;
+  const zipBoundary = findJpegZipBoundary(data);
+  if (zipBoundary > 0) {
+    polyglotJpegAvatar = new File(
+      [data.slice(0, zipBoundary)],
+      "avatar.jpg",
+      { type: "image/jpeg" },
+    );
+    data = data.subarray(zipBoundary);
+  }
 
   // Only decompress card.json, module files, and image files — skip everything else
+  // Track running decompressed size against the cap; throw inside the filter so
+  // fflate aborts before allocating a multi-GB buffer for a zip-bomb payload.
+  let plannedBytes = 0;
   const unzipped = unzipSync(data, {
-    filter: (entry) =>
-      entry.name === "card.json" ||
-      entry.name === "module.risum" ||
-      entry.name === "lumiverse_modules.json" ||
-      IMAGE_EXTENSIONS.test(entry.name),
+    filter: (entry) => {
+      const wanted =
+        entry.name === "card.json" ||
+        entry.name === "module.risum" ||
+        entry.name === "lumiverse_modules.json" ||
+        IMAGE_EXTENSIONS.test(entry.name);
+      if (!wanted) return false;
+      plannedBytes += entry.originalSize ?? 0;
+      if (plannedBytes > MAX_CHARX_DECOMPRESSED_SIZE) {
+        throw new Error(
+          `CHARX archive decompresses to more than ${MAX_CHARX_DECOMPRESSED_SIZE / 1024 / 1024} MB`,
+        );
+      }
+      return true;
+    },
   });
 
   const cardBytes = unzipped["card.json"];
@@ -460,7 +649,7 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
     imagePaths.find((p) => !p.includes("/")) ??
     imagePaths.find((p) => p.startsWith("assets/"));
 
-  const avatarFile = avatarPath
+  let avatarFile = avatarPath
     ? imageFileFromBytes(unzipped[avatarPath], avatarPath)
     : null;
 
@@ -522,5 +711,121 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
     assetFiles.set(p, imageFileFromBytes(unzipped[p], p));
   }
 
-  return { card, avatarFile, galleryFiles, risuModule, expressionAssets, lumiverseModules, assetFiles };
+  // Analyze expression grouping for multi-character detection
+  const expressionGroupAnalysis = expressionAssets.length > 0
+    ? analyzeExpressionGroups(expressionAssets.map((a) => a.label))
+    : null;
+
+  // For polyglot files: use JPEG avatar as fallback if no avatar found in the archive
+  if (!avatarFile && polyglotJpegAvatar) {
+    avatarFile = polyglotJpegAvatar;
+    polyglotJpegAvatar = null; // consumed — don't return as separate field
+  }
+
+  return {
+    card, avatarFile, galleryFiles, risuModule, expressionAssets,
+    lumiverseModules, assetFiles, expressionGroupAnalysis, polyglotJpegAvatar,
+  };
+}
+
+// ── Inline asset reference resolution ────────────────────────────────────────
+
+const INLINE_IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["']/gi;
+const INLINE_MD_IMG_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
+const INLINE_RISU_IMG_RE = /<img="([^"]+)">/gi;
+
+/** Extracts the stem (filename without extension) from a path or filename. */
+export function fileStem(pathOrName: string): string {
+  const base = pathOrName.split("/").pop() || pathOrName;
+  const dotIdx = base.lastIndexOf(".");
+  return dotIdx > 0 ? base.slice(0, dotIdx) : base;
+}
+
+/**
+ * Resolves inline asset references (`embeded://`, relative filenames) in
+ * character text fields to `/api/v1/images/{id}` URLs.
+ *
+ * Called at CharX import time after all archive images have been uploaded.
+ * Builds a multi-level lookup (exact path → basename → stem) to match
+ * references that may differ in path prefix or file extension.
+ *
+ * @param fields Text fields to scan (string or string[] values)
+ * @param assetImageMap Archive path → uploaded image ID
+ * @returns Object with only the fields that were modified (empty if none changed)
+ */
+export function resolveInlineAssetReferences(
+  fields: Record<string, string | string[] | undefined>,
+  assetImageMap: Map<string, string>,
+): Record<string, string | string[]> {
+  if (assetImageMap.size === 0) return {};
+
+  // Build tiered lookup tables — higher priority first
+  const exactLookup = new Map<string, string>();   // full path / embeded:// URI
+  const baseLookup = new Map<string, string>();     // basename (with extension)
+  const stemLookup = new Map<string, string>();     // stem (without extension)
+
+  for (const [archivePath, imageId] of assetImageMap) {
+    const apiUrl = `/api/v1/images/${imageId}`;
+    exactLookup.set(archivePath, apiUrl);
+    exactLookup.set(`embeded://${archivePath}`, apiUrl);
+
+    const basename = archivePath.split("/").pop()!;
+    if (!baseLookup.has(basename)) baseLookup.set(basename, apiUrl);
+
+    const stem = fileStem(basename);
+    if (!stemLookup.has(stem)) stemLookup.set(stem, apiUrl);
+  }
+
+  function resolve(src: string): string | undefined {
+    return exactLookup.get(src)
+      ?? baseLookup.get(src)
+      ?? stemLookup.get(fileStem(src));
+  }
+
+  function resolveText(text: string): string {
+    let result = text;
+
+    // Resolve <img ... src="..."> tags
+    INLINE_IMG_SRC_RE.lastIndex = 0;
+    result = result.replace(INLINE_IMG_SRC_RE, (match, src) => {
+      const resolved = resolve(src);
+      return resolved ? match.replace(src, resolved) : match;
+    });
+
+    // Resolve ![alt](src) markdown images
+    INLINE_MD_IMG_RE.lastIndex = 0;
+    result = result.replace(INLINE_MD_IMG_RE, (match, src) => {
+      const resolved = resolve(src);
+      return resolved ? match.replace(src, resolved) : match;
+    });
+
+    // Resolve Risu-style <img="AssetName"> tags → <img src="/api/v1/images/{id}">
+    INLINE_RISU_IMG_RE.lastIndex = 0;
+    result = result.replace(INLINE_RISU_IMG_RE, (match, assetName) => {
+      const resolved = resolve(assetName);
+      return resolved ? `<img src="${resolved}">` : match;
+    });
+
+    return result;
+  }
+
+  const changes: Record<string, string | string[]> = {};
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (!value) continue;
+    if (typeof value === "string") {
+      const resolved = resolveText(value);
+      if (resolved !== value) changes[key] = resolved;
+    } else if (Array.isArray(value)) {
+      let changed = false;
+      const resolved = value.map((v) => {
+        const r = resolveText(v);
+        if (r !== v) changed = true;
+        return r;
+      });
+      if (changed) changes[key] = resolved;
+    }
+  }
+
+  return changes;
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Puzzle } from 'lucide-react'
+import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw } from 'lucide-react'
+import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
 import { worldBooksApi } from '@/api/world-books'
@@ -13,9 +14,23 @@ import { Button } from '@/components/shared/FormComponents'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { useFolders } from '@/hooks/useFolders'
+import { resolveBinding } from '@/store/slices/personas'
 import type { Persona, WorldBook } from '@/types/api'
 import styles from './PersonaEditor.module.css'
 import clsx from 'clsx'
+
+type PronounField = 'subjective_pronoun' | 'objective_pronoun' | 'possessive_pronoun'
+
+const PRONOUN_FIELDS: Array<{
+  key: PronounField
+  label: string
+  macro: '{{sub}}' | '{{obj}}' | '{{poss}}'
+  placeholder: string
+}> = [
+  { key: 'subjective_pronoun', label: 'Subjective', macro: '{{sub}}', placeholder: 'she' },
+  { key: 'objective_pronoun', label: 'Objective', macro: '{{obj}}', placeholder: 'her' },
+  { key: 'possessive_pronoun', label: 'Possessive', macro: '{{poss}}', placeholder: 'her' },
+]
 
 const POSITION_OPTIONS = [
   { value: 0, label: 'In Prompt' },
@@ -57,6 +72,9 @@ export default function PersonaEditor({
   const [name, setName] = useState(persona.name)
   const [title, setTitle] = useState(persona.title || '')
   const [description, setDescription] = useState(persona.description)
+  const [subjectivePronoun, setSubjectivePronoun] = useState(persona.subjective_pronoun || '')
+  const [objectivePronoun, setObjectivePronoun] = useState(persona.objective_pronoun || '')
+  const [possessivePronoun, setPossessivePronoun] = useState(persona.possessive_pronoun || '')
   const [folder, setFolder] = useState(persona.folder || '')
   const [descPosition, setDescPosition] = useState<number>(persona.metadata?.description_position ?? 0)
   const [descDepth, setDescDepth] = useState<number>(persona.metadata?.description_depth ?? 4)
@@ -78,6 +96,7 @@ export default function PersonaEditor({
   const nameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const titleTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const descTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const pronounTimers = useRef<Partial<Record<PronounField, ReturnType<typeof setTimeout>>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const lastSyncedId = useRef<string | null>(null)
 
@@ -91,6 +110,9 @@ export default function PersonaEditor({
     setName(persona.name)
     setTitle(persona.title || '')
     setDescription(persona.description)
+    setSubjectivePronoun(persona.subjective_pronoun || '')
+    setObjectivePronoun(persona.objective_pronoun || '')
+    setPossessivePronoun(persona.possessive_pronoun || '')
     setFolder(persona.folder || '')
     setDescPosition(persona.metadata?.description_position ?? 0)
     setDescDepth(persona.metadata?.description_depth ?? 4)
@@ -136,6 +158,20 @@ export default function PersonaEditor({
       clearTimeout(descTimer.current)
       descTimer.current = setTimeout(() => {
         onUpdate(persona.id, { description: value })
+      }, 400)
+    },
+    [persona.id, onUpdate]
+  )
+
+  const handlePronounChange = useCallback(
+    (field: PronounField, value: string) => {
+      if (field === 'subjective_pronoun') setSubjectivePronoun(value)
+      if (field === 'objective_pronoun') setObjectivePronoun(value)
+      if (field === 'possessive_pronoun') setPossessivePronoun(value)
+
+      clearTimeout(pronounTimers.current[field])
+      pronounTimers.current[field] = setTimeout(() => {
+        onUpdate(persona.id, { [field]: value })
       }, 400)
     },
     [persona.id, onUpdate]
@@ -241,13 +277,41 @@ export default function PersonaEditor({
 
   // Character-persona binding
   const activeCharName = activeCharacterId ? characters.find((c) => c.id === activeCharacterId)?.name : null
-  const isBoundToActiveChar = activeCharacterId ? characterPersonaBindings[activeCharacterId] === persona.id : false
-  const addonCount = Array.isArray(persona.metadata?.addons) ? persona.metadata.addons.length : 0
+  const rawBinding = activeCharacterId ? characterPersonaBindings[activeCharacterId] : undefined
+  const boundPersonaId = rawBinding ? resolveBinding(rawBinding).personaId : undefined
+  const isBoundToActiveChar = boundPersonaId === persona.id
+  const boundAddonStates = isBoundToActiveChar && rawBinding ? resolveBinding(rawBinding).addonStates : undefined
+  const personaAddonCount = Array.isArray(persona.metadata?.addons) ? persona.metadata.addons.length : 0
+  const globalAddonCount = Array.isArray(persona.metadata?.attached_global_addons) ? persona.metadata.attached_global_addons.length : 0
+  const addonCount = personaAddonCount + globalAddonCount
+
+  /** Build a snapshot of current addon enabled states. */
+  const snapshotAddonStates = useCallback((): Record<string, boolean> => {
+    const states: Record<string, boolean> = {}
+    const addons = persona.metadata?.addons
+    if (Array.isArray(addons)) {
+      for (const a of addons) states[a.id] = a.enabled
+    }
+    const globalRefs = persona.metadata?.attached_global_addons
+    if (Array.isArray(globalRefs)) {
+      for (const r of globalRefs) states[r.id] = r.enabled
+    }
+    return states
+  }, [persona.metadata])
 
   const handleToggleCharacterBinding = useCallback(() => {
     if (!activeCharacterId) return
-    setCharacterPersonaBinding(activeCharacterId, isBoundToActiveChar ? null : persona.id)
-  }, [activeCharacterId, isBoundToActiveChar, persona.id, setCharacterPersonaBinding])
+    if (isBoundToActiveChar) {
+      setCharacterPersonaBinding(activeCharacterId, null)
+    } else {
+      setCharacterPersonaBinding(activeCharacterId, persona.id, snapshotAddonStates())
+    }
+  }, [activeCharacterId, isBoundToActiveChar, persona.id, snapshotAddonStates, setCharacterPersonaBinding])
+
+  const handleRebindAddons = useCallback(() => {
+    if (!activeCharacterId || !isBoundToActiveChar) return
+    setCharacterPersonaBinding(activeCharacterId, persona.id, snapshotAddonStates())
+  }, [activeCharacterId, isBoundToActiveChar, persona.id, snapshotAddonStates, setCharacterPersonaBinding])
 
   return (
     <div className={styles.editor}>
@@ -347,6 +411,41 @@ export default function PersonaEditor({
         </div>
       </div>
 
+      <div className={styles.pronounSection}>
+        <div className={styles.pronounHeader}>
+          <span className={styles.pronounTitle}>Pronouns</span>
+          <span className={styles.pronounHint}>Used by JanitorAI persona macros</span>
+        </div>
+        <div className={styles.pronounGrid}>
+          {PRONOUN_FIELDS.map((field) => {
+            const value =
+              field.key === 'subjective_pronoun'
+                ? subjectivePronoun
+                : field.key === 'objective_pronoun'
+                  ? objectivePronoun
+                  : possessivePronoun
+
+            return (
+              <label key={field.key} className={styles.pronounField}>
+                <span className={styles.pronounLabel}>{field.label}</span>
+                <div className={styles.pronounInputWrap}>
+                  <code className={styles.pronounMacro} aria-hidden="true">
+                    {field.macro}
+                  </code>
+                  <input
+                    type="text"
+                    className={styles.pronounInput}
+                    value={value}
+                    onChange={(e) => handlePronounChange(field.key, e.target.value)}
+                    placeholder={field.placeholder}
+                  />
+                </div>
+              </label>
+            )
+          })}
+        </div>
+      </div>
+
       {/* Folder */}
       <div className={styles.folderRow}>
         <FolderDropdown
@@ -402,8 +501,17 @@ export default function PersonaEditor({
           onClick={() => openModal('personaAddons', { personaId: persona.id, personaName: persona.name })}
           title="Manage persona add-ons"
         >
-          <Puzzle size={13} />
+          <IconPlaylistAdd size={13} />
           <span>Add-Ons{addonCount > 0 ? ` (${addonCount})` : ''}</span>
+        </button>
+        <button
+          type="button"
+          className={styles.toggleBtn}
+          onClick={() => openModal('globalAddonsLibrary')}
+          title="Global add-ons library"
+        >
+          <Globe size={13} />
+          <span>Global Library</span>
         </button>
       </div>
 
@@ -417,7 +525,7 @@ export default function PersonaEditor({
             title={
               isBoundToActiveChar
                 ? `Unbind from ${activeCharName || 'character'}`
-                : `Bind to ${activeCharName || 'character'} — auto-switch to this persona when chatting with them`
+                : `Bind to ${activeCharName || 'character'} — auto-switch to this persona and add-on states when chatting with them`
             }
           >
             <Link size={11} />
@@ -425,6 +533,17 @@ export default function PersonaEditor({
           <span className={clsx(styles.bindingLabel, isBoundToActiveChar && styles.bindingLabelActive)}>
             {isBoundToActiveChar ? `Bound to ${activeCharName}` : `Bind to ${activeCharName}`}
           </span>
+          {isBoundToActiveChar && addonCount > 0 && (
+            <button
+              type="button"
+              className={styles.rebindBtn}
+              onClick={handleRebindAddons}
+              title={`Rebind add-on states to ${activeCharName || 'character'} — snapshot current enabled/disabled states`}
+            >
+              <RefreshCw size={10} />
+              <span>{boundAddonStates ? 'Rebind' : 'Bind'} Add-Ons</span>
+            </button>
+          )}
         </div>
       )}
 

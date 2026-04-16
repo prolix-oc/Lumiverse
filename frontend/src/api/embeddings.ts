@@ -1,5 +1,8 @@
-import { get, put, post } from './client'
+import { get, put, post, type RequestOptions } from './client'
 import type { EmbeddingConfig, ChatMemorySettings, WorldBookReindexResult } from '@/types/api'
+
+/** Embedding operations can be slow (external API + vector DB writes). */
+const LONG: RequestOptions = { timeout: 60_000 }
 
 export const embeddingsApi = {
   getConfig() {
@@ -16,20 +19,22 @@ export const embeddingsApi = {
       dimension: number
       applied_dimensions: number
       config: EmbeddingConfig
-    }>('/embeddings/test', { text })
+    }>('/embeddings/test', { text }, LONG)
   },
 
   reindexWorldBook(bookId: string) {
     return post<WorldBookReindexResult>(
       `/embeddings/world-books/${encodeURIComponent(bookId)}/reindex`,
-      {}
+      {},
+      LONG,
     )
   },
 
   forceReset() {
     return post<{ success: boolean; deleted: boolean; path: string }>(
       '/embeddings/force-reset',
-      {}
+      {},
+      LONG,
     )
   },
 
@@ -44,7 +49,27 @@ export const embeddingsApi = {
   recompileChatMemory(chatId: string) {
     return post<{ success: boolean; totalChunks: number; vectorizedChunks: number; pendingChunks: number }>(
       `/embeddings/chats/${encodeURIComponent(chatId)}/recompile`,
-      {}
+      {},
+      LONG,
     )
   },
+
+  getHealth() {
+    return get<VectorStoreHealth>('/embeddings/health')
+  },
+
+  optimize() {
+    return post<{ success: boolean }>('/embeddings/optimize', {}, LONG)
+  },
+}
+
+export interface VectorStoreHealth {
+  exists: boolean
+  rowCount: number
+  vectorIndexReady: boolean
+  scalarIndexReady: boolean
+  ftsIndexReady: boolean
+  unindexedRowEstimate: number
+  lastIndexRebuildAt: number
+  indexes: Array<{ name: string; type?: string }>
 }

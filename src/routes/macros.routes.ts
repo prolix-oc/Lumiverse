@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { evaluate, buildEnv, resolveGroupCharacterNames, registry, initMacros } from "../macros";
+import { getEffectiveCharacterName } from "../types/character";
 import type { MacroEnv, MacroHandler, MacroDefinition } from "../macros";
 import * as chatsSvc from "../services/chats.service";
 import * as charactersSvc from "../services/characters.service";
@@ -35,6 +36,53 @@ app.post("/resolve", async (c) => {
 
   const result = await evaluate(body.template, env, registry);
   return c.json({ text: result.text, diagnostics: result.diagnostics });
+});
+
+/**
+ * POST /resolve-batch
+ * Resolve multiple macro templates in a single call with a shared environment.
+ * Accepts { templates: Record<string, string>, ...context }.
+ * Returns { resolved: Record<string, string> }.
+ */
+app.post("/resolve-batch", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{
+    templates: Record<string, string>;
+    chat_id?: string;
+    character_id?: string;
+    persona_id?: string;
+    connection_id?: string;
+    dynamic_macros?: Record<string, string>;
+  }>();
+
+  if (!body.templates || typeof body.templates !== "object") {
+    return c.json({ resolved: {} });
+  }
+
+  const entries = Object.entries(body.templates);
+  if (entries.length === 0) {
+    return c.json({ resolved: {} });
+  }
+
+  // Cap at 100 templates per request
+  if (entries.length > 100) {
+    return c.json({ error: "Too many templates (max 100)" }, 400);
+  }
+
+  // Build environment once and reuse for all templates
+  const env = buildEnvFromIds(userId, body);
+  const resolved: Record<string, string> = {};
+
+  for (const [key, template] of entries) {
+    if (!template) {
+      resolved[key] = "";
+      continue;
+    }
+    const result = await evaluate(template, env, registry);
+    resolved[key] = result.text;
+  }
+
+  return c.json({ resolved });
 });
 
 /**
@@ -88,8 +136,10 @@ function buildEnvFromIds(userId: string, body: {
           ? connectionsSvc.getConnection(userId, body.connection_id)
           : connectionsSvc.getDefaultConnection(userId);
 
-        const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) =>
-          charactersSvc.getCharacter(userId, cid)?.name);
+        const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) => {
+          const c = charactersSvc.getCharacter(userId, cid);
+          return c ? getEffectiveCharacterName(c) : undefined;
+        });
         const isGroup = !!chat.metadata?.group;
         return buildEnv({
           character,
@@ -100,7 +150,7 @@ function buildEnvFromIds(userId: string, body: {
           connection,
           dynamicMacros: body.dynamic_macros,
           groupCharacterNames,
-          targetCharacterName: isGroup ? character.name : undefined,
+          targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
       }
     }
@@ -139,6 +189,9 @@ function buildEnvFromIds(userId: string, body: {
     },
     character: {
       name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",
+      personaSubjectivePronoun: persona?.subjective_pronoun || "",
+      personaObjectivePronoun: persona?.objective_pronoun || "",
+      personaPossessivePronoun: persona?.possessive_pronoun || "",
       mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "",
       depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "",
     },
@@ -150,7 +203,7 @@ function buildEnvFromIds(userId: string, body: {
       model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
       lastGenerationType: "normal", isMobile: false,
     },
-    variables: { local: new Map(), global: new Map() },
+    variables: { local: new Map(), global: new Map(), chat: new Map() },
     dynamicMacros: body.dynamic_macros || {},
     extra: {},
   };

@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Download, Upload } from 'lucide-react'
+import { Download, Upload, Code2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { DEFAULT_THEME } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
@@ -15,7 +15,9 @@ import styles from './ThemePanel.module.css'
 export default function ThemePanel() {
   const theme = useStore((s) => s.theme) as ThemeConfig | null
   const setTheme = useStore((s) => s.setTheme)
+  const hasExtensionOverrides = useStore((s) => Object.keys(s.extensionThemeOverrides).length > 0)
 
+  const openModal = useStore((s) => s.openModal)
   const current = theme ?? DEFAULT_THEME
 
   // Always read the latest theme from the store to avoid stale closures
@@ -44,18 +46,22 @@ export default function ThemePanel() {
     [update]
   )
 
+  const clearAllExtensionThemeOverrides = useStore((s) => s.clearAllExtensionThemeOverrides)
+
   const handlePresetSelect = useCallback(
     (preset: ThemeConfig) => {
       // Preserve the user's current mode when selecting any preset
       const latest = getLatest()
+      // Clear extension theme overrides so the preset takes full control
+      clearAllExtensionThemeOverrides()
       setTheme({ ...preset, mode: latest.mode })
     },
-    [setTheme, getLatest]
+    [setTheme, getLatest, clearAllExtensionThemeOverrides]
   )
 
   const handleAccentChange = useCallback(
-    (h: number, s: number) => update({ accent: { h, s, l: current.accent.l } }),
-    [current.accent.l, update]
+    (h: number, s: number, l: number) => update({ accent: { h, s, l } }),
+    [update]
   )
 
   const handleRadiusChange = useCallback(
@@ -70,6 +76,11 @@ export default function ThemePanel() {
 
   const handleFontScaleChange = useCallback(
     (fontScale: number) => update({ fontScale }),
+    [update]
+  )
+
+  const handleUiScaleChange = useCallback(
+    (uiScale: number) => update({ uiScale }),
     [update]
   )
 
@@ -124,7 +135,7 @@ export default function ThemePanel() {
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>Presets</h4>
-        <PresetGrid activeId={current.id} onSelect={handlePresetSelect} />
+        <PresetGrid activeId={hasExtensionOverrides ? '' : current.id} onSelect={handlePresetSelect} />
       </section>
 
       <ExtensionThemes />
@@ -134,6 +145,7 @@ export default function ThemePanel() {
         <AccentPicker
           hue={current.accent.h}
           saturation={current.accent.s}
+          luminance={current.accent.l}
           onChange={handleAccentChange}
         />
       </section>
@@ -152,10 +164,23 @@ export default function ThemePanel() {
           radiusScale={current.radiusScale}
           enableGlass={current.enableGlass}
           fontScale={current.fontScale}
+          uiScale={current.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
           onFontScaleChange={handleFontScaleChange}
+          onUiScaleChange={handleUiScaleChange}
         />
+      </section>
+
+      <section className={styles.section}>
+        <h4 className={styles.sectionLabel}>Advanced</h4>
+        <button
+          type="button"
+          className={styles.actionBtn}
+          onClick={() => openModal('customCSS')}
+        >
+          <Code2 size={12} /> Custom CSS Editor
+        </button>
       </section>
 
       <div className={styles.themeActions}>

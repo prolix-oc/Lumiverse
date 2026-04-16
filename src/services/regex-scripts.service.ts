@@ -12,6 +12,18 @@ import type {
   RegexScope,
   RegexTarget,
 } from "../types/regex-script";
+import type { MacroEnv } from "../macros/types";
+import { evaluate } from "../macros/MacroEvaluator";
+import { registry } from "../macros/MacroRegistry";
+import {
+  regexCollectSandboxed,
+  regexReplaceSandboxed,
+  regexTestSandboxed,
+  RegexTimeoutError,
+  type SandboxMatch,
+} from "../utils/regex-sandbox";
+
+const REGEX_SCRIPT_TIMEOUT_MS = 500;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,12 +34,15 @@ const VALID_FLAGS = new Set(["g", "i", "m", "s", "u"]);
 const VALID_MACRO_MODES = new Set(["none", "raw", "escaped"]);
 const MAX_PATTERN_LENGTH = 10_000;
 
-function rowToRegexScript(row: any): RegexScript {
+export function rowToRegexScript(row: any): RegexScript {
   return {
     ...row,
+    script_id: row.script_id || "",
     placement: JSON.parse(row.placement),
     trim_strings: JSON.parse(row.trim_strings),
     folder: row.folder || "",
+    pack_id: row.pack_id || null,
+    preset_id: row.preset_id || null,
     metadata: JSON.parse(row.metadata),
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
@@ -90,8 +105,25 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
   if (input.substitute_macros !== undefined && !VALID_MACRO_MODES.has(input.substitute_macros)) {
     return `Invalid substitute_macros: ${input.substitute_macros}`;
   }
+  if (input.script_id !== undefined) {
+    input.script_id = normalizeScriptId(input.script_id);
+    if (input.script_id.length > 100) {
+      return "script_id exceeds maximum length (100 characters)";
+    }
+  }
 
   return null;
+}
+
+/**
+ * Normalize a script_id to lowercase alphanumeric + underscores.
+ * Uppercase → lowercase, spaces/hyphens → underscores, strip all other punctuation.
+ */
+function normalizeScriptId(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[\s\-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -149,13 +181,14 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       userId,
       input.name.trim(),
+      input.script_id ?? "",
       input.find_regex,
       input.replace_string ?? "",
       input.flags ?? "gi",
@@ -172,6 +205,8 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
       input.sort_order ?? 0,
       input.description ?? "",
       input.folder ?? "",
+      input.pack_id ?? null,
+      input.preset_id ?? null,
       JSON.stringify(input.metadata ?? {}),
       now,
       now
@@ -201,6 +236,7 @@ export function updateRegexScript(userId: string, id: string, input: UpdateRegex
   const values: any[] = [];
 
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name.trim()); }
+  if (input.script_id !== undefined) { fields.push("script_id = ?"); values.push(input.script_id); }
   if (input.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(input.find_regex); }
   if (input.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(input.replace_string); }
   if (input.flags !== undefined) { fields.push("flags = ?"); values.push(input.flags); }
@@ -244,6 +280,37 @@ export function deleteRegexScript(userId: string, id: string): boolean {
   return false;
 }
 
+/**
+ * Bulk delete a set of regex scripts. Runs in a single transaction and emits
+ * REGEX_SCRIPT_DELETED per removed row. Returns the IDs that were actually
+ * deleted (missing / cross-user IDs are silently skipped).
+ */
+export function deleteRegexScripts(userId: string, ids: string[]): string[] {
+  if (ids.length === 0) return [];
+
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const existingRows = db
+    .query(`SELECT id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...ids) as Array<{ id: string }>;
+  if (existingRows.length === 0) return [];
+
+  const existingIds = existingRows.map((r) => r.id);
+  const existingPlaceholders = existingIds.map(() => "?").join(", ");
+
+  db.transaction(() => {
+    db
+      .query(`DELETE FROM regex_scripts WHERE user_id = ? AND id IN (${existingPlaceholders})`)
+      .run(userId, ...existingIds);
+  })();
+
+  for (const id of existingIds) {
+    eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  }
+
+  return existingIds;
+}
+
 export function duplicateRegexScript(userId: string, id: string): RegexScript | null {
   const existing = getRegexScript(userId, id);
   if (!existing) return null;
@@ -253,13 +320,14 @@ export function duplicateRegexScript(userId: string, id: string): RegexScript | 
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
       userId,
       existing.name + " (Copy)",
+      "", // script_id intentionally blank on duplicate — must be unique
       existing.find_regex,
       existing.replace_string,
       existing.flags,
@@ -321,6 +389,17 @@ export function getCharacterBoundScripts(userId: string, characterId: string): R
   return rows.map(rowToRegexScript);
 }
 
+// ── Lookup by script_id ─────────────────────────────────────────────────────
+
+/** Find a regex script by its user-defined script_id. Returns null if not found or script_id is empty. */
+export function getRegexScriptByScriptId(userId: string, scriptId: string): RegexScript | null {
+  if (!scriptId) return null;
+  const row = getDb()
+    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND script_id = ?")
+    .get(userId, scriptId) as any;
+  return row ? rowToRegexScript(row) : null;
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
 /**
@@ -368,15 +447,131 @@ export function getActiveScripts(
 }
 
 /**
+ * Manually substitute regex capture references ($1, $&, etc.) in a replacement
+ * template using actual match values.  Mirrors String.prototype.replace's
+ * special $ patterns so that macros can see the captured text.
+ */
+export function substituteRegexCaptures(
+  template: string,
+  fullMatch: string,
+  groups: (string | undefined)[],
+  offset: number,
+  input: string,
+  namedGroups?: Record<string, string>,
+): string {
+  return template.replace(
+    /\$(?:(\$)|(&)|(`)|(')|(\d{1,2})|<([^>]*)>)/g,
+    (token, dollar, amp, backtick, quote, digits, name) => {
+      if (dollar !== undefined) return "$";
+      if (amp !== undefined) return fullMatch;
+      if (backtick !== undefined) return input.slice(0, offset);
+      if (quote !== undefined) return input.slice(offset + fullMatch.length);
+      if (digits !== undefined) {
+        const idx = parseInt(digits, 10);
+        if (idx >= 1 && idx <= groups.length) return groups[idx - 1] ?? "";
+        return token;
+      }
+      if (name !== undefined && namedGroups) return namedGroups[name] ?? token;
+      return token;
+    },
+  );
+}
+
+/**
+ * Collect all regex matches from a string, returning match metadata needed
+ * for capture-group substitution.
+ */
+function collectMatches(content: string, regex: RegExp) {
+  const re = new RegExp(regex.source, regex.flags);
+  const matches: { fullMatch: string; index: number; groups: (string | undefined)[]; namedGroups?: Record<string, string> }[] = [];
+
+  if (re.global || re.sticky) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      matches.push({
+        fullMatch: m[0],
+        index: m.index,
+        groups: Array.from(m).slice(1),
+        namedGroups: m.groups,
+      });
+      if (m[0].length === 0) re.lastIndex++;
+    }
+  } else {
+    const m = re.exec(content);
+    if (m) {
+      matches.push({
+        fullMatch: m[0],
+        index: m.index,
+        groups: Array.from(m).slice(1),
+        namedGroups: m.groups,
+      });
+    }
+  }
+
+  return matches;
+}
+
+/**
+ * Rebuild a string by splicing replacements into the original at match positions.
+ */
+function rebuildFromMatches(
+  content: string,
+  matches: { fullMatch: string; index: number }[],
+  replacements: string[],
+): string {
+  let out = "";
+  let lastIdx = 0;
+  for (let i = 0; i < matches.length; i++) {
+    out += content.slice(lastIdx, matches[i].index);
+    out += replacements[i];
+    lastIdx = matches[i].index + matches[i].fullMatch.length;
+  }
+  out += content.slice(lastIdx);
+  return out;
+}
+
+/**
+ * Resolve macros in a regex replacement string based on the substitute_macros mode.
+ * - "none": return as-is
+ * - "raw": resolve macros, result may contain regex back-references ($1, etc.)
+ * - "escaped": resolve macros, then escape $ so no back-references are interpreted
+ */
+async function resolveReplacementMacros(
+  replaceString: string,
+  mode: RegexScript["substitute_macros"],
+  macroEnv: MacroEnv,
+): Promise<string> {
+  if (mode === "none") return replaceString;
+
+  const resolved = (await evaluate(replaceString, macroEnv, registry)).text;
+
+  if (mode === "escaped") {
+    // Escape $ so regex replacement doesn't interpret $1, $&, etc.
+    return resolved.replace(/\$/g, "$$$$");
+  }
+
+  return resolved;
+}
+
+/**
  * Apply regex scripts to content string.
  * Returns the transformed content.
+ *
+ * When `macroEnv` is provided, scripts with `substitute_macros` set to "raw" or
+ * "escaped" will have their replacement strings resolved through the macro engine
+ * before being applied.
+ *
+ * For "raw" mode, capture groups ($1, $2, etc.) are substituted into the
+ * replacement template BEFORE macro resolution, so macros can reference
+ * captured text (e.g. `{{setvar::key::$1}}`).
  */
-export function applyRegexScripts(
+export async function applyRegexScripts(
   content: string,
   scripts: RegexScript[],
   placement: RegexPlacement,
-  depth?: number
-): string {
+  depth?: number,
+  macroEnv?: MacroEnv,
+): Promise<string> {
   let result = content;
 
   for (const script of scripts) {
@@ -390,9 +585,43 @@ export function applyRegexScripts(
     }
 
     try {
-      const startTime = Date.now();
-      const regex = new RegExp(script.find_regex, script.flags);
-      result = result.replace(regex, script.replace_string);
+      if (macroEnv && script.substitute_macros === "raw") {
+        // "raw" mode: substitute capture groups into the replacement template
+        // BEFORE macro resolution so $1, $2, etc. are available inside macros.
+        // Match collection runs in the regex sandbox so a pathological
+        // user-authored pattern can't freeze the event loop here.
+        const matches: SandboxMatch[] = await regexCollectSandboxed(
+          script.find_regex,
+          script.flags,
+          result,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
+        if (matches.length > 0) {
+          const replacements = await Promise.all(
+            matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
+              const withCaptures = substituteRegexCaptures(
+                script.replace_string, fullMatch, groups, index, result, namedGroups,
+              );
+              return (await evaluate(withCaptures, macroEnv, registry)).text;
+            }),
+          );
+          result = rebuildFromMatches(result, matches, replacements);
+        }
+      } else {
+        // "none" or "escaped" mode: resolve macros first (if applicable), then
+        // run the actual replace inside the sandbox.
+        let replaceString = script.replace_string;
+        if (macroEnv && script.substitute_macros !== "none") {
+          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
+        }
+        result = await regexReplaceSandboxed(
+          script.find_regex,
+          script.flags,
+          result,
+          replaceString,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
+      }
 
       // Apply trim_strings
       if (script.trim_strings.length > 0) {
@@ -402,12 +631,13 @@ export function applyRegexScripts(
           }
         }
       }
-
-      // Safety check: skip script if it took > 500ms
-      if (Date.now() - startTime > 500) {
-        console.warn(`[RegexScripts] Script "${script.name}" (${script.id}) exceeded 500ms, skipping`);
-      }
     } catch (e) {
+      if (e instanceof RegexTimeoutError) {
+        console.warn(
+          `[RegexScripts] Script "${script.name}" (${script.id}) exceeded ${REGEX_SCRIPT_TIMEOUT_MS}ms, skipping`,
+        );
+        continue;
+      }
       console.warn(`[RegexScripts] Failed to apply script "${script.name}" (${script.id}):`, e);
     }
   }
@@ -417,23 +647,31 @@ export function applyRegexScripts(
 
 // ── Test ─────────────────────────────────────────────────────────────────────
 
-export function testRegex(
+const TEST_REGEX_TIMEOUT_MS = 1_000;
+
+export async function testRegex(
   findRegex: string,
   replaceString: string,
   flags: string,
-  content: string
-): { result: string; matches: number; error?: string } {
+  content: string,
+): Promise<{ result: string; matches: number; error?: string }> {
   try {
-    const regex = new RegExp(findRegex, flags);
-    let matches = 0;
-    content.replace(regex, (...args) => {
-      matches++;
-      return args[0];
-    });
-    const result = content.replace(regex, replaceString);
-    return { result, matches };
+    const out = await regexTestSandboxed(
+      findRegex,
+      flags,
+      content,
+      replaceString,
+      TEST_REGEX_TIMEOUT_MS,
+    );
+    return out;
   } catch (e: any) {
-    return { result: content, matches: 0, error: e.message };
+    if (e instanceof RegexTimeoutError) {
+      // Surface the timeout to the caller as a soft error so the UI can show
+      // "your regex is too slow / contains catastrophic backtracking" without
+      // a 500.
+      return { result: content, matches: 0, error: e.message };
+    }
+    return { result: content, matches: 0, error: e?.message || "Regex error" };
   }
 }
 
@@ -455,7 +693,7 @@ export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptE
   }
 
   const scripts = rows.map(rowToRegexScript).map((s) => {
-    const { id, user_id, created_at, updated_at, ...rest } = s;
+    const { id, user_id, created_at, updated_at, pack_id, preset_id, ...rest } = s;
     return rest;
   });
 
@@ -465,6 +703,43 @@ export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptE
     scripts,
     exported_at: Math.floor(Date.now() / 1000),
   };
+}
+
+export function getRegexScriptsByPackId(userId: string, packId: string): RegexScript[] {
+  const rows = getDb()
+    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND pack_id = ? ORDER BY sort_order ASC, created_at ASC")
+    .all(userId, packId) as any[];
+  return rows.map(rowToRegexScript);
+}
+
+export function getRegexScriptsByPresetId(userId: string, presetId: string): RegexScript[] {
+  const rows = getDb()
+    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND preset_id = ? ORDER BY sort_order ASC, created_at ASC")
+    .all(userId, presetId) as any[];
+  return rows.map(rowToRegexScript);
+}
+
+/**
+ * Delete every regex script owned by a preset. Emits REGEX_SCRIPT_DELETED per
+ * removed script so subscribed clients update their lists.
+ */
+export function deleteRegexScriptsByPresetId(userId: string, presetId: string): number {
+  const db = getDb();
+  const rows = db
+    .query("SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
+    .all(userId, presetId) as Array<{ id: string }>;
+  if (rows.length === 0) return 0;
+
+  const result = db
+    .query("DELETE FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
+    .run(userId, presetId);
+  const changes = Number(result.changes ?? 0);
+
+  for (const { id } of rows) {
+    eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  }
+
+  return changes;
 }
 
 // SillyTavern regex_placement enum → Lumiverse placement strings
@@ -525,6 +800,18 @@ export function importRegexScripts(
   let imported = 0;
   let skipped = 0;
 
+  // Extract top-level folder override (e.g. preset name)
+  const folderOverride: string | undefined =
+    typeof payload?.folder === "string" && payload.folder.trim()
+      ? payload.folder.trim()
+      : undefined;
+
+  // Extract top-level preset_id ownership link so preset deletion can cascade
+  const presetIdOverride: string | undefined =
+    typeof payload?.preset_id === "string" && payload.preset_id.trim()
+      ? payload.preset_id.trim()
+      : undefined;
+
   // Normalize input: accept array, { scripts: [] }, or single object
   let scripts: any[];
   if (Array.isArray(payload)) {
@@ -562,6 +849,7 @@ export function importRegexScripts(
 
       item = {
         name: item.scriptName ?? item.name ?? `Imported Script ${i + 1}`,
+        script_id: item.script_id ?? "",
         find_regex: pattern,
         replace_string: item.replaceString ?? item.replace_string ?? "",
         flags,
@@ -585,6 +873,16 @@ export function importRegexScripts(
       errors.push(`Script ${i}: missing name or find_regex`);
       skipped++;
       continue;
+    }
+
+    // Apply folder override if script doesn't already have one
+    if (folderOverride && !item.folder) {
+      item.folder = folderOverride;
+    }
+
+    // Stamp preset ownership if provided
+    if (presetIdOverride && !item.preset_id) {
+      item.preset_id = presetIdOverride;
     }
 
     const result = createRegexScript(userId, item);

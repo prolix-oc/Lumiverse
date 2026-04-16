@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { getVapidPublicKey } from "../crypto/vapid";
 import * as pushSvc from "../services/push.service";
 import type { CreatePushSubscriptionInput } from "../types/push";
+import { validateHost, SSRFError } from "../utils/safe-fetch";
 
 const app = new Hono();
 
@@ -20,6 +21,27 @@ app.post("/subscriptions", async (c) => {
 
   if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
     return c.json({ error: "Missing endpoint or keys" }, 400);
+  }
+
+  // Validate the push endpoint: real push services use HTTPS, and must not
+  // resolve to private/internal addresses (SSRF protection — the stored
+  // endpoint is POSTed to on every GENERATION_ENDED event).
+  let parsed: URL;
+  try {
+    parsed = new URL(body.endpoint);
+  } catch {
+    return c.json({ error: "endpoint is not a valid URL" }, 400);
+  }
+  if (parsed.protocol !== "https:") {
+    return c.json({ error: "Push endpoint must use HTTPS" }, 400);
+  }
+  try {
+    await validateHost(parsed.hostname);
+  } catch (err: any) {
+    if (err instanceof SSRFError) {
+      return c.json({ error: err.message }, 400);
+    }
+    throw err;
   }
 
   const sub = pushSvc.createSubscription(userId, body);

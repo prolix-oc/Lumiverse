@@ -12,6 +12,8 @@ const FALLBACK_PROVIDERS = [
   { id: 'openai', name: 'OpenAI', default_url: 'https://api.openai.com/v1' },
   { id: 'anthropic', name: 'Anthropic', default_url: 'https://api.anthropic.com' },
   { id: 'google', name: 'Google Gemini', default_url: 'https://generativelanguage.googleapis.com' },
+  { id: 'pollinations_text', name: 'Pollinations (Text)', default_url: 'https://text.pollinations.ai/openai' },
+  { id: 'pollinations', name: 'Pollinations', default_url: 'https://gen.pollinations.ai/v1' },
 ]
 
 export default function ConnectionManager() {
@@ -28,6 +30,22 @@ export default function ConnectionManager() {
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ConnectionProfile | null>(null)
+
+  useEffect(() => {
+    const returnedKey = sessionStorage.getItem('pollinations_byop_returned_api_key')
+    const pendingRaw = sessionStorage.getItem('pollinations_byop_pending')
+    if (!returnedKey || !pendingRaw) return
+
+    try {
+      const pending = JSON.parse(pendingRaw) as { target?: string; provider?: string; connectionId?: string | null }
+      if (pending.target !== 'connections') return
+      if (pending.provider !== 'pollinations') return
+      if (pending.connectionId) return
+      setCreating(true)
+    } catch {
+      // ignore malformed pending state
+    }
+  }, [])
 
   // Initialization: load profiles and providers in parallel
   useEffect(() => {
@@ -126,6 +144,10 @@ export default function ConnectionManager() {
           providers={providers}
           onSave={handleCreate}
           onCancel={() => setCreating(false)}
+          onOAuthCreated={(profile) => {
+            addProfile(profile)
+            setCreating(false)
+          }}
         />
       )}
 

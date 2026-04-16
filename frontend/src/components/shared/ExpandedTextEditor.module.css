@@ -15,7 +15,6 @@
 :global([data-glass]) .overlay {
   background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
 }
 
 .dialog {
@@ -412,7 +411,12 @@
   }
 
   .textarea {
-    font-size: 16px; /* Prevent iOS auto-zoom on focus */
+    font-size: 16px; /* Prevent iOS/Android auto-zoom on focus */
+  }
+
+  .textareaHighlighted,
+  .highlightPre {
+    font-size: 16px; /* Must match .textarea — prevents auto-zoom cursor misalignment */
   }
 
   .macroSidebar {
@@ -434,12 +438,22 @@
     opacity: 0.7;
   }
 
+  .highlightBackdrop {
+    display: none;
+  }
+
+  /* With the backdrop hidden, the absolute overlay positioning is unnecessary and
+     causes cursor coordinate mismatches on Android. Switch to normal flow layout
+     so the textarea fills its container without position:absolute. */
   .textareaHighlighted {
+    position: static;
     -webkit-text-fill-color: unset;
     color: var(--lumiverse-text);
   }
 
-  .highlightBackdrop {
-    display: none;
+  .highlightContainer {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
   }
 }

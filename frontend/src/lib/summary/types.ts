@@ -2,7 +2,7 @@
 export type SummaryMode = 'disabled' | 'auto' | 'manual'
 
 /** Which connection profile to use for generation. */
-export type SummaryApiSource = 'active' | 'dedicated'
+export type SummaryApiSource = 'active' | 'dedicated' | 'sidecar'
 
 export interface SummarizationSettings {
   mode: SummaryMode
@@ -19,17 +19,23 @@ export interface SummarizationSettings {
   messageLimitEnabled: boolean
   /** Maximum number of recent messages to include when messageLimit is enabled. */
   messageLimitCount: number
+  /** Custom system prompt template. When null/empty, backend default is used. */
+  systemPromptOverride: string | null
+  /** Custom user prompt template. When null/empty, backend default is used. */
+  userPromptOverride: string | null
 }
 
 export const DEFAULT_SUMMARIZATION_SETTINGS: SummarizationSettings = {
   mode: 'disabled',
-  apiSource: 'active',
+  apiSource: 'sidecar',
   dedicatedConnectionId: null,
   autoInterval: 10,
   autoMessageContext: 10,
   manualMessageContext: 10,
   messageLimitEnabled: false,
   messageLimitCount: 50,
+  systemPromptOverride: null,
+  userPromptOverride: null,
 }
 
 /** Metadata keys stored on chat.metadata */

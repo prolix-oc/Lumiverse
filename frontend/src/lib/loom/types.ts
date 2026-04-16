@@ -12,6 +12,7 @@ export interface PromptBlock {
   isLocked: boolean
   color: string | null
   injectionTrigger: string[]
+  categoryMode?: 'radio' | 'checkbox' | null
 }
 
 export interface SamplerOverrides {
@@ -25,6 +26,7 @@ export interface SamplerOverrides {
   frequencyPenalty: number | null
   presencePenalty: number | null
   repetitionPenalty: number | null
+  streaming: boolean
 }
 
 export interface CustomBody {

@@ -42,7 +42,7 @@ app.get("/:identifier/callback", async (c) => {
     return c.html(errorHtml("Invalid State", "OAuth state parameter is missing, expired, or invalid. Please retry the authorization flow."), 400);
   }
 
-  const ext = managerSvc.getExtensionByIdentifier(identifier);
+  const ext = await managerSvc.getExtensionByIdentifier(identifier);
   if (!ext) {
     return c.html(errorHtml("Extension Not Found", `No extension with identifier "${identifier}" is installed.`), 404);
   }

@@ -1,0 +1,54 @@
+.kvList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kvRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.kvRow > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.kvRemove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.kvRemove:hover {
+  background: var(--lumiverse-error-010);
+  color: var(--lumiverse-error);
+}
+
+.kvAdd {
+  align-self: flex-start;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-primary);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.kvAdd:hover {
+  background: var(--lumiverse-primary-light);
+}

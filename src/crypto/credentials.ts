@@ -10,10 +10,14 @@
  *
  * File layout: JSON
  *   { username, passwordHash, createdAt, updatedAt }
+ *
+ * All file I/O uses Bun-native APIs (Bun.file / Bun.write) for reliable
+ * cross-platform behavior, including Termux/Android where Node's fs module
+ * with explicit mode flags can fail on non-POSIX filesystems.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { mkdirSync, chmodSync } from "node:fs";
+import { dirname } from "node:path";
 
 export interface OwnerCredentials {
   username: string;
@@ -25,20 +29,27 @@ export interface OwnerCredentials {
 /**
  * Check whether the credentials file exists.
  */
-export function ownerCredentialsExist(filePath: string): boolean {
-  return existsSync(filePath);
+export async function ownerCredentialsExist(filePath: string): Promise<boolean> {
+  return Bun.file(filePath).exists();
 }
 
 /**
  * Read and parse the owner credentials file.
  * Throws on missing file or malformed JSON.
  */
-export function readOwnerCredentials(filePath: string): OwnerCredentials {
-  if (!existsSync(filePath)) {
+export async function readOwnerCredentials(filePath: string): Promise<OwnerCredentials> {
+  const file = Bun.file(filePath);
+  if (!(await file.exists())) {
     throw new Error(`Owner credentials file not found: ${filePath}`);
   }
 
-  const raw = readFileSync(filePath, "utf-8");
+  let raw: string;
+  try {
+    raw = await file.text();
+  } catch (err) {
+    throw new Error(`Owner credentials file could not be read: ${err}`);
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -61,20 +72,21 @@ export function readOwnerCredentials(filePath: string): OwnerCredentials {
 
 /**
  * Write (create or overwrite) the owner credentials file.
- * Sets file permissions to 0o600 (owner-only read/write).
+ * Attempts to set file permissions to 0o600 (owner-only read/write) but
+ * does not fail if the filesystem doesn't support Unix permissions.
  */
-export function writeOwnerCredentials(
+export async function writeOwnerCredentials(
   filePath: string,
   username: string,
   passwordHash: string
-): OwnerCredentials {
+): Promise<OwnerCredentials> {
   const now = Math.floor(Date.now() / 1000);
 
   let createdAt = now;
   // Preserve original createdAt if updating an existing file
-  if (existsSync(filePath)) {
+  if (await Bun.file(filePath).exists()) {
     try {
-      const existing = readOwnerCredentials(filePath);
+      const existing = await readOwnerCredentials(filePath);
       createdAt = existing.createdAt;
     } catch {
       // File exists but is corrupted — treat as new
@@ -89,7 +101,23 @@ export function writeOwnerCredentials(
   };
 
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(credentials, null, 2) + "\n", { mode: 0o600 });
+  await Bun.write(filePath, JSON.stringify(credentials, null, 2) + "\n");
+
+  // Set restrictive permissions where the filesystem supports it.
+  // Android/Termux storage and other non-POSIX filesystems may not honor chmod.
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {
+    // Non-fatal: filesystem doesn't support Unix permissions
+  }
+
+  // Verify the write actually persisted (catches silent write failures)
+  const written = Bun.file(filePath);
+  if (!(await written.exists()) || written.size === 0) {
+    throw new Error(
+      `Failed to write credentials file — file is empty or missing after write: ${filePath}`
+    );
+  }
 
   return credentials;
 }

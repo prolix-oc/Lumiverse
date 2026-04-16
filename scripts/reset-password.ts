@@ -15,70 +15,19 @@
  *   5. Revokes all active sessions (forces re-login)
  */
 
-import { existsSync } from "fs";
-import { join, resolve } from "path";
-import { createInterface } from "readline";
+import { join, resolve } from "node:path";
 import Database from "bun:sqlite";
 import { hashPassword } from "../src/crypto/password";
 import { readIdentityFile } from "../src/crypto/identity";
-import { writeOwnerCredentials, ownerCredentialsExist, readOwnerCredentials } from "../src/crypto/credentials";
+import { writeOwnerCredentials } from "../src/crypto/credentials";
 import {
   printBanner,
   printStepHeader,
   printSummary,
   printDivider,
-  promptLabel,
   theme,
 } from "./ui";
-
-// ─── Input helpers ──────────────────────────────────────────────────────────
-
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-function ask(question: string, defaultValue?: string): Promise<string> {
-  const hint = defaultValue ? ` ${theme.muted}(${defaultValue})${theme.reset}` : "";
-  return new Promise((resolve) => {
-    rl.question(`${promptLabel(question)}${hint} `, (answer) => {
-      resolve(answer.trim() || defaultValue || "");
-    });
-  });
-}
-
-function askSecret(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(`${promptLabel(question)} `);
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-
-    if (stdin.isTTY) {
-      stdin.setRawMode(true);
-    }
-
-    let input = "";
-    const onData = (char: Buffer) => {
-      const c = char.toString();
-      if (c === "\n" || c === "\r") {
-        if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
-        stdin.removeListener("data", onData);
-        process.stdout.write("\n");
-        resolve(input);
-      } else if (c === "\u007F" || c === "\b") {
-        if (input.length > 0) {
-          input = input.slice(0, -1);
-          process.stdout.write("\b \b");
-        }
-      } else if (c === "\u0003") {
-        process.stdout.write("\n");
-        process.exit(1);
-      } else {
-        input += c;
-        process.stdout.write(`${theme.muted}*${theme.reset}`);
-      }
-    };
-    stdin.resume();
-    stdin.on("data", onData);
-  });
-}
+import { askSecret } from "./input";
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
@@ -98,7 +47,7 @@ async function main() {
 
   printStepHeader(1, 3, "Validate Instance", "Checking for Lumiverse identity and database.");
 
-  if (!existsSync(identityPath)) {
+  if (!(await Bun.file(identityPath).exists())) {
     console.log(`  ${theme.error}Identity file not found: ${identityPath}${theme.reset}`);
     console.log(`  ${theme.muted}This doesn't appear to be a configured Lumiverse instance.${theme.reset}`);
     console.log(`  ${theme.muted}Run the setup wizard first: bun run setup${theme.reset}`);
@@ -115,7 +64,7 @@ async function main() {
     process.exit(1);
   }
 
-  if (!existsSync(dbPath)) {
+  if (!(await Bun.file(dbPath).exists())) {
     console.log(`  ${theme.error}Database not found: ${dbPath}${theme.reset}`);
     console.log(`  ${theme.muted}The server must be started at least once before resetting the password.${theme.reset}`);
     console.log("");
@@ -203,7 +152,7 @@ async function main() {
   console.log(`  ${theme.success}Revoked ${sessions.changes} active session(s)${theme.reset}`);
 
   // Update the credentials file
-  writeOwnerCredentials(credentialsPath, owner.username, passwordHash);
+  await writeOwnerCredentials(credentialsPath, owner.username, passwordHash);
   console.log(`  ${theme.success}Credentials file updated${theme.reset}`);
 
   db.close();
@@ -222,7 +171,6 @@ async function main() {
     ]
   );
 
-  rl.close();
 }
 
 main().catch((err) => {

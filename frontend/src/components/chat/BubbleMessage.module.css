@@ -14,7 +14,6 @@
     var(--lcs-glass-bg);
   box-shadow: 0 0 0 0.5px var(--lcs-glass-border);
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   transition:
     background var(--lcs-transition-fast),
     border-color var(--lcs-transition-fast),
@@ -74,7 +73,6 @@
    background (image/video/scene). Blurring a solid color is pure GPU waste. */
 :global([data-glass][data-chat-bg]) .card[data-in-viewport] {
   backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2);
 }
 
 .card[data-in-viewport]:hover {
@@ -98,6 +96,27 @@
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(255, 255, 255, 0.04) 100%),
     var(--lcs-glass-bg-hover, rgba(255, 255, 255, 0.75));
+}
+
+/* Hide dissolving avatar background when user opts out */
+:global([data-no-bubble-avatar-bg]) .avatarBg {
+  display: none;
+}
+
+/* Disable bubble hover effects when user opts out */
+:global([data-no-bubble-hover]) .card[data-in-viewport]:hover {
+  box-shadow:
+    0 0 0 0.5px var(--lcs-glass-border),
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 4px 16px rgba(0, 0, 0, 0.14),
+    0 12px 48px rgba(0, 0, 0, 0.08);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
+    var(--lcs-glass-bg, rgba(18, 16, 28, 0.55));
+}
+
+:global([data-no-bubble-hover]) .card:hover .avatarBgImg {
+  opacity: 0.28;
 }
 
 /* Hidden draft message — dimmed, darkened, dashed border */
@@ -143,7 +162,6 @@
 .streaming {
   will-change: opacity, transform;
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 /* ── Bubble inner content ── */
@@ -183,10 +201,12 @@
   align-items: center;
   gap: 14px;
   min-width: 0;
+  max-width: calc(100% - 180px);
 }
 
 .user .headerLeft {
   flex-direction: row-reverse;
+  max-width: calc(100% - 155px);
 }
 
 .userLeft.user .headerLeft {
@@ -231,14 +251,17 @@
   line-height: 1.2;
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :global([data-theme-mode='dark']) .nameChar {
-  color: var(--char-name-dark, #fff);
+  color: var(--char-name-dark, var(--lumiverse-primary-text));
 }
 
 :global([data-theme-mode='light']) .nameChar {
-  color: var(--char-name-light, var(--lumiverse-text));
+  color: var(--char-name-light, var(--lumiverse-primary-text));
 }
 
 /* ── Meta wrap ── */
@@ -267,6 +290,7 @@
 
 /* Meta pill — monospace badge */
 .metaPill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   align-self: flex-start;
@@ -279,13 +303,52 @@
   letter-spacing: 0.02em;
   flex-wrap: wrap;
   gap: 0;
+  max-width: 100%;
   background: var(--lumiverse-fill-deepest);
   border: 1px solid var(--lumiverse-border);
   line-height: 1;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
+.metaSegment {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
 /* metaPill blur removed — sits inside the card which already has 40px blur */
+
+.metaPillTooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--lumiverse-fill-deepest);
+  border: 1px solid var(--lumiverse-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  z-index: 9999;
+  pointer-events: none;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
+  line-height: 1.3;
+}
+
+.tooltipRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tooltipLabel {
+  color: var(--lumiverse-text-muted);
+}
+
+.tooltipValue {
+  color: var(--lumiverse-text);
+  font-variant-numeric: tabular-nums;
+}
 
 .metaDot {
   margin: 0 6px;
@@ -420,6 +483,13 @@
   opacity: 1;
 }
 
+/* Touch devices: keep actions visible for deliberate tapping */
+@media (hover: none) {
+  .actionsPill {
+    opacity: 0.5;
+  }
+}
+
 .user .actionsPill {
   left: 24px;
   right: auto;
@@ -492,6 +562,14 @@
 
   .name {
     font-size: calc(15px * var(--lumiverse-font-scale, 1));
+  }
+
+  .metaDot {
+    margin: 0 4px;
+  }
+
+  .metaPill {
+    padding: 3px 8px;
   }
 
   .actionsPill {

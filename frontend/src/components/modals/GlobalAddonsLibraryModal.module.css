@@ -1,0 +1,183 @@
+.modal {
+  box-shadow:
+    var(--lumiverse-shadow-xl),
+    0 0 40px var(--lumiverse-primary-010);
+}
+
+/* -- Header -- */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.headerIcon {
+  color: var(--lumiverse-info, #42a5f5);
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--lumiverse-info, #42a5f5) 20%, transparent));
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- Body -- */
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  text-align: center;
+  padding: 24px 12px;
+}
+
+/* -- Add-on card -- */
+.addonCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-left: 3px solid var(--lumiverse-info, #42a5f5);
+  border-radius: 10px;
+  background: var(--lumiverse-fill, rgba(0, 0, 0, 0.12));
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addonCard:hover {
+  border-color: var(--lumiverse-border-hover);
+  border-left-color: var(--lumiverse-info, #42a5f5);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.addonTopRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.globalIndicator {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 12%, transparent);
+  color: var(--lumiverse-info, #42a5f5);
+  flex-shrink: 0;
+}
+
+/* -- Inputs -- */
+.addonLabelInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-text);
+  outline: none;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addonLabelInput:focus {
+  border-color: var(--lumiverse-info, #42a5f5);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-info, #42a5f5) 10%, transparent);
+}
+
+.addonActionBtn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+  padding: 0;
+}
+
+.addonActionBtn:hover {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.addonDeleteBtn:hover {
+  color: var(--lumiverse-error);
+  border-color: var(--lumiverse-error);
+  background: color-mix(in srgb, var(--lumiverse-error) 8%, transparent);
+}
+
+.addonContent {
+  width: 100%;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  resize: vertical;
+  min-height: 48px;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.5;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.addonContent:focus {
+  border-color: var(--lumiverse-info, #42a5f5);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-info, #42a5f5) 10%, transparent);
+}
+
+/* -- Footer -- */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-top: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.addonCount {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}

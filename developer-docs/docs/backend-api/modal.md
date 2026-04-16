@@ -251,10 +251,103 @@ spindle.onFrontendMessage(async (payload, userId) => {
         { userId },
       )
       spindle.toast.success('Nudge history cleared')
-      spindle.sendToFrontend({ type: 'history_cleared', characterId: payload.characterId })
+      spindle.sendToFrontend({ type: 'history_cleared', characterId: payload.characterId }, userId)
     }
   }
 })
 ```
 
 For frontend-initiated confirmations, see [Confirmation Modal](../frontend-api/ui-placement.md#confirmation-modal-free-no-permission-needed) in the Frontend API docs.
+
+---
+
+## Input Prompt
+
+Present a text input modal to the user and wait for their response. The host renders a themed dialog with a title, optional message, a text input (single-line or multiline), and submit/cancel buttons. The call blocks until the user submits or cancels.
+
+```ts
+const { value, cancelled } = await spindle.prompt.input({
+  title: 'Rename Preset',
+  placeholder: 'Enter a name...',
+  defaultValue: currentName,
+})
+
+if (!cancelled && value) {
+  await renamePreset(value)
+  spindle.toast.success(`Renamed to "${value}"`)
+}
+```
+
+The returned Promise resolves when the user submits or cancels. It never rejects. Counts toward the **2 stacked modals** limit per extension.
+
+### Options
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `title` | `string` | *required* | Title displayed in the modal header |
+| `message` | `string` | — | Description shown below the title |
+| `placeholder` | `string` | — | Placeholder text for the input field |
+| `defaultValue` | `string` | `""` | Pre-filled value |
+| `submitLabel` | `string` | `"Submit"` | Label for the primary action button |
+| `cancelLabel` | `string` | `"Cancel"` | Label for the dismiss button |
+| `multiline` | `boolean` | `false` | Render a multi-line textarea instead of a single-line input |
+| `userId` | `string` | — | Target user ID. Only needed for operator-scoped extensions. |
+
+### Result
+
+| Field | Type | Description |
+|---|---|---|
+| `value` | `string \| null` | The submitted text, or `null` if the user cancelled |
+| `cancelled` | `boolean` | `true` if the user cancelled or dismissed the prompt |
+
+### Behavior
+
+- The input auto-focuses when the modal opens.
+- **Single-line** (`multiline: false`): pressing Enter submits. Ctrl/Cmd+Enter also submits.
+- **Multi-line** (`multiline: true`): Enter inserts a newline. Ctrl/Cmd+Enter submits.
+- The submit button is disabled until the input has non-whitespace content.
+- The modal can be dismissed by clicking cancel, clicking the backdrop, or pressing Escape — all of these resolve with `cancelled: true`.
+
+### Example: Collecting Feedback Before an Action
+
+```ts
+spindle.commands.register([{
+  id: 'send-feedback',
+  label: 'Send Feedback to Character',
+  scope: 'chat',
+}])
+
+spindle.commands.onInvoked(async (commandId, context) => {
+  if (commandId !== 'send-feedback') return
+
+  const { value, cancelled } = await spindle.prompt.input({
+    title: 'Character Feedback',
+    message: 'This will be injected as an OOC instruction in the next generation.',
+    placeholder: 'e.g. Be more descriptive, focus on the environment...',
+    multiline: true,
+    submitLabel: 'Send',
+  })
+
+  if (cancelled || !value) return
+
+  // Store feedback for the next generation cycle
+  await spindle.variables.local.set(context.chatId!, 'pending_feedback', value)
+  spindle.toast.info('Feedback queued for next generation')
+})
+```
+
+### Example: Single-Line Rename
+
+```ts
+const { value } = await spindle.prompt.input({
+  title: 'Rename Profile',
+  defaultValue: profile.name,
+  placeholder: 'Profile name',
+  submitLabel: 'Rename',
+})
+
+if (value) {
+  profile.name = value
+  await saveProfile(profile)
+}
+```

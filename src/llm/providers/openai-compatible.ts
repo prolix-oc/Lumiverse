@@ -26,11 +26,17 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     return {};
   }
 
+  protected normalizeApiKey(apiKey: string): string {
+    return apiKey.trim().replace(/^Bearer\s+/i, "");
+  }
+
   protected headers(apiKey: string): Record<string, string> {
+    const normalizedApiKey = this.normalizeApiKey(apiKey);
+
     return {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      ...this.extraHeaders(apiKey),
+      ...(normalizedApiKey ? { Authorization: `Bearer ${normalizedApiKey}` } : {}),
+      ...this.extraHeaders(normalizedApiKey),
     };
   }
 

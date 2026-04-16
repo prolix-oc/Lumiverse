@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import * as linkSvc from "../services/lumihub-link.service";
 import { getLumiHubClient } from "../lumihub/client";
+import { validateHost, SSRFError } from "../utils/safe-fetch";
 
 // --- PKCE state storage (in-memory, same pattern as spindle/oauth-state.ts) ---
 
@@ -40,14 +41,25 @@ lumihubCallbackRoute.get("/callback", async (c) => {
     return c.html(errorHtml("Missing Code", "No authorization code received from LumiHub."), 400);
   }
 
-  // Find the PKCE state — we only ever have one pending link
+  // Prefer state-based lookup (OAuth 2.0 spec). Fall back to linear scan so
+  // existing LumiHub deployments that haven't started echoing state still link.
+  const stateParam = c.req.query("state");
   let pkceState: PKCEState | undefined;
   let stateKey: string | undefined;
-  for (const [key, entry] of pkceStateMap) {
-    if (Date.now() <= entry.expiresAt) {
+
+  if (stateParam) {
+    const entry = pkceStateMap.get(stateParam);
+    if (entry && Date.now() <= entry.expiresAt) {
       pkceState = entry;
-      stateKey = key;
-      break;
+      stateKey = stateParam;
+    }
+  } else {
+    for (const [key, entry] of pkceStateMap) {
+      if (Date.now() <= entry.expiresAt) {
+        pkceState = entry;
+        stateKey = key;
+        break;
+      }
     }
   }
 
@@ -76,6 +88,21 @@ lumihubCallbackRoute.get("/callback", async (c) => {
     }
 
     const data = (await response.json()) as { token: string; instance_id: string; ws_url: string };
+
+    // Validate the WebSocket URL returned by LumiHub — it's a separate URL from
+    // the validated lumihubUrl so treat it as untrusted input.
+    try {
+      const wsParsed = new URL(data.ws_url);
+      if (wsParsed.protocol !== "ws:" && wsParsed.protocol !== "wss:") {
+        return c.html(errorHtml("Invalid WebSocket URL", "LumiHub returned an unsupported WebSocket protocol."), 400);
+      }
+      await validateHost(wsParsed.hostname);
+    } catch (err: any) {
+      if (err instanceof SSRFError) {
+        return c.html(errorHtml("Blocked WebSocket URL", err.message), 400);
+      }
+      return c.html(errorHtml("Invalid WebSocket URL", "LumiHub returned an unparseable WebSocket URL."), 400);
+    }
 
     // Save the link config (encrypted)
     await linkSvc.saveLinkConfig(
@@ -115,6 +142,39 @@ lumihubRoutes.post("/link", requireOwner, async (c) => {
     return c.json({ error: "redirect_origin is required" }, 400);
   }
 
+  // Validate the redirect origin too. LumiHub will hand the user back to this
+  // URL with the authorization code attached, so we must make sure it's a real
+  // http(s) origin and not a `javascript:` payload or arbitrary scheme.
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(redirectOrigin);
+  } catch {
+    return c.json({ error: "redirect_origin is not a valid URL" }, 400);
+  }
+  if (parsedOrigin.protocol !== "https:" && parsedOrigin.protocol !== "http:") {
+    return c.json({ error: "redirect_origin must use http or https" }, 400);
+  }
+
+  // Validate the LumiHub URL is http/https and does not resolve to a private
+  // or blocked address (SSRF protection for the callback's token-exchange fetch).
+  let parsedHub: URL;
+  try {
+    parsedHub = new URL(lumihubUrl);
+  } catch {
+    return c.json({ error: "lumihub_url is not a valid URL" }, 400);
+  }
+  if (parsedHub.protocol !== "https:" && parsedHub.protocol !== "http:") {
+    return c.json({ error: "lumihub_url must use http or https" }, 400);
+  }
+  try {
+    await validateHost(parsedHub.hostname);
+  } catch (err: any) {
+    if (err instanceof SSRFError) {
+      return c.json({ error: err.message }, 400);
+    }
+    throw err;
+  }
+
   // Generate PKCE
   const { codeVerifier, codeChallenge } = await linkSvc.generatePKCE();
 
@@ -127,12 +187,14 @@ lumihubRoutes.post("/link", requireOwner, async (c) => {
     expiresAt: Date.now() + PKCE_TTL_MS,
   });
 
-  // Build the authorization URL
+  // Build the authorization URL. Include `state` so the callback can look up
+  // the exact PKCE state that originated this request (OAuth 2.0 spec).
   const params = new URLSearchParams({
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
     instance_name: instanceName,
     redirect_origin: redirectOrigin,
+    state: stateId,
   });
 
   const authorizeUrl = `${lumihubUrl}/api/v1/link/authorize?${params.toString()}`;

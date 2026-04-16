@@ -21,8 +21,14 @@ import { createPromptBreakdownSlice } from './slices/prompt-breakdown'
 import { createRegexSlice } from './slices/regex'
 import { createExpressionSlice } from './slices/expressions'
 import { createImageGenConnectionsSlice } from './slices/image-gen-connections'
+import { createTtsConnectionsSlice } from './slices/tts-connections'
+import { createMcpServersSlice } from './slices/mcp-servers'
 import { createLoadoutsSlice } from './slices/loadouts'
 import { createMigrationSlice } from './slices/migration'
+import { createOperatorSlice } from './slices/operator'
+import { createFloatingAvatarSlice } from './slices/floating-avatar'
+import { createChatHeadsSlice } from './slices/chat-heads'
+import { createDatabankSlice } from './slices/databank'
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -46,6 +52,12 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createRegexSlice(...a),
   ...createExpressionSlice(...a),
   ...createImageGenConnectionsSlice(...a),
+  ...createTtsConnectionsSlice(...a),
+  ...createMcpServersSlice(...a),
   ...createLoadoutsSlice(...a),
   ...createMigrationSlice(...a),
+  ...createOperatorSlice(...a),
+  ...createFloatingAvatarSlice(...a),
+  ...createChatHeadsSlice(...a),
+  ...createDatabankSlice(...a),
 }))

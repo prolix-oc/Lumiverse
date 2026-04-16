@@ -4,7 +4,7 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { env } from "../env";
 import type { Image } from "../types/image";
-import { mkdirSync, existsSync, unlinkSync, readFileSync } from "fs";
+import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { join, extname } from "path";
 
 const IMAGES_DIR = "images";
@@ -196,11 +196,11 @@ export async function getImageFilePathPublic(id: string, tier?: ThumbTier): Prom
     // Lazy generate if original exists
     const originalPath = join(dir, row.filename);
     if (!existsSync(originalPath)) return null;
-    const buffer = readFileSync(originalPath);
+    const buffer = Buffer.from(await Bun.file(originalPath).arrayBuffer());
     const userId = row.user_id;
     const sizes = getThumbnailSettings(userId);
     const size = tier === "sm" ? sizes.smallSize : sizes.largeSize;
-    const ok = await generateThumbnail(Buffer.from(buffer), thumbPath, size);
+    const ok = await generateThumbnail(buffer, thumbPath, size);
     return ok ? thumbPath : originalPath;
   }
 
@@ -239,7 +239,7 @@ export async function getImageFilePath(
       const sizes = getThumbnailSettings(userId);
       const size = tier === "sm" ? sizes.smallSize : sizes.largeSize;
       const ok = await generateThumbnail(
-        readFileSync(originalPath),
+        Buffer.from(await Bun.file(originalPath).arrayBuffer()),
         tieredPath,
         size
       );
@@ -311,7 +311,7 @@ export async function rebuildAllThumbnails(
         }
 
         // Regenerate both tiers
-        const buffer = readFileSync(originalPath);
+        const buffer = Buffer.from(await Bun.file(originalPath).arrayBuffer());
         const [smOk, lgOk] = await Promise.all([
           generateThumbnail(buffer, join(dir, `${img.id}${thumbSuffix("sm")}`), sizes.smallSize),
           generateThumbnail(buffer, join(dir, `${img.id}${thumbSuffix("lg")}`), sizes.largeSize),

@@ -262,6 +262,124 @@ const result = await spindle.generate.raw({
 
 ---
 
+## Stream Observation
+
+Observe an in-flight LLM generation in real time. `observe()` subscribes to all generation lifecycle events for a specific chat, accumulates streamed content and reasoning tokens automatically, and exposes them through a simple callback API.
+
+### `spindle.generate.observe(chatId)`
+
+Returns a `GenerationObserver` that filters events to the given chat.
+
+```ts
+const observer = spindle.generate.observe('chat-uuid')
+
+observer.onStart((info) => {
+  spindle.log.info(`Generation started: ${info.model}`)
+})
+
+observer.onToken((token) => {
+  // Called for every streamed token (content and reasoning)
+  if (token.type === 'reasoning') {
+    spindle.log.info(`[thinking] ${token.token}`)
+  }
+})
+
+observer.onEnd((result) => {
+  if (result.error) {
+    spindle.log.error(`Generation failed: ${result.error}`)
+  } else {
+    spindle.log.info(`Done — ${observer.content.length} chars`)
+  }
+  observer.dispose()
+})
+
+observer.onStop((result) => {
+  spindle.log.info(`Stopped early — partial: ${observer.content.length} chars`)
+  observer.dispose()
+})
+```
+
+At any point during streaming you can read the accumulated state:
+
+```ts
+observer.content    // all content tokens concatenated
+observer.reasoning  // all reasoning tokens concatenated
+observer.generationId  // active generation ID, or null if idle
+```
+
+!!! warning "Always call `dispose()`"
+    The observer subscribes to four event channels internally. Call `observer.dispose()` when you no longer need it to unsubscribe and free resources.
+
+### GenerationObserver
+
+| Property / Method | Type | Description |
+|---|---|---|
+| `onStart(handler)` | `(info: GenerationStartedPayloadDTO) => void` | Called when a generation begins on this chat |
+| `onToken(handler)` | `(token: StreamTokenPayloadDTO) => void` | Called for each streamed token |
+| `onEnd(handler)` | `(result: GenerationEndedPayloadDTO) => void` | Called when the generation completes or errors |
+| `onStop(handler)` | `(result: GenerationStoppedPayloadDTO) => void` | Called when the user stops the generation |
+| `content` | `string` (readonly) | Accumulated content tokens |
+| `reasoning` | `string` (readonly) | Accumulated reasoning/CoT tokens |
+| `generationId` | `string \| null` (readonly) | Active generation ID |
+| `dispose()` | `() => void` | Unsubscribe from all events |
+
+### GenerationStartedPayloadDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `generationId` | `string` | Unique generation ID |
+| `chatId` | `string` | Chat this generation belongs to |
+| `model` | `string` | Model being used |
+| `targetMessageId` | `string` | Optional. ID of the message being generated/regenerated |
+| `characterId` | `string` | Optional. Target character ID |
+| `characterName` | `string` | Optional. Target character name |
+
+### StreamTokenPayloadDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `generationId` | `string` | Generation this token belongs to |
+| `chatId` | `string` | Chat ID |
+| `token` | `string` | The text chunk |
+| `seq` | `number` | Monotonic sequence number (for deduplication) |
+| `type` | `"reasoning"` | Optional. Present for chain-of-thought tokens |
+
+### GenerationEndedPayloadDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `generationId` | `string` | Generation ID |
+| `chatId` | `string` | Chat ID |
+| `messageId` | `string` | ID of the saved message (absent on error) |
+| `content` | `string` | Final generated content (absent on error) |
+| `error` | `string` | Error message (absent on success) |
+
+### GenerationStoppedPayloadDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `generationId` | `string` | Generation ID |
+| `chatId` | `string` | Chat ID |
+| `content` | `string` | Partial content accumulated before the stop |
+
+### Raw event subscription
+
+If you need lower-level control (e.g. observing multiple chats, or only specific events), you can subscribe to the generation events directly. These are fully typed when using `lumiverse-spindle-types`:
+
+```ts
+const unsub = spindle.on('STREAM_TOKEN_RECEIVED', (payload) => {
+  // payload is typed as StreamTokenPayloadDTO
+  console.log(payload.token, payload.seq)
+})
+
+// Clean up when done
+unsub()
+```
+
+Available generation events: `GENERATION_STARTED`, `STREAM_TOKEN_RECEIVED`, `GENERATION_ENDED`, `GENERATION_STOPPED`.
+
+---
+
 ## Connection Profiles
 
 Extensions with the `generation` permission can discover and inspect the user's connection profiles. This lets you present a UI for selecting which LLM provider/model to use, or programmatically pick the right connection for your use case.

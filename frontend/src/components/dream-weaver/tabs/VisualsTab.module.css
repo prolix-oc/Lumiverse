@@ -1,0 +1,29 @@
+.visualsTab {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  padding: 1rem 0 1.75rem;
+}
+
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 350px;
+  color: var(--lumiverse-text-muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.stageBand {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(300px, 360px);
+  gap: 1.15rem;
+  align-items: start;
+}
+
+@media (max-width: 980px) {
+  .stageBand {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,4 +1,5 @@
 import type { Character } from "../types/character";
+import { getEffectiveCharacterName } from "../types/character";
 import type { Persona } from "../types/persona";
 import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
@@ -13,6 +14,7 @@ export interface BuildEnvContext {
   messages: Message[];
   generationType: GenerationType;
   connection?: ConnectionProfile | null;
+  userId?: string;
   dynamicMacros?: Record<string, string | MacroHandler | MacroDefinition>;
   /** Pre-resolved group character names (all members). Used for {{group}} macro. */
   groupCharacterNames?: string[];
@@ -41,7 +43,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   return {
     names: {
       user: persona?.name || "User",
-      char: character.name,
+      char: getEffectiveCharacterName(character),
       group: allGroupNames?.join(", ") ?? "",
       groupNotMuted: (ctx.groupNotMutedNames ?? allGroupNames)?.join(", ") ?? "",
       notChar: persona?.name || "User",
@@ -59,7 +61,10 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       personality: character.personality || "",
       scenario: character.scenario || "",
       persona: buildPersonaWithAddons(persona),
-      mesExamples: character.mes_example || "",
+      personaSubjectivePronoun: persona?.subjective_pronoun || "",
+      personaObjectivePronoun: persona?.objective_pronoun || "",
+      personaPossessivePronoun: persona?.possessive_pronoun || "",
+      mesExamples: character.mes_example || getDreamWeaverVoiceGuidance(character) || "",
       mesExamplesRaw: character.mes_example || "",
       systemPrompt: character.system_prompt || "",
       postHistoryInstructions: character.post_history_instructions || "",
@@ -92,10 +97,16 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     variables: {
       local: new Map(Object.entries((chat.metadata?.macro_variables?.local as Record<string, string>) || {})),
       global: new Map(Object.entries((chat.metadata?.macro_variables?.global as Record<string, string>) || {})),
+      chat: new Map(Object.entries((chat.metadata?.chat_variables as Record<string, string>) || {})),
     },
     dynamicMacros: ctx.dynamicMacros || {},
     _dynamicMacrosLower: buildDynamicLookup(ctx.dynamicMacros),
-    extra: {},
+    extra: {
+      userId: ctx.userId ?? (chat as any).user_id as string | undefined,
+      messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
+      chatCreatedAt: (chat as any).created_at as number | undefined,
+      characterTags: Array.isArray((character as any).tags) ? (character as any).tags : [],
+    },
   };
 }
 
@@ -133,18 +144,45 @@ export function resolveGroupCharacterNames(
   return names.length > 0 ? names : undefined;
 }
 
+/**
+ * Dream Weaver cards don't populate `mes_example` — they use voice guidance
+ * instead. When the `dialogue_examples` block resolves `{{mesExamples}}`, this
+ * lets DW cards fill that slot with their compiled voice guidance so preset
+ * prompt orders that include dialogue examples still work.
+ */
+function getDreamWeaverVoiceGuidance(character: Character): string {
+  const dw = character.extensions?.dream_weaver as
+    | { voice_guidance?: { compiled?: string } }
+    | undefined;
+  return dw?.voice_guidance?.compiled?.trim() || "";
+}
+
 function buildPersonaWithAddons(persona: Persona | null): string {
   if (!persona) return "";
   const base = persona.description || "";
-  const addons = persona.metadata?.addons;
-  if (!Array.isArray(addons) || addons.length === 0) return base;
-  const enabledContent = addons
-    .filter((a: any) => a.enabled && a.content)
-    .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-    .map((a: any) => a.content.trim())
-    .filter(Boolean);
-  if (enabledContent.length === 0) return base;
-  return base ? `${base}\n${enabledContent.join("\n")}` : enabledContent.join("\n");
+
+  // Persona-specific add-ons
+  const personaAddons = persona.metadata?.addons;
+  const enabledPersonaContent = Array.isArray(personaAddons)
+    ? personaAddons
+        .filter((a: any) => a.enabled && a.content)
+        .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map((a: any) => a.content.trim())
+        .filter(Boolean)
+    : [];
+
+  // Global add-ons (resolved upstream in prompt assembly, injected into metadata)
+  const globalAddons = persona.metadata?._resolvedGlobalAddons;
+  const enabledGlobalContent = Array.isArray(globalAddons)
+    ? globalAddons
+        .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map((a: any) => ((a.content as string) || "").trim())
+        .filter(Boolean)
+    : [];
+
+  const allContent = [...enabledPersonaContent, ...enabledGlobalContent];
+  if (allContent.length === 0) return base;
+  return base ? `${base}\n${allContent.join("\n")}` : allContent.join("\n");
 }
 
 function findLast(messages: Message[], predicate: (m: Message) => boolean): Message | null {

@@ -18,6 +18,7 @@ interface UseLongPressOptions {
 export function useLongPress({ onLongPress, delay = 500, moveThreshold = 10 }: UseLongPressOptions) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const startPos = useRef<LongPressPos>({ x: 0, y: 0 })
+  const targetRef = useRef<Element | null>(null)
   const firedRef = useRef(false)
 
   const clear = useCallback(() => {
@@ -31,13 +32,22 @@ export function useLongPress({ onLongPress, delay = 500, moveThreshold = 10 }: U
     firedRef.current = false
     const touch = e.touches[0]
     startPos.current = { x: touch.clientX, y: touch.clientY }
+    targetRef.current = e.target instanceof Element ? e.target : null
     clear()
     timerRef.current = setTimeout(() => {
+      const target = targetRef.current
+      targetRef.current = null
+      if (!target) return
       firedRef.current = true
       navigator.vibrate?.(50)
-      onLongPress({ x: touch.clientX, y: touch.clientY })
+      target.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+      }))
     }, delay)
-  }, [onLongPress, delay, clear])
+  }, [delay, clear])
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
     if (!timerRef.current) return

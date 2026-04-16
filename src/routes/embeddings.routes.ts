@@ -14,8 +14,16 @@ app.get("/config", async (c) => {
 app.put("/config", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const updated = await embeddingsSvc.updateEmbeddingConfig(userId, body);
-  return c.json(updated);
+  try {
+    const updated = await embeddingsSvc.updateEmbeddingConfig(userId, body);
+    return c.json(updated);
+  } catch (err: any) {
+    const msg = err?.message || "Failed to update embedding config";
+    if (/managed by the server owner/i.test(msg)) {
+      return c.json({ error: msg }, 403);
+    }
+    throw err;
+  }
 });
 
 app.post("/test", async (c) => {
@@ -155,6 +163,15 @@ app.post("/optimize", async (c) => {
     return c.json({ success: true });
   } catch (err: any) {
     return c.json({ error: err.message || "Optimize failed" }, 500);
+  }
+});
+
+app.get("/health", async (c) => {
+  try {
+    const health = await embeddingsSvc.getVectorStoreHealth();
+    return c.json(health);
+  } catch (err: any) {
+    return c.json({ error: err.message || "Health check failed" }, 500);
   }
 });
 

@@ -13,9 +13,9 @@ app.post("/upload", async (c) => {
   return c.json({ filename }, 201);
 });
 
-app.get("/:filename", (c) => {
+app.get("/:filename", async (c) => {
   const userId = c.get("userId");
-  const filepath = files.getFilePath(userId, c.req.param("filename"));
+  const filepath = await files.getFilePath(userId, c.req.param("filename"));
   if (!filepath) return c.json({ error: "Not found" }, 404);
   const response = new Response(Bun.file(filepath));
   response.headers.set("Cache-Control", "public, max-age=3600");
@@ -24,9 +24,9 @@ app.get("/:filename", (c) => {
   return response;
 });
 
-app.delete("/:filename", (c) => {
+app.delete("/:filename", async (c) => {
   const userId = c.get("userId");
-  const deleted = files.deleteFile(userId, c.req.param("filename"));
+  const deleted = await files.deleteFile(userId, c.req.param("filename"));
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });

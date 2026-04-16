@@ -45,8 +45,37 @@ function isCustom(e: ContextMenuEntry): e is ContextMenuCustom {
   return 'type' in e && e.type === 'custom'
 }
 
+// Module-level registry of currently-open context menus. Opening a new menu
+// closes all others so only one is ever visible, regardless of which widget
+// owns the state (built-in widgets each manage their own `contextMenu` state,
+// as do Spindle extensions).
+const openMenus = new Map<symbol, () => void>()
+
 export default function ContextMenu({ position, items, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
+  const instanceIdRef = useRef<symbol>(null as unknown as symbol)
+  if (instanceIdRef.current === null) instanceIdRef.current = Symbol('ContextMenu')
+
+  // Keep the latest onClose accessible from the module-level registry without
+  // re-running the open/close effect whenever an inline `() => setX(null)`
+  // onClose prop gets a new identity.
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose })
+
+  // Enforce the single-menu invariant. When this instance transitions to
+  // visible, close every other registered menu and register ourselves. On
+  // cleanup (position back to null or unmount), deregister.
+  useEffect(() => {
+    if (!position) return
+    const me = instanceIdRef.current
+    for (const [key, close] of Array.from(openMenus)) {
+      if (key !== me) close()
+    }
+    openMenus.set(me, () => onCloseRef.current())
+    return () => {
+      openMenus.delete(me)
+    }
+  }, [position])
 
   // Dismiss on click outside, Escape, or scroll.
   // Listen on both mousedown and pointerdown because some elements (e.g.

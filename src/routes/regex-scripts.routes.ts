@@ -46,7 +46,7 @@ app.post("/test", async (c) => {
   const userId = c.get("userId");
   const { find_regex, replace_string, flags, content } = await c.req.json();
   if (!find_regex || content === undefined) return c.json({ error: "find_regex and content are required" }, 400);
-  return c.json(svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content));
+  return c.json(await svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content));
 });
 
 // POST /export — export scripts
@@ -70,6 +70,16 @@ app.put("/reorder", async (c) => {
   if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
   svc.reorderRegexScripts(userId, ids);
   return c.json({ success: true });
+});
+
+// POST /bulk-delete — delete many scripts in one transaction
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const { ids } = await c.req.json();
+  if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
+  const stringIds = ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
+  const deleted = svc.deleteRegexScripts(userId, stringIds);
+  return c.json({ deleted, count: deleted.length });
 });
 
 // GET /:id — get by ID

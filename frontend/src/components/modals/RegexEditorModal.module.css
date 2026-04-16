@@ -39,6 +39,12 @@
   min-width: 0;
 }
 
+.monoText {
+  font-family: var(--lumiverse-mono, monospace);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
 /* ── Sections ────────────────────────────────── */
 
 .section {

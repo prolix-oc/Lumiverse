@@ -38,14 +38,14 @@ app.put("/:id", async (c) => {
   return c.json(persona);
 });
 
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const persona = svc.getPersona(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
 
   // Clean up images
   if (persona.image_id) images.deleteImage(userId, persona.image_id);
-  if (persona.avatar_path) files.deleteAvatar(persona.avatar_path);
+  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
   const origImageId = persona.metadata?.original_image_id;
   if (origImageId) images.deleteImage(userId, origImageId);
 
@@ -74,7 +74,7 @@ app.get("/:id/avatar", async (c) => {
   }
 
   if (info.avatar_path) {
-    const filepath = files.getAvatarPath(info.avatar_path);
+    const filepath = await files.getAvatarPath(info.avatar_path);
     if (filepath) {
       return createAvatarResolverResponse(
         filepath,
@@ -105,7 +105,7 @@ app.post("/:id/avatar", async (c) => {
 
   // Clean up old image if present
   if (persona.image_id) images.deleteImage(userId, persona.image_id);
-  if (persona.avatar_path) files.deleteAvatar(persona.avatar_path);
+  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
   const oldOriginalImageId = persona.metadata?.original_image_id;
   if (oldOriginalImageId) images.deleteImage(userId, oldOriginalImageId);
 

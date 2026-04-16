@@ -31,6 +31,14 @@ const updated = await spindle.characters.update(newChar.id, {
   tags: ['adventure', 'fantasy', 'action'],
 })
 
+// Attach world books to a character (replaces the current set)
+await spindle.characters.update(newChar.id, {
+  world_book_ids: ['lore-book-id', 'glossary-book-id'],
+})
+
+// Detach all world books
+await spindle.characters.update(newChar.id, { world_book_ids: [] })
+
 // Delete a character
 const deleted = await spindle.characters.delete(newChar.id)
 ```
@@ -63,6 +71,8 @@ const deleted = await spindle.characters.delete(newChar.id)
   alternate_greetings: string[]
   creator: string
   image_id: string | null
+  /** IDs of world books attached directly to this character. */
+  world_book_ids: string[]
   created_at: number   // unix epoch seconds
   updated_at: number
 }
@@ -84,10 +94,19 @@ const deleted = await spindle.characters.delete(newChar.id)
 | `tags` | `string[]` | No | Tags for organization |
 | `alternate_greetings` | `string[]` | No | Alternative first messages |
 | `creator` | `string` | No | Creator name |
+| `world_book_ids` | `string[]` | No | World books to attach to the character on creation |
 
 ## CharacterUpdateDTO
 
-Same fields as `CharacterCreateDTO`, but all are optional (including `name`).
+Same fields as `CharacterCreateDTO`, but all are optional (including `name`). Passing `world_book_ids` **replaces** the entire attached-book set; pass `[]` to detach all books, or omit the field to leave the existing attachments unchanged.
+
+## World Book Attachments
+
+`world_book_ids` exposes the array of world books attached directly to a character — the same list the built-in world book selector edits inside Lumiverse. The legacy single-id form is auto-migrated, so consumers can rely on the array form unconditionally.
+
+This is the only structured field surfaced from the character's internal `extensions` blob; alternate fields, alternate avatars, expressions, and other extension-only state remain internal. Non-string and duplicate IDs in `world_book_ids` are silently filtered server-side.
+
+Reading the attached world book *contents* still goes through the regular `spindle.world_books.*` API — `world_book_ids` is just the linkage layer.
 
 !!! note
     For user-scoped extensions, the user context is inferred automatically. For operator-scoped extensions, the user ID is resolved from the extension context. Characters are always scoped to a single user.

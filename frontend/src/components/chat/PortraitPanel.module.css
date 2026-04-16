@@ -46,7 +46,6 @@
 
 :global([data-glass]) .panel {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
   will-change: backdrop-filter;
 }
 

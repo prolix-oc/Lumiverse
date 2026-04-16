@@ -291,10 +291,13 @@ export default function ExpressionDisplay() {
     setPos(clampPos(raw.x, raw.y))
   }, [clampPos])
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (!dragging.current) return
     dragging.current = false
     if (isDragging.current) {
+      // Prevent the touch release from triggering interactions on elements below
+      e.preventDefault()
+      e.stopPropagation()
       requestAnimationFrame(() => {
         setPos((prev) => {
           setExpressionDisplay({ x: prev.x, y: prev.y })
@@ -324,8 +327,11 @@ export default function ExpressionDisplay() {
     setCustomSize({ width: newWidth, height: Math.max(150, Math.min(750, newHeight)) })
   }, [])
 
-  const handleResizeUp = useCallback(() => {
+  const handleResizeUp = useCallback((e: React.PointerEvent) => {
+    if (!resizing.current) return
     resizing.current = false
+    e.preventDefault()
+    e.stopPropagation()
     setExpressionDisplay({ sizePreset: 'custom', customWidth: customSize.width, customHeight: customSize.height })
   }, [customSize, setExpressionDisplay])
 
@@ -439,11 +445,13 @@ export default function ExpressionDisplay() {
 
   // ── Minimized state ──
   if (display.minimized) {
-    const handleMinimizedPointerUp = () => {
+    const handleMinimizedPointerUp = (e: React.PointerEvent) => {
       if (!dragging.current) return
       dragging.current = false
       if (isDragging.current) {
-        // Was a drag — persist position
+        // Was a drag — persist position, prevent touch from reaching chat below
+        e.preventDefault()
+        e.stopPropagation()
         requestAnimationFrame(() => {
           setPos((prev) => {
             setExpressionDisplay({ x: prev.x, y: prev.y })

@@ -41,7 +41,7 @@ const BUILT_IN_PATTERNS = [
   { id: "pat-openai-cl100k", tokenizer_id: "openai-cl100k", pattern: "^(gpt-4(?!o)|gpt-3\\.5)", priority: 90 },
   { id: "pat-claude", tokenizer_id: "claude", pattern: "^claude-", priority: 80 },
   { id: "pat-gemini", tokenizer_id: "gemma-3", pattern: "^(gemini-|gemma-)", priority: 80 },
-  { id: "pat-fallback", tokenizer_id: "approximate-4", pattern: ".*", priority: 0 },
+  { id: "pat-fallback", tokenizer_id: "approximate-4", pattern: ".*", priority: -1 },
 ];
 
 export function seedTokenizers(): void {

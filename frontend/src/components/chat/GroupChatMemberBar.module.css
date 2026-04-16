@@ -19,7 +19,6 @@
 
 :global([data-glass]) .bar {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 @media (max-width: 768px) {

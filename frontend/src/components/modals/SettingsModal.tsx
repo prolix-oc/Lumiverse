@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
-import { Settings, Shield, Palette, Sliders, MessageSquare, Users, PanelRight, Compass, Reply, HardDrive, RefreshCw, Puzzle, Database, Hash, Activity, Globe, Bell, Import } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -10,16 +10,19 @@ import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import { embeddingsApi } from '@/api/embeddings'
 import { imagesApi } from '@/api/images'
-import { PRESETS, DEFAULT_THEME } from '@/theme/presets'
 import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
-import ModeSelector from '@/components/panels/theme-panel/ModeSelector'
 import UserManagement from '@/components/settings/UserManagement'
 import MigrationSettings from '@/components/settings/MigrationSettings'
 import TokenizerManager from '@/components/settings/TokenizerManager'
 import Diagnostics from '@/components/settings/Diagnostics'
 import NotificationSettings from '@/components/settings/NotificationSettings'
+import MemoryCortexSettings from '@/components/settings/MemoryCortexSettings'
+import OperatorPanel from '@/components/settings/OperatorPanel'
+import VoiceSettings from '@/components/settings/VoiceSettings'
+import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettings'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
+import { getVisibleSettingsTabs } from '@/lib/settings-tab-registry'
 import styles from './SettingsModal.module.css'
 import clsx from 'clsx'
 
@@ -27,32 +30,12 @@ interface SettingsModalProps {
   onClose: () => void
 }
 
-const BASE_VIEWS = [
-  { id: 'general', icon: Settings, label: 'General' },
-  { id: 'display', icon: PanelRight, label: 'Display' },
-  { id: 'chat', icon: MessageSquare, label: 'Chat' },
-  { id: 'extensions', icon: Puzzle, label: 'Extensions' },
-  { id: 'guided', icon: Compass, label: 'Guided Gen' },
-  { id: 'quickReplies', icon: Reply, label: 'Quick Replies' },
-  { id: 'extensionPools', icon: HardDrive, label: 'Extension Pools' },
-  { id: 'embeddings', icon: Database, label: 'Embeddings' },
-  { id: 'appearance', icon: Palette, label: 'Appearance' },
-  { id: 'notifications', icon: Bell, label: 'Notifications' },
-  { id: 'advanced', icon: Sliders, label: 'Advanced' },
-  { id: 'lumihub', icon: Globe, label: 'LumiHub' },
-  { id: 'danger', icon: Shield, label: 'Danger Zone' },
-  { id: 'diagnostics', icon: Activity, label: 'Diagnostics' },
-] as const
-
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const settingsActiveView = useStore((s) => s.settingsActiveView)
   const user = useStore((s) => s.user)
-  const [activeView, setActiveView] = useState(settingsActiveView || 'general')
+  const [activeView, setActiveView] = useState(settingsActiveView || 'display')
 
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin'
-  const VIEWS = isAdmin
-    ? [...BASE_VIEWS, { id: 'tokenizers' as const, icon: Hash, label: 'Tokenizers' }, { id: 'users' as const, icon: Users, label: 'Users' }, { id: 'migration' as const, icon: Import, label: 'Migration' }]
-    : [...BASE_VIEWS]
+  const VIEWS = useMemo(() => getVisibleSettingsTabs(user?.role), [user?.role])
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose}>
@@ -71,17 +54,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
         <div className={styles.body}>
           <nav className={styles.sidebar}>
-            {VIEWS.map((view) => {
-              const Icon = view.icon
+            {VIEWS.map((tab) => {
+              const Icon = tab.tabIcon
               return (
                 <button
-                  key={view.id}
+                  key={tab.id}
                   type="button"
-                  className={clsx(styles.navBtn, activeView === view.id && styles.navBtnActive)}
-                  onClick={() => setActiveView(view.id)}
+                  className={clsx(styles.navBtn, activeView === tab.id && styles.navBtnActive)}
+                  onClick={() => setActiveView(tab.id)}
                 >
                   <Icon size={14} />
-                  <span>{view.label}</span>
+                  <span>{tab.shortName}</span>
                 </button>
               )
             })}
@@ -107,16 +90,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
 function SettingsView({ view }: { view: string }) {
   switch (view) {
-    case 'general':
-      return <GeneralSettings />
     case 'display':
       return <DisplaySettings />
     case 'chat':
       return <ChatSettings />
     case 'extensions':
       return <ExtensionSettingsView />
-    case 'appearance':
-      return <AppearanceSettings />
     case 'guided':
       return <GuidedGenerationSettings />
     case 'quickReplies':
@@ -129,18 +108,24 @@ function SettingsView({ view }: { view: string }) {
       return <EmbeddingsSettings />
     case 'lumihub':
       return <LumiHubSettings />
-    case 'danger':
-      return <DangerZone />
     case 'tokenizers':
       return <TokenizerManager />
     case 'users':
       return <UserManagement />
+    case 'memoryCortex':
+      return <MemoryCortexSettings />
     case 'notifications':
       return <NotificationSettings />
+    case 'voice':
+      return <VoiceSettings />
+    case 'mcpServers':
+      return <McpServerSettings />
     case 'diagnostics':
       return <Diagnostics />
     case 'migration':
       return <MigrationSettings />
+    case 'operator':
+      return <OperatorPanel />
     default:
       return <div className={styles.placeholder}>Select a settings category</div>
   }
@@ -150,29 +135,16 @@ function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-function GeneralSettings() {
-  const enableLandingPage = useStore((s) => s.enableLandingPage)
-  const setSetting = useStore((s) => s.setSetting)
-
-  return (
-    <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>General</h3>
-
-      <Toggle.Checkbox
-        checked={enableLandingPage}
-        onChange={(checked) => setSetting('enableLandingPage', checked)}
-        label="Enable landing page"
-      />
-    </div>
-  )
-}
-
 function DisplaySettings() {
   const drawerSettings = useStore((s) => s.drawerSettings)
   const modalWidthMode = useStore((s) => s.modalWidthMode)
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const toastPosition = useStore((s) => s.toastPosition)
+  const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
+  const chatHeadsSize = useStore((s) => s.chatHeadsSize)
+  const chatHeadsDirection = useStore((s) => s.chatHeadsDirection)
+  const chatHeadsOpacity = useStore((s) => s.chatHeadsOpacity)
   const setSetting = useStore((s) => s.setSetting)
 
   const updateDrawer = (patch: Partial<DrawerSettings>) => {
@@ -279,6 +251,13 @@ function DisplaySettings() {
         </div>
       </div>
 
+      <Toggle.Checkbox
+        checked={drawerSettings.showTabLabels ?? false}
+        onChange={(checked) => updateDrawer({ showTabLabels: checked })}
+        label="Show tab labels"
+        hint="Display short names below each tab icon in the sidebar"
+      />
+
       <div className={styles.field}>
         <label className={styles.fieldLabel}>PANEL WIDTH</label>
         <div className={styles.segmented}>
@@ -344,6 +323,65 @@ function DisplaySettings() {
           ))}
         </div>
       </div>
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>Chat Heads</h3>
+
+      <Toggle.Checkbox
+        checked={chatHeadsEnabled}
+        onChange={(checked) => setSetting('chatHeadsEnabled', checked)}
+        label="Show chat heads"
+        hint="Display floating indicators for background generations"
+      />
+
+      {chatHeadsEnabled && (
+        <>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>SIZE ({chatHeadsSize}px)</label>
+            <div className={styles.rangeRow}>
+              <input
+                type="range"
+                className={styles.rangeSlider}
+                min={32}
+                max={64}
+                step={4}
+                value={chatHeadsSize}
+                onChange={(e) => setSetting('chatHeadsSize', parseInt(e.target.value, 10))}
+              />
+            </div>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>LAYOUT</label>
+            <div className={styles.segmented}>
+              {(['column', 'row'] as const).map((dir) => (
+                <button
+                  key={dir}
+                  type="button"
+                  className={`${styles.segmentedBtn} ${chatHeadsDirection === dir ? styles.segmentedBtnActive : ''}`}
+                  onClick={() => setSetting('chatHeadsDirection', dir)}
+                >
+                  {dir === 'column' ? 'Vertical' : 'Horizontal'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>OPACITY ({Math.round(chatHeadsOpacity * 100)}%)</label>
+            <div className={styles.rangeRow}>
+              <input
+                type="range"
+                className={styles.rangeSlider}
+                min={20}
+                max={100}
+                step={5}
+                value={Math.round(chatHeadsOpacity * 100)}
+                onChange={(e) => setSetting('chatHeadsOpacity', parseInt(e.target.value, 10) / 100)}
+              />
+            </div>
+          </div>
+        </>
+      )}
 
       <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>Pagination</h3>
 
@@ -630,6 +668,26 @@ function ChatSettings() {
           </p>
         </div>
       )}
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Message Info</h3>
+
+      <Toggle.Checkbox
+        checked={useStore((s) => s.showMessageTokenCount ?? true)}
+        onChange={(checked) => setSetting('showMessageTokenCount', checked)}
+        label="Show token count in message pill"
+        hint="Displays the token count for assistant messages in the timestamp badge below each message"
+      />
+
+      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Swipe Navigation</h3>
+      <p className={styles.helperText}>
+        Navigate message swipes using touch gestures (mobile) or arrow keys (desktop). Hold Shift and hover to target a specific message.
+      </p>
+
+      <Toggle.Checkbox
+        checked={useStore((s) => s.swipeGesturesEnabled)}
+        onChange={(checked) => setSetting('swipeGesturesEnabled', checked)}
+        label="Enable swipe gestures & keyboard shortcuts"
+      />
     </div>
   )
 }
@@ -1274,75 +1332,6 @@ function ExtensionPoolSettings() {
   )
 }
 
-function AppearanceSettings() {
-  const theme = useStore((s) => s.theme) as import('@/types/theme').ThemeConfig | null
-  const setTheme = useStore((s) => s.setTheme)
-  const openDrawer = useStore((s) => s.openDrawer)
-  const closeSettings = useStore((s) => s.closeSettings)
-
-  const current = theme ?? DEFAULT_THEME
-  const presetName = PRESETS.find((p) => p.id === current.id)?.name ?? 'Custom'
-
-  return (
-    <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>Appearance</h3>
-
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>Mode</label>
-        <ModeSelector value={current.mode} onChange={(mode) => {
-          const next = { ...current, mode }
-          if (!next.characterAware) next.id = 'custom'
-          setTheme(next)
-        }} />
-      </div>
-
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>Preset</label>
-        <select
-          className={styles.select}
-          value={current.id}
-          onChange={(e) => {
-            const preset = PRESETS.find((p) => p.id === e.target.value)
-            if (preset) setTheme(preset)
-          }}
-        >
-          {PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-          {!PRESETS.some((p) => p.id === current.id) && (
-            <option value={current.id}>Custom</option>
-          )}
-        </select>
-      </div>
-
-      <div className={styles.field}>
-        <button
-          type="button"
-          className={styles.select}
-          style={{ cursor: 'pointer', textAlign: 'left' }}
-          onClick={() => {
-            closeSettings()
-            openDrawer('theme')
-          }}
-        >
-          Open Theme Panel
-        </button>
-      </div>
-
-      <div className={styles.field}>
-        <button
-          type="button"
-          className={styles.select}
-          style={{ cursor: 'pointer', textAlign: 'left' }}
-          onClick={() => setTheme(null)}
-        >
-          Reset to Default
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function EmbeddingsSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -1369,8 +1358,23 @@ function EmbeddingsSettings() {
     load()
   }, [])
 
+  const PROVIDER_DEFAULTS: Record<string, { api_url: string; model: string }> = {
+    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openai: { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings', model: 'text-embedding-3-small' },
+    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings', model: 'text-embedding-3-small' },
+    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings', model: 'text-embedding-3-small' },
+  }
+
   const update = (patch: Partial<EmbeddingConfig>) => {
     if (!cfg) return
+    // When provider changes, auto-fill URL and model with provider defaults
+    if (patch.provider && patch.provider !== cfg.provider) {
+      const defaults = PROVIDER_DEFAULTS[patch.provider]
+      if (defaults) {
+        patch = { ...patch, api_url: defaults.api_url, model: defaults.model }
+      }
+    }
     setCfg({ ...cfg, ...patch })
   }
 
@@ -1396,6 +1400,7 @@ function EmbeddingsSettings() {
         vectorize_chat_messages: cfg.vectorize_chat_messages,
         vectorize_chat_documents: cfg.vectorize_chat_documents,
         chat_memory_mode: cfg.chat_memory_mode,
+        request_timeout: cfg.request_timeout,
         api_key: apiKey.trim() ? apiKey.trim() : undefined,
       })
       setCfg(saved)
@@ -1450,7 +1455,7 @@ function EmbeddingsSettings() {
     },
     {
       label: 'World-book vectorization enabled',
-      description: 'Allows lorebook entries to be indexed and searched semantically.',
+      description: 'Allows lorebook entries to be indexed and searched with vectors.',
       complete: cfg.vectorize_world_books,
     },
   ]
@@ -1458,10 +1463,18 @@ function EmbeddingsSettings() {
   const checklistPercent = Math.round((completedChecklistCount / setupChecklist.length) * 100)
   const checklistReady = completedChecklistCount === setupChecklist.length
 
+  const inherited = !!cfg.inherited
+
   return (
     <div className={styles.settingsSection}>
       <h3 className={styles.sectionTitle}>Embeddings</h3>
-      <p className={styles.placeholder}>Configure vector embeddings for long-term memory retrieval. Vectorizes world books, chat messages, and documents for semantic search during generation.</p>
+      <p className={styles.placeholder}>Configure vector embeddings for long-term memory retrieval. Vectorizes world books, chat messages, and documents for vector search during generation.</p>
+
+      {inherited && (
+        <p className={styles.placeholder} style={{ fontStyle: 'normal', padding: '8px 12px', border: '1px solid var(--lumiverse-border-subtle)', borderRadius: 6, background: 'var(--lumiverse-surface-raised)' }}>
+          These embedding settings are managed by the server owner. Your account inherits the shared configuration and uses the owner's API key — you cannot change the provider, model, or key here. Test verifies the inherited connection works for your account.
+        </p>
+      )}
 
       {error && <p className={styles.errorText}>{error}</p>}
       {success && <p className={styles.successText}>{success}</p>}
@@ -1541,7 +1554,7 @@ function EmbeddingsSettings() {
         <label className={styles.fieldLabel}>API URL</label>
         <input className={styles.select} value={cfg.api_url} onChange={(e) => update({ api_url: e.target.value })} />
         <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
-          Base domain auto-appends /v1/embeddings. Custom paths (e.g. /v1/embeddings) are used as-is.
+          Auto-appends /v1/embeddings to base domains and /embeddings to partial paths (e.g. /v1). Full paths ending in /embeddings are used as-is.
         </span>
       </div>
 
@@ -1668,15 +1681,33 @@ function EmbeddingsSettings() {
         </div>
       )}
       <div className={styles.field}>
-        <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
+        <label className={styles.fieldLabel}>Request Timeout (seconds)</label>
         <input
-          className={styles.select}
-          type="password"
-          value={apiKey}
-          placeholder="Paste a new key to replace"
-          onChange={(e) => setApiKey(e.target.value)}
+          className={styles.numberInput}
+          type="number"
+          min={0}
+          max={300}
+          step={5}
+          value={cfg.request_timeout ?? 60}
+          onChange={(e) => update({ request_timeout: Math.max(0, Math.min(300, Number(e.target.value || 60))) })}
         />
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          Max seconds to wait for an embedding API response. Increase for slow providers or large batches. 0 = no timeout.
+        </span>
       </div>
+
+      {!inherited && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>API Key {cfg.has_api_key ? '(configured)' : '(not configured)'}</label>
+          <input
+            className={styles.select}
+            type="password"
+            value={apiKey}
+            placeholder="Paste a new key to replace"
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </div>
+      )}
 
       <Toggle.Checkbox
         checked={cfg.vectorize_world_books}
@@ -1697,7 +1728,7 @@ function EmbeddingsSettings() {
       />
 
       <div className={styles.drawerRow}>
-        <Button size="sm" onClick={save} disabled={saving} loading={saving}>
+        <Button size="sm" onClick={save} disabled={saving || inherited} loading={saving}>
           {saving ? 'Saving...' : 'Save Embedding Settings'}
         </Button>
         <Button size="sm" onClick={test} disabled={testing || saving} loading={testing}>
@@ -1705,7 +1736,9 @@ function EmbeddingsSettings() {
         </Button>
       </div>
       <p className={styles.placeholder}>
-        Testing auto-detects native model dimensions and applies them to this configuration.
+        {inherited
+          ? 'Testing verifies the inherited embedding connection without changing any settings.'
+          : 'Testing auto-detects native model dimensions and applies them to this configuration.'}
       </p>
     </div>
   )
@@ -2312,79 +2345,3 @@ function LumiHubSettings() {
   )
 }
 
-function DangerZone() {
-  const [resetting, setResetting] = useState(false)
-  const [confirmReset, setConfirmReset] = useState(false)
-  const [resetResult, setResetResult] = useState<string | null>(null)
-
-  const handleForceResetLanceDB = async () => {
-    if (!confirmReset) {
-      setConfirmReset(true)
-      return
-    }
-    setResetting(true)
-    setResetResult(null)
-    setConfirmReset(false)
-    try {
-      const res = await embeddingsApi.forceReset()
-      setResetResult(
-        res.deleted
-          ? 'LanceDB vector store deleted and reset. It will reinitialize on next use.'
-          : 'No LanceDB directory found — nothing to delete. SQLite flags reset.'
-      )
-    } catch (err: any) {
-      setResetResult(`Reset failed: ${err.body?.error || err.message || 'Unknown error'}`)
-    } finally {
-      setResetting(false)
-    }
-  }
-
-  return (
-    <div className={styles.settingsSection}>
-      <h3 className={clsx(styles.sectionTitle, styles.danger)}>Danger Zone</h3>
-
-      <div className={styles.field}>
-        <span className={styles.fieldLabel}>Force Reset LanceDB Vector Store</span>
-        <p style={{ fontSize: 12, color: 'var(--lumiverse-text-dim)', margin: 0 }}>
-          Completely wipes the LanceDB directory, clears all cached embeddings, and resets vectorization
-          flags. Useful for recovering from corruption (e.g. &quot;vector not divisible by 8&quot; errors).
-          The vector store will reinitialize automatically on next use.
-        </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={handleForceResetLanceDB}
-            disabled={resetting}
-            loading={resetting}
-          >
-            {resetting
-              ? 'Resetting...'
-              : confirmReset
-              ? 'Are you sure? Click again to confirm'
-              : 'Reset LanceDB'}
-          </Button>
-          {confirmReset && (
-            <Button
-              size="sm"
-              onClick={() => setConfirmReset(false)}
-            >
-              Cancel
-            </Button>
-          )}
-        </div>
-        {resetResult && (
-          <p style={{
-            fontSize: 12,
-            color: resetResult.startsWith('Reset failed')
-              ? 'var(--lumiverse-error)'
-              : 'var(--lumiverse-success, #4ade80)',
-            margin: 0,
-          }}>
-            {resetResult}
-          </p>
-        )}
-      </div>
-    </div>
-  )
-}

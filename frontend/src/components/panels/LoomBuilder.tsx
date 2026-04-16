@@ -55,10 +55,11 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
+import { ModalShell } from '@/components/shared/ModalShell'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
-import { createBlock, createMarkerBlock } from '@/lib/loom/service'
+import { computeGroups, createBlock, createMarkerBlock } from '@/lib/loom/service'
 import {
   MARKER_NAMES,
   PROMPT_TEMPLATES,
@@ -72,7 +73,6 @@ import {
   DEFAULT_COMPLETION_SETTINGS,
   DEFAULT_ADVANCED_SETTINGS,
 } from '@/lib/loom/constants'
-import { computeGroups } from '@/lib/loom/service'
 import type { PromptBlock, LoomConnectionProfile, SamplerParam, MacroGroup } from '@/lib/loom/types'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import NumberStepper from '@/components/shared/NumberStepper'
@@ -145,9 +145,14 @@ function SortableCategoryItem({
       <Button size="icon-sm" variant="ghost" onClick={onToggleCollapse} title={isCollapsed ? 'Expand category' : 'Collapse category'}>
         {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
       </Button>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }} onClick={onToggleCollapse}>
+      <div className={s.categoryMeta} onClick={onToggleCollapse}>
         <span className={clsx(s.categoryName, s.truncTooltip)} data-tooltip={displayName}>{displayName}</span>
         <span className={s.categoryCount}>({childCount})</span>
+        {block.categoryMode && (
+          <span className={s.groupBadge}>
+            {block.categoryMode === 'radio' ? 'pick one' : 'multi'}
+          </span>
+        )}
       </div>
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? 'Disable category' : 'Enable category'}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -217,15 +222,13 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented }: Sort
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? 'Disable' : 'Enable'}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
+      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title="Edit">
+        <Edit2 size={14} />
+      </Button>
       {!block.isLocked && (
-        <>
-          <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title="Edit">
-            <Edit2 size={14} />
-          </Button>
-          <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title="Delete">
-            <Trash2 size={14} />
-          </Button>
-        </>
+        <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title="Delete">
+          <Trash2 size={14} />
+        </Button>
       )}
     </div>
   )
@@ -252,6 +255,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
   const [depth, setDepth] = useState(block.depth || 0)
   const [isLocked, setIsLocked] = useState(block.isLocked || false)
   const [injectionTrigger, setInjectionTrigger] = useState<string[]>(block.injectionTrigger || [])
+  const [categoryMode, setCategoryMode] = useState<PromptBlock['categoryMode']>(block.categoryMode ?? null)
   const [showMacros, setShowMacros] = useState(false)
   const [macroSearch, setMacroSearch] = useState('')
   const [showPreview, setShowPreview] = useState(false)
@@ -261,6 +265,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
   const [showExpandedEditor, setShowExpandedEditor] = useState(false)
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const activeChatId = __contextMeterStore((s) => s.activeChatId)
 
   // Debounced macro preview resolution
   useEffect(() => {
@@ -272,7 +277,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
     previewTimerRef.current = setTimeout(() => {
       setPreviewLoading(true)
-      resolveMacrosApi({ template: content })
+      resolveMacrosApi({ template: content, ...(activeChatId ? { chat_id: activeChatId } : {}) })
         .then((res) => {
           setPreviewText(res.text)
           setPreviewDiagnostics(res.diagnostics)
@@ -284,13 +289,13 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
         .finally(() => setPreviewLoading(false))
     }, 500)
     return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
-  }, [content, showPreview])
+  }, [content, showPreview, activeChatId])
 
   const handlePositionChange = (newPosition: string) => {
     const pos = newPosition as PromptBlock['position']
     setPosition(pos)
     const isAppend = role === 'user_append' || role === 'assistant_append'
-    if (pos === 'post_history' && !isAppend) setRole('assistant')
+    if (pos === 'post_history' && !isAppend && role === 'system') setRole('user')
     else if (pos === 'pre_history' && role === 'assistant') setRole('system')
   }
 
@@ -301,6 +306,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
       position: isAppend ? 'pre_history' : position,
       depth: (position === 'in_history' || isAppend) ? depth : 0,
       isLocked, injectionTrigger,
+      categoryMode: block.marker === 'category' ? categoryMode : null,
     })
   }
 
@@ -361,13 +367,12 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
             <div className={s.formGroup} style={{ flex: 1, minWidth: '120px' }}>
               <label className={s.label}>Role</label>
               <select className={s.select} value={role} onChange={e => setRole(e.target.value as PromptBlock['role'])}>
-                <option value="system">System</option>
+                {position !== 'post_history' && <option value="system">System</option>}
                 <option value="user">User</option>
                 <option value="assistant">Assistant</option>
                 <option value="user_append">User Append</option>
                 <option value="assistant_append">Assistant Append</option>
               </select>
-              {position === 'post_history' && role !== 'user_append' && role !== 'assistant_append' && <div className={s.postHistoryNote}>Post-history blocks are sent as assistant messages.</div>}
             </div>
             {role !== 'user_append' && role !== 'assistant_append' && (
               <div className={s.formGroup} style={{ flex: 1, minWidth: '140px' }}>
@@ -452,6 +457,24 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
             <Toggle.Checkbox checked={isLocked} onChange={setIsLocked} label={<><Lock size={14} /> Lock block (prevent accidental edits)</>} />
           </div>
 
+          {block.marker === 'category' && (
+            <div className={s.formGroup}>
+              <label className={s.label}>Category Mode</label>
+              <select
+                className={s.select}
+                value={categoryMode || ''}
+                onChange={e => setCategoryMode((e.target.value || null) as PromptBlock['categoryMode'])}
+              >
+                <option value="">Normal toggles</option>
+                <option value="checkbox">Multi-select</option>
+                <option value="radio">Pick one</option>
+              </select>
+              <span className={s.settingsHint}>
+                Applies to the blocks inside this category. Ungrouped blocks and categories left on normal toggles behave exactly as they do now.
+              </span>
+            </div>
+          )}
+
           <div className={s.formGroup}>
             <label className={s.label}>Injection Triggers</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -492,18 +515,23 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
 interface PresetSelectorProps {
   registry: Record<string, { name: string; blockCount: number }>
   activePresetId: string | null
+  activePresetName: string | null
   onSelect: (id: string | null) => void
   onCreate: (name: string) => void
+  onRename: (name: string) => void
   onDuplicate: () => void
   onDelete: () => void
   onImport: (type: string) => void
   onExport: () => void
+  onExportLegacy: () => void
 }
 
-function PresetSelector({ registry, activePresetId, onSelect, onCreate, onDuplicate, onDelete, onImport, onExport }: PresetSelectorProps) {
+function PresetSelector({ registry, activePresetId, activePresetName, onSelect, onCreate, onRename, onDuplicate, onDelete, onImport, onExport, onExportLegacy }: PresetSelectorProps) {
   const [showMenu, setShowMenu] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [showRename, setShowRename] = useState(false)
   const [newName, setNewName] = useState('')
+  const [renameName, setRenameName] = useState('')
   const registryEntries = Object.entries(registry)
 
   const handleCreate = () => {
@@ -511,6 +539,13 @@ function PresetSelector({ registry, activePresetId, onSelect, onCreate, onDuplic
     onCreate(newName.trim())
     setNewName('')
     setShowCreate(false)
+  }
+
+  const handleRename = () => {
+    if (!renameName.trim()) return
+    onRename(renameName.trim())
+    setRenameName('')
+    setShowRename(false)
   }
 
   return (
@@ -531,8 +566,10 @@ function PresetSelector({ registry, activePresetId, onSelect, onCreate, onDuplic
             <MenuButton icon={<Plus size={14} />} label="New Preset" onClick={() => { setShowCreate(true); setShowMenu(false) }} />
             {activePresetId && (
               <>
+                <MenuButton icon={<Edit2 size={14} />} label="Rename" onClick={() => { setRenameName(activePresetName || ''); setShowRename(true); setShowMenu(false) }} />
                 <MenuButton icon={<Copy size={14} />} label="Duplicate" onClick={() => { onDuplicate(); setShowMenu(false) }} />
                 <MenuButton icon={<Download size={14} />} label="Export Loom JSON" onClick={() => { onExport(); setShowMenu(false) }} />
+                <MenuButton icon={<Download size={14} />} label="Export Legacy Preset" onClick={() => { onExportLegacy(); setShowMenu(false) }} />
                 <hr className={s.menuDivider} />
                 <MenuButton icon={<Trash2 size={14} />} label="Delete" danger onClick={() => { onDelete(); setShowMenu(false) }} />
               </>
@@ -544,18 +581,33 @@ function PresetSelector({ registry, activePresetId, onSelect, onCreate, onDuplic
         )}
       </div>
 
-      {showCreate && (
-        <div className={s.createOverlay} onClick={() => setShowCreate(false)}>
-          <div className={s.createDialog} onClick={e => e.stopPropagation()}>
-            <h4 className={s.createTitle}>New Loom Preset</h4>
-            <input className={s.input} style={{ width: '100%', boxSizing: 'border-box' }} placeholder="Preset name" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreate()} autoFocus />
-            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
-              <button className={s.btn} onClick={() => setShowCreate(false)} type="button">Cancel</button>
-              <button className={clsx(s.btn, s.btnPrimary)} onClick={handleCreate} type="button">Create</button>
-            </div>
+      <ModalShell isOpen={showCreate} onClose={() => setShowCreate(false)} maxWidth="clamp(320px, 90vw, min(420px, var(--lumiverse-content-max-width, 420px)))" className={s.presetNameModal}>
+        <div className={s.presetNameHeader}>
+          <Plus size={16} />
+          <h3 className={s.presetNameTitle}>New Loom Preset</h3>
+        </div>
+        <div className={s.presetNameBody}>
+          <input className={s.presetNameInput} placeholder="Preset name" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreate()} autoFocus />
+          <div className={s.presetNameActions}>
+            <button type="button" className={clsx(s.presetNameBtn, s.presetNameBtnCancel)} onClick={() => setShowCreate(false)}>Cancel</button>
+            <button type="button" className={clsx(s.presetNameBtn, s.presetNameBtnSubmit)} onClick={handleCreate} disabled={!newName.trim()}>Create</button>
           </div>
         </div>
-      )}
+      </ModalShell>
+
+      <ModalShell isOpen={showRename} onClose={() => setShowRename(false)} maxWidth="clamp(320px, 90vw, min(420px, var(--lumiverse-content-max-width, 420px)))" className={s.presetNameModal}>
+        <div className={s.presetNameHeader}>
+          <Edit2 size={16} />
+          <h3 className={s.presetNameTitle}>Rename Preset</h3>
+        </div>
+        <div className={s.presetNameBody}>
+          <input className={s.presetNameInput} placeholder="Preset name" value={renameName} onChange={e => setRenameName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleRename()} autoFocus />
+          <div className={s.presetNameActions}>
+            <button type="button" className={clsx(s.presetNameBtn, s.presetNameBtnCancel)} onClick={() => setShowRename(false)}>Cancel</button>
+            <button type="button" className={clsx(s.presetNameBtn, s.presetNameBtnSubmit)} onClick={handleRename} disabled={!renameName.trim()}>Rename</button>
+          </div>
+        </div>
+      </ModalShell>
     </div>
   )
 }
@@ -783,6 +835,15 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
             </div>
           )}
           <hr className={s.menuDivider} style={{ margin: '8px 0 4px' }} />
+          <div style={{ padding: '2px 0 4px' }}>
+            <Toggle.Checkbox
+              checked={overrides.streaming !== false}
+              onChange={(v) => onSaveSamplers({ ...overrides, enabled: true, streaming: v })}
+              label="Stream response"
+              hint="Disable to receive the full response at once instead of token-by-token"
+            />
+          </div>
+          <hr className={s.menuDivider} style={{ margin: '4px 0 4px' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0 4px' }}>
             <span className={s.samplerLabel}>Custom Body</span>
             <Toggle.Checkbox checked={!!body.enabled} onChange={handleToggleCustomBody} label="Enabled" />
@@ -1101,6 +1162,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     saveBlocks,
     deletePreset,
     duplicatePreset,
+    renamePreset,
     addBlock,
     removeBlock,
     updateBlock,
@@ -1113,9 +1175,28 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     importFromFile,
     importFromST,
     exportInternal,
+    exportLegacy,
   } = useLoomBuilder()
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+  const addToast = __contextMeterStore((s) => s.addToast)
+
+  const reapplyDefaults = useCallback(() => {
+    const binding = presetProfiles.defaults
+    if (!binding || !activePreset?.blocks?.length) return
+
+    const updatedBlocks = activePreset.blocks.map(b =>
+      b.id in binding.block_states ? { ...b, enabled: binding.block_states[b.id] } : b
+    )
+
+    const changed = updatedBlocks.some((b, i) => b.enabled !== activePreset.blocks[i].enabled)
+    if (changed) {
+      saveBlocks(updatedBlocks)
+      addToast({ type: 'success', message: 'Default profile reapplied' })
+    } else {
+      addToast({ type: 'info', message: 'Block states already match defaults' })
+    }
+  }, [presetProfiles.defaults, activePreset, saveBlocks, addToast])
 
   // Apply preset profile binding when the resolved binding changes (chat/character/default switch).
   // Uses refs for values we read but don't want to trigger the effect on.
@@ -1145,6 +1226,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importTypeRef = useRef<string>('json')
@@ -1271,6 +1353,11 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     }
   }, [confirmDelete, removeBlock])
 
+  const handleRenamePreset = useCallback(async (newName: string) => {
+    if (!activePresetId) return
+    await renamePreset(activePresetId, newName)
+  }, [activePresetId, renamePreset])
+
   const handleDuplicatePreset = useCallback(async () => {
     if (!activePreset || !activePresetId) return
     await duplicatePreset(activePresetId, `${activePreset.name} (Copy)`)
@@ -1292,6 +1379,19 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     a.click()
     URL.revokeObjectURL(url)
   }, [exportInternal])
+
+  const handleExportLegacy = useCallback(() => {
+    const data = exportLegacy()
+    if (!data) return
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${(data as any).name || 'preset'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setShowLegacyExportConfirm(false)
+  }, [exportLegacy])
 
   const handleImport = useCallback((type: string) => {
     importTypeRef.current = type
@@ -1338,12 +1438,15 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
           <PresetSelector
           registry={registry}
           activePresetId={activePresetId}
+          activePresetName={activePreset?.name ?? null}
           onSelect={selectPreset}
           onCreate={createPreset}
+          onRename={handleRenamePreset}
           onDuplicate={handleDuplicatePreset}
           onDelete={handleDeletePreset}
           onImport={handleImport}
           onExport={handleExport}
+          onExportLegacy={() => setShowLegacyExportConfirm(true)}
         />
       </div>
 
@@ -1383,13 +1486,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             ) : (
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
-                onClick={presetProfiles.clearDefaults}
+                onClick={reapplyDefaults}
                 disabled={presetProfiles.isLoading}
-                title="Clear default block states"
+                title="Reapply default block states"
                 type="button"
               >
-                <Camera size={10} /> Defaults
-                <X size={8} />
+                <RotateCcw size={10} /> Defaults
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.clearDefaults() }}
+                  title="Clear default block states"
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
               </button>
             )}
 
@@ -1407,13 +1518,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             ) : (
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
-                onClick={presetProfiles.unbindCharacter}
+                onClick={presetProfiles.bindToCharacter}
                 disabled={presetProfiles.isLoading}
-                title="Remove character binding"
+                title="Rebind current block states to this character"
                 type="button"
               >
-                <Unlink size={10} /> Character
-                <X size={8} />
+                <RotateCcw size={10} /> Character
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.unbindCharacter() }}
+                  title="Remove character binding"
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
               </button>
             )}
 
@@ -1431,13 +1550,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             ) : (
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
-                onClick={presetProfiles.unbindChat}
+                onClick={presetProfiles.bindToChat}
                 disabled={presetProfiles.isLoading}
-                title="Remove chat binding"
+                title="Rebind current block states to this chat"
                 type="button"
               >
-                <Unlink size={10} /> Chat
-                <X size={8} />
+                <RotateCcw size={10} /> Chat
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.unbindChat() }}
+                  title="Remove chat binding"
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
               </button>
             )}
           </div>
@@ -1592,6 +1719,17 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
 
       {/* Hidden file input for import */}
       <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleFileSelect} />
+
+      {/* Confirm legacy export */}
+        <ConfirmationModal
+          isOpen={showLegacyExportConfirm}
+          title="Export Legacy Preset"
+          message="Lumiverse-specific macros (e.g. {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) will not resolve in SillyTavern. Only standard macros like {{char}}, {{user}}, and {{persona}} are portable. Blocks using Lumiverse macros will be exported as-is with their raw macro text."
+          variant="warning"
+          confirmText="Export Anyway"
+          onConfirm={handleExportLegacy}
+          onCancel={() => setShowLegacyExportConfirm(false)}
+        />
 
       {/* Confirm delete dialog */}
         <ConfirmationModal

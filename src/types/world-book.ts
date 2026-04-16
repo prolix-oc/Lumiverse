@@ -120,6 +120,7 @@ export interface WorldBookDiagnostics {
     matched_comment: string | null;
     score_breakdown: {
       vectorSimilarity: number;
+      lexicalContentBoost: number;
       primaryExact: number;
       primaryPartial: number;
       secondaryExact: number;
@@ -132,8 +133,75 @@ export interface WorldBookDiagnostics {
       focusMissPenalty: number;
     };
     search_text_preview: string;
+    rerank_rank: number | null;
+    final_outcome_code:
+      | "injected_vector"
+      | "already_keyword"
+      | "blocked_by_group"
+      | "blocked_by_min_priority"
+      | "blocked_by_max_entries"
+      | "blocked_by_token_budget"
+      | "deduplicated"
+      | "blocked_during_final_assembly"
+      | "trimmed_by_top_k"
+      | "rejected_by_rerank_cutoff"
+      | "rejected_by_similarity_threshold";
+    final_outcome_label: string;
+    final_outcome_reason: string;
+  }>;
+  vector_trace: Array<{
+    entry_id: string;
+    comment: string;
+    score: number;
+    distance: number;
+    final_score: number;
+    lexical_candidate_score: number | null;
+    matched_primary_keys: string[];
+    matched_secondary_keys: string[];
+    matched_comment: string | null;
+    score_breakdown: {
+      vectorSimilarity: number;
+      lexicalContentBoost: number;
+      primaryExact: number;
+      primaryPartial: number;
+      secondaryExact: number;
+      secondaryPartial: number;
+      commentExact: number;
+      commentPartial: number;
+      focusBoost: number;
+      priority: number;
+      broadPenalty: number;
+      focusMissPenalty: number;
+    };
+    search_text_preview: string;
+    rerank_rank: number | null;
+    final_outcome_code:
+      | "injected_vector"
+      | "already_keyword"
+      | "blocked_by_group"
+      | "blocked_by_min_priority"
+      | "blocked_by_max_entries"
+      | "blocked_by_token_budget"
+      | "deduplicated"
+      | "blocked_during_final_assembly"
+      | "trimmed_by_top_k"
+      | "rejected_by_rerank_cutoff"
+      | "rejected_by_similarity_threshold";
+    final_outcome_label: string;
+    final_outcome_reason: string;
   }>;
   blocker_messages: string[];
+  deduplication?: {
+    removed_count: number;
+    removed: Array<{
+      removed_entry_id: string;
+      removed_entry_comment: string;
+      kept_entry_id: string;
+      kept_entry_comment: string;
+      tier: "exact" | "near-exact" | "fuzzy";
+      similarity?: number;
+    }>;
+  };
   stats: {
     keywordActivated: number;
     vectorActivated: number;
@@ -145,6 +213,7 @@ export interface WorldBookDiagnostics {
     evictedByMinPriority: number;
     estimatedTokens: number;
     recursionPassesUsed: number;
+    deduplicated: number;
     queryPreview: string;
   };
 }

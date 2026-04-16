@@ -20,6 +20,8 @@ import { activateWorldInfo } from "../world-info-activation.service";
 import { getCharacterWorldBookIds } from "../../utils/character-world-books";
 import { getCouncilSettings, getAvailableTools } from "./council-settings.service";
 import { BUILTIN_TOOLS_MAP } from "./builtin-tools";
+import { parseMcpToolName } from "./mcp-tools";
+import { getMcpClientManager } from "../mcp-client-manager";
 import { toolRegistry } from "../../spindle/tool-registry";
 import { getWorkerHost } from "../../spindle/lifecycle";
 import { getExpressionLabels, hasExpressions } from "../expressions.service";
@@ -53,6 +55,10 @@ interface ExecuteInput {
   /** Pre-computed enrichment from the generation chain. When provided, council tools
    *  use this data instead of independently loading character/persona/WI. */
   enrichment?: CouncilEnrichment;
+  /** When set, only re-execute these specific tool names (retry mode).
+   *  Members are filtered to only include those with matching failed tools.
+   *  Dice rolls are skipped — all matching members participate. */
+  retryToolNames?: string[];
 }
 
 /**
@@ -97,17 +103,34 @@ export async function executeCouncil(
 
   // Build available tools map
   const availableTools = new Map<string, CouncilToolDefinition>();
-  for (const t of getAvailableTools(input.userId)) {
+  for (const t of await getAvailableTools(input.userId)) {
     availableTools.set(t.name, t);
   }
 
-  // Roll dice for each member
-  const activeMembers = settings.members.filter((m) => {
-    if (m.tools.length === 0) return false;
-    if (m.chance >= 100) return true;
-    if (m.chance <= 0) return false;
-    return Math.random() * 100 < m.chance;
-  });
+  // In retry mode, skip dice rolls and only include members with failed tools
+  const retrySet = input.retryToolNames ? new Set(input.retryToolNames) : null;
+
+  let activeMembers: CouncilMember[];
+  if (retrySet) {
+    // Retry mode: filter members to only those with matching failed tools,
+    // and narrow their tool lists to just the failed ones
+    activeMembers = settings.members
+      .map((m) => ({
+        ...m,
+        tools: m.tools.filter((t) => retrySet.has(t)),
+      }))
+      .filter((m) => m.tools.length > 0);
+    console.debug("[council] Retry mode: %d members with %d failed tools to re-execute",
+      activeMembers.length, retrySet.size);
+  } else {
+    // Normal mode: roll dice for each member
+    activeMembers = settings.members.filter((m) => {
+      if (m.tools.length === 0) return false;
+      if (m.chance >= 100) return true;
+      if (m.chance <= 0) return false;
+      return Math.random() * 100 < m.chance;
+    });
+  }
 
   if (activeMembers.length === 0) {
     console.debug("[council] Skipped: no members survived dice roll (total=%d)", settings.members.length);
@@ -215,9 +238,24 @@ async function executeMemberTools(
     const extToolReg = toolRegistry.getTool(toolName);
     const isExtensionTool = !!extToolReg?.extension_id;
 
+    // Check if this is an MCP tool (route to connected MCP server)
+    const mcpMatch = !isExtensionTool ? parseMcpToolName(input.userId, toolName) : null;
+    const isMcpTool = !!mcpMatch;
+
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        if (isExtensionTool) {
+        if (isMcpTool) {
+          // Route to connected MCP server — the sidecar determines the arguments
+          // via function calling, but for council mode we pass an empty args object
+          // and let the MCP server handle the execution.
+          content = await getMcpClientManager().callTool(
+            input.userId,
+            mcpMatch!.serverId,
+            mcpMatch!.toolName,
+            {},
+            settings.toolsSettings.timeoutMs
+          );
+        } else if (isExtensionTool) {
           // Pass the bare tool name (not qualified) so extension handlers can
           // match easily, and forward the full chat context so tools can act on it.
           // Extension tools receive the exact same context as sidecar tools —
@@ -237,7 +275,9 @@ async function executeMemberTools(
             bareToolName,
             {
               context: contextSummary,
-              __userId: input.userId,
+              // Deadline hint is opaque and useful for the extension; userId is
+              // intentionally NOT included here — the worker host strips any
+              // attempted __userId injection before posting to the worker.
               __deadlineMs: Date.now() + settings.toolsSettings.timeoutMs,
             },
             settings.toolsSettings.timeoutMs
@@ -261,7 +301,7 @@ async function executeMemberTools(
         error = err.message;
         // Don't retry if the generation was aborted — bail out immediately
         if (input.signal?.aborted) break;
-        if (isExtensionTool) break;
+        if (isExtensionTool || isMcpTool) break;
         if (attempt < MAX_RETRIES - 1) {
           await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
         }
@@ -293,7 +333,13 @@ async function executeMemberTools(
   return results;
 }
 
-/** Route a tool call to the extension worker that registered it. */
+/**
+ * Route a tool call to the extension worker that registered it. We never
+ * forward the authenticated userId — extensions run in their own user-scoped
+ * worker and reach back via the RPC bridge under that identity. Passing the
+ * raw userId to the tool handler would let a malicious extension impersonate
+ * the user via its own internal state, defeating the worker boundary.
+ */
 async function invokeExtensionToolViaWorker(
   userId: string,
   extensionId: string,
@@ -305,7 +351,7 @@ async function invokeExtensionToolViaWorker(
   if (!host) {
     throw new Error(`Extension worker '${extensionId}' is not running`);
   }
-  return host.invokeExtensionTool(toolName, { ...args, __userId: userId }, timeoutMs);
+  return host.invokeExtensionTool(toolName, args, timeoutMs);
 }
 
 /** Call the sidecar LLM for a single tool. */
@@ -316,18 +362,22 @@ async function invokeSidecarTool(
   member: CouncilMember,
   identityMsg: string,
   contextMessages: LlmMessage[],
-  toolsSettings: { maxWordsPerTool: number; timeoutMs: number },
+  toolsSettings: { maxWordsPerTool: number; timeoutMs: number; allowUserControl?: boolean },
   signal?: AbortSignal,
   enrichment?: CouncilEnrichment
 ): Promise<string> {
   const brevityNote =
     toolsSettings.maxWordsPerTool > 0
-      ? `\n\nIMPORTANT: Keep your response under ${toolsSettings.maxWordsPerTool} words.`
+      ? `\n\nIMPORTANT — BREVITY REQUIREMENT: Keep each tool response field under ${toolsSettings.maxWordsPerTool} words. Be direct, specific, and actionable. No preamble, filler, or repetition. Every word must earn its place.`
       : "";
 
   const roleNote = member.role
-    ? `\nYour role on the council is: ${member.role}`
+    ? `\nYour role on the council is: ${member.role}\nWhen using your tools, consider how your role influences your perspective and recommendations. Draw upon your expertise as ${member.role} to provide valuable insights.`
     : "";
+
+  const userControlNote = toolsSettings.allowUserControl
+    ? `\n\n### User Character Guidance ###\nYou may plan and suggest actions, dialogue, thoughts, and development for ALL characters in the story, including the user's character. Treat all participants — including the user — as characters whose arcs, actions, and dialogue you can direct and shape.`
+    : `\n\n### User Character Guidance ###\nIMPORTANT: Do NOT plan actions, dialogue, thoughts, or decisions for the user's character. Focus exclusively on how the story's non-player characters should react, behave, and develop in response to the user's input. Your suggestions should only concern the characters, world, and narrative elements — never dictate what the user's character does, says, thinks, or feels.`;
 
   // Dynamic enrichment for expression detector — inject available labels
   let dynamicSuffix = "";
@@ -345,12 +395,12 @@ You are being asked to use the following analysis tool. Respond with your analys
 ## Tool: ${tool.displayName}
 ${tool.description}
 
-${tool.prompt}${dynamicSuffix}${brevityNote}`;
+${tool.prompt}${dynamicSuffix}${brevityNote}${userControlNote}`;
 
   const messages: LlmMessage[] = [
     { role: "system", content: systemPrompt },
     ...contextMessages,
-    { role: "user", content: `Please perform your ${tool.displayName} analysis on the story context provided above. Respond directly with your findings.` },
+    { role: "user", content: `Review the story context above. Provide specific, actionable input from your unique perspective as ${member.itemName}. Filter every contribution through your personality, biases, and worldview.` },
   ];
 
   // Resolve the connection to get the provider name
@@ -479,12 +529,12 @@ function buildMemberIdentity(userId: string, member: CouncilMember): string {
     const item = packsSvc.getLumiaItem(userId, member.itemId);
     if (item) {
       const parts: string[] = [];
-      if (item.definition) parts.push(`Definition: ${item.definition}`);
-      if (item.personality) parts.push(`Personality: ${item.personality}`);
-      if (item.behavior) parts.push(`Behavior: ${item.behavior}`);
+      if (item.definition) parts.push(`### Your Physical Identity ###\n${item.definition}`);
+      if (item.personality) parts.push(`### Your Personality ###\n${item.personality}`);
+      if (item.behavior) parts.push(`### Your Behavioral Patterns ###\n${item.behavior}`);
       if (parts.length > 0) {
-        identity += `\n\n## WHO YOU ARE\n${parts.join("\n\n")}`;
-        identity += `\n\nYou MUST analyze everything through the lens of this identity. Your perspective is shaped by who you are. Be biased toward your nature.`;
+        identity += `\n\n### WHO YOU ARE ###\n\n${parts.join("\n\n")}`;
+        identity += `\n\n### INSTRUCTION ###\nYou MUST answer ALL tool calls and contributions through the lens of your personality, behavior, and identity described above. Your biases, quirks, speech patterns, and perspective should color every observation and suggestion you make. Do NOT provide generic or neutral responses—filter everything through who you are. Your unique voice and worldview must be evident in every contribution.`;
       }
     }
   } catch {
@@ -495,7 +545,7 @@ function buildMemberIdentity(userId: string, member: CouncilMember): string {
 }
 
 /** Format tool results into the Markdown deliberation block. */
-function formatDeliberation(
+export function formatDeliberation(
   results: CouncilToolResult[],
   tools: Map<string, CouncilToolDefinition>
 ): string {

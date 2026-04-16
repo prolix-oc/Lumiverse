@@ -1,7 +1,7 @@
 import { env } from "../env";
 import * as managerSvc from "./manager.service";
 import type { ExtensionInfo } from "lumiverse-spindle-types";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
 
 export interface EphemeralPoolConfig {
@@ -41,7 +41,7 @@ function sanitizeOverrides(input: unknown): Record<string, number> {
   return out;
 }
 
-export function getEphemeralPoolConfig(): EphemeralPoolConfig {
+export async function getEphemeralPoolConfig(): Promise<EphemeralPoolConfig> {
   const base: EphemeralPoolConfig = {
     globalMaxBytes: env.spindleEphemeralGlobalMaxBytes,
     extensionDefaultMaxBytes: env.spindleEphemeralExtensionDefaultMaxBytes,
@@ -49,10 +49,11 @@ export function getEphemeralPoolConfig(): EphemeralPoolConfig {
     reservationTtlMs: env.spindleEphemeralReservationTtlMs,
   };
 
-  if (!existsSync(CONFIG_PATH)) return base;
+  const configFile = Bun.file(CONFIG_PATH);
+  if (!(await configFile.exists())) return base;
 
   try {
-    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    const raw = JSON.parse(await configFile.text());
     return {
       globalMaxBytes: parsePositiveInt(raw.globalMaxBytes, base.globalMaxBytes),
       extensionDefaultMaxBytes: parsePositiveInt(
@@ -70,10 +71,10 @@ export function getEphemeralPoolConfig(): EphemeralPoolConfig {
   }
 }
 
-export function updateEphemeralPoolConfig(
+export async function updateEphemeralPoolConfig(
   patch: Partial<EphemeralPoolConfig>
-): EphemeralPoolConfig {
-  const current = getEphemeralPoolConfig();
+): Promise<EphemeralPoolConfig> {
+  const current = await getEphemeralPoolConfig();
   const next: EphemeralPoolConfig = {
     globalMaxBytes: parsePositiveInt(patch.globalMaxBytes, current.globalMaxBytes),
     extensionDefaultMaxBytes: parsePositiveInt(
@@ -91,7 +92,7 @@ export function updateEphemeralPoolConfig(
   };
 
   mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), "utf-8");
+  await Bun.write(CONFIG_PATH, JSON.stringify(next, null, 2));
   return next;
 }
 
@@ -99,11 +100,12 @@ function getExtensionEphemeralBase(ext: ExtensionInfo): string {
   return resolve(managerSvc.getStoragePathForExtension(ext), ".ephemeral");
 }
 
-function getReservations(ext: ExtensionInfo): ReservationRow[] {
+async function getReservations(ext: ExtensionInfo): Promise<ReservationRow[]> {
   const path = join(getExtensionEphemeralBase(ext), ".reservations.json");
-  if (!existsSync(path)) return [];
+  const file = Bun.file(path);
+  if (!(await file.exists())) return [];
   try {
-    const rows = JSON.parse(readFileSync(path, "utf-8"));
+    const rows = JSON.parse(await file.text());
     if (!Array.isArray(rows)) return [];
     return rows.filter((r) => {
       return (
@@ -119,7 +121,7 @@ function getReservations(ext: ExtensionInfo): ReservationRow[] {
   }
 }
 
-function getExtensionUsage(ext: ExtensionInfo) {
+async function getExtensionUsage(ext: ExtensionInfo) {
   const base = getExtensionEphemeralBase(ext);
   const indexPath = join(base, ".index.json");
   const reservationsPath = join(base, ".reservations.json");
@@ -145,7 +147,7 @@ function getExtensionUsage(ext: ExtensionInfo) {
   }
 
   const now = Date.now();
-  const reservations = getReservations(ext)
+  const reservations = (await getReservations(ext))
     .map((r) => {
       const expiresAtMs = Date.parse(r.expiresAt);
       const expired = Number.isNaN(expiresAtMs) || expiresAtMs <= now;
@@ -168,12 +170,13 @@ function getExtensionUsage(ext: ExtensionInfo) {
   };
 }
 
-export function getEphemeralPoolOverview(options?: { includeReservations?: boolean }) {
+export async function getEphemeralPoolOverview(options?: { includeReservations?: boolean }) {
   const includeReservations = options?.includeReservations ?? false;
-  const cfg = getEphemeralPoolConfig();
+  const cfg = await getEphemeralPoolConfig();
 
-  const extensionRows = managerSvc.list().map((ext) => {
-    const usage = getExtensionUsage(ext);
+  const extensions = await managerSvc.list();
+  const extensionRows = await Promise.all(extensions.map(async (ext) => {
+    const usage = await getExtensionUsage(ext);
     const extensionMaxBytes =
       cfg.extensionMaxOverrides[ext.identifier] ?? cfg.extensionDefaultMaxBytes;
 
@@ -200,7 +203,7 @@ export function getEphemeralPoolOverview(options?: { includeReservations?: boole
           }))
         : undefined,
     };
-  });
+  }));
 
   const globalUsedBytes = extensionRows.reduce((sum, row) => sum + row.usedBytes, 0);
   const globalReservedBytes = extensionRows.reduce((sum, row) => sum + row.reservedBytes, 0);

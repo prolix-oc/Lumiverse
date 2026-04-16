@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride } from '@/types/store'
+import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride, BulkUpdateStatus } from '@/types/store'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/loader'
@@ -7,12 +7,15 @@ import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/lo
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
   extensionThemeOverrides: {},
+  mutedExtensionThemes: {},
   extensionOperationStatus: null,
+  bulkUpdateStatus: null,
   spindlePrivileged: false,
   pendingPermissionRequest: null,
   pendingTextEditor: null,
   pendingModal: null,
   pendingConfirm: null,
+  pendingInputPrompt: null,
   pendingContextMenu: null,
 
   loadExtensions: async () => {
@@ -166,6 +169,16 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     })
   },
 
+  dismissSpindleModal: (requestId: string) => {
+    set((state) => {
+      // Only clear if the requestId matches to avoid stale dismissals.
+      // Unlike closeSpindleModal, this does NOT send a WS message back —
+      // preventing an echo loop when the server initiates the close.
+      if (state.pendingModal?.requestId !== requestId) return state
+      return { ...state, pendingModal: null }
+    })
+  },
+
   openSpindleConfirm: (request) => {
     set({ pendingConfirm: request })
   },
@@ -184,12 +197,45 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     )
   },
 
+  openInputPrompt: (request) => {
+    set({ pendingInputPrompt: request })
+  },
+
+  closeInputPrompt: (requestId: string, value: string | null) => {
+    set({ pendingInputPrompt: null })
+    wsClient.send({
+      type: 'SPINDLE_INPUT_PROMPT_RESULT',
+      requestId,
+      value,
+      cancelled: value === null,
+    })
+  },
+
   openContextMenu: (request: PendingContextMenuRequest) => {
+    // If another extension already has a pending context menu, cancel it so
+    // its showContextMenu() promise resolves with null instead of being
+    // silently orphaned when we overwrite the slot. This preserves ownership
+    // correctness: the previous extension sees cancellation, and only the
+    // new request owns the visible menu.
+    const prev = get().pendingContextMenu
+    if (prev && prev.requestId !== request.requestId) {
+      window.dispatchEvent(
+        new CustomEvent('spindle:context-menu-resolved', {
+          detail: { requestId: prev.requestId, selectedKey: null },
+        })
+      )
+    }
     set({ pendingContextMenu: request })
   },
 
   closeContextMenu: (requestId: string, selectedKey: string | null) => {
-    set({ pendingContextMenu: null })
+    // Only clear the slot if the requestId still matches the currently-pending
+    // menu. A stale close (e.g. from an onClose closure captured when a prior
+    // request was pending) must not wipe out a newer request's menu.
+    const current = get().pendingContextMenu
+    if (current && current.requestId === requestId) {
+      set({ pendingContextMenu: null })
+    }
     window.dispatchEvent(
       new CustomEvent('spindle:context-menu-resolved', {
         detail: { requestId, selectedKey },
@@ -217,6 +263,23 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     set({ extensionThemeOverrides: {} })
   },
 
+  muteExtensionTheme: (extensionId: string) => {
+    set((state) => {
+      const { [extensionId]: _, ...rest } = state.extensionThemeOverrides
+      return {
+        mutedExtensionThemes: { ...state.mutedExtensionThemes, [extensionId]: true },
+        extensionThemeOverrides: rest,
+      }
+    })
+  },
+
+  unmuteExtensionTheme: (extensionId: string) => {
+    set((state) => {
+      const { [extensionId]: _, ...rest } = state.mutedExtensionThemes
+      return { mutedExtensionThemes: rest }
+    })
+  },
+
   setExtensionOperationStatus: (extensionId: string | null, operation: string, name: string | null) => {
     // "completed" operations (past tense) auto-clear after a short delay
     const isCompleted = !operation.endsWith('ing')
@@ -229,5 +292,22 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
         }
       }, 2000)
     }
+  },
+
+  updateAllExtensions: async () => {
+    const result = await spindleApi.updateAll()
+    // Seed progress state so the button flips to its spinner immediately,
+    // before any WS events arrive.
+    set({
+      bulkUpdateStatus: {
+        total: result.total,
+        completed: 0,
+        failed: 0,
+      },
+    })
+  },
+
+  setBulkUpdateStatus: (status: BulkUpdateStatus | null) => {
+    set({ bulkUpdateStatus: status })
   },
 })

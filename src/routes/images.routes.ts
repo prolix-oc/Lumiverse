@@ -3,11 +3,20 @@ import * as svc from "../services/images.service";
 
 const app = new Hono();
 
+const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const formData = await c.req.formData();
   const file = formData.get("image") as File | null;
   if (!file) return c.json({ error: "image file is required" }, 400);
+
+  // Bound the upload to keep a single request from filling memory or disk.
+  // The 10 MB API-wide bodyLimit middleware skips this route to allow chunkier
+  // image uploads, so the cap has to live here.
+  if (typeof file.size === "number" && file.size > MAX_IMAGE_UPLOAD_BYTES) {
+    return c.json({ error: "Image too large", maxBytes: MAX_IMAGE_UPLOAD_BYTES }, 413);
+  }
 
   const image = await svc.uploadImage(userId, file);
   return c.json(image, 201);
@@ -25,6 +34,10 @@ app.get("/:id", async (c) => {
 
   const response = new Response(Bun.file(filepath));
   response.headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  // Block MIME sniffing — without this, an uploaded `.svg` would render with
+  // Content-Type: image/svg+xml and execute embedded scripts in the user's
+  // origin (stored XSS).
+  response.headers.set("X-Content-Type-Options", "nosniff");
   return response;
 });
 

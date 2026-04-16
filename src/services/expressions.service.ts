@@ -177,3 +177,186 @@ export function hasExpressions(userId: string, characterId: string): boolean {
   const config = getExpressionConfig(userId, characterId);
   return !!config?.enabled && Object.keys(config.mappings).length > 0;
 }
+
+// ── Multi-character expression groups ─────────────────────────────────────────
+
+/** Character name → { cleanLabel → imageId } mapping, stored in character.extensions.expression_groups. */
+export type ExpressionGroups = Record<string, Record<string, string>>;
+
+/**
+ * Returns the multi-character expression groups from a character's extensions,
+ * or null if the character doesn't have grouped expressions.
+ */
+export function getExpressionGroups(userId: string, characterId: string): ExpressionGroups | null {
+  const character = getCharacter(userId, characterId);
+  if (!character) return null;
+  const groups = getExtensions(character).expression_groups;
+  if (!groups || typeof groups !== "object" || Object.keys(groups).length === 0) return null;
+  return groups as ExpressionGroups;
+}
+
+/** Returns true if a character has multi-character expression groups configured. */
+export function hasExpressionGroups(userId: string, characterId: string): boolean {
+  return getExpressionGroups(userId, characterId) !== null;
+}
+
+/** Replaces the full expression_groups object in character extensions. */
+export function putExpressionGroups(
+  userId: string,
+  characterId: string,
+  groups: ExpressionGroups,
+): ExpressionGroups {
+  const character = getCharacter(userId, characterId);
+  if (!character) throw new Error("Character not found");
+  const extensions = { ...getExtensions(character), expression_groups: groups };
+  updateCharacter(userId, characterId, { extensions });
+  return groups;
+}
+
+/** Removes a single label from a character group. Deletes the group if empty. */
+export function removeGroupLabel(
+  userId: string,
+  characterId: string,
+  groupName: string,
+  label: string,
+): ExpressionGroups {
+  const groups = getExpressionGroups(userId, characterId);
+  if (!groups || !groups[groupName]) throw new Error("Group not found");
+  const { [label]: _, ...rest } = groups[groupName];
+  const updated = { ...groups, [groupName]: rest };
+  if (Object.keys(rest).length === 0) delete updated[groupName];
+  return putExpressionGroups(userId, characterId, updated);
+}
+
+/** Creates a new empty character group. */
+export function addGroup(
+  userId: string,
+  characterId: string,
+  groupName: string,
+): ExpressionGroups {
+  const existing = getExpressionGroups(userId, characterId) || {};
+  if (existing[groupName]) throw new Error("Group already exists");
+  return putExpressionGroups(userId, characterId, { ...existing, [groupName]: {} });
+}
+
+/** Adds a single expression to a group. */
+export function addGroupLabel(
+  userId: string,
+  characterId: string,
+  groupName: string,
+  label: string,
+  imageId: string,
+): ExpressionGroups {
+  const existing = getExpressionGroups(userId, characterId) || {};
+  const group = existing[groupName];
+  if (!group) throw new Error("Group not found");
+  return putExpressionGroups(userId, characterId, {
+    ...existing,
+    [groupName]: { ...group, [label]: imageId },
+  });
+}
+
+/** Import a ZIP of named images into a specific expression group. */
+export async function importGroupFromZip(
+  userId: string,
+  characterId: string,
+  groupName: string,
+  zipBuffer: Buffer,
+): Promise<ExpressionGroups> {
+  const existing = getExpressionGroups(userId, characterId) || {};
+  const group = existing[groupName];
+  if (!group) throw new Error("Group not found");
+
+  const { unzipSync } = await import("fflate");
+  const unzipped = unzipSync(new Uint8Array(zipBuffer), {
+    filter: (entry) => {
+      const ext = entry.name.lastIndexOf(".");
+      return ext >= 0 && IMAGE_EXTENSIONS.has(entry.name.slice(ext).toLowerCase());
+    },
+  });
+
+  const newMappings: Record<string, string> = { ...group };
+
+  const mimeMap: Record<string, string> = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+  };
+
+  for (const [entryName, data] of Object.entries(unzipped)) {
+    if (!data || data.length === 0) continue;
+    const ext = entryName.lastIndexOf(".") >= 0 ? entryName.slice(entryName.lastIndexOf(".")).toLowerCase() : "";
+    if (!IMAGE_EXTENSIONS.has(ext)) continue;
+    const label = getBaseName(entryName).toLowerCase().replace(/[^a-z0-9_\- ]/g, "").trim();
+    if (!label) continue;
+    const filename = entryName.split("/").pop() || `${label}${ext}`;
+    const file = new File([new Uint8Array(data).buffer as ArrayBuffer], filename, {
+      type: mimeMap[ext] || "application/octet-stream",
+    });
+    const image = await uploadImage(userId, file);
+    newMappings[label] = image.id;
+  }
+
+  return putExpressionGroups(userId, characterId, { ...existing, [groupName]: newMappings });
+}
+
+/**
+ * Convert flat single-character expressions into a multi-character group.
+ * Moves all mappings from `expressions.mappings` into a group named after the character,
+ * then clears the flat config.
+ */
+export function convertToGroups(
+  userId: string,
+  characterId: string,
+): ExpressionGroups {
+  const character = getCharacter(userId, characterId);
+  if (!character) throw new Error("Character not found");
+  const config = getExpressionConfig(userId, characterId);
+  const groupName = character.name || "Default";
+  const mappings = config?.mappings && Object.keys(config.mappings).length > 0
+    ? { ...config.mappings }
+    : {};
+  const groups: ExpressionGroups = { [groupName]: mappings };
+  // Clear flat expressions and set groups
+  const extensions = {
+    ...getExtensions(character),
+    expressions: { enabled: false, defaultExpression: "", mappings: {} },
+    expression_groups: groups,
+  };
+  updateCharacter(userId, characterId, { extensions });
+  return groups;
+}
+
+/** Revert a single remaining group back to flat expression mode. */
+export function convertToFlat(
+  userId: string,
+  characterId: string,
+  groupName: string,
+): ExpressionConfig {
+  const groups = getExpressionGroups(userId, characterId);
+  if (!groups || !groups[groupName]) throw new Error("Group not found");
+  if (Object.keys(groups).length > 1) throw new Error("Cannot convert: multiple groups exist");
+  const mappings = groups[groupName];
+  const character = getCharacter(userId, characterId);
+  if (!character) throw new Error("Character not found");
+  const config: ExpressionConfig = {
+    enabled: Object.keys(mappings).length > 0,
+    defaultExpression: Object.keys(mappings)[0] || "",
+    mappings,
+  };
+  const extensions: Record<string, any> = { ...getExtensions(character), expressions: config };
+  delete extensions.expression_groups;
+  updateCharacter(userId, characterId, { extensions });
+  return config;
+}
+
+/** Removes an entire character group. */
+export function removeGroup(
+  userId: string,
+  characterId: string,
+  groupName: string,
+): ExpressionGroups {
+  const groups = getExpressionGroups(userId, characterId);
+  if (!groups) throw new Error("No expression groups found");
+  const { [groupName]: _, ...rest } = groups;
+  return putExpressionGroups(userId, characterId, rest);
+}

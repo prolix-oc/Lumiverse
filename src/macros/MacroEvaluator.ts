@@ -8,7 +8,7 @@ import type {
   EvaluateResult,
   MacroFlags,
 } from "./types";
-import { parse } from "./MacroParser";
+import { parse, ESCAPED_OPEN, ESCAPED_CLOSE } from "./MacroParser";
 import { MacroRegistry } from "./MacroRegistry";
 
 const MAX_NESTING_DEPTH = 20;
@@ -73,7 +73,8 @@ function preprocessLegacy(input: string): string {
 }
 
 function postprocess(text: string): string {
-  return text;
+  // Convert sentinel characters back to actual braces
+  return text.replaceAll(ESCAPED_OPEN, "{").replaceAll(ESCAPED_CLOSE, "}");
 }
 
 async function evaluateNodes(

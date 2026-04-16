@@ -76,6 +76,17 @@ app.get("/:id/models", async (c) => {
   return c.json(result);
 });
 
+/** List models for a specific component subtype (e.g. "vae", "text_encoders") */
+app.get("/:id/models/:subtype", async (c) => {
+  const userId = c.get("userId");
+  const result = await svc.listConnectionModelsBySubtype(
+    userId,
+    c.req.param("id"),
+    c.req.param("subtype"),
+  );
+  return c.json(result);
+});
+
 /** Set or update API key */
 app.put("/:id/api-key", async (c) => {
   const userId = c.get("userId");

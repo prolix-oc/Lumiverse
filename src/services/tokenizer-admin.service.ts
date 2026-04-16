@@ -62,7 +62,7 @@ export function createPattern(input: CreateTokenizerModelPatternInput): Tokenize
 
   db.run(
     `INSERT INTO tokenizer_model_patterns (id, tokenizer_id, pattern, priority) VALUES (?, ?, ?, ?)`,
-    [id, input.tokenizer_id, input.pattern, input.priority ?? 0]
+    [id, input.tokenizer_id, input.pattern, input.priority ?? 50]
   );
   tokenizerService.invalidatePatterns();
 

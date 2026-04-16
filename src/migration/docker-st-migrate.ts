@@ -134,7 +134,7 @@ export async function runDockerSTMigration(): Promise<void> {
     logger.info(`Source: ${effectiveDataDir}`);
 
     // 4. Scan available data
-    const counts = scanSTData(effectiveDataDir);
+    const counts = await scanSTData(effectiveDataDir);
     const totalItems = counts.characters + counts.totalChatFiles + counts.groupChatFiles + counts.worldBooks + counts.personas;
 
     if (totalItems === 0) {

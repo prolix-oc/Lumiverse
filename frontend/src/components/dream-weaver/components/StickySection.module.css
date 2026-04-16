@@ -1,0 +1,96 @@
+.section {
+  position: relative;
+}
+
+.stickyHeader {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.625rem 1.25rem;
+  background: rgba(16, 12, 25, 0.95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--lumiverse-primary, #bd9dff);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.statusDot[data-status='populated'] {
+  background: #34d399;
+}
+
+.statusDot[data-status='attention'] {
+  background: #f59e0b;
+}
+
+.statusDot[data-status='empty'] {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.reweaveButton {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: var(--lumiverse-text-secondary, #797384);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.reweaveButton:hover:not(:disabled) {
+  color: var(--lumiverse-primary, #bd9dff);
+  border-color: rgba(189, 157, 255, 0.2);
+}
+
+.reweaveButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.content {
+  padding: 0.75rem 1.25rem 1.5rem;
+  transition: opacity 0.2s;
+}
+
+.content[data-reweaving] {
+  opacity: 0.5;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.3; }
+}

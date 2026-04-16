@@ -39,7 +39,10 @@ export function registerCoreMacros(): void {
     returnType: "string",
     handler: (ctx) => {
       if (ctx.isScoped) {
-        return ctx.body.trim();
+        // {{#trim}}...{{/trim}} — preserve whitespace (ST compat)
+        if (ctx.flags.preserveWhitespace) return ctx.body;
+        // {{trim}}...{{/trim}} — strip blank lines, dedent, and trim
+        return dedent(ctx.body).trim();
       }
       // Non-scoped trim acts as a marker; handled in post-processing
       return "";
@@ -115,19 +118,53 @@ export function registerCoreMacros(): void {
     returnType: "string",
     delayArgResolution: true,
     handler: async (ctx) => {
-      // Resolve the condition argument
-      const conditionNodes = ctx.rawArgs[0] || [];
-      const conditionStr = (await ctx.resolveNodes(conditionNodes)).trim();
+      // Join multiple space-delimited args into one condition expression
+      // e.g. {{if .myvar == 5}} → rawArgs = [[getvar], ["=="], ["5"]] → join with spaces
+      let conditionNodes: any[] = ctx.rawArgs[0] || [];
+      if (ctx.rawArgs.length > 1) {
+        conditionNodes = [];
+        for (let i = 0; i < ctx.rawArgs.length; i++) {
+          if (i > 0) conditionNodes.push({ type: "text" as const, value: " " });
+          conditionNodes.push(...ctx.rawArgs[i]);
+        }
+      }
+      let conditionStr = (await ctx.resolveNodes(conditionNodes)).trim();
 
-      const isTruthy = evaluateCondition(conditionStr);
-
-      if (ctx.isScoped) {
-        // Split body on {{else}} marker
-        const parts = splitOnElse(ctx.body);
-        return isTruthy ? parts.truthy : parts.falsy;
+      // Iteratively re-resolve the condition string. A single resolve pass only
+      // walks the AST one level deep — if the resolved value itself contains
+      // macro markers (e.g. a character description that embeds {{user}} or
+      // {{char}}), those need additional passes to resolve. This mirrors the
+      // top-level evaluate() loop. Stops when nothing changes (genuinely
+      // unresolvable, e.g. an unknown macro reconstructed as {{name}}) or when
+      // no markers remain.
+      const MAX_CONDITION_PASSES = 5;
+      for (let i = 0; i < MAX_CONDITION_PASSES; i++) {
+        if (!conditionStr.includes("{{")) break;
+        const next = (await ctx.resolve(conditionStr)).trim();
+        if (next === conditionStr) break;
+        conditionStr = next;
       }
 
-      return isTruthy ? "true" : "";
+      // Handle ! prefix negation (ST compat: {{if !condition}})
+      let negate = false;
+      if (conditionStr.startsWith("!")) {
+        negate = true;
+        conditionStr = conditionStr.slice(1).trim();
+      }
+
+      // Resolve remaining .var/$var shorthands that weren't caught by the lexer
+      // (e.g. {{if !.myvar}} where ! prevented lexer shorthand detection)
+      conditionStr = resolveInlineShorthands(conditionStr, ctx.env.variables);
+
+      const isTruthy = evaluateCondition(conditionStr);
+      const result = negate ? !isTruthy : isTruthy;
+
+      if (ctx.isScoped) {
+        const parts = splitOnElse(ctx.body);
+        return result ? parts.truthy : parts.falsy;
+      }
+
+      return result ? "true" : "";
     },
   });
 
@@ -141,20 +178,60 @@ export function registerCoreMacros(): void {
   });
 }
 
+/**
+ * Resolve .varName and $varName shorthands within a condition string.
+ * Used as a fallback when the lexer couldn't detect the shorthand
+ * (e.g. preceded by ! or other non-space characters).
+ */
+function resolveInlineShorthands(
+  condition: string,
+  variables: { local: Map<string, string>; global: Map<string, string> },
+): string {
+  return condition
+    .replace(/(^|\s)\.([a-zA-Z][\w-]*)/g, (_, pre, name) => pre + (variables.local.get(name) ?? ""))
+    .replace(/(^|\s)\$([a-zA-Z][\w-]*)/g, (_, pre, name) => pre + (variables.global.get(name) ?? ""));
+}
+
+// Order matters here — we scan for the *leftmost* operator and prefer the
+// longest match at that position so e.g. ">=" beats ">" when both could
+// apply at index N.
+const COMPARISON_OPERATORS = ["==", "!=", ">=", "<=", ">", "<"] as const;
+
+function findComparisonOperator(value: string): { op: typeof COMPARISON_OPERATORS[number]; index: number } | null {
+  let bestIndex = -1;
+  let bestOp: typeof COMPARISON_OPERATORS[number] | null = null;
+  for (const op of COMPARISON_OPERATORS) {
+    const index = value.indexOf(op);
+    if (index === -1) continue;
+    if (bestIndex === -1 || index < bestIndex || (index === bestIndex && op.length > (bestOp?.length ?? 0))) {
+      bestIndex = index;
+      bestOp = op;
+    }
+  }
+  return bestOp ? { op: bestOp, index: bestIndex } : null;
+}
+
 function evaluateCondition(value: string): boolean {
-  // Handle comparison operators
-  const compMatch = value.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
-  if (compMatch) {
-    const [, left, op, right] = compMatch;
-    const lv = left.trim();
-    const rv = right.trim();
+  // Unresolved macros (reconstructed as {{name}} by the evaluator) mean the
+  // value couldn't be determined — treat the entire condition as falsy.
+  if (value.includes("{{") && value.includes("}}")) {
+    return false;
+  }
+
+  // Linear scan for the first comparison operator; avoids the previous
+  // `^(.*?)\s*(...)\s*(.+)$` regex whose greedy/non-greedy combination
+  // could backtrack pathologically on user-supplied values.
+  const found = findComparisonOperator(value);
+  if (found) {
+    const lv = value.slice(0, found.index).trim();
+    const rv = value.slice(found.index + found.op.length).trim();
 
     // Try numeric comparison
     const ln = parseFloat(lv);
     const rn = parseFloat(rv);
     const bothNumeric = !isNaN(ln) && !isNaN(rn);
 
-    switch (op) {
+    switch (found.op) {
       case "==": return bothNumeric ? ln === rn : lv === rv;
       case "!=": return bothNumeric ? ln !== rn : lv !== rv;
       case ">": return bothNumeric ? ln > rn : lv > rv;
@@ -178,4 +255,27 @@ function splitOnElse(body: string): { truthy: string; falsy: string } {
     truthy: body.substring(0, idx),
     falsy: body.substring(idx + ELSE_MARKER.length),
   };
+}
+
+/** Strip leading/trailing blank lines, then remove common indentation. */
+function dedent(text: string): string {
+  const lines = text.split("\n");
+  // Strip leading blank lines
+  let start = 0;
+  while (start < lines.length && lines[start].trim() === "") start++;
+  // Strip trailing blank lines
+  let end = lines.length - 1;
+  while (end > start && lines[end].trim() === "") end--;
+  const trimmed = lines.slice(start, end + 1);
+  if (trimmed.length === 0) return "";
+  const nonEmpty = trimmed.filter((l) => l.trim().length > 0);
+  if (nonEmpty.length === 0) return "";
+  const minIndent = Math.min(
+    ...nonEmpty.map((l) => {
+      const m = l.match(/^(\s*)/);
+      return m ? m[1].length : 0;
+    }),
+  );
+  if (minIndent === 0) return trimmed.join("\n");
+  return trimmed.map((l) => l.slice(minIndent)).join("\n");
 }

@@ -4,6 +4,7 @@ import { highlightCode } from '@/lib/codeHighlight'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import {
   stripAndDispatchMessageTags,
   subscribeTagInterceptorRegistry,
@@ -246,22 +247,35 @@ marked.setOptions({
 })
 
 // ── HTML Island Isolation ──
-// Detects self-contained HTML blocks containing <style> tags and extracts them
-// for Shadow DOM rendering, preventing markdown parsing from breaking interactive
-// HTML (CSS checkbox/radio hacks, tabs, etc.) and isolating their styles.
+// Detects self-contained HTML blocks containing <style> tags or significant
+// inline styling and extracts them for Shadow DOM rendering, preventing markdown
+// parsing from breaking interactive/styled HTML (CSS checkbox/radio hacks, tabs,
+// phone screens, etc.) and isolating their styles.
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
 const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details)\b/i
+const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
+
+/** Detect HTML blocks with enough inline styling to warrant island extraction. */
+function hasSignificantInlineStyles(html: string): boolean {
+  INLINE_STYLE_ATTR_RE.lastIndex = 0
+  let count = 0
+  while (INLINE_STYLE_ATTR_RE.exec(html)) {
+    if (++count >= 3) return true
+  }
+  return false
+}
 
 function extractHtmlIslands(
   raw: string,
   isStreaming: boolean,
 ): { content: string; islands: string[] } {
-  if (!/<style[\s>]/i.test(raw)) return { content: raw, islands: [] }
+  const hasStyleTag = /<style[\s>]/i.test(raw)
+  if (!hasStyleTag && !/\bstyle\s*=/i.test(raw)) return { content: raw, islands: [] }
 
-  // Don't extract during streaming if a <style> tag is still unclosed
-  if (isStreaming) {
+  // Don't extract <style>-based islands during streaming if a <style> tag is still unclosed
+  if (isStreaming && hasStyleTag) {
     const opens = (raw.match(/<style[\s>]/gi) || []).length
     const closes = (raw.match(/<\/style\s*>/gi) || []).length
     if (opens > closes) return { content: raw, islands: [] }
@@ -275,8 +289,9 @@ function extractHtmlIslands(
   while (i < lines.length) {
     const trimmed = lines[i].trim()
 
-    // Strategy 1: Block-level element that might wrap a <style> block.
-    // Collect the entire balanced tag tree, then check for <style> inside.
+    // Strategy 1: Block-level element that might wrap a <style> block or
+    // contain significant inline styling (e.g. phone screens, UI mockups).
+    // Collect the entire balanced tag tree, then check for isolation criteria.
     const blockMatch = trimmed.match(BLOCK_ELEMENT_RE)
     if (blockMatch) {
       const blockLines: string[] = []
@@ -295,8 +310,8 @@ function extractHtmlIslands(
 
       const blockContent = blockLines.join('\n')
 
-      // Only isolate if the block is balanced and contains <style>
-      if (depth <= 0 && /<style[\s>]/i.test(blockContent)) {
+      // Isolate if balanced and contains <style> or significant inline styling
+      if (depth <= 0 && (/<style[\s>]/i.test(blockContent) || hasSignificantInlineStyles(blockContent))) {
         const idx = islands.length
         islands.push(blockContent)
         output.push('', `<!--${HTML_ISLAND_TOKEN}_${idx}-->`, '')
@@ -363,6 +378,51 @@ function extractHtmlIslands(
   return { content: output.join('\n'), islands }
 }
 
+/**
+ * Convert markdown syntax within HTML island text content to rendered HTML.
+ * Preserves <style> blocks and HTML tag structure while processing text nodes
+ * through marked, so captured content ($1, $2 etc.) renders correctly in Shadow DOM.
+ */
+function processMarkdownInIsland(html: string): string {
+  // Protect <style> blocks — CSS selectors can contain '>' which breaks tag splitting
+  const styleBlocks: string[] = []
+  const shielded = html.replace(/<style[\s>][\s\S]*?<\/style\s*>/gi, (m) => {
+    styleBlocks.push(m)
+    return `<!--ISLAND_STYLE_${styleBlocks.length - 1}-->`
+  })
+
+  // Split into HTML tags (odd indices) and text content (even indices)
+  const parts = shielded.split(/(<[^>]*>)/)
+  let skipDepth = 0
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+
+    // HTML tags — track elements whose content should not be processed
+    if (i % 2 === 1) {
+      if (/^<(pre|code|script)\b/i.test(part)) skipDepth++
+      else if (/^<\/(pre|code|script)\b/i.test(part)) skipDepth = Math.max(0, skipDepth - 1)
+      continue
+    }
+
+    // Text content — skip if empty, inside skip element, a style placeholder, or plain text
+    if (!part.trim() || skipDepth > 0) continue
+    if (/^<!--ISLAND_STYLE_\d+-->$/.test(part.trim())) continue
+    if (!/[*_`~\[#\-]/.test(part)) continue
+
+    parts[i] = marked.parseInline(part, { async: false }) as string
+  }
+
+  let result = parts.join('')
+
+  // Restore <style> blocks
+  for (let i = 0; i < styleBlocks.length; i++) {
+    result = result.replace(`<!--ISLAND_STYLE_${i}-->`, styleBlocks[i])
+  }
+
+  return result
+}
+
 interface ContentPiece {
   type: 'markup' | 'island'
   content: string
@@ -385,7 +445,7 @@ function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] 
     const before = html.slice(lastIdx, m.index!)
     if (before.trim()) pieces.push({ type: 'markup', content: before })
     const idx = parseInt(m[1], 10)
-    if (islands[idx] != null) pieces.push({ type: 'island', content: islands[idx] })
+    if (islands[idx] != null) pieces.push({ type: 'island', content: processMarkdownInIsland(islands[idx]) })
     lastIdx = m.index! + m[0].length
   }
 
@@ -408,6 +468,55 @@ function IsolatedHtml({ html }: { html: string }) {
   return <div ref={ref} className={styles.htmlIsland} />
 }
 
+// Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
+const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
+
+// Standard <img src="AssetName"> where src is a relative asset reference (not a URL)
+const IMG_SRC_ASSET_RE = /<img\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>/gi
+
+/** Strip path prefix and file extension to get the asset stem. */
+function assetStem(name: string): string {
+  const base = name.split('/').pop() || name
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(0, dot) : base
+}
+
+/** Look up an asset reference in the map — tries exact, then stem. Handles embeded:// URIs. */
+function resolveAssetId(src: string, assetMap: Record<string, string>): string | undefined {
+  // Strip Risu embeded:// prefix
+  const cleaned = src.startsWith('embeded://') ? src.slice('embeded://'.length) : src
+  return assetMap[cleaned] ?? assetMap[assetStem(cleaned)]
+}
+
+/** Resolve Risu <img="AssetName"> tags to rendered image markdown using the character's stored asset map. */
+function resolveRisuAssetTags(text: string, assetMap: Record<string, string>): string {
+  if (!text.includes('<img="')) return text
+  RISU_IMG_TAG_RE.lastIndex = 0
+  return text.replace(RISU_IMG_TAG_RE, (match, assetName: string) => {
+    const imageId = resolveAssetId(assetName, assetMap)
+    if (imageId) return `\n\n![${assetName.replace(/[[\]]/g, '')}](/api/v1/images/${imageId})\n\n`
+    return match
+  })
+}
+
+/** Resolve standard <img src="AssetName"> tags where src is an unresolved asset reference.
+ *  Unresolved asset refs are converted to markdown images so they go through the same
+ *  custom renderer (proseImageWrap, lightbox) as Risu <img="..."> tags.
+ *  Already-resolved URLs (absolute paths, http, data:) are left as raw HTML. */
+function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
+  IMG_SRC_ASSET_RE.lastIndex = 0
+  return text.replace(IMG_SRC_ASSET_RE, (match, before: string, src: string, after: string) => {
+    // Skip already-resolved URLs — these are valid img tags that should render as-is
+    if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
+    const imageId = resolveAssetId(src, assetMap)
+    if (imageId) {
+      const alt = src.replace(/[[\]]/g, '')
+      return `\n\n![${alt}](/api/v1/images/${imageId})\n\n`
+    }
+    return match
+  })
+}
+
 export default function MessageContent({
   content,
   isUser,
@@ -419,11 +528,30 @@ export default function MessageContent({
 }: MessageContentProps) {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
+  const isGroupChat = useStore((s) => s.isGroupChat)
+  const groupCharacterIds = useStore((s) => s.groupCharacterIds)
 
   const charName = useMemo(
     () => characters.find((c) => c.id === activeCharacterId)?.name ?? 'Assistant',
     [characters, activeCharacterId],
   )
+
+  // Merge Risu asset maps from active character (and all group members in group chats)
+  const risuAssetMap = useMemo(() => {
+    const charIds = isGroupChat && groupCharacterIds.length > 0
+      ? groupCharacterIds
+      : activeCharacterId ? [activeCharacterId] : []
+    let merged: Record<string, string> | null = null
+    for (const id of charIds) {
+      const map = characters.find((c) => c.id === id)?.extensions?.risu_asset_map
+      if (map && typeof map === 'object') {
+        if (!merged) merged = { ...map }
+        else Object.assign(merged, map)
+      }
+    }
+    return merged
+  }, [characters, activeCharacterId, isGroupChat, groupCharacterIds])
+
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
     getTagInterceptorRegistryVersion,
@@ -433,10 +561,25 @@ export default function MessageContent({
     () => stripAndDispatchMessageTags(content, { messageId, chatId, isUser, isStreaming }),
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
   )
+
+  // Resolve Risu asset tags before regex/macro processing:
+  // 1. <img="AssetName"> (Risu custom syntax) → markdown image
+  // 2. <img src="AssetName"> (standard HTML with relative asset ref) → resolved src URL
+  const risuResolvedContent = useMemo(
+    () => {
+      if (!risuAssetMap) return interceptorCleanedContent
+      let resolved = resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap)
+      resolved = resolveImgSrcAssetTags(resolved, risuAssetMap)
+      return resolved
+    },
+    [interceptorCleanedContent, risuAssetMap],
+  )
+
   const applyRegex = useDisplayRegex()
+  const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
   const regexAppliedContent = useMemo(
-    () => applyRegex(interceptorCleanedContent, isUser, depth),
-    [applyRegex, interceptorCleanedContent, isUser, depth],
+    () => applyRegex(risuResolvedContent, isUser, depth, macroCtx),
+    [applyRegex, risuResolvedContent, isUser, depth, macroCtx],
   )
   const resolvedContent = useMemo(
     () => resolveDisplayMacros(regexAppliedContent, { charName, userName }),
@@ -475,7 +618,7 @@ export default function MessageContent({
       const codeEl = codeBlock?.querySelector('code')
       if (!codeEl) return
       const text = codeEl.textContent || ''
-      navigator.clipboard.writeText(text).then(() => {
+      copyTextToClipboard(text).then(() => {
         const label = btn.querySelector('span')
         if (label) {
           label.textContent = 'Copied!'
@@ -485,6 +628,8 @@ export default function MessageContent({
             btn.classList.remove(styles.codeCopied)
           }, 2000)
         }
+      }).catch((err) => {
+        console.error('[MessageContent] Copy failed:', err)
       })
     }
     container.addEventListener('click', handleClick)
@@ -616,6 +761,7 @@ export default function MessageContent({
   return (
     <>
       <div
+        data-component="MessageContent"
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}
       >

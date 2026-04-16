@@ -28,6 +28,7 @@ These are always available:
 | `"tools"` | Register LLM tools (function calling). Council-eligible tools appear in the Council tools list and can be assigned to members for pre-generation analysis |
 | `"cors_proxy"` | Make HTTP requests through the Lumiverse server (bypass CORS) |
 | `"context_handler"` | Register middleware that enriches the generation context before prompt assembly |
+| `"generation_parameters"` | Inject provider-specific parameters (e.g. `response_format`, sampling overrides) into in-flight generations via interceptors. Requires `interceptor` to be useful |
 | `"ephemeral_storage"` | Use temporary storage with TTL, memory pooling, and per-extension quotas |
 | `"characters"` | Full CRUD on character cards (list, get, create, update, delete) |
 | `"chats"` | CRUD on chat sessions (list, get, update, delete) + get active chat |

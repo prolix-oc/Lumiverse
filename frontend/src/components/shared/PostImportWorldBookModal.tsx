@@ -91,7 +91,7 @@ export default function PostImportWorldBookModal({ book, onClose }: Props) {
   }
 
   return (
-    <ModalShell isOpen onClose={onClose} maxWidth={700} zIndex={1500} className={styles.modal}>
+    <ModalShell isOpen onClose={onClose} maxWidth={700} zIndex={10002} className={styles.modal}>
       <div className={styles.header}>
         <div>
           <div className={styles.eyebrow}>Import Complete</div>

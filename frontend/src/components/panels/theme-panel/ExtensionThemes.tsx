@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Blocks, X } from 'lucide-react'
+import { Blocks } from 'lucide-react'
+import { Toggle } from '@/components/shared/Toggle'
 import { useStore } from '@/store'
 import type { ExtensionThemeOverride } from '@/types/store'
 import styles from './ExtensionThemes.module.css'
@@ -42,12 +43,8 @@ function extractSwatchColors(variables: Record<string, string>): string[] {
   return colors.length > 0 ? colors : ['var(--lumiverse-primary)']
 }
 
-interface ExtensionThemeCardProps {
-  override: ExtensionThemeOverride
-  onDismiss: (extensionId: string) => void
-}
-
-function ExtensionThemeCard({ override, onDismiss }: ExtensionThemeCardProps) {
+function ActiveThemeCard({ override }: { override: ExtensionThemeOverride }) {
+  const muteTheme = useStore((s) => s.muteExtensionTheme)
   const swatches = useMemo(() => extractSwatchColors(override.variables), [override.variables])
   const varCount = Object.keys(override.variables).length
 
@@ -64,26 +61,44 @@ function ExtensionThemeCard({ override, onDismiss }: ExtensionThemeCardProps) {
           {varCount} override{varCount !== 1 ? 's' : ''} applied
         </span>
       </div>
-      <span className={styles.badge}>Active</span>
-      <button
-        type="button"
-        className={styles.dismissBtn}
-        onClick={() => onDismiss(override.extensionId)}
-        title={`Remove ${override.extensionName} theme overrides`}
-      >
-        <X size={12} />
-      </button>
+      <Toggle.Switch
+        checked={true}
+        onChange={() => muteTheme(override.extensionId)}
+      />
+    </div>
+  )
+}
+
+function MutedThemeCard({ extensionId }: { extensionId: string }) {
+  const unmuteTheme = useStore((s) => s.unmuteExtensionTheme)
+  const extensions = useStore((s) => s.extensions)
+  const name = extensions.find((e) => e.id === extensionId)?.name ?? extensionId
+
+  return (
+    <div className={styles.card} style={{ opacity: 0.5 }}>
+      <div className={styles.swatches}>
+        <div className={styles.swatch} style={{ background: 'var(--lumiverse-fill-medium)' }} />
+      </div>
+      <div className={styles.info}>
+        <span className={styles.name}>{name}</span>
+        <span className={styles.attribution}>Theme disabled</span>
+      </div>
+      <Toggle.Switch
+        checked={false}
+        onChange={() => unmuteTheme(extensionId)}
+      />
     </div>
   )
 }
 
 export default function ExtensionThemes() {
   const overrides = useStore((s) => s.extensionThemeOverrides)
-  const clearOverride = useStore((s) => s.clearExtensionThemeOverride)
+  const muted = useStore((s) => s.mutedExtensionThemes)
 
-  const entries = useMemo(() => Object.values(overrides), [overrides])
+  const activeEntries = useMemo(() => Object.values(overrides), [overrides])
+  const mutedIds = useMemo(() => Object.keys(muted), [muted])
 
-  if (entries.length === 0) return null
+  if (activeEntries.length === 0 && mutedIds.length === 0) return null
 
   return (
     <div className={styles.section}>
@@ -92,12 +107,11 @@ export default function ExtensionThemes() {
         <h4 className={styles.headerLabel}>Extension Themes</h4>
       </div>
       <div className={styles.list}>
-        {entries.map((override) => (
-          <ExtensionThemeCard
-            key={override.extensionId}
-            override={override}
-            onDismiss={clearOverride}
-          />
+        {activeEntries.map((override) => (
+          <ActiveThemeCard key={override.extensionId} override={override} />
+        ))}
+        {mutedIds.map((id) => (
+          <MutedThemeCard key={id} extensionId={id} />
         ))}
       </div>
     </div>

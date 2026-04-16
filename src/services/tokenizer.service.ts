@@ -1,6 +1,24 @@
 import { getDb } from "../db/connection";
 import type { TokenizerConfig, TokenizerModelPattern, TokenCountResult, TokenCountBreakdownEntry } from "../types/tokenizer";
 import { getTextContent, type AssemblyBreakdownEntry, type LlmMessage } from "../llm/types";
+import { validateHost, SSRFError } from "../utils/safe-fetch";
+
+/**
+ * Validate a tokenizer resource URL before fetching. Owner-supplied, but still
+ * should not reach private/internal hosts.
+ */
+async function validateTokenizerUrl(url: string, label: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SSRFError(`${label} is not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new SSRFError(`${label} must use http or https, got: ${parsed.protocol}`);
+  }
+  await validateHost(parsed.hostname);
+}
 
 /** A loaded tokenizer instance with a count(text) method. */
 interface TokenizerInstance {
@@ -35,7 +53,9 @@ function getConfig(id: string): TokenizerConfig | null {
 
 function getAllPatterns(): TokenizerModelPattern[] {
   const db = getDb();
-  const rows = db.query("SELECT * FROM tokenizer_model_patterns ORDER BY priority DESC").all();
+  // Sort: highest priority first. Within the same priority tier, custom (non-built-in)
+  // patterns come before built-in ones so user patterns always beat the .* catchall.
+  const rows = db.query("SELECT * FROM tokenizer_model_patterns ORDER BY priority DESC, is_built_in ASC, created_at DESC").all();
   return rows.map((r: any) => ({ ...r, is_built_in: !!r.is_built_in }));
 }
 
@@ -138,6 +158,7 @@ async function loadHuggingFace(config: TokenizerConfig): Promise<TokenizerInstan
     // If the user's URL doesn't end with tokenizer.json (e.g. a direct download link),
     // try fetching the JSON data manually and use fromPreTrained() instead of fromPreTrainedUrls()
     if (configUrl === cfg.url) {
+      await validateTokenizerUrl(cfg.url, "tokenizer url");
       const resp = await fetch(cfg.url);
       if (!resp.ok) throw new Error(`Failed to fetch tokenizer.json from ${cfg.url}: ${resp.status}`);
       const tokenizerJSON = await resp.json();
@@ -148,6 +169,9 @@ async function loadHuggingFace(config: TokenizerConfig): Promise<TokenizerInstan
       return { count: (text: string) => tokenizer.encode(text).length };
     }
 
+    // fromPreTrainedUrls() fetches both URLs internally — validate both hosts up front
+    await validateTokenizerUrl(cfg.url, "tokenizer url");
+    await validateTokenizerUrl(configUrl, "tokenizer config url");
     const tokenizer = await TokenizerLoader.fromPreTrainedUrls({
       tokenizerJSON: cfg.url,
       tokenizerConfig: configUrl,
@@ -163,6 +187,7 @@ async function loadTiktoken(config: TokenizerConfig): Promise<TokenizerInstance>
   const cfg = config.config;
   if (!cfg.url) throw new Error("Tiktoken requires 'url' in config pointing to .model file");
 
+  await validateTokenizerUrl(cfg.url, "tiktoken model url");
   const resp = await fetch(cfg.url);
   if (!resp.ok) throw new Error(`Failed to fetch tiktoken model from ${cfg.url}`);
   const bpeData = await resp.text();
@@ -171,6 +196,7 @@ async function loadTiktoken(config: TokenizerConfig): Promise<TokenizerInstance>
   let specialTokens: Record<string, number> = {};
   if (cfg.configUrl) {
     try {
+      await validateTokenizerUrl(cfg.configUrl, "tiktoken config url");
       const configResp = await fetch(cfg.configUrl);
       if (configResp.ok) {
         const configData = await configResp.json();
@@ -268,11 +294,13 @@ export async function countBreakdown(
     if (entry.preCountedTokens != null) {
       tokens = entry.preCountedTokens;
     } else if (entry.type === "chat_history" && chatHistoryMessages && chatHistoryMessages.length > 0) {
-      for (const msg of chatHistoryMessages) {
-        const text = getTextContent(msg);
-        // Count role + content together to capture the full message footprint
-        tokens += countText(`${msg.role}\n${text}`);
-      }
+      // Concatenate all messages into a single string and tokenize once.
+      // Per-message encode() calls have significant per-call overhead (regex
+      // preprocessing, BPE merges, array alloc) that compounds on slower runtimes.
+      const bulk = chatHistoryMessages
+        .map(msg => `${msg.role}\n${getTextContent(msg)}`)
+        .join("\n");
+      tokens = countText(bulk);
     } else {
       tokens = countText(entry.content || "");
     }
@@ -305,4 +333,37 @@ export function invalidate(tokenizerId: string): void {
 
 export function invalidatePatterns(): void {
   patternCache = null;
+}
+
+/**
+ * Pre-warm tokenizer instances for all models referenced by existing connection
+ * profiles. Resolves each unique model to its tokenizer ID and eagerly loads the
+ * instance so the first dry-run / generation doesn't pay the cold-start import
+ * cost (2+ MB module parse for gpt-tokenizer / @lenml/tokenizer-claude).
+ *
+ * Intended to be called fire-and-forget at startup — failures are non-fatal.
+ */
+export async function prewarm(): Promise<void> {
+  const db = getDb();
+  const rows = db.query("SELECT DISTINCT model FROM connection_profiles WHERE model IS NOT NULL AND model != ''").all() as { model: string }[];
+
+  const tokenizerIds = new Set<string>();
+  for (const { model } of rows) {
+    const id = getTokenizerIdForModel(model);
+    if (id) tokenizerIds.add(id);
+  }
+
+  if (tokenizerIds.size === 0) return;
+
+  const labels: string[] = [];
+  await Promise.allSettled(
+    [...tokenizerIds].map(async (id) => {
+      await getInstance(id);
+      labels.push(id);
+    })
+  );
+
+  if (labels.length > 0) {
+    console.log("[Tokenizer] Pre-warmed: %s", labels.join(", "));
+  }
 }

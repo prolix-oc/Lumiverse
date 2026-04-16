@@ -15,13 +15,14 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 
 /** Keys that represent persisted data (not functions) */
 const DATA_KEYS: ReadonlySet<string> = new Set([
-  'enableLandingPage',
   'landingPageChatsDisplayed',
   'charactersPerPage',
   'personasPerPage',
   'messagesPerPage',
   'chatSheldDisplayMode',
   'bubbleUserAlign',
+  'bubbleDisableHover',
+  'bubbleHideAvatarBg',
   'chatSheldEnterToSend',
   'saveDraftInput',
   'chatWidthMode',
@@ -82,6 +83,8 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'reasoningSettings',
   'promptBias',
   'regenFeedback',
+  'swipeGesturesEnabled',
+  'showMessageTokenCount',
   'guidedGenerations',
   'quickReplySets',
   'toastPosition',
@@ -94,12 +97,20 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'thumbnailSettings',
   // Push notification preferences
   'pushNotificationPreferences',
+  'customCSS',
+  'componentOverrides',
+  'chatHeadsEnabled',
+  'chatHeadsSize',
+  'chatHeadsDirection',
+  'chatHeadsOpacity',
+  'voiceSettings',
 ])
 
 // ── Debounced batch persistence ──────────────────────────────────────────
 // Dirty keys accumulate and flush as a single PUT after FLUSH_DELAY ms of
 // inactivity.  Also flushes on page unload so nothing is lost.
 const FLUSH_DELAY = 1_500
+const PENDING_SETTINGS_KEY = '__lumiverse_pending_settings'
 const dirtyKeys = new Map<string, any>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushInFlight = false
@@ -112,7 +123,10 @@ function flushDirtyKeys() {
   dirtyKeys.clear()
   flushInFlight = true
 
-  settingsApi.putMany(batch).catch((err) => {
+  settingsApi.putMany(batch).then(() => {
+    // Flush succeeded — clear localStorage bridge since DB is now up to date
+    try { localStorage.removeItem(PENDING_SETTINGS_KEY) } catch {}
+  }).catch((err) => {
     console.error('[settings] Batch persist failed, re-queuing:', err)
     // Re-queue failed keys so the next flush retries them
     for (const [k, v] of Object.entries(batch)) {
@@ -129,7 +143,7 @@ function scheduleFlush() {
   flushTimer = setTimeout(flushDirtyKeys, FLUSH_DELAY)
 }
 
-function persistKey(key: string, value: any) {
+export function persistKey(key: string, value: any) {
   dirtyKeys.set(key, value)
   scheduleFlush()
 }
@@ -144,6 +158,15 @@ export function flushSettings() {
 
   const batch = Object.fromEntries(dirtyKeys)
   dirtyKeys.clear()
+
+  // Write to localStorage synchronously as a bridge for the next page load.
+  // The keepalive fetch below races with the new page's loadSettings() — if
+  // GET /settings resolves before the PUT lands, the new page gets stale data.
+  // localStorage survives across page loads and is read synchronously by
+  // loadSettings() to recover any values the keepalive flush hasn't persisted yet.
+  try {
+    localStorage.setItem(PENDING_SETTINGS_KEY, JSON.stringify(batch))
+  } catch {}
 
   // keepalive fetch survives page unload and supports PUT (unlike sendBeacon)
   fetch(`${BASE_URL}/settings`, {
@@ -171,13 +194,14 @@ if (typeof window !== 'undefined') {
 }
 
 export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
-  enableLandingPage: true,
   landingPageChatsDisplayed: 12,
   charactersPerPage: 50,
   personasPerPage: 24,
   messagesPerPage: 50,
   chatSheldDisplayMode: 'minimal',
   bubbleUserAlign: 'right',
+  bubbleDisableHover: false,
+  bubbleHideAvatarBg: false,
   chatSheldEnterToSend: true,
   saveDraftInput: false,
   chatWidthMode: 'full',
@@ -192,6 +216,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     tabSize: 'large',
     panelWidthMode: 'default',
     customPanelWidth: 35,
+    showTabLabels: false,
   },
   oocEnabled: true,
   lumiaOOCStyle: 'social',
@@ -215,6 +240,8 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     enabled: false,
     position: 'user',
   },
+  swipeGesturesEnabled: true,
+  showMessageTokenCount: true,
   globalWorldBooks: [],
   worldInfoSettings: {
     globalScanDepth: null,
@@ -235,6 +262,39 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
 
   thumbnailSettings: { smallSize: 300, largeSize: 700 },
   pushNotificationPreferences: { enabled: true, events: { generation_ended: true, generation_error: false } },
+  chatHeadsEnabled: true,
+  chatHeadsSize: 48,
+  chatHeadsDirection: 'column' as const,
+  chatHeadsOpacity: 1,
+  customCSS: { css: '', enabled: false, revision: 0 },
+  componentOverrides: {},
+  voiceSettings: {
+    sttProvider: 'webspeech' as const,
+    sttLanguage: 'en-US',
+    sttContinuous: false,
+    sttInterimResults: true,
+    sttConnectionId: null,
+    ttsEnabled: false,
+    ttsConnectionId: null,
+    ttsAutoPlay: false,
+    ttsSpeed: 1.0,
+    ttsVolume: 0.8,
+    speechDetectionRules: {
+      asterisked: 'skip' as const,
+      quoted: 'speech' as const,
+      undecorated: 'narration' as const,
+    },
+  },
+
+  setVoiceSettings: (partial) =>
+    set((state) => {
+      const voiceSettings = { ...state.voiceSettings, ...partial }
+      if (partial.speechDetectionRules) {
+        voiceSettings.speechDetectionRules = { ...state.voiceSettings.speechDetectionRules, ...partial.speechDetectionRules }
+      }
+      persistKey('voiceSettings', voiceSettings)
+      return { voiceSettings }
+    }),
 
   setWallpaper: (partial) =>
     set((state) => {
@@ -255,6 +315,87 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     persistKey('theme', theme)
   },
 
+  setCustomCSS: (css) =>
+    set((state) => {
+      const customCSS = { ...state.customCSS, css, revision: state.customCSS.revision + 1 }
+      persistKey('customCSS', customCSS)
+      return { customCSS }
+    }),
+
+  toggleCustomCSS: (enabled) =>
+    set((state) => {
+      const customCSS = { ...state.customCSS, enabled }
+      persistKey('customCSS', customCSS)
+      return { customCSS }
+    }),
+
+  setComponentCSS: (componentName, css) =>
+    set((state) => {
+      const prev = state.componentOverrides[componentName]
+      const componentOverrides = {
+        ...state.componentOverrides,
+        [componentName]: { css, tsx: prev?.tsx ?? '', enabled: prev?.enabled ?? true },
+      }
+      persistKey('componentOverrides', componentOverrides)
+      return { componentOverrides }
+    }),
+
+  setComponentTSX: (componentName, tsx) =>
+    set((state) => {
+      const prev = state.componentOverrides[componentName]
+      const componentOverrides = {
+        ...state.componentOverrides,
+        [componentName]: { tsx, css: prev?.css ?? '', enabled: prev?.enabled ?? true },
+      }
+      persistKey('componentOverrides', componentOverrides)
+      return { componentOverrides }
+    }),
+
+  toggleComponentOverride: (componentName, enabled) =>
+    set((state) => {
+      const existing = state.componentOverrides[componentName]
+      if (!existing) return {}
+      const componentOverrides = {
+        ...state.componentOverrides,
+        [componentName]: { ...existing, enabled },
+      }
+      persistKey('componentOverrides', componentOverrides)
+      return { componentOverrides }
+    }),
+
+  resetAllOverrides: () => {
+    const componentOverrides = {}
+    const customCSS = { css: '', enabled: false, revision: 0 }
+    persistKey('componentOverrides', componentOverrides)
+    persistKey('customCSS', customCSS)
+    set({ componentOverrides, customCSS })
+  },
+
+  applyThemePack: (pack) => {
+    const patch: Record<string, any> = {}
+
+    // Layer 1: Theme config
+    if (pack.theme) {
+      patch.theme = pack.theme
+      persistKey('theme', pack.theme)
+    }
+
+    // Layer 2: Global CSS
+    const customCSS = { css: pack.globalCSS || '', enabled: !!pack.globalCSS.trim(), revision: Date.now() }
+    patch.customCSS = customCSS
+    persistKey('customCSS', customCSS)
+
+    // Layer 3: Component overrides
+    const componentOverrides: Record<string, any> = {}
+    for (const [name, comp] of Object.entries(pack.components)) {
+      componentOverrides[name] = { css: comp.css || '', tsx: comp.tsx || '', enabled: comp.enabled }
+    }
+    patch.componentOverrides = componentOverrides
+    persistKey('componentOverrides', componentOverrides)
+
+    set(patch as any)
+  },
+
   loadSettings: async () => {
     try {
       const rows = await settingsApi.getAll()
@@ -264,12 +405,40 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
           patch[row.key] = row.value
         }
       }
+
+      // Recover any settings the previous page wrote to localStorage but may
+      // not have persisted to the DB yet (keepalive flush races with this GET).
+      let pendingKeys: Record<string, any> | null = null
+      try {
+        const raw = localStorage.getItem(PENDING_SETTINGS_KEY)
+        if (raw) {
+          pendingKeys = JSON.parse(raw)
+          if (pendingKeys) {
+            for (const [k, v] of Object.entries(pendingKeys)) {
+              if (DATA_KEYS.has(k)) {
+                patch[k] = v
+              }
+            }
+          }
+        }
+      } catch {}
+
       // Migration: discard old ThemeConfig shape (has baseColors but no accent)
       if (patch.theme && 'baseColors' in patch.theme && !('accent' in patch.theme)) {
         patch.theme = null
       }
       if (Object.keys(patch).length > 0) {
         set(patch as any)
+      }
+
+      // Flush recovered pending keys to the DB so subsequent loads are correct,
+      // then clear localStorage since the DB is now authoritative.
+      if (pendingKeys && Object.keys(pendingKeys).length > 0) {
+        settingsApi.putMany(pendingKeys)
+          .then(() => {
+            try { localStorage.removeItem(PENDING_SETTINGS_KEY) } catch {}
+          })
+          .catch(() => {})
       }
     } catch (err) {
       console.error('[settings] Failed to load settings:', err)

@@ -15,6 +15,22 @@
   z-index: 21;
 }
 
+:global(html[data-ios-pwa]) .bar {
+  bottom: calc(110px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+}
+
+@media (max-width: 600px) {
+  .bar {
+    bottom: 90px;
+    left: 8px;
+    right: 8px;
+  }
+
+  :global(html[data-ios-pwa]) .bar {
+    bottom: calc(90px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+  }
+}
+
 .left {
   display: flex;
   align-items: center;
@@ -87,6 +103,16 @@
   background: rgba(80, 180, 255, 0.2);
 }
 
+.deleteBtn {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: rgb(239, 68, 68);
+}
+
+.deleteBtn:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
 .cancelBtn {
   background: transparent;
   border-color: transparent;
@@ -95,4 +121,14 @@
 
 .cancelBtn:hover {
   color: var(--lumiverse-text);
+}
+
+@media (max-width: 480px) {
+  .actionLabel {
+    display: none;
+  }
+
+  .actionBtn {
+    padding: 6px;
+  }
 }

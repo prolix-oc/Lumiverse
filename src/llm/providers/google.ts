@@ -214,7 +214,7 @@ export class GoogleProvider implements LlmProvider {
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
-  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage"]);
+  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming"]);
 
   /** Keys explicitly handled by Google's buildBody — excluded from passthrough. */
   private static readonly HANDLED_PARAMS = new Set([

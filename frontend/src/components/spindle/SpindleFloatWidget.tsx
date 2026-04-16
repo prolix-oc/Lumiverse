@@ -94,6 +94,17 @@ export default function SpindleFloatWidget({ widget }: Props) {
     onLongPress: (pos) => setContextMenu(pos),
   })
 
+  // The extension owns its content area. If an inner element handled the
+  // contextmenu event (either by opening a Spindle context menu via the store,
+  // or by calling preventDefault), don't also raise the outer widget-chrome
+  // menu — otherwise the less-specific chrome menu wins ownership over the
+  // extension's own menu on the same right-click.
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (e.defaultPrevented) return
+    if (useStore.getState().pendingContextMenu) return
+    longPress.onContextMenu(e)
+  }, [longPress])
+
   const menuItems: ContextMenuEntry[] = useMemo(() => [
     {
       key: 'hide',
@@ -132,6 +143,8 @@ export default function SpindleFloatWidget({ widget }: Props) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         {...longPress}
+        onTouchStart={(e) => { if (!widget.root.contains(e.target as Node)) longPress.onTouchStart(e) }}
+        onContextMenu={handleContextMenu}
       >
         <div className={styles.content} ref={(el) => {
           if (el && !el.contains(widget.root)) {

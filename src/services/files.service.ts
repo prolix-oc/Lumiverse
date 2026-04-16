@@ -32,31 +32,31 @@ export async function saveAvatar(file: File): Promise<string> {
 }
 
 /** Get avatar file path (global, not user-scoped) */
-export function getAvatarPath(filename: string): string | null {
+export async function getAvatarPath(filename: string): Promise<string | null> {
   const base = resolve(env.dataDir, "avatars");
   const filepath = resolve(base, filename);
   if (!filepath.startsWith(base + sep) && filepath !== base) return null;
-  if (!existsSync(filepath)) return null;
+  if (!(await Bun.file(filepath).exists())) return null;
   return filepath;
 }
 
 /** Delete avatar file (global, not user-scoped) */
-export function deleteAvatar(filename: string): boolean {
+export async function deleteAvatar(filename: string): Promise<boolean> {
   const base = resolve(env.dataDir, "avatars");
   const filepath = resolve(base, filename);
   if (!filepath.startsWith(base + sep) && filepath !== base) return false;
-  if (!existsSync(filepath)) return false;
+  if (!(await Bun.file(filepath).exists())) return false;
   unlinkSync(filepath);
   return true;
 }
 
-export function getFilePath(userId: string, filename: string, subdir: string = "uploads"): string | null {
+export async function getFilePath(userId: string, filename: string, subdir: string = "uploads"): Promise<string | null> {
   // Try user-scoped path first
   const scopedBase = resolve(env.dataDir, subdir, userId);
   const scopedPath = resolve(scopedBase, filename);
   if (
     (scopedPath.startsWith(scopedBase + sep) || scopedPath === scopedBase) &&
-    existsSync(scopedPath)
+    (await Bun.file(scopedPath).exists())
   ) {
     return scopedPath;
   }
@@ -65,17 +65,17 @@ export function getFilePath(userId: string, filename: string, subdir: string = "
   const legacyBase = resolve(env.dataDir, subdir);
   const legacyPath = resolve(legacyBase, filename);
   if (!legacyPath.startsWith(legacyBase + sep) && legacyPath !== legacyBase) return null;
-  if (!existsSync(legacyPath)) return null;
+  if (!(await Bun.file(legacyPath).exists())) return null;
   return legacyPath;
 }
 
-export function deleteFile(userId: string, filename: string, subdir: string = "uploads"): boolean {
+export async function deleteFile(userId: string, filename: string, subdir: string = "uploads"): Promise<boolean> {
   // Try user-scoped path first
   const scopedBase = resolve(env.dataDir, subdir, userId);
   const scopedPath = resolve(scopedBase, filename);
   if (
     (scopedPath.startsWith(scopedBase + sep) || scopedPath === scopedBase) &&
-    existsSync(scopedPath)
+    (await Bun.file(scopedPath).exists())
   ) {
     unlinkSync(scopedPath);
     return true;
@@ -85,7 +85,7 @@ export function deleteFile(userId: string, filename: string, subdir: string = "u
   const legacyBase = resolve(env.dataDir, subdir);
   const legacyPath = resolve(legacyBase, filename);
   if (!legacyPath.startsWith(legacyBase + sep) && legacyPath !== legacyBase) return false;
-  if (!existsSync(legacyPath)) return false;
+  if (!(await Bun.file(legacyPath).exists())) return false;
   unlinkSync(legacyPath);
   return true;
 }

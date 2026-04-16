@@ -160,7 +160,7 @@ function dataUriToFile(dataUri: string): File {
 }
 
 async function fetchUrlAsFile(url: string): Promise<File> {
-  const res = await safeFetch(url, { maxBytes: 20 * 1024 * 1024 });
+  const res = await safeFetch(url, { maxBytes: 50 * 1024 * 1024 });
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   const blob = await res.blob();
   const urlPath = new URL(url).pathname;

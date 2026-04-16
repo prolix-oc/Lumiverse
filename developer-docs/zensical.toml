@@ -49,6 +49,7 @@ nav = [
     { "Push Notifications" = "backend-api/push-notifications.md" },
     { "User Presence" = "backend-api/user-presence.md" },
     { "Frontend Communication" = "backend-api/frontend-communication.md" },
+    { "Version" = "backend-api/version.md" },
   ] },
   { "Frontend API" = [
     { "Overview" = "frontend-api/index.md" },
@@ -137,8 +138,6 @@ repo = "lucide/github"
 [project.markdown_extensions.pymdownx.superfences]
 
 [project.markdown_extensions.pymdownx.highlight]
-anchor_linenums = true
-line_spans = "__span"
 pygments_lang_class = true
 
 [project.markdown_extensions.pymdownx.inlinehilite]

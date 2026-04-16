@@ -336,7 +336,8 @@ export default function WorldBookPanel() {
   const [globalPopoverOpen, setGlobalPopoverOpen] = useState(false)
   const globalPopoverRef = useRef<HTMLDivElement>(null)
   const globalAddBtnRef = useRef<HTMLButtonElement>(null)
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null)
+  const globalSectionRef = useRef<HTMLDivElement>(null)
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!globalPopoverOpen) return
@@ -355,9 +356,14 @@ export default function WorldBookPanel() {
   const openGlobalPopover = useCallback(() => {
     setGlobalPopoverOpen((prev) => {
       const next = !prev
-      if (next && globalAddBtnRef.current) {
-        const rect = globalAddBtnRef.current.getBoundingClientRect()
-        setPopoverPos({ top: rect.bottom + 4, left: rect.right })
+      if (next && globalAddBtnRef.current && globalSectionRef.current) {
+        const btnRect = globalAddBtnRef.current.getBoundingClientRect()
+        const sectionRect = globalSectionRef.current.getBoundingClientRect()
+        setPopoverPos({
+          top: btnRect.bottom + 4,
+          left: sectionRect.left,
+          width: sectionRect.width,
+        })
       }
       return next
     })
@@ -384,7 +390,8 @@ export default function WorldBookPanel() {
   const [chatPopoverOpen, setChatPopoverOpen] = useState(false)
   const chatPopoverRef = useRef<HTMLDivElement>(null)
   const chatAddBtnRef = useRef<HTMLButtonElement>(null)
-  const [chatPopoverPos, setChatPopoverPos] = useState<{ top: number; left: number } | null>(null)
+  const chatSectionRef = useRef<HTMLDivElement>(null)
+  const [chatPopoverPos, setChatPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!activeChatId) {
@@ -416,9 +423,14 @@ export default function WorldBookPanel() {
   const openChatPopover = useCallback(() => {
     setChatPopoverOpen((prev) => {
       const next = !prev
-      if (next && chatAddBtnRef.current) {
-        const rect = chatAddBtnRef.current.getBoundingClientRect()
-        setChatPopoverPos({ top: rect.bottom + 4, left: rect.right })
+      if (next && chatAddBtnRef.current && chatSectionRef.current) {
+        const btnRect = chatAddBtnRef.current.getBoundingClientRect()
+        const sectionRect = chatSectionRef.current.getBoundingClientRect()
+        setChatPopoverPos({
+          top: btnRect.bottom + 4,
+          left: sectionRect.left,
+          width: sectionRect.width,
+        })
       }
       return next
     })
@@ -429,17 +441,17 @@ export default function WorldBookPanel() {
       ? chatWorldBookIds.filter((x) => x !== id)
       : [...chatWorldBookIds, id]
     setChatWorldBookIds(next)
-    const meta = { ...chatMetadata, chat_world_book_ids: next }
-    setChatMetadata(meta)
-    if (activeChatId) chatsApi.update(activeChatId, { metadata: meta }).catch(() => {})
+    setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
+    // Atomic partial merge so concurrent server-side writers (post-generation
+    // expression detection, council caching, etc.) can't clobber this change.
+    if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
   }
 
   const removeChatBook = (id: string) => {
     const next = chatWorldBookIds.filter((x) => x !== id)
     setChatWorldBookIds(next)
-    const meta = { ...chatMetadata, chat_world_book_ids: next }
-    setChatMetadata(meta)
-    if (activeChatId) chatsApi.update(activeChatId, { metadata: meta }).catch(() => {})
+    setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
+    if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
   }
 
   const activeChatBooks = books.filter((b) => chatWorldBookIds.includes(b.id))
@@ -496,7 +508,7 @@ export default function WorldBookPanel() {
   return (
     <div className={styles.panel}>
       {/* Global world books section */}
-      <div className={styles.globalSection}>
+      <div ref={globalSectionRef} className={styles.globalSection}>
         <div className={styles.globalHeader}>
           <Globe size={12} className={styles.globalIcon} />
           <span className={styles.globalLabel}>Always Active</span>
@@ -518,7 +530,7 @@ export default function WorldBookPanel() {
               <div
                 ref={globalPopoverRef}
                 className={styles.globalPopover}
-                style={{ top: popoverPos.top, left: popoverPos.left }}
+                style={{ top: popoverPos.top, left: popoverPos.left, width: popoverPos.width }}
               >
                 {books.length === 0 ? (
                   <div className={styles.globalPopoverEmpty}>No world books available</div>
@@ -565,7 +577,7 @@ export default function WorldBookPanel() {
       </div>
 
       {/* Chat-scoped world books section */}
-      <div className={clsx(styles.chatSection, !activeChatId && styles.chatSectionDisabled)}>
+      <div ref={chatSectionRef} className={clsx(styles.chatSection, !activeChatId && styles.chatSectionDisabled)}>
         <div className={styles.chatHeader}>
           <MessageSquare size={12} className={styles.chatIcon} />
           <span className={styles.chatLabel}>This Chat Only</span>
@@ -588,7 +600,7 @@ export default function WorldBookPanel() {
                 <div
                   ref={chatPopoverRef}
                   className={styles.chatPopover}
-                  style={{ top: chatPopoverPos.top, left: chatPopoverPos.left }}
+                  style={{ top: chatPopoverPos.top, left: chatPopoverPos.left, width: chatPopoverPos.width }}
                 >
                   {books.length === 0 ? (
                     <div className={styles.chatPopoverEmpty}>No world books available</div>
@@ -759,7 +771,7 @@ export default function WorldBookPanel() {
               </Button>
               {vectorSummary && (
                 <div className={styles.vectorSummary}>
-                  <div className={styles.vectorSummaryTitle}>Semantic activation status</div>
+                  <div className={styles.vectorSummaryTitle}>Vector activation status</div>
                   <div className={styles.vectorSummaryGrid}>
                     <span>{vectorSummary.enabled} enabled</span>
                     <span>{vectorSummary.enabled_non_empty}/{vectorSummary.non_empty} non-empty</span>
@@ -771,7 +783,7 @@ export default function WorldBookPanel() {
               )}
               <div className={styles.bookActionRow}>
                 <Button variant="primary" size="sm" onClick={handleReindexVectors} disabled={reindexing}>
-                  {reindexing ? 'Reindexing...' : 'Reindex semantic search'}
+                  {reindexing ? 'Reindexing...' : 'Reindex vector search'}
                 </Button>
                 <Button variant="secondary" size="sm" onClick={handleConvertToVectorizedPreview} disabled={reindexing}>
                   Convert to Vectorized
@@ -934,7 +946,7 @@ export default function WorldBookPanel() {
             convertPreview.eligible === 0
               ? 'No entries are eligible for conversion. All non-constant entries are either already vectorized, empty, or disabled.'
               : <>
-                  <p>This will enable semantic activation for <strong>{convertPreview.eligible}</strong> {convertPreview.eligible === 1 ? 'entry' : 'entries'} and immediately start reindexing.</p>
+                  <p>This will enable vector activation for <strong>{convertPreview.eligible}</strong> {convertPreview.eligible === 1 ? 'entry' : 'entries'} and immediately start reindexing.</p>
                   <ul style={{ textAlign: 'left', margin: '8px 0', paddingLeft: '20px', fontSize: '12px', opacity: 0.8 }}>
                     {convertPreview.constant_skipped > 0 && <li>{convertPreview.constant_skipped} constant {convertPreview.constant_skipped === 1 ? 'entry' : 'entries'} skipped (always active)</li>}
                     {convertPreview.already_vectorized > 0 && <li>{convertPreview.already_vectorized} already vectorized</li>}

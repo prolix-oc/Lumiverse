@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { GenerationSlice } from '@/types/store'
-import { settingsApi } from '@/api/settings'
+import { persistKey } from './settings'
 
 export const createGenerationSlice: StateCreator<GenerationSlice> = (set) => ({
   imageGeneration: {
@@ -20,7 +20,7 @@ export const createGenerationSlice: StateCreator<GenerationSlice> = (set) => ({
   setImageGenSettings: (settings) =>
     set((state) => {
       const imageGeneration = { ...state.imageGeneration, ...settings }
-      settingsApi.put('imageGeneration', imageGeneration).catch(() => {})
+      persistKey('imageGeneration', imageGeneration)
       return { imageGeneration }
     }),
   setSceneBackground: (url) => set({ sceneBackground: url }),

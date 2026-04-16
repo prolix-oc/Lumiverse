@@ -17,6 +17,7 @@ export default defineConfig({
       includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
   ],
@@ -29,6 +30,14 @@ export default defineConfig({
     },
   },
   css: {
+    lightningcss: {
+      // Safari 14 still requires -webkit-backdrop-filter. Setting this target
+      // tells Lightning CSS to emit both prefixed and unprefixed forms
+      // automatically — manual -webkit- prefixes are removed from source.
+      targets: {
+        safari: (14 << 16),
+      },
+    },
     modules: {
       localsConvention: 'camelCaseOnly',
     },

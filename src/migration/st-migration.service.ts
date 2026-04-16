@@ -6,7 +6,6 @@
  * via an in-memory lock.
  */
 
-import { existsSync } from "fs";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { scanSTData } from "./st-reader";
@@ -18,6 +17,8 @@ import {
   importChats,
   importGroupChats,
 } from "./st-importer";
+import type { FileSystem } from "../file-connections/types";
+import { LocalFileSystem } from "../file-connections/providers/local";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,10 @@ function createWsLogger(migrationId: string, callerUserId: string): MigrationLog
   };
 }
 
+// ─── Default filesystem singleton ──────────────────────────────────────────
+
+const defaultFs = new LocalFileSystem();
+
 // ─── Orchestrator ───────────────────────────────────────────────────────────
 
 export async function executeMigration(
@@ -106,6 +111,7 @@ export async function executeMigration(
   targetUserId: string,
   dataDir: string,
   scope: MigrationScope,
+  fs: FileSystem = defaultFs,
 ): Promise<void> {
   const startTime = Date.now();
 
@@ -125,20 +131,34 @@ export async function executeMigration(
 
   const logger = createWsLogger(migrationId, callerUserId);
 
+  // Helper to emit phase transitions so the frontend always tracks state
+  const setPhase = (phase: string) => {
+    state.phase = phase;
+    eventBus.emit(EventType.MIGRATION_PROGRESS, {
+      migrationId,
+      phase,
+      label: phase,
+      current: 0,
+      total: 0,
+    }, callerUserId);
+  };
+
   try {
-    if (!existsSync(dataDir)) {
+    if (!(await fs.exists(dataDir))) {
       throw new Error(`Data directory no longer exists: ${dataDir}`);
     }
 
-    const counts = scanSTData(dataDir);
+    setPhase("scanning");
+    logger.info("Scanning SillyTavern data directory...");
+    const counts = await scanSTData(dataDir, fs);
     const results: MigrationResults = {};
 
     // Characters (needed first for filenameToId mapping)
     let filenameToId = new Map<string, string>();
     if (scope.characters && counts.characters > 0) {
-      state.phase = "characters";
+      setPhase("characters");
       logger.info(`Importing ${counts.characters} characters...`);
-      const charResult = await importCharacters(targetUserId, dataDir, logger);
+      const charResult = await importCharacters(targetUserId, dataDir, logger, fs);
       filenameToId = charResult.filenameToId;
       results.characters = {
         imported: charResult.imported,
@@ -151,9 +171,9 @@ export async function executeMigration(
     // World Books
     let worldBookNameToId = new Map<string, string>();
     if (scope.worldBooks && counts.worldBooks > 0) {
-      state.phase = "worldBooks";
+      setPhase("worldBooks");
       logger.info(`Importing ${counts.worldBooks} world books...`);
-      const wbResult = await importWorldBooks(targetUserId, dataDir, logger);
+      const wbResult = await importWorldBooks(targetUserId, dataDir, logger, fs);
       worldBookNameToId = wbResult.nameToId;
       results.world_books = {
         imported: wbResult.imported,
@@ -166,9 +186,9 @@ export async function executeMigration(
     // Personas
     let personaNameToId = new Map<string, string>();
     if (scope.personas && counts.personas > 0) {
-      state.phase = "personas";
+      setPhase("personas");
       logger.info(`Importing ${counts.personas} personas...`);
-      const pResult = await importPersonas(targetUserId, dataDir, worldBookNameToId, logger);
+      const pResult = await importPersonas(targetUserId, dataDir, worldBookNameToId, logger, fs);
       personaNameToId = pResult.nameToId;
       results.personas = {
         imported: pResult.imported,
@@ -180,9 +200,9 @@ export async function executeMigration(
 
     // Chats
     if (scope.chats && counts.totalChatFiles > 0) {
-      state.phase = "chats";
+      setPhase("chats");
       logger.info(`Importing chats...`);
-      const chatResult = await importChats(targetUserId, dataDir, filenameToId, personaNameToId, logger);
+      const chatResult = await importChats(targetUserId, dataDir, filenameToId, personaNameToId, logger, fs);
       results.chats = {
         imported: chatResult.imported,
         failed: chatResult.failed,
@@ -196,9 +216,9 @@ export async function executeMigration(
 
     // Group Chats
     if (scope.groupChats && counts.groupChats > 0) {
-      state.phase = "groupChats";
+      setPhase("groupChats");
       logger.info(`Importing group chats...`);
-      const gcResult = await importGroupChats(targetUserId, dataDir, filenameToId, personaNameToId, logger);
+      const gcResult = await importGroupChats(targetUserId, dataDir, filenameToId, personaNameToId, logger, fs);
       results.group_chats = {
         imported: gcResult.imported,
         failed: gcResult.failed,
@@ -237,5 +257,9 @@ export async function executeMigration(
     logger.error(`Migration failed: ${errorMsg}`);
   } finally {
     currentMigrationId = null;
+    // Disconnect remote filesystems when migration ends
+    if (fs.type !== "local") {
+      try { await fs.disconnect(); } catch { /* ignore */ }
+    }
   }
 }

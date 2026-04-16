@@ -159,14 +159,14 @@ function SingleCharacterProfile({
       </div>
 
       {/* Description */}
-      <EditorSection Icon={BookOpen} title="Description">
+      <EditorSection Icon={BookOpen} title="Description" defaultExpanded={false}>
         <div className={styles.fieldContent}>
           {character.description || <span className={styles.placeholder}>No description</span>}
         </div>
       </EditorSection>
 
       {/* Personality */}
-      <EditorSection Icon={Sparkles} title="Personality">
+      <EditorSection Icon={Sparkles} title="Personality" defaultExpanded={false}>
         <div className={styles.fieldContent}>
           {character.personality || <span className={styles.placeholder}>No personality defined</span>}
         </div>

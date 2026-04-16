@@ -6,7 +6,7 @@ Apply CSS variable overrides on top of the user's current theme. Overrides are s
 
 ## `spindle.theme.apply(overrides)`
 
-Push CSS variable overrides to the frontend. Subsequent calls merge with any previously applied overrides from your extension — new keys are added, existing keys are overwritten. The UI updates immediately via WebSocket.
+Push CSS variable overrides to the frontend. Small partial updates merge with any previously applied overrides from your extension — new keys are added, existing keys are overwritten. Full theme-sized payloads are treated as replacements for their scope (`variables`, `variablesByMode.dark`, `variablesByMode.light`) so stale alpha/glass/fill tokens do not accumulate across repeated theme regeneration. The UI updates immediately via WebSocket.
 
 ```ts
 await spindle.theme.apply({
@@ -50,6 +50,26 @@ await spindle.theme.apply({
 |---|---|---|
 | `variables` | `Record<string, string>` | CSS custom property overrides applied regardless of mode. Keys must start with `--`. Max 200 per extension. |
 | `variablesByMode` | `{ dark?: Record<string, string>; light?: Record<string, string> }` | Mode-specific CSS overrides. Selected based on the user's resolved mode. Override flat `variables` for the same key. |
+
+---
+
+## `spindle.theme.applyPalette(palette, userId?)`
+
+Apply a safe palette-driven theme without letting the extension push raw CSS variables. Lumiverse preserves the user's current glass, radius, font, and UI-scale settings, generates both light and dark variable maps internally, and owns alpha-heavy presentation tokens like fills, glass backgrounds, shadows, and scrims.
+
+This is the preferred API for live theming from avatars, album art, or other frequently changing color sources.
+
+```ts
+await spindle.theme.applyPalette({
+  accent: { h: 210, s: 60, l: 58 },
+}, userId)
+```
+
+### ThemePaletteConfigDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `accent` | `{ h, s, l }` | Primary accent color in HSL. Lumiverse derives the final full palette and mode-aware CSS vars from this. |
 
 ### Available CSS Variables
 
@@ -153,6 +173,69 @@ The `flatness` field helps you avoid sampling background regions. A score above 
 
 ---
 
+## `spindle.theme.generateVariables(config)`
+
+Generate the full set of Lumiverse CSS variables from a theme configuration. Returns a `Record<string, string>` containing every CSS variable the theme engine would produce — primary accent variants, backgrounds, borders, text, glass tokens, shadows, radii, prose tokens, and more (~80+ variables). The result can be passed directly to `apply()` for a complete, coherent theme override.
+
+This is the same engine that powers Lumiverse's built-in Character Aware theme. Instead of manually crafting individual CSS variables and risking gaps (e.g. forgetting `--lcs-glass-bg` while overriding `--lumiverse-bg`), you provide an accent color and mode and receive the entire variable map.
+
+```ts
+// Generate a complete blue theme for dark mode
+const vars = await spindle.theme.generateVariables({
+  accent: { h: 210, s: 60, l: 58 },
+  mode: 'dark',
+})
+
+// Apply every variable at once — no gaps, fully coherent
+await spindle.theme.apply({ variables: vars })
+```
+
+### Combining with `extractColors`
+
+The most powerful pattern is extracting colors from an image and feeding the result directly into `generateVariables`:
+
+```ts
+const palette = await spindle.theme.extractColors(character.image_id)
+const vars = await spindle.theme.generateVariables({
+  accent: palette.dominantHsl,
+  mode: 'dark',
+})
+await spindle.theme.apply({ variables: vars })
+```
+
+This gives your extension the same full-palette theming that Character Aware provides, with zero manual variable mapping.
+
+### ThemeVariablesConfigDTO
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `accent` | `{ h, s, l }` | *(required)* | Primary accent color in HSL. |
+| `mode` | `"dark" \| "light"` | *(required)* | Target color mode. |
+| `enableGlass` | `boolean` | `true` | Whether to generate glassmorphic backdrop-filter tokens. |
+| `radiusScale` | `number` | `1` | Border radius multiplier. |
+| `fontScale` | `number` | `1` | Font size multiplier. |
+| `uiScale` | `number` | `1` | Full UI zoom multiplier. |
+| `baseColors` | `object` | — | Optional base color overrides (see below). |
+| `statusColors` | `object` | — | Override danger/success/warning colors. |
+
+### `baseColors`
+
+When provided, these hex/hsl color strings override the accent-derived defaults for specific variable groups. The engine automatically generates all related variants (hover, muted, opacity stops, etc.) from each base color.
+
+| Key | Affects |
+|---|---|
+| `primary` | `--lumiverse-primary` and all `-hover`, `-light`, `-muted`, `-text`, `-010` through `-050`, `-contrast` variants |
+| `secondary` | `--lumiverse-secondary`, `-hover`, `-border` |
+| `background` | `--lumiverse-bg`, `-elevated`, `-hover`, `-deep` |
+| `text` | `--lumiverse-text`, `-muted`, `-dim`, `-hint` |
+| `danger` | `--lumiverse-danger` and all variants |
+| `success` | `--lumiverse-success` and all variants |
+| `warning` | `--lumiverse-warning` and all variants |
+| `speech` | `--lumiverse-prose-dialogue` |
+| `thoughts` | `--lumiverse-prose-italic` |
+
+---
+
 ## User Visibility
 
 When your extension applies theme overrides, users see an **Extension Themes** section in their Theme panel. Each entry shows your extension name, a color swatch strip, the number of overrides applied, and a dismiss button. This gives users full transparency into what's modifying their theme and the ability to remove overrides at any time.
@@ -168,7 +251,7 @@ Overrides are automatically cleared when:
 
 ## Example: Character-Derived Theme with Mode Support
 
-This example extracts colors from the active character's avatar and applies a mode-aware theme that adapts to both light and dark mode.
+This example extracts colors from the active character's avatar and applies a complete theme using `generateVariables`. Compare this to the manual approach — no need to guess variable names or worry about missing glass/border/shadow tokens.
 
 ```ts
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
@@ -181,29 +264,25 @@ async function applyCharacterTheme(characterId: string) {
   }
 
   const palette = await spindle.theme.extractColors(character.image_id)
-  const hue = palette.dominantHsl.h
-  const sat = Math.max(35, Math.min(70, palette.dominantHsl.s))
+  const theme = await spindle.theme.getCurrent()
 
+  // Generate a complete variable map for both modes
+  const darkVars = await spindle.theme.generateVariables({
+    accent: palette.dominantHsl,
+    mode: 'dark',
+    enableGlass: theme.enableGlass,
+    radiusScale: theme.radiusScale,
+  })
+  const lightVars = await spindle.theme.generateVariables({
+    accent: palette.dominantHsl,
+    mode: 'light',
+    enableGlass: theme.enableGlass,
+    radiusScale: theme.radiusScale,
+  })
+
+  // Apply with mode-awareness — every variable is covered
   await spindle.theme.apply({
-    variables: {
-      '--lumiverse-primary': `hsl(${hue}, ${sat}%, 58%)`,
-      '--lumiverse-primary-hover': `hsl(${hue}, ${sat + 5}%, 52%)`,
-      '--lumiverse-prose-dialogue': `hsl(${hue}, ${Math.min(sat + 10, 80)}%, 72%)`,
-    },
-    variablesByMode: {
-      dark: {
-        '--lumiverse-bg': `hsl(${hue}, 12%, 10%)`,
-        '--lumiverse-bg-elevated': `hsl(${hue}, 12%, 13%)`,
-        '--lumiverse-bg-deep': `hsl(${hue}, 14%, 7%)`,
-        '--lcs-glass-bg': `hsla(${hue}, 12%, 6%, 0.55)`,
-      },
-      light: {
-        '--lumiverse-bg': `hsl(${hue}, 18%, 96%)`,
-        '--lumiverse-bg-elevated': `hsl(${hue}, 18%, 100%)`,
-        '--lumiverse-bg-deep': `hsl(${hue}, 20%, 93%)`,
-        '--lcs-glass-bg': `hsla(${hue}, 18%, 92%, 0.55)`,
-      },
-    },
+    variablesByMode: { dark: darkVars, light: lightVars },
   })
 }
 
@@ -215,6 +294,36 @@ spindle.on('SETTINGS_UPDATED', async (payload: any) => {
       await applyCharacterTheme(chat.character_id)
     }
   }
+})
+```
+
+### Manual approach (partial overrides)
+
+If you only need to override a few specific variables rather than the full theme, you can still use `apply()` directly. This is lighter weight but requires you to cover all relevant variables yourself — see the [Available CSS Variables](#available-css-variables) table.
+
+```ts
+const palette = await spindle.theme.extractColors(character.image_id)
+const hue = palette.dominantHsl.h
+const sat = Math.max(35, Math.min(70, palette.dominantHsl.s))
+
+await spindle.theme.apply({
+  variables: {
+    '--lumiverse-primary': `hsl(${hue}, ${sat}%, 58%)`,
+    '--lumiverse-primary-hover': `hsl(${hue}, ${sat + 5}%, 52%)`,
+    '--lumiverse-prose-dialogue': `hsl(${hue}, ${Math.min(sat + 10, 80)}%, 72%)`,
+  },
+  variablesByMode: {
+    dark: {
+      '--lumiverse-bg': `hsl(${hue}, 12%, 10%)`,
+      '--lumiverse-bg-elevated': `hsl(${hue}, 12%, 13%)`,
+      '--lcs-glass-bg': `hsla(${hue}, 12%, 6%, 0.55)`,
+    },
+    light: {
+      '--lumiverse-bg': `hsl(${hue}, 18%, 96%)`,
+      '--lumiverse-bg-elevated': `hsl(${hue}, 18%, 100%)`,
+      '--lcs-glass-bg': `hsla(${hue}, 18%, 92%, 0.55)`,
+    },
+  },
 })
 ```
 

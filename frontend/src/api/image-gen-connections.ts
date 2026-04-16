@@ -7,6 +7,8 @@ import type {
   ImageGenConnectionTestResult,
   ImageGenConnectionModelsResult,
   ImageGenProviderInfo,
+  PollinationsAuthUrlRequest,
+  PollinationsAuthUrlResponse,
 } from '@/types/api'
 
 export const imageGenConnectionsApi = {
@@ -42,12 +44,20 @@ export const imageGenConnectionsApi = {
     return get<ImageGenConnectionModelsResult>(`/image-gen-connections/${id}/models`)
   },
 
+  modelsBySubtype(id: string, subtype: string) {
+    return get<ImageGenConnectionModelsResult>(`/image-gen-connections/${id}/models/${encodeURIComponent(subtype)}`)
+  },
+
   setApiKey(id: string, apiKey: string) {
     return put<{ success: boolean }>(`/image-gen-connections/${id}/api-key`, { api_key: apiKey })
   },
 
   clearApiKey(id: string) {
     return del<{ success: boolean }>(`/image-gen-connections/${id}/api-key`)
+  },
+
+  pollinationsAuthUrl(input: PollinationsAuthUrlRequest) {
+    return post<PollinationsAuthUrlResponse>('/connections/pollinations/auth-url', input)
   },
 
   providers() {

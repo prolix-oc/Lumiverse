@@ -15,9 +15,13 @@
     setup           - Run setup wizard only
     reset-password  - Reset owner account password
     migrate-st      - Run SillyTavern migration helper
+    kill-pkgs       - Nuke lockfiles + node_modules, reinstall backend deps
 
 .PARAMETER Build
     Rebuild the frontend before starting the backend
+
+.PARAMETER KillPkgs
+    Nuke lockfiles and node_modules, then reinstall backend dependencies
 
 .PARAMETER FrontendPath
     Path to frontend directory (default: ./frontend)
@@ -27,7 +31,7 @@
 #>
 
 param(
-    [ValidateSet("all", "build-only", "backend-only", "dev", "setup", "reset-password", "migrate-st")]
+    [ValidateSet("all", "build-only", "backend-only", "dev", "setup", "reset-password", "migrate-st", "kill-pkgs")]
     [string]$Mode = "all",
 
     [Alias("b")]
@@ -38,7 +42,10 @@ param(
 
     [string]$FrontendPath,
 
-    [switch]$NoRunner
+    [switch]$NoRunner,
+
+    [Alias("k")]
+    [switch]$KillPkgs
 )
 
 $ErrorActionPreference = "Stop"
@@ -158,6 +165,33 @@ function Invoke-MigrateST {
     try { & bun run migrate:st } finally { Pop-Location }
 }
 
+# ─── Kill packages (nuke + reinstall) ──────────────────────────────────────
+
+function Invoke-KillPkgs {
+    Write-Warn "Removing lockfiles and node_modules..."
+
+    $paths = @(
+        (Join-Path $BackendDir "bun.lock"),
+        (Join-Path $FrontendPath "bun.lock")
+    )
+    foreach ($p in $paths) {
+        if (Test-Path $p) { Remove-Item $p -Force }
+    }
+
+    $dirs = @(
+        (Join-Path $BackendDir "node_modules"),
+        (Join-Path $FrontendPath "node_modules")
+    )
+    foreach ($d in $dirs) {
+        if (Test-Path $d) { Remove-Item $d -Recurse -Force }
+    }
+
+    Write-Ok "Cleaned lockfiles and node_modules from backend and frontend"
+
+    Install-Deps $BackendDir "backend"
+    Write-Ok "Backend dependencies reinstalled (frontend deps will install on next build)"
+}
+
 # ─── Load .env into current process ─────────────────────────────────────────
 
 function Load-EnvFile {
@@ -227,7 +261,7 @@ function Start-Backend {
     # Decide: visual runner or plain process
     $isTTY = [Environment]::UserInteractive -and -not $NoRunner
     if ($isTTY) {
-        $runnerArgs = @("run", "scripts/runner.tsx")
+        $runnerArgs = @("run", "scripts/runner.ts")
         if ($Mode -eq "dev") { $runnerArgs += @("--", "--dev") }
         Push-Location $BackendDir
         try { & bun @runnerArgs } finally { Pop-Location }
@@ -256,8 +290,9 @@ Write-Host ""
 
 Ensure-Bun
 
-# Allow -MigrateST switch as shorthand for -Mode migrate-st
+# Allow switches as shorthand for -Mode
 if ($MigrateST) { $Mode = "migrate-st" }
+if ($KillPkgs)  { $Mode = "kill-pkgs" }
 
 switch ($Mode) {
     "all" {
@@ -286,5 +321,8 @@ switch ($Mode) {
     }
     "migrate-st" {
         Invoke-MigrateST
+    }
+    "kill-pkgs" {
+        Invoke-KillPkgs
     }
 }

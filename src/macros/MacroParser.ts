@@ -1,6 +1,10 @@
 import { TokenType, type Token, type AstNode, type TextNode, type MacroNode, type ScopedMacroNode, type MacroFlags } from "./types";
 import { lex } from "./MacroLexer";
 
+/** Sentinel characters for escaped braces — survive re-evaluation passes. */
+export const ESCAPED_OPEN = "\x01";
+export const ESCAPED_CLOSE = "\x02";
+
 const DEFAULT_FLAGS: MacroFlags = {
   immediate: false,
   delayed: false,
@@ -82,7 +86,7 @@ function parseDocument(ctx: ParseContext): AstNode[] {
       pushTextNode(nodes, tok.value);
     } else if (tok.type === TokenType.ESCAPED_BRACE) {
       ctx.advance();
-      pushTextNode(nodes, tok.value);
+      pushTextNode(nodes, tok.value === "{" ? ESCAPED_OPEN : ESCAPED_CLOSE);
     } else if (tok.type === TokenType.MACRO_OPEN) {
       nodes.push(parseMacroExpr(ctx));
     } else {
@@ -112,8 +116,8 @@ function parseMacroExpr(ctx: ParseContext): MacroNode {
     else break;
   }
 
-  // Variable shorthand: {{.varName}} or {{$varName}}
-  if (ctx.at(TokenType.DOT) || ctx.at(TokenType.DOLLAR)) {
+  // Variable shorthand: {{.varName}}, {{$varName}}, or {{@varName}}
+  if (ctx.at(TokenType.DOT) || ctx.at(TokenType.DOLLAR) || ctx.at(TokenType.AT)) {
     return parseVariableShorthand(ctx, flags, startOffset);
   }
 
@@ -138,7 +142,7 @@ function parseMacroExpr(ctx: ParseContext): MacroNode {
         argNodes.push(parseMacroExpr(ctx));
       } else if (tok.type === TokenType.ESCAPED_BRACE) {
         ctx.advance();
-        pushTextNode(argNodes, tok.value);
+        pushTextNode(argNodes, tok.value === "{" ? ESCAPED_OPEN : ESCAPED_CLOSE);
       } else {
         // Consume unknown token as text
         ctx.advance();
@@ -168,8 +172,10 @@ function parseMacroExpr(ctx: ParseContext): MacroNode {
 }
 
 function parseVariableShorthand(ctx: ParseContext, flags: MacroFlags, startOffset: number): MacroNode {
-  const scopeTok = ctx.advance(); // . or $
-  const isGlobal = scopeTok.type === TokenType.DOLLAR;
+  const scopeTok = ctx.advance(); // ., $, or @
+  const scope: "local" | "global" | "chat" =
+    scopeTok.type === TokenType.DOLLAR ? "global" :
+    scopeTok.type === TokenType.AT ? "chat" : "local";
 
   let varName = "";
   if (ctx.at(TokenType.IDENTIFIER)) {
@@ -177,12 +183,46 @@ function parseVariableShorthand(ctx: ParseContext, flags: MacroFlags, startOffse
   }
 
   let operator = "";
-  let operandValue = "";
+  const operandNodes: AstNode[] = [];
   if (ctx.at(TokenType.OPERATOR)) {
     operator = ctx.advance().value;
-    // If there's a text value following the operator
-    if (ctx.at(TokenType.TEXT)) {
-      operandValue = ctx.advance().value;
+    // Collect operand value tokens — may include nested macros
+    while (!ctx.atEnd() && !ctx.at(TokenType.MACRO_CLOSE)) {
+      const tok = ctx.peek();
+      if (tok.type === TokenType.TEXT) {
+        ctx.advance();
+        pushTextNode(operandNodes, tok.value);
+      } else if (tok.type === TokenType.MACRO_OPEN) {
+        operandNodes.push(parseMacroExpr(ctx));
+      } else if (tok.type === TokenType.ESCAPED_BRACE) {
+        ctx.advance();
+        pushTextNode(operandNodes, tok.value === "{" ? ESCAPED_OPEN : ESCAPED_CLOSE);
+      } else {
+        ctx.advance();
+        pushTextNode(operandNodes, tok.value);
+      }
+    }
+    // Trim trailing whitespace from operand (spaces before closing }})
+    if (operandNodes.length > 0) {
+      const last = operandNodes[operandNodes.length - 1];
+      if (last.type === "text") {
+        (last as TextNode).value = (last as TextNode).value.trimEnd();
+        if ((last as TextNode).value === "") {
+          operandNodes.pop();
+        }
+      }
+    }
+  }
+
+  // Handle -= by negating the operand so addvar subtracts
+  if (operator === "-=" && operandNodes.length > 0) {
+    const first = operandNodes[0];
+    if (first.type === "text") {
+      const textNode = first as TextNode;
+      textNode.value = textNode.value.startsWith("-") ? textNode.value.slice(1) : `-${textNode.value}`;
+    } else {
+      // Nested macro as first element — prepend a negative sign
+      operandNodes.unshift({ type: "text", value: "-" } as TextNode);
     }
   }
 
@@ -190,10 +230,10 @@ function parseVariableShorthand(ctx: ParseContext, flags: MacroFlags, startOffse
   if (ctx.at(TokenType.MACRO_CLOSE)) ctx.advance();
 
   // Translate variable shorthand to macro calls
-  const macroName = translateVarShorthand(isGlobal, operator);
+  const macroName = translateVarShorthand(scope, operator);
   const args: AstNode[][] = [[{ type: "text", value: varName } as TextNode]];
-  if (operandValue) {
-    args.push([{ type: "text", value: operandValue } as TextNode]);
+  if (operandNodes.length > 0) {
+    args.push(operandNodes);
   }
 
   return {
@@ -201,12 +241,27 @@ function parseVariableShorthand(ctx: ParseContext, flags: MacroFlags, startOffse
     name: macroName,
     args,
     flags,
-    raw: `{{${scopeTok.value}${varName}${operator}${operandValue}}}`,
+    raw: `{{${scopeTok.value}${varName}${operator}}}`,
     offset: startOffset,
   };
 }
 
-function translateVarShorthand(isGlobal: boolean, operator: string): string {
+function translateVarShorthand(scope: "local" | "global" | "chat", operator: string): string {
+  if (scope === "chat") {
+    if (!operator) return "getchatvar";
+    switch (operator) {
+      case "++": return "incchatvar";
+      case "--": return "decchatvar";
+      case "=": return "setchatvar";
+      case "+=": return "addchatvar";
+      case "-=": return "addchatvar";
+      case "||":
+      case "??": return "getchatvar";
+      default: return "getchatvar";
+    }
+  }
+
+  const isGlobal = scope === "global";
   const prefix = isGlobal ? "getgvar" : "getvar";
   if (!operator) return prefix;
 
