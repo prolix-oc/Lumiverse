@@ -962,7 +962,10 @@ app.post("/import", async (c) => {
           for (const [groupName, labelMap] of Object.entries(expressionGroupAnalysis.groups)) {
             const groupMappings: Record<string, string> = {};
             for (const [cleanLabel, originalLabel] of Object.entries(labelMap)) {
-              const imageId = risuAssetMap[originalLabel];
+              // risuAssetMap is keyed by stem (no extension); originalLabel may carry the
+              // archive's extension (e.g. "Zhu Yuan_Clothed_angry.webp"), so fall back to stem.
+              const imageId = risuAssetMap[originalLabel]
+                ?? risuAssetMap[cardSvc.fileStem(originalLabel)];
               if (imageId) {
                 groupMappings[cleanLabel] = imageId;
               }

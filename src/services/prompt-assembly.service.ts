@@ -3729,7 +3729,8 @@ function buildParameters(
  * is already set (e.g. by a prior custom body or explicit override).
  *
  * Provider mapping:
- * - Anthropic:   thinking + output_config (adaptive 4.6) or thinking.budget_tokens (legacy)
+ * - Anthropic:   thinking + output_config (adaptive 4.6+) or thinking.budget_tokens (legacy).
+ *                Opus 4.7 additionally supports an "xhigh" tier between high and max.
  * - Google:      thinkingConfig.thinkingLevel (3.x) or thinkingBudget (2.5)
  * - OpenRouter:  reasoning: { effort } with values: none/minimal/low/medium/high/xhigh
  * - NanoGPT:     reasoning_effort (OpenAI-compat) with values: none/minimal/low/medium/high
@@ -3740,13 +3741,16 @@ function buildParameters(
 export function injectReasoningParams(params: Record<string, any>, providerName: string, effort: string, model?: string): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
-      // Claude 4.6 models support adaptive thinking (recommended over manual budget)
-      const isAdaptiveModel = model && /claude-(opus|sonnet)-4-6/i.test(model);
+      // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
+      const isAdaptiveModel = model && /claude-(opus|sonnet)-4[-.](6|7)/i.test(model);
       if (isAdaptiveModel) {
         // Adaptive thinking: Claude decides when/how much to think
         params.thinking = { type: "adaptive" };
-        // Map effort to output_config.effort — all 4 levels supported on both Opus and Sonnet 4.6
-        const validEfforts = new Set(["low", "medium", "high", "max"]);
+        // Opus 4.7 adds an "xhigh" tier between high and max; other adaptive models don't support it.
+        const isOpus47 = /claude-opus-4[-.]7/i.test(model!);
+        const validEfforts = isOpus47
+          ? new Set(["low", "medium", "high", "xhigh", "max"])
+          : new Set(["low", "medium", "high", "max"]);
         const mappedEffort = validEfforts.has(effort) ? effort : "high";
         params.output_config = { effort: mappedEffort };
       } else {

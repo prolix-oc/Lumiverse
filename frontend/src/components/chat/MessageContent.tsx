@@ -474,6 +474,9 @@ const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
 // Standard <img src="AssetName"> where src is a relative asset reference (not a URL)
 const IMG_SRC_ASSET_RE = /<img\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>/gi
 
+// Markdown ![alt](src) where src is a relative asset reference (not a URL)
+const MARKDOWN_IMG_RE = /!\[([^\]]*)\]\(([^)]+)\)/g
+
 /** Strip path prefix and file extension to get the asset stem. */
 function assetStem(name: string): string {
   const base = name.split('/').pop() || name
@@ -513,6 +516,24 @@ function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>):
       const alt = src.replace(/[[\]]/g, '')
       return `\n\n![${alt}](/api/v1/images/${imageId})\n\n`
     }
+    return match
+  })
+}
+
+/** Resolve markdown ![alt](src) images where src is an unresolved asset reference.
+ *  Handles the common AI-generated pattern of referencing Risu assets by relative
+ *  filename (including extensions like .webp/.png/.jpg). Already-resolved URLs are
+ *  left as-is. Strips a trailing markdown title ("...") before lookup. */
+function resolveMarkdownImgTags(text: string, assetMap: Record<string, string>): string {
+  if (!text.includes('![')) return text
+  MARKDOWN_IMG_RE.lastIndex = 0
+  return text.replace(MARKDOWN_IMG_RE, (match, alt: string, rawSrc: string) => {
+    // Strip trailing markdown title: ![alt](src "title") → src
+    const src = rawSrc.trim().replace(/\s+["'][^"']*["']\s*$/, '').trim()
+    if (!src) return match
+    if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
+    const imageId = resolveAssetId(src, assetMap)
+    if (imageId) return `![${alt}](/api/v1/images/${imageId})`
     return match
   })
 }
@@ -565,11 +586,13 @@ export default function MessageContent({
   // Resolve Risu asset tags before regex/macro processing:
   // 1. <img="AssetName"> (Risu custom syntax) → markdown image
   // 2. <img src="AssetName"> (standard HTML with relative asset ref) → resolved src URL
+  // 3. ![alt](AssetName.ext) (markdown image with relative asset ref) → resolved src URL
   const risuResolvedContent = useMemo(
     () => {
       if (!risuAssetMap) return interceptorCleanedContent
       let resolved = resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap)
       resolved = resolveImgSrcAssetTags(resolved, risuAssetMap)
+      resolved = resolveMarkdownImgTags(resolved, risuAssetMap)
       return resolved
     },
     [interceptorCleanedContent, risuAssetMap],

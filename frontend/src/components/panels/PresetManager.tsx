@@ -47,6 +47,16 @@ const ANTHROPIC_EFFORTS: EffortOption[] = [
   { value: 'max', label: 'Max' },
 ]
 
+// Opus 4.7 supports an additional "Extra High" tier between High and Max.
+const ANTHROPIC_OPUS_47_EFFORTS: EffortOption[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
+  { value: 'max', label: 'Max' },
+]
+
 const NANOGPT_EFFORTS: EffortOption[] = [
   { value: 'auto', label: 'Auto' },
   { value: 'none', label: 'None (disabled)' },
@@ -64,12 +74,13 @@ const GENERIC_EFFORTS: EffortOption[] = [
   { value: 'max', label: 'Max' },
 ]
 
-function getEffortOptions(provider: string | undefined): EffortOption[] {
+function getEffortOptions(provider: string | undefined, model: string | undefined): EffortOption[] {
   switch (provider) {
     case 'openrouter': return OPENROUTER_EFFORTS
     case 'google':
     case 'google_vertex': return GOOGLE_EFFORTS
-    case 'anthropic': return ANTHROPIC_EFFORTS
+    case 'anthropic':
+      return model && /claude-opus-4[-.]7/i.test(model) ? ANTHROPIC_OPUS_47_EFFORTS : ANTHROPIC_EFFORTS
     case 'nanogpt': return NANOGPT_EFFORTS
     default: return GENERIC_EFFORTS
   }
@@ -83,13 +94,15 @@ export default function PresetManager() {
   // Derive provider from active connection profile
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
-  const activeProvider = useMemo(() => {
+  const activeProfile = useMemo(() => {
     if (!activeProfileId) return undefined
-    return profiles.find((p) => p.id === activeProfileId)?.provider
+    return profiles.find((p) => p.id === activeProfileId)
   }, [activeProfileId, profiles])
+  const activeProvider = activeProfile?.provider
+  const activeModel = activeProfile?.model
 
   const isToggleOnly = activeProvider ? TOGGLE_ONLY_PROVIDERS.has(activeProvider) : false
-  const effortOptions = getEffortOptions(activeProvider)
+  const effortOptions = getEffortOptions(activeProvider, activeModel)
 
   const updateReasoning = useCallback(
     (partial: Partial<ReasoningSettings>) => {
