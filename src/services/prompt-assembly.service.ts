@@ -3656,7 +3656,7 @@ function collapseToSingleUserMessage(result: LlmMessage[]): void {
 function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
-  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string } | null,
+  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string; thinkingDisplay?: string } | null,
   providerName?: string | null,
   modelName?: string | null,
 ): Record<string, any> {
@@ -3705,7 +3705,7 @@ function buildParameters(
     const effort = reasoningSettings.reasoningEffort || "auto";
     const isToggleOnly = providerName === "moonshot" || providerName === "zai";
     if (effort !== "auto" || isToggleOnly) {
-      injectReasoningParams(params, providerName, effort, modelName || undefined);
+      injectReasoningParams(params, providerName, effort, modelName || undefined, reasoningSettings.thinkingDisplay);
     }
   }
 
@@ -3731,6 +3731,9 @@ function buildParameters(
  * Provider mapping:
  * - Anthropic:   thinking + output_config (adaptive 4.6+) or thinking.budget_tokens (legacy).
  *                Opus 4.7 additionally supports an "xhigh" tier between high and max.
+ *                Anthropic-only: `thinkingDisplay` ('summarized' | 'omitted') maps to the
+ *                `thinking.display` field. On Opus 4.7+ the API defaults to 'omitted' when
+ *                unset, so users must opt in to 'summarized' to receive summary text.
  * - Google:      thinkingConfig.thinkingLevel (3.x) or thinkingBudget (2.5)
  * - OpenRouter:  reasoning: { effort } with values: none/minimal/low/medium/high/xhigh
  * - NanoGPT:     reasoning_effort (OpenAI-compat) with values: none/minimal/low/medium/high
@@ -3738,7 +3741,13 @@ function buildParameters(
  * - Z.AI:        thinking: { type: "enabled" } — toggle-only, effort ignored
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
  */
-export function injectReasoningParams(params: Record<string, any>, providerName: string, effort: string, model?: string): void {
+export function injectReasoningParams(
+  params: Record<string, any>,
+  providerName: string,
+  effort: string,
+  model?: string,
+  thinkingDisplay?: string,
+): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
       // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
@@ -3758,6 +3767,11 @@ export function injectReasoningParams(params: Record<string, any>, providerName:
         const budgetMap: Record<string, number> = { low: 2048, medium: 8192, high: 16384, max: 32768 };
         const budget = budgetMap[effort] || 8192;
         params.thinking = { type: "enabled", budget_tokens: budget };
+      }
+    }
+    if (thinkingDisplay === "summarized" || thinkingDisplay === "omitted") {
+      if (params.thinking && typeof params.thinking === "object" && params.thinking.display === undefined) {
+        params.thinking.display = thinkingDisplay;
       }
     }
   } else if (providerName === "google" || providerName === "google_vertex") {
@@ -3820,7 +3834,7 @@ async function onelinerImpersonation(
   samplerOverrides: SamplerOverrides | null,
   ctx: AssemblyContext,
   macroEnv: MacroEnv,
-  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string } | null,
+  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string; thinkingDisplay?: string } | null,
 ): Promise<AssemblyResult> {
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
@@ -4033,7 +4047,7 @@ async function legacyAssembly(
   legacyHistoryCount = mergeConsecutiveUserMessages(llmMessages, legacyFirstChatIdx, legacyHistoryCount);
 
   // Strip reasoning from older chat history messages based on keepInHistory
-  let reasoningVal: { apiReasoning?: boolean; reasoningEffort?: string } | null = null;
+  let reasoningVal: { apiReasoning?: boolean; reasoningEffort?: string; thinkingDisplay?: string } | null = null;
   if (userId) {
     const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
     if (reasoningSetting?.value) {

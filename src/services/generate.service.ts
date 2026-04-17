@@ -29,6 +29,7 @@ import * as tokenizerSvc from "./tokenizer.service";
 import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
 import * as pool from "./generation-pool.service";
+import * as summarizePool from "./summarize-pool.service";
 import { detectExpression, detectMultiCharacterExpression, getExpressionDetectionSettings } from "./expression-detection.service";
 import { hasExpressions, getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { getSidecarSettings } from "./sidecar-settings.service";
@@ -113,6 +114,12 @@ export interface QuietGenerateInput {
   tools?: ToolDefinition[];
   /** Optional abort signal — when fired, cancels the in-flight HTTP request. */
   signal?: AbortSignal;
+  /**
+   * Optional chat id. Currently used by the summarize path to track in-flight
+   * jobs in the summarize pool so frontends can recover state on reconnect or
+   * chat-switch. Ignored by `quietGenerate`.
+   */
+  chat_id?: string;
 }
 
 export interface DryRunResult {
@@ -1979,7 +1986,7 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
   if (reasoningSetting?.value?.apiReasoning) {
     const effort = reasoningSetting.value.reasoningEffort || "auto";
     if (effort !== "auto") {
-      injectReasoningParams(mergedParams, provider.name, effort, connection.model || undefined);
+      injectReasoningParams(mergedParams, provider.name, effort, connection.model || undefined, reasoningSetting.value.thinkingDisplay);
     }
   }
 
@@ -2024,59 +2031,84 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
  * When using sidecar, applies sidecar model/temperature/maxTokens overrides.
  */
 export async function summarizeGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
-  let connectionId = input.connection_id;
-  let sidecarModel: string | undefined;
-  let sidecarParams: Record<string, unknown> = {};
+  const chatId = input.chat_id;
+  // One generationId per summary invocation — tracked in summarize-pool so the
+  // WS completion/failure events can be correlated by the frontend even when
+  // multiple tabs kick off summaries for the same chat.
+  const generationId = crypto.randomUUID();
 
-  // If no explicit connection, resolve via shared sidecar settings
-  if (!connectionId) {
-    const sidecar = getSidecarSettings(userId);
-    if (sidecar.connectionProfileId) {
-      connectionId = sidecar.connectionProfileId;
-      if (sidecar.model) sidecarModel = sidecar.model;
-      sidecarParams = {
-        temperature: sidecar.temperature,
-        top_p: sidecar.topP,
-        max_tokens: sidecar.maxTokens,
-      };
+  if (chatId) {
+    summarizePool.startSummarizePool({ generationId, userId, chatId });
+  }
+
+  try {
+    let connectionId = input.connection_id;
+    let sidecarModel: string | undefined;
+    let sidecarParams: Record<string, unknown> = {};
+
+    // If no explicit connection, resolve via shared sidecar settings
+    if (!connectionId) {
+      const sidecar = getSidecarSettings(userId);
+      if (sidecar.connectionProfileId) {
+        connectionId = sidecar.connectionProfileId;
+        if (sidecar.model) sidecarModel = sidecar.model;
+        sidecarParams = {
+          temperature: sidecar.temperature,
+          top_p: sidecar.topP,
+          max_tokens: sidecar.maxTokens,
+        };
+      }
     }
-  }
 
-  const connection = resolveConnection(userId, connectionId);
-  const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
+    const connection = resolveConnection(userId, connectionId);
+    const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
 
-  // Merge: preset defaults < sidecar overrides < request overrides
-  let mergedParams: GenerationParameters = {};
-  if (connection.preset_id) {
-    const preset = presetsSvc.getPreset(userId, connection.preset_id);
-    if (preset) {
-      mergedParams = { ...preset.parameters };
+    // Merge: preset defaults < sidecar overrides < request overrides
+    let mergedParams: GenerationParameters = {};
+    if (connection.preset_id) {
+      const preset = presetsSvc.getPreset(userId, connection.preset_id);
+      if (preset) {
+        mergedParams = { ...preset.parameters };
+      }
     }
-  }
-  mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
+    mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
 
-  // Inject connection-level metadata flags
-  if (connection.metadata?.use_responses_api) {
-    mergedParams.use_responses_api = true;
-  }
-  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
-    mergedParams._openrouter = connection.metadata.openrouter;
-  }
+    // Inject connection-level metadata flags
+    if (connection.metadata?.use_responses_api) {
+      mergedParams.use_responses_api = true;
+    }
+    if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+      mergedParams._openrouter = connection.metadata.openrouter;
+    }
 
-  const request: GenerationRequest = {
-    messages: input.messages,
-    model: sidecarModel || connection.model,
-    parameters: mergedParams,
-    tools: input.tools,
-  };
+    const request: GenerationRequest = {
+      messages: input.messages,
+      model: sidecarModel || connection.model,
+      parameters: mergedParams,
+      tools: input.tools,
+    };
 
-  // Use streaming when tools are present — some providers only emit tool call
-  // deltas correctly via the streaming path.
-  if (input.tools && input.tools.length > 0) {
-    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+    // Use streaming when tools are present — some providers only emit tool call
+    // deltas correctly via the streaming path.
+    const result = input.tools && input.tools.length > 0
+      ? await consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }))
+      : await provider.generate(apiKey, apiUrl, { ...request, stream: false });
+
+    if (chatId) {
+      summarizePool.completeSummarizePool({ generationId, userId, chatId });
+    }
+    return result;
+  } catch (err: any) {
+    if (chatId) {
+      summarizePool.failSummarizePool({
+        generationId,
+        userId,
+        chatId,
+        error: err?.message || "Summary generation failed",
+      });
+    }
+    throw err;
   }
-
-  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
 }
 
 /**

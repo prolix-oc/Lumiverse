@@ -122,6 +122,28 @@ export enum EventType {
   MCP_SERVER_DISCONNECTED = 'MCP_SERVER_DISCONNECTED',
   MCP_SERVER_ERROR = 'MCP_SERVER_ERROR',
   MCP_SERVER_CHANGED = 'MCP_SERVER_CHANGED',
+
+  // Loom summary auto-summarization
+  SUMMARIZATION_STARTED = 'SUMMARIZATION_STARTED',
+  SUMMARIZATION_COMPLETED = 'SUMMARIZATION_COMPLETED',
+  SUMMARIZATION_FAILED = 'SUMMARIZATION_FAILED',
+}
+
+export interface SummarizationStartedPayload {
+  chatId: string
+  generationId: string
+  startedAt: number
+}
+
+export interface SummarizationCompletedPayload {
+  chatId: string
+  generationId: string
+}
+
+export interface SummarizationFailedPayload {
+  chatId: string
+  generationId: string
+  error: string
 }
 
 // ---- Operator ----

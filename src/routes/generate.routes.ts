@@ -4,6 +4,7 @@ import type { Context, Next } from "hono";
 import * as svc from "../services/generate.service";
 import * as breakdownSvc from "../services/breakdown.service";
 import * as poolSvc from "../services/generation-pool.service";
+import * as summarizePoolSvc from "../services/summarize-pool.service";
 import { getSummarizationPromptDefaults } from "../services/summarization-prompts.service";
 
 const LOCALHOST_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -147,6 +148,18 @@ app.post("/summarize", async (c) => {
     const status = err.message.includes("No connection") || err.message.includes("Unknown provider") || err.message.includes("No API key") ? 400 : 502;
     return c.json({ error: err.message }, status);
   }
+});
+
+app.get("/summarize/status/:chatId", (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const entry = summarizePoolSvc.getSummarizePoolEntry(userId, chatId);
+  if (!entry) return c.json({ active: false });
+  return c.json({
+    active: true,
+    generationId: entry.generationId,
+    startedAt: entry.startedAt,
+  });
 });
 
 // --- Extension endpoints (localhost-only, synchronous, stateless) ---

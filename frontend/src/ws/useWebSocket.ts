@@ -750,6 +750,28 @@ export function useWebSocket() {
           store.getState().updateMcpServer(payload.id, payload.profile)
         }
       }),
+
+      // Loom summary auto-summarization — backend summarize-pool signals so
+      // the Summary UI flag stays in sync across tabs / chat switches.
+      wsClient.on(EventType.SUMMARIZATION_STARTED, (payload: { chatId: string; generationId: string; startedAt: number }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(true)
+        }
+      }),
+      wsClient.on(EventType.SUMMARIZATION_COMPLETED, (payload: { chatId: string; generationId: string }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(false)
+        }
+      }),
+      wsClient.on(EventType.SUMMARIZATION_FAILED, (payload: { chatId: string; generationId: string; error: string }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(false)
+        }
+        console.warn(`[Summary] Generation failed for chat ${payload.chatId}:`, payload.error)
+      }),
     ]
 
     return () => {

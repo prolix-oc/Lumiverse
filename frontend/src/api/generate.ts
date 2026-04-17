@@ -34,6 +34,19 @@ export interface QuietGenerateRequest {
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
   connection_id?: string
   parameters?: Record<string, any>
+  /**
+   * Optional chat id. When passed to the `/generate/summarize` endpoint, the
+   * server registers the job in its summarize-pool so frontends can recover
+   * in-flight state via `getSummarizeStatus` and the `SUMMARIZATION_*` WS
+   * events.
+   */
+  chat_id?: string
+}
+
+export interface SummarizeStatusResponse {
+  active: boolean
+  generationId?: string
+  startedAt?: number
 }
 
 export interface QuietGenerateResponse {
@@ -176,6 +189,10 @@ export const generateApi = {
 
   getSummarizationDefaults() {
     return get<SummarizationPromptDefaults>('/generate/summarize/prompt-defaults')
+  },
+
+  getSummarizeStatus(chatId: string) {
+    return get<SummarizeStatusResponse>(`/generate/summarize/status/${chatId}`)
   },
 
   dryRun(request: GenerateRequest) {

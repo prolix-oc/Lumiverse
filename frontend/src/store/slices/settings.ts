@@ -11,6 +11,7 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
   apiReasoning: false,
   reasoningEffort: 'auto',
   keepInHistory: 0,
+  thinkingDisplay: 'auto',
 }
 
 /** Keys that represent persisted data (not functions) */

@@ -5,48 +5,94 @@ import {
   getLastSummarizedInfo,
   shouldAutoSummarize,
 } from '@/lib/summary/service'
+import { generateApi } from '@/api/generate'
 
 /**
  * Always-mounted auto-summarization trigger. Lives at the App root so it runs
- * regardless of whether the Summary drawer tab is currently visible. Previously
- * this logic was embedded in `useSummary()`, which only mounts alongside the
- * SummaryEditor component — leaving users with auto-mode enabled but their
- * Summary tab closed unexpectedly stranded without automatic summaries.
+ * regardless of whether the Summary drawer tab is currently visible.
  *
- * Work is dispatched via queueMicrotask so the React commit phase isn't tied
- * up by the initial metadata fetch. All further network work is awaited inside
- * the microtask — fire-and-forget from the effect's point of view.
+ * Two concerns handled here:
+ *
+ * 1. **Background survival** — once a summary kicks off for a given chat, it
+ *    completes even if the user navigates to another chat. All state used
+ *    inside the kickoff is captured at effect-start; no live store reads that
+ *    could flip when `activeChatId` changes.
+ * 2. **Cross-tab/refresh recovery** — when a chat becomes active, we poll the
+ *    backend's summarize-pool via `getSummarizeStatus` to see if a summary is
+ *    already in flight for that chat (e.g. started in another tab, or before a
+ *    page refresh). If so, we flip `isSummarizing` so the UI reflects reality.
+ *    The backend emits `SUMMARIZATION_*` WS events which the summary slice
+ *    listens for to resolve the flag once the pool terminates.
  */
 export function useAutoSummarization() {
   const activeChatId = useStore((s) => s.activeChatId)
   const messageCount = useStore((s) => s.messages.length)
   const mode = useStore((s) => s.summarization.mode)
   const autoInterval = useStore((s) => s.summarization.autoInterval)
-  const isSummarizing = useStore((s) => s.isSummarizing)
   const isStreaming = useStore((s) => s.isStreaming)
 
-  const inFlightRef = useRef(false)
+  // Per-chat in-flight tracking so the global `isSummarizing` flag is no longer
+  // the sole gate. Multiple chats can be mid-summary across tabs; what matters
+  // locally is whether *this tab* already kicked off a summary for this chat.
+  const inFlightChatsRef = useRef(new Set<string>())
   const lastTriggerCountRef = useRef<{ chatId: string; count: number } | null>(null)
+
+  // Recovery: when the active chat changes, ask the backend whether a summary
+  // is currently in flight for it. The UI flag is global, so on chat switch we
+  // need to re-sync it to match whatever the new chat's pool state says —
+  // otherwise a leftover `true` from the previous chat would bleed into the
+  // new one. The WS events will keep it in sync after this initial fetch.
+  useEffect(() => {
+    if (!activeChatId) return
+    const chatId = activeChatId
+    let cancelled = false
+    ;(async () => {
+      try {
+        const status = await generateApi.getSummarizeStatus(chatId)
+        if (cancelled) return
+        // Only resolve the flag if the chat hasn't changed again in the meantime.
+        if (useStore.getState().activeChatId !== chatId) return
+        useStore.getState().setIsSummarizing(status.active)
+      } catch {
+        // Status endpoint failure shouldn't block anything — leave the flag as-is
+        // and let the next summary attempt / WS event figure it out.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeChatId])
 
   useEffect(() => {
     if (mode !== 'auto') return
     if (!activeChatId) return
-    if (isSummarizing || isStreaming) return
-    if (inFlightRef.current) return
+    if (isStreaming) return
     if (messageCount === 0) return
 
-    // Guard against the effect re-running at the same message count for the same chat
-    // (e.g. a streaming flag flip or an unrelated settings change).
+    // Capture the values this effect tick is reasoning about. Everything the
+    // kickoff does is keyed off these locals, not the live store.
+    const chatId = activeChatId
+    const capturedMessageCount = messageCount
+    const capturedAutoInterval = autoInterval
+
+    // Don't re-enter for the same (chat, count) if we already tried at this
+    // exact state — prevents streaming-flag flips / unrelated renders from
+    // stacking kickoffs.
     const lastTrigger = lastTriggerCountRef.current
-    if (lastTrigger && lastTrigger.chatId === activeChatId && lastTrigger.count === messageCount) return
+    if (lastTrigger && lastTrigger.chatId === chatId && lastTrigger.count === capturedMessageCount) return
+
+    // Don't stack a second summary for the same chat if this tab already has
+    // one in flight. Summaries for *other* chats are independent.
+    if (inFlightChatsRef.current.has(chatId)) return
+
+    // If the UI flag is set by the recovery effect above or by a manual
+    // summary, defer — we don't want to step on that.
+    if (useStore.getState().isSummarizing) return
 
     const kickoff = async () => {
-      inFlightRef.current = true
+      inFlightChatsRef.current.add(chatId)
       try {
         const snapshot = useStore.getState()
-        const chatId = snapshot.activeChatId
-        if (!chatId) return
-
         const current = snapshot.summarization
         if (current.mode !== 'auto') return
         if (snapshot.isSummarizing || snapshot.isStreaming) return
@@ -54,15 +100,10 @@ export function useAutoSummarization() {
         const info = await getLastSummarizedInfo(chatId)
         const lastCount = info?.messageCount ?? 0
 
-        const live = useStore.getState()
-        if (live.activeChatId !== chatId) return
-        if (live.isSummarizing || live.isStreaming) return
-
-        const currentMessageCount = live.messages.length
-        if (!shouldAutoSummarize(currentMessageCount, lastCount, current.autoInterval)) return
+        if (!shouldAutoSummarize(capturedMessageCount, lastCount, capturedAutoInterval)) return
 
         // Record the trigger so the effect won't re-enter for the same (chat, count).
-        lastTriggerCountRef.current = { chatId, count: currentMessageCount }
+        lastTriggerCountRef.current = { chatId, count: capturedMessageCount }
 
         let connectionId: string | undefined
         if (current.apiSource === 'sidecar') {
@@ -70,15 +111,15 @@ export function useAutoSummarization() {
         } else if (current.apiSource === 'dedicated' && current.dedicatedConnectionId) {
           connectionId = current.dedicatedConnectionId
         } else {
-          connectionId = live.activeProfileId || undefined
+          connectionId = snapshot.activeProfileId || undefined
         }
 
-        const character = live.characters.find((c) => c.id === live.activeCharacterId)
+        const character = snapshot.characters.find((c) => c.id === snapshot.activeCharacterId)
         const characterName = character?.name || 'Character'
-        const activePersona = live.personas.find((p) => p.id === live.activePersonaId)
+        const activePersona = snapshot.personas.find((p) => p.id === snapshot.activePersonaId)
         const userName = activePersona?.name || 'User'
 
-        live.setIsSummarizing(true)
+        useStore.getState().setIsSummarizing(true)
         try {
           await generateSummary({
             chatId,
@@ -92,13 +133,20 @@ export function useAutoSummarization() {
         } catch (err) {
           console.error('[useAutoSummarization] Summary generation failed:', err)
         } finally {
-          useStore.getState().setIsSummarizing(false)
+          // The backend clears its pool entry and emits SUMMARIZATION_COMPLETED
+          // before this returns. Only flip the local flag if the active chat
+          // is still this one — otherwise a parallel summary on the new chat
+          // could have claimed the flag already.
+          const after = useStore.getState()
+          if (after.activeChatId === chatId) {
+            after.setIsSummarizing(false)
+          }
         }
       } finally {
-        inFlightRef.current = false
+        inFlightChatsRef.current.delete(chatId)
       }
     }
 
     queueMicrotask(kickoff)
-  }, [activeChatId, messageCount, mode, autoInterval, isSummarizing, isStreaming])
+  }, [activeChatId, messageCount, mode, autoInterval, isStreaming])
 }

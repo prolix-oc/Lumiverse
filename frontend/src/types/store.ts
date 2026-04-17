@@ -235,6 +235,11 @@ export interface RegenFeedbackSettings {
  */
 export type ReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
+/** Anthropic-only: controls the `thinking.display` field on the Messages API.
+ *  'auto' omits the field so Anthropic applies its model-specific default
+ *  ('omitted' on Opus 4.7 / Mythos Preview, 'summarized' elsewhere). */
+export type ThinkingDisplay = 'auto' | 'summarized' | 'omitted'
+
 export interface ReasoningSettings {
   prefix: string
   suffix: string
@@ -244,6 +249,9 @@ export interface ReasoningSettings {
   /** How many recent reasoning blocks to keep in assembled prompt history.
    *  0 = strip all, -1 = keep all (unlimited), N = keep last N. */
   keepInHistory: number
+  /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
+   *  'auto' leaves the field unset so the API picks a model-appropriate default. */
+  thinkingDisplay: ThinkingDisplay
 }
 
 /** Reasoning settings snapshot bound to a connection profile. */
