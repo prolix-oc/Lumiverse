@@ -33,8 +33,28 @@ export interface CreateMessageInput {
   branch_id?: string;
 }
 
+//reasoning "extra" data - Only support accessing "reasoning" and "reasoning_duration" directly, rather than the 
+// whole "extra" object, since it's mostly used for internal use, but "reasoning" goes to message content 
 export interface UpdateMessageInput {
   content?: string;
   name?: string;
-  extra?: Record<string, any>;
+  extra?: Record<string, any>;    
+  swipe_patch?: MessageSwipesPatch;
+}
+
+export interface MessageSwipesPatch {
+  swipes?: string[];
+  swipe_id?: number;
+  swipe_dates?: number[];
+  //Which field to use for sync - 
+  // content : The current swipe is overwritten by the current content before writing
+  // swipe: The message content is overwritten by swipes[swipe_id] before writing
+  // if omitted, use "content"
+  content_sync?: "content" | "swipe";
+}
+
+//Set any field to "null" to remove it entirely 
+export interface MessageReasoningPatch {
+  reasoning?: string | null;
+  reasoning_duration?: number | null;
 }

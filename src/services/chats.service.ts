@@ -645,16 +645,39 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   const fields: string[] = [];
   const values: any[] = [];
 
+  const swipePatch = input.swipe_patch;
+
   if (input.content !== undefined) {
     fields.push("content = ?");
     values.push(input.content);
 
-    // Update current swipe content too
-    const swipes = [...existing.swipes];
-    swipes[existing.swipe_id] = input.content;
-    fields.push("swipes = ?");
-    values.push(JSON.stringify(swipes));
-  }
+    if (!swipePatch){ //No swipe patch. Keep the old behavior
+      // Update current swipe content too
+      const swipes = [...existing.swipes];
+      swipes[existing.swipe_id] = input.content;
+      fields.push("swipes = ?");
+      values.push(JSON.stringify(swipes));
+    }     
+  }   
+
+  if (swipePatch) {
+    //if we have a swipePatch, then swipes and input.content were already synced
+    if (swipePatch.swipes !== undefined){
+      fields.push("swipes = ?");
+      values.push(JSON.stringify(swipePatch.swipes));
+    }
+    if (swipePatch.swipe_id !== undefined){
+      fields.push("swipe_id = ?");
+      values.push(JSON.stringify(swipePatch.swipe_id));
+    }
+    if (swipePatch.swipe_dates !== undefined){
+      fields.push("swipe_dates = ?");
+      values.push(JSON.stringify(swipePatch.swipe_dates));
+    }
+  } 
+
+
+
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
   if (input.extra !== undefined) { fields.push("extra = ?"); values.push(JSON.stringify(input.extra)); }
 

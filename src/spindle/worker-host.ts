@@ -76,6 +76,7 @@ import {
 import http from "node:http";
 import https from "node:https";
 import { join, resolve, relative, sep } from "path";
+import { MessageReasoningPatch, MessageSwipesPatch, UpdateMessageInput } from "@/types/message";
 
 const EPHEMERAL_MAX_FILES = 250;
 
@@ -2822,25 +2823,32 @@ export class WorkerHost {
       if (!userId) throw new Error("Chat not found");
       this.enforceScopedUser(userId);
 
-      const messages = getChatMessages(userId, chatId).map((m) => {
+      const messages = getChatMessages(userId, chatId).map((m) => {        
         const role = this.mapChatRole(m.is_user, (m.extra || {}) as Record<string, unknown>);
+
+        //Split out spindle_metadata from extra so it's not getting passed down the pipe twice
         const extra = (m.extra || {}) as Record<string, unknown>;
+        const {spindle_metadata, ...extraOther} = extra;
+        
         const metadata =
-          typeof extra.spindle_metadata === "object" && extra.spindle_metadata
-            ? (extra.spindle_metadata as Record<string, unknown>)
+          typeof spindle_metadata === "object" && spindle_metadata
+            ? (spindle_metadata as Record<string, unknown>)
             : undefined;
 
         const swipes = Array.isArray(m.swipes) ? m.swipes.slice() : [];
         const swipeId =
           typeof m.swipe_id === "number" && Number.isFinite(m.swipe_id) ? m.swipe_id : 0;
+        const swipe_dates = Array.isArray(m.swipe_dates) ? [...m.swipe_dates] : [];
 
         return {
           id: m.id,
           role,
           content: m.content,
+          extra: extraOther,
           metadata,
           swipe_id: swipeId,
           swipes,
+          swipe_dates
         };
       });
 
@@ -2903,7 +2911,7 @@ export class WorkerHost {
     requestId: string,
     chatId: string,
     messageId: string,
-    patch: { content?: string; metadata?: Record<string, unknown> }
+    patch: { content?: string; metadata?: Record<string, unknown>, swipePatch?: MessageSwipesPatch, reasoning?:Record<string, unknown> }
   ): void {
     try {
       if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
@@ -2918,21 +2926,145 @@ export class WorkerHost {
       if (!current || current.chat_id !== chatId) {
         throw new Error("Message not found");
       }
-
-      const extra = { ...(current.extra || {}) } as Record<string, unknown>;
+      
+      const currextra = { ...(current.extra || {}) } as Record<string, unknown>;
       if (patch.metadata !== undefined) {
-        extra.spindle_metadata = patch.metadata;
+        currextra.spindle_metadata = patch.metadata;
+      }
+      
+      const swipe_patch = this.prepareSwipePatch(current, patch);            
+      this.mergeReasoningPatch(currextra, patch);
+
+      const updatePatch: UpdateMessageInput = {
+        content: patch.content,
+        extra: patch.metadata !== undefined ? currextra : undefined,        
+        swipe_patch: swipe_patch !== undefined ? swipe_patch : undefined
       }
 
+      /*
       updateChatMessage(userId, messageId, {
         content: patch.content,
         extra: patch.metadata !== undefined ? extra : undefined,
       });
+      */
+      updateChatMessage(userId, messageId, updatePatch);
 
       this.postToWorker({ type: "response", requestId, result: true });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
+  }
+
+  private prepareSwipePatch(oldMsg: any ,  patch?: any, ): MessageSwipesPatch  | undefined  {
+    /* NB: 
+    Q: Why does this throw so many errors? Why not just NOP it when it's wrong?  
+    A: Data integrity, that's why. If it's missing or empty, fine, we're obviously not using it. If it's 
+    malformed or would desync data, then obviously someone thinks it should be doing something or it wouldn't be sent.
+    So we STOP, we don't happily perform half of the expected update.
+    */
+
+    //Easy catches - NOP the function
+    if (!patch || typeof patch.swipePatch !== "object" || patch.swipePatch === null) {
+      return undefined;
+    }
+    const keys = Object.keys(patch.swipePatch);
+    //Also NOP it if the swipePatch is empty
+    if (keys.length === 0) {
+      return undefined;
+    }
+    
+    const patchKeys = ["swipe_id", "swipes", "swipe_dates"];
+    //Error out if there's ONLY extraneous cruft (ignored) and no required patch keys - assume the consumer screwed up
+    if (!keys.some(k => patchKeys.includes(k))){
+      throw new Error("Invalid Swipe Update Request: no swipe patch keys found in request");
+    }
+
+    
+    const preparedPatch: MessageSwipesPatch = {};
+    const swipePatch = patch.swipePatch;
+    //----  Validation Checks ----  Drink!
+    //cannot use "content" priority without specifying a content update
+    if (swipePatch?.content_sync === "content" && !patch.content?.trim()){    
+      throw new Error("Invalid Swipe Update Request: content patch required when content_sync method is 'content'");
+    }
+    //cannot use "swipe" priority if swipes aren't updated
+    if (swipePatch?.content_sync === "swipe" && !swipePatch?.swipes){    
+      throw new Error("Invalid Swipe Update Request: swipes patch required when content_sync method is 'swipe'");
+    }
+    //if swipes or swipe_dates are present but empty, or not arrays, error  out - both lists must have at least one element if they're around
+    if ((swipePatch?.swipes !== undefined && (!Array.isArray(swipePatch.swipes) || swipePatch.swipes.length === 0)) ||
+          (swipePatch?.swipe_dates !== undefined && (!Array.isArray(swipePatch.swipe_dates) || swipePatch.swipe_dates.length === 0)
+        )) {
+    throw new Error("Invalid Swipe Update Request: swipes and swipe_dates lists must contain at least one element, if included");
+    }
+
+    //depending on update presence, figure out which list to check which swipe_ids against, and to compare lengths
+    const compareSwipes = (swipePatch.swipes) ? swipePatch.swipes : oldMsg.swipes;
+    const compareId = (swipePatch.swipe_id !== undefined) ?  swipePatch.swipe_id : oldMsg.swipe_id;
+    const compareDates = (swipePatch.swipe_dates) ? swipePatch.swipe_dates: oldMsg.swipe_dates;
+    if (compareId < 0 || compareId >= compareSwipes.length || !Number.isFinite(compareId)) {
+      throw new Error("Invalid Swipe Update Request: swipe_id out of range");
+    }
+    //If swipes, swipe_dates, or both are set to be updated, make sure the lengths match
+    if (((swipePatch.swipes) || (swipePatch.swipe_dates)) && (compareSwipes.length !== compareDates.length)){
+      throw new Error("Invalid Swipe Update Request: Size mismatch between swipes and swipe_dates");
+    }
+    //---- End Validation Checks - If we've gotten this far, everything looks good
+    
+    if (swipePatch.swipe_id !== undefined){
+      preparedPatch.swipe_id = swipePatch.swipe_id;
+    }
+    if (swipePatch.swipes){    
+      if (swipePatch.content_sync == 'swipe'){        
+        if (typeof swipePatch.swipes[compareId] !== "string" || !swipePatch.swipes[compareId].trim()) {
+          throw new Error("Invalid Swipe Update Request: Invalid swipe specified when using sync method 'swipe'");
+        }
+        patch.content = swipePatch.swipes[compareId]; //Override the content         
+      } else {
+        if (typeof patch.content !== "string" || !patch.content.trim()){
+          throw new Error("Invalid Swipe Update Request: content patch required when content_sync method is 'content'");
+        }
+        swipePatch.swipes[compareId] = patch.content;
+        //update the swipe_date as well 
+        if (!swipePatch.swipe_dates){
+          swipePatch.swipe_dates = oldMsg.swipe_dates;
+        }
+        swipePatch.swipe_dates[compareId] = Math.floor(Date.now() / 1000);
+        preparedPatch.swipe_dates = swipePatch.swipe_dates;
+      }            
+      preparedPatch.swipes = swipePatch.swipes;      
+    }  
+    return preparedPatch;
+  }
+
+  //Validate and generate the reasoning patch -- returns a full copy of oldMsg.extra (if any), with reasoning updates attached...
+  private mergeReasoningPatch(currentExtra: any ,  patch?: any) {    
+    //Easy catches - NOP the function
+    if (!patch || typeof patch.reasoning !== "object" || patch.reasoning === null) {
+      return undefined;
+    }
+    const keys = Object.keys(patch.reasoning);
+    //Also NOP it if the reasoning request is empty
+    if (keys.length === 0) {
+      return undefined;
+    }
+    //Check for the bad case - either remove both fields, or update both fields. Don't remove just one. 
+    if ((patch.reasoning === null) !== (patch.reasoning_duration === null)) {
+      throw new Error("Invalid Reasoning Update Request: reasoning and reasoning_duration must be both null or both non-null");
+    }    
+    
+    const preparedPatch = currentExtra;
+    //If any field in the patch === null, remove it from the record entirely
+    if (patch.reasoning !== null){
+      preparedPatch.reasoning = patch.reasoning;
+    } else {
+      delete preparedPatch.reasoning;
+    }
+    if (patch.reasoning_duration !== null){
+      preparedPatch.reasoning_duration = patch.reasoning_duration;  
+    } else {
+      delete preparedPatch.reasoning_duration;
+    }    
   }
 
   private handleChatDeleteMessage(
