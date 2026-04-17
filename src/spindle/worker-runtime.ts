@@ -573,7 +573,7 @@ const spindleApi: SpindleAPI = {
   chat: {
     async getMessages(chatId: string) {
       const requestId = crypto.randomUUID();
-      const result = await request({ type: "chat_get_messages", requestId, chatId });           
+      const result = await request({ type: "chat_get_messages", requestId, chatId });
       return result as Array<{
         id: string;
         role: "system" | "user" | "assistant";
