@@ -208,7 +208,7 @@ export default function ViewportDrawer() {
               <CloseButton onClick={closeDrawer} />
             </div>
             <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)}>
-              <ErrorBoundary label={activeTabConfig?.tabName}>
+              <ErrorBoundary key={activeTab} label={activeTabConfig?.tabName}>
                 {activeTabConfig?.component()}
               </ErrorBoundary>
             </div>

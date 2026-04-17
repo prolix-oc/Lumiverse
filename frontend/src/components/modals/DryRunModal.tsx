@@ -1,11 +1,14 @@
 import { useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Check, Code, Copy } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Badge } from '@/components/shared/Badge'
+import { Button } from '@/components/shared/FormComponents'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import type { DryRunResponse, DryRunMessage } from '@/api/generate'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
 import styles from './DryRunModal.module.css'
 import clsx from 'clsx'
 
@@ -159,6 +162,27 @@ export default function DryRunModal() {
   const [paramsOpen, setParamsOpen] = useState(false)
   const [wiStatsOpen, setWiStatsOpen] = useState(false)
   const [memStatsOpen, setMemStatsOpen] = useState(false)
+  const [rawView, setRawView] = useState<'off' | RawPromptView>('off')
+  const [copied, setCopied] = useState(false)
+
+  const rawInput = useMemo(() => dryRunToRawPromptInput(modalProps), [modalProps])
+  const rawText = useMemo(
+    () => (rawView === 'off' ? '' : formatRawPrompt(rawInput, rawView)),
+    [rawInput, rawView],
+  )
+
+  const handleCopy = () => {
+    const text = formatRawPrompt(rawInput, rawView === 'json' ? 'json' : 'text')
+    copyTextToClipboard(text).catch(console.error)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  const cycleRawView = () => {
+    setRawView((v) => (v === 'off' ? 'text' : v === 'text' ? 'json' : 'off'))
+  }
+
+  const rawButtonLabel = rawView === 'off' ? 'Raw' : rawView === 'text' ? 'JSON' : 'Visual'
 
   // Memoise derived values so toggling a sibling section doesn't re-serialise
   // potentially large payloads on every render.
@@ -188,6 +212,10 @@ export default function DryRunModal() {
 
           {/* Scrollable body */}
           <div className={styles.body}>
+            {rawView !== 'off' ? (
+              <pre className={styles.rawView}>{rawText}</pre>
+            ) : (
+              <>
             {/* Messages — collapsible + virtualised so 600+ message chats stay responsive */}
             <div className={styles.collapsible}>
               <button
@@ -432,6 +460,31 @@ export default function DryRunModal() {
                 )}
               </div>
             )}
+              </>
+            )}
+          </div>
+
+          <div className={styles.footer}>
+            <span className={styles.footerTotal}>
+              {messages.length} message{messages.length === 1 ? '' : 's'}
+            </span>
+            {tokenCount && (
+              <span className={styles.footerMax}>
+                {tokenCount.total_tokens.toLocaleString()} tokens
+              </span>
+            )}
+            <div className={styles.footerSpacer} />
+            <Button variant="ghost" size="sm" icon={<Code size={12} />} onClick={cycleRawView}>
+              {rawButtonLabel}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={copied ? <Check size={12} /> : <Copy size={12} />}
+              onClick={handleCopy}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
           </div>
     </ModalShell>
   )

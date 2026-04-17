@@ -148,6 +148,27 @@ export function persistKey(key: string, value: any) {
   scheduleFlush()
 }
 
+/**
+ * Merge a setting value loaded from storage against the current in-memory
+ * default. Recursive so nested keys the stored row is missing (or explicitly
+ * null'd) fall back to the default — prevents panels from crashing on
+ * `contextFilters.htmlTags.enabled`-style reads when a row was written before
+ * a field existed. Arrays and primitives replace the default wholesale.
+ */
+function isPlainObject(v: any): v is Record<string, any> {
+  return v != null && typeof v === 'object' && !Array.isArray(v)
+}
+
+function mergeStoredSetting(defaultValue: any, storedValue: any): any {
+  if (!isPlainObject(defaultValue)) return storedValue
+  if (!isPlainObject(storedValue)) return defaultValue
+  const merged: Record<string, any> = { ...defaultValue }
+  for (const key of Object.keys(storedValue)) {
+    merged[key] = mergeStoredSetting(defaultValue[key], storedValue[key])
+  }
+  return merged
+}
+
 /** Immediately flush any pending settings (e.g. on page unload). */
 export function flushSettings() {
   if (flushTimer !== null) {
@@ -400,10 +421,10 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     try {
       const rows = await settingsApi.getAll()
       const patch: Record<string, any> = {}
+      const defaults = get()
       for (const row of rows) {
-        if (DATA_KEYS.has(row.key)) {
-          patch[row.key] = row.value
-        }
+        if (!DATA_KEYS.has(row.key)) continue
+        patch[row.key] = mergeStoredSetting((defaults as any)[row.key], row.value)
       }
 
       // Recover any settings the previous page wrote to localStorage but may
@@ -415,9 +436,8 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
           pendingKeys = JSON.parse(raw)
           if (pendingKeys) {
             for (const [k, v] of Object.entries(pendingKeys)) {
-              if (DATA_KEYS.has(k)) {
-                patch[k] = v
-              }
+              if (!DATA_KEYS.has(k)) continue
+              patch[k] = mergeStoredSetting((defaults as any)[k], v)
             }
           }
         }

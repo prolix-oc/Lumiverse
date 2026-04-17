@@ -22,6 +22,8 @@ export interface GenerateRequest {
   regen_feedback?: string
   regen_feedback_position?: 'system' | 'user'
   retain_council?: boolean
+  /** Dry-run only: reassemble as if this message were absent from history. */
+  exclude_message_id?: string
 }
 
 export interface GenerateResponse {

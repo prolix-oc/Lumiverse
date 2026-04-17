@@ -307,6 +307,47 @@
   white-space: pre-wrap;
 }
 
+/* ── Raw view ── */
+.rawView {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.85));
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
+  border-radius: 10px;
+  padding: 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Footer ── */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+}
+
+.footerTotal {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.footerMax {
+  font-size: 11px;
+  color: var(--lumiverse-text-muted);
+}
+
+.footerSpacer {
+  flex: 1;
+}
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .modal {

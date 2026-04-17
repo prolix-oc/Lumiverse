@@ -48,6 +48,9 @@ interface GenerateInput {
   regen_feedback?: string;
   regen_feedback_position?: "system" | "user";
   retain_council?: boolean;
+  /** Dry-run only: reassemble as if this message were absent from history
+   *  (used to reconstruct the prompt that produced an existing assistant turn). */
+  exclude_message_id?: string;
 }
 
 /** Lifecycle context passed from startGeneration → runGeneration */
@@ -1151,6 +1154,8 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     impersonateMode: genType === "impersonate" ? (input.impersonate_mode || "prompts") : undefined,
     inputMessages: input.messages,
     inputParameters: input.parameters,
+    excludeMessageId: input.exclude_message_id,
+    targetCharacterId: input.target_character_id,
   });
 
   // Compute token counts for the breakdown

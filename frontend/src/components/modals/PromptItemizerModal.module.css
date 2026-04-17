@@ -242,6 +242,18 @@
   margin-top: 4px;
 }
 
+/* Raw view caveat banner */
+.rawCaveat {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--lumiverse-text-muted);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
 /* Raw view */
 .rawView {
   font-family: 'SF Mono', 'Fira Code', monospace;
