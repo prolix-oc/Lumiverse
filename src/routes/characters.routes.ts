@@ -45,6 +45,43 @@ async function importRisuExpressionAssets(
   return Object.keys(config.mappings).length;
 }
 
+// ─── Import error response helper ────────────────────────────────────────
+
+function respondImportError(c: any, err: any, fallbackMessage: string) {
+  // Log every import failure server-side so silent 4xx responses are traceable.
+  // Generic 400s from the old code swallowed this — which is how a 500 MB
+  // decompression-cap hit looked like "no backend error" to operators.
+  console.error("[character import] failed:", err);
+  if (err instanceof cardSvc.CharacterImportError) {
+    return c.json({ error: err.message, code: err.code }, err.status);
+  }
+  return c.json({ error: err?.message || fallbackMessage }, 400);
+}
+
+// ─── Concurrency-limited map (worker pool) ───────────────────────────────
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  if (items.length === 0) return results;
+  const workers = Math.min(Math.max(1, concurrency), items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
+const GALLERY_UPLOAD_CONCURRENCY = 6;
+
 // ─── Auto-import embedded character book as world book ───────────────────
 
 function autoImportEmbeddedWorldbook(userId: string, characterId: string): void {
@@ -637,19 +674,23 @@ app.post("/import-bulk", async (c) => {
         // Upload gallery images, tracking archive path → image ID for inline asset resolution
         const bulkAssetImageMap = new Map<string, string>();
         if (charxAssetFiles) {
+          const bulkEntries: Array<{ path: string; file: File }> = [];
           for (const [path, gf] of charxAssetFiles) {
             if (avatarFile && gf.name === avatarFile.name) continue;
             if (!/^assets\/(icon|other)\//i.test(path)) continue;
+            bulkEntries.push({ path, file: gf });
+          }
+          await mapWithConcurrency(bulkEntries, GALLERY_UPLOAD_CONCURRENCY, async ({ path, file: gf }) => {
             try {
               const img = await images.uploadImage(userId, gf);
               gallerySvc.addToGallery(userId, character.id, img.id);
               bulkAssetImageMap.set(path, img.id);
             } catch { /* skip */ }
-          }
+          });
         } else {
-          for (const gf of charxGalleryFiles) {
+          await mapWithConcurrency(charxGalleryFiles, GALLERY_UPLOAD_CONCURRENCY, async (gf) => {
             try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
-          }
+          });
         }
 
         // Resolve inline asset references in character text fields
@@ -723,7 +764,7 @@ app.post("/import-bulk", async (c) => {
 
     return c.json({ results, summary: { total: files.length, imported, skipped, failed } }, 201);
   } catch (err: any) {
-    return c.json({ error: err.message || "Bulk import failed" }, 400);
+    return respondImportError(c, err, "Bulk import failed");
   }
 });
 
@@ -896,21 +937,24 @@ app.post("/import", async (c) => {
           }
         }
         const galleryTotal = remainingGalleryEntries.length;
-        for (let i = 0; i < galleryTotal; i++) {
-          const { path, file: gf } = remainingGalleryEntries[i];
-          if (galleryTotal > 3) {
-            eventBus.emit(
-              EventType.IMPORT_GALLERY_PROGRESS,
-              { characterId: character.id, current: i + 1, total: galleryTotal, filename: gf.name },
-              userId,
-            );
-          }
+        // Progress is reported by completion count — workers finish out of order
+        // but the current/total ratio remains meaningful for UI feedback.
+        let galleryCompleted = 0;
+        await mapWithConcurrency(remainingGalleryEntries, GALLERY_UPLOAD_CONCURRENCY, async ({ path, file: gf }) => {
           try {
             const img = await images.uploadImage(userId, gf);
             gallerySvc.addToGallery(userId, character.id, img.id);
             assetImageMap.set(path, img.id);
           } catch { /* skip individual failures */ }
-        }
+          galleryCompleted++;
+          if (galleryTotal > 3) {
+            eventBus.emit(
+              EventType.IMPORT_GALLERY_PROGRESS,
+              { characterId: character.id, current: galleryCompleted, total: galleryTotal, filename: gf.name },
+              userId,
+            );
+          }
+        });
 
         // Resolve inline asset references (embeded://, relative filenames, Risu <img="...">) in character text fields
         const risuAssetMap: Record<string, string> = {};
@@ -1019,7 +1063,7 @@ app.post("/import", async (c) => {
       return c.json({ character: imported }, 201);
     }
   } catch (err: any) {
-    return c.json({ error: err.message || "Failed to import character card" }, 400);
+    return respondImportError(c, err, "Failed to import character card");
   }
 });
 

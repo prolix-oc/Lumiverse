@@ -8,8 +8,33 @@ const MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024; // 100 MB (PNG text chunks)
 const MAX_CHARX_SIZE = 1000 * 1024 * 1024; // 1000 MB
 // Cap on the total bytes produced by .charx ZIP decompression. fflate's
 // unzipSync has no built-in output cap, so a 1 KB compressed file with a 4 GB
-// decompressed payload would otherwise OOM the process.
-const MAX_CHARX_DECOMPRESSED_SIZE = 500 * 1024 * 1024; // 500 MB
+// decompressed payload would otherwise OOM the process. Set to 2x the compressed
+// cap so legitimate large Risu cards (many image assets compress ~1:1 since they
+// are already JPEG/PNG/WebP) still import while still bounding zip-bomb damage.
+const MAX_CHARX_DECOMPRESSED_SIZE = 2000 * 1024 * 1024; // 2000 MB
+
+/**
+ * Typed error for character card import failures, so route handlers can map
+ * to the right HTTP status and expose a stable error code to the frontend.
+ */
+export type CharacterImportErrorCode =
+  | "file_too_large"
+  | "archive_decompresses_too_large"
+  | "invalid_archive"
+  | "invalid_card"
+  | "unsupported_format";
+
+export class CharacterImportError extends Error {
+  readonly code: CharacterImportErrorCode;
+  readonly status: number;
+
+  constructor(code: CharacterImportErrorCode, message: string, status?: number) {
+    super(message);
+    this.name = "CharacterImportError";
+    this.code = code;
+    this.status = status ?? (code === "file_too_large" || code === "archive_decompresses_too_large" ? 413 : 400);
+  }
+}
 
 /**
  * Reads PNG chunks and extracts the text value for a given keyword.
@@ -581,7 +606,10 @@ export interface CharxResult {
 export async function extractCardFromCharx(file: File): Promise<CharxResult> {
   const arrayBuf = await file.arrayBuffer();
   if (arrayBuf.byteLength > MAX_CHARX_SIZE) {
-    throw new Error(`CHARX file too large (${(arrayBuf.byteLength / 1024 / 1024).toFixed(1)} MB, max ${MAX_CHARX_SIZE / 1024 / 1024} MB)`);
+    throw new CharacterImportError(
+      "file_too_large",
+      `CHARX file too large (${(arrayBuf.byteLength / 1024 / 1024).toFixed(1)} MB, max ${MAX_CHARX_SIZE / 1024 / 1024} MB)`,
+    );
   }
 
   let data = new Uint8Array(arrayBuf);
@@ -614,7 +642,8 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
       if (!wanted) return false;
       plannedBytes += entry.originalSize ?? 0;
       if (plannedBytes > MAX_CHARX_DECOMPRESSED_SIZE) {
-        throw new Error(
+        throw new CharacterImportError(
+          "archive_decompresses_too_large",
           `CHARX archive decompresses to more than ${MAX_CHARX_DECOMPRESSED_SIZE / 1024 / 1024} MB`,
         );
       }
@@ -624,14 +653,20 @@ export async function extractCardFromCharx(file: File): Promise<CharxResult> {
 
   const cardBytes = unzipped["card.json"];
   if (!cardBytes) {
-    throw new Error("CHARX archive does not contain card.json at the root");
+    throw new CharacterImportError(
+      "invalid_archive",
+      "CHARX archive does not contain card.json at the root",
+    );
   }
 
   let json: any;
   try {
     json = JSON.parse(new TextDecoder().decode(cardBytes));
   } catch {
-    throw new Error("Failed to parse card.json from CHARX archive");
+    throw new CharacterImportError(
+      "invalid_card",
+      "Failed to parse card.json from CHARX archive",
+    );
   }
 
   const card = parseCardJson(json);

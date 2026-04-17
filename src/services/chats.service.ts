@@ -12,7 +12,8 @@ import * as embeddingsSvc from "./embeddings.service";
 import * as memoryCortex from "./memory-cortex";
 import { removePoolEntriesForChat } from "./generation-pool.service";
 import { invalidateChatMemoryCache, scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
-import { sanitizeForVectorization } from "../utils/content-sanitizer";
+import { sanitizeForVectorization, type SanitizeOptions } from "../utils/content-sanitizer";
+import { getReasoningStripOptions } from "../utils/reasoning-strip";
 
 // --- Chat helpers ---
 
@@ -1309,11 +1310,11 @@ async function shouldStartNewChunk(lastChunk: ChatChunk, newMessage: Message, us
 /**
  * Create a new chunk from a set of messages.
  */
-function createChatChunk(chatId: string, messages: Message[]): ChatChunk {
+function createChatChunk(chatId: string, messages: Message[], reasoningStrip?: SanitizeOptions): ChatChunk {
   const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
   const content = messages.map(m =>
-    `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+    `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`
   ).join("\n");
   const tokenCount = estimateTokens(content);
   const messageIds = messages.map(m => m.id);
@@ -1344,14 +1345,14 @@ function createChatChunk(chatId: string, messages: Message[]): ChatChunk {
 /**
  * Append a message to an existing chunk.
  */
-function appendToChunk(chunkId: string, message: Message): void {
+function appendToChunk(chunkId: string, message: Message, reasoningStrip?: SanitizeOptions): void {
   const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
   if (!chunk) return;
 
   const messageIds = JSON.parse(chunk.message_ids);
   messageIds.push(message.id);
 
-  const newContent = chunk.content + `\n[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${sanitizeForVectorization(message.content)}`;
+  const newContent = chunk.content + `\n[${message.is_user ? "USER" : "CHARACTER"} | ${message.name}]: ${sanitizeForVectorization(message.content, reasoningStrip)}`;
   const newTokenCount = estimateTokens(newContent);
   const now = Math.floor(Date.now() / 1000);
 
@@ -1379,15 +1380,16 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
 
+  const reasoningStrip = getReasoningStripOptions(userId);
   const lastChunk = getLastChatChunk(chatId);
   let chunkId: string;
 
   if (!lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId))) {
-    const newChunk = createChatChunk(chatId, [newMessage]);
+    const newChunk = createChatChunk(chatId, [newMessage], reasoningStrip);
     chunkId = newChunk.id;
     vectorizationQueue.queueChunkVectorization(userId, chatId, newChunk.id, 5);
   } else {
-    appendToChunk(lastChunk.id, newMessage);
+    appendToChunk(lastChunk.id, newMessage, reasoningStrip);
     chunkId = lastChunk.id;
     vectorizationQueue.queueChunkVectorization(userId, chatId, lastChunk.id, 5);
   }
@@ -1654,12 +1656,13 @@ async function _rebuildChatChunksImpl(userId: string, chatId: string): Promise<v
     cfg,
   );
   const targetTokens = chatMemSettings.chunkTargetTokens;
+  const reasoningStrip = getReasoningStripOptions(userId);
 
   let currentChunk: Message[] = [];
   let currentTokens = 0;
 
   for (const msg of messages) {
-    const sanitizedContent = sanitizeForVectorization(msg.content);
+    const sanitizedContent = sanitizeForVectorization(msg.content, reasoningStrip);
     const msgTokens = estimateTokens(`[${msg.is_user ? "USER" : "CHARACTER"} | ${msg.name}]: ${sanitizedContent}`);
     const wouldExceedTarget = currentTokens + msgTokens > targetTokens;
 
@@ -1700,7 +1703,7 @@ async function _rebuildChatChunksImpl(userId: string, chatId: string): Promise<v
     }
 
     if (forceNewChunk) {
-      const chunk = createChatChunk(chatId, currentChunk);
+      const chunk = createChatChunk(chatId, currentChunk, reasoningStrip);
       vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
       currentChunk = [];
       currentTokens = 0;
@@ -1711,7 +1714,7 @@ async function _rebuildChatChunksImpl(userId: string, chatId: string): Promise<v
   }
 
   if (currentChunk.length > 0) {
-    const chunk = createChatChunk(chatId, currentChunk);
+    const chunk = createChatChunk(chatId, currentChunk, reasoningStrip);
     vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
   }
 

@@ -164,6 +164,12 @@ export interface DryRunResult {
 export interface BatchGenerateInput {
   requests: RawGenerateInput[];
   concurrent?: boolean;
+  /**
+   * Optional abort signal — when fired, every still-pending sub-request is
+   * cancelled. Already-completed sub-requests keep their results in the
+   * returned array; cancelled ones surface as `{ success: false, error: "AbortError" }`.
+   */
+  signal?: AbortSignal;
 }
 
 export interface BatchResultItem {
@@ -1948,7 +1954,17 @@ async function consumeStream(
 
 // --- Extension generation (stateless, synchronous, no WS events) ---
 
-export async function rawGenerate(userId: string, input: RawGenerateInput & { signal?: AbortSignal }): Promise<GenerationResponse> {
+interface PreparedGenerationCall {
+  provider: LlmProvider;
+  apiKey: string;
+  apiUrl: string;
+  request: GenerationRequest;
+}
+
+async function prepareRawCall(
+  userId: string,
+  input: RawGenerateInput & { signal?: AbortSignal }
+): Promise<PreparedGenerationCall> {
   const { provider, apiKey, apiUrl } = await resolveRawProviderAndKey(userId, input);
   const request: GenerationRequest = {
     messages: input.messages,
@@ -1957,18 +1973,13 @@ export async function rawGenerate(userId: string, input: RawGenerateInput & { si
     tools: input.tools,
     signal: input.signal,
   };
-
-  // Use streaming when tools are present — some providers only emit tool call
-  // deltas correctly via the streaming path. Consume the stream internally to
-  // produce a complete response.
-  if (input.tools && input.tools.length > 0) {
-    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
-  }
-
-  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+  return { provider, apiKey, apiUrl, request };
 }
 
-export async function quietGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
+async function prepareQuietCall(
+  userId: string,
+  input: QuietGenerateInput
+): Promise<PreparedGenerationCall> {
   const connection = resolveConnection(userId, input.connection_id);
   const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
 
@@ -2016,13 +2027,60 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
     signal: input.signal,
   };
 
+  return { provider, apiKey, apiUrl, request };
+}
+
+export async function rawGenerate(userId: string, input: RawGenerateInput & { signal?: AbortSignal }): Promise<GenerationResponse> {
+  const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input);
+
   // Use streaming when tools are present — some providers only emit tool call
-  // deltas correctly via the streaming path.
+  // deltas correctly via the streaming path. Consume the stream internally to
+  // produce a complete response.
   if (input.tools && input.tools.length > 0) {
     return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
   }
 
   return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+}
+
+export async function quietGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
+  const { provider, apiKey, apiUrl, request } = await prepareQuietCall(userId, input);
+
+  // Use streaming when tools are present — some providers only emit tool call
+  // deltas correctly via the streaming path.
+  if (request.tools && request.tools.length > 0) {
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+  }
+
+  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+}
+
+/**
+ * Streaming variant of {@link rawGenerate}. Returns the raw provider stream
+ * iterator with the caller's `AbortSignal` already wired in. Used by
+ * Spindle's `request_generation_stream` RPC to pipe chunks back to the
+ * extension worker.
+ */
+export async function rawGenerateStream(
+  userId: string,
+  input: RawGenerateInput & { signal?: AbortSignal }
+): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
+  const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input);
+  return provider.generateStream(apiKey, apiUrl, { ...request, stream: true });
+}
+
+/**
+ * Streaming variant of {@link quietGenerate}. Same parameter resolution as
+ * `quietGenerate` (preset merge, reasoning injection, connection metadata)
+ * but returns the underlying provider stream iterator instead of an
+ * aggregated response.
+ */
+export async function quietGenerateStream(
+  userId: string,
+  input: QuietGenerateInput
+): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
+  const { provider, apiKey, apiUrl, request } = await prepareQuietCall(userId, input);
+  return provider.generateStream(apiKey, apiUrl, { ...request, stream: true });
 }
 
 /**
@@ -2144,7 +2202,7 @@ function applyPostProcessing(messages: LlmMessage[], mode: string): void {
 export async function batchGenerate(userId: string, input: BatchGenerateInput): Promise<BatchResultItem[]> {
   const processOne = async (req: RawGenerateInput, index: number): Promise<BatchResultItem> => {
     try {
-      const result = await rawGenerate(userId, req);
+      const result = await rawGenerate(userId, { ...req, signal: input.signal });
       return {
         index,
         success: true,
@@ -2163,6 +2221,10 @@ export async function batchGenerate(userId: string, input: BatchGenerateInput): 
 
   const results: BatchResultItem[] = [];
   for (let i = 0; i < input.requests.length; i++) {
+    if (input.signal?.aborted) {
+      results.push({ index: i, success: false, error: "AbortError: Generation aborted" });
+      continue;
+    }
     results.push(await processOne(input.requests[i], i));
   }
   return results;

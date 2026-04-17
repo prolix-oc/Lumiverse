@@ -199,7 +199,7 @@ function clampFloat(v: unknown, min: number, max: number, fallback: number): num
  * Any chat whose stored hash doesn't match the current hash will get
  * its chunks rebuilt on the next generation.
  */
-export const LTCM_FORMAT_VERSION = 2;
+export const LTCM_FORMAT_VERSION = 3;
 
 /**
  * Compute a deterministic hash from the settings that affect how chunks

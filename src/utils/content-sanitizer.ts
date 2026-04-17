@@ -123,16 +123,73 @@ export function collapseExcessiveNewlines(content: string): string {
 // Composed sanitization for vectorization
 // ---------------------------------------------------------------------------
 
+export interface SanitizeOptions {
+  /** User-configured reasoning prefix (e.g. from `reasoningSettings.prefix`). */
+  reasoningPrefix?: string;
+  /** User-configured reasoning suffix (e.g. from `reasoningSettings.suffix`). */
+  reasoningSuffix?: string;
+}
+
+const DEFAULT_REASONING_TAGS = new Set(["think", "thinking", "reasoning"]);
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Remove reasoning blocks bracketed by the configured prefix/suffix (paired + unclosed). */
+function stripCustomReasoningBlocks(content: string, prefix: string, suffix: string): string {
+  const rawPrefix = prefix.replace(/^\n+|\n+$/g, "");
+  const rawSuffix = suffix.replace(/^\n+|\n+$/g, "");
+  if (!rawPrefix || !rawSuffix) return content;
+
+  // Skip when the configured tags are just default <think>/<thinking>/<reasoning>
+  // variants — the default regex below already handles them.
+  const defaultTagPair = /^<\s*([a-z_][\w-]*)\s*>$/i;
+  const prefixMatch = rawPrefix.match(defaultTagPair);
+  const suffixMatch = rawSuffix.match(/^<\s*\/\s*([a-z_][\w-]*)\s*>$/i);
+  if (
+    prefixMatch && suffixMatch &&
+    prefixMatch[1].toLowerCase() === suffixMatch[1].toLowerCase() &&
+    DEFAULT_REASONING_TAGS.has(prefixMatch[1].toLowerCase())
+  ) {
+    return content;
+  }
+
+  const escapedPrefix = escapeRegex(rawPrefix);
+  const escapedSuffix = escapeRegex(rawSuffix);
+  let result = content.replace(
+    new RegExp(`\\s*${escapedPrefix}[\\s\\S]*?${escapedSuffix}\\s*`, "g"),
+    "",
+  );
+  // Strip trailing unclosed custom reasoning blocks (interrupted generation)
+  result = result.replace(
+    new RegExp(`\\s*${escapedPrefix}[\\s\\S]*$`),
+    "",
+  );
+  return result;
+}
+
 /**
  * Apply full content sanitization for embedding/vectorization.
  *
  * Strips reasoning tags, details blocks, loom structural tags, and HTML
  * formatting tags. Font tags are intentionally KEPT — they carry semantic
  * styling intent rather than structural noise.
+ *
+ * Pass `options.reasoningPrefix` / `options.reasoningSuffix` to also strip
+ * blocks wrapped in the user's custom reasoning delimiters — critical for
+ * keeping reasoning out of chat chunks and retrieval queries when a user has
+ * configured non-default CoT tags.
  */
-export function sanitizeForVectorization(content: string): string {
-  // Strip reasoning tags (complete blocks only)
-  let result = content.replace(
+export function sanitizeForVectorization(content: string, options?: SanitizeOptions): string {
+  // Strip custom reasoning blocks first so default-tag regexes don't leave
+  // stragglers inside a user-configured wrapper.
+  let result = content;
+  if (options?.reasoningPrefix && options?.reasoningSuffix) {
+    result = stripCustomReasoningBlocks(result, options.reasoningPrefix, options.reasoningSuffix);
+  }
+  // Strip default reasoning tags (complete blocks only)
+  result = result.replace(
     /\s*<(think|thinking|reasoning)>[\s\S]*?<\/\1>\s*/gi,
     "",
   );

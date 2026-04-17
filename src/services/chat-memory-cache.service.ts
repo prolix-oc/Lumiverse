@@ -1,6 +1,7 @@
 import { getDb } from "../db/connection";
 import * as embeddingsSvc from "./embeddings.service";
-import { sanitizeForVectorization } from "../utils/content-sanitizer";
+import { sanitizeForVectorization, type SanitizeOptions } from "../utils/content-sanitizer";
+import { getReasoningStripOptions } from "../utils/reasoning-strip";
 
 const MAX_STALE_VISIBLE_MESSAGES = 2;
 const REFRESH_DEBOUNCE_MS = 100;
@@ -107,6 +108,7 @@ function truncateToContextSize(text: string, maxTokens: number): string {
 function buildQueryText(
   messages: MemoryMessageView[],
   settings: embeddingsSvc.ChatMemorySettings,
+  reasoningStrip?: SanitizeOptions,
 ): string {
   const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
   const contextSize = Math.max(1, settings.queryContextSize);
@@ -116,14 +118,14 @@ function buildQueryText(
       const lastUser = [...visibleMessages].reverse().find(m => m.is_user);
       if (!lastUser) return "";
       return truncateToContextSize(
-        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content)}`,
+        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content, reasoningStrip)}`,
         settings.queryMaxTokens,
       );
     }
     case "weighted_recent": {
       const queryMessages = visibleMessages.slice(-contextSize);
       const parts = queryMessages.map(m =>
-        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`,
+        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`,
       );
       if (parts.length > 0) parts.push(parts[parts.length - 1]);
       return truncateToContextSize(parts.join("\n").trim(), settings.queryMaxTokens);
@@ -133,7 +135,7 @@ function buildQueryText(
       const queryMessages = visibleMessages.slice(-contextSize);
       return truncateToContextSize(
         queryMessages
-          .map(m => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`)
+          .map(m => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`)
           .join("\n")
           .trim(),
         settings.queryMaxTokens,
@@ -337,7 +339,8 @@ async function computeFreshMemoryResult(
   const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings, cfg);
   const settingsSource: "global" | "per_chat" = perChatOverrides ? "per_chat" : "global";
   const sourceMessageCount = getVisibleMessageCount(messages);
-  const queryText = buildQueryText(messages, settings);
+  const reasoningStrip = getReasoningStripOptions(userId);
+  const queryText = buildQueryText(messages, settings, reasoningStrip);
   const settingsKey = computeSettingsKey(settings, perChatOverrides, cfg.hybrid_weight_mode);
 
   const chunkStats = getDb()
@@ -565,7 +568,8 @@ export async function readCachedChatMemory(
   }));
   const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings, cfg);
   const settingsSource: "global" | "per_chat" = perChatOverrides ? "per_chat" : "global";
-  const queryText = buildQueryText(messageViews, settings);
+  const reasoningStrip = getReasoningStripOptions(userId);
+  const queryText = buildQueryText(messageViews, settings, reasoningStrip);
   if (!queryText) {
     return { ...EMPTY_RESULT, enabled: true, settingsSource };
   }

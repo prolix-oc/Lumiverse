@@ -26,7 +26,9 @@ import {
   stripHtmlFormattingTags as _stripHtmlFormattingTags,
   collapseExcessiveNewlines as _collapseExcessiveNewlines,
   sanitizeForVectorization,
+  type SanitizeOptions,
 } from "../utils/content-sanitizer";
+import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as globalAddonsSvc from "./global-addons.service";
@@ -419,7 +421,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         ? embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg)
         : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
 
-      const cortexQueryText = buildQueryText(messages, effective);
+      const cortexQueryText = buildQueryText(messages, effective, getReasoningStripOptions(ctx.userId));
       const recentContent = messages.slice(-6).map(m => m.content).join(" ");
       const emotionalContext = buildEmotionalContext(recentContent);
 
@@ -2750,13 +2752,13 @@ function truncateToContextSize(text: string, maxTokens: number): string {
   return text.slice(-maxChars);
 }
 
-function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: number): string {
+function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: number, reasoningStrip?: SanitizeOptions): string {
   const queryMessages = messages
     .filter((m) => !(m.extra?.hidden) && m.content.trim().length > 0)
     .slice(-Math.max(1, contextSize));
   return truncateToContextSize(
     queryMessages
-      .map((m) => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(stripReasoningTags(m.content))}`)
+      .map((m) => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(stripReasoningTags(m.content), reasoningStrip)}`)
       .join("\n")
       .trim(),
     8000,
@@ -2765,7 +2767,7 @@ function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: numb
 
 export async function getWorldInfoVectorQueryPreview(userId: string, messages: Message[]): Promise<string> {
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  return buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3);
+  return buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3, getReasoningStripOptions(userId));
 }
 
 function isVectorEligibleWorldInfoEntry(entry: import("../types/world-book").WorldBookEntry): boolean {
@@ -3041,6 +3043,7 @@ export interface MemoryRetrievalResult {
 function buildQueryText(
   messages: Message[],
   settings: import("./embeddings.service").ChatMemorySettings,
+  reasoningStrip?: SanitizeOptions,
 ): string {
   const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
   const contextSize = Math.max(1, settings.queryContextSize);
@@ -3050,14 +3053,14 @@ function buildQueryText(
       const lastUser = [...visibleMessages].reverse().find(m => m.is_user);
       if (!lastUser) return "";
       return truncateToContextSize(
-        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content)}`,
+        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content, reasoningStrip)}`,
         settings.queryMaxTokens,
       );
     }
     case "weighted_recent": {
       const queryMessages = visibleMessages.slice(-contextSize);
       const parts = queryMessages.map(m =>
-        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`
       );
       // Repeat last message for recency bias
       if (parts.length > 0) parts.push(parts[parts.length - 1]);
@@ -3068,7 +3071,7 @@ function buildQueryText(
       const queryMessages = visibleMessages.slice(-contextSize);
       return truncateToContextSize(
         queryMessages.map(m =>
-          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`
         ).join("\n").trim(),
         settings.queryMaxTokens,
       );
