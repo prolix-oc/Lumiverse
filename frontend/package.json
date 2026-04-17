@@ -1,7 +1,7 @@
 {
   "name": "lumiverse-frontend",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.9.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -31,7 +31,7 @@
     "fuse.js": "^7.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.468.0",
-    "lumiverse-spindle-types": "0.4.21",
+    "lumiverse-spindle-types": "0.4.24",
     "marked": "^15.0.4",
     "motion": "^12.0.0",
     "react": "^19.0.0",

@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "@lenml/tokenizer-claude": "^3.7.2",
@@ -17,7 +17,7 @@
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.16",
     "jsdom": "^29.0.1",
-    "lumiverse-spindle-types": "0.4.21",
+    "lumiverse-spindle-types": "0.4.24",
     "sharp": "^0.34.5",
     "ssh2-sftp-client": "^12.1.1"
   },
