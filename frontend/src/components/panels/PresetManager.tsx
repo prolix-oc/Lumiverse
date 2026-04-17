@@ -219,7 +219,7 @@ export default function PresetManager() {
               <option value="summarized">Summarized</option>
               <option value="omitted">Omitted</option>
             </select>
-            <span className={styles.historyHint}>
+            <span className={styles.toggleDesc}>
               Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.
             </span>
           </div>
