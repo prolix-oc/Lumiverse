@@ -146,7 +146,11 @@ setTimeout(() => {
 if (env.trustAnyOrigin) {
   console.log("[Auth] Trusted origins: ALL (TRUST_ANY_ORIGIN enabled)");
 } else {
-  console.log(`[Auth] Trusted origins:\n${env.trustedOrigins.map((o) => `  • ${o}`).join("\n")}`);
+  const { getSnapshot: getTrustedHostsSnapshot } = await import("./services/trusted-hosts.service");
+  const snapshot = getTrustedHostsSnapshot();
+  const baselineLines = snapshot.baseline.map((e) => `  • ${e.host} (${e.source})`);
+  const configuredLines = snapshot.configured.map((h) => `  • ${h} (configured)`);
+  console.log(`[Auth] Trusted origins:\n${[...baselineLines, ...configuredLines].join("\n")}`);
 }
 
 // --- Graceful shutdown ---
