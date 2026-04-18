@@ -188,12 +188,28 @@ export interface StreamTokenPayload {
   type?: 'text' | 'reasoning'
 }
 
+export interface ContextClipStats {
+  enabled: boolean
+  maxContext: number
+  maxResponseTokens: number
+  safetyMargin: number
+  inputBudget: number
+  fixedTokens: number
+  chatHistoryTokensBefore: number
+  chatHistoryTokensAfter: number
+  messagesDropped: number
+  tokensDropped: number
+  tokenizerUsed: string
+  budgetInvalid?: boolean
+}
+
 export interface GenerationStartedPayload {
   generationId: string
   chatId: string
   targetMessageId?: string
   characterId?: string
   characterName?: string
+  contextClipStats?: ContextClipStats
 }
 
 export interface GenerationMetrics {

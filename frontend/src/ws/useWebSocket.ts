@@ -143,6 +143,20 @@ export function useWebSocket() {
             // called without a targetMessageId (e.g. regeneration flow).
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+
+          // Notify the user when the backend clipped chat history to fit the
+          // configured context budget. Only surface for the currently-active
+          // chat — otherwise background generations would spam toasts.
+          const clip = payload.contextClipStats
+          if (clip?.enabled && clip.budgetInvalid) {
+            toast.error(
+              `Context size (${clip.maxContext.toLocaleString()}) is smaller than reserved response tokens — no history can fit. Raise Context Size or lower Max Tokens.`,
+            )
+          } else if (clip?.enabled && clip.messagesDropped > 0) {
+            toast.warning(
+              `Clipped ${clip.messagesDropped} message${clip.messagesDropped === 1 ? '' : 's'} to fit context budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
+            )
+          }
         }
         // Track as a chat head so it appears if user navigates away
         state.addChatHead({

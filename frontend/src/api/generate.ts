@@ -118,6 +118,7 @@ export interface DryRunResponse {
     queryPreview: string
     settingsSource: 'global' | 'per_chat'
   }
+  contextClipStats?: import('@/types/ws-events').ContextClipStats
 }
 
 export interface BreakdownResponse {
