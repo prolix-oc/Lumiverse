@@ -274,30 +274,45 @@ export function useDreamWeaverStudio(
   useEffect(() => {
     let cancelled = false
 
-    setLoading(true)
-    setErrorMessage(null)
+    const loadSession = async () => {
+      setLoading(true)
+      setErrorMessage(null)
 
-    dreamWeaverApi.getSession(sessionId)
-      .then((nextSession) => {
+      try {
+        const nextSession = await dreamWeaverApi.getSession(sessionId)
         if (cancelled) return
 
         setSession(nextSession)
         setDraft(parseStoredDraft(nextSession.draft))
         setDirty(false)
         if (nextSession.soul_state === 'generating') setGenerating(true)
-      })
-      .catch((err: any) => {
+
+        if (nextSession.character_id) {
+          try {
+            await dreamWeaverApi.repairCharacter(nextSession.id)
+          } catch {
+          }
+
+          try {
+            const character = await charactersApi.get(nextSession.character_id)
+            if (!cancelled) addCharacter(character)
+          } catch {
+          }
+        }
+      } catch (err: any) {
         if (cancelled) return
         setErrorMessage(err?.message ?? 'Failed to load Dream Weaver session')
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+
+    void loadSession()
 
     return () => {
       cancelled = true
     }
-  }, [sessionId])
+  }, [sessionId, addCharacter])
 
   const refreshSession = useCallback(async () => {
     const nextSession = await dreamWeaverApi.getSession(sessionId)

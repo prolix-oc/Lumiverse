@@ -204,10 +204,12 @@ export function buildVisualMacroOptions(
   const pushOption = (
     tokenName: string,
     label: string,
-    value: string | undefined,
+    value: unknown,
     group: DreamWeaverVisualMacroOption['group'],
   ) => {
-    const trimmed = value?.trim()
+    const trimmed = typeof value === 'string'
+      ? value.trim()
+      : String(value ?? '').trim()
     if (!trimmed) return
     options.push({
       token: `{{${tokenName}}}`,

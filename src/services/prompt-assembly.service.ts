@@ -51,6 +51,7 @@ import * as databankSvc from "./databank";
 import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { getSidecarSettings } from "./sidecar-settings.service";
 import { getChatBackgroundSignal } from "./chat-background.service";
+import { getDreamWeaverRuntimeBlocks } from "./dream-weaver/runtime-prompt";
 
 // ---------------------------------------------------------------------------
 // Chat history identity marker
@@ -1157,6 +1158,14 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // Use the count tracked during chat_history insertion (respects message limit + exclusions)
   const lastChatIdx = firstChatIdx >= 0 ? firstChatIdx + chatHistoryCount : result.length;
+
+  const dreamWeaverRuntimeBlocks = getDreamWeaverRuntimeBlocks(effectiveCharacter)
+    .map((entry) => ({ ...entry, role: "system" as const }));
+  if (dreamWeaverRuntimeBlocks.length > 0) {
+    const insertAt = firstChatIdx >= 0 ? firstChatIdx : result.length;
+    const inserted = injectPromptBlocksAt(result, breakdown, dreamWeaverRuntimeBlocks, insertAt);
+    if (firstChatIdx >= 0) firstChatIdx += inserted;
+  }
 
   // Position 0: "before" — insert just before chat history
   if (!hasWiBefore && wiCache.before.length > 0) {
@@ -3370,6 +3379,22 @@ function injectWorldInfoAt(
   return entries.length;
 }
 
+function injectPromptBlocksAt(
+  result: LlmMessage[],
+  breakdown: AssemblyBreakdownEntry[],
+  entries: Array<{ content: string; role: LlmMessage["role"]; name: string }>,
+  insertAt: number,
+): number {
+  if (entries.length === 0) return 0;
+  let idx = Math.max(0, Math.min(insertAt, result.length));
+  for (const entry of entries) {
+    result.splice(idx, 0, { role: entry.role, content: entry.content });
+    breakdown.push({ type: "block", name: entry.name, role: entry.role, content: entry.content });
+    idx++;
+  }
+  return entries.length;
+}
+
 /**
  * Apply a group of appends that share the same target (baseRole + depth)
  * in a single pass. Contents are concatenated in prompt_order sequence
@@ -4270,6 +4295,11 @@ async function legacyAssembly(
     const systemContent = await resolveMacros(systemParts.join("\n\n"));
     llmMessages.push({ role: "system", content: systemContent });
     breakdown.push({ type: "block", name: "Character Card (legacy)", role: "system", content: systemContent });
+  }
+
+  for (const block of getDreamWeaverRuntimeBlocks(legacyChar as Character)) {
+    llmMessages.push({ role: "system", content: block.content });
+    breakdown.push({ type: "block", name: block.name, role: "system", content: block.content });
   }
 
   // Add dialogue examples if present
