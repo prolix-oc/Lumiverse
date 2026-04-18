@@ -14,7 +14,20 @@ import { LocalFileSystem } from "./providers/local";
 /** Cache: undefined = not probed, true/false = result */
 const availabilityCache = new Map<string, boolean>();
 
+// SFTP is gated behind an opt-in env flag because `ssh2` ships a native
+// addon (sshcrypto.node) that calls libuv functions Bun doesn't implement
+// on POSIX (e.g. `uv_version_string`). The dlopen panic is a process-level
+// crash — try/catch here cannot catch it — so we refuse to even attempt
+// the import unless the operator has explicitly opted in. See
+// oven-sh/bun#18546 (libuv polyfills) and oven-sh/bun#11947 / #8228 (ssh2
+// specifically, both closed "not planned").
+function isSftpOptedIn(): boolean {
+  const v = process.env.LUMIVERSE_ENABLE_SFTP;
+  return v === "1" || v === "true";
+}
+
 async function probeSftp(): Promise<boolean> {
+  if (!isSftpOptedIn()) return false;
   try {
     await import("./providers/sftp");
     return true;
@@ -93,6 +106,12 @@ export async function createFileSystem(
       return new LocalFileSystem();
 
     case "sftp": {
+      if (!isSftpOptedIn()) {
+        throw new Error(
+          "SFTP is disabled by default because ssh2's native module crashes Bun " +
+          "(oven-sh/bun#18546). Set LUMIVERSE_ENABLE_SFTP=1 to enable at your own risk.",
+        );
+      }
       if (!(await isProviderAvailable("sftp"))) {
         throw new Error("SFTP provider is not available — ssh2-sftp-client could not be loaded.");
       }

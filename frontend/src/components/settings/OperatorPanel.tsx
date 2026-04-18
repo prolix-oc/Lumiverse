@@ -12,6 +12,9 @@ import {
   HardDrive,
   PackageCheck,
   Hammer,
+  Globe,
+  Plus,
+  X,
 } from 'lucide-react'
 import { Toggle } from '@/components/shared/Toggle'
 import { spinClass } from '@/components/shared/Spinner'
@@ -23,6 +26,8 @@ import {
   type DatabaseTuningSettings,
   type OperatorDatabaseStatus,
   type OperatorStatus,
+  type TrustedHostEntry,
+  type TrustedHostsResponse,
 } from '@/api/operator'
 import { settingsApi } from '@/api/settings'
 import { embeddingsApi, type VectorStoreHealth } from '@/api/embeddings'
@@ -33,6 +38,16 @@ import clsx from 'clsx'
 
 /** Operations that cause the server to restart and require reconnection handling. */
 const RESTART_OPERATIONS = new Set(['updating', 'switching branch', 'restarting', 'toggling remote', 'rebuilding frontend'])
+
+const TRUSTED_HOST_SOURCE_LABELS: Record<TrustedHostEntry['source'], string> = {
+  hostname: 'hostname',
+  mdns: 'mDNS',
+  'reverse-dns': 'reverse DNS',
+  tailscale: 'Tailscale',
+  'lan-ip': 'LAN IP',
+  env: 'env',
+  configured: 'configured',
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -220,6 +235,8 @@ export default function OperatorPanel() {
   const [isShutdown, setIsShutdown] = useState(false)
   const [vectorHealth, setVectorHealth] = useState<VectorStoreHealth | null>(null)
   const [vectorBusy, setVectorBusy] = useState<string | null>(null)
+  const [trustedHosts, setTrustedHosts] = useState<TrustedHostsResponse | null>(null)
+  const [hostDraft, setHostDraft] = useState('')
   const storeBusy = useStore((s) => s.operatorBusy)
   const addToast = useStore((s) => s.addToast)
 
@@ -257,6 +274,44 @@ export default function OperatorPanel() {
       return null
     }
   }, [])
+
+  const refreshTrustedHosts = useCallback(async () => {
+    try {
+      const res = await operatorApi.getTrustedHosts()
+      setTrustedHosts(res)
+    } catch {
+      /* leave previous state */
+    }
+  }, [])
+
+  const saveTrustedHosts = useCallback(async (nextConfigured: string[]) => {
+    try {
+      const res = await operatorApi.putTrustedHosts(nextConfigured)
+      setTrustedHosts((prev) => prev ? { ...prev, configured: res.configured, baseline: res.baseline } : prev)
+      addToast({ type: 'success', message: 'Trusted hosts updated.' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update trusted hosts.'
+      addToast({ type: 'error', message })
+      await refreshTrustedHosts()
+    }
+  }, [addToast, refreshTrustedHosts])
+
+  const handleAddHost = useCallback((value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    const current = trustedHosts?.configured ?? []
+    if (current.some((h) => h.toLowerCase() === trimmed.toLowerCase())) {
+      setHostDraft('')
+      return
+    }
+    setHostDraft('')
+    saveTrustedHosts([...current, trimmed])
+  }, [saveTrustedHosts, trustedHosts])
+
+  const handleRemoveHost = useCallback((host: string) => {
+    const current = trustedHosts?.configured ?? []
+    saveTrustedHosts(current.filter((h) => h !== host))
+  }, [saveTrustedHosts, trustedHosts])
 
   const refreshVectorHealth = useCallback(async () => {
     try {
@@ -297,14 +352,14 @@ export default function OperatorPanel() {
   useEffect(() => {
     let mounted = true
     const fetchStatus = async () => {
-      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth()])
+      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth(), refreshTrustedHosts()])
       if (mounted && s) setLoading(false)
       else if (mounted) setLoading(false)
     }
     fetchStatus()
     const interval = setInterval(fetchStatus, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [refreshDatabase, refreshStatus, refreshVectorHealth])
+  }, [refreshDatabase, refreshStatus, refreshVectorHealth, refreshTrustedHosts])
 
   // Tick uptime every second (paused while reconnecting or shut down)
   useEffect(() => {
@@ -852,6 +907,119 @@ export default function OperatorPanel() {
               onChange={handleToggleRemote}
               disabled={!ipcAvailable || !!effectiveBusy}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Trusted Hostnames */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Trusted Hostnames</span>
+        </div>
+        <div className={styles.sectionBody}>
+          <span className={styles.remoteHint}>
+            Hostnames accepted in the HTTP <code>Host</code> header. Add the DNS or Tailscale name you use
+            to reach this device. Wildcards are not allowed — this guards against DNS-rebinding attacks.
+          </span>
+
+          <div className={styles.dbInfoBlock}>
+            <span className={styles.fieldLabel}>Always trusted</span>
+            <div className={styles.hostChipGroup}>
+              {(trustedHosts?.baseline ?? []).map((entry) => (
+                <span key={entry.host} className={styles.hostChipBaseline} title={`source: ${TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}`}>
+                  {entry.host}
+                  <span className={styles.hostChipSource}>{TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className={styles.dbInfoBlock}>
+            <span className={styles.fieldLabel}>Configured</span>
+            {trustedHosts && trustedHosts.configured.length > 0 ? (
+              <div className={styles.hostChipGroup}>
+                {trustedHosts.configured.map((host) => (
+                  <span key={host} className={styles.hostChip}>
+                    {host}
+                    <button
+                      type="button"
+                      className={styles.hostChipRemove}
+                      onClick={() => handleRemoveHost(host)}
+                      aria-label={`Remove ${host}`}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className={styles.hostEmpty}>No custom hostnames added yet.</span>
+            )}
+          </div>
+
+          {trustedHosts && trustedHosts.suggestions.length > 0 && (
+            <div className={styles.dbInfoBlock}>
+              <span className={styles.fieldLabel}>Detected on this device</span>
+              <div className={styles.hostChipGroup}>
+                {trustedHosts.suggestions.map((entry) => {
+                  const alreadyConfigured = trustedHosts.configured.includes(entry.host)
+                  return (
+                    <button
+                      key={entry.host}
+                      type="button"
+                      className={styles.hostChipSuggested}
+                      disabled={alreadyConfigured}
+                      onClick={() => handleAddHost(entry.host)}
+                      title={`source: ${TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}`}
+                    >
+                      <Plus size={11} />
+                      {entry.host}
+                      <span className={styles.hostChipSource}>{TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className={styles.dbInfoBlock}>
+            <span className={styles.fieldLabel}>Add manually</span>
+            <form
+              className={styles.hostInputRow}
+              onSubmit={(e) => {
+                e.preventDefault()
+                handleAddHost(hostDraft)
+              }}
+            >
+              <input
+                type="text"
+                className={styles.hostInput}
+                placeholder="e.g. machine.tailnet-abcd.ts.net"
+                value={hostDraft}
+                onChange={(e) => setHostDraft(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                type="submit"
+                className={styles.controlBtnPrimary}
+                disabled={!hostDraft.trim()}
+              >
+                <Globe size={14} />
+                Add
+              </button>
+              <button
+                type="button"
+                className={styles.controlBtn}
+                onClick={refreshTrustedHosts}
+              >
+                <RefreshCw size={14} />
+                Rescan
+              </button>
+            </form>
+            <span className={styles.fieldHint}>
+              Port defaults to {status?.port ?? '7860'} when omitted. Schemes (<code>http://</code>) are stripped automatically.
+            </span>
           </div>
         </div>
       </div>

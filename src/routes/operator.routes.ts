@@ -2,6 +2,12 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import { operatorService, OperationConflictError } from "../services/operator.service";
 import { InsufficientDiskSpaceError } from "../db/maintenance";
+import {
+  detectHostnameSuggestions,
+  getSnapshot as getTrustedHostsSnapshot,
+  InvalidTrustedHostError,
+  setTrustedHosts,
+} from "../services/trusted-hosts.service";
 
 const app = new Hono();
 const CHECKPOINT_MODES = new Set(["PASSIVE", "FULL", "RESTART", "TRUNCATE"]);
@@ -47,6 +53,32 @@ app.post("/database/maintenance", async (c) => {
     }
     if (err instanceof InsufficientDiskSpaceError) {
       return c.json({ error: err.message }, 409);
+    }
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+// ── Trusted hosts ───────────────────────────────────────────────────────────
+
+app.get("/trusted-hosts", async (c) => {
+  const snapshot = getTrustedHostsSnapshot();
+  const suggestions = await detectHostnameSuggestions();
+  return c.json({ ...snapshot, ...suggestions });
+});
+
+app.put("/trusted-hosts", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  const hosts = Array.isArray(body?.hosts) ? body.hosts : null;
+  if (!hosts) {
+    return c.json({ error: "Payload must be { hosts: string[] }" }, 400);
+  }
+  try {
+    const configured = setTrustedHosts(userId, hosts);
+    return c.json({ configured, baseline: getTrustedHostsSnapshot().baseline });
+  } catch (err) {
+    if (err instanceof InvalidTrustedHostError) {
+      return c.json({ error: err.message }, 400);
     }
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }

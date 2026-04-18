@@ -50,6 +50,12 @@ const { seedOwner, backfillUserIds, getFirstUserId } = await import("./auth/seed
 const { operatorService } = await import("./services/operator.service");
 await seedOwner();
 backfillUserIds();
+
+// Load the operator-configured trusted host allowlist now that the owner is
+// known — the Host-header middleware in app.ts reads from this cache.
+const { load: loadTrustedHosts } = await import("./services/trusted-hosts.service");
+loadTrustedHosts();
+
 runStartupDatabaseMaintenance(db, getDatabasePath(), getFirstUserId());
 startDatabaseMonitor(() => db, getDatabasePath());
 startAutomaticDatabaseMaintenance(
