@@ -23,7 +23,7 @@
 }
 
 .statusLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -31,7 +31,7 @@
 }
 
 .statusValue {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   font-variant-numeric: tabular-nums;
@@ -43,7 +43,7 @@
   gap: 4px;
   padding: 2px 8px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   background: rgba(255, 183, 77, 0.15);
   color: #ffb74d;
@@ -55,7 +55,7 @@
   gap: 4px;
   padding: 2px 8px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
 }
 
@@ -87,7 +87,7 @@
 }
 
 .sectionTitle {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -112,13 +112,13 @@
 
 .dbMono {
   font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   word-break: break-all;
 }
 
 .dbInlineText {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -135,7 +135,7 @@
 }
 
 .fieldLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -147,7 +147,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .fieldInput:disabled {
@@ -156,7 +156,7 @@
 }
 
 .fieldHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.45;
 }
@@ -201,7 +201,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -255,13 +255,13 @@
 }
 
 .remoteLabel {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .remoteHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -280,7 +280,7 @@
   overflow-y: auto;
   padding: 8px 10px;
   font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -306,7 +306,7 @@
 .logEmpty {
   padding: 24px;
   text-align: center;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -320,7 +320,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -331,7 +331,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   text-align: center;
 }
 
@@ -344,7 +344,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -364,7 +364,7 @@
   border-radius: 8px;
   background: rgba(100, 181, 246, 0.08);
   border: 1px solid rgba(100, 181, 246, 0.2);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: #64b5f6;
 }
 
@@ -374,12 +374,12 @@
   border: 1px solid rgba(255, 183, 77, 0.28);
   background: rgba(255, 183, 77, 0.08);
   color: #ffb74d;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
 }
 
 .disabledHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -395,7 +395,7 @@
   background: rgba(255, 183, 77, 0.08);
   border: 1px solid rgba(255, 183, 77, 0.25);
   color: #ffb74d;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   animation: reconnectPulse 2s ease-in-out infinite;
 }
 
@@ -413,7 +413,7 @@
   background: rgba(239, 83, 80, 0.08);
   border: 1px solid rgba(239, 83, 80, 0.25);
   color: #ef5350;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 /* ── Trusted Hosts ───────────────────────────────────────────────────────── */
@@ -433,7 +433,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   font-variant-numeric: tabular-nums;
 }
 
@@ -464,7 +464,7 @@
 }
 
 .hostChipSource {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   opacity: 0.6;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -502,11 +502,11 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .hostEmpty {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }

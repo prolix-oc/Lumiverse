@@ -17,7 +17,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   border: 1px dashed var(--lumiverse-border);
   border-radius: 6px;
   background: transparent;
@@ -45,14 +45,14 @@
 }
 
 .detectionHeader {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin-bottom: 8px;
 }
 
 .detectionHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.5;
   margin-bottom: 10px;
@@ -84,13 +84,13 @@
 }
 
 .modeName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   font-weight: 500;
 }
 
 .modeDesc {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -104,14 +104,14 @@
 }
 
 .contextRow label {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   white-space: nowrap;
 }
 
 .contextInput {
   width: 60px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   padding: 3px 6px;
   border: 1px solid var(--lumiverse-border);
   border-radius: 4px;
@@ -134,14 +134,14 @@
 }
 
 .defaultRow label {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   white-space: nowrap;
 }
 
 .defaultSelect {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   padding: 4px 8px;
   border: 1px solid var(--lumiverse-border);
   border-radius: 4px;
@@ -189,13 +189,13 @@
 }
 
 .emptyTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
 }
 
 .emptyHint {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -206,7 +206,7 @@
 }
 
 .count {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
 }
 
@@ -227,7 +227,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -249,7 +249,7 @@
 }
 
 .groupTabCount {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
   background: var(--lumiverse-fill);
   padding: 1px 5px;
@@ -268,7 +268,7 @@
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   border: 1px solid var(--lumiverse-border);
   border-radius: 4px;
   background: transparent;
@@ -284,7 +284,7 @@
 }
 
 .uploading {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary);
   padding: 8px 0;
 }
@@ -333,7 +333,7 @@
 .labelPromptInput {
   width: 100%;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   background: var(--lumiverse-bg-dark);
@@ -354,7 +354,7 @@
 
 .labelPromptBtn {
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   border: 1px solid var(--lumiverse-border);
   border-radius: 4px;
   background: transparent;

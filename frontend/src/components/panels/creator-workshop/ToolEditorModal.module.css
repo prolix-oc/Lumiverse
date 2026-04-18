@@ -12,7 +12,7 @@
 }
 
 .title {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -93,7 +93,7 @@
   border: 1px dashed var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   width: 100%;
   justify-content: center;
@@ -114,7 +114,7 @@
 
 .toggleLabel {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 

@@ -4,7 +4,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   cursor: pointer;
 }
@@ -27,7 +27,7 @@
 }
 
 .hint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.4;
 }

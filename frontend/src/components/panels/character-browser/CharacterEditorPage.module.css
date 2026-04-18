@@ -2,6 +2,8 @@
 .backdrop {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   z-index: 10001;
   display: flex;
@@ -22,7 +24,7 @@
   flex-direction: column;
   width: 100%;
   max-width: 720px;
-  max-height: 85vh;
+  max-height: calc(85vh / var(--lumiverse-ui-scale, 1));
   background: var(--lumiverse-gradient-modal);
   border-radius: 16px;
   border: 1px solid var(--lumiverse-primary-020);
@@ -66,7 +68,7 @@
   justify-content: center;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-010);
-  font-size: 18px;
+  font-size: calc(18px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
 }
 
@@ -92,7 +94,7 @@
 }
 
 .avatarProgressText {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-primary-contrast, #fff);
   font-variant-numeric: tabular-nums;
@@ -115,7 +117,7 @@
   border: none;
   border-bottom: 1px solid transparent;
   padding: 2px 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   outline: none;
@@ -128,7 +130,7 @@
 }
 
 .creatorText {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -170,7 +172,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   text-align: left;
   border-radius: 6px;
   cursor: pointer;
@@ -182,7 +184,7 @@
 }
 
 .savingIndicator {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary);
   padding: 0 4px;
   flex-shrink: 0;
@@ -209,7 +211,7 @@
   background: transparent;
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -249,13 +251,13 @@
 }
 
 .fieldLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .fieldHelper {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-bottom: 2px;
 }
@@ -266,7 +268,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   resize: vertical;
   min-height: 80px;
@@ -286,7 +288,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -314,7 +316,7 @@
 }
 
 .greetingLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
 }
@@ -346,7 +348,7 @@
   background: transparent;
   border: 1px dashed var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   align-self: flex-start;
@@ -374,7 +376,7 @@
   background: var(--lumiverse-primary-010);
   border: 1px solid var(--lumiverse-primary-020);
   color: var(--lumiverse-primary-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .tagRemove {
@@ -403,7 +405,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 5px;
   padding: 3px 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
 }
@@ -514,7 +516,7 @@
   background: transparent;
   border: 1px dashed var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -570,7 +572,7 @@
 }
 
 .lorebookSuccess {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-success, #4ade80);
   flex-shrink: 0;
 }
@@ -590,7 +592,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
 }
 
 .regexIcon {
@@ -613,7 +615,7 @@
 }
 
 .regexTarget {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--lumiverse-text-muted);
@@ -649,7 +651,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: 'SF Mono', 'Fira Code', monospace;
   color: var(--lumiverse-text);
   resize: vertical;
@@ -665,7 +667,7 @@
 }
 
 .jsonError {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-error);
   padding: 0 2px;
 }
@@ -687,7 +689,7 @@
   background: transparent;
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -723,7 +725,7 @@
 .charWbPopoverEmpty {
   padding: 12px;
   text-align: center;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -737,7 +739,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   text-align: left;
   transition: background var(--lumiverse-transition-fast);
@@ -753,7 +755,7 @@
 
 .charWbPopoverCheck {
   width: 14px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   flex-shrink: 0;
   text-align: center;
   color: var(--lumiverse-primary);
@@ -781,7 +783,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
   color: var(--lumiverse-primary);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
 }
 
 .charWbPillName {
@@ -810,7 +812,7 @@
 }
 
 .charWbHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
   margin-top: 4px;
@@ -845,7 +847,7 @@
 
   .tab {
     padding: 5px 10px;
-    font-size: 11px;
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
   }
 
   .tabContent {

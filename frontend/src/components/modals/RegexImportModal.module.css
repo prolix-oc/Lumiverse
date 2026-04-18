@@ -8,7 +8,7 @@
 }
 
 .title {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -30,7 +30,7 @@
 
 .tab {
   padding: 8px 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   border: none;
   background: transparent;
   color: var(--lumiverse-text-dim);
@@ -54,7 +54,7 @@
   padding: 40px 20px;
   text-align: center;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -69,7 +69,7 @@
   width: 100%;
   min-height: 120px;
   padding: 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-mono, monospace);
   border-radius: 8px;
   border: 1px solid var(--lumiverse-border);
@@ -84,7 +84,7 @@
 }
 
 .result {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   padding: 10px;
   border-radius: 8px;

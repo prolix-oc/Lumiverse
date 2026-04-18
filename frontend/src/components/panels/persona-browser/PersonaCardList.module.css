@@ -7,7 +7,7 @@
 .empty {
   padding: 40px 20px;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -74,7 +74,7 @@
 }
 
 .name {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -83,7 +83,7 @@
 }
 
 .title {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -91,7 +91,7 @@
 }
 
 .desc {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;

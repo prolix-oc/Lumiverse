@@ -27,6 +27,8 @@
 .bg {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   pointer-events: none;
   overflow: hidden;
 }
@@ -71,6 +73,8 @@
 .grid {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   pointer-events: none;
   background-image:
     linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
@@ -129,7 +133,7 @@
 }
 
 .logoText h1 {
-  font-size: 24px;
+  font-size: calc(24px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.02em;
@@ -142,7 +146,7 @@
   background: none;
   border: none;
   padding: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   cursor: pointer;
   transition: color 0.2s ease;
@@ -309,7 +313,7 @@
 }
 
 .cardName {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -328,7 +332,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-015);
@@ -340,7 +344,7 @@
 }
 
 .cardTime {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -350,7 +354,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 48px;
+  font-size: calc(48px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-010);
@@ -478,7 +482,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-015);
@@ -540,14 +544,14 @@
 }
 
 .emptyState h3 {
-  font-size: 20px;
+  font-size: calc(20px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin-bottom: 8px;
 }
 
 .emptyState p {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -568,7 +572,7 @@
   border: 1px solid var(--lumiverse-primary-050);
   color: var(--lumiverse-primary-contrast, #fff);
   font-weight: 600;
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
 }
 
@@ -584,7 +588,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -593,7 +597,7 @@
   text-align: center;
   padding: 24px 0;
   color: var(--lumiverse-text-hint);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 @media (max-width: 600px) {

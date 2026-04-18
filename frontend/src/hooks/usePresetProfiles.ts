@@ -14,6 +14,16 @@ function snapshotBlockStates(blocks: PromptBlock[]): Record<string, boolean> {
   return states
 }
 
+// Bindings are cached with the chat/character id they were fetched for so
+// stale fetches (e.g. left over from the previous chat) can't leak into the
+// current context. The `for` field holds the id the binding was fetched
+// against, or `null` when unresolved/inactive.
+type ChatSlot = { for: string | null; binding: PresetProfileBinding | null }
+type CharSlot = { for: string | null; binding: PresetProfileBinding | null }
+
+const EMPTY_CHAT_SLOT: ChatSlot = { for: null, binding: null }
+const EMPTY_CHAR_SLOT: CharSlot = { for: null, binding: null }
+
 export function usePresetProfiles(
   presetId: string | null,
   blocks: PromptBlock[] | undefined,
@@ -24,37 +34,67 @@ export function usePresetProfiles(
   const addToast = useStore((s) => s.addToast)
 
   const [defaults, setDefaults] = useState<PresetProfileBinding | null>(null)
-  const [chatBinding, setChatBinding] = useState<PresetProfileBinding | null>(null)
-  const [characterBinding, setCharacterBinding] = useState<PresetProfileBinding | null>(null)
+  const [chatSlot, setChatSlot] = useState<ChatSlot>(EMPTY_CHAT_SLOT)
+  const [charSlot, setCharSlot] = useState<CharSlot>(EMPTY_CHAR_SLOT)
   const [isLoading, setIsLoading] = useState(false)
-
-  const hasDefaults = defaults !== null && defaults.preset_id === presetId
 
   // Load defaults on mount / preset change
   useEffect(() => {
     if (!presetId) { setDefaults(null); return }
+    let cancelled = false
     presetProfilesApi.getDefaults()
-      .then((d) => setDefaults(d))
-      .catch(() => setDefaults(null))
+      .then((d) => { if (!cancelled) setDefaults(d) })
+      .catch(() => { if (!cancelled) setDefaults(null) })
+    return () => { cancelled = true }
   }, [presetId])
 
-  // Load chat binding when chat changes
+  // Load chat binding when chat changes. Stale fetches are discarded by the
+  // cancelled flag, and the slot is keyed by the chat id it was fetched for so
+  // downstream consumers can tell whether it's fresh for the current chat.
   useEffect(() => {
-    if (!activeChatId || !presetId) { setChatBinding(null); return }
-    setChatBinding(null) // Clear stale binding before fetching new one
-    presetProfilesApi.getChatBinding(activeChatId)
-      .then((b) => setChatBinding(b))
-      .catch(() => setChatBinding(null))
+    if (!activeChatId || !presetId) {
+      setChatSlot(EMPTY_CHAT_SLOT)
+      return
+    }
+    const target = activeChatId
+    let cancelled = false
+    // Drop any previous slot whose id doesn't match the new target so the
+    // consumer doesn't observe a stale X-binding during the fetch window.
+    setChatSlot((prev) => (prev.for === target ? prev : EMPTY_CHAT_SLOT))
+    presetProfilesApi.getChatBinding(target)
+      .then((b) => { if (!cancelled) setChatSlot({ for: target, binding: b }) })
+      .catch(() => { if (!cancelled) setChatSlot({ for: target, binding: null }) })
+    return () => { cancelled = true }
   }, [activeChatId, presetId])
 
-  // Load character binding when character changes
+  // Load character binding when character changes (same pattern as chat).
   useEffect(() => {
-    if (!activeCharacterId || !presetId) { setCharacterBinding(null); return }
-    setCharacterBinding(null) // Clear stale binding before fetching new one
-    presetProfilesApi.getCharacterBinding(activeCharacterId)
-      .then((b) => setCharacterBinding(b))
-      .catch(() => setCharacterBinding(null))
+    if (!activeCharacterId || !presetId) {
+      setCharSlot(EMPTY_CHAR_SLOT)
+      return
+    }
+    const target = activeCharacterId
+    let cancelled = false
+    setCharSlot((prev) => (prev.for === target ? prev : EMPTY_CHAR_SLOT))
+    presetProfilesApi.getCharacterBinding(target)
+      .then((b) => { if (!cancelled) setCharSlot({ for: target, binding: b }) })
+      .catch(() => { if (!cancelled) setCharSlot({ for: target, binding: null }) })
+    return () => { cancelled = true }
   }, [activeCharacterId, presetId])
+
+  // A binding is only considered "for" the current context if its `for` id
+  // still matches the store's active id. Anything else is stale.
+  const chatBinding = chatSlot.for === activeChatId ? chatSlot.binding : null
+  const characterBinding = charSlot.for === activeCharacterId ? charSlot.binding : null
+
+  // isResolved: true when every applicable fetch has landed for the current
+  // context. The LoomBuilder apply-effect waits on this so it doesn't overwrite
+  // blocks with a stale binding mid-transition.
+  const chatResolved = !activeChatId || chatSlot.for === activeChatId
+  const characterResolved = !activeCharacterId || charSlot.for === activeCharacterId
+  const isResolved = Boolean(presetId) && chatResolved && characterResolved
+
+  const hasDefaults = defaults !== null && defaults.preset_id === presetId
 
   // Capture defaults
   const captureDefaults = useCallback(async () => {
@@ -91,7 +131,7 @@ export function usePresetProfiles(
     setIsLoading(true)
     try {
       const binding = await presetProfilesApi.setChatBinding(activeChatId, presetId, snapshotBlockStates(blocks))
-      setChatBinding(binding)
+      setChatSlot({ for: activeChatId, binding })
       addToast({ type: 'success', message: 'Block states bound to this chat' })
     } catch {
       addToast({ type: 'error', message: 'Failed to bind to chat' })
@@ -106,7 +146,7 @@ export function usePresetProfiles(
     setIsLoading(true)
     try {
       await presetProfilesApi.deleteChatBinding(activeChatId)
-      setChatBinding(null)
+      setChatSlot({ for: activeChatId, binding: null })
       addToast({ type: 'info', message: 'Chat binding removed' })
     } catch {
       addToast({ type: 'error', message: 'Failed to remove chat binding' })
@@ -121,7 +161,7 @@ export function usePresetProfiles(
     setIsLoading(true)
     try {
       const binding = await presetProfilesApi.setCharacterBinding(activeCharacterId, presetId, snapshotBlockStates(blocks))
-      setCharacterBinding(binding)
+      setCharSlot({ for: activeCharacterId, binding })
       addToast({ type: 'success', message: 'Block states bound to this character' })
     } catch {
       addToast({ type: 'error', message: 'Failed to bind to character' })
@@ -136,7 +176,7 @@ export function usePresetProfiles(
     setIsLoading(true)
     try {
       await presetProfilesApi.deleteCharacterBinding(activeCharacterId)
-      setCharacterBinding(null)
+      setCharSlot({ for: activeCharacterId, binding: null })
       addToast({ type: 'info', message: 'Character binding removed' })
     } catch {
       addToast({ type: 'error', message: 'Failed to remove character binding' })
@@ -176,10 +216,16 @@ export function usePresetProfiles(
     characterBindingEnabled,
     activeSource,
     activeBinding,
+    isResolved,
     isLoading,
     defaults,
     chatBinding,
     characterBinding,
+    // Context the binding was resolved for — consumers include this in effect
+    // deps so the apply-pass re-runs whenever the user switches chat/character,
+    // even when the binding itself happens to be structurally unchanged.
+    activeChatId,
+    activeCharacterId,
 
     // Actions
     captureDefaults,

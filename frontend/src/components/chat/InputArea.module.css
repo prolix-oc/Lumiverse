@@ -190,7 +190,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  max-height: min(240px, 35vh);
+  max-height: min(240px, calc(35vh / var(--lumiverse-ui-scale, 1)));
   overflow-y: auto;
   animation: popover-fade 220ms cubic-bezier(0.4, 0, 0.2, 1) both;
   will-change: opacity, transform;

@@ -7,7 +7,7 @@
 .loading, .empty {
   padding: 40px 20px;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -20,7 +20,7 @@
   background: var(--lumiverse-primary-light);
   border: 1px solid var(--lumiverse-primary-020);
   color: var(--lumiverse-primary);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -55,7 +55,7 @@
 }
 
 .fileUploadName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -71,7 +71,7 @@
 }
 
 .byopStatus {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 

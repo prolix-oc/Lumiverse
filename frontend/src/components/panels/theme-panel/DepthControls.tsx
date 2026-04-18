@@ -68,14 +68,14 @@ export default function DepthControls({
         <input
           type="range"
           min={0.85}
-          max={1.5}
+          max={2}
           step={0.05}
           value={localFontScale}
           onChange={(e) => setLocalFontScale(Number(e.target.value))}
           onPointerUp={(e) => commitFromInput(e, onFontScaleChange)}
           onKeyUp={(e) => commitFromInput(e, onFontScaleChange)}
           className={styles.slider}
-          style={trackFill(localFontScale, 0.85, 1.5)}
+          style={trackFill(localFontScale, 0.85, 2)}
         />
         <span className={styles.value}>{localFontScale.toFixed(2)}x</span>
       </label>

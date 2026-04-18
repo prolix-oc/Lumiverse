@@ -10,7 +10,7 @@
   justify-content: center;
   padding: 40px 16px;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 /* ── Master Toggle ────────────────────────────────── */
@@ -28,7 +28,7 @@
   padding: 8px 16px;
   border-radius: 8px;
   border: 1px solid var(--lumiverse-border);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -69,7 +69,7 @@
   border: none;
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -90,7 +90,7 @@
 }
 
 .inlineHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-dim);
   padding: 8px 10px;
@@ -103,7 +103,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-warning, #e5a93e);
   padding: 8px 10px;
@@ -188,7 +188,7 @@
 }
 
 .memberName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -207,7 +207,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -271,7 +271,7 @@
 
 .inlineLabel {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   display: flex;
@@ -292,7 +292,7 @@
 }
 
 .chanceHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   white-space: nowrap;
 }
@@ -323,7 +323,7 @@
   border: 1px solid var(--lumiverse-primary);
   background: transparent;
   color: var(--lumiverse-primary);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -346,7 +346,7 @@
   gap: 4px;
   padding: 3px 9px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
   color: var(--lumiverse-primary);
@@ -380,7 +380,7 @@
 }
 
 .noTools {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -395,7 +395,7 @@
 
 /* Helper text */
 .memberHelperText {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-dim);
   padding: 8px 10px;
@@ -429,7 +429,7 @@
   gap: 4px;
   padding: 7px 14px;
   border-radius: 7px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -507,7 +507,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -561,7 +561,7 @@
 .addDropdownEmpty {
   padding: 20px 12px;
   text-align: center;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -618,7 +618,7 @@
 }
 
 .addDropdownName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -627,7 +627,7 @@
 }
 
 .addDropdownPack {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -663,7 +663,7 @@
 }
 
 .toolCategoryLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -676,7 +676,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -686,7 +686,7 @@
 }
 
 .toolExtBadge {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -710,7 +710,7 @@
 /* ── Loading / Empty ──────────────────────────────── */
 
 .loadingItems {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   padding: 8px 0;
 }
@@ -719,5 +719,5 @@
   text-align: center;
   padding: 20px 12px;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }

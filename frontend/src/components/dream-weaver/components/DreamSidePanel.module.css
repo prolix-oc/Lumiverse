@@ -16,7 +16,7 @@
 
 .title {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: calc(0.95rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
@@ -25,7 +25,7 @@
 .blockHint {
   margin: 0;
   color: var(--lumiverse-text-secondary, #797384);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -34,7 +34,7 @@
   flex-direction: column;
   gap: 0.4rem;
   color: var(--lumiverse-text-muted, #afa8bb);
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -59,12 +59,12 @@
   min-height: 7rem;
   padding: 0.85rem 0.9rem;
   line-height: 1.55;
-  font-size: 0.9rem;
+  font-size: calc(0.9rem * var(--lumiverse-font-scale, 1));
 }
 
 .field {
   padding: 0.65rem 0.75rem;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--lumiverse-font-scale, 1));
 }
 
 .dreamInput:focus,
@@ -106,7 +106,7 @@
 
 .blockTitle {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -122,7 +122,7 @@
   color: var(--lumiverse-text-secondary, #afa8bb);
   border-radius: 999px;
   padding: 0.45rem 0.7rem;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   line-height: 1.35;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -157,7 +157,7 @@
   padding: 0;
   cursor: pointer;
   color: var(--lumiverse-text-muted, #afa8bb);
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -169,7 +169,7 @@
 }
 
 .llmChevron {
-  font-size: 0.6rem;
+  font-size: calc(0.6rem * var(--lumiverse-font-scale, 1));
   line-height: 1;
   transition: transform 0.15s ease;
 }
@@ -181,7 +181,7 @@
 .llmHint {
   margin: 0;
   color: var(--lumiverse-text-secondary, #797384);
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   line-height: 1.4;
 }
 
@@ -196,7 +196,7 @@
   flex-direction: column;
   gap: 0.3rem;
   color: var(--lumiverse-text-muted, #afa8bb);
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -209,7 +209,7 @@
   background: rgba(0, 0, 0, 0.18);
   color: var(--lumiverse-text, #f0e7fc);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   outline: none;
   padding: 0.5rem 0.6rem;
   box-sizing: border-box;

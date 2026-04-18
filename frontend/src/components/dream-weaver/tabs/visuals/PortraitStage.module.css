@@ -14,7 +14,7 @@
 
 .eyebrow {
   margin: 0 0 0.25rem;
-  font-size: 0.66rem;
+  font-size: calc(0.66rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -23,7 +23,7 @@
 
 .title {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: calc(1.05rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -33,7 +33,7 @@
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 28%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -72,13 +72,13 @@
 }
 
 .emptyTitle {
-  font-size: 0.92rem;
+  font-size: calc(0.92rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
 
 .emptyBody {
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   max-width: 24rem;
 }
@@ -99,7 +99,7 @@
   background: rgba(12, 11, 20, 0.82);
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 26%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--lumiverse-font-scale, 1));
 }
 
 .compareGrid {
@@ -129,7 +129,7 @@
   background: rgba(12, 11, 20, 0.72);
   border: 1px solid color-mix(in srgb, var(--lumiverse-border) 90%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.66rem;
+  font-size: calc(0.66rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -146,7 +146,7 @@
 .secondaryAction {
   padding: 0.62rem 0.9rem;
   border-radius: 10px;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -173,7 +173,7 @@
   background: color-mix(in srgb, #ef4444 10%, var(--lumiverse-bg-deep));
   border: 1px solid color-mix(in srgb, #ef4444 22%, transparent);
   color: #fda4af;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
 }
 
 @media (max-width: 900px) {

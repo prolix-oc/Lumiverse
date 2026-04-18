@@ -12,7 +12,7 @@
 }
 
 .sectionHeading {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   text-transform: uppercase;
@@ -45,7 +45,7 @@
 }
 
 .fieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -65,7 +65,7 @@
   border: none;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-dim);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -90,7 +90,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -106,7 +106,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   font-family: inherit;
@@ -124,7 +124,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   cursor: pointer;
@@ -151,7 +151,7 @@
   min-height: 22px;
   padding: 0 10px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -177,7 +177,7 @@
 }
 
 .vectorStatusText {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   line-height: 1.45;
   flex: 1;
@@ -193,7 +193,7 @@
   background: none;
   border: none;
   color: var(--lumiverse-text-muted);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -215,7 +215,7 @@
 
 /* ── Read-only value ── */
 .readOnlyValue {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   font-family: 'SF Mono', 'Fira Code', monospace;
   color: var(--lumiverse-text-dim);
   padding: 5px 8px;

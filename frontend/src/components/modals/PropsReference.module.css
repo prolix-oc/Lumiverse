@@ -21,7 +21,7 @@
 }
 
 .headerLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -53,7 +53,7 @@
   align-items: baseline;
   gap: 6px;
   padding: 2px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -67,7 +67,7 @@
 
 .propType {
   font-family: var(--lumiverse-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
   white-space: nowrap;
   flex-shrink: 0;
@@ -75,7 +75,7 @@
 
 .propDesc {
   color: var(--lumiverse-text-dim);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
 }
 
 .childRow {
@@ -89,7 +89,7 @@
 
 .emptyNote {
   padding: 8px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
   font-style: italic;
 }

@@ -31,7 +31,7 @@
 .formLabel {
   display: block;
   margin-bottom: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -43,14 +43,14 @@
 
 .formHint {
   margin-top: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.4;
 }
 
 .formError {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger);
 }
 
@@ -81,7 +81,7 @@
 }
 
 .sectionTitle {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   flex: 1;
@@ -98,7 +98,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
 }
@@ -116,7 +116,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   line-height: 1.5;
   resize: vertical;
@@ -140,7 +140,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   appearance: none;
   cursor: pointer;
@@ -173,7 +173,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
@@ -226,7 +226,7 @@
 
 .btnSm {
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .btnIcon {

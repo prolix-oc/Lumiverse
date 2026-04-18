@@ -18,7 +18,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);

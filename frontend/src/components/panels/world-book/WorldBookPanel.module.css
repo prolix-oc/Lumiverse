@@ -27,7 +27,7 @@
 }
 
 .globalLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   flex: 1;
@@ -46,7 +46,7 @@
   background: transparent;
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -74,7 +74,7 @@
 .globalPopoverEmpty {
   padding: 12px;
   text-align: center;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -88,7 +88,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   text-align: left;
   transition: background var(--lumiverse-transition-fast);
@@ -104,7 +104,7 @@
 
 .globalPopoverCheck {
   width: 14px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   flex-shrink: 0;
   text-align: center;
   color: var(--lumiverse-primary);
@@ -143,7 +143,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   text-align: left;
   transition: background var(--lumiverse-transition-fast);
@@ -169,7 +169,7 @@
   background: var(--lumiverse-primary-015, rgba(147, 112, 219, 0.15));
   background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
   color: var(--lumiverse-primary);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
 }
 
 .globalPillName {
@@ -200,7 +200,7 @@
 }
 
 .globalHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -233,7 +233,7 @@
 }
 
 .chatLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   flex: 1;
@@ -252,7 +252,7 @@
   background: transparent;
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -280,7 +280,7 @@
 .chatPopoverEmpty {
   padding: 12px;
   text-align: center;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -294,7 +294,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   text-align: left;
   transition: background var(--lumiverse-transition-fast);
@@ -310,7 +310,7 @@
 
 .chatPopoverCheck {
   width: 14px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   flex-shrink: 0;
   text-align: center;
   color: var(--lumiverse-info, #42a5f5);
@@ -337,7 +337,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 14%, transparent);
   color: var(--lumiverse-info, #42a5f5);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
 }
 
 .chatPillName {
@@ -366,7 +366,7 @@
 }
 
 .chatHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -385,7 +385,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 6px 8px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   cursor: pointer;
@@ -419,7 +419,7 @@
   background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   white-space: nowrap;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
   z-index: 200;
@@ -445,7 +445,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -489,7 +489,7 @@
 }
 
 .fieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -499,7 +499,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 5px 8px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -529,7 +529,7 @@
 }
 
 .vectorSummaryTitle {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   text-transform: uppercase;
@@ -540,7 +540,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -582,7 +582,7 @@
 }
 
 .bulkSemanticTitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   line-height: 1.4;
@@ -590,13 +590,13 @@
 
 .bulkSemanticMeta,
 .bulkSemanticHint {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.45;
 }
 
 .vectorStatusText {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.45;
 }
@@ -617,7 +617,7 @@
   flex-wrap: wrap;
   gap: 8px 12px;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .diagnosticsHeader {
@@ -634,7 +634,7 @@
   padding: 8px;
   border-radius: 6px;
   background: var(--lumiverse-fill-subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   white-space: pre-wrap;
   color: var(--lumiverse-text);
 }
@@ -651,12 +651,12 @@
   border: 1px solid var(--lumiverse-border);
   background: color-mix(in srgb, var(--lumiverse-fill-subtle) 72%, var(--lumiverse-bg));
   color: var(--lumiverse-text-dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
 }
 
 .diagnosticsSectionLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -694,13 +694,13 @@
 }
 
 .diagnosticsHitTitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .diagnosticsHitSummary {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
   color: var(--lumiverse-text-dim);
 }
@@ -722,7 +722,7 @@
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -743,12 +743,12 @@
 }
 
 .diagnosticsBreakdownLabel {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
 .diagnosticsBreakdownValue {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -760,7 +760,7 @@
 }
 
 .diagnosticsPreviewLabel {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -772,7 +772,7 @@
   border-radius: 6px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
   white-space: pre-wrap;
   color: var(--lumiverse-text-dim);
@@ -786,7 +786,7 @@
 }
 
 .entryListTitle {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -817,7 +817,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -870,7 +870,7 @@
 
 .entryComment {
   flex: 1;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 550;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -887,7 +887,7 @@
 }
 
 .entryBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   padding: 1px 7px;
   border-radius: 4px;
@@ -911,7 +911,7 @@
 }
 
 .entryMetaItem {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   padding: 1px 6px;
   border-radius: 4px;
@@ -956,7 +956,7 @@
   padding: 24px 12px;
   text-align: center;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-style: italic;
 }
 
@@ -977,7 +977,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: color 0.15s;
@@ -1001,7 +1001,7 @@
 }
 
 .wiFieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   text-transform: uppercase;
@@ -1009,7 +1009,7 @@
 }
 
 .wiFieldHint {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin: 0 0 2px;
   line-height: 1.4;
@@ -1029,7 +1029,7 @@
   border-radius: 6px;
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -1073,7 +1073,7 @@
 }
 
 .wiRangeValue {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary);
   min-width: 24px;

@@ -235,7 +235,7 @@ export function getSnapshot(): TrustedHostsSnapshot {
   };
 }
 
-export function setTrustedHosts(ownerId: string, hosts: unknown): string[] {
+export function setTrustedHosts(hosts: unknown): string[] {
   if (!Array.isArray(hosts)) {
     throw new InvalidTrustedHostError("Payload must be { hosts: string[] }");
   }
@@ -244,6 +244,15 @@ export function setTrustedHosts(ownerId: string, hosts: unknown): string[] {
       `Too many trusted hosts (max ${MAX_CONFIGURED_HOSTS})`,
     );
   }
+  // Persist against the server owner's settings row so that `load()` (which
+  // also resolves via `getFirstUserId()`) sees the same value on restart.
+  // Admins can reach this endpoint via `requireOwner`, but their own user row
+  // would be invisible to startup load.
+  const ownerId = getFirstUserId();
+  if (!ownerId) {
+    throw new InvalidTrustedHostError("Server owner is not initialized yet");
+  }
+
   const baseline = new Set(baselineEntries().map((e) => e.host));
   const seen = new Set<string>();
   const normalized: string[] = [];

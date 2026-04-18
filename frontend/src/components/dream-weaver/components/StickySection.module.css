@@ -22,7 +22,7 @@
 }
 
 .label {
-  font-size: 0.6875rem;
+  font-size: calc(0.6875rem * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -56,7 +56,7 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
   color: var(--lumiverse-text-secondary, #797384);
-  font-size: 0.6875rem;
+  font-size: calc(0.6875rem * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }

@@ -23,7 +23,7 @@
 
 .title {
   margin: 0;
-  font-size: 18px;
+  font-size: calc(18px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.01em;
@@ -31,7 +31,7 @@
 
 .count {
   margin-left: 0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-variant-numeric: tabular-nums;
   padding: 2px 8px;
@@ -47,7 +47,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 60vh;
+  max-height: calc(60vh / var(--lumiverse-ui-scale, 1));
   scrollbar-width: thin;
   scrollbar-color: var(--lumiverse-fill-subtle) transparent;
 }
@@ -186,7 +186,7 @@
 }
 
 .cardLabel {
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   letter-spacing: 0.01em;
@@ -200,7 +200,7 @@
   border-radius: 10px;
   background: var(--lumiverse-primary-015);
   color: var(--lumiverse-primary-text);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -213,7 +213,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -273,7 +273,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all 150ms ease;
@@ -295,7 +295,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border-hover);
   color: var(--lumiverse-text);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;

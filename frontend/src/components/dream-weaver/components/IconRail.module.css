@@ -94,7 +94,7 @@
 .statusDot[data-status='empty'] { background: color-mix(in srgb, var(--lumiverse-text) 15%, transparent); }
 
 .iconLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   white-space: nowrap;
   flex: 1;
 }

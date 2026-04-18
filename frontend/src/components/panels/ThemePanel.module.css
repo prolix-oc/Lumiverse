@@ -12,7 +12,7 @@
 }
 
 .sectionLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -36,7 +36,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -55,7 +55,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);

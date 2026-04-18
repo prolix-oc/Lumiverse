@@ -18,7 +18,7 @@
 }
 
 .title {
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin: 0;
@@ -32,7 +32,7 @@
   background: var(--lumiverse-danger-015);
   border: 1px solid var(--lumiverse-danger-020);
   color: var(--lumiverse-error, #ef4444);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .success {
@@ -41,7 +41,7 @@
   background: rgba(16, 185, 129, 0.1);
   border: 1px solid rgba(16, 185, 129, 0.3);
   color: rgb(16, 185, 129);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .form {
@@ -55,7 +55,7 @@
 }
 
 .resetHeader {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -74,7 +74,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -88,7 +88,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -124,7 +124,7 @@
 }
 
 .userName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   display: flex;
@@ -133,7 +133,7 @@
 }
 
 .youBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--lumiverse-primary-light);
@@ -142,7 +142,7 @@
 }
 
 .bannedBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--lumiverse-danger-015);
@@ -151,7 +151,7 @@
 }
 
 .userEmail {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -163,7 +163,7 @@
 }
 
 .roleBadge {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   padding: 2px 8px;
   border-radius: 4px;
   font-weight: 500;

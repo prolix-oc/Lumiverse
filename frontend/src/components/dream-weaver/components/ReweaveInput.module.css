@@ -28,7 +28,7 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(0, 0, 0, 0.25);
   color: var(--lumiverse-text, #f0e7fc);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-body, 'Inter', sans-serif);
   outline: none;
   transition: border-color 0.15s;

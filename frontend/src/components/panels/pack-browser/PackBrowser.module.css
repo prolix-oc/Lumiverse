@@ -38,7 +38,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -69,7 +69,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
 }
@@ -145,7 +145,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: calc(28px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text-muted);
   background: var(--lumiverse-fill);
@@ -160,7 +160,7 @@
 }
 
 .cardName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -169,7 +169,7 @@
 }
 
 .cardAuthor {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -209,7 +209,7 @@
 }
 
 .detailName {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -218,7 +218,7 @@
 }
 
 .detailAuthor {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -258,13 +258,13 @@
 
 .sectionTitle {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .sectionCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -277,7 +277,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -322,7 +322,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   flex-shrink: 0;
@@ -334,7 +334,7 @@
 }
 
 .lumiaName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -343,12 +343,12 @@
 }
 
 .lumiaAuthor {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
 .genderBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--lumiverse-fill);
@@ -374,7 +374,7 @@
 .loomName {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   white-space: nowrap;
   overflow: hidden;
@@ -382,7 +382,7 @@
 }
 
 .loomPreview {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -391,7 +391,7 @@
 }
 
 .categoryBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 1px 6px;
   border-radius: 4px;
   border: 1px solid var(--lumiverse-border);
@@ -440,7 +440,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.5px;
   cursor: pointer;
@@ -461,7 +461,7 @@
 
 .lumiaPreviewText {
   margin: 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
   white-space: pre-wrap;
@@ -474,7 +474,7 @@
   padding: 24px;
   text-align: center;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   grid-column: 1 / -1;
 }
 
@@ -482,6 +482,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   background: var(--lumiverse-fill-heavy);
   display: flex;
@@ -499,7 +501,7 @@
   max-width: 480px;
   display: flex;
   flex-direction: column;
-  max-height: 90vh;
+  max-height: calc(90vh / var(--lumiverse-ui-scale, 1));
   overflow: hidden;
 }
 
@@ -517,7 +519,7 @@
 }
 
 .modalTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -549,7 +551,7 @@
 }
 
 .fieldLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-dim);
 }
@@ -560,7 +562,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -576,7 +578,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -588,7 +590,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -603,7 +605,7 @@
 }
 
 .charCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   text-align: right;
 }
@@ -624,7 +626,7 @@
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
 }
@@ -648,11 +650,11 @@
   background: var(--lumiverse-danger-015);
   border: 1px solid var(--lumiverse-danger-020);
   color: var(--lumiverse-error, #ef4444);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .importStatus {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   padding: 6px 0;
 }
@@ -684,13 +686,13 @@
 }
 
 .lucidHeaderTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .lucidHeaderSub {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   margin-top: 2px;
 }
@@ -710,7 +712,7 @@
   align-items: center;
   gap: 5px;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
   background: transparent;
@@ -809,7 +811,7 @@
 }
 
 .lucidCardTitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin-bottom: 3px;
@@ -819,13 +821,13 @@
 }
 
 .lucidCardAuthor {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   margin-bottom: 4px;
 }
 
 .lucidCardCounts {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary);
 }
 
@@ -838,12 +840,12 @@
   gap: 10px;
   padding: 40px 20px;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   text-align: center;
 }
 
 .lucidErrorText {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -868,7 +870,7 @@
 
 .lucidFooterLink {
   padding: 4px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   background: transparent;
   color: var(--lumiverse-text-muted);
@@ -882,7 +884,7 @@
 }
 
 .lucidSelectedCount {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -897,7 +899,7 @@
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .dropZone:hover,
@@ -907,13 +909,13 @@
 }
 
 .dropZoneText {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-bottom: 8px;
 }
 
 .dropZoneSub {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -938,13 +940,13 @@
 
 .lucidItemName {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .lucidItemAuthor {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -954,7 +956,7 @@
   border: 1px solid var(--lumiverse-primary);
   background: transparent;
   color: var(--lumiverse-primary);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   flex-shrink: 0;

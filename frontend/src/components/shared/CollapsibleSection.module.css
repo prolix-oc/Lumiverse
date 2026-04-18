@@ -28,7 +28,7 @@
 
 .title {
   flex: 1;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   text-align: left;

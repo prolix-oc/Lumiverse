@@ -1,9 +1,11 @@
 .app {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   display: flex;
   flex-direction: column;
-  max-height: var(--app-shell-height, 100dvh);
+  max-height: var(--app-shell-height, calc(100dvh / var(--lumiverse-ui-scale, 1)));
   overflow: hidden;
   background: var(--lumiverse-bg-deep);
   /* Prevent Safari/WebKit backdrop-filter compositing from stacking across

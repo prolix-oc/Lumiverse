@@ -7,7 +7,7 @@
 .loading {
   padding: 40px 20px;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -46,7 +46,7 @@
 }
 
 .folderName {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -54,7 +54,7 @@
 }
 
 .folderCount {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   background: var(--lumiverse-fill-subtle);
   border-radius: 999px;

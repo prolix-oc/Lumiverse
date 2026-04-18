@@ -25,7 +25,7 @@
 }
 
 .label {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -33,6 +33,6 @@
 }
 
 .hint {
-  font-size: 0.67rem;
+  font-size: calc(0.67rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }

@@ -88,7 +88,7 @@
   align-items: center;
   justify-content: center;
   background: var(--lumiverse-bg-dark);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   border: 2px solid transparent;
@@ -100,7 +100,7 @@
 }
 
 .name {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   max-width: 56px;
   overflow: hidden;

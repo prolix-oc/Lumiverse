@@ -36,7 +36,7 @@
   border-radius: 10px;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   display: grid;
   gap: 4px;
 }
@@ -67,7 +67,7 @@
   border: 1px solid rgba(255, 94, 94, 0.35);
   background: rgba(255, 94, 94, 0.14);
   color: #ffd0d0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .refGrid {

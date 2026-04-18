@@ -46,7 +46,7 @@
 }
 
 .name {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -59,7 +59,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
   background: var(--lumiverse-fill);
@@ -70,7 +70,7 @@
 .toolBadge {
   display: inline-flex;
   padding: 2px 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-primary);
   background: var(--lumiverse-primary-light);
@@ -81,7 +81,7 @@
 .disabledBadge {
   display: inline-flex;
   padding: 2px 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
   background: var(--lumiverse-fill);
@@ -127,7 +127,7 @@
 }
 
 .testResult {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
@@ -144,7 +144,7 @@
 }
 
 .error {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-error);
   padding: 4px 8px;
   background: var(--lumiverse-error-010);
@@ -166,7 +166,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: color var(--lumiverse-transition-fast);
 }
@@ -190,14 +190,14 @@
 }
 
 .toolName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   font-family: var(--lumiverse-font-mono);
 }
 
 .toolDesc {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   line-height: 1.3;
 }

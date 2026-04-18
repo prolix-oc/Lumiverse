@@ -158,13 +158,21 @@ export function useLoomBuilder() {
     }
   }, [])
 
+  // Read activePreset through a ref so saveStructure stays reference-stable
+  // across renders. When saveBlocks is captured by downstream effects, a
+  // changing reference would either cause runaway effect loops or leak stale
+  // activePreset into the callback — the ref avoids both.
+  const activePresetRef = useRef(activePreset)
+  activePresetRef.current = activePreset
+
   const saveStructure = useCallback(async (
     blocks: PromptBlock[],
   ) => {
-    if (!activePreset) return
+    const current = activePresetRef.current
+    if (!current) return
     const normalizedBlocks = normalizeCategoryBlockState(blocks)
     const updated = {
-      ...activePreset,
+      ...current,
       blocks: normalizedBlocks,
       updatedAt: Date.now(),
     }
@@ -175,7 +183,7 @@ export function useLoomBuilder() {
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save preset structure:', err)
     }
-  }, [activePreset, refreshRegistry])
+  }, [refreshRegistry])
 
   // Save blocks
   const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {

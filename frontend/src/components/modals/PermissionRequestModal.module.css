@@ -21,7 +21,7 @@
 
 .title {
   margin: 0 0 12px;
-  font-size: 18px;
+  font-size: calc(18px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   text-align: center;
@@ -33,7 +33,7 @@
 }
 
 .description {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text);
   text-align: center;
@@ -41,7 +41,7 @@
 }
 
 .reason {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
   text-align: center;
@@ -62,7 +62,7 @@
   align-items: center;
   padding: 5px 12px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.01em;
   background: var(--lumiverse-warning-015);
@@ -79,7 +79,7 @@
 .denyBtn {
   flex: 1;
   padding: 12px 20px;
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border-hover);
@@ -102,7 +102,7 @@
 .grantBtn {
   flex: 1;
   padding: 12px 20px;
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   border: none;
   border-radius: 10px;
