@@ -8,6 +8,7 @@ import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
 import { toast } from '@/lib/toast'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
+import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -418,6 +419,15 @@ export function useWebSocket() {
         if (!hasUnsavedSettings()) {
           store.getState().loadSettings()
         }
+
+        // Re-sync any pooled generation for the active chat. Covers sockets
+        // that were killed during backgrounding (mobile OS suspend, long tab
+        // switch) — tokens streamed while we were offline are pulled from the
+        // server pool and the seq watermark de-dupes the live WS replay.
+        const activeChatId = store.getState().activeChatId
+        if (activeChatId) {
+          recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+        }
       }),
 
       // Re-sync settings when another tab (or the old page's keepalive flush)
@@ -774,7 +784,22 @@ export function useWebSocket() {
       }),
     ]
 
+    // Re-sync pooled tokens whenever the tab becomes visible. Mobile PWAs and
+    // background tabs may miss live STREAM_TOKEN_RECEIVED events while hidden
+    // even when the WS stays open; the server pool is authoritative, so a
+    // status poll on every visible transition restores all accumulated content
+    // (and the tokenSeq watermark drops tokens the client already rendered).
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      const activeChatId = store.getState().activeChatId
+      if (activeChatId) {
+        recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }
