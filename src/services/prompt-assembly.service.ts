@@ -1,5 +1,5 @@
 import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry, type MemoryStats, type ContextClipStats } from "../llm/types";
-import { resolveCounter } from "./tokenizer.service";
+import { resolveCounter, APPROXIMATE_TOKENIZER_NAME } from "./tokenizer.service";
 import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
@@ -1336,6 +1336,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     }
     chatHistoryEntry.firstMessageIndex = firstIdx >= 0 ? firstIdx : undefined;
     chatHistoryEntry.messageCount = count;
+    // Clip already tokenized every remaining history message with the same
+    // model → same tokenizer as countBreakdown will resolve. Hand the sum
+    // over so the downstream snapshot doesn't retokenize.
+    if (contextClipStats.enabled && !contextClipStats.budgetInvalid) {
+      chatHistoryEntry.preCountedTokens = contextClipStats.chatHistoryTokensAfter;
+    }
   }
 
   return {
@@ -3715,9 +3721,6 @@ async function clipToContextBudget(
     ? maxResponseTokens
     : FALLBACK_MAX_RESPONSE_TOKENS;
 
-  // Skip when no context budget is configured — users who haven't set one
-  // opt out entirely. Every stat reads zero and `enabled: false` lets the UI
-  // know there's nothing to display.
   if (resolvedContext <= 0) {
     return {
       enabled: false,
@@ -3730,7 +3733,7 @@ async function clipToContextBudget(
       chatHistoryTokensAfter: 0,
       messagesDropped: 0,
       tokensDropped: 0,
-      tokenizerUsed: "approximate",
+      tokenizerUsed: APPROXIMATE_TOKENIZER_NAME,
     };
   }
 
@@ -3739,9 +3742,6 @@ async function clipToContextBudget(
 
   const counter = await resolveCounter(modelId || "");
 
-  // One tokenization pass: classify + count every message exactly once.
-  // Tokens include a small role-prefix overhead to approximate the role
-  // framing most providers serialise (matches `countBreakdown`'s approach).
   const n = result.length;
   const tokens: number[] = new Array(n);
   const historyIndices: number[] = [];
@@ -3760,83 +3760,7 @@ async function clipToContextBudget(
     }
   }
 
-  // Misconfigured budget (e.g. maxContext smaller than max_tokens + margin).
-  // Don't clip — the user has bigger problems than we can solve silently.
-  // Return diagnostic stats so the UI can surface the misconfiguration.
-  if (inputBudget <= 0) {
-    return {
-      enabled: true,
-      maxContext: resolvedContext,
-      maxResponseTokens: resolvedResponse,
-      safetyMargin,
-      inputBudget,
-      fixedTokens,
-      chatHistoryTokensBefore,
-      chatHistoryTokensAfter: chatHistoryTokensBefore,
-      messagesDropped: 0,
-      tokensDropped: 0,
-      tokenizerUsed: counter.name,
-      budgetInvalid: true,
-    };
-  }
-
-  // Walk history newest→oldest, keeping messages until the budget runs out.
-  // `historyIndices` is already in insertion order (oldest first), so we
-  // iterate it backward. We track the oldest KEPT index; everything older is
-  // dropped in a single filter pass below.
-  const remainingBudget = inputBudget - fixedTokens;
-  let accHistoryTokens = 0;
-  let oldestKeptHistoryIdx = -1; // -1 → nothing kept yet
-  if (remainingBudget > 0) {
-    for (let i = historyIndices.length - 1; i >= 0; i--) {
-      const msgIdx = historyIndices[i];
-      const t = tokens[msgIdx];
-      if (accHistoryTokens + t > remainingBudget) break;
-      accHistoryTokens += t;
-      oldestKeptHistoryIdx = i;
-    }
-  }
-
-  // Nothing to drop → fast path, no array mutation.
-  if (oldestKeptHistoryIdx === 0 || historyIndices.length === 0) {
-    return {
-      enabled: true,
-      maxContext: resolvedContext,
-      maxResponseTokens: resolvedResponse,
-      safetyMargin,
-      inputBudget,
-      fixedTokens,
-      chatHistoryTokensBefore,
-      chatHistoryTokensAfter: chatHistoryTokensBefore,
-      messagesDropped: 0,
-      tokensDropped: 0,
-      tokenizerUsed: counter.name,
-    };
-  }
-
-  // Build the drop-set: everything in historyIndices older than the first kept.
-  // When nothing could be kept (oldestKeptHistoryIdx === -1), drop all history.
-  const droppedCount = oldestKeptHistoryIdx === -1
-    ? historyIndices.length
-    : oldestKeptHistoryIdx;
-  const dropped = new Set<number>();
-  let tokensDropped = 0;
-  for (let i = 0; i < droppedCount; i++) {
-    const idx = historyIndices[i];
-    dropped.add(idx);
-    tokensDropped += tokens[idx];
-  }
-
-  // Single O(n) filter pass — compacts in place without repeated splicing.
-  let write = 0;
-  for (let read = 0; read < n; read++) {
-    if (dropped.has(read)) continue;
-    if (write !== read) result[write] = result[read];
-    write++;
-  }
-  result.length = write;
-
-  return {
+  const makeStats = (overrides: Partial<ContextClipStats>): ContextClipStats => ({
     enabled: true,
     maxContext: resolvedContext,
     maxResponseTokens: resolvedResponse,
@@ -3844,11 +3768,64 @@ async function clipToContextBudget(
     inputBudget,
     fixedTokens,
     chatHistoryTokensBefore,
+    chatHistoryTokensAfter: chatHistoryTokensBefore,
+    messagesDropped: 0,
+    tokensDropped: 0,
+    tokenizerUsed: counter.name,
+    ...overrides,
+  });
+
+  // Misconfigured budget (e.g. maxContext smaller than max_tokens + margin).
+  // Don't clip silently — surface the misconfiguration via `budgetInvalid`.
+  if (inputBudget <= 0) {
+    return makeStats({ budgetInvalid: true });
+  }
+
+  // Walk history newest→oldest; remember the oldest index we can keep.
+  const remainingBudget = inputBudget - fixedTokens;
+  let accHistoryTokens = 0;
+  let oldestKeptHistoryIdx = -1;
+  if (remainingBudget > 0) {
+    for (let i = historyIndices.length - 1; i >= 0; i--) {
+      const t = tokens[historyIndices[i]];
+      if (accHistoryTokens + t > remainingBudget) break;
+      accHistoryTokens += t;
+      oldestKeptHistoryIdx = i;
+    }
+  }
+
+  if (oldestKeptHistoryIdx === 0 || historyIndices.length === 0) {
+    return makeStats({});
+  }
+
+  const droppedCount = oldestKeptHistoryIdx === -1
+    ? historyIndices.length
+    : oldestKeptHistoryIdx;
+  let tokensDropped = 0;
+  for (let i = 0; i < droppedCount; i++) {
+    tokensDropped += tokens[historyIndices[i]];
+  }
+
+  // historyIndices is monotonically increasing, so messages with raw index
+  // below `firstKeptRawIdx` are exactly the dropped history messages. Using
+  // a boundary comparison avoids allocating a Set per generation.
+  const firstKeptRawIdx = oldestKeptHistoryIdx === -1
+    ? Number.POSITIVE_INFINITY
+    : historyIndices[oldestKeptHistoryIdx];
+  let write = 0;
+  for (let read = 0; read < n; read++) {
+    const msg = result[read];
+    if (isChatHistoryMessage(msg) && read < firstKeptRawIdx) continue;
+    if (write !== read) result[write] = msg;
+    write++;
+  }
+  result.length = write;
+
+  return makeStats({
     chatHistoryTokensAfter: accHistoryTokens,
     messagesDropped: droppedCount,
     tokensDropped,
-    tokenizerUsed: counter.name,
-  };
+  });
 }
 
 /**
