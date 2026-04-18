@@ -130,6 +130,10 @@ export interface AssemblyContext {
   /** Pre-fetched data to avoid redundant DB calls during assembly.
    *  When provided, assembly reads from this instead of querying DB. */
   prefetched?: PrefetchedData;
+  /** Optional abort signal. When fired, in-flight embedding requests
+   *  (WI vector retrieval) are cancelled and assembly short-circuits with
+   *  an AbortError so the caller can unwind cleanly. */
+  signal?: AbortSignal;
 }
 
 /**

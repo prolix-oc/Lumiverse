@@ -505,6 +505,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         wiSources.worldBookIds,
         wiEntries,
         messages,
+        ctx.signal,
       );
       vectorActivated = detailed.entries;
       vectorRetrievalDetails = detailed;
@@ -528,6 +529,9 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         );
       }
     } catch (err) {
+      // Propagate aborts so the entire assembly unwinds instead of silently
+      // continuing with keyword-only results after the user stopped generation.
+      if (ctx.signal?.aborted || (err as any)?.name === "AbortError") throw err;
       console.warn("[prompt-assembly] Vector world info activation failed, continuing with keyword-only:", err);
       vectorActivated = [];
     }
@@ -2779,6 +2783,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   worldBookIds: string[],
   entries: WorldBookEntryModel[],
   messages: Message[],
+  signal?: AbortSignal,
 ): Promise<VectorWorldInfoRetrievalResult> {
   const emptyResult: VectorWorldInfoRetrievalResult = {
     entries: [],
@@ -2827,7 +2832,9 @@ export async function collectVectorActivatedWorldInfoDetailed(
   }
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     if (!queryVector || queryVector.length === 0) {
       return {
         ...emptyResult,
@@ -2951,6 +2958,9 @@ export async function collectVectorActivatedWorldInfoDetailed(
       blockerMessages,
     };
   } catch (err) {
+    // Caller-initiated abort bubbles up so the whole pipeline can unwind
+    // instead of silently returning an empty result and continuing.
+    if (signal?.aborted || (err as any)?.name === "AbortError") throw err;
     console.warn("[prompt] Vector activated world info retrieval failed:", err);
     return {
       ...emptyResult,
@@ -2970,8 +2980,9 @@ export async function collectVectorActivatedWorldInfo(
   worldBookIds: string[],
   entries: import("../types/world-book").WorldBookEntry[],
   messages: Message[],
+  signal?: AbortSignal,
 ): Promise<VectorActivatedEntry[]> {
-  const result = await collectVectorActivatedWorldInfoDetailed(userId, worldBookIds, entries, messages);
+  const result = await collectVectorActivatedWorldInfoDetailed(userId, worldBookIds, entries, messages, signal);
   return result.entries;
 }
 

@@ -352,6 +352,7 @@ async function runPromptPipeline(opts: {
   precomputedVectorEntries?: VectorActivatedEntry[];
   regenFeedback?: string;
   regenFeedbackPosition?: "system" | "user";
+  signal?: AbortSignal;
 }): Promise<PromptPipelineResult> {
   // Build spindle context
   let spindleContext: SpindleContext = {
@@ -411,6 +412,7 @@ async function runPromptPipeline(opts: {
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
       prefetched,
+      signal: opts.signal,
     });
 
     messages = assemblyResult.messages;
@@ -826,6 +828,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
           wiBookIds,
           wiEntries,
           councilMessages,
+          abortController.signal,
         );
         councilWiActivated = mergeActivatedWorldInfoEntries(
           councilWiActivated,
@@ -1014,6 +1017,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     precomputedVectorEntries,
     regenFeedback: input.regen_feedback,
     regenFeedbackPosition: input.regen_feedback_position,
+    signal: abortController.signal,
   });
 
   let { messages } = pipeline;

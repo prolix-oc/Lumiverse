@@ -30,6 +30,26 @@ const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
  *  User-configurable via EmbeddingConfig.request_timeout (seconds). */
 const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 120_000; // 120 seconds
 
+/** Combine an optional external abort signal with an internal timeout into a
+ *  single signal. Used so callers (like an active generation) can cancel an
+ *  in-flight embedding request without waiting for its own timeout. */
+function linkTimeoutSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const timeoutController = new AbortController();
+  const timer = timeoutMs > 0
+    ? setTimeout(() => timeoutController.abort(), timeoutMs)
+    : null;
+  const combined = external
+    ? AbortSignal.any([external, timeoutController.signal])
+    : timeoutController.signal;
+  return {
+    signal: combined,
+    cleanup: () => { if (timer) clearTimeout(timer); },
+  };
+}
+
 export type EmbeddingProvider =
   | "openai-compatible"
   | "openai"
@@ -1248,7 +1268,7 @@ async function requestVertexEmbeddings(
   cfg: EmbeddingConfig,
   apiKey: string,
   texts: string[],
-  options?: { omitDimensions?: boolean }
+  options?: { omitDimensions?: boolean; signal?: AbortSignal }
 ): Promise<number[][]> {
   const sa = parseServiceAccount(apiKey);
   const accessToken = await getAccessToken(sa);
@@ -1272,6 +1292,7 @@ async function requestVertexEmbeddings(
   if (useEmbedContent) {
     const results: number[][] = [];
     for (const text of texts) {
+      if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
       const body: Record<string, any> = {
         content: { role: "user", parts: [{ text }] },
       };
@@ -1281,6 +1302,7 @@ async function requestVertexEmbeddings(
         accessToken,
         body,
         timeoutMs,
+        options?.signal,
       );
       const values = vec?.embedding?.values;
       if (!Array.isArray(values)) {
@@ -1301,6 +1323,7 @@ async function requestVertexEmbeddings(
     accessToken,
     body,
     timeoutMs,
+    options?.signal,
   );
   const preds = payload?.predictions;
   if (!Array.isArray(preds) || preds.length !== texts.length) {
@@ -1317,9 +1340,8 @@ async function requestVertexEmbeddings(
   });
 }
 
-async function postVertex<T>(url: string, accessToken: string, body: Record<string, any>, timeoutMs: number): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function postVertex<T>(url: string, accessToken: string, body: Record<string, any>, timeoutMs: number, externalSignal?: AbortSignal): Promise<T> {
+  const { signal, cleanup } = linkTimeoutSignal(externalSignal, timeoutMs);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -1329,15 +1351,16 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
   } catch (err: any) {
     if (err?.name === "AbortError") {
+      if (externalSignal?.aborted) throw err;
       throw new Error(`Vertex embedding request timed out after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
-    clearTimeout(timer);
+    cleanup();
   }
   if (!res.ok) {
     const msg = await res.text().catch(() => "Vertex embedding request failed");
@@ -1349,7 +1372,7 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
 async function requestEmbeddings(
   userId: string,
   texts: string[],
-  options?: { omitDimensions?: boolean }
+  options?: { omitDimensions?: boolean; signal?: AbortSignal }
 ): Promise<number[][]> {
   // Resolve which user's settings + API key actually drive this call. In gate
   // mode non-owners inherit the owner's config and use the owner's key.
@@ -1359,6 +1382,7 @@ async function requestEmbeddings(
   const apiKey = await secretsSvc.getSecret(ctx.userId, EMBEDDING_SECRET_KEY);
   if (!apiKey) throw new Error("Embedding API key is not configured");
   if (!texts.length) return [];
+  if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
 
   if (cfg.provider === "google_vertex") {
     return requestVertexEmbeddings(cfg, apiKey, texts, options);
@@ -1396,8 +1420,7 @@ async function requestEmbeddings(
   const timeoutMs = cfg.request_timeout > 0
     ? cfg.request_timeout * 1000
     : DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { signal, cleanup } = linkTimeoutSignal(options?.signal, timeoutMs);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -1407,15 +1430,17 @@ async function requestEmbeddings(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
   } catch (err: any) {
     if (err?.name === "AbortError") {
+      // Distinguish external cancel (caller-initiated) from our own timeout.
+      if (options?.signal?.aborted) throw err;
       throw new Error(`Embedding request timed out after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
-    clearTimeout(timeout);
+    cleanup();
   }
 
   if (!res.ok) {
@@ -1428,8 +1453,12 @@ async function requestEmbeddings(
   return vectors;
 }
 
-export async function embedTexts(userId: string, texts: string[]): Promise<number[][]> {
-  return requestEmbeddings(userId, texts);
+export async function embedTexts(
+  userId: string,
+  texts: string[],
+  options?: { signal?: AbortSignal },
+): Promise<number[][]> {
+  return requestEmbeddings(userId, texts, options);
 }
 
 function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
@@ -1455,8 +1484,13 @@ const inflightEmbeddings = new Map<string, Promise<number[]>>();
  * Single-text calls are deduped: if another caller is already fetching the
  * same text, we share its promise instead of making a second API call.
  */
-export async function cachedEmbedTexts(userId: string, texts: string[]): Promise<number[][]> {
+export async function cachedEmbedTexts(
+  userId: string,
+  texts: string[],
+  options?: { signal?: AbortSignal },
+): Promise<number[][]> {
   if (!texts.length) return [];
+  if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
   const cfg = await getEmbeddingConfig(userId);
   const fingerprint = getModelFingerprint(cfg);
 
@@ -1466,10 +1500,14 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
     const cached = embeddingCache.get(key);
     if (cached) return [cached];
 
-    // Join an in-flight request for the same text instead of making a duplicate API call
+    // Join an in-flight request for the same text instead of making a duplicate API call.
+    // If the caller has a signal, race against it so this caller's await
+    // rejects on abort without cancelling the shared upstream request.
     const inflight = inflightEmbeddings.get(key);
-    if (inflight) return [await inflight];
+    if (inflight) return [await raceWithSignal(inflight, options?.signal)];
 
+    // Share a long-lived upstream request across dedup joiners — don't forward
+    // the individual caller's signal into the shared promise.
     const promise = requestEmbeddings(userId, texts).then(vecs => {
       const vec = vecs[0];
       embeddingCache.set(key, vec);
@@ -1480,7 +1518,7 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
       throw err;
     });
     inflightEmbeddings.set(key, promise);
-    return [await promise];
+    return [await raceWithSignal(promise, options?.signal)];
   }
 
   // Multi-text path: LRU cache check, batch uncached
@@ -1499,7 +1537,7 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
 
   if (uncachedIndices.length > 0) {
     const uncachedTexts = uncachedIndices.map((i) => texts[i]);
-    const vectors = await requestEmbeddings(userId, uncachedTexts);
+    const vectors = await requestEmbeddings(userId, uncachedTexts, options);
     for (let j = 0; j < uncachedIndices.length; j++) {
       const idx = uncachedIndices[j];
       results[idx] = vectors[j];
@@ -1508,6 +1546,21 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
   }
 
   return results as number[][];
+}
+
+/** Race a shared promise against an abort signal so the caller's await can
+ *  reject on cancel without killing the shared upstream request. */
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      v => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      e => { signal.removeEventListener("abort", onAbort); reject(e); },
+    );
+  });
 }
 
 export async function testEmbeddingConfig(
