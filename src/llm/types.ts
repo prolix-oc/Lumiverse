@@ -200,6 +200,42 @@ export interface MemoryStats {
   settingsSource: "global" | "per_chat";
 }
 
+/**
+ * Result of the context-budget clipping step that runs at the end of prompt
+ * assembly. When `enabled` is true and `messagesDropped > 0`, oldest chat
+ * history messages were excluded so the assembly would fit within the preset's
+ * configured `contextSize` (minus response headroom + a small safety margin).
+ *
+ * When `enabled` is false, clipping was skipped (no contextSize configured,
+ * or the budget computed to <= 0 — see `budgetInvalid`).
+ */
+export interface ContextClipStats {
+  /** True when a context budget was resolved and the clip step ran. */
+  enabled: boolean;
+  /** Preset `contextSize` (→ `max_context_length`). 0 when unset. */
+  maxContext: number;
+  /** Reserved for the LLM response (`max_tokens`). */
+  maxResponseTokens: number;
+  /** Headroom for interceptors, deliberation inject, tokenizer variance. */
+  safetyMargin: number;
+  /** `maxContext - maxResponseTokens - safetyMargin`. */
+  inputBudget: number;
+  /** Tokens consumed by non-chat-history messages (system blocks, WI, prefill, …). */
+  fixedTokens: number;
+  /** Chat-history tokens before clipping. */
+  chatHistoryTokensBefore: number;
+  /** Chat-history tokens after clipping. */
+  chatHistoryTokensAfter: number;
+  /** Number of chat-history messages excluded from the final assembly. */
+  messagesDropped: number;
+  /** Sum of tokens dropped (oldest messages). */
+  tokensDropped: number;
+  /** Display name of the tokenizer used, or "approximate" for the char/4 fallback. */
+  tokenizerUsed: string;
+  /** True when the budget computed to <= 0 (misconfigured preset) — no clipping attempted. */
+  budgetInvalid?: boolean;
+}
+
 export interface AssemblyResult {
   messages: LlmMessage[];
   breakdown: AssemblyBreakdownEntry[];
@@ -239,6 +275,9 @@ export interface AssemblyResult {
   };
   /** Statistics from long-term memory retrieval. */
   memoryStats?: MemoryStats;
+  /** Context-budget clipping stats. Present when assembly went through the
+   *  token-budget clip step (i.e. the preset-driven path, not legacyAssembly). */
+  contextClipStats?: ContextClipStats;
   /** Deferred WI state to persist after generation completes. Only the keys
    *  this writer owns; merged via mergeChatMetadata so concurrent user edits
    *  to chat metadata are not clobbered. */

@@ -90,6 +90,8 @@ interface GenerationLifecycle {
   maxContext?: number;
   /** Council named results (for expression detection and other post-generation hooks) */
   councilNamedResults?: Record<string, string>;
+  /** Context-budget clipping stats (for GENERATION_STARTED payload + breakdown). */
+  contextClipStats?: import("../llm/types").ContextClipStats;
 }
 
 export interface RawGenerateInput {
@@ -159,6 +161,7 @@ export interface DryRunResult {
     };
   };
   memoryStats?: import("../llm/types").MemoryStats;
+  contextClipStats?: import("../llm/types").ContextClipStats;
 }
 
 export interface BatchGenerateInput {
@@ -205,6 +208,7 @@ interface PromptPipelineResult {
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   worldInfoStats?: DryRunResult["worldInfoStats"];
   memoryStats?: import("../llm/types").MemoryStats;
+  contextClipStats?: import("../llm/types").ContextClipStats;
   deferredWiState?: { chatId: string; partial: Record<string, any> };
   spindleContext: SpindleContext;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
@@ -373,6 +377,7 @@ async function runPromptPipeline(opts: {
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
+  let contextClipStats: import("../llm/types").ContextClipStats | undefined;
   let deferredWiState: { chatId: string; partial: Record<string, any> } | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
 
@@ -422,6 +427,7 @@ async function runPromptPipeline(opts: {
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     worldInfoStats = assemblyResult.worldInfoStats;
     memoryStats = assemblyResult.memoryStats;
+    contextClipStats = assemblyResult.contextClipStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
     macroEnv = assemblyResult.macroEnv;
@@ -513,7 +519,7 @@ async function runPromptPipeline(opts: {
   // Merge parameters: assembled (from preset) < interceptor overrides < request overrides
   const parameters: GenerationParameters = { ...assembledParams, ...interceptorParameters, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
+  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, contextClipStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -1067,6 +1073,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   lifecycle.providerName = provider.name;
   lifecycle.maxContext = mergedParams.max_context_length as number | undefined;
   lifecycle.councilNamedResults = councilNamedResults;
+  lifecycle.contextClipStats = pipeline.contextClipStats;
 
   // Strip internal-only keys before they reach the provider
   delete mergedParams.max_context_length;
@@ -1208,6 +1215,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     tokenCount,
     worldInfoStats: pipeline.worldInfoStats,
     memoryStats: pipeline.memoryStats,
+    contextClipStats: pipeline.contextClipStats,
   };
 }
 
@@ -1236,6 +1244,7 @@ async function runGeneration(
     targetMessageId: lifecycle.targetMessageId,
     characterId: lifecycle.targetCharacterId,
     characterName: lifecycle.characterName,
+    contextClipStats: lifecycle.contextClipStats,
   }, userId);
 
   let fullContent = "";

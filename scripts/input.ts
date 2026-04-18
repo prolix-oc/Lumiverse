@@ -112,7 +112,7 @@ function prompt(question: string, opts: PromptOptions): Promise<string> {
   return new Promise<string>((resolve) => {
     if (!opts.masked) {
       rl.question(fullPrompt, (answer) => {
-        resolve(answer.normalize("NFC"));
+        resolve(sanitizeAnswer(answer));
       });
       return;
     }
@@ -139,7 +139,23 @@ function prompt(question: string, opts: PromptOptions): Promise<string> {
 
     rl.question(fullPrompt, (answer) => {
       rl._writeToOutput = original;
-      resolve(answer.normalize("NFC"));
+      resolve(sanitizeAnswer(answer));
     });
   });
+}
+
+/**
+ * Normalize and strip line terminators that some terminal / tty stacks leak
+ * into readline's question callback.  The previous byte-level reader couldn't
+ * hit this because it terminated on CR/LF bytes before appending to its
+ * buffer — moving to readline re-opened the hole.
+ *
+ * Symptom if omitted: on Bun-on-Windows (cooked mode leaking CR, see
+ * oven-sh/bun#9853, #25663) the owner username is stored as `admin\r` and
+ * the password hash is computed against `pw\r`.  Login then fails because
+ * the user types the actual characters without the trailing CR, so
+ * BetterAuth's lookup and hash compare both miss.
+ */
+function sanitizeAnswer(answer: string): string {
+  return answer.replace(/[\r\n]+$/, "").normalize("NFC");
 }

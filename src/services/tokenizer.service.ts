@@ -325,6 +325,41 @@ export async function countBreakdown(
   };
 }
 
+/**
+ * Resolve a synchronous token counter for a model. Loads the tokenizer
+ * instance (cached after first use), returns a `count(text)` that runs
+ * in-process with zero per-call await overhead, and a display `name`.
+ *
+ * When no tokenizer can be resolved (unknown model, fetch failure, etc.),
+ * falls back to the `char/4` heuristic and reports the name as `"approximate"`.
+ *
+ * Intended for hot loops (e.g. context-budget clipping) that tokenize every
+ * message in the assembled prompt and need to avoid async overhead per call.
+ */
+export async function resolveCounter(modelId: string): Promise<{ count: (text: string) => number; name: string }> {
+  const tokenizerId = modelId ? getTokenizerIdForModel(modelId) : null;
+  if (tokenizerId) {
+    const config = getConfig(tokenizerId);
+    try {
+      const instance = await getInstance(tokenizerId);
+      const name = config?.name || tokenizerId;
+      return {
+        count: (text: string) => {
+          if (!text) return 0;
+          try { return instance.count(text); } catch { return Math.ceil(text.length / 4); }
+        },
+        name,
+      };
+    } catch {
+      // fall through to approximate
+    }
+  }
+  return {
+    count: (text: string) => (text ? Math.ceil(text.length / 4) : 0),
+    name: "approximate",
+  };
+}
+
 export { getTokenizerIdForModel, getAllConfigs, getConfig, getAllPatterns };
 
 export function invalidate(tokenizerId: string): void {
