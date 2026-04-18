@@ -344,9 +344,14 @@ export function listCharactersDiscover(
 
 // Prepared statement for hot-path character fetch
 let _stmtCharById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtCharByIdGen = -1;
 
 export function getCharacter(userId: string, id: string): Character | null {
-  if (!_stmtCharById) _stmtCharById = getDb().query("SELECT * FROM characters WHERE id = ? AND user_id = ?");
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (!_stmtCharById || _stmtCharByIdGen !== gen) {
+    _stmtCharById = getDb().query("SELECT * FROM characters WHERE id = ? AND user_id = ?");
+    _stmtCharByIdGen = gen;
+  }
   const row = _stmtCharById.get(id, userId) as any;
   if (!row) return null;
   return rowToCharacter(row);
