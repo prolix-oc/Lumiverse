@@ -81,6 +81,36 @@ export function isChatHistoryMessage(msg: LlmMessage): boolean {
   return (msg as any)[CHAT_HISTORY_KEY] === true;
 }
 
+function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
+  for (let i = result.length - 1; i >= 0; i--) {
+    const msg = result[i];
+    if (msg.role !== "assistant" || !isChatHistoryMessage(msg)) continue;
+
+    if (typeof msg.content === "string") {
+      const trimmed = msg.content.replace(/\s+$/, "");
+      if (trimmed !== msg.content) {
+        result[i] = { ...msg, content: trimmed };
+        markAsChatHistory(result[i]);
+      }
+    } else if (Array.isArray(msg.content)) {
+      const parts = msg.content as import("../llm/types").LlmMessagePart[];
+      for (let j = parts.length - 1; j >= 0; j--) {
+        const p = parts[j];
+        if (p.type !== "text") continue;
+        const trimmed = p.text.replace(/\s+$/, "");
+        if (trimmed !== p.text) {
+          const newParts = [...parts];
+          newParts[j] = { type: "text", text: trimmed };
+          result[i] = { ...msg, content: newParts };
+          markAsChatHistory(result[i]);
+        }
+        break;
+      }
+    }
+    return;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
 // ---------------------------------------------------------------------------
@@ -1270,6 +1300,11 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   for (const group of appendGroups.values()) {
     applyAppendGroup(result, breakdown, group);
   }
+
+  // Strip trailing whitespace from the last chat-history assistant message.
+  // Anthropic (and other strict providers) reject turns ending in whitespace;
+  // explicit prefills are left alone so users can intentionally seed responses.
+  rtrimLastHistoryAssistant(result);
 
   // ---- Collapse all messages into a single user message (if enabled) ----
   const advSettings: AdvancedSettings | undefined = prompts.advancedSettings;
