@@ -33,88 +33,9 @@
   flex: 1;
 }
 
-.globalPopoverWrapper {
-  position: relative;
-}
-
-.globalAddBtn {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px 8px;
-  border-radius: 5px;
-  background: transparent;
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text-muted);
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
-}
-
-.globalAddBtn:hover {
-  border-color: var(--lumiverse-primary);
-  color: var(--lumiverse-primary);
-}
-
-.globalPopover {
-  position: fixed;
-  box-sizing: border-box;
-  max-height: 240px;
-  overflow-y: auto;
-  background: var(--lumiverse-bg);
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 8px;
-  box-shadow: var(--lumiverse-shadow-lg);
-  z-index: 9995;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-}
-
-.globalPopoverEmpty {
-  padding: 12px;
-  text-align: center;
-  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
-  color: var(--lumiverse-text-dim);
-  font-style: italic;
-}
-
-.globalPopoverItem {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 5px;
-  background: transparent;
-  border: none;
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  text-align: left;
-  transition: background var(--lumiverse-transition-fast);
-}
-
-.globalPopoverItem:hover {
-  background: var(--lumiverse-fill-subtle);
-}
-
-.globalPopoverItemActive {
-  color: var(--lumiverse-primary);
-}
-
-.globalPopoverCheck {
-  width: 14px;
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
-  flex-shrink: 0;
-  text-align: center;
-  color: var(--lumiverse-primary);
-}
-
-.globalPopoverName {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.bookPickerSelect {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .exportWrapper {
@@ -239,90 +160,6 @@
   flex: 1;
 }
 
-.chatPopoverWrapper {
-  position: relative;
-}
-
-.chatAddBtn {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px 8px;
-  border-radius: 5px;
-  background: transparent;
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text-muted);
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
-}
-
-.chatAddBtn:hover {
-  border-color: var(--lumiverse-info, #42a5f5);
-  color: var(--lumiverse-info, #42a5f5);
-}
-
-.chatPopover {
-  position: fixed;
-  box-sizing: border-box;
-  max-height: 240px;
-  overflow-y: auto;
-  background: var(--lumiverse-bg);
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 8px;
-  box-shadow: var(--lumiverse-shadow-lg);
-  z-index: 9995;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-}
-
-.chatPopoverEmpty {
-  padding: 12px;
-  text-align: center;
-  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
-  color: var(--lumiverse-text-dim);
-  font-style: italic;
-}
-
-.chatPopoverItem {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 5px;
-  background: transparent;
-  border: none;
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  text-align: left;
-  transition: background var(--lumiverse-transition-fast);
-}
-
-.chatPopoverItem:hover {
-  background: var(--lumiverse-fill-subtle);
-}
-
-.chatPopoverItemActive {
-  color: var(--lumiverse-info, #42a5f5);
-}
-
-.chatPopoverCheck {
-  width: 14px;
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
-  flex-shrink: 0;
-  text-align: center;
-  color: var(--lumiverse-info, #42a5f5);
-}
-
-.chatPopoverName {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chatPills {
   display: flex;
   flex-wrap: wrap;
@@ -378,21 +215,9 @@
   gap: 6px;
 }
 
-.bookSelect {
+.bookSelectWrapper {
   flex: 1;
   min-width: 0;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
-  color: var(--lumiverse-text);
-  outline: none;
-  cursor: pointer;
-}
-
-.bookSelect:focus {
-  border-color: var(--lumiverse-primary);
 }
 
 .sourceBadge {

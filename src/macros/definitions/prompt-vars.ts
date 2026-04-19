@@ -3,16 +3,24 @@
  *
  * Defs live on PromptBlock.variables. Values live in preset.metadata.promptVariables
  * keyed by block id. prompt-assembly.service.ts merges values over defaults,
- * coerces + clamps per type, and writes the results to env.extra.promptVariables
- * before any block content is evaluated.
+ * coerces + clamps per type, writes the results to env.extra.promptVariables,
+ * and pre-seeds env.variables.local with the same keys before any block content
+ * is evaluated. That shared backing store is what lets {{var::name}},
+ * {{getvar::name}}, and the {{.name}} shorthand all resolve to the same value.
+ *
+ * Resolution precedence for {{var::name}}:
+ *   1. env.variables.local  — runtime map; reflects schema-seeded values AND any
+ *                             in-prompt {{setvar::name::…}} mutations so an
+ *                             upstream variable-setter block's writes survive
+ *                             downstream reads via either syntax.
+ *   2. env.extra.promptVariables       — schema-resolved snapshot (belt & braces).
+ *   3. env.extra.promptVariableDefaults — creator-declared defaults.
+ *   4. "" — undeclared.
  *
  * env.extra shape:
  *   promptVariables         — Record<varName, string | number>   flat; last enabled block wins
  *   promptVariablesByBlock  — Record<blockId, Record<varName, string | number>>
  *   promptVariableDefaults  — Record<varName, string | number>   creator-declared defaults
- *
- * Variables on disabled blocks are skipped at resolution time, so {{hasVar::x}}
- * reflects whether a variable is actually in play for this generation.
  */
 
 import { registry } from "../MacroRegistry";
@@ -32,18 +40,22 @@ function getDefaults(ctx: MacroExecContext): Record<string, string | number> {
 }
 
 export function registerPromptVarMacros(): void {
-  // {{var::name}} — configured value, falling back to creator default, then empty string
+  // {{var::name}} — configured value, falling back to creator default, then empty string.
+  // Reads env.variables.local first so {{var::}} stays in lockstep with {{getvar::}}
+  // and the {{.name}} shorthand — all three resolve against the same backing store.
   registry.registerMacro({
     name: "var",
     category: "state",
     description:
-      "Read a preset-scoped prompt variable value. Returns the end-user override, the creator default, or an empty string. Variables on disabled blocks are skipped.",
+      "Read a preset-scoped prompt variable value. Returns the runtime value (including any {{setvar::}} overrides), then the end-user configured value, then the creator default, then an empty string.",
     args: [{ name: "name", type: "string", description: "Variable name defined on a prompt block" }],
     aliases: ["promptVar", "presetVar"],
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const key = resolveKey(ctx);
       if (!key) return "";
+      const local = ctx.env.variables.local;
+      if (local.has(key)) return local.get(key)!;
       const values = getValues(ctx);
       if (key in values) return String(values[key]);
       const defaults = getDefaults(ctx);
@@ -57,13 +69,14 @@ export function registerPromptVarMacros(): void {
     name: "hasVar",
     category: "state",
     description:
-      "Returns 'true' if the named prompt variable is defined on an enabled block, 'false' otherwise.",
+      "Returns 'true' if the named prompt variable is resolvable (runtime, schema, or default), 'false' otherwise.",
     args: [{ name: "name", type: "string", description: "Variable name" }],
     aliases: ["hasPromptVar", "hasPresetVar"],
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const key = resolveKey(ctx);
       if (!key) return "false";
+      if (ctx.env.variables.local.has(key)) return "true";
       const values = getValues(ctx);
       const defaults = getDefaults(ctx);
       return key in values || key in defaults ? "true" : "false";

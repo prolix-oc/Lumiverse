@@ -22,10 +22,10 @@ import {
 import {
   Button,
   EditorSection,
-  Select,
   TextArea,
   TextInput,
 } from '@/components/shared/FormComponents'
+import SearchableSelect from '@/components/shared/SearchableSelect'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { toast } from '@/lib/toast'
 import { useStore } from '@/store'
@@ -232,18 +232,12 @@ export default function DreamWeaverPanel() {
   }
 
   const personaOptions = useMemo(
-    () =>
-      personas.length === 0
-        ? [{ value: '', label: 'No personas available' }]
-        : personas.map((p) => ({ value: p.id, label: p.name })),
+    () => personas.map((p) => ({ value: p.id, label: p.name })),
     [personas],
   )
 
   const connectionOptions = useMemo(
-    () =>
-      connections.length === 0
-        ? [{ value: '', label: 'No connections available' }]
-        : connections.map((c) => ({ value: c.id, label: c.name })),
+    () => connections.map((c) => ({ value: c.id, label: c.name })),
     [connections],
   )
 
@@ -266,20 +260,28 @@ export default function DreamWeaverPanel() {
         <div className={styles.grid2}>
           <div className={styles.field}>
             <span className={styles.fieldLabel}>Persona</span>
-            <Select
+            <SearchableSelect
               value={resolvedPersonaId ?? ''}
               onChange={(v) => setSelectedPersonaId(v || null)}
               options={personaOptions}
+              placeholder="Select a persona…"
+              searchPlaceholder="Search personas…"
+              emptyMessage="No personas available"
               disabled={personas.length === 0}
+              ariaLabel="Persona"
             />
           </div>
           <div className={styles.field}>
             <span className={styles.fieldLabel}>Connection</span>
-            <Select
+            <SearchableSelect
               value={resolvedConnectionId ?? ''}
               onChange={(v) => setSelectedConnectionId(v || null)}
               options={connectionOptions}
+              placeholder="Select a connection…"
+              searchPlaceholder="Search connections…"
+              emptyMessage="No connections available"
               disabled={connections.length === 0}
+              ariaLabel="Connection"
             />
           </div>
         </div>

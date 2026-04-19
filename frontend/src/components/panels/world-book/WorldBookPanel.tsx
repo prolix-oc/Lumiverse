@@ -12,6 +12,7 @@ import PostImportWorldBookModal from '@/components/shared/PostImportWorldBookMod
 import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookDiagnosticsModal'
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
 import { Button } from '@/components/shared/FormComponents'
+import SearchableSelect from '@/components/shared/SearchableSelect'
 import Pagination from '@/components/shared/Pagination'
 import type { WorldBook, WorldBookEntry, WorldBookVectorSummary, WorldInfoSettings } from '@/types/api'
 
@@ -366,50 +367,10 @@ export default function WorldBookPanel() {
     openModal('worldBookEditor', { bookId: selectedBookId })
   }, [openModal, selectedBookId])
 
-  // Global world books popover
-  const [globalPopoverOpen, setGlobalPopoverOpen] = useState(false)
-  const globalPopoverRef = useRef<HTMLDivElement>(null)
-  const globalAddBtnRef = useRef<HTMLButtonElement>(null)
-  const globalSectionRef = useRef<HTMLDivElement>(null)
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
-
-  useEffect(() => {
-    if (!globalPopoverOpen) return
-    const handleClick = (e: MouseEvent) => {
-      if (
-        globalPopoverRef.current && !globalPopoverRef.current.contains(e.target as Node) &&
-        globalAddBtnRef.current && !globalAddBtnRef.current.contains(e.target as Node)
-      ) {
-        setGlobalPopoverOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [globalPopoverOpen])
-
-  const openGlobalPopover = useCallback(() => {
-    setGlobalPopoverOpen((prev) => {
-      const next = !prev
-      if (next && globalAddBtnRef.current && globalSectionRef.current) {
-        const btnRect = globalAddBtnRef.current.getBoundingClientRect()
-        const sectionRect = globalSectionRef.current.getBoundingClientRect()
-        setPopoverPos({
-          top: btnRect.bottom + 4,
-          left: sectionRect.left,
-          width: sectionRect.width,
-        })
-      }
-      return next
-    })
-  }, [])
-
-  const toggleGlobalBook = (id: string) => {
-    const current = globalWorldBooks ?? []
-    const next = current.includes(id)
-      ? current.filter((x) => x !== id)
-      : [...current, id]
-    setSetting('globalWorldBooks', next)
-  }
+  const setGlobalBooks = useCallback(
+    (ids: string[]) => setSetting('globalWorldBooks', ids),
+    [setSetting],
+  )
 
   const removeGlobalBook = (id: string) => {
     setSetting('globalWorldBooks', (globalWorldBooks ?? []).filter((x) => x !== id))
@@ -421,11 +382,6 @@ export default function WorldBookPanel() {
   // Chat-scoped world books
   const [chatWorldBookIds, setChatWorldBookIds] = useState<string[]>([])
   const [chatMetadata, setChatMetadata] = useState<Record<string, any>>({})
-  const [chatPopoverOpen, setChatPopoverOpen] = useState(false)
-  const chatPopoverRef = useRef<HTMLDivElement>(null)
-  const chatAddBtnRef = useRef<HTMLButtonElement>(null)
-  const chatSectionRef = useRef<HTMLDivElement>(null)
-  const [chatPopoverPos, setChatPopoverPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!activeChatId) {
@@ -440,52 +396,19 @@ export default function WorldBookPanel() {
     }).catch(() => {})
   }, [activeChatId])
 
-  useEffect(() => {
-    if (!chatPopoverOpen) return
-    const handleClick = (e: MouseEvent) => {
-      if (
-        chatPopoverRef.current && !chatPopoverRef.current.contains(e.target as Node) &&
-        chatAddBtnRef.current && !chatAddBtnRef.current.contains(e.target as Node)
-      ) {
-        setChatPopoverOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [chatPopoverOpen])
-
-  const openChatPopover = useCallback(() => {
-    setChatPopoverOpen((prev) => {
-      const next = !prev
-      if (next && chatAddBtnRef.current && chatSectionRef.current) {
-        const btnRect = chatAddBtnRef.current.getBoundingClientRect()
-        const sectionRect = chatSectionRef.current.getBoundingClientRect()
-        setChatPopoverPos({
-          top: btnRect.bottom + 4,
-          left: sectionRect.left,
-          width: sectionRect.width,
-        })
-      }
-      return next
-    })
-  }, [])
-
-  const toggleChatBook = (id: string) => {
-    const next = chatWorldBookIds.includes(id)
-      ? chatWorldBookIds.filter((x) => x !== id)
-      : [...chatWorldBookIds, id]
-    setChatWorldBookIds(next)
-    setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
-    // Atomic partial merge so concurrent server-side writers (post-generation
-    // expression detection, council caching, etc.) can't clobber this change.
-    if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
-  }
+  // Atomic partial merge so concurrent server-side writers (post-generation
+  // expression detection, council caching, etc.) can't clobber this change.
+  const setChatBooks = useCallback(
+    (next: string[]) => {
+      setChatWorldBookIds(next)
+      setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
+      if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
+    },
+    [activeChatId],
+  )
 
   const removeChatBook = (id: string) => {
-    const next = chatWorldBookIds.filter((x) => x !== id)
-    setChatWorldBookIds(next)
-    setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
-    if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
+    setChatBooks(chatWorldBookIds.filter((x) => x !== id))
   }
 
   const activeChatBooks = books.filter((b) => chatWorldBookIds.includes(b.id))
@@ -542,52 +465,24 @@ export default function WorldBookPanel() {
   return (
     <div className={styles.panel}>
       {/* Global world books section */}
-      <div ref={globalSectionRef} className={styles.globalSection}>
+      <div className={styles.globalSection}>
         <div className={styles.globalHeader}>
           <Globe size={12} className={styles.globalIcon} />
           <span className={styles.globalLabel}>Always Active</span>
-          <div className={styles.globalPopoverWrapper}>
-            <button
-              ref={globalAddBtnRef}
-              type="button"
-              className={styles.globalAddBtn}
-              onClick={openGlobalPopover}
-            >
-              <Plus size={11} />
-              <span>Add</span>
-              <ChevronDown
-                size={10}
-                className={clsx(styles.chevron, globalPopoverOpen && styles.chevronOpen)}
-              />
-            </button>
-            {globalPopoverOpen && popoverPos && createPortal(
-              <div
-                ref={globalPopoverRef}
-                className={styles.globalPopover}
-                style={{ top: popoverPos.top, left: popoverPos.left, width: popoverPos.width }}
-              >
-                {books.length === 0 ? (
-                  <div className={styles.globalPopoverEmpty}>No world books available</div>
-                ) : (
-                  books.map((book) => {
-                    const isActive = (globalWorldBooks ?? []).includes(book.id)
-                    return (
-                      <button
-                        key={book.id}
-                        type="button"
-                        className={clsx(styles.globalPopoverItem, isActive && styles.globalPopoverItemActive)}
-                        onClick={() => toggleGlobalBook(book.id)}
-                      >
-                        <span className={styles.globalPopoverCheck}>{isActive ? '\u2713' : ''}</span>
-                        <span className={styles.globalPopoverName}>{book.name}</span>
-                      </button>
-                    )
-                  })
-                )}
-              </div>,
-              document.body
-            )}
-          </div>
+          <SearchableSelect
+            multi
+            value={globalWorldBooks ?? []}
+            onChange={setGlobalBooks}
+            options={books.map((b) => ({ value: b.id, label: b.name }))}
+            triggerLabel="Add"
+            triggerIcon={<Plus size={11} />}
+            searchPlaceholder="Search world books…"
+            emptyMessage="No world books available"
+            className={styles.bookPickerSelect}
+            portal
+            align="right"
+            minWidth={280}
+          />
         </div>
         {activeGlobalBooks.length > 0 ? (
           <div className={styles.globalPills}>
@@ -611,53 +506,25 @@ export default function WorldBookPanel() {
       </div>
 
       {/* Chat-scoped world books section */}
-      <div ref={chatSectionRef} className={clsx(styles.chatSection, !activeChatId && styles.chatSectionDisabled)}>
+      <div className={clsx(styles.chatSection, !activeChatId && styles.chatSectionDisabled)}>
         <div className={styles.chatHeader}>
           <MessageSquare size={12} className={styles.chatIcon} />
           <span className={styles.chatLabel}>This Chat Only</span>
           {activeChatId ? (
-            <div className={styles.chatPopoverWrapper}>
-              <button
-                ref={chatAddBtnRef}
-                type="button"
-                className={styles.chatAddBtn}
-                onClick={openChatPopover}
-              >
-                <Plus size={11} />
-                <span>Add</span>
-                <ChevronDown
-                  size={10}
-                  className={clsx(styles.chevron, chatPopoverOpen && styles.chevronOpen)}
-                />
-              </button>
-              {chatPopoverOpen && chatPopoverPos && createPortal(
-                <div
-                  ref={chatPopoverRef}
-                  className={styles.chatPopover}
-                  style={{ top: chatPopoverPos.top, left: chatPopoverPos.left, width: chatPopoverPos.width }}
-                >
-                  {books.length === 0 ? (
-                    <div className={styles.chatPopoverEmpty}>No world books available</div>
-                  ) : (
-                    books.map((book) => {
-                      const isActive = chatWorldBookIds.includes(book.id)
-                      return (
-                        <button
-                          key={book.id}
-                          type="button"
-                          className={clsx(styles.chatPopoverItem, isActive && styles.chatPopoverItemActive)}
-                          onClick={() => toggleChatBook(book.id)}
-                        >
-                          <span className={styles.chatPopoverCheck}>{isActive ? '\u2713' : ''}</span>
-                          <span className={styles.chatPopoverName}>{book.name}</span>
-                        </button>
-                      )
-                    })
-                  )}
-                </div>,
-                document.body
-              )}
-            </div>
+            <SearchableSelect
+              multi
+              value={chatWorldBookIds}
+              onChange={setChatBooks}
+              options={books.map((b) => ({ value: b.id, label: b.name }))}
+              triggerLabel="Add"
+              triggerIcon={<Plus size={11} />}
+              searchPlaceholder="Search world books…"
+              emptyMessage="No world books available"
+              className={styles.bookPickerSelect}
+              portal
+              align="right"
+              minWidth={280}
+            />
           ) : null}
         </div>
         {!activeChatId ? (
@@ -707,18 +574,18 @@ export default function WorldBookPanel() {
 
       {/* Top bar: Book selector + actions */}
       <div className={styles.topBar}>
-        <select
-          className={styles.bookSelect}
+        <SearchableSelect
           value={selectedBookId || ''}
-          onChange={(e) => setSelectedBookId(e.target.value || null)}
-        >
-          <option value="">Select a book...</option>
-          {books.map((book) => (
-            <option key={book.id} value={book.id}>
-              {book.name}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => setSelectedBookId(v || null)}
+          options={books.map((b) => ({ value: b.id, label: b.name }))}
+          placeholder="Select a book…"
+          searchPlaceholder="Search world books…"
+          emptyMessage="No world books available"
+          ariaLabel="Select world book"
+          className={styles.bookSelectWrapper}
+          clearable
+          clearLabel="None"
+        />
         {(() => {
           const sel = books.find((b) => b.id === selectedBookId)
           if (sel?.metadata?.source === 'character') return (
