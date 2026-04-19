@@ -71,9 +71,7 @@ export function PromptVariablesModal({
       seeded[block.id] = bucket
     }
     setDraft(seeded)
-    setCollapsed(eligible.length > 3
-      ? Object.fromEntries(eligible.map(({ block }) => [block.id, true]))
-      : {})
+    setCollapsed(Object.fromEntries(eligible.map(({ block }) => [block.id, true])))
   }, [isOpen, eligible, values])
 
   const setVar = (blockId: string, varName: string, value: PromptVariableValue) => {
