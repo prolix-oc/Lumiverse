@@ -463,6 +463,44 @@
     background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
   overflow: hidden;
+  position: relative;
+}
+
+/* Mirror layer that renders @mention pills behind the (transparent) textarea.
+   Font / padding / line-height / wrap rules MUST stay locked to `.textarea`
+   so wrapped glyphs land on the same x/y as the caret. */
+.textareaMirror {
+  position: absolute;
+  inset: 0;
+  font-family: inherit;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+  padding: 9px 14px;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+/* Pills must be layout-neutral — no padding, margin, or font-weight change
+   (all of which would shift glyph advances and drift the caret). The extra
+   breathing room around the text comes from `box-shadow`, which paints
+   outside the border box without affecting layout. */
+.mentionPill {
+  color: var(--lumiverse-primary, rgba(160, 150, 255, 1));
+  background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%, transparent);
+}
+
+.mentionPillMuted {
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.7));
+  background: color-mix(in srgb, var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6)) 16%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6)) 16%, transparent);
 }
 
 .inputWrapper:focus-within {
@@ -477,7 +515,9 @@
   border: none;
   outline: none;
   background: transparent;
-  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
   font-family: inherit;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
@@ -485,10 +525,19 @@
   min-height: 40px;
   max-height: 180px;
   overflow-y: auto;
+  position: relative;
+  z-index: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .textarea::placeholder {
   color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+  -webkit-text-fill-color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+}
+
+.textarea::selection {
+  background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 35%, transparent);
 }
 
 .textarea:disabled {

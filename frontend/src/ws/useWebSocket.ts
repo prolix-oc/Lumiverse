@@ -6,6 +6,7 @@ import { hasUnsavedSettings } from '@/store/slices/settings'
 import { routeBackendMessage } from '@/lib/spindle/loader'
 import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
+import { generateApi } from '@/api/generate'
 import { toast } from '@/lib/toast'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
@@ -212,6 +213,10 @@ export function useWebSocket() {
               state.removeMessage(regenId)
             }
             state.setStreamingError(payload.error)
+            // Drop any pending @mention chain so we don't spam-fire through failures
+            if (state.mentionQueue && state.mentionQueue.chatId === payload.chatId) {
+              state.setMentionQueue(null)
+            }
             // Backend preserves any content that streamed before the failure
             // (socket drop, upstream 5xx, etc.) and returns its messageId.
             // Surface that in the toast so users know their partial response
@@ -290,6 +295,43 @@ export function useWebSocket() {
               }
             }).catch(() => { /* ignore */ }).finally(() => {
               const latest = store.getState()
+              // Drain the @mention queue — kick off the next mentioned member's
+              // turn. Skips if the active chat no longer matches, the queue is
+              // for a different chat, or a new generation has already started.
+              const queue = latest.mentionQueue
+              if (
+                queue &&
+                queue.chatId === payload.chatId &&
+                queue.ids.length > 0 &&
+                !latest.isStreaming &&
+                latest.activeChatId === payload.chatId
+              ) {
+                const nextId = latest.shiftMentionQueue()
+                if (nextId) {
+                  latest.beginStreaming()
+                  generateApi.start({
+                    chat_id: queue.chatId,
+                    connection_id: queue.opts.connection_id,
+                    persona_id: queue.opts.persona_id,
+                    preset_id: queue.opts.preset_id,
+                    target_character_id: nextId,
+                    generation_type: 'normal',
+                  }).then((res) => {
+                    const s = store.getState()
+                    if (s.activeChatId === queue.chatId) {
+                      s.startStreaming(res.generationId)
+                    }
+                  }).catch((err) => {
+                    console.error('[MentionQueue] Failed to start next generation:', err)
+                    const s = store.getState()
+                    s.setStreamingError(err?.body?.error || err?.message || 'Failed to continue @mention chain')
+                    s.setMentionQueue(null)
+                    s.stopStreaming()
+                  })
+                  return
+                }
+              }
+
               // Don't trigger image gen if a new generation already started,
               // or if we're in the middle of a group nudge loop.
               if (
@@ -339,6 +381,10 @@ export function useWebSocket() {
         // Guard: only stop streaming if this event matches the active generation
         // (a newer generation may have already replaced it)
         if (state.activeGenerationId && payload.generationId && payload.generationId !== state.activeGenerationId) return
+        // User stop also cancels any pending @mention chain for this chat
+        if (state.mentionQueue && payload.chatId && state.mentionQueue.chatId === payload.chatId) {
+          state.setMentionQueue(null)
+        }
         // Mark as ended to prevent zombie resurrection from late HTTP responses
         if (payload.generationId) {
           state.markGenerationEnded(payload.generationId)

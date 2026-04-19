@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
 import { useStore } from '@/store'
@@ -33,24 +33,17 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const rafRef = useRef<number>(0)
   const { visibleMessages, hasMore, loadMore, loadingOlder, justPrependedRef } = useChunkedMessages(messages, chatId)
   const lastScrollHeightRef = useRef(0)
-  const [revealed, setRevealed] = useState(false)
-  const prevChatIdRef = useRef(chatId)
 
-  // Fade-in on chat switch: reset revealed when chat changes, reveal once messages arrive
+  // Per-row reveal gate: rows fade in once their first measurement lands, so
+  // the estimate→measured reposition happens invisibly. Keys already in the
+  // Set mount revealed (covers scroll-back into previously measured rows).
+  const measuredKeysRef = useRef<Set<string | number | bigint>>(new Set())
+
+  // Clear the per-row reveal cache and re-arm top-pagination on chat switch.
   useEffect(() => {
-    if (chatId !== prevChatIdRef.current) {
-      prevChatIdRef.current = chatId
-      setRevealed(false)
-      topLoadArmedRef.current = true
-    }
+    measuredKeysRef.current = new Set()
+    topLoadArmedRef.current = true
   }, [chatId])
-
-  useEffect(() => {
-    if (!revealed && visibleMessages.length > 0) {
-      // Use rAF to ensure the DOM has rendered before triggering the transition
-      requestAnimationFrame(() => setRevealed(true))
-    }
-  }, [revealed, visibleMessages.length])
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingReasoning = useStore((s) => s.streamingReasoning)
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
@@ -360,7 +353,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [glassEnabled, rangeKey])
 
   return (
-    <div data-component="MessageList" className={`${styles.list} ${revealed ? styles.listRevealed : styles.listHidden}`} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
+    <div data-component="MessageList" className={styles.list} ref={scrollRef} onScroll={handleScroll} data-chat-scroll="true">
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
       {loadingOlder && (
         <div className={styles.loadingOlder}>Loading older messages...</div>
@@ -374,19 +367,20 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           if (!message) return null
 
           return (
-            <div
+            <VirtualRow
               key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={rowVirtualizer.measureElement}
-              className={styles.virtualRow}
-              style={{ transform: `translateY(${virtualRow.start}px)` }}
+              itemKey={virtualRow.key}
+              index={virtualRow.index}
+              start={virtualRow.start}
+              measureElement={rowVirtualizer.measureElement}
+              measuredKeys={measuredKeysRef.current}
             >
               <MessageCard
                 message={message}
                 chatId={chatId}
                 depth={visibleMessages.length - 1 - virtualRow.index}
               />
-            </div>
+            </VirtualRow>
           )
         })}
       </div>
@@ -465,6 +459,52 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
       <div data-spindle-mount="message_footer" />
       <div ref={bottomRef} />
+    </div>
+  )
+}
+
+interface VirtualRowProps {
+  itemKey: string | number | bigint
+  index: number
+  start: number
+  measureElement: (el: Element | null) => void
+  measuredKeys: Set<string | number | bigint>
+  children: ReactNode
+}
+
+// Gates each virtualized row's opacity on its first measurement. The row
+// mounts invisible, then fades in after two rAFs — enough for the
+// ResizeObserver-driven reposition to commit before we reveal. Previously
+// measured keys (e.g. on scroll-back) mount already revealed so the reveal
+// isn't replayed every time a row re-enters the window.
+function VirtualRow({ itemKey, index, start, measureElement, measuredKeys, children }: VirtualRowProps) {
+  const alreadyMeasured = measuredKeys.has(itemKey)
+  const [measured, setMeasured] = useState(alreadyMeasured)
+
+  useEffect(() => {
+    if (alreadyMeasured) return
+    let r2 = 0
+    const r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => {
+        measuredKeys.add(itemKey)
+        setMeasured(true)
+      })
+    })
+    return () => {
+      cancelAnimationFrame(r1)
+      cancelAnimationFrame(r2)
+    }
+  }, [alreadyMeasured, measuredKeys, itemKey])
+
+  return (
+    <div
+      ref={measureElement}
+      data-index={index}
+      data-measured={measured ? 'true' : 'false'}
+      className={styles.virtualRow}
+      style={{ transform: `translateY(${start}px)` }}
+    >
+      {children}
     </div>
   )
 }

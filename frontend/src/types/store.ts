@@ -770,6 +770,18 @@ export interface LumiSlice {
 }
 
 // ---- Group Chat Slice ----
+export interface MentionQueueOpts {
+  connection_id?: string
+  persona_id?: string
+  preset_id?: string
+}
+
+export interface MentionQueue {
+  chatId: string
+  ids: string[]
+  opts: MentionQueueOpts
+}
+
 export interface GroupChatSlice {
   isGroupChat: boolean
   groupCharacterIds: string[]
@@ -779,6 +791,7 @@ export interface GroupChatSlice {
   currentRound: number
   isNudgeLoopActive: boolean
   activeGroupCharacterId: string | null
+  mentionQueue: MentionQueue | null
 
   setGroupChat: (isGroup: boolean, characterIds: string[], mutedIds?: string[]) => void
   clearGroupChat: () => void
@@ -789,6 +802,8 @@ export interface GroupChatSlice {
   setGroupCharacterIds: (ids: string[]) => void
   setMutedCharacterIds: (ids: string[]) => void
   toggleMuteCharacter: (characterId: string) => string[]
+  setMentionQueue: (queue: MentionQueue | null) => void
+  shiftMentionQueue: () => string | null
 }
 
 // ---- Spindle Placement Slice ----

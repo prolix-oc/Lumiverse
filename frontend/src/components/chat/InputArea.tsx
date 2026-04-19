@@ -11,7 +11,7 @@ import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
-import { getPersonaAvatarThumbUrlById } from '@/lib/avatarUrls'
+import { getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
@@ -32,14 +32,25 @@ interface InputAreaProps {
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const queueModLabel = isMac ? 'Cmd' : 'Ctrl'
 
+// Slugify a character name into a stable @mention token. Matches the
+// databank `#` convention (lowercase, hyphen-separated, diacritics stripped).
+function slugifyName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 export default function InputArea({ chatId }: InputAreaProps) {
   const navigate = useNavigate()
   const [text, setText] = useState('')
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
-  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank'>(null)
-  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank'>(null)
+  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember'>(null)
+  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
   const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
@@ -48,11 +59,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const mirrorRef = useRef<HTMLDivElement>(null)
   const [hashQuery, setHashQuery] = useState<string | null>(null)
   const [hashStartIndex, setHashStartIndex] = useState(0)
   const [databankResults, setDatabankResults] = useState<AutocompleteResult[]>([])
   const [databankActiveIdx, setDatabankActiveIdx] = useState(0)
   const databankDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [atQuery, setAtQuery] = useState<string | null>(null)
+  const [atStartIndex, setAtStartIndex] = useState(0)
+  const [atResults, setAtResults] = useState<Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null }>>([])
+  const [atActiveIdx, setAtActiveIdx] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
@@ -83,6 +99,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
   const mutedCharacterIds = useStore((s) => s.mutedCharacterIds)
+  const characters = useStore((s) => s.characters)
+  const setMentionQueue = useStore((s) => s.setMentionQueue)
   const expressionDisplay = useStore((s) => s.expressionDisplay)
   const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
 
@@ -321,6 +339,51 @@ export default function InputArea({ chatId }: InputAreaProps) {
     return () => { if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hashQuery, chatId, activeCharacterId])
+
+  // @ autocomplete — filter locally against group members. Muted members are
+  // kept in the list (dimmed in UI); selecting them overrides mute for this turn.
+  useEffect(() => {
+    if (!isGroupChat || atQuery === null) {
+      if (openPopover === 'groupMember') setOpenPopover(null)
+      setAtResults([])
+      return
+    }
+    const q = atQuery.toLowerCase()
+    const members = groupCharacterIds
+      .map((id) => {
+        const c = characters.find((ch) => ch.id === id)
+        if (!c) return null
+        return {
+          id,
+          name: c.name,
+          slug: slugifyName(c.name),
+          muted: mutedCharacterIds.includes(id),
+          image_id: (c as any).image_id ?? null,
+        }
+      })
+      .filter(Boolean) as Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null }>
+    const ranked = members
+      .map((m) => {
+        const lname = m.name.toLowerCase()
+        let score: number
+        if (q.length === 0) score = 100
+        else if (m.slug.startsWith(q) || lname.startsWith(q)) score = 0
+        else if (m.slug.includes(q) || lname.includes(q)) score = 1
+        else score = -1
+        return { m, score }
+      })
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => a.score - b.score || a.m.name.localeCompare(b.m.name))
+      .map((x) => x.m)
+    setAtResults(ranked)
+    setAtActiveIdx(0)
+    if (ranked.length > 0) {
+      setOpenPopover('groupMember')
+    } else if (openPopover === 'groupMember') {
+      setOpenPopover(null)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atQuery, isGroupChat, groupCharacterIds, mutedCharacterIds, characters])
 
   // ResizeObserver — set --lcs-input-safe-zone on parent so scroll padding stays in sync
   useEffect(() => {
@@ -564,19 +627,64 @@ export default function InputArea({ chatId }: InputAreaProps) {
         preset_id: getActivePresetForGeneration() || undefined,
         generation_type: 'normal' as const,
       }
-      // For group chats, pick the first non-muted character as the initial speaker
-      if (isGroupChat && groupCharacterIds.length > 0) {
-        const firstUnmuted = groupCharacterIds.find((id) => !mutedCharacterIds.includes(id))
-        if (firstUnmuted) genOpts.target_character_id = firstUnmuted
+
+      // Parse @mentions in the user's message (group chats only). Each mention
+      // force-summons a group member in the order they appear — muted members
+      // included. Mentions are normalized to canonical names in the saved text.
+      let finalContent = content
+      const mentionedIds: string[] = []
+      if (isGroupChat && content) {
+        const slugToMember = new Map<string, { id: string; name: string }>()
+        for (const id of groupCharacterIds) {
+          const c = characters.find((ch) => ch.id === id)
+          if (!c) continue
+          const slug = slugifyName(c.name)
+          if (!slugToMember.has(slug)) slugToMember.set(slug, { id, name: c.name })
+        }
+        const seen = new Set<string>()
+        finalContent = content.replace(/(^|\s)@([a-z0-9][a-z0-9-]*)(?=\s|$|[.,!?;:])/gi, (_, lead: string, rawSlug: string) => {
+          const slug = rawSlug.toLowerCase()
+          const member = slugToMember.get(slug)
+          if (!member) return `${lead}@${rawSlug}`
+          if (!seen.has(member.id)) { seen.add(member.id); mentionedIds.push(member.id) }
+          return `${lead}@${member.name}`
+        })
       }
-      if (content || attachments) {
+
+      // Initial speaker: first mention → first unmuted → undefined.
+      if (isGroupChat && groupCharacterIds.length > 0) {
+        if (mentionedIds.length > 0) {
+          genOpts.target_character_id = mentionedIds[0]
+        } else {
+          const firstUnmuted = groupCharacterIds.find((id) => !mutedCharacterIds.includes(id))
+          if (firstUnmuted) genOpts.target_character_id = firstUnmuted
+        }
+      }
+
+      // Queue remaining mentioned members to speak in order after the first.
+      const remainingMentions = mentionedIds.slice(1)
+      if (isGroupChat && remainingMentions.length > 0) {
+        setMentionQueue({
+          chatId,
+          ids: remainingMentions,
+          opts: {
+            connection_id: genOpts.connection_id,
+            persona_id: genOpts.persona_id,
+            preset_id: genOpts.preset_id,
+          },
+        })
+      } else {
+        setMentionQueue(null)
+      }
+
+      if (finalContent || attachments) {
         const extra: Record<string, any> = {}
         if (effectivePersonaId) extra.persona_id = effectivePersonaId
         if (attachments) extra.attachments = attachments
         const msg = await messagesApi.create(chatId, {
           is_user: true,
           name: effectivePersonaName,
-          content: content || '(attached)',
+          content: finalContent || '(attached)',
           extra: Object.keys(extra).length > 0 ? extra : undefined,
         })
         // Optimistically add to store so it appears immediately
@@ -612,7 +720,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages])
+  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue])
 
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isStreaming) return
@@ -866,6 +974,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
     requestAnimationFrame(() => textareaRef.current?.focus())
   }, [text, hashStartIndex, hashQuery])
 
+  const handleAtSelect = useCallback((result: { slug: string; name: string }) => {
+    const before = text.slice(0, atStartIndex)
+    const afterCursor = text.slice(atStartIndex + 1 + (atQuery?.length ?? 0))
+    const newText = `${before}@${result.slug} ${afterCursor}`
+    setText(newText)
+    setAtQuery(null)
+    setOpenPopover(null)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [text, atStartIndex, atQuery])
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       // Intercept keys when databank autocomplete popover is active
@@ -874,6 +992,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
         if (e.key === 'ArrowDown') { e.preventDefault(); setDatabankActiveIdx((i) => Math.min(databankResults.length - 1, i + 1)); return }
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleHashSelect(databankResults[databankActiveIdx]); return }
         if (e.key === 'Escape') { e.preventDefault(); setHashQuery(null); setOpenPopover(null); return }
+      }
+
+      // Intercept keys when @ member autocomplete popover is active
+      if (openPopover === 'groupMember' && atResults.length > 0) {
+        if (e.key === 'ArrowUp') { e.preventDefault(); setAtActiveIdx((i) => Math.max(0, i - 1)); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); setAtActiveIdx((i) => Math.min(atResults.length - 1, i + 1)); return }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAtSelect(atResults[atActiveIdx]); return }
+        if (e.key === 'Tab') { e.preventDefault(); handleAtSelect(atResults[atActiveIdx]); return }
+        if (e.key === 'Escape') { e.preventDefault(); setAtQuery(null); setOpenPopover(null); return }
       }
 
       // Cmd+L (Mac) / Ctrl+L (other) — resolve macros in input
@@ -901,7 +1028,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         }
       }
     },
-    [enterToSend, handleSend, handleQueueMessage, handleResolveMacros, openPopover, databankResults, databankActiveIdx, handleHashSelect]
+    [enterToSend, handleSend, handleQueueMessage, handleResolveMacros, openPopover, databankResults, databankActiveIdx, handleHashSelect, atResults, atActiveIdx, handleAtSelect]
   )
 
   // Send button: cmd+click (mac) / ctrl+click (other) queues, normal click sends
@@ -955,11 +1082,82 @@ export default function InputArea({ chatId }: InputAreaProps) {
         if (!fragment.includes(' ') && fragment.length > 0) {
           setHashQuery(fragment)
           setHashStartIndex(hashIdx)
+          // `#` takes precedence if both tokens are active on the same keystroke
+          setAtQuery(null)
           return
         }
       }
     }
     setHashQuery(null)
+
+    // Detect @ trigger for group member autocomplete (group chats only)
+    if (isGroupChat) {
+      const atIdx = textBeforeCursor.lastIndexOf('@')
+      if (atIdx >= 0) {
+        const charBefore = atIdx > 0 ? textBeforeCursor[atIdx - 1] : ' '
+        if (atIdx === 0 || /\s/.test(charBefore)) {
+          const fragment = textBeforeCursor.slice(atIdx + 1)
+          if (!/\s/.test(fragment)) {
+            setAtQuery(fragment)
+            setAtStartIndex(atIdx)
+            return
+          }
+        }
+      }
+    }
+    setAtQuery(null)
+  }, [isGroupChat])
+
+  // Highlighted mirror content — rendered behind a transparent-text textarea.
+  // We only wrap the exact slug tokens that resolve to a known group member;
+  // anything else passes through as plain text. A trailing `\u200b` keeps the
+  // last line's height when the user's text ends with a newline.
+  const mirrorContent = useMemo(() => {
+    const ZWSP = '\u200B'
+    if (!isGroupChat || !text) return text + ZWSP
+
+    const slugMap = new Map<string, { muted: boolean }>()
+    for (const id of groupCharacterIds) {
+      const c = characters.find((ch) => ch.id === id)
+      if (!c) continue
+      const slug = slugifyName(c.name)
+      if (slug) slugMap.set(slug, { muted: mutedCharacterIds.includes(id) })
+    }
+    if (slugMap.size === 0) return text + ZWSP
+
+    const parts: React.ReactNode[] = []
+    const re = /(^|\s)@([a-z0-9][a-z0-9-]*)(?=\s|$|[.,!?;:])/gi
+    let lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = re.exec(text)) !== null) {
+      const [, lead, rawSlug] = match
+      const info = slugMap.get(rawSlug.toLowerCase())
+      if (!info) continue
+      const tagStart = match.index + lead.length
+      const tagEnd = tagStart + 1 + rawSlug.length
+      if (tagStart > lastIndex) parts.push(text.slice(lastIndex, tagStart))
+      parts.push(
+        <span
+          key={`mp-${tagStart}`}
+          className={info.muted ? styles.mentionPillMuted : styles.mentionPill}
+        >
+          @{rawSlug}
+        </span>
+      )
+      lastIndex = tagEnd
+    }
+    if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+    parts.push(ZWSP)
+    return <>{parts}</>
+  }, [text, isGroupChat, groupCharacterIds, mutedCharacterIds, characters])
+
+  // Keep the mirror's scroll position locked to the textarea so pills stay
+  // aligned with the caret once content overflows the 180px max-height.
+  const handleTextareaScroll = useCallback(() => {
+    const ta = textareaRef.current
+    const mirror = mirrorRef.current
+    if (!ta || !mirror) return
+    mirror.scrollTop = ta.scrollTop
   }, [])
 
   const toggleGuide = useCallback((id: string) => {
@@ -1566,6 +1764,68 @@ export default function InputArea({ chatId }: InputAreaProps) {
               ))}
             </div>
           )}
+
+          {renderPopover === 'groupMember' && (
+            <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              <div className={styles.quickSetName}>Mention member</div>
+              {atResults.length === 0 && <div className={styles.popEmpty}>No matching members.</div>}
+              {atResults.map((r, i) => {
+                const avatarUrl = getCharacterAvatarThumbUrlById(r.id, r.image_id)
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className={clsx(styles.popRowBtn, i === atActiveIdx && styles.popRowBtnActive)}
+                    style={r.muted ? { opacity: 0.55 } : undefined}
+                    onMouseDown={(e) => { e.preventDefault(); handleAtSelect(r) }}
+                    onMouseEnter={() => setAtActiveIdx(i)}
+                    title={r.muted ? `${r.name} (muted — mention will override)` : r.name}
+                  >
+                    <span className={styles.personaMain}>
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt=""
+                          loading="lazy"
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: '50%',
+                            objectFit: 'cover',
+                            flexShrink: 0,
+                            background: 'var(--lumiverse-surface-muted, rgba(255,255,255,0.06))',
+                          }}
+                        />
+                      ) : (
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: '50%',
+                            flexShrink: 0,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: 'var(--lumiverse-surface-muted, rgba(255,255,255,0.06))',
+                            color: 'var(--lumiverse-text-dim, rgba(255,255,255,0.7))',
+                            fontSize: 11,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {r.name?.[0]?.toUpperCase() || '?'}
+                        </span>
+                      )}
+                      <span className={styles.personaNameGroup}>
+                        <span>{r.name}</span>
+                        <span className={styles.personaTitle}>@{r.slug}{r.muted ? ' · muted' : ''}</span>
+                      </span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1618,11 +1878,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
         )}
 
         <div className={styles.inputWrapper}>
+          <div ref={mirrorRef} className={styles.textareaMirror} aria-hidden="true">
+            {mirrorContent}
+          </div>
           <textarea
             ref={textareaRef}
             className={styles.textarea}
             value={text}
             onChange={handleInput}
+            onScroll={handleTextareaScroll}
             onKeyDown={handleKeyDown}
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
