@@ -27,6 +27,7 @@ import {
 } from '@/components/shared/FormComponents'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { getPersonaAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { useStore } from '@/store'
 import { EventType } from '@/types/ws-events'
@@ -232,7 +233,21 @@ export default function DreamWeaverPanel() {
   }
 
   const personaOptions = useMemo(
-    () => personas.map((p) => ({ value: p.id, label: p.name })),
+    () => personas.map((p) => {
+      const avatarUrl = getPersonaAvatarThumbUrlById(p.id, p.image_id)
+      const initial = p.name.trim().charAt(0).toUpperCase() || '?'
+      const title = p.title?.trim()
+      return {
+        value: p.id,
+        label: p.name,
+        sublabel: title || undefined,
+        leading: avatarUrl ? (
+          <img src={avatarUrl} alt="" loading="lazy" />
+        ) : (
+          <span>{initial}</span>
+        ),
+      }
+    }),
     [personas],
   )
 

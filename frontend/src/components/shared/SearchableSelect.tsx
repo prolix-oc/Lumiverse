@@ -17,6 +17,8 @@ export interface SearchableSelectOption {
   value: string
   label: string
   sublabel?: string
+  /** Optional leading node (avatar, icon, swatch) rendered before the label in both the trigger and the option row. */
+  leading?: ReactNode
   disabled?: boolean
 }
 
@@ -232,6 +234,12 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     }
   }
 
+  const selectedOption = useMemo(
+    () => (isMulti ? undefined : options.find((o) => o.value === (props.value as string))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isMulti, options, props.value],
+  )
+
   const renderLabel = (): { text: string; isPlaceholder: boolean } => {
     if (triggerLabel !== undefined) return { text: triggerLabel, isPlaceholder: false }
     if (isMulti) {
@@ -240,9 +248,8 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         ? { text: placeholder, isPlaceholder: true }
         : { text: `${count} selected`, isPlaceholder: false }
     }
-    const sel = options.find((o) => o.value === props.value)
-    return sel
-      ? { text: sel.label, isPlaceholder: false }
+    return selectedOption
+      ? { text: selectedOption.label, isPlaceholder: false }
       : { text: placeholder, isPlaceholder: true }
   }
 
@@ -317,6 +324,11 @@ export default function SearchableSelect(props: SearchableSelectProps) {
                 aria-selected={selected}
               >
                 <span className={styles.optionCheck}>{selected ? '✓' : ''}</span>
+                {opt.leading && (
+                  <span className={styles.optionLeading} aria-hidden>
+                    {opt.leading}
+                  </span>
+                )}
                 <span className={styles.optionTextWrap}>
                   <span className={styles.optionLabel}>{opt.label}</span>
                   {opt.sublabel && (
@@ -350,6 +362,11 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         onKeyDown={handleKeyDown}
       >
         {triggerIcon && <span className={styles.triggerIcon}>{triggerIcon}</span>}
+        {selectedOption?.leading && triggerLabel === undefined && (
+          <span className={styles.triggerLeading} aria-hidden>
+            {selectedOption.leading}
+          </span>
+        )}
         <span
           className={clsx(
             styles.triggerLabel,
