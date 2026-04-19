@@ -3037,7 +3037,7 @@ export class WorkerHost {
     return preparedPatch;
   }
 
-  //Validate and generate the reasoning patch -- returns a full copy of oldMsg.extra (if any), with reasoning updates attached...
+  //Validate and apply the reasoning patch 
   private mergeReasoningPatch(currentExtra: any ,  patch?: any) {    
     //Easy catches - NOP the function
     if (!patch || typeof patch.reasoning !== "object" || patch.reasoning === null) {
