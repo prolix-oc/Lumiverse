@@ -28,7 +28,16 @@ export const worldBooksApi = {
   },
 
   // Entries
-  listEntries(bookId: string, params?: { limit?: number; offset?: number }) {
+  listEntries(
+    bookId: string,
+    params?: {
+      limit?: number
+      offset?: number
+      sort_by?: 'order' | 'priority' | 'created' | 'updated' | 'name'
+      sort_dir?: 'asc' | 'desc'
+      search?: string
+    }
+  ) {
     return get<PaginatedResult<WorldBookEntry>>(`/world-books/${bookId}/entries`, params)
   },
 

@@ -776,12 +776,19 @@ app.post("/import-character-book", async (c) => {
 
 // --- Entry endpoints ---
 
+const VALID_ENTRY_SORT_KEYS = new Set(["order", "priority", "created", "updated", "name"]);
+
 app.get("/:id/entries", (c) => {
   const userId = c.get("userId");
   const book = svc.getWorldBook(userId, c.req.param("id"));
   if (!book) return c.json({ error: "World book not found" }, 404);
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
-  return c.json(svc.listEntriesPaginated(userId, book.id, pagination));
+  const rawSortBy = c.req.query("sort_by");
+  const rawSortDir = c.req.query("sort_dir");
+  const sortBy = rawSortBy && VALID_ENTRY_SORT_KEYS.has(rawSortBy) ? (rawSortBy as svc.EntrySortKey) : undefined;
+  const sortDir = rawSortDir === "desc" || rawSortDir === "asc" ? rawSortDir : undefined;
+  const search = c.req.query("search") || undefined;
+  return c.json(svc.listEntriesPaginated(userId, book.id, pagination, { sortBy, sortDir, search }));
 });
 
 app.post("/:id/entries", async (c) => {

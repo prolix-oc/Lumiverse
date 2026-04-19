@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Trash2, BookOpen, Maximize2, ChevronDown, Upload, Download, Globe, X, User, FileUp, Settings, Search, MessageSquare } from 'lucide-react'
+import { Plus, Trash2, BookOpen, Maximize2, ChevronDown, Upload, Download, Globe, X, User, FileUp, Settings, Search, MessageSquare, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import { worldBooksApi } from '@/api/world-books'
@@ -12,7 +12,18 @@ import PostImportWorldBookModal from '@/components/shared/PostImportWorldBookMod
 import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookDiagnosticsModal'
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
 import { Button } from '@/components/shared/FormComponents'
+import Pagination from '@/components/shared/Pagination'
 import type { WorldBook, WorldBookEntry, WorldBookVectorSummary, WorldInfoSettings } from '@/types/api'
+
+type EntrySortBy = 'order' | 'priority' | 'created' | 'updated' | 'name'
+type EntrySortDir = 'asc' | 'desc'
+const SORT_OPTIONS: { value: EntrySortBy; label: string }[] = [
+  { value: 'order', label: 'Order Value' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'name', label: 'Name' },
+  { value: 'created', label: 'Date Created' },
+  { value: 'updated', label: 'Last Updated' },
+]
 import styles from './WorldBookPanel.module.css'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import clsx from 'clsx'
@@ -36,10 +47,11 @@ export default function WorldBookPanel() {
   const [entries, setEntries] = useState<WorldBookEntry[]>([])
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [entryTotal, setEntryTotal] = useState(0)
-  const [entryOffset, setEntryOffset] = useState(0)
-  const [loadingMore, setLoadingMore] = useState(false)
+  const [entryPage, setEntryPage] = useState(1)
   const [loadingEntries, setLoadingEntries] = useState(false)
   const [entrySearchFilter, setEntrySearchFilter] = useState('')
+  const [entrySortBy, setEntrySortBy] = useState<EntrySortBy>('order')
+  const [entrySortDir, setEntrySortDir] = useState<EntrySortDir>('asc')
 
   // Book editing state
   const [bookFieldsOpen, setBookFieldsOpen] = useState(false)
@@ -64,22 +76,14 @@ export default function WorldBookPanel() {
   const bookNameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const bookDescTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-  const normalizedEntrySearch = entrySearchFilter.trim().toLowerCase()
-  const filteredEntries = normalizedEntrySearch
-    ? entries.filter((entry) =>
-        [entry.comment, entry.content, ...entry.key, ...entry.keysecondary]
-          .join('\n')
-          .toLowerCase()
-          .includes(normalizedEntrySearch)
-      )
-    : entries
 
+  // Debounced search term for FTS query
+  const [debouncedEntrySearch, setDebouncedEntrySearch] = useState('')
   useEffect(() => {
-    if (!selectedEntryId) return
-    if (!filteredEntries.some((entry) => entry.id === selectedEntryId)) {
-      setSelectedEntryId(null)
-    }
-  }, [filteredEntries, selectedEntryId])
+    const trimmed = entrySearchFilter.trim()
+    const handle = setTimeout(() => setDebouncedEntrySearch(trimmed), 200)
+    return () => clearTimeout(handle)
+  }, [entrySearchFilter])
 
   // Load books
   const loadBooks = useCallback(async () => {
@@ -94,15 +98,31 @@ export default function WorldBookPanel() {
   }, [loadBooks])
 
   const ENTRIES_PAGE_SIZE = 50
+  const entryTotalPages = Math.max(1, Math.ceil(entryTotal / ENTRIES_PAGE_SIZE))
 
-  // Load entries when book selected
-  const loadEntries = useCallback(async (bookId: string) => {
+  // Load entries for a specific page
+  const loadEntries = useCallback(async (
+    bookId: string,
+    page: number,
+    sortBy: EntrySortBy,
+    sortDir: EntrySortDir,
+    search: string,
+  ) => {
     setLoadingEntries(true)
     try {
-      const res = await worldBooksApi.listEntries(bookId, { limit: ENTRIES_PAGE_SIZE, offset: 0 })
+      const res = await worldBooksApi.listEntries(bookId, {
+        limit: ENTRIES_PAGE_SIZE,
+        offset: (page - 1) * ENTRIES_PAGE_SIZE,
+        sort_by: sortBy,
+        sort_dir: sortDir,
+        search: search || undefined,
+      })
       setEntries(res.data)
       setEntryTotal(res.total)
-      setEntryOffset(res.data.length)
+      const lastPage = Math.max(1, Math.ceil(res.total / ENTRIES_PAGE_SIZE))
+      if (page > lastPage) {
+        setEntryPage(lastPage)
+      }
     } catch {}
     setLoadingEntries(false)
   }, [])
@@ -116,21 +136,21 @@ export default function WorldBookPanel() {
     }
   }, [])
 
-  const loadMoreEntries = useCallback(async () => {
-    if (!selectedBookId || loadingMore) return
-    setLoadingMore(true)
-    try {
-      const res = await worldBooksApi.listEntries(selectedBookId, { limit: ENTRIES_PAGE_SIZE, offset: entryOffset })
-      setEntries((prev) => [...prev, ...res.data])
-      setEntryTotal(res.total)
-      setEntryOffset((prev) => prev + res.data.length)
-    } catch {}
-    setLoadingMore(false)
-  }, [selectedBookId, entryOffset, loadingMore])
+  // Reset to page 1 whenever the search term changes
+  useEffect(() => {
+    setEntryPage(1)
+    setSelectedEntryId(null)
+  }, [debouncedEntrySearch])
 
+  // Refetch whenever book / page / sort / search state changes
+  useEffect(() => {
+    if (!selectedBookId) return
+    loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
+  }, [selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries])
+
+  // Side effects on book selection change (book fields, vector summary, reset UI state)
   useEffect(() => {
     if (selectedBookId) {
-      loadEntries(selectedBookId)
       loadVectorSummary(selectedBookId)
       const book = books.find((b) => b.id === selectedBookId)
       if (book) {
@@ -140,16 +160,28 @@ export default function WorldBookPanel() {
       setEntrySearchFilter('')
       setSelectedEntryId(null)
       setShowDiagnosticsModal(false)
+      setEntryPage(1)
     } else {
       setEntries([])
       setEntryTotal(0)
-      setEntryOffset(0)
+      setEntryPage(1)
       setEntrySearchFilter('')
       setSelectedEntryId(null)
       setVectorSummary(null)
       setShowDiagnosticsModal(false)
     }
-  }, [selectedBookId, books, loadEntries, loadVectorSummary])
+  }, [selectedBookId, books, loadVectorSummary])
+
+  // Reset to page 1 when sort changes
+  const handleSortByChange = useCallback((value: EntrySortBy) => {
+    setEntrySortBy(value)
+    setEntryPage(1)
+  }, [])
+
+  const toggleSortDir = useCallback(() => {
+    setEntrySortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+    setEntryPage(1)
+  }, [])
 
   // Book CRUD
   const handleCreateBook = useCallback(async () => {
@@ -202,6 +234,11 @@ export default function WorldBookPanel() {
     [selectedBookId]
   )
 
+  const refetchCurrentPage = useCallback(() => {
+    if (!selectedBookId) return
+    loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
+  }, [selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries])
+
   // Entry CRUD
   const handleCreateEntry = useCallback(async () => {
     if (!selectedBookId) return
@@ -211,12 +248,11 @@ export default function WorldBookPanel() {
         key: [],
         content: '',
       })
-      setEntries((prev) => [...prev, entry])
-      setEntryTotal((prev) => prev + 1)
-      setEntryOffset((prev) => prev + 1)
       setSelectedEntryId(entry.id)
+      // Refetch current page so sort ordering is respected
+      await loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
     } catch {}
-  }, [selectedBookId])
+  }, [selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries])
 
   const [reindexing, setReindexing] = useState(false)
 
@@ -232,14 +268,14 @@ export default function WorldBookPanel() {
       })
       const finalStatus = formatWorldBookReindexStatus(result)
       setVectorStatus(`Done: ${finalStatus}`)
-      await loadEntries(selectedBookId)
+      refetchCurrentPage()
       await loadVectorSummary(selectedBookId)
     } catch {
       setVectorStatus('Failed to reindex vectors')
     } finally {
       setReindexing(false)
     }
-  }, [selectedBookId, reindexing, loadEntries, loadVectorSummary])
+  }, [selectedBookId, reindexing, refetchCurrentPage, loadVectorSummary])
 
   const handleConvertToVectorizedPreview = useCallback(async () => {
     if (!selectedBookId) return
@@ -259,7 +295,7 @@ export default function WorldBookPanel() {
       const result = await worldBooksApi.convertToVectorized(selectedBookId)
       setVectorSummary(result.summary)
       setVectorStatus(`Converted ${result.converted} entries. Reindexing vectors...`)
-      await loadEntries(selectedBookId)
+      refetchCurrentPage()
       const reindexResult = await worldBooksApi.reindexVectors(selectedBookId, {
         onProgress: (p) => {
           setVectorStatus(`Reindexing... ${formatWorldBookReindexStatus(p)}`)
@@ -267,14 +303,14 @@ export default function WorldBookPanel() {
       })
       const finalStatus = formatWorldBookReindexStatus(reindexResult)
       setVectorStatus(`Done: ${finalStatus}`)
-      await loadEntries(selectedBookId)
+      refetchCurrentPage()
       await loadVectorSummary(selectedBookId)
     } catch {
       setVectorStatus('Failed to convert and reindex')
     } finally {
       setReindexing(false)
     }
-  }, [selectedBookId, loadEntries, loadVectorSummary])
+  }, [selectedBookId, refetchCurrentPage, loadVectorSummary])
 
   const handleDiagnostics = useCallback(async () => {
     if (!selectedBookId || !activeChatId) return
@@ -286,13 +322,11 @@ export default function WorldBookPanel() {
       if (!selectedBookId) return
       try {
         await worldBooksApi.deleteEntry(selectedBookId, entryId)
-        setEntries((prev) => prev.filter((e) => e.id !== entryId))
-        setEntryTotal((prev) => Math.max(0, prev - 1))
-        setEntryOffset((prev) => Math.max(0, prev - 1))
         if (selectedEntryId === entryId) setSelectedEntryId(null)
+        await loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
       } catch {}
     },
-    [selectedBookId, selectedEntryId]
+    [selectedBookId, selectedEntryId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries]
   )
 
   const updateEntry = useCallback(
@@ -804,12 +838,34 @@ export default function WorldBookPanel() {
             <Button variant="primary" size="sm" icon={<Plus size={12} />} onClick={handleCreateEntry}>New</Button>
           </div>
 
+          <div className={styles.entrySortRow}>
+            <select
+              className={styles.entrySortSelect}
+              value={entrySortBy}
+              onChange={(e) => handleSortByChange(e.target.value as EntrySortBy)}
+              title="Sort entries by"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>Sort: {opt.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={styles.entrySortDirBtn}
+              onClick={toggleSortDir}
+              title={entrySortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
+            >
+              {entrySortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+              <ArrowUpDown size={10} />
+            </button>
+          </div>
+
           <label className={styles.entrySearch}>
             <Search size={14} className={styles.entrySearchIcon} />
             <input
               type="text"
               className={styles.entrySearchInput}
-              placeholder="Search entries..."
+              placeholder="Search all entries..."
               value={entrySearchFilter}
               onChange={(e) => setEntrySearchFilter(e.target.value)}
             />
@@ -821,7 +877,7 @@ export default function WorldBookPanel() {
           ) : (
           <PanelFadeIn>
           <div className={styles.entryList}>
-            {filteredEntries.map((entry) => (
+            {entries.map((entry) => (
               <div key={entry.id}>
                 <div
                   className={clsx(styles.entryRow, selectedEntryId === entry.id && styles.entryRowActive, entry.disabled && styles.entryRowDisabled)}
@@ -879,22 +935,22 @@ export default function WorldBookPanel() {
               </div>
             ))}
             {entries.length === 0 && (
-              <div className={styles.emptyState}>No entries yet</div>
-            )}
-            {entries.length > 0 && filteredEntries.length === 0 && (
-              <div className={styles.emptyState}>No entries match your search</div>
-            )}
-            {entries.length < entryTotal && (
-              <Button
-                variant="primary" size="sm"
-                onClick={loadMoreEntries}
-                disabled={loadingMore}
-                style={{ margin: '8px auto', display: 'block' }}
-              >
-                {loadingMore ? 'Loading...' : `Load More (${entries.length}/${entryTotal})`}
-              </Button>
+              <div className={styles.emptyState}>
+                {debouncedEntrySearch ? 'No entries match your search' : 'No entries yet'}
+              </div>
             )}
           </div>
+          {entryTotalPages > 1 && (
+            <Pagination
+              currentPage={entryPage}
+              totalPages={entryTotalPages}
+              onPageChange={(p) => {
+                setEntryPage(p)
+                setSelectedEntryId(null)
+              }}
+              totalItems={entryTotal}
+            />
+          )}
           </PanelFadeIn>
           )}
 

@@ -280,17 +280,80 @@ export function convertToVectorized(
 
 // --- World Book Entry CRUD ---
 
-export function listEntriesPaginated(userId: string, worldBookId: string, pagination: PaginationParams): PaginatedResult<WorldBookEntry> {
+const ENTRY_SORT_COLUMNS = {
+  order: "order_value",
+  priority: "priority",
+  created: "created_at",
+  updated: "updated_at",
+  name: "comment",
+} as const;
+
+export type EntrySortKey = keyof typeof ENTRY_SORT_COLUMNS;
+
+/** Escape special FTS5 query characters and append prefix wildcard */
+function sanitizeEntryFtsQuery(input: string): string {
+  const cleaned = input.replace(/[":*()^{}~\-]/g, " ").trim();
+  if (!cleaned) return "";
+  return cleaned
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `"${t}"*`)
+    .join(" ");
+}
+
+export function listEntriesPaginated(
+  userId: string,
+  worldBookId: string,
+  pagination: PaginationParams,
+  options?: { sortBy?: EntrySortKey; sortDir?: "asc" | "desc"; search?: string }
+): PaginatedResult<WorldBookEntry> {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return { data: [], total: 0, limit: pagination.limit, offset: pagination.offset };
 
-  return paginatedQuery(
-    "SELECT * FROM world_book_entries WHERE world_book_id = ? ORDER BY order_value ASC",
-    "SELECT COUNT(*) as count FROM world_book_entries WHERE world_book_id = ?",
-    [worldBookId],
-    pagination,
-    rowToEntry
-  );
+  const sortKey: EntrySortKey = options?.sortBy && options.sortBy in ENTRY_SORT_COLUMNS
+    ? options.sortBy
+    : "order";
+  const column = ENTRY_SORT_COLUMNS[sortKey];
+  const direction = options?.sortDir === "desc" ? "DESC" : "ASC";
+  const collate = sortKey === "name" ? " COLLATE NOCASE" : "";
+
+  const ftsQuery = options?.search ? sanitizeEntryFtsQuery(options.search) : "";
+  if (!ftsQuery) {
+    // Fast path: no search — use cached paginated query
+    return paginatedQuery(
+      `SELECT * FROM world_book_entries WHERE world_book_id = ? ORDER BY ${column}${collate} ${direction}, id ASC`,
+      "SELECT COUNT(*) as count FROM world_book_entries WHERE world_book_id = ?",
+      [worldBookId],
+      pagination,
+      rowToEntry
+    );
+  }
+
+  // FTS path: JOIN world_book_entries_fts, scoped by world_book_id, sorted by
+  // explicit column (never by FTS rank — users already picked a sort order).
+  const db = getDb();
+  const whereStr = "e.world_book_id = ? AND world_book_entries_fts MATCH ?";
+  const params = [worldBookId, ftsQuery];
+  const fromClause =
+    "world_book_entries e JOIN world_book_entries_fts fts ON fts.rowid = e.rowid";
+
+  const countRow = db
+    .query(`SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`)
+    .get(...params) as { count: number } | null;
+  const total = countRow?.count ?? 0;
+
+  const rows = db
+    .query(
+      `SELECT e.* FROM ${fromClause} WHERE ${whereStr} ORDER BY e.${column}${collate} ${direction}, e.id ASC LIMIT ? OFFSET ?`
+    )
+    .all(...params, pagination.limit, pagination.offset) as any[];
+
+  return {
+    data: rows.map(rowToEntry),
+    total,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
 }
 
 export function listEntries(userId: string, worldBookId: string): WorldBookEntry[] {

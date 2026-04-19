@@ -785,6 +785,49 @@
   justify-content: space-between;
 }
 
+.entrySortRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.entrySortSelect {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.entrySortSelect:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary);
+}
+
+.entrySortDirBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.entrySortDirBtn:hover {
+  border-color: var(--lumiverse-primary-050);
+  color: var(--lumiverse-primary);
+}
+
 .entryListTitle {
   font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
