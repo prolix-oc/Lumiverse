@@ -662,7 +662,8 @@
   /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px).
      Compensate the taller line-height (16px × 1.5 = 24px) with reduced vertical
      padding so the textarea stays 40px — matching the buttons. */
-  .textarea {
+  .textarea,
+  .textareaMirror {
     font-size: max(16px, calc(14px * var(--lumiverse-font-scale, 1)));
     padding: 8px 14px;
   }
