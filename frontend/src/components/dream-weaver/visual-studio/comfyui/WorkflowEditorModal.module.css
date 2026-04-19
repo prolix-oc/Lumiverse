@@ -1,6 +1,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   z-index: 10003;
   display: flex;
   align-items: center;
@@ -11,8 +13,8 @@
 }
 
 .modal {
-  width: min(1220px, 96vw);
-  height: min(860px, 92vh);
+  width: min(1220px, calc(96vw / var(--lumiverse-ui-scale, 1)));
+  height: min(860px, calc(92vh / var(--lumiverse-ui-scale, 1)));
   display: flex;
   flex-direction: column;
   border-radius: 24px;
@@ -42,7 +44,7 @@
 .eyebrow,
 .panelEyebrow {
   margin: 0 0 0.25rem;
-  font-size: 0.66rem;
+  font-size: calc(0.66rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -56,11 +58,11 @@
 }
 
 .title {
-  font-size: 1.1rem;
+  font-size: calc(1.1rem * var(--lumiverse-font-scale, 1));
 }
 
 .panelTitle {
-  font-size: 0.98rem;
+  font-size: calc(0.98rem * var(--lumiverse-font-scale, 1));
 }
 
 .closeButton {
@@ -98,7 +100,7 @@
   margin: 0;
   color: var(--lumiverse-text-muted);
   line-height: 1.6;
-  font-size: 0.84rem;
+  font-size: calc(0.84rem * var(--lumiverse-font-scale, 1));
   max-width: 44rem;
 }
 
@@ -113,7 +115,7 @@
   gap: 0.45rem;
   padding: 0.7rem 0.95rem;
   border-radius: 12px;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -139,7 +141,7 @@
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 48%, transparent);
   color: var(--lumiverse-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
   resize: vertical;
   box-sizing: border-box;
@@ -158,7 +160,7 @@
 
 .metaText {
   color: var(--lumiverse-text-muted);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -168,7 +170,7 @@
   background: color-mix(in srgb, #f59e0b 9%, var(--lumiverse-bg-deep));
   border: 1px solid color-mix(in srgb, #f59e0b 22%, transparent);
   color: var(--lumiverse-text-muted);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -221,7 +223,7 @@
   border: 1px solid color-mix(in srgb, var(--lumiverse-border) 92%, transparent);
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 82%, transparent);
   color: var(--lumiverse-text-muted);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
   backdrop-filter: blur(8px);
 }
@@ -233,7 +235,7 @@
   background: color-mix(in srgb, #ef4444 10%, var(--lumiverse-bg-deep));
   border: 1px solid color-mix(in srgb, #ef4444 22%, transparent);
   color: #fda4af;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
 }
 
 @media (max-width: 860px) {

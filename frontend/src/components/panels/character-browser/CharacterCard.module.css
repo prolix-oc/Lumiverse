@@ -63,7 +63,7 @@
 }
 
 .avatarFallback {
-  font-size: 48px;
+  font-size: calc(48px * var(--lumiverse-font-scale, 1));
   font-weight: 300;
   color: var(--lumiverse-primary-muted);
   user-select: none;
@@ -176,7 +176,7 @@
 }
 
 .name {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   letter-spacing: -0.2px;
@@ -187,7 +187,7 @@
 }
 
 .creator {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -204,7 +204,7 @@
 }
 
 .tag {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 2px 8px;
   border-radius: 6px;
   border: 1px solid;
@@ -216,7 +216,7 @@
 }
 
 .tagOverflow {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 2px 6px;
   border-radius: 6px;
   color: var(--lumiverse-text-dim);
@@ -256,7 +256,7 @@
 }
 
 .compact .avatarFallback {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
 }
 
 .compact .info {
@@ -267,7 +267,7 @@
 }
 
 .compact .name {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .compact .tags,

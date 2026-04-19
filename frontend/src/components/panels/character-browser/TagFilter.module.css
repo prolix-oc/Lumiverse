@@ -14,7 +14,7 @@
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   border-radius: 6px;
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
@@ -73,7 +73,7 @@
   border-bottom: 1px solid var(--lumiverse-border);
   outline: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .search::placeholder {
@@ -107,20 +107,20 @@
 }
 
 .tagPill {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 1px 6px;
   border-radius: 4px;
   border: 1px solid;
 }
 
 .tagCount {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
 }
 
 .empty {
   padding: 12px;
   text-align: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }

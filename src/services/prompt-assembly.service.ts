@@ -1,4 +1,5 @@
-import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry, type MemoryStats } from "../llm/types";
+import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry, type MemoryStats, type ContextClipStats } from "../llm/types";
+import { resolveCounter, APPROXIMATE_TOKENIZER_NAME } from "./tokenizer.service";
 import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
@@ -26,7 +27,9 @@ import {
   stripHtmlFormattingTags as _stripHtmlFormattingTags,
   collapseExcessiveNewlines as _collapseExcessiveNewlines,
   sanitizeForVectorization,
+  type SanitizeOptions,
 } from "../utils/content-sanitizer";
+import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as globalAddonsSvc from "./global-addons.service";
@@ -47,6 +50,8 @@ import { buildEmotionalContext } from "./memory-cortex";
 import * as databankSvc from "./databank";
 import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { getSidecarSettings } from "./sidecar-settings.service";
+import { getChatBackgroundSignal } from "./chat-background.service";
+import { getDreamWeaverRuntimeBlocks } from "./dream-weaver/runtime-prompt";
 
 // ---------------------------------------------------------------------------
 // Chat history identity marker
@@ -76,6 +81,61 @@ function markAsChatHistory(msg: LlmMessage): LlmMessage {
 
 export function isChatHistoryMessage(msg: LlmMessage): boolean {
   return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
+
+/**
+ * Strip whitespace-only text parts from any multipart message. Strict providers
+ * (Anthropic, some OpenAI-compat) reject text content blocks that contain only
+ * whitespace; filtering at the assembly boundary keeps every downstream provider
+ * safe without per-provider defensive code.
+ *
+ * If a multipart message ends up with zero parts after filtering (all text was
+ * blank and no media survived), the message is collapsed to a string so the
+ * outbound request at least carries an empty-but-valid content field.
+ */
+function stripEmptyTextParts(result: LlmMessage[]): void {
+  for (let i = 0; i < result.length; i++) {
+    const msg = result[i];
+    if (!Array.isArray(msg.content)) continue;
+    const parts = msg.content as import("../llm/types").LlmMessagePart[];
+    const cleaned = parts.filter((p) => p.type !== "text" || p.text.trim().length > 0);
+    if (cleaned.length === parts.length) continue;
+    const replacement: LlmMessage = cleaned.length > 0
+      ? { ...msg, content: cleaned }
+      : { ...msg, content: "" };
+    if (isChatHistoryMessage(msg)) markAsChatHistory(replacement);
+    result[i] = replacement;
+  }
+}
+
+function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
+  for (let i = result.length - 1; i >= 0; i--) {
+    const msg = result[i];
+    if (msg.role !== "assistant" || !isChatHistoryMessage(msg)) continue;
+
+    if (typeof msg.content === "string") {
+      const trimmed = msg.content.replace(/\s+$/, "");
+      if (trimmed !== msg.content) {
+        result[i] = { ...msg, content: trimmed };
+        markAsChatHistory(result[i]);
+      }
+    } else if (Array.isArray(msg.content)) {
+      const parts = msg.content as import("../llm/types").LlmMessagePart[];
+      for (let j = parts.length - 1; j >= 0; j--) {
+        const p = parts[j];
+        if (p.type !== "text") continue;
+        const trimmed = p.text.replace(/\s+$/, "");
+        if (trimmed !== p.text) {
+          const newParts = [...parts];
+          newParts[j] = { type: "text", text: trimmed };
+          result[i] = { ...msg, content: newParts };
+          markAsChatHistory(result[i]);
+        }
+        break;
+      }
+    }
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +380,15 @@ interface PendingAppend {
  * Falls back to legacy simple message mapping if no preset/blocks are found.
  */
 export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResult> {
+  // Macrotask yield + abort check at the entry point so the event loop can
+  // process pending HTTP requests (crucially `/generate/stop`) before we
+  // enter the long stretch of synchronous block iteration, macro evaluation,
+  // and regex script application below. Without this, a stop clicked during
+  // the first ~200ms of assembly stayed queued behind our sync work and the
+  // user perceived the stop button as unresponsive.
+  await new Promise<void>(r => setTimeout(r, 0));
+  if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
+
   const pf = ctx.prefetched; // shorthand for prefetched data
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
@@ -375,7 +444,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       ctx.userId,
       resolvedPresetId,
       chat.id,
-      characterId
+      characterId,
+      { isGroup: chat.metadata?.group === true }
     );
     if (resolved.binding) {
       presetProfilesSvc.applyProfileToBlocks(blocks, resolved.binding);
@@ -413,17 +483,31 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       ? Promise.resolve(pf.embeddingConfig)
       : embeddingsSvc.getEmbeddingConfig(ctx.userId);
 
+    // Combine the generation's own abort with the chat-scoped background
+    // signal. Either firing tears down the fire-and-forget task: stop on
+    // the current gen OR a newer gen arriving on this chat aborts any
+    // orphan cortex/databank work left over from prior gens.
+    const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
+    const cortexSignal = ctx.signal
+      ? AbortSignal.any([ctx.signal, chatBgSignal])
+      : chatBgSignal;
+
     void (async () => {
       const embCfg = await embCfgPromise;
+      if (cortexSignal.aborted) return;
       const effective = cortexChatMemSettings
         ? embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg)
         : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
 
-      const cortexQueryText = buildQueryText(messages, effective);
+      const cortexQueryText = buildQueryText(messages, effective, getReasoningStripOptions(ctx.userId));
       const recentContent = messages.slice(-6).map(m => m.content).join(" ");
       const emotionalContext = buildEmotionalContext(recentContent);
 
-      // Fire main cortex query + linked cortex queries in parallel
+      // Fire main cortex query + linked cortex queries in parallel. The
+      // combined signal is threaded through so a user-initiated stop OR a
+      // newer generation on this chat tears down the embedding API call
+      // and LanceDB retrieval instead of letting the background task live
+      // on as an orphan.
       const mainQuery = memoryCortex.queryCortex({
         chatId: ctx.chatId,
         userId: ctx.userId,
@@ -434,15 +518,16 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         includeConsolidations: cortexConfig.consolidation.enabled,
         includeRelationships: cortexConfig.retrieval.relationshipInjection,
         excludeMessageIds: ctx.excludeMessageId ? [ctx.excludeMessageId] : undefined,
-      }, cortexConfig);
+      }, cortexConfig, cortexSignal);
 
       // Linked cortex queries use the same queryText for semantic relevance
       const linkedQuery = memoryCortex.queryLinkedCortex(
-        ctx.chatId, ctx.userId, cortexConfig, cortexQueryText,
+        ctx.chatId, ctx.userId, cortexConfig, cortexQueryText, cortexSignal,
       );
 
       await Promise.all([mainQuery, linkedQuery]);
     })().catch(err => {
+      if (cortexSignal.aborted) return;
       console.warn("[prompt-assembly] Background cortex query failed:", err);
     });
   }
@@ -455,12 +540,19 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   {
     const dbIds = databankSvc.resolveActiveDatabankIds(ctx.userId, ctx.chatId, character?.id ? [character.id] : [], databankCrossRefs);
     if (dbIds.length > 0) {
+      const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
+      const dbSignal = ctx.signal
+        ? AbortSignal.any([ctx.signal, chatBgSignal])
+        : chatBgSignal;
+
       void (async () => {
         const embCfg = pf?.embeddingConfig ?? await embeddingsSvc.getEmbeddingConfig(ctx.userId);
         if (!embCfg.enabled) return;
+        if (dbSignal.aborted) return;
         const queryText = messages.slice(-6).map(m => m.content).join(" ");
-        await databankSvc.searchDatabanks(ctx.userId, ctx.chatId, dbIds, queryText, 4);
+        await databankSvc.searchDatabanks(ctx.userId, ctx.chatId, dbIds, queryText, 4, dbSignal);
       })().catch(err => {
+        if (dbSignal.aborted) return;
         console.warn("[prompt-assembly] Background databank query failed:", err);
       });
     }
@@ -503,6 +595,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         wiSources.worldBookIds,
         wiEntries,
         messages,
+        ctx.signal,
       );
       vectorActivated = detailed.entries;
       vectorRetrievalDetails = detailed;
@@ -526,6 +619,9 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         );
       }
     } catch (err) {
+      // Propagate aborts so the entire assembly unwinds instead of silently
+      // continuing with keyword-only results after the user stopped generation.
+      if (ctx.signal?.aborted || (err as any)?.name === "AbortError") throw err;
       console.warn("[prompt-assembly] Vector world info activation failed, continuing with keyword-only:", err);
       vectorActivated = [];
     }
@@ -874,8 +970,13 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         historyParts.push(resolvedContent);
         const attachments = Array.isArray(msg.extra?.attachments) ? msg.extra.attachments : [];
         if (attachments.length > 0) {
-          // Build multipart content: text + attachment parts
-          const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolvedContent }];
+          // Build multipart content: text + attachment parts. Skip the text part
+          // when it's blank so strict providers (Anthropic et al) don't reject
+          // the request for empty content blocks.
+          const parts: import("../llm/types").LlmMessagePart[] = [];
+          if (resolvedContent.trim().length > 0) {
+            parts.push({ type: "text", text: resolvedContent });
+          }
           for (const att of attachments) {
             const b64 = attachmentCache.get(att.image_id) ?? null;
             if (!b64) continue;
@@ -885,7 +986,11 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
               parts.push({ type: "audio", data: b64, mime_type: att.mime_type });
             }
           }
-          result.push(markAsChatHistory({ role, content: parts }));
+          if (parts.length > 0) {
+            result.push(markAsChatHistory({ role, content: parts }));
+          } else {
+            result.push(markAsChatHistory({ role, content: resolvedContent }));
+          }
         } else {
           result.push(markAsChatHistory({ role, content: resolvedContent }));
         }
@@ -1053,6 +1158,14 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // Use the count tracked during chat_history insertion (respects message limit + exclusions)
   const lastChatIdx = firstChatIdx >= 0 ? firstChatIdx + chatHistoryCount : result.length;
+
+  const dreamWeaverRuntimeBlocks = getDreamWeaverRuntimeBlocks(effectiveCharacter)
+    .map((entry) => ({ ...entry, role: "system" as const }));
+  if (dreamWeaverRuntimeBlocks.length > 0) {
+    const insertAt = firstChatIdx >= 0 ? firstChatIdx : result.length;
+    const inserted = injectPromptBlocksAt(result, breakdown, dreamWeaverRuntimeBlocks, insertAt);
+    if (firstChatIdx >= 0) firstChatIdx += inserted;
+  }
 
   // Position 0: "before" — insert just before chat history
   if (!hasWiBefore && wiCache.before.length > 0) {
@@ -1264,6 +1377,17 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     applyAppendGroup(result, breakdown, group);
   }
 
+  // Strip trailing whitespace from the last chat-history assistant message.
+  // Anthropic (and other strict providers) reject turns ending in whitespace;
+  // explicit prefills are left alone so users can intentionally seed responses.
+  rtrimLastHistoryAssistant(result);
+
+  // Drop blank text parts from multipart messages — caption-less attachments,
+  // fully-stripped regex output, etc. can otherwise produce empty content blocks
+  // that Anthropic/Vertex-Anthropic reject with "text content blocks must
+  // contain non-whitespace text".
+  stripEmptyTextParts(result);
+
   // ---- Collapse all messages into a single user message (if enabled) ----
   const advSettings: AdvancedSettings | undefined = prompts.advancedSettings;
   if (advSettings?.collapseMessages) {
@@ -1277,6 +1401,19 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   if (completionSettings.includeUsage) {
     parameters._include_usage = true;
   }
+
+  // ---- Context budget clipping ----
+  // Drop oldest chat history messages until the assembly fits under the
+  // configured `max_context_length` (minus response headroom + safety margin).
+  // Runs AFTER all WI / AN / depth / prefill insertions so fixed overhead is
+  // accurately measured. The breakdown recompute below picks up the new
+  // chat-history bounds from the mutated `result` array.
+  const contextClipStats = await clipToContextBudget(
+    result,
+    connection?.model ?? null,
+    parameters.max_context_length as number | null | undefined,
+    parameters.max_tokens as number | null | undefined,
+  );
 
   // Build memory stats for dry-run diagnostics
   const memoryStats: MemoryStats = {
@@ -1316,6 +1453,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     }
     chatHistoryEntry.firstMessageIndex = firstIdx >= 0 ? firstIdx : undefined;
     chatHistoryEntry.messageCount = count;
+    // Clip already tokenized every remaining history message with the same
+    // model → same tokenizer as countBreakdown will resolve. Hand the sum
+    // over so the downstream snapshot doesn't retokenize.
+    if (contextClipStats.enabled && !contextClipStats.budgetInvalid) {
+      chatHistoryEntry.preCountedTokens = contextClipStats.chatHistoryTokensAfter;
+    }
   }
 
   return {
@@ -1326,6 +1469,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     activatedWorldInfo: activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
     worldInfoStats,
     memoryStats,
+    contextClipStats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,
     macroEnv,
@@ -2750,13 +2894,13 @@ function truncateToContextSize(text: string, maxTokens: number): string {
   return text.slice(-maxChars);
 }
 
-function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: number): string {
+function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: number, reasoningStrip?: SanitizeOptions): string {
   const queryMessages = messages
     .filter((m) => !(m.extra?.hidden) && m.content.trim().length > 0)
     .slice(-Math.max(1, contextSize));
   return truncateToContextSize(
     queryMessages
-      .map((m) => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(stripReasoningTags(m.content))}`)
+      .map((m) => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(stripReasoningTags(m.content), reasoningStrip)}`)
       .join("\n")
       .trim(),
     8000,
@@ -2765,7 +2909,7 @@ function buildWorldInfoVectorQueryPreview(messages: Message[], contextSize: numb
 
 export async function getWorldInfoVectorQueryPreview(userId: string, messages: Message[]): Promise<string> {
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  return buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3);
+  return buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3, getReasoningStripOptions(userId));
 }
 
 function isVectorEligibleWorldInfoEntry(entry: import("../types/world-book").WorldBookEntry): boolean {
@@ -2777,6 +2921,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   worldBookIds: string[],
   entries: WorldBookEntryModel[],
   messages: Message[],
+  signal?: AbortSignal,
 ): Promise<VectorWorldInfoRetrievalResult> {
   const emptyResult: VectorWorldInfoRetrievalResult = {
     entries: [],
@@ -2825,7 +2970,9 @@ export async function collectVectorActivatedWorldInfoDetailed(
   }
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     if (!queryVector || queryVector.length === 0) {
       return {
         ...emptyResult,
@@ -2844,7 +2991,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
 
     const searchResults = await Promise.allSettled(
       worldBookIds.map((worldBookId) =>
-        embeddingsSvc.searchWorldBookEntriesHybridWithVector(userId, worldBookId, queryText, queryVector, fetchLimit)
+        embeddingsSvc.searchWorldBookEntriesHybridWithVector(userId, worldBookId, queryText, queryVector, fetchLimit, signal)
       )
     );
 
@@ -2949,6 +3096,9 @@ export async function collectVectorActivatedWorldInfoDetailed(
       blockerMessages,
     };
   } catch (err) {
+    // Caller-initiated abort bubbles up so the whole pipeline can unwind
+    // instead of silently returning an empty result and continuing.
+    if (signal?.aborted || (err as any)?.name === "AbortError") throw err;
     console.warn("[prompt] Vector activated world info retrieval failed:", err);
     return {
       ...emptyResult,
@@ -2968,8 +3118,9 @@ export async function collectVectorActivatedWorldInfo(
   worldBookIds: string[],
   entries: import("../types/world-book").WorldBookEntry[],
   messages: Message[],
+  signal?: AbortSignal,
 ): Promise<VectorActivatedEntry[]> {
-  const result = await collectVectorActivatedWorldInfoDetailed(userId, worldBookIds, entries, messages);
+  const result = await collectVectorActivatedWorldInfoDetailed(userId, worldBookIds, entries, messages, signal);
   return result.entries;
 }
 
@@ -3041,6 +3192,7 @@ export interface MemoryRetrievalResult {
 function buildQueryText(
   messages: Message[],
   settings: import("./embeddings.service").ChatMemorySettings,
+  reasoningStrip?: SanitizeOptions,
 ): string {
   const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
   const contextSize = Math.max(1, settings.queryContextSize);
@@ -3050,14 +3202,14 @@ function buildQueryText(
       const lastUser = [...visibleMessages].reverse().find(m => m.is_user);
       if (!lastUser) return "";
       return truncateToContextSize(
-        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content)}`,
+        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content, reasoningStrip)}`,
         settings.queryMaxTokens,
       );
     }
     case "weighted_recent": {
       const queryMessages = visibleMessages.slice(-contextSize);
       const parts = queryMessages.map(m =>
-        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`
       );
       // Repeat last message for recency bias
       if (parts.length > 0) parts.push(parts[parts.length - 1]);
@@ -3068,7 +3220,7 @@ function buildQueryText(
       const queryMessages = visibleMessages.slice(-contextSize);
       return truncateToContextSize(
         queryMessages.map(m =>
-          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`
+          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`
         ).join("\n").trim(),
         settings.queryMaxTokens,
       );
@@ -3222,6 +3374,22 @@ function injectWorldInfoAt(
   for (const entry of entries) {
     result.splice(idx, 0, { role: entry.role, content: entry.content });
     breakdown.push({ type: "world_info", name, role: entry.role, content: entry.content });
+    idx++;
+  }
+  return entries.length;
+}
+
+function injectPromptBlocksAt(
+  result: LlmMessage[],
+  breakdown: AssemblyBreakdownEntry[],
+  entries: Array<{ content: string; role: LlmMessage["role"]; name: string }>,
+  insertAt: number,
+): number {
+  if (entries.length === 0) return 0;
+  let idx = Math.max(0, Math.min(insertAt, result.length));
+  for (const entry of entries) {
+    result.splice(idx, 0, { role: entry.role, content: entry.content });
+    breakdown.push({ type: "block", name: entry.name, role: entry.role, content: entry.content });
     idx++;
   }
   return entries.length;
@@ -3647,6 +3815,152 @@ function collapseToSingleUserMessage(result: LlmMessage[]): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Context budget clipping
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum safety margin in tokens. Even on tiny context windows we want some
+ * headroom for later mutations (council deliberation splice, interceptor
+ * parameter injection, tokenizer variance between our count and provider count).
+ */
+const MIN_CLIP_SAFETY_MARGIN = 256;
+/** Safety margin as a fraction of `contextSize`. `max(MIN, ratio * contextSize)` wins. */
+const CLIP_SAFETY_MARGIN_RATIO = 0.02;
+/** Fallback response headroom when `max_tokens` is unset. Matches the industry default. */
+const FALLBACK_MAX_RESPONSE_TOKENS = 4096;
+
+/**
+ * Clip oldest chat-history messages from the assembled prompt so the total
+ * fits within the preset's `contextSize` (minus response headroom + margin).
+ *
+ * Single-pass tokenization: each message is counted exactly once. Chat-history
+ * messages are identified by the `__chatHistorySource` marker (survives all
+ * spread-based mutations). Newest→oldest walk picks keepers until the budget
+ * is hit; the remaining oldest are dropped via a single `filter()`.
+ *
+ * Mutates `result` in place when clipping occurs. Returns stats so the caller
+ * can emit them on `GENERATION_STARTED` / dry-run so the UI can surface a
+ * "N messages hidden" indicator.
+ */
+async function clipToContextBudget(
+  result: LlmMessage[],
+  modelId: string | null,
+  maxContext: number | null | undefined,
+  maxResponseTokens: number | null | undefined,
+): Promise<ContextClipStats> {
+  const resolvedContext = typeof maxContext === "number" && maxContext > 0 ? maxContext : 0;
+  const resolvedResponse = typeof maxResponseTokens === "number" && maxResponseTokens > 0
+    ? maxResponseTokens
+    : FALLBACK_MAX_RESPONSE_TOKENS;
+
+  if (resolvedContext <= 0) {
+    return {
+      enabled: false,
+      maxContext: 0,
+      maxResponseTokens: resolvedResponse,
+      safetyMargin: 0,
+      inputBudget: 0,
+      fixedTokens: 0,
+      chatHistoryTokensBefore: 0,
+      chatHistoryTokensAfter: 0,
+      messagesDropped: 0,
+      tokensDropped: 0,
+      tokenizerUsed: APPROXIMATE_TOKENIZER_NAME,
+    };
+  }
+
+  const safetyMargin = Math.max(MIN_CLIP_SAFETY_MARGIN, Math.floor(resolvedContext * CLIP_SAFETY_MARGIN_RATIO));
+  const inputBudget = resolvedContext - resolvedResponse - safetyMargin;
+
+  const counter = await resolveCounter(modelId || "");
+
+  const n = result.length;
+  const tokens: number[] = new Array(n);
+  const historyIndices: number[] = [];
+  let fixedTokens = 0;
+  let chatHistoryTokensBefore = 0;
+  for (let i = 0; i < n; i++) {
+    const msg = result[i];
+    const text = `${msg.role}\n${getTextContent(msg)}`;
+    const t = counter.count(text);
+    tokens[i] = t;
+    if (isChatHistoryMessage(msg)) {
+      historyIndices.push(i);
+      chatHistoryTokensBefore += t;
+    } else {
+      fixedTokens += t;
+    }
+  }
+
+  const makeStats = (overrides: Partial<ContextClipStats>): ContextClipStats => ({
+    enabled: true,
+    maxContext: resolvedContext,
+    maxResponseTokens: resolvedResponse,
+    safetyMargin,
+    inputBudget,
+    fixedTokens,
+    chatHistoryTokensBefore,
+    chatHistoryTokensAfter: chatHistoryTokensBefore,
+    messagesDropped: 0,
+    tokensDropped: 0,
+    tokenizerUsed: counter.name,
+    ...overrides,
+  });
+
+  // Misconfigured budget (e.g. maxContext smaller than max_tokens + margin).
+  // Don't clip silently — surface the misconfiguration via `budgetInvalid`.
+  if (inputBudget <= 0) {
+    return makeStats({ budgetInvalid: true });
+  }
+
+  // Walk history newest→oldest; remember the oldest index we can keep.
+  const remainingBudget = inputBudget - fixedTokens;
+  let accHistoryTokens = 0;
+  let oldestKeptHistoryIdx = -1;
+  if (remainingBudget > 0) {
+    for (let i = historyIndices.length - 1; i >= 0; i--) {
+      const t = tokens[historyIndices[i]];
+      if (accHistoryTokens + t > remainingBudget) break;
+      accHistoryTokens += t;
+      oldestKeptHistoryIdx = i;
+    }
+  }
+
+  if (oldestKeptHistoryIdx === 0 || historyIndices.length === 0) {
+    return makeStats({});
+  }
+
+  const droppedCount = oldestKeptHistoryIdx === -1
+    ? historyIndices.length
+    : oldestKeptHistoryIdx;
+  let tokensDropped = 0;
+  for (let i = 0; i < droppedCount; i++) {
+    tokensDropped += tokens[historyIndices[i]];
+  }
+
+  // historyIndices is monotonically increasing, so messages with raw index
+  // below `firstKeptRawIdx` are exactly the dropped history messages. Using
+  // a boundary comparison avoids allocating a Set per generation.
+  const firstKeptRawIdx = oldestKeptHistoryIdx === -1
+    ? Number.POSITIVE_INFINITY
+    : historyIndices[oldestKeptHistoryIdx];
+  let write = 0;
+  for (let read = 0; read < n; read++) {
+    const msg = result[read];
+    if (isChatHistoryMessage(msg) && read < firstKeptRawIdx) continue;
+    if (write !== read) result[write] = msg;
+    write++;
+  }
+  result.length = write;
+
+  return makeStats({
+    chatHistoryTokensAfter: accHistoryTokens,
+    messagesDropped: droppedCount,
+    tokensDropped,
+  });
+}
+
 /**
  * Map SamplerOverrides + advanced settings + reasoning + customBody to API-compatible parameter object.
  *
@@ -3656,7 +3970,7 @@ function collapseToSingleUserMessage(result: LlmMessage[]): void {
 function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
-  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string } | null,
+  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string; thinkingDisplay?: string } | null,
   providerName?: string | null,
   modelName?: string | null,
 ): Record<string, any> {
@@ -3705,7 +4019,7 @@ function buildParameters(
     const effort = reasoningSettings.reasoningEffort || "auto";
     const isToggleOnly = providerName === "moonshot" || providerName === "zai";
     if (effort !== "auto" || isToggleOnly) {
-      injectReasoningParams(params, providerName, effort, modelName || undefined);
+      injectReasoningParams(params, providerName, effort, modelName || undefined, reasoningSettings.thinkingDisplay);
     }
   }
 
@@ -3720,6 +4034,18 @@ function buildParameters(
     }
   }
 
+  // Authoritative off-switch: when the user has disabled API reasoning, strip every
+  // provider-specific reasoning field — including anything a customBody spread in —
+  // so native thinking is never requested. Omitting these params is the documented
+  // "no extended thinking" default for every provider we target.
+  if (reasoningSettings && reasoningSettings.apiReasoning === false) {
+    delete params.thinking;
+    delete params.output_config;
+    delete params.thinkingConfig;
+    delete params.reasoning;
+    delete params.reasoning_effort;
+  }
+
   return params;
 }
 
@@ -3731,6 +4057,9 @@ function buildParameters(
  * Provider mapping:
  * - Anthropic:   thinking + output_config (adaptive 4.6+) or thinking.budget_tokens (legacy).
  *                Opus 4.7 additionally supports an "xhigh" tier between high and max.
+ *                Anthropic-only: `thinkingDisplay` ('summarized' | 'omitted') maps to the
+ *                `thinking.display` field. On Opus 4.7+ the API defaults to 'omitted' when
+ *                unset, so users must opt in to 'summarized' to receive summary text.
  * - Google:      thinkingConfig.thinkingLevel (3.x) or thinkingBudget (2.5)
  * - OpenRouter:  reasoning: { effort } with values: none/minimal/low/medium/high/xhigh
  * - NanoGPT:     reasoning_effort (OpenAI-compat) with values: none/minimal/low/medium/high
@@ -3738,7 +4067,13 @@ function buildParameters(
  * - Z.AI:        thinking: { type: "enabled" } — toggle-only, effort ignored
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
  */
-export function injectReasoningParams(params: Record<string, any>, providerName: string, effort: string, model?: string): void {
+export function injectReasoningParams(
+  params: Record<string, any>,
+  providerName: string,
+  effort: string,
+  model?: string,
+  thinkingDisplay?: string,
+): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
       // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
@@ -3758,6 +4093,11 @@ export function injectReasoningParams(params: Record<string, any>, providerName:
         const budgetMap: Record<string, number> = { low: 2048, medium: 8192, high: 16384, max: 32768 };
         const budget = budgetMap[effort] || 8192;
         params.thinking = { type: "enabled", budget_tokens: budget };
+      }
+    }
+    if (thinkingDisplay === "summarized" || thinkingDisplay === "omitted") {
+      if (params.thinking && typeof params.thinking === "object" && params.thinking.display === undefined) {
+        params.thinking.display = thinkingDisplay;
       }
     }
   } else if (providerName === "google" || providerName === "google_vertex") {
@@ -3820,7 +4160,7 @@ async function onelinerImpersonation(
   samplerOverrides: SamplerOverrides | null,
   ctx: AssemblyContext,
   macroEnv: MacroEnv,
-  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string } | null,
+  reasoningSettings?: { apiReasoning?: boolean; reasoningEffort?: string; thinkingDisplay?: string } | null,
 ): Promise<AssemblyResult> {
   const result: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
@@ -3957,6 +4297,11 @@ async function legacyAssembly(
     breakdown.push({ type: "block", name: "Character Card (legacy)", role: "system", content: systemContent });
   }
 
+  for (const block of getDreamWeaverRuntimeBlocks(legacyChar as Character)) {
+    llmMessages.push({ role: "system", content: block.content });
+    breakdown.push({ type: "block", name: block.name, role: "system", content: block.content });
+  }
+
   // Add dialogue examples if present
   if (character?.mes_example) {
     const examples = character.mes_example.trim();
@@ -4004,7 +4349,10 @@ async function legacyAssembly(
     legacyHistoryParts.push(resolved);
     const attachments = Array.isArray(m.extra?.attachments) ? m.extra.attachments : [];
     if (attachments.length > 0) {
-      const parts: import("../llm/types").LlmMessagePart[] = [{ type: "text", text: resolved }];
+      const parts: import("../llm/types").LlmMessagePart[] = [];
+      if (resolved.trim().length > 0) {
+        parts.push({ type: "text", text: resolved });
+      }
       for (const att of attachments) {
         if (!att.image_id || !userId) continue;
         const b64 = legacyAttachmentCache.get(att.image_id as string) ?? null;
@@ -4017,7 +4365,7 @@ async function legacyAssembly(
       }
       llmMessages.push({
         role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
-        content: parts,
+        content: parts.length > 0 ? parts : resolved,
       });
     } else {
       llmMessages.push({
@@ -4033,7 +4381,7 @@ async function legacyAssembly(
   legacyHistoryCount = mergeConsecutiveUserMessages(llmMessages, legacyFirstChatIdx, legacyHistoryCount);
 
   // Strip reasoning from older chat history messages based on keepInHistory
-  let reasoningVal: { apiReasoning?: boolean; reasoningEffort?: string } | null = null;
+  let reasoningVal: { apiReasoning?: boolean; reasoningEffort?: string; thinkingDisplay?: string } | null = null;
   if (userId) {
     const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
     if (reasoningSetting?.value) {

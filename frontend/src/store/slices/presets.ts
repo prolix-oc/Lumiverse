@@ -5,7 +5,6 @@ export const createPresetsSlice: StateCreator<PresetsSlice> = (set, get) => ({
   presets: {},
   activePresetId: null,
   activeLoomPresetId: null,
-  activeLumiPresetId: null,
   loomRegistry: {},
 
   setPresets: (presets) => set({ presets }),
@@ -15,15 +14,6 @@ export const createPresetsSlice: StateCreator<PresetsSlice> = (set, get) => ({
     set({ activeLoomPresetId: id })
     if (setSetting) setSetting('activeLoomPresetId', id)
   },
-  setActiveLumiPreset: (id) => {
-    const { setSetting } = get() as any
-    set({ activeLumiPresetId: id })
-    if (setSetting) setSetting('activeLumiPresetId', id)
-  },
   setLoomRegistry: (registry) => set({ loomRegistry: registry }),
-  /** Prefers Lumi preset when set, falls back to Loom preset. */
-  getActivePresetForGeneration: () => {
-    const { activeLumiPresetId, activeLoomPresetId } = get()
-    return activeLumiPresetId || activeLoomPresetId || null
-  },
+  getActivePresetForGeneration: () => get().activeLoomPresetId || null,
 })

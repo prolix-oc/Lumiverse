@@ -1,12 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useStore } from '@/store'
 import {
   generateSummary,
   saveSummary,
   clearSummary,
   getSummary,
-  getLastSummarizedInfo,
-  shouldAutoSummarize,
 } from '@/lib/summary/service'
 
 export function useSummary() {
@@ -17,7 +15,6 @@ export function useSummary() {
   const activePersonaId = useStore((s) => s.activePersonaId)
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
-  const messages = useStore((s) => s.messages)
   const summarization = useStore((s) => s.summarization)
   const setSummarization = useStore((s) => s.setSummarization)
   const isSummarizing = useStore((s) => s.isSummarizing)
@@ -27,8 +24,6 @@ export function useSummary() {
   const [originalText, setOriginalText] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  const autoCheckRef = useRef(false)
 
   // Derived values
   const hasChat = !!activeChatId
@@ -129,28 +124,6 @@ export function useSummary() {
       setError(err.message)
     }
   }, [activeChatId])
-
-  // Auto-summarization check on message count changes
-  useEffect(() => {
-    if (summarization.mode !== 'auto' || !activeChatId || isSummarizing) return
-    if (autoCheckRef.current) return // Prevent double-trigger
-
-    const check = async () => {
-      const info = await getLastSummarizedInfo(activeChatId)
-      const lastCount = info?.messageCount ?? 0
-
-      if (shouldAutoSummarize(messages.length, lastCount, summarization.autoInterval)) {
-        autoCheckRef.current = true
-        try {
-          await generate(false)
-        } finally {
-          autoCheckRef.current = false
-        }
-      }
-    }
-
-    check()
-  }, [messages.length, summarization.mode, summarization.autoInterval, activeChatId, isSummarizing, generate])
 
   return {
     // State

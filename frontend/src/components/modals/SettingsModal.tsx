@@ -1553,7 +1553,7 @@ function EmbeddingsSettings() {
       <div className={styles.field}>
         <label className={styles.fieldLabel}>API URL</label>
         <input className={styles.select} value={cfg.api_url} onChange={(e) => update({ api_url: e.target.value })} />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
           Auto-appends /v1/embeddings to base domains and /embeddings to partial paths (e.g. /v1). Full paths ending in /embeddings are used as-is.
         </span>
       </div>
@@ -1627,7 +1627,7 @@ function EmbeddingsSettings() {
           value={cfg.batch_size}
           onChange={(e) => update({ batch_size: Math.max(1, Math.min(200, Number(e.target.value || 50))) })}
         />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
           Number of entries to embed per API request during reindexing (1-200)
         </span>
       </div>
@@ -1643,7 +1643,7 @@ function EmbeddingsSettings() {
           value={cfg.similarity_threshold}
           onChange={(e) => update({ similarity_threshold: Math.max(0, Math.min(2, Number(e.target.value || 0))) })}
         />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
           Maximum cosine distance for vector matches (0 = no filtering, lower = stricter). LanceDB cosine distance starts at 0 for identical text and can go above 1.
         </span>
       </div>
@@ -1659,7 +1659,7 @@ function EmbeddingsSettings() {
           value={cfg.rerank_cutoff}
           onChange={(e) => update({ rerank_cutoff: Math.max(0, Math.min(2, Number(e.target.value || 0))) })}
         />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
           Minimum rerank score required after boosts and penalties are applied to world-book vector hits. 0 = no post-rerank filtering.
         </span>
       </div>
@@ -1675,7 +1675,7 @@ function EmbeddingsSettings() {
             <option value="balanced">Balanced - Standard retrieval (recommended)</option>
             <option value="aggressive">Aggressive - More memories, lower threshold</option>
           </select>
-          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
             Controls how many memories are retrieved and quality threshold. All chunking parameters are automatically optimized based on this mode.
           </span>
         </div>
@@ -1691,7 +1691,7 @@ function EmbeddingsSettings() {
           value={cfg.request_timeout ?? 60}
           onChange={(e) => update({ request_timeout: Math.max(0, Math.min(300, Number(e.target.value || 60))) })}
         />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: '11px' }}>
+        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
           Max seconds to wait for an embedding API response. Increase for slow providers or large batches. 0 = no timeout.
         </span>
       </div>

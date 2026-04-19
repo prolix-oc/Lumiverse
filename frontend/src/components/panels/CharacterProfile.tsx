@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type CSSProperties } from 'react'
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
 import { useParams } from 'react-router'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
@@ -7,7 +7,7 @@ import { useStore } from '@/store'
 import LazyImage from '@/components/shared/LazyImage'
 import { EditorSection } from '@/components/shared/FormComponents'
 import {
-  User, Users, BookOpen, MessageSquare, Sparkles, FileText,
+  User, Users, BookOpen, MessageSquare, Sparkles, FileText, Eye, Mic,
   Pencil, Settings2, ChevronRight,
 } from 'lucide-react'
 import { extractPalette } from '@/lib/colorExtraction'
@@ -16,6 +16,13 @@ import type { Character } from '@/types/api'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import clsx from 'clsx'
 import styles from './CharacterProfile.module.css'
+import {
+  getDreamWeaverAppearanceText,
+  getDreamWeaverCharacterMetadata,
+  getDreamWeaverVoiceDisplayText,
+  hasDreamWeaverAppearance,
+  hasDreamWeaverVoiceGuidance,
+} from '@/lib/dream-weaver-character'
 
 export default function CharacterProfile() {
   const params = useParams<{ id: string }>()
@@ -93,6 +100,15 @@ function SingleCharacterProfile({
   }, [charId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const avatarUrl = getCharacterAvatarLargeUrl(character) ?? ''
+  const dreamWeaverMetadata = useMemo(() => getDreamWeaverCharacterMetadata(character), [character])
+  const dreamWeaverAppearance = useMemo(
+    () => getDreamWeaverAppearanceText(dreamWeaverMetadata),
+    [dreamWeaverMetadata],
+  )
+  const dreamWeaverVoice = useMemo(
+    () => getDreamWeaverVoiceDisplayText(dreamWeaverMetadata),
+    [dreamWeaverMetadata],
+  )
 
   useEffect(() => {
     if (!avatarUrl) {
@@ -159,6 +175,15 @@ function SingleCharacterProfile({
       </div>
 
       {/* Description */}
+      {hasDreamWeaverAppearance(dreamWeaverMetadata) && (
+        <EditorSection Icon={Eye} title="Appearance" defaultExpanded={false}>
+          <div className={styles.fieldContent}>
+            {dreamWeaverAppearance}
+          </div>
+        </EditorSection>
+      )}
+
+      {/* Description */}
       <EditorSection Icon={BookOpen} title="Description" defaultExpanded={false}>
         <div className={styles.fieldContent}>
           {character.description || <span className={styles.placeholder}>No description</span>}
@@ -185,6 +210,14 @@ function SingleCharacterProfile({
           {character.first_mes || <span className={styles.placeholder}>No first message</span>}
         </div>
       </EditorSection>
+
+      {hasDreamWeaverVoiceGuidance(dreamWeaverMetadata) && (
+        <EditorSection Icon={Mic} title="Voice Guidance" defaultExpanded={false}>
+          <div className={styles.fieldContent}>
+            {dreamWeaverVoice}
+          </div>
+        </EditorSection>
+      )}
 
       {/* System Prompt */}
       <EditorSection Icon={FileText} title="System Prompt" defaultExpanded={false}>
@@ -294,6 +327,9 @@ function GroupProfile({
         <div className={styles.groupMembers}>
           {members.map((char) => {
             const isExpanded = expandedId === char.id
+            const dreamWeaverMetadata = getDreamWeaverCharacterMetadata(char)
+            const dreamWeaverAppearance = getDreamWeaverAppearanceText(dreamWeaverMetadata)
+            const dreamWeaverVoice = getDreamWeaverVoiceDisplayText(dreamWeaverMetadata)
             return (
               <div key={char.id} className={clsx(styles.memberCard, isExpanded && styles.memberCardExpanded)}>
                 <button
@@ -338,11 +374,17 @@ function GroupProfile({
                     {char.description && (
                       <MemberField icon={BookOpen} label="Description" content={char.description} />
                     )}
+                    {hasDreamWeaverAppearance(dreamWeaverMetadata) && (
+                      <MemberField icon={Eye} label="Appearance" content={dreamWeaverAppearance} />
+                    )}
                     {char.personality && (
                       <MemberField icon={Sparkles} label="Personality" content={char.personality} />
                     )}
                     {char.scenario && (
                       <MemberField icon={FileText} label="Scenario" content={char.scenario} />
+                    )}
+                    {hasDreamWeaverVoiceGuidance(dreamWeaverMetadata) && (
+                      <MemberField icon={Mic} label="Voice Guidance" content={dreamWeaverVoice} />
                     )}
                     <button
                       type="button"

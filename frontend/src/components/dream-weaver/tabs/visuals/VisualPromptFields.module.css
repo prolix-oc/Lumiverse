@@ -28,7 +28,7 @@
 }
 
 .promptLabel {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -41,7 +41,7 @@
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 12%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -63,7 +63,7 @@
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 8%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   cursor: pointer;
 }
 
@@ -76,7 +76,7 @@
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 48%, transparent);
   color: var(--lumiverse-text);
   font: inherit;
-  font-size: 0.88rem;
+  font-size: calc(0.88rem * var(--lumiverse-font-scale, 1));
   line-height: 1.65;
   resize: vertical;
   box-sizing: border-box;
@@ -111,7 +111,7 @@
 }
 
 .reviewLabel {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -119,12 +119,12 @@
 }
 
 .reviewHint {
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
 .reviewSectionLabel {
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -137,13 +137,13 @@
   border-radius: 14px;
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 78%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.84rem;
+  font-size: calc(0.84rem * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
 }
 
 .reviewError {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   color: #ff8a8a;
 }
 
@@ -157,7 +157,7 @@
 .reviewSecondary {
   padding: 0.55rem 0.82rem;
   border-radius: 12px;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -190,7 +190,7 @@
 
 .generateHint {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
   color: var(--lumiverse-text-muted);
   max-width: 40rem;
@@ -202,7 +202,7 @@
   border-radius: 14px;
   background: var(--lumiverse-primary);
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 0.86rem;
+  font-size: calc(0.86rem * var(--lumiverse-font-scale, 1));
   font-weight: 800;
   cursor: pointer;
   white-space: nowrap;

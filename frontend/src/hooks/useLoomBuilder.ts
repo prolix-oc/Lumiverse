@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '@/store'
 import { presetsApi } from '@/api/presets'
+import { connectionsApi } from '@/api/connections'
+import { ApiError } from '@/api/client'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import { getMacroCatalog } from '@/api/macros'
@@ -56,14 +58,22 @@ export function useLoomBuilder() {
         setIsLoading(false)
       }
     }).catch((err) => {
-      if (!cancelled) {
-        console.warn('[LoomBuilder] Failed to load preset:', err)
-        setError(err.message)
+      if (cancelled) return
+      // Retroactive cleanup: if the persisted active preset id points at a row
+      // that no longer exists (legacy deletions that didn't cascade), clear it
+      // so generation doesn't keep 400ing on a ghost id.
+      if (err instanceof ApiError && err.status === 404) {
+        setActiveLoomPreset(null)
+        setActivePreset(null)
         setIsLoading(false)
+        return
       }
+      console.warn('[LoomBuilder] Failed to load preset:', err)
+      setError(err.message)
+      setIsLoading(false)
     })
     return () => { cancelled = true }
-  }, [activeLoomPresetId, activePreset?.id])
+  }, [activeLoomPresetId, activePreset?.id, setActiveLoomPreset])
 
   // Refresh registry from API
   const refreshRegistry = useCallback(async () => {
@@ -148,13 +158,21 @@ export function useLoomBuilder() {
     }
   }, [])
 
+  // Read activePreset through a ref so saveStructure stays reference-stable
+  // across renders. When saveBlocks is captured by downstream effects, a
+  // changing reference would either cause runaway effect loops or leak stale
+  // activePreset into the callback — the ref avoids both.
+  const activePresetRef = useRef(activePreset)
+  activePresetRef.current = activePreset
+
   const saveStructure = useCallback(async (
     blocks: PromptBlock[],
   ) => {
-    if (!activePreset) return
+    const current = activePresetRef.current
+    if (!current) return
     const normalizedBlocks = normalizeCategoryBlockState(blocks)
     const updated = {
-      ...activePreset,
+      ...current,
       blocks: normalizedBlocks,
       updatedAt: Date.now(),
     }
@@ -165,7 +183,7 @@ export function useLoomBuilder() {
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save preset structure:', err)
     }
-  }, [activePreset, refreshRegistry])
+  }, [refreshRegistry])
 
   // Save blocks
   const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {
@@ -188,6 +206,14 @@ export function useLoomBuilder() {
     if (presetId === activeLoomPresetId) {
       setActiveLoomPreset(null)
       setActivePreset(null)
+    }
+    // Refresh connection profiles so any stale preset_id references (the
+    // backend's FK nulls them out on delete) drop from the store.
+    try {
+      const res = await connectionsApi.list({ limit: 100 })
+      useStore.getState().setProfiles(res.data)
+    } catch {
+      // non-fatal — store just keeps the previous profile list
     }
   }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
 

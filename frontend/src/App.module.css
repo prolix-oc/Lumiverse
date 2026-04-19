@@ -1,9 +1,20 @@
 .app {
   position: fixed;
   inset: 0;
+  /* Use 100dvh/100vw directly rather than --app-scaled-viewport-* (which
+     resolves to the visualViewport height tracked by syncViewportVars in
+     main.tsx). On iOS PWA the visualViewport shrinks when the keyboard
+     opens — if .app shrinks with it, InputArea's
+     `bottom: var(--app-keyboard-inset-bottom)` computes against the
+     shrunken containing block and pushes the bar near the top of the
+     screen. 100dvh is stable against keyboard visibility while still
+     responding to browser chrome. The `/ ui-scale` compensates for the
+     `body > *` zoom layer (see reset.css). */
+  height: calc(100dvh / var(--lumiverse-ui-scale, 1));
+  width: calc(100vw / var(--lumiverse-ui-scale, 1));
   display: flex;
   flex-direction: column;
-  max-height: var(--app-shell-height, 100dvh);
+  max-height: calc(100dvh / var(--lumiverse-ui-scale, 1));
   overflow: hidden;
   background: var(--lumiverse-bg-deep);
   /* Prevent Safari/WebKit backdrop-filter compositing from stacking across

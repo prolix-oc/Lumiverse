@@ -2,7 +2,7 @@
 
 .page {
   position: relative;
-  min-height: var(--app-viewport-height, 100dvh);
+  min-height: var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1)));
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -14,6 +14,8 @@
 .bg {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   pointer-events: none;
   overflow: hidden;
 }
@@ -94,6 +96,8 @@
 .grid {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   pointer-events: none;
   background-image:
     linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
@@ -111,7 +115,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: var(--app-viewport-height, 100dvh);
+  min-height: var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1)));
   padding: 48px 24px;
   box-sizing: border-box;
 }
@@ -139,7 +143,7 @@
 }
 
 .logoTitle {
-  font-size: 28px;
+  font-size: calc(28px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.03em;
@@ -147,7 +151,7 @@
 }
 
 .logoSubtitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin: 6px 0 0;
   letter-spacing: 0.04em;
@@ -200,7 +204,7 @@
 }
 
 .label {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   letter-spacing: 0.04em;
@@ -230,7 +234,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   outline: none;
   box-sizing: border-box;
@@ -254,7 +258,7 @@
     var(--lumiverse-primary-hover)
   );
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
@@ -309,7 +313,7 @@
   background: var(--lumiverse-danger-015);
   border: 1px solid var(--lumiverse-danger-020);
   color: var(--lumiverse-danger, #ef4444);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.4;
 }
 
@@ -317,7 +321,7 @@
 
 .footer {
   margin-top: 28px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
   letter-spacing: 0.02em;
 }
@@ -329,7 +333,7 @@
     padding: 32px 20px;
     /* Let content push taller than viewport when keyboard is open */
     justify-content: flex-start;
-    padding-top: 18vh;
+    padding-top: calc(18vh / var(--lumiverse-ui-scale, 1));
   }
 
   .card {
@@ -349,7 +353,7 @@
   }
 
   .logoTitle {
-    font-size: 24px;
+    font-size: calc(24px * var(--lumiverse-font-scale, 1));
   }
 
   .logoBlock {

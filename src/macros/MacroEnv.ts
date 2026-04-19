@@ -6,6 +6,7 @@ import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { GenerationType } from "../llm/types";
 import type { MacroEnv, MacroHandler, MacroDefinition } from "./types";
+import { stripLegacyDreamWeaverVoiceSection } from "../services/dream-weaver/runtime-prompt";
 
 export interface BuildEnvContext {
   character: Character;
@@ -64,9 +65,9 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       personaSubjectivePronoun: persona?.subjective_pronoun || "",
       personaObjectivePronoun: persona?.objective_pronoun || "",
       personaPossessivePronoun: persona?.possessive_pronoun || "",
-      mesExamples: character.mes_example || getDreamWeaverVoiceGuidance(character) || "",
+      mesExamples: character.mes_example || "",
       mesExamplesRaw: character.mes_example || "",
-      systemPrompt: character.system_prompt || "",
+      systemPrompt: stripLegacyDreamWeaverVoiceSection(character.system_prompt || "", character),
       postHistoryInstructions: character.post_history_instructions || "",
       depthPrompt: (character.extensions?.depth_prompt as string) || "",
       creatorNotes: character.creator_notes || "",
@@ -142,19 +143,6 @@ export function resolveGroupCharacterNames(
     if (name) names.push(name);
   }
   return names.length > 0 ? names : undefined;
-}
-
-/**
- * Dream Weaver cards don't populate `mes_example` — they use voice guidance
- * instead. When the `dialogue_examples` block resolves `{{mesExamples}}`, this
- * lets DW cards fill that slot with their compiled voice guidance so preset
- * prompt orders that include dialogue examples still work.
- */
-function getDreamWeaverVoiceGuidance(character: Character): string {
-  const dw = character.extensions?.dream_weaver as
-    | { voice_guidance?: { compiled?: string } }
-    | undefined;
-  return dw?.voice_guidance?.compiled?.trim() || "";
 }
 
 function buildPersonaWithAddons(persona: Persona | null): string {

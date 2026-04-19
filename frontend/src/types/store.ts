@@ -182,6 +182,10 @@ export interface UISlice {
   // Regen feedback text retention
   lastRegenFeedback: string
   setLastRegenFeedback: (text: string) => void
+
+  // Message editing (globally single-slot)
+  editingMessageId: string | null
+  setEditingMessageId: (id: string | null) => void
 }
 
 // ---- OOC Style Type ----
@@ -235,6 +239,11 @@ export interface RegenFeedbackSettings {
  */
 export type ReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
+/** Anthropic-only: controls the `thinking.display` field on the Messages API.
+ *  'auto' omits the field so Anthropic applies its model-specific default
+ *  ('omitted' on Opus 4.7 / Mythos Preview, 'summarized' elsewhere). */
+export type ThinkingDisplay = 'auto' | 'summarized' | 'omitted'
+
 export interface ReasoningSettings {
   prefix: string
   suffix: string
@@ -244,6 +253,9 @@ export interface ReasoningSettings {
   /** How many recent reasoning blocks to keep in assembled prompt history.
    *  0 = strip all, -1 = keep all (unlimited), N = keep last N. */
   keepInHistory: number
+  /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
+   *  'auto' leaves the field unset so the API picks a model-appropriate default. */
+  thinkingDisplay: ThinkingDisplay
 }
 
 /** Reasoning settings snapshot bound to a connection profile. */
@@ -381,14 +393,12 @@ export interface PresetsSlice {
   presets: Record<string, Preset>
   activePresetId: string | null
   activeLoomPresetId: string | null
-  activeLumiPresetId: string | null
   loomRegistry: Record<string, LoomRegistryEntry>
   setPresets: (presets: Record<string, Preset>) => void
   setActivePreset: (id: string | null) => void
   setActiveLoomPreset: (id: string | null) => void
-  setActiveLumiPreset: (id: string | null) => void
   setLoomRegistry: (registry: Record<string, LoomRegistryEntry>) => void
-  /** Prefers Lumi preset when set. */
+  /** Resolves the preset id that should drive generation. */
   getActivePresetForGeneration: () => string | null
 }
 

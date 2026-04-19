@@ -427,6 +427,8 @@ export interface CortexStats {
   topScore: number;
   retrievalTimeMs: number;
   timedOut?: boolean;
+  /** Set when retrieval bailed out because the caller's AbortSignal fired. */
+  aborted?: boolean;
 }
 
 export interface CortexResult {

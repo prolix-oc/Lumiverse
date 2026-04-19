@@ -109,7 +109,8 @@ export async function queryCortex(
   let vectorResults: VectorSearchResult[];
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText]);
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText], { signal });
+    if (signal?.aborted) return emptyResult(startTime);
     if (!queryVector || queryVector.length === 0) {
       return emptyResult(startTime);
     }
@@ -121,8 +122,10 @@ export async function queryCortex(
       candidateChunkIds,
       query.topK * 3, // Over-fetch for reranking
       query.excludeMessageIds,
+      signal,
     );
   } catch (err) {
+    if (signal?.aborted) return emptyResult(startTime);
     console.warn("[memory-cortex] Vector search failed:", err);
     return emptyResult(startTime);
   }
@@ -419,6 +422,7 @@ async function searchChatChunksScoped(
   candidateChunkIds: Set<string>,
   limit: number,
   excludeMessageIds?: string[],
+  signal?: AbortSignal,
 ): Promise<VectorSearchResult[]> {
   // Pass exclude IDs to the vector search so chunks containing the
   // regeneration target (or other excluded messages) are filtered out.
@@ -434,6 +438,7 @@ async function searchChatChunksScoped(
     undefined,
     undefined,
     candidateChunkIds,
+    signal,
   );
 
   // Filter to candidate set if we have one

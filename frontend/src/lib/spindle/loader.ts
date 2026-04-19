@@ -243,7 +243,7 @@ async function doLoadFrontendExtension(
             padding: '12px 16px', borderBottom: '1px solid var(--lumiverse-border)',
           })
           const titleEl = document.createElement('h3')
-          Object.assign(titleEl.style, { margin: '0', fontSize: '15px', fontWeight: '600', color: 'var(--lumiverse-text)' })
+          Object.assign(titleEl.style, { margin: '0', fontSize: 'calc(15px * var(--lumiverse-font-scale, 1))', fontWeight: '600', color: 'var(--lumiverse-text)' })
           titleEl.textContent = options?.title || ''
           header.appendChild(titleEl)
 

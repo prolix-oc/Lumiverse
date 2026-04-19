@@ -8,6 +8,7 @@ import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
 import { toast } from '@/lib/toast'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
+import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -141,6 +142,20 @@ export function useWebSocket() {
             // This happens when council sidecar stages a message after startStreaming was
             // called without a targetMessageId (e.g. regeneration flow).
             state.setRegeneratingMessageId(payload.targetMessageId)
+          }
+
+          // Notify the user when the backend clipped chat history to fit the
+          // configured context budget. Only surface for the currently-active
+          // chat — otherwise background generations would spam toasts.
+          const clip = payload.contextClipStats
+          if (clip?.enabled && clip.budgetInvalid) {
+            toast.error(
+              `Context size (${clip.maxContext.toLocaleString()}) is smaller than reserved response tokens — no history can fit. Raise Context Size or lower Max Tokens.`,
+            )
+          } else if (clip?.enabled && clip.messagesDropped > 0) {
+            toast.warning(
+              `Clipped ${clip.messagesDropped} message${clip.messagesDropped === 1 ? '' : 's'} to fit context budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
+            )
           }
         }
         // Track as a chat head so it appears if user navigates away
@@ -417,6 +432,15 @@ export function useWebSocket() {
         //    another tab or the server itself while we were disconnected.
         if (!hasUnsavedSettings()) {
           store.getState().loadSettings()
+        }
+
+        // Re-sync any pooled generation for the active chat. Covers sockets
+        // that were killed during backgrounding (mobile OS suspend, long tab
+        // switch) — tokens streamed while we were offline are pulled from the
+        // server pool and the seq watermark de-dupes the live WS replay.
+        const activeChatId = store.getState().activeChatId
+        if (activeChatId) {
+          recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
         }
       }),
 
@@ -750,9 +774,46 @@ export function useWebSocket() {
           store.getState().updateMcpServer(payload.id, payload.profile)
         }
       }),
+
+      // Loom summary auto-summarization — backend summarize-pool signals so
+      // the Summary UI flag stays in sync across tabs / chat switches.
+      wsClient.on(EventType.SUMMARIZATION_STARTED, (payload: { chatId: string; generationId: string; startedAt: number }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(true)
+        }
+      }),
+      wsClient.on(EventType.SUMMARIZATION_COMPLETED, (payload: { chatId: string; generationId: string }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(false)
+        }
+      }),
+      wsClient.on(EventType.SUMMARIZATION_FAILED, (payload: { chatId: string; generationId: string; error: string }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(false)
+        }
+        console.warn(`[Summary] Generation failed for chat ${payload.chatId}:`, payload.error)
+      }),
     ]
 
+    // Re-sync pooled tokens whenever the tab becomes visible. Mobile PWAs and
+    // background tabs may miss live STREAM_TOKEN_RECEIVED events while hidden
+    // even when the WS stays open; the server pool is authoritative, so a
+    // status poll on every visible transition restores all accumulated content
+    // (and the tokenSeq watermark drops tokens the client already rendered).
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      const activeChatId = store.getState().activeChatId
+      if (activeChatId) {
+        recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }

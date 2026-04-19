@@ -1,4 +1,4 @@
-import { getDb } from "../../db/connection";
+import { getDb, onDbReset } from "../../db/connection";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
 import type {
@@ -7,6 +7,7 @@ import type {
   DW_DRAFT_V1,
   UpdateSessionInput,
 } from "../../types/dream-weaver";
+import type { Character, UpdateCharacterInput } from "../../types/character";
 import { rawGenerate } from "../generate.service";
 import { getDWGenParams, applyDWGenParams, createDWTimeout } from "./dw-gen-params";
 import * as connectionsSvc from "../connections.service";
@@ -68,6 +69,10 @@ const DREAM_WEAVER_REQUIRED_COLUMNS: Array<[name: string, definition: string]> =
 ];
 
 let dreamWeaverSchemaEnsured = false;
+
+onDbReset(() => {
+  dreamWeaverSchemaEnsured = false;
+});
 
 function createDreamWeaverTable(): void {
   const db = getDb();
@@ -192,6 +197,105 @@ function rowToSession(row: any): DreamWeaverSession {
   };
 }
 
+function coerceString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (Array.isArray(value)) {
+    return value.map((item) => coerceString(item)).filter(Boolean).join("\n");
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return String(value);
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => coerceString(item)).filter(Boolean);
+  if (value == null || value === "") return [];
+  return [coerceString(value)].filter(Boolean);
+}
+
+function normalizeDraftStrings(draft: DW_DRAFT_V1): DW_DRAFT_V1 {
+  const card = (draft.card ?? {}) as any;
+  const normalizedCard = {
+    ...card,
+    name: coerceString(card.name),
+    appearance: coerceString(card.appearance),
+    description: coerceString(card.description),
+    personality: coerceString(card.personality),
+    scenario: coerceString(card.scenario),
+    first_mes: coerceString(card.first_mes),
+    system_prompt: coerceString(card.system_prompt),
+    post_history_instructions: coerceString(card.post_history_instructions),
+  };
+  if (card.appearance_data && typeof card.appearance_data === "object" && !Array.isArray(card.appearance_data)) {
+    const ad: Record<string, string> = {};
+    for (const [k, v] of Object.entries(card.appearance_data)) ad[k] = coerceString(v);
+    normalizedCard.appearance_data = ad;
+  }
+
+  const voice = (draft.voice_guidance ?? {}) as any;
+  const voiceRules = (voice.rules ?? {}) as any;
+  const normalizedVoice = {
+    compiled: coerceString(voice.compiled),
+    rules: {
+      baseline: coerceStringArray(voiceRules.baseline),
+      rhythm: coerceStringArray(voiceRules.rhythm),
+      diction: coerceStringArray(voiceRules.diction),
+      quirks: coerceStringArray(voiceRules.quirks),
+      hard_nos: coerceStringArray(voiceRules.hard_nos),
+    },
+  };
+
+  const normalizeAltList = (list: unknown): Array<{ id: string; label: string; content: string }> => {
+    if (!Array.isArray(list)) return [];
+    return list.map((item: any, idx: number) => ({
+      id: coerceString(item?.id) || `alt_${idx}`,
+      label: coerceString(item?.label),
+      content: coerceString(item?.content),
+    }));
+  };
+  const alt = (draft.alternate_fields ?? {}) as any;
+  const normalizedAlt = {
+    description: normalizeAltList(alt.description),
+    personality: normalizeAltList(alt.personality),
+    scenario: normalizeAltList(alt.scenario),
+  };
+
+  const normalizedGreetings = Array.isArray(draft.greetings)
+    ? draft.greetings.map((g: any, idx: number) => ({
+        id: coerceString(g?.id) || `g_${idx}`,
+        label: coerceString(g?.label),
+        content: coerceString(g?.content),
+      }))
+    : [];
+
+  const meta = (draft.meta ?? {}) as any;
+  const normalizedMeta = {
+    ...meta,
+    title: coerceString(meta.title),
+    summary: coerceString(meta.summary),
+    tags: coerceStringArray(meta.tags),
+    content_rating: meta.content_rating === "nsfw" ? "nsfw" : "sfw",
+  };
+
+  return {
+    ...draft,
+    meta: normalizedMeta,
+    card: normalizedCard,
+    voice_guidance: normalizedVoice,
+    alternate_fields: normalizedAlt,
+    greetings: normalizedGreetings,
+    lorebooks: Array.isArray(draft.lorebooks) ? draft.lorebooks : [],
+    npc_definitions: Array.isArray(draft.npc_definitions) ? draft.npc_definitions : [],
+    regex_scripts: Array.isArray(draft.regex_scripts) ? draft.regex_scripts : [],
+  } as DW_DRAFT_V1;
+}
+
 function parseDraftResponse(content: string): DW_DRAFT_V1 {
   const trimmed = content.trim();
   const jsonContent = trimmed.startsWith("```")
@@ -202,16 +306,20 @@ function parseDraftResponse(content: string): DW_DRAFT_V1 {
   try {
     draft = JSON.parse(jsonContent) as DW_DRAFT_V1;
   } catch (err: any) {
-    // A malformed model output or corrupted stored draft used to crash the
-    // entire Dream Weaver session; surface a typed error instead.
-    throw new Error(`Dream Weaver draft is not valid JSON: ${err?.message || "parse failed"}`);
+    const repaired = safeParseJson(jsonContent);
+    if (!repaired) {
+      // A malformed model output or corrupted stored draft used to crash the
+      // entire Dream Weaver session; surface a typed error instead.
+      throw new Error(`Dream Weaver draft is not valid JSON: ${err?.message || "parse failed"}`);
+    }
+    draft = repaired as DW_DRAFT_V1;
   }
 
   if (!draft || typeof draft !== "object" || draft.format !== "DW_DRAFT_V1") {
     throw new Error("Dream Weaver returned an unexpected draft format");
   }
 
-  return draft;
+  return normalizeDraftStrings(draft);
 }
 
 export function parseStoredDreamWeaverDraft(
@@ -700,6 +808,241 @@ function buildSystemPromptWithVoiceGuidance(draft: DW_DRAFT_V1): string {
   return systemPrompt;
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function buildDreamWeaverMetadata(
+  sessionId: string,
+  draft: DW_DRAFT_V1,
+): Record<string, unknown> {
+  return {
+    session_id: sessionId,
+    kind: draft.kind,
+    meta: draft.meta,
+    voice_guidance: draft.voice_guidance,
+    appearance: draft.card.appearance,
+    appearance_data: draft.card.appearance_data ?? {},
+  };
+}
+
+function buildCharacterExtensionsFromDraft(
+  existingExtensions: Record<string, any> | undefined,
+  sessionId: string,
+  draft: DW_DRAFT_V1,
+): Record<string, any> {
+  return {
+    ...(existingExtensions ?? {}),
+    alternate_fields: draft.alternate_fields,
+    dream_weaver: buildDreamWeaverMetadata(sessionId, draft),
+  };
+}
+
+function buildCharacterPayloadFromDraft(
+  sessionId: string,
+  draft: DW_DRAFT_V1,
+  existingExtensions?: Record<string, any>,
+): UpdateCharacterInput {
+  return {
+    name: draft.card.name,
+    description: draft.card.description,
+    personality: draft.card.personality,
+    scenario: draft.card.scenario,
+    first_mes: draft.card.first_mes,
+    system_prompt: buildSystemPromptWithVoiceGuidance(draft),
+    post_history_instructions: draft.card.post_history_instructions,
+    tags: draft.meta.tags,
+    alternate_greetings: draft.greetings.slice(1).map((greeting) => greeting.content),
+    extensions: buildCharacterExtensionsFromDraft(existingExtensions, sessionId, draft),
+  };
+}
+
+function mergeMissingAlternateFields(
+  existingAlternateFields: unknown,
+  nextAlternateFields: DW_DRAFT_V1["alternate_fields"],
+): { value: Record<string, any>; changed: boolean } {
+  const merged = isRecord(existingAlternateFields) ? { ...existingAlternateFields } : {};
+  let changed = !isRecord(existingAlternateFields);
+
+  for (const fieldName of ["description", "personality", "scenario"] as const) {
+    const existingEntries = Array.isArray(merged[fieldName]) ? merged[fieldName] : [];
+    const nextEntries = nextAlternateFields[fieldName];
+    if (existingEntries.length === 0 && nextEntries.length > 0) {
+      merged[fieldName] = nextEntries;
+      changed = true;
+    }
+  }
+
+  return { value: merged, changed };
+}
+
+function mergeMissingDreamWeaverMetadata(
+  existingMetadata: unknown,
+  nextMetadata: ReturnType<typeof buildDreamWeaverMetadata>,
+): { value: Record<string, any>; changed: boolean } {
+  const merged = isRecord(existingMetadata) ? { ...existingMetadata } : {};
+  let changed = !isRecord(existingMetadata);
+
+  if (!hasText(merged.session_id) && hasText(nextMetadata.session_id)) {
+    merged.session_id = nextMetadata.session_id;
+    changed = true;
+  }
+
+  if (!hasText(merged.kind) && hasText(nextMetadata.kind)) {
+    merged.kind = nextMetadata.kind;
+    changed = true;
+  }
+
+  const nextMeta = isRecord(nextMetadata.meta) ? nextMetadata.meta : {};
+  const mergedMeta = isRecord(merged.meta) ? { ...merged.meta } : {};
+  let metaChanged = !isRecord(merged.meta);
+  if (!hasText(mergedMeta.title) && hasText(nextMeta.title)) {
+    mergedMeta.title = nextMeta.title;
+    metaChanged = true;
+  }
+  if (!hasText(mergedMeta.summary) && hasText(nextMeta.summary)) {
+    mergedMeta.summary = nextMeta.summary;
+    metaChanged = true;
+  }
+  if ((!Array.isArray(mergedMeta.tags) || mergedMeta.tags.length === 0) && Array.isArray(nextMeta.tags) && nextMeta.tags.length > 0) {
+    mergedMeta.tags = nextMeta.tags;
+    metaChanged = true;
+  }
+  if (!hasText(mergedMeta.content_rating) && hasText(nextMeta.content_rating)) {
+    mergedMeta.content_rating = nextMeta.content_rating;
+    metaChanged = true;
+  }
+  if (metaChanged) {
+    merged.meta = mergedMeta;
+    changed = true;
+  }
+
+  const nextVoice = isRecord(nextMetadata.voice_guidance) ? nextMetadata.voice_guidance : {};
+  const mergedVoice = isRecord(merged.voice_guidance) ? { ...merged.voice_guidance } : {};
+  let voiceChanged = !isRecord(merged.voice_guidance);
+  if (!hasText(mergedVoice.compiled) && hasText(nextVoice.compiled)) {
+    mergedVoice.compiled = nextVoice.compiled;
+    voiceChanged = true;
+  }
+
+  const nextRules = isRecord(nextVoice.rules) ? nextVoice.rules : {};
+  const mergedRules = isRecord(mergedVoice.rules) ? { ...mergedVoice.rules } : {};
+  let rulesChanged = !isRecord(mergedVoice.rules);
+  for (const ruleName of ["baseline", "rhythm", "diction", "quirks", "hard_nos"] as const) {
+    const existingRule = Array.isArray(mergedRules[ruleName]) ? mergedRules[ruleName] : [];
+    const nextRule = Array.isArray(nextRules[ruleName]) ? nextRules[ruleName] : [];
+    if (existingRule.length === 0 && nextRule.length > 0) {
+      mergedRules[ruleName] = nextRule;
+      rulesChanged = true;
+    }
+  }
+  if (rulesChanged) {
+    mergedVoice.rules = mergedRules;
+    voiceChanged = true;
+  }
+  if (voiceChanged) {
+    merged.voice_guidance = mergedVoice;
+    changed = true;
+  }
+
+  if (!hasText(merged.appearance) && hasText(nextMetadata.appearance)) {
+    merged.appearance = nextMetadata.appearance;
+    changed = true;
+  }
+
+  const nextAppearanceData = isRecord(nextMetadata.appearance_data)
+    ? nextMetadata.appearance_data
+    : {};
+  const mergedAppearanceData = isRecord(merged.appearance_data)
+    ? { ...merged.appearance_data }
+    : {};
+  let appearanceDataChanged = !isRecord(merged.appearance_data);
+  for (const [key, value] of Object.entries(nextAppearanceData)) {
+    if (!hasText(mergedAppearanceData[key]) && hasText(value)) {
+      mergedAppearanceData[key] = value;
+      appearanceDataChanged = true;
+    }
+  }
+  if (appearanceDataChanged && Object.keys(mergedAppearanceData).length > 0) {
+    merged.appearance_data = mergedAppearanceData;
+    changed = true;
+  }
+
+  return { value: merged, changed };
+}
+
+function buildMissingCharacterPayloadFromDraft(
+  character: Character,
+  sessionId: string,
+  draft: DW_DRAFT_V1,
+): UpdateCharacterInput | null {
+  const next: UpdateCharacterInput = {};
+
+  if (!hasText(character.name) && hasText(draft.card.name)) {
+    next.name = draft.card.name;
+  }
+  if (!hasText(character.description) && hasText(draft.card.description)) {
+    next.description = draft.card.description;
+  }
+  if (!hasText(character.personality) && hasText(draft.card.personality)) {
+    next.personality = draft.card.personality;
+  }
+  if (!hasText(character.scenario) && hasText(draft.card.scenario)) {
+    next.scenario = draft.card.scenario;
+  }
+  if (!hasText(character.first_mes) && hasText(draft.card.first_mes)) {
+    next.first_mes = draft.card.first_mes;
+  }
+
+  const nextSystemPrompt = buildSystemPromptWithVoiceGuidance(draft);
+  if (!hasText(character.system_prompt) && hasText(nextSystemPrompt)) {
+    next.system_prompt = nextSystemPrompt;
+  }
+  if (
+    !hasText(character.post_history_instructions)
+    && hasText(draft.card.post_history_instructions)
+  ) {
+    next.post_history_instructions = draft.card.post_history_instructions;
+  }
+  if (character.tags.length === 0 && draft.meta.tags.length > 0) {
+    next.tags = draft.meta.tags;
+  }
+  if (character.alternate_greetings.length === 0 && draft.greetings.length > 1) {
+    next.alternate_greetings = draft.greetings.slice(1).map((greeting) => greeting.content);
+  }
+
+  const nextExtensions = { ...(character.extensions ?? {}) };
+  let extensionsChanged = false;
+
+  const alternateMerge = mergeMissingAlternateFields(
+    character.extensions?.alternate_fields,
+    draft.alternate_fields,
+  );
+  if (alternateMerge.changed) {
+    nextExtensions.alternate_fields = alternateMerge.value;
+    extensionsChanged = true;
+  }
+
+  const dreamWeaverMerge = mergeMissingDreamWeaverMetadata(
+    character.extensions?.dream_weaver,
+    buildDreamWeaverMetadata(sessionId, draft),
+  );
+  if (dreamWeaverMerge.changed) {
+    nextExtensions.dream_weaver = dreamWeaverMerge.value;
+    extensionsChanged = true;
+  }
+
+  if (extensionsChanged) {
+    next.extensions = nextExtensions;
+  }
+
+  return Object.keys(next).length > 0 ? next : null;
+}
+
 function formatNpcEntryContent(npc: any, characterName: string): string {
   const parts: string[] = [];
   const header = npc.role ? `[${npc.name} — ${npc.role}]` : `[${npc.name}]`;
@@ -712,6 +1055,36 @@ function formatNpcEntryContent(npc: any, characterName: string): string {
     parts.push(`Relationship to ${characterName}: ${npc.relationship_to_card}`);
   }
   return parts.join("\n");
+}
+
+function deriveLorebookEntryComment(entry: any): string {
+  if (hasText(entry?.comment)) return entry.comment.trim();
+  if (hasText(entry?.name)) return entry.name.trim();
+
+  const keywords: string[] = Array.isArray(entry?.keywords)
+    ? entry.keywords.filter((keyword: unknown) => hasText(keyword)).map((keyword: string) => keyword.trim())
+    : typeof entry?.keywords === "string"
+      ? entry.keywords.split(",").map((keyword: string) => keyword.trim()).filter(Boolean)
+      : [];
+  if (keywords.length > 0) {
+    return keywords.slice(0, 3).join(", ");
+  }
+
+  const content = coerceString(entry?.content).replace(/\s+/g, " ").trim();
+  return content ? content.slice(0, 72) : "Lore Entry";
+}
+
+function deriveNpcEntryComment(npc: any): string {
+  if (hasText(npc?.name)) return npc.name.trim();
+
+  const keywords: string[] = Array.isArray(npc?.keyword_triggers)
+    ? npc.keyword_triggers.filter((keyword: unknown) => hasText(keyword)).map((keyword: string) => keyword.trim())
+    : [];
+  if (keywords.length > 0) {
+    return keywords.slice(0, 3).join(", ");
+  }
+
+  return "NPC";
 }
 
 function createWorldBooksFromDraft(
@@ -739,6 +1112,7 @@ function createWorldBooksFromDraft(
       worldBooksSvc.createEntry(userId, book.id, {
         key: keywords,
         content: entry.content || "",
+        comment: deriveLorebookEntryComment(entry),
         position: 0,
         priority: 10,
       });
@@ -762,6 +1136,7 @@ function createWorldBooksFromDraft(
       worldBooksSvc.createEntry(userId, npcBook.id, {
         key: keywords,
         content: formatNpcEntryContent(npc, draft.card.name),
+        comment: deriveNpcEntryComment(npc),
         position: 0,
         priority: npc.importance === "major" ? 20 : 10,
         constant: npc.importance === "major",
@@ -826,35 +1201,27 @@ export async function finalize(
     emitProgress(userId, sessionId, "finalize", "creating_character", 1, 4, "Syncing character");
 
     const worldBookIds = createWorldBooksFromDraft(userId, draft);
+    const character = charactersSvc.getCharacter(userId, session.character_id);
+    const characterPayload = buildCharacterPayloadFromDraft(
+      sessionId,
+      draft,
+      character?.extensions,
+    );
+
     if (worldBookIds.length > 0) {
-      const character = charactersSvc.getCharacter(userId, session.character_id);
       if (character) {
         const existingIds = getCharacterWorldBookIds(character.extensions);
         const mergedIds = [...existingIds, ...worldBookIds];
-        const nextExtensions = setCharacterWorldBookIds(
-          character.extensions ?? {},
+        characterPayload.extensions = setCharacterWorldBookIds(
+          characterPayload.extensions ?? character.extensions ?? {},
           mergedIds,
         );
-        charactersSvc.updateCharacter(userId, session.character_id, {
-          extensions: nextExtensions,
-        });
       }
     }
 
     createRegexScriptsFromDraft(userId, session.character_id, draft);
 
-    const systemPrompt = buildSystemPromptWithVoiceGuidance(draft);
-    charactersSvc.updateCharacter(userId, session.character_id, {
-      name: draft.card.name,
-      description: draft.card.description,
-      personality: draft.card.personality,
-      scenario: draft.card.scenario,
-      first_mes: draft.card.first_mes,
-      system_prompt: systemPrompt,
-      post_history_instructions: draft.card.post_history_instructions,
-      tags: draft.meta.tags,
-      alternate_greetings: draft.greetings.slice(1).map((greeting) => greeting.content),
-    });
+    charactersSvc.updateCharacter(userId, session.character_id, characterPayload);
 
     if (portraitImageId) {
       charactersSvc.setCharacterImage(userId, session.character_id, portraitImageId);
@@ -890,34 +1257,33 @@ export async function finalize(
   // we can attach the IDs at creation time).
   const worldBookIds = createWorldBooksFromDraft(userId, draft);
 
-  let extensions: Record<string, unknown> = {
-    alternate_fields: draft.alternate_fields,
-    dream_weaver: {
-      session_id: sessionId,
-      kind: draft.kind,
-      voice_guidance: draft.voice_guidance,
-      appearance: draft.card.appearance,
-    },
-  };
+  let extensions: Record<string, unknown> = buildCharacterExtensionsFromDraft(
+    {},
+    sessionId,
+    draft,
+  );
 
   if (worldBookIds.length > 0) {
     extensions = setCharacterWorldBookIds(extensions as Record<string, any>, worldBookIds);
   }
 
-  // Merge voice guidance into system_prompt so it's always in context
-  const systemPrompt = buildSystemPromptWithVoiceGuidance(draft);
+  const characterPayload = buildCharacterPayloadFromDraft(
+    sessionId,
+    draft,
+    extensions as Record<string, any>,
+  );
 
   const character = charactersSvc.createCharacter(userId, {
-    name: draft.card.name,
-    description: draft.card.description,
-    personality: draft.card.personality,
-    scenario: draft.card.scenario,
-    first_mes: draft.card.first_mes,
-    system_prompt: systemPrompt,
-    post_history_instructions: draft.card.post_history_instructions,
-    tags: draft.meta.tags,
-    alternate_greetings: draft.greetings.slice(1).map((greeting) => greeting.content),
-    extensions,
+    name: characterPayload.name!,
+    description: characterPayload.description,
+    personality: characterPayload.personality,
+    scenario: characterPayload.scenario,
+    first_mes: characterPayload.first_mes,
+    system_prompt: characterPayload.system_prompt,
+    post_history_instructions: characterPayload.post_history_instructions,
+    tags: characterPayload.tags,
+    alternate_greetings: characterPayload.alternate_greetings,
+    extensions: characterPayload.extensions,
   });
   if (portraitImageId) {
     charactersSvc.setCharacterImage(userId, character.id, portraitImageId);
@@ -960,6 +1326,40 @@ export function deleteSession(userId: string, sessionId: string): void {
 export interface SyncWorldResult {
   worldBookIds: string[];
   regexScriptsCreated: number;
+}
+
+export interface RepairCharacterCardResult {
+  characterId: string | null;
+  repaired: boolean;
+}
+
+export function repairCharacterCardDataFromSessionIfMissing(
+  userId: string,
+  sessionId: string,
+): RepairCharacterCardResult {
+  ensureDreamWeaverSchema();
+
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+  if (!session.character_id) {
+    return { characterId: null, repaired: false };
+  }
+
+  const draft = parseStoredDreamWeaverDraft(session.draft);
+  if (!draft) {
+    return { characterId: session.character_id, repaired: false };
+  }
+
+  const character = charactersSvc.getCharacter(userId, session.character_id);
+  if (!character) throw new Error("Character not found");
+
+  const patch = buildMissingCharacterPayloadFromDraft(character, sessionId, draft);
+  if (!patch) {
+    return { characterId: session.character_id, repaired: false };
+  }
+
+  charactersSvc.updateCharacter(userId, session.character_id, patch);
+  return { characterId: session.character_id, repaired: true };
 }
 
 export function syncWorldToCharacter(

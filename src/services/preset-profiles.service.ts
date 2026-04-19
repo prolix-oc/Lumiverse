@@ -129,7 +129,8 @@ export function resolveProfile(
   userId: string,
   presetId: string,
   chatId: string,
-  characterId: string
+  characterId: string,
+  options: { isGroup?: boolean } = {}
 ): ResolvedPresetProfile {
   // 1. Chat-level binding (most specific)
   const chatBinding = getChatBinding(userId, chatId);
@@ -141,10 +142,13 @@ export function resolveProfile(
     }
   }
 
-  // 2. Character-level binding
-  const charBinding = getCharacterBinding(userId, characterId);
-  if (charBinding && charBinding.preset_id === presetId) {
-    return { binding: charBinding, source: "character" };
+  // 2. Character-level binding — skipped in group chats. Per-member bindings
+  //    would be ambiguous (which member wins?), so group chats are chat-only.
+  if (!options.isGroup) {
+    const charBinding = getCharacterBinding(userId, characterId);
+    if (charBinding && charBinding.preset_id === presetId) {
+      return { binding: charBinding, source: "character" };
+    }
   }
 
   // 3. Default snapshot — also used when chat binding delegates via linked_to_defaults

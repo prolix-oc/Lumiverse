@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
@@ -37,11 +37,14 @@ function parseThinkingTags(content: string): { cleaned: string; thoughts: string
 
 export function useMessageCard(message: Message, chatId: string) {
   const navigate = useNavigate()
-  const [isEditing, setIsEditing] = useState(false)
+  const editingMessageId = useStore((s) => s.editingMessageId)
+  const setEditingMessageId = useStore((s) => s.setEditingMessageId)
+  const isEditing = editingMessageId === message.id
   const [editContent, setEditContent] = useState('')
   const [editReasoning, setEditReasoning] = useState('')
   const [showReasoningEditor, setShowReasoningEditor] = useState(false)
   const hadReasoningRef = useRef(false)
+  const wasEditingRef = useRef(false)
   const updateMessage = useStore((s) => s.updateMessage)
   const removeMessage = useStore((s) => s.removeMessage)
   const openModal = useStore((s) => s.openModal)
@@ -169,7 +172,7 @@ export function useMessageCard(message: Message, chatId: string) {
     return firstUser?.name || fallback
   }, [messages, message.id, message.name, isUser, activePersona])
 
-  const handleEdit = useCallback(() => {
+  const initializeEdit = useCallback(() => {
     if (!message.is_user) {
       // For assistant messages, separate reasoning from content
       const apiReasoning = typeof message.extra?.reasoning === 'string' ? message.extra.reasoning : ''
@@ -187,8 +190,20 @@ export function useMessageCard(message: Message, chatId: string) {
       setShowReasoningEditor(false)
       hadReasoningRef.current = false
     }
-    setIsEditing(true)
   }, [message.content, message.is_user, message.extra])
+
+  // Populate edit fields on the false→true transition of isEditing,
+  // so externally-triggered edits (keyboard shortcut) seed the fields too.
+  useEffect(() => {
+    if (isEditing && !wasEditingRef.current) {
+      initializeEdit()
+    }
+    wasEditingRef.current = isEditing
+  }, [isEditing, initializeEdit])
+
+  const handleEdit = useCallback(() => {
+    setEditingMessageId(message.id)
+  }, [message.id, setEditingMessageId])
 
   const handleSaveEdit = useCallback(async () => {
     try {
@@ -204,19 +219,19 @@ export function useMessageCard(message: Message, chatId: string) {
         await messagesApi.update(chatId, message.id, { content: cleanContent })
         updateMessage(message.id, { content: cleanContent })
       }
-      setIsEditing(false)
+      setEditingMessageId(null)
     } catch (err) {
       console.error('[MessageCard] Failed to save edit:', err)
     }
-  }, [chatId, message.id, editContent, editReasoning, message.is_user, message.extra, updateMessage])
+  }, [chatId, message.id, editContent, editReasoning, message.is_user, message.extra, updateMessage, setEditingMessageId])
 
   const handleCancelEdit = useCallback(() => {
-    setIsEditing(false)
+    setEditingMessageId(null)
     setEditContent('')
     setEditReasoning('')
     setShowReasoningEditor(false)
     hadReasoningRef.current = false
-  }, [])
+  }, [setEditingMessageId])
 
   const doDeleteMessage = useCallback(async () => {
     try {

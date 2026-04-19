@@ -3,6 +3,7 @@ import { username, admin, bearer } from "better-auth/plugins";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
+import { getAllowedOrigins } from "../services/trusted-hosts.service";
 
 // ─── Signup gate ────────────────────────────────────────────────────────
 // All signups are blocked unless a valid nonce is presented.
@@ -34,12 +35,19 @@ export const auth = betterAuth({
   baseURL: process.env.AUTH_BASE_URL || `http://localhost:${env.port}`,
   basePath: "/api/auth",
   secret: env.authSecret,
-  trustedOrigins: env.trustAnyOrigin
-    ? (request?: Request) => {
-        const origin = request?.headers.get("origin");
-        return origin ? [origin] : [];
-      }
-    : env.trustedOrigins,
+  // Dynamic form so that hosts added via the Operator panel (Host-header
+  // allowlist) are also accepted by BetterAuth's origin check. A static array
+  // would freeze the env-only baseline at module init, which is why newly
+  // added trusted hosts appeared to "revert" on every server restart — the
+  // DB-backed hosts were loaded into the middleware's cache but never fed
+  // back into BetterAuth.
+  trustedOrigins: (request?: Request) => {
+    if (env.trustAnyOrigin) {
+      const origin = request?.headers.get("origin");
+      return origin ? [origin] : [];
+    }
+    return [...getAllowedOrigins()];
+  },
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,

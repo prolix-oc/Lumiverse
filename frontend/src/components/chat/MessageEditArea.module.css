@@ -7,7 +7,8 @@
 
 .editTextarea {
   width: 100%;
-  min-height: 100px;
+  min-height: 220px;
+  max-height: 65vh;
   padding: 10px 12px;
   background: color-mix(in srgb, var(--lumiverse-fill-subtle) 82%, var(--lcs-glass-bg) 18%);
   border: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
@@ -38,7 +39,8 @@
 }
 
 .reasoningTextarea {
-  min-height: 70px;
+  min-height: 140px;
+  max-height: 40vh;
   border-color: var(--lcs-glass-border, var(--lumiverse-border));
   background: color-mix(in srgb, var(--lcs-glass-bg) 30%, var(--lumiverse-fill-subtle) 70%);
 }
@@ -96,11 +98,13 @@
 /* ── Mobile ── */
 @media (max-width: 600px) {
   .reasoningTextarea {
-    min-height: 56px;
+    min-height: 100px;
+    max-height: 35vh;
   }
 
   .editTextarea {
-    min-height: 80px;
+    min-height: 160px;
+    max-height: 55vh;
   }
 
   .editActions {

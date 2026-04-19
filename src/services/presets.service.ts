@@ -2,9 +2,11 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Preset, CreatePresetInput, UpdatePresetInput } from "../types/preset";
+import type { ConnectionProfile } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
+import * as settingsSvc from "./settings.service";
 export interface PresetRegistryRow {
   id: string;
   name: string;
@@ -81,6 +83,39 @@ export function getPreset(userId: string, id: string): Preset | null {
   return row ? rowToPreset(row) : null;
 }
 
+export function countPresets(userId: string): number {
+  const row = getDb().query("SELECT COUNT(*) as count FROM presets WHERE user_id = ?").get(userId) as any;
+  return row?.count ?? 0;
+}
+
+/**
+ * Validate that a usable preset exists for generation. Throws a config error
+ * (mapped to HTTP 400 by the route) when the user has no presets at all or
+ * when the resolved preset id points at a row that was deleted.
+ *
+ * `requestedPresetId` is the explicit preset the caller asked for; `connectionPresetId`
+ * is the fallback carried by the connection profile. Either pointing at a
+ * missing row is a hard error — silently falling back to legacy assembly lets
+ * stale state produce working-but-unintended generations.
+ */
+export function assertUsablePreset(
+  userId: string,
+  requestedPresetId: string | undefined | null,
+  connectionPresetId: string | undefined | null,
+): void {
+  const resolvedId = requestedPresetId || connectionPresetId || null;
+  if (resolvedId) {
+    if (!getPreset(userId, resolvedId)) {
+      throw new Error("The selected preset was deleted. Pick a different preset before generating.");
+    }
+    return;
+  }
+  if (countPresets(userId) === 0) {
+    throw new Error("No presets available. Create a preset before generating.");
+  }
+  throw new Error("No preset selected. Choose a preset before generating.");
+}
+
 export function createPreset(userId: string, input: CreatePresetInput): Preset {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
@@ -130,8 +165,53 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
 }
 
 export function deletePreset(userId: string, id: string): boolean {
+  const db = getDb();
+
+  // Capture connection profiles that reference this preset. The FK on
+  // connection_profiles.preset_id (ON DELETE SET NULL) will clear the
+  // references when the preset row is removed, but we need the list up front
+  // so we can broadcast refreshed profiles to subscribers afterwards.
+  const affectedConnectionIds = (
+    db
+      .query("SELECT id FROM connection_profiles WHERE user_id = ? AND preset_id = ?")
+      .all(userId, id) as Array<{ id: string }>
+  ).map((r) => r.id);
+
   // Cascade-delete any regex scripts that were imported from this preset so
   // they don't linger as orphaned "preset regexes" in the user's list.
   deleteRegexScriptsByPresetId(userId, id);
-  return getDb().query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+
+  const deleted = db.query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+  if (!deleted) return false;
+
+  // Clean up preset_profile bindings (setting-keyed, no FK) that referenced
+  // the now-deleted preset. Covers defaults, per-character, and per-chat.
+  for (const s of settingsSvc.getAllSettings(userId)) {
+    if (s.key !== "presetProfileDefaults"
+      && !s.key.startsWith("presetProfile:character:")
+      && !s.key.startsWith("presetProfile:chat:")) continue;
+    if (s.value && typeof s.value === "object" && (s.value as any).preset_id === id) {
+      settingsSvc.deleteSetting(userId, s.key);
+    }
+  }
+
+  // Broadcast refreshed connection profiles so frontends drop stale preset_id
+  // references from their in-memory stores.
+  for (const connId of affectedConnectionIds) {
+    const row = db
+      .query("SELECT * FROM connection_profiles WHERE id = ? AND user_id = ?")
+      .get(connId, userId) as any;
+    if (!row) continue;
+    const profile: ConnectionProfile = {
+      ...row,
+      preset_id: row.preset_id || null,
+      is_default: !!row.is_default,
+      has_api_key: !!row.has_api_key,
+      metadata: JSON.parse(row.metadata),
+    };
+    eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id: connId, profile }, userId);
+  }
+
+  eventBus.emit(EventType.PRESET_DELETED, { id }, userId);
+  return true;
 }

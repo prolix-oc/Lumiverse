@@ -51,6 +51,15 @@ const ALL_SETTINGS_KEYS = [
 ];
 
 export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<PrefetchedData> {
+  // Macrotask yield + abort check at the top. Without this, a stop clicked
+  // during the first ~500ms of assembly stayed queued behind prefetch's
+  // synchronous DB reads (which can total 100-300ms on large chats with
+  // hundreds of WI entries) — the event loop had no chance to process the
+  // incoming /generate/stop request until the first internal yield, and by
+  // then the user had already perceived an unresponsive stop button.
+  await new Promise<void>(r => setTimeout(r, 0));
+  if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
+
   // ── 1. Batch settings (1 query for ~25 keys) ─────────────────────────
   const allSettings = settingsSvc.getSettingsByKeys(ctx.userId, ALL_SETTINGS_KEYS);
 
@@ -69,6 +78,7 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   // WebSocket frames before we continue with more sync DB work.
   if (allMessages.length > 200) {
     await new Promise<void>(r => setTimeout(r, 0));
+    if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
   }
 
   const characterId = ctx.targetCharacterId || chat.character_id;

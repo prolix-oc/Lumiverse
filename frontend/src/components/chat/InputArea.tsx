@@ -796,13 +796,18 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   const handleDryRun = useCallback(async () => {
     if (dryRunning || isStreaming) return
+    const presetId = getActivePresetForGeneration()
+    if (!presetId) {
+      toast.warning('No preset selected. Create or select a preset to dry-run.')
+      return
+    }
     setDryRunning(true)
     try {
       const result = await generateApi.dryRun({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: presetId,
       })
       openModal('dryRun', result)
     } catch (err: any) {
@@ -1372,24 +1377,33 @@ export default function InputArea({ chatId }: InputAreaProps) {
                     <span>New Chat</span>
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className={styles.popRowBtn}
-                  onClick={() => {
-                    setOpenPopover(null)
-                    handleDryRun()
-                  }}
-                  disabled={dryRunning}
-                  style={dryRunning ? { opacity: 0.5 } : undefined}
-                >
-                  <span className={styles.personaMain}>
-                    <Eye size={14} />
-                    <span className={styles.personaNameGroup}>
-                      <span>Dry Run</span>
-                      <span className={styles.personaTitle}>Preview the full prompt sent to the AI without generating</span>
-                    </span>
-                  </span>
-                </button>
+                {(() => {
+                  const hasPreset = !!getActivePresetForGeneration()
+                  const dryRunDisabled = dryRunning || !hasPreset
+                  return (
+                    <button
+                      type="button"
+                      className={styles.popRowBtn}
+                      onClick={() => {
+                        setOpenPopover(null)
+                        handleDryRun()
+                      }}
+                      disabled={dryRunDisabled}
+                      style={dryRunDisabled ? { opacity: 0.5 } : undefined}
+                      title={!hasPreset ? 'No preset selected' : undefined}
+                    >
+                      <span className={styles.personaMain}>
+                        <Eye size={14} />
+                        <span className={styles.personaNameGroup}>
+                          <span>Dry Run</span>
+                          <span className={styles.personaTitle}>
+                            {hasPreset ? 'Preview the full prompt sent to the AI without generating' : 'Select a preset to enable dry run'}
+                          </span>
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })()}
                 <button
                   type="button"
                   className={styles.popRowBtn}

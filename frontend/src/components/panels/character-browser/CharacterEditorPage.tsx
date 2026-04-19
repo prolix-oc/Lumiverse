@@ -31,6 +31,12 @@ import ExpressionEditorTab from './ExpressionEditorTab'
 import AlternateFieldEditor from './AlternateFieldEditor'
 import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
+import { VoiceGuidanceEditor } from '@/components/dream-weaver/components/VoiceGuidanceEditor'
+import {
+  EMPTY_DREAM_WEAVER_VOICE_GUIDANCE,
+  getDreamWeaverAppearanceText,
+  getDreamWeaverCharacterMetadata,
+} from '@/lib/dream-weaver-character'
 
 const DEBOUNCE_MS = 2000
 
@@ -45,6 +51,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'expressions', label: 'Expressions' },
   { id: 'advanced', label: 'Advanced' },
 ]
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
 
 export default function CharacterEditorPage() {
   const editingCharacterId = useStore((s) => s.editingCharacterId)
@@ -284,6 +294,21 @@ export default function CharacterEditorPage() {
   // immediate save lands so the in-flight changes get persisted together.
   const pendingExtensionsRef = useRef<Record<string, any> | null>(null)
 
+  const workingExtensions = useMemo(() => {
+    try {
+      const parsed = JSON.parse(extensionsJson)
+      if (isRecord(parsed)) return parsed
+    } catch {
+    }
+
+    return pendingExtensionsRef.current ?? character?.extensions ?? {}
+  }, [extensionsJson, character?.extensions])
+
+  const dreamWeaverMetadata = useMemo(
+    () => getDreamWeaverCharacterMetadata({ extensions: workingExtensions } as Pick<Character, 'extensions'>),
+    [workingExtensions],
+  )
+
   const flushExtensionsSave = useCallback(async () => {
     if (!editingCharacterId) return
     clearTimeout(timers.current['extensions'])
@@ -318,6 +343,25 @@ export default function CharacterEditorPage() {
     [editingCharacterId, character, flushExtensionsSave]
   )
 
+  const mutateDreamWeaver = useCallback(
+    (mutator: (metadata: Record<string, any>) => Record<string, any>) => {
+      mutateExtensions((ext) => {
+        const next = { ...ext }
+        const currentDreamWeaver = isRecord(ext.dream_weaver) ? { ...ext.dream_weaver } : {}
+        const updatedDreamWeaver = mutator(currentDreamWeaver)
+
+        if (Object.keys(updatedDreamWeaver).length > 0) {
+          next.dream_weaver = updatedDreamWeaver
+        } else {
+          delete next.dream_weaver
+        }
+
+        return next
+      }, false)
+    },
+    [mutateExtensions],
+  )
+
   const handleNameChange = useCallback(
     (value: string) => {
       setName(value)
@@ -332,6 +376,46 @@ export default function CharacterEditorPage() {
       debouncedSave(field, value)
     },
     [debouncedSave]
+  )
+
+  const handleDreamWeaverAppearanceChange = useCallback(
+    (value: string) => {
+      mutateDreamWeaver((metadata) => {
+        const next = { ...metadata }
+        if (value.trim()) next.appearance = value
+        else delete next.appearance
+        return next
+      })
+    },
+    [mutateDreamWeaver],
+  )
+
+  const handleDreamWeaverVoiceChange = useCallback(
+    (voiceGuidance: typeof EMPTY_DREAM_WEAVER_VOICE_GUIDANCE) => {
+      mutateDreamWeaver((metadata) => {
+        const hasStructuredRules = Object.values(voiceGuidance.rules).some((items) => items.length > 0)
+        const hasVoiceContent = hasStructuredRules || Boolean(voiceGuidance.compiled.trim())
+        const next = { ...metadata }
+
+        if (hasVoiceContent) {
+          next.voice_guidance = {
+            compiled: voiceGuidance.compiled,
+            rules: {
+              baseline: [...voiceGuidance.rules.baseline],
+              rhythm: [...voiceGuidance.rules.rhythm],
+              diction: [...voiceGuidance.rules.diction],
+              quirks: [...voiceGuidance.rules.quirks],
+              hard_nos: [...voiceGuidance.rules.hard_nos],
+            },
+          }
+        } else {
+          delete next.voice_guidance
+        }
+
+        return next
+      })
+    },
+    [mutateDreamWeaver],
   )
 
   const handleAlternatesChange = useCallback(
@@ -830,6 +914,15 @@ export default function CharacterEditorPage() {
                 <div className={styles.tabContent}>
                   {activeTab === 'core' && (
                     <>
+                      {dreamWeaverMetadata && (
+                        <Field
+                          label="Appearance"
+                          helper="Appearance data for Dream Weaver characters."
+                          value={getDreamWeaverAppearanceText(dreamWeaverMetadata)}
+                          onChange={handleDreamWeaverAppearanceChange}
+                          rows={4}
+                        />
+                      )}
                       <AlternateFieldEditor
                         label="Description"
                         helper="The character's physical appearance, backstory, and other details."
@@ -862,6 +955,18 @@ export default function CharacterEditorPage() {
 
                   {activeTab === 'system' && (
                     <>
+                      {dreamWeaverMetadata && (
+                        <div className={styles.fieldGroup}>
+                          <span className={styles.fieldLabel}>Voice Guidance</span>
+                          <span className={styles.fieldHelper}>
+                            Structured voice rules are used at runtime first, compiled guidance remains the fallback.
+                          </span>
+                          <VoiceGuidanceEditor
+                            voice={dreamWeaverMetadata.voiceGuidance || EMPTY_DREAM_WEAVER_VOICE_GUIDANCE}
+                            onChange={handleDreamWeaverVoiceChange}
+                          />
+                        </div>
+                      )}
                       <Field
                         label="System Prompt"
                         helper="Instructions injected at the start of every conversation."

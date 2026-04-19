@@ -48,7 +48,7 @@
 
 .sectionTitle {
   flex: 1;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -67,7 +67,7 @@
   gap: 6px;
   padding: 7px 10px;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
 }
 
@@ -97,7 +97,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   color: var(--lumiverse-text);
   line-height: 1.6;
@@ -129,7 +129,7 @@
 
 /* ─── Unsaved indicator ───────────────────────────────────── */
 .unsaved {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: rgba(255, 193, 7, 0.8);
   padding: 5px 10px;
   border-radius: 6px;
@@ -153,7 +153,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   transition: all var(--lumiverse-transition-fast);
   user-select: none;
@@ -181,7 +181,7 @@
 
 /* ─── Description text ────────────────────────────────────── */
 .desc {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.5;
   padding: 0;
@@ -196,13 +196,13 @@
 }
 
 .fieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .fieldHint {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-top: 1px;
 }
@@ -213,7 +213,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -230,7 +230,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   cursor: pointer;
@@ -263,7 +263,7 @@
   border-radius: 8px;
   background: rgba(255, 152, 0, 0.06);
   border: 1px solid rgba(255, 152, 0, 0.15);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: rgba(255, 152, 0, 0.8);
   line-height: 1.4;
 }
@@ -275,7 +275,7 @@
 
 /* ─── Error display ───────────────────────────────────────── */
 .errorBox {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-error);
   padding: 7px 10px;
   border-radius: 6px;
@@ -291,7 +291,7 @@
 }
 
 .toggleLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -310,7 +310,7 @@
 }
 
 .promptBlockLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   display: flex;
@@ -324,7 +324,7 @@
   border-radius: 6px;
   color: var(--lumiverse-text-dim);
   padding: 3px 8px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   display: inline-flex;
@@ -354,7 +354,7 @@
 
 .placeholderChip {
   font-family: var(--lumiverse-font-mono, ui-monospace, Menlo, monospace);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 2px 6px;
   background: var(--lumiverse-primary-010);
   color: var(--lumiverse-primary);

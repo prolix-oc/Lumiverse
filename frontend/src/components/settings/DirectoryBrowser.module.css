@@ -32,7 +32,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   white-space: nowrap;
   transition: all var(--lumiverse-transition-fast);
@@ -46,7 +46,7 @@
 
 .breadcrumbSep {
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   user-select: none;
 }
 
@@ -67,7 +67,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   text-align: left;
@@ -94,21 +94,21 @@
   padding: 20px;
   text-align: center;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .loading {
   padding: 20px;
   text-align: center;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .error {
   padding: 12px;
   text-align: center;
   color: var(--lumiverse-error, #ef4444);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .pathInput {
@@ -127,7 +127,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
 }
 

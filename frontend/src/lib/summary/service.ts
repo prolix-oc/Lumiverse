@@ -107,8 +107,11 @@ export async function generateSummary(opts: GenerateSummaryOpts): Promise<string
   })
   if (!prompt) return null
 
-  // Send to backend via summarize endpoint (sidecar-aware, not localhost-restricted)
+  // Send to backend via summarize endpoint (sidecar-aware, not localhost-restricted).
+  // Passing chat_id lets the server register this job in its summarize-pool so
+  // other tabs / reconnects can recover the in-flight state.
   const result = await generateApi.summarize({
+    chat_id: chatId,
     connection_id: connectionId,
     messages: [
       { role: 'system', content: prompt.systemPrompt },

@@ -56,14 +56,26 @@ Tools execute differently depending on the Council **mode** (configured by the u
 
 ### Handling tool invocations
 
-When your tool is invoked during Council execution, the host sends a `tool_invocation` event to your worker:
+When your tool is invoked during Council execution, the host sends a `TOOL_INVOCATION` event to your worker:
 
 ```ts
-spindle.on('tool_invocation', async (event) => {
-  const { toolName, args } = event
+spindle.on('TOOL_INVOCATION', async (payload) => {
+  const { toolName, args, councilMember, contextMessages } = payload
 
   if (toolName === 'search_knowledge_base') {
     const results = await searchMyKnowledgeBase(args.query, args.limit)
+
+    // Inspect the structured chat context if you need role boundaries
+    const lastAssistant = contextMessages
+      ?.filter(m => m.role === 'assistant')
+      .pop()
+
+    // When invoked via council, tailor the output to the assigned member's voice
+    if (councilMember) {
+      return `${councilMember.name} (${councilMember.role || 'analyst'}) reports:\n` +
+        results.map(r => r.summary).join('\n')
+    }
+
     return results.map(r => r.summary).join('\n')
   }
 
@@ -77,15 +89,66 @@ The return value is a string that becomes the tool's result in the Council delib
 
 Extension tools are stored internally with a qualified name: `extensionId:toolName`. When a user assigns your tool to a Council member, the qualified name is used. You don't need to worry about collisions with other extensions' tools.
 
-### Execution context
+### Invocation payload
 
-Your tool receives the following in `args`:
+The handler receives a `ToolInvocationPayloadDTO`:
 
 | Field | Type | Description |
 |---|---|---|
-| `context` | `string` | Formatted chat context (character info, world info, recent messages) — the same context sidecar tools see |
-| `__userId` | `string` | The user ID (for scoped operations) |
+| `toolName` | `string` | The bare name you registered (no `extensionId:` qualifier) |
+| `args` | `Record<string, unknown>` | Arguments matching your tool's `parameters` schema, plus the host-supplied fields below |
+| `requestId` | `string` | Host-side correlation id for this invocation |
+| `councilMember` | `CouncilMemberContext \| undefined` | Assigned member snapshot when invoked via council — see below. Undefined for non-council invocation paths |
+| `contextMessages` | `LlmMessageDTO[] \| undefined` | Structured chat context for council invocations — the same content as the flattened `args.context` string, but with role boundaries preserved. See below. Undefined for non-council invocation paths |
+
+Host-supplied fields inside `args` for council invocations:
+
+| Field | Type | Description |
+|---|---|---|
+| `context` | `string` | Formatted chat context (character info, world info, recent messages) — the same context sidecar tools see. Kept for backwards compatibility; use `contextMessages` (top-level) when you need role boundaries |
 | `__deadlineMs` | `number` | Timestamp by which the tool must respond (derived from `timeoutMs` setting) |
+
+!!! note "No `__userId` in args"
+    The worker host strips `__userId`, `__user_id`, and `userId` from `args` before delivering the invocation. Extensions identify their owner via their worker context, not a string parameter. Any userId you receive in `args` would be untrusted; don't rely on one being present.
+
+### Council member context
+
+When a tool is invoked as part of a council cycle, the host attaches a `councilMember` snapshot of the assigned member. Use it to personalise your tool's response in the member's voice, filter by role, or surface the avatar in modal UI.
+
+```ts
+interface CouncilMemberContext {
+  memberId: string              // Council settings row id
+  itemId: string                // Backing Lumia item id
+  packId: string                // Pack the item lives in
+  packName: string              // Pack display name
+  name: string                  // Member / Lumia item name
+  role: string                  // User-assigned role (e.g. "Plot Enforcer")
+  chance: number                // Participation probability 0–100
+  avatarUrl: string | null      // Relative URL (e.g. /api/v1/images/{id})
+  definition: string            // Lumia "definition" field
+  personality: string           // Lumia "personality" field
+  behavior: string              // Lumia "behavior" field
+  genderIdentity: 0 | 1 | 2     // 0=unspecified, 1=feminine, 2=masculine
+}
+```
+
+The context is built entirely host-side from the user's council settings row and the backing Lumia item. It is delivered as a separate top-level field on the payload so user-space `args` cannot collide with or spoof it. `councilMember` is `undefined` for any non-council invocation path (future inline function calling, etc.) — guard on presence before reading.
+
+### Structured context messages
+
+Council invocations also deliver the assembled chat context as a structured `contextMessages: LlmMessageDTO[]` field. This is the same content that populates `args.context` (kept for backwards compatibility), but with role boundaries preserved so you can filter by role, extract the last user/assistant turn, or re-render the context in your own format.
+
+```ts
+interface LlmMessageDTO {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+  name?: string
+}
+```
+
+Multi-part message content (multimodal text+image/audio parts) is flattened to its text portion before being forwarded — non-text parts are dropped.
+
+Like `councilMember`, `contextMessages` is delivered as a separate top-level payload field so it cannot collide with or be spoofed by user-space `args`. It is `undefined` for any non-council invocation path — guard on presence before reading.
 
 ### Tool lifecycle
 

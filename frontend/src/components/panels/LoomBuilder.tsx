@@ -344,7 +344,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
       {compact && (
         <div className={s.toolbar} style={{ justifyContent: 'space-between' }}>
           <Button size="icon-sm" variant="ghost" onClick={onBack} title="Back to list"><ArrowLeft size={18} /></Button>
-          <span style={{ fontSize: '13px', fontWeight: 600 }}>Edit Block</span>
+          <span style={{ fontSize: 'calc(13px * var(--lumiverse-font-scale, 1))', fontWeight: 600 }}>Edit Block</span>
           <button className={clsx(s.btn, s.btnPrimary, s.btnSmall)} onClick={handleSave} type="button"><Check size={12} /> Save</button>
         </div>
       )}
@@ -435,7 +435,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
               <button className={clsx(s.btn, s.btnSmall, showPreview && s.btnPrimary)} onClick={() => setShowPreview(!showPreview)} type="button">
                 <Eye size={12} /> {showPreview ? 'Hide Preview' : 'Preview'}
               </button>
-              {showPreview && previewLoading && <span style={{ fontSize: '10px', color: 'var(--lumiverse-text-dim)' }}>Resolving...</span>}
+              {showPreview && previewLoading && <span style={{ fontSize: 'calc(10px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)' }}>Resolving...</span>}
             </div>
             {showPreview && (
               <div className={s.previewPanel}>
@@ -830,7 +830,7 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
             <SamplerSlider key={param.key} param={param} value={overrides[param.key]} onChange={handleChangeParam} />
           ))}
           {visibleParams.length === 0 && (
-            <div style={{ fontSize: '11px', color: 'var(--lumiverse-text-dim)', padding: '8px 0', textAlign: 'center' }}>
+            <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', padding: '8px 0', textAlign: 'center' }}>
               No sampler overrides available for this provider.
             </div>
           )}
@@ -1051,7 +1051,7 @@ function AdvancedSettingsPanel({ advancedSettings, onSave }: { advancedSettings:
             <span className={clsx(s.settingsFieldLabel, s.settingsFieldLabelDefault)}>Custom Stop Strings</span>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
               <input className={s.settingsInput} style={{ flex: 1 }} value={stopInput} onChange={e => setStopInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStopString() } }} placeholder="Type and press Enter" />
-              <button className={s.btn} style={{ padding: '4px 8px', fontSize: '11px' }} onClick={handleAddStopString} type="button">
+              <button className={s.btn} style={{ padding: '4px 8px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }} onClick={handleAddStopString} type="button">
                 <Plus size={10} />
               </button>
             </div>
@@ -1198,14 +1198,21 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     }
   }, [presetProfiles.defaults, activePreset, saveBlocks, addToast])
 
-  // Apply preset profile binding when the resolved binding changes (chat/character/default switch).
-  // Uses refs for values we read but don't want to trigger the effect on.
-  const saveBlocksRef = useRef(saveBlocks)
-  saveBlocksRef.current = saveBlocks
+  // Apply the resolved preset profile binding to the active preset's blocks
+  // whenever the chat/character context changes and the hook confirms its
+  // binding state is fresh for that new context (isResolved). Keying off
+  // activeChatId + activeCharacterId — not just the binding reference —
+  // guarantees the effect re-runs on every chat switch, even when two
+  // characters happen to share structurally-identical block states.
+  //
+  // activePreset is read through a ref so user-driven block toggles (which
+  // mutate activePreset) don't re-fire this effect and fight the toggle by
+  // re-applying the binding.
   const activePresetRef = useRef(activePreset)
   activePresetRef.current = activePreset
 
   useEffect(() => {
+    if (!presetProfiles.isResolved) return
     const binding = presetProfiles.activeBinding
     const currentBlocks = activePresetRef.current?.blocks
     if (!binding || !currentBlocks?.length) return
@@ -1214,12 +1221,18 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
       b.id in binding.block_states ? { ...b, enabled: binding.block_states[b.id] } : b
     )
 
-    // Only save if something actually changed
     const changed = updatedBlocks.some((b, i) => b.enabled !== currentBlocks[i].enabled)
     if (changed) {
-      saveBlocksRef.current(updatedBlocks)
+      saveBlocks(updatedBlocks)
     }
-  }, [presetProfiles.activeBinding])
+  }, [
+    presetProfiles.isResolved,
+    presetProfiles.activeBinding,
+    presetProfiles.activeChatId,
+    presetProfiles.activeCharacterId,
+    activePreset?.id,
+    saveBlocks,
+  ])
 
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
@@ -1504,13 +1517,17 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
               </button>
             )}
 
-            {/* Bind / unbind character */}
-            {!presetProfiles.hasCharacterBinding ? (
+            {/* Bind / unbind character — hidden in group chats (chat-only) */}
+            {presetProfiles.characterBindingEnabled && (!presetProfiles.hasCharacterBinding ? (
               <button
                 className={s.profileBtn}
                 onClick={presetProfiles.bindToCharacter}
-                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset}
-                title={!presetProfiles.hasDefaults ? 'Capture defaults first' : 'Bind current block states to this character'}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset || !presetProfiles.activeCharacterId}
+                title={
+                  !presetProfiles.activeCharacterId ? 'No active character — open a chat first'
+                    : !presetProfiles.hasDefaults ? 'Capture defaults first'
+                      : 'Bind current block states to this character'
+                }
                 type="button"
               >
                 <Link size={10} /> Character
@@ -1519,7 +1536,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
                 onClick={presetProfiles.bindToCharacter}
-                disabled={presetProfiles.isLoading}
+                disabled={presetProfiles.isLoading || !presetProfiles.activeCharacterId}
                 title="Rebind current block states to this character"
                 type="button"
               >
@@ -1534,15 +1551,19 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                   <X size={8} />
                 </span>
               </button>
-            )}
+            ))}
 
             {/* Bind / unbind chat */}
             {!presetProfiles.hasChatBinding ? (
               <button
                 className={s.profileBtn}
                 onClick={presetProfiles.bindToChat}
-                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset}
-                title={!presetProfiles.hasDefaults ? 'Capture defaults first' : 'Bind current block states to this chat'}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset || !presetProfiles.activeChatId}
+                title={
+                  !presetProfiles.activeChatId ? 'No active chat — open a chat first'
+                    : !presetProfiles.hasDefaults ? 'Capture defaults first'
+                      : 'Bind current block states to this chat'
+                }
                 type="button"
               >
                 <Link size={10} /> Chat
@@ -1551,7 +1572,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
               <button
                 className={clsx(s.profileBtn, s.profileBtnActive)}
                 onClick={presetProfiles.bindToChat}
-                disabled={presetProfiles.isLoading}
+                disabled={presetProfiles.isLoading || !presetProfiles.activeChatId}
                 title="Rebind current block states to this chat"
                 type="button"
               >
@@ -1605,13 +1626,13 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
           ) : !activePreset ? (
             <div className={s.emptyState}>
               <Layers size={40} style={{ opacity: 0.3 }} />
-              <div style={{ fontSize: '14px', fontWeight: 500 }}>No Preset Selected</div>
-              <div style={{ fontSize: '12px' }}>Create a new preset or select an existing one to start building.</div>
+              <div style={{ fontSize: 'calc(14px * var(--lumiverse-font-scale, 1))', fontWeight: 500 }}>No Preset Selected</div>
+              <div style={{ fontSize: 'calc(12px * var(--lumiverse-font-scale, 1))' }}>Create a new preset or select an existing one to start building.</div>
             </div>
           ) : activePreset.blocks.length === 0 ? (
             <div className={s.emptyState}>
-              <div style={{ fontSize: '14px' }}>No blocks yet</div>
-              <div style={{ fontSize: '12px' }}>Add a prompt block or marker to get started.</div>
+              <div style={{ fontSize: 'calc(14px * var(--lumiverse-font-scale, 1))' }}>No blocks yet</div>
+              <div style={{ fontSize: 'calc(12px * var(--lumiverse-font-scale, 1))' }}>Add a prompt block or marker to get started.</div>
             </div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>

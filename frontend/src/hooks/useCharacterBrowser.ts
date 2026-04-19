@@ -106,6 +106,12 @@ export function useCharacterBrowser() {
     })
   }, [])
 
+  useEffect(() => {
+    return wsClient.on(EventType.CHARACTER_EDITED, () => {
+      setFetchVersion((v) => v + 1)
+    })
+  }, [])
+
   // ─── Server-side paginated summaries (the fast path) ────────────────────
   const [browserItems, setBrowserItems] = useState<CharacterSummary[]>([])
   const [browserTotal, setBrowserTotal] = useState(0)

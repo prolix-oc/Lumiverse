@@ -11,18 +11,18 @@
 }
 
 .label {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .helper {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
 .selectionHint {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary-muted, rgba(140, 130, 255, 0.6));
   font-style: italic;
 }
@@ -86,7 +86,7 @@
 }
 
 .avatarLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   text-align: center;
   max-width: 72px;
@@ -159,7 +159,7 @@
 .renameInput {
   width: 56px;
   padding: 1px 4px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   background: var(--lumiverse-fill);
   border: 1px solid var(--lumiverse-primary);
   border-radius: 3px;
@@ -195,7 +195,7 @@
 .uploadPercent {
   position: relative;
   z-index: 1;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text-muted);
   font-variant-numeric: tabular-nums;

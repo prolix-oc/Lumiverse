@@ -13,6 +13,16 @@
   --app-viewport-offset-left: 0px;
   --app-keyboard-inset-bottom: 0px;
   --app-shell-height: var(--app-viewport-height);
+  /* Scale-compensated full-viewport sizes. Inside the `body > *` zoom
+     layer (see below), a raw `100vw`/`100vh` refers to the unzoomed
+     physical viewport, so a `position: fixed; width: 100vw` overlay
+     overflows at `zoom: 1.5`. These vars pre-divide by the current UI
+     scale, so `width: var(--app-scaled-viewport-width)` renders as one
+     full viewport width at every scale. Used by overlays and backdrops
+     rendered inside zoomed portals. For partial-viewport sizing (e.g.
+     `94vw` modals), wrap the raw unit: `calc(94vw / var(--lumiverse-ui-scale, 1))`. */
+  --app-scaled-viewport-width: calc(var(--app-viewport-width) / var(--lumiverse-ui-scale, 1));
+  --app-scaled-viewport-height: calc(var(--app-viewport-height) / var(--lumiverse-ui-scale, 1));
 }
 
 html {

@@ -1,5 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import { readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
 
 const API_VERSION = "2023-06-01";
@@ -96,11 +97,12 @@ export class AnthropicProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/v1/messages`;
     const body = this.buildBody(request, true);
 
+    // NOTE: signal intentionally NOT passed to fetch — see src/llm/stream-utils.ts.
+    // Abort is handled in-loop via readWithAbort() and a reader.cancel() in finally.
     const res = await fetch(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
     });
 
     if (!res.ok) {
@@ -119,7 +121,7 @@ export class AnthropicProvider implements LlmProvider {
 
     try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithAbort(reader, request.signal);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });

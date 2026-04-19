@@ -11,6 +11,7 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
 import { get } from '@/api/client'
+import { toast } from '@/lib/toast'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import clsx from 'clsx'
 import styles from './ManageChatsModal.module.css'
@@ -228,14 +229,16 @@ export default function ManageChatsModal() {
         const data = JSON.parse(text)
 
         if (!data.chat || !data.messages) {
-          console.error('[ManageChats] Invalid chat export format')
+          toast.error('Invalid chat export format')
           return
         }
 
         await chatsApi.importChat(characterId, data)
         await fetchChats()
-      } catch (err) {
+        toast.success('Chat imported')
+      } catch (err: any) {
         console.error('[ManageChats] Failed to import chat:', err)
+        toast.error(err?.body?.error || err?.message || 'Failed to import chat')
       } finally {
         setImporting(false)
       }
@@ -254,16 +257,28 @@ export default function ManageChatsModal() {
       e.target.value = ''
 
       setImportingSt(true)
+      const fileList = Array.from(files)
       let imported = 0
-      for (const file of Array.from(files)) {
+      const failures: { name: string; reason: string }[] = []
+      for (const file of fileList) {
         try {
           await chatsApi.importFromSt(characterId, file)
           imported++
-        } catch (err) {
+        } catch (err: any) {
           console.error('[ManageChats] Failed to import ST chat:', file.name, err)
+          failures.push({ name: file.name, reason: err?.body?.error || err?.message || 'Unknown error' })
         }
       }
       if (imported > 0) await fetchChats()
+      if (imported > 0 && failures.length === 0) {
+        toast.success(`Imported ${imported} chat${imported === 1 ? '' : 's'}`)
+      } else if (imported > 0 && failures.length > 0) {
+        toast.warning(`Imported ${imported}, failed ${failures.length}: ${failures[0].name} — ${failures[0].reason}`)
+      } else if (failures.length === 1) {
+        toast.error(`Failed to import ${failures[0].name}: ${failures[0].reason}`)
+      } else if (failures.length > 1) {
+        toast.error(`Failed to import ${failures.length} chats — first error: ${failures[0].reason}`)
+      }
       setImportingSt(false)
     },
     [characterId, fetchChats]

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { motion, AnimatePresence } from 'motion/react'
-import { MessageSquarePlus, MessageSquare, Trash2, Users } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
 import { wsClient } from '@/ws/client'
@@ -99,8 +99,12 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
     const rect = rectRef.current
     const mx = (e.clientX - rect.left) / rect.width
     const my = (e.clientY - rect.top) / rect.height
+    const tiltX = (mx - 0.5) * 2
+    const tiltY = (my - 0.5) * 2
     tilt.style.transform =
       `rotateX(${(my - 0.5) * -18}deg) rotateY(${(mx - 0.5) * 18}deg) scale3d(1.04,1.04,1.04)`
+    tilt.style.setProperty('--tilt-x', String(tiltX))
+    tilt.style.setProperty('--tilt-y', String(tiltY))
     card.style.setProperty('--shine-x', `${mx * 100}%`)
     card.style.setProperty('--shine-y', `${my * 100}%`)
   }, [])
@@ -112,8 +116,12 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
     if (!tilt || !card || !rect) return
     const mx = (e.clientX - rect.left) / rect.width
     const my = (e.clientY - rect.top) / rect.height
+    const tiltX = (mx - 0.5) * 2
+    const tiltY = (my - 0.5) * 2
     tilt.style.transform =
       `rotateX(${(my - 0.5) * -18}deg) rotateY(${(mx - 0.5) * 18}deg) scale3d(1.04,1.04,1.04)`
+    tilt.style.setProperty('--tilt-x', String(tiltX))
+    tilt.style.setProperty('--tilt-y', String(tiltY))
     card.style.setProperty('--shine-x', `${mx * 100}%`)
     card.style.setProperty('--shine-y', `${my * 100}%`)
   }, [])
@@ -124,6 +132,8 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
     if (!tilt || !card) return
     tilt.classList.remove(styles.tilting)
     tilt.style.transform = ''
+    tilt.style.removeProperty('--tilt-x')
+    tilt.style.removeProperty('--tilt-y')
     card.style.removeProperty('--shine-x')
     card.style.removeProperty('--shine-y')
     rectRef.current = null
@@ -233,6 +243,9 @@ export default function LandingPage() {
   const navigate = useNavigate()
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const openModal = useStore((s) => s.openModal)
+  const logout = useStore((s) => s.logout)
+  const authUser = useStore((s) => s.user)
+  const accountLabel = authUser?.username || authUser?.name || 'Account'
 
   const [items, setItems] = useState<GroupedRecentChat[]>([])
   const [loading, setLoading] = useState(true)
@@ -349,6 +362,21 @@ export default function LandingPage() {
     navigate('/characters')
   }, [navigate])
 
+  const handleLogout = useCallback(() => {
+    openModal('confirm', {
+      title: 'Log out',
+      message: 'You\u2019ll be signed out on this device. Other devices stay signed in.',
+      confirmText: 'Log out',
+      onConfirm: async () => {
+        try {
+          await logout()
+        } catch (err) {
+          console.error('[Lumiverse] Logout failed:', err)
+        }
+      },
+    })
+  }, [openModal, logout])
+
   const hasMore = items.length < total
 
   return (
@@ -408,6 +436,15 @@ export default function LandingPage() {
               </button>
             </div>
           </div>
+          <button
+            type="button"
+            className={styles.accountBtn}
+            onClick={handleLogout}
+            title="Log out of this device"
+          >
+            <span className={styles.accountName}>{accountLabel}</span>
+            <LogOut size={13} strokeWidth={1.5} />
+          </button>
         </motion.header>
 
         {/* Main grid */}

@@ -93,6 +93,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       })
       // Clear expression state so stale expressions from the previous character don't linger
       ;(get() as any).setActiveExpression?.(null, null, null)
+      // Clear any pending message edit from the previous chat
+      ;(get() as any).setEditingMessageId?.(null)
       settingsApi.put('activeChatId', chatId).catch(() => {})
     },
 

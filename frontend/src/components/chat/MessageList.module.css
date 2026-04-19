@@ -48,7 +48,7 @@
 .loadingOlder {
   text-align: center;
   padding: 12px 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   flex-shrink: 0;
 }

@@ -58,17 +58,21 @@ export async function searchDatabanks(
   databankIds: string[],
   queryText: string,
   limit = 4,
+  signal?: AbortSignal,
 ): Promise<DatabankRetrievalResult> {
   if (databankIds.length === 0) {
     return { chunks: [], formatted: "", count: 0 };
   }
 
   try {
+    if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
+
     // Embed the query
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
 
     // Search LanceDB
-    const raw = await embeddingsSvc.searchDatabankChunks(userId, databankIds, queryVector, limit, queryText);
+    const raw = await embeddingsSvc.searchDatabankChunks(userId, databankIds, queryVector, limit, queryText, signal);
 
     const chunks: DatabankSearchResult[] = raw.map((r) => ({
       chunkId: r.chunk_id,
@@ -83,11 +87,16 @@ export async function searchDatabanks(
     const formatted = formatResult(chunks);
     const result: DatabankRetrievalResult = { chunks, formatted, count: chunks.length };
 
-    // Cache for synchronous consumption
-    resultCache.set(cacheKey(userId, chatId), { result, cachedAt: Date.now() });
+    // Cache for synchronous consumption — but not when the caller aborted.
+    // A truncated or abort-interrupted result shouldn't poison the next
+    // generation's warm cache.
+    if (!signal?.aborted) {
+      resultCache.set(cacheKey(userId, chatId), { result, cachedAt: Date.now() });
+    }
 
     return result;
   } catch (err) {
+    if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
     console.warn("[databank] Search failed:", err);
     return { chunks: [], formatted: "", count: 0 };
   }

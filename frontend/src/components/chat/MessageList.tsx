@@ -121,6 +121,16 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const virtualItems = rowVirtualizer.getVirtualItems()
   const rangeKey = `${virtualItems[0]?.index ?? -1}:${virtualItems[virtualItems.length - 1]?.index ?? -1}`
 
+  // While streaming, the `streamingContent`-deps RAF pin (below) is the sole
+  // authority on scroll position. The virtualTotalSize layout-effect and the
+  // MutationObserver/visualViewport triple-pin get routed through this ref so
+  // they no-op during generation — their overlapping scrollTop writes on top
+  // of the RAF pin are what produced the "jumping" stream on iOS PWA.
+  const isStreamingRef = useRef(isStreaming)
+  useEffect(() => {
+    isStreamingRef.current = isStreaming
+  }, [isStreaming])
+
   const scrollToHistoryBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current
     if (!el || visibleMessages.length === 0) return
@@ -220,9 +230,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // exceeds the estimate (common for long messages), totalSize grows after
   // the pin-to-bottom effect above already ran — leaving the tail of the
   // last message behind the input bar. Re-pin whenever the virtual total
-  // size changes while the user is anchored to the bottom.
+  // size changes while the user is anchored to the bottom. Skipped during
+  // active streaming — the streamingContent RAF pin already handles that
+  // cadence, and lazy markdown/image measures mid-stream would otherwise
+  // double-pin on top of the RAF writes.
   const virtualTotalSize = rowVirtualizer.getTotalSize()
   useLayoutEffect(() => {
+    if (isStreamingRef.current) return
     if (!isNearBottomRef.current) return
     const el = scrollRef.current
     if (!el) return
@@ -258,8 +272,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     // iOS keyboard animation (~250-350ms) fires multiple visualViewport
     // resize events. A single rAF-pin can land mid-animation, so we pin
     // immediately AND schedule settling retries to catch the final layout
-    // once the keyboard and safe-zone have settled.
+    // once the keyboard and safe-zone have settled. Skipped while streaming
+    // — the 32ms streamingContent RAF pin already holds the viewport at the
+    // bottom, and stacking the 180/420ms timer pins on top of rapid content
+    // growth produced the visible stepping on iOS PWA.
     const repinIfAnchored = () => {
+      if (isStreamingRef.current) return
       if (!isNearBottomRef.current) return
       requestAnimationFrame(pinToBottom)
       clearSettleTimers()

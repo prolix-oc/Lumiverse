@@ -10,7 +10,7 @@
 .emptyState {
   padding: 40px 20px;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -131,7 +131,7 @@
   background: rgba(220, 60, 60, 0.1);
   border: 1px solid rgba(220, 60, 60, 0.2);
   border-radius: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #dc3c3c);
   white-space: pre-wrap;
 }
@@ -143,7 +143,7 @@
   background: transparent;
   border: 1px solid rgba(220, 60, 60, 0.3);
   color: var(--lumiverse-danger, #dc3c3c);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
 }
 
@@ -159,7 +159,7 @@
   background: rgba(100, 160, 255, 0.08);
   border: 1px solid rgba(100, 160, 255, 0.2);
   border-radius: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-secondary, #aaa);
 }
 
@@ -201,7 +201,7 @@
 
 .importProgressStep {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: rgba(100, 160, 255, 0.8);
 }
 

@@ -2,6 +2,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   z-index: 10001;
   display: flex;
   align-items: center;
@@ -14,8 +16,8 @@
 }
 
 .studio {
-  width: clamp(340px, 94vw, min(1200px, var(--lumiverse-content-max-width, 1200px)));
-  height: clamp(400px, 88vh, 860px);
+  width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(1200px, var(--lumiverse-content-max-width, 1200px)));
+  height: clamp(400px, calc(88vh / var(--lumiverse-ui-scale, 1)), 860px);
   background: var(--lumiverse-bg-deep);
   border: 1px solid var(--lumiverse-border);
   border-radius: 16px;
@@ -33,7 +35,7 @@
   gap: 1rem;
   flex: 1;
   color: var(--lumiverse-text-muted);
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--lumiverse-font-scale, 1));
 }
 
 /* ===== Header ===== */
@@ -54,7 +56,7 @@
 }
 
 .headerLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary);
   text-transform: uppercase;
   letter-spacing: 0.15em;
@@ -62,7 +64,7 @@
 }
 
 .headerTitle {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin: 0;
@@ -83,7 +85,7 @@
 .badge {
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   background: var(--lumiverse-fill-subtle);
@@ -180,7 +182,7 @@
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: color var(--lumiverse-transition-fast);
 }
@@ -222,7 +224,7 @@
 }
 
 .sessionName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -230,7 +232,7 @@
 }
 
 .saveStatus {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: #34d399;
 }
 
@@ -257,7 +259,7 @@
   background: color-mix(in srgb, var(--lumiverse-danger) 12%, var(--lumiverse-bg-deep));
   border: 1px solid color-mix(in srgb, var(--lumiverse-danger) 20%, transparent);
   color: var(--lumiverse-danger);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   z-index: 20;
 }
 
@@ -265,15 +267,15 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-danger);
-  font-size: 1rem;
+  font-size: calc(1rem * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   padding: 0 4px;
 }
 
 @media (max-width: 640px) {
   .studio {
-    width: 100vw;
-    height: 100vh;
+    width: calc(100vw / var(--lumiverse-ui-scale, 1));
+    height: calc(100vh / var(--lumiverse-ui-scale, 1));
     border-radius: 0;
   }
 

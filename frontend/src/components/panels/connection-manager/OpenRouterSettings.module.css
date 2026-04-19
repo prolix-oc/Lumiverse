@@ -41,7 +41,7 @@
 }
 
 .brandLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.8px;
@@ -57,7 +57,7 @@
 }
 
 .oauthHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -84,7 +84,7 @@
 }
 
 .creditLabel {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -93,7 +93,7 @@
 }
 
 .creditValue {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   font-variant-numeric: tabular-nums;
@@ -104,7 +104,7 @@
 }
 
 .creditValue[data-unlimited] {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary-text);
 }
 
@@ -137,7 +137,7 @@
   align-items: center;
   padding: 1px 5px;
   border-radius: 4px;
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -149,7 +149,7 @@
 }
 
 .creditsUnavailable {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   padding: 4px 2px;
   font-style: italic;
@@ -165,7 +165,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
   border-radius: 8px;
@@ -226,7 +226,7 @@
   justify-content: center;
   gap: 4px;
   padding: 6px 0 2px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
   border-top: 1px solid var(--lumiverse-border-light);
   margin-top: 2px;

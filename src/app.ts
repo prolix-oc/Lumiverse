@@ -54,6 +54,7 @@ import { globalAddonsRoutes } from "./routes/global-addons.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
+import { isHostAllowed, isOriginAllowed } from "./services/trusted-hosts.service";
 
 const app = new Hono();
 
@@ -85,7 +86,7 @@ app.use("/api/*", async (c, next) => {
 
 app.use("/api/*", async (c, next) => {
   const path = c.req.path;
-  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/characters/import" || path.startsWith("/api/v1/world-books/import") || path === "/api/v1/images" || path.endsWith("/expressions/upload-zip") || path === "/api/v1/stt/transcribe") {
+  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/characters/import" || path.startsWith("/api/v1/world-books/import") || path === "/api/v1/images" || path.endsWith("/expressions/upload-zip") || path === "/api/v1/stt/transcribe" || path === "/api/v1/chats/import" || path === "/api/v1/chats/import-st") {
     return next();
   }
   return bodyLimit({
@@ -94,25 +95,16 @@ app.use("/api/*", async (c, next) => {
   })(c, next);
 });
 
-// Host header validation — prevents DNS rebinding attacks
-const allowedHosts = new Set<string>();
-for (const origin of env.trustedOrigins) {
-  try {
-    allowedHosts.add(new URL(origin).host);
-  } catch { /* skip malformed */ }
-}
-// Always allow localhost variants
-allowedHosts.add(`localhost:${env.port}`);
-allowedHosts.add(`127.0.0.1:${env.port}`);
-allowedHosts.add(`[::1]:${env.port}`);
-
+// Host header validation — prevents DNS rebinding attacks.
+// The allowlist is sourced from trustedHostsService so it can be updated at
+// runtime via the Operator panel without a server restart.
 app.use("/api/*", async (c, next) => {
   if (env.trustAnyOrigin) return next();
   const host = c.req.header("host");
   // Reject when Host is missing entirely — a raw HTTP/1.0 request or a crafted
   // TCP connection can omit the Host header, which would otherwise bypass the
   // DNS-rebinding guard.
-  if (!host || !allowedHosts.has(host)) {
+  if (!isHostAllowed(host)) {
     return c.json({ error: "Forbidden" }, 403);
   }
   return next();
@@ -123,7 +115,7 @@ app.use(
   cors({
     origin: (origin) => {
       if (env.trustAnyOrigin) return origin;
-      return env.trustedOriginsSet.has(origin) ? origin : '';
+      return isOriginAllowed(origin) ? origin : '';
     },
     credentials: true,
   })

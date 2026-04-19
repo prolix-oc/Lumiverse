@@ -3,7 +3,7 @@
   flex-direction: column;
   gap: 0.95rem;
   min-width: 0;
-  max-height: min(480px, 58vh);
+  max-height: min(480px, calc(58vh / var(--lumiverse-ui-scale, 1)));
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--lumiverse-border) 60%, transparent) transparent;
@@ -43,7 +43,7 @@
 }
 
 .sectionLabel {
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -56,12 +56,12 @@
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.66rem;
+  font-size: calc(0.66rem * var(--lumiverse-font-scale, 1));
 }
 
 .metaInline {
   color: var(--lumiverse-text-muted);
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--lumiverse-font-scale, 1));
   line-height: 1.4;
 }
 
@@ -75,7 +75,7 @@
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 58%, transparent);
   color: var(--lumiverse-text);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--lumiverse-font-scale, 1));
   outline: none;
   box-sizing: border-box;
 }
@@ -93,14 +93,14 @@
 
 .meta {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
   color: var(--lumiverse-text-muted);
 }
 
 .warning {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-warning, #fbbf24);
 }
 
@@ -111,7 +111,7 @@
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
   color: var(--lumiverse-text);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -134,7 +134,7 @@
 }
 
 .controlLabel {
-  font-size: 0.66rem;
+  font-size: calc(0.66rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;

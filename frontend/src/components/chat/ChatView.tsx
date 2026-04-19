@@ -4,8 +4,8 @@ import { UserRound, ListChecks } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
-import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
+import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
 import { imagesApi } from '@/api/images'
 import { expressionsApi } from '@/api/expressions'
@@ -13,6 +13,7 @@ import { personasApi } from '@/api/personas'
 import { resolveBinding } from '@/store/slices/personas'
 import type { WallpaperRef } from '@/types/store'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
+import useEditKeyboard from '@/hooks/useEditKeyboard'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
@@ -47,6 +48,7 @@ export default function ChatView() {
   }, [messageSelectMode, setMessageSelectMode])
 
   useSwipeKeyboard()
+  useEditKeyboard()
 
   const innerStyle = useMemo(() => {
     switch (chatWidthMode) {
@@ -92,37 +94,10 @@ export default function ChatView() {
           showCouncilRetryModal(pendingFailure)
         }
 
-        // Check for an active or recently-completed generation to recover
-        try {
-          const genStatus = await generateApi.getStatus(chatId)
-          if (cancelled) return
-          if (genStatus.active && genStatus.generationId && genStatus.status === 'streaming') {
-            // Resume streaming from pooled tokens
-            const state = useStore.getState()
-            state.startStreaming(genStatus.generationId, genStatus.targetMessageId)
-            if (genStatus.content) state.replaceStreamContent(genStatus.content)
-            if (genStatus.reasoning) state.replaceStreamReasoning(genStatus.reasoning)
-            if (genStatus.tokenSeq != null) state.setLastPooledSeq(genStatus.tokenSeq)
-            // Restore reasoning timer state:
-            if (genStatus.reasoningDurationMs) {
-              // Reasoning already finished — set the finalized duration directly
-              // so the label shows "Thought for Xs" instead of a running timer
-              useStore.setState({ streamingReasoningDuration: genStatus.reasoningDurationMs })
-            } else if (genStatus.reasoningStartedAt) {
-              // Reasoning is still ongoing — restore the start timestamp so the
-              // live timer and the closure variable continue from the correct point
-              state.setStreamingReasoningStartedAt(genStatus.reasoningStartedAt)
-            }
-          } else if (genStatus.active && genStatus.generationId) {
-            // Generation is in council/assembling — just wire up the generation ID
-            // so WS events are processed when streaming begins
-            useStore.getState().startStreaming(genStatus.generationId, genStatus.targetMessageId)
-          } else if (!genStatus.active && genStatus.completedMessageId) {
-            // Generation completed while we were away — refetch messages to include it
-            const freshMsgs = await messagesApi.list(chatId, { limit: pageSize, tail: true })
-            if (!cancelled) setMessages(freshMsgs.data, freshMsgs.total)
-          }
-        } catch { /* generation status check is best-effort */ }
+        // Recover any active or recently-completed generation. The helper is
+        // also invoked on visibilitychange and WS reconnect so that any path
+        // back to this chat re-syncs pooled tokens.
+        if (!cancelled) await recoverPooledGeneration(chatId)
 
         // Auto-switch persona if this character has a binding
         if (chat.character_id) {

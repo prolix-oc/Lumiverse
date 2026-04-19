@@ -54,7 +54,7 @@
 }
 
 .popoverTitle {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -69,7 +69,7 @@
 }
 
 .fieldLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   flex-shrink: 0;
 }
@@ -78,7 +78,7 @@
   flex: 1;
   min-width: 0;
   padding: 4px 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   background: var(--lumiverse-fill-hover);
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;

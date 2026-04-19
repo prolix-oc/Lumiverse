@@ -110,7 +110,7 @@
 
 .gridCardName {
   display: block;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -123,7 +123,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -205,7 +205,7 @@
 }
 
 .listCardName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -214,7 +214,7 @@
 }
 
 .listCardMeta {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -254,7 +254,7 @@
   padding: 48px 20px;
   gap: 12px;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -273,7 +273,7 @@
   background: var(--lumiverse-primary-010);
   border: 1px solid var(--lumiverse-primary-020);
   color: var(--lumiverse-primary-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);

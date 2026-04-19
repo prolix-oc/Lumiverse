@@ -1,5 +1,5 @@
 .modal {
-  max-height: min(760px, 88vh);
+  max-height: min(760px, calc(88vh / var(--lumiverse-ui-scale, 1)));
 }
 
 .header {
@@ -12,7 +12,7 @@
 }
 
 .title {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin: 0;
@@ -24,7 +24,7 @@
   align-items: center;
   padding: 2px 8px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-muted);
@@ -70,7 +70,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -105,7 +105,7 @@
   text-align: left;
   cursor: pointer;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   transition: background var(--lumiverse-transition-fast);
 }
@@ -123,7 +123,7 @@
 
 .accordionTokens {
   margin-left: auto;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-variant-numeric: tabular-nums;
   color: var(--lumiverse-text-muted);
 }
@@ -147,7 +147,7 @@
 .tokenTable {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .tokenTable td {
@@ -177,7 +177,7 @@
   display: inline-flex;
   padding: 0 4px;
   border-radius: 3px;
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
 }
 
@@ -210,14 +210,14 @@
 }
 
 .footerTotal {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   font-variant-numeric: tabular-nums;
 }
 
 .footerMax {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -233,7 +233,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -244,7 +244,7 @@
 
 /* Raw view caveat banner */
 .rawCaveat {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
   background: var(--lumiverse-fill-subtle);
@@ -257,7 +257,7 @@
 /* Raw view */
 .rawView {
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
   background: var(--lumiverse-fill-subtle);
@@ -277,7 +277,7 @@
   justify-content: center;
   padding: 40px;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 .empty {

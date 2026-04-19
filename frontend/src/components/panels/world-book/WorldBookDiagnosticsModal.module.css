@@ -1,6 +1,8 @@
 .backdrop {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   display: flex;
   align-items: center;
@@ -15,8 +17,8 @@
 }
 
 .modal {
-  width: min(1120px, 96vw);
-  max-height: 88vh;
+  width: min(1120px, calc(96vw / var(--lumiverse-ui-scale, 1)));
+  max-height: calc(88vh / var(--lumiverse-ui-scale, 1));
   display: flex;
   flex-direction: column;
   background: var(--lumiverse-bg);
@@ -43,7 +45,7 @@
 }
 
 .eyebrow {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -52,7 +54,7 @@
 
 .title {
   margin: 0;
-  font-size: 22px;
+  font-size: calc(22px * var(--lumiverse-font-scale, 1));
   line-height: 1.2;
   color: var(--lumiverse-text);
 }
@@ -60,7 +62,7 @@
 .subtitle {
   margin: 0;
   max-width: 780px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
 }
@@ -93,7 +95,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
 }
@@ -203,7 +205,7 @@
 }
 
 .heroTitle {
-  font-size: 18px;
+  font-size: calc(18px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   line-height: 1.3;
   color: var(--lumiverse-text);
@@ -211,7 +213,7 @@
 
 .heroBody {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.65;
   color: var(--lumiverse-text-muted);
 }
@@ -230,7 +232,7 @@
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -240,14 +242,14 @@
   border: 1px solid color-mix(in srgb, #d39b32 30%, var(--lumiverse-border));
   background: rgba(211, 155, 50, 0.1);
   color: var(--lumiverse-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
 }
 
 .inlineNotice {
   padding: 12px 14px;
   border-radius: 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
   color: var(--lumiverse-text);
 }
@@ -285,7 +287,7 @@
 }
 
 .metricLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -293,13 +295,13 @@
 }
 
 .metricValue {
-  font-size: 24px;
+  font-size: calc(24px * var(--lumiverse-font-scale, 1));
   line-height: 1;
   color: var(--lumiverse-text);
 }
 
 .metricMeta {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
   color: var(--lumiverse-text-dim);
 }
@@ -334,7 +336,7 @@
 }
 
 .sectionEyebrow {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -344,7 +346,7 @@
 
 .sectionTitle {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   line-height: 1.3;
   color: var(--lumiverse-text);
 }
@@ -359,7 +361,7 @@
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
   background: color-mix(in srgb, var(--lumiverse-bg) 76%, transparent);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
@@ -391,7 +393,7 @@
 
 .collapsibleSummaryText {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
 }
@@ -437,7 +439,7 @@
   outline: none;
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.4;
 }
 
@@ -446,7 +448,7 @@
 }
 
 .traceSearchMeta {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
 }
@@ -484,7 +486,7 @@
 }
 
 .scoreGuideTitle {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -493,7 +495,7 @@
 
 .scoreGuideText {
   margin: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text);
 }
@@ -534,7 +536,7 @@
 
 .hitTitle {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   line-height: 1.3;
   color: var(--lumiverse-text);
 }
@@ -546,7 +548,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
   color: var(--lumiverse-primary);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -560,7 +562,7 @@
   border: 1px solid var(--lumiverse-border);
   background: color-mix(in srgb, var(--lumiverse-bg) 74%, transparent);
   color: var(--lumiverse-text-muted);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -571,7 +573,7 @@
   align-items: center;
   padding: 4px 8px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -598,14 +600,14 @@
 
 .hitSummary {
   margin: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
 }
 
 .hitOutcomeReason {
   margin: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text);
 }
@@ -628,7 +630,7 @@
   gap: 6px;
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .scorePill,
@@ -675,7 +677,7 @@
 }
 
 .previewLabel {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -688,7 +690,7 @@
   border-radius: 14px;
   border: 1px solid var(--lumiverse-border);
   background: color-mix(in srgb, var(--lumiverse-bg) 78%, transparent);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.65;
   color: var(--lumiverse-text);
   white-space: pre-wrap;
@@ -713,19 +715,19 @@
 }
 
 .factLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
 .factValue {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   text-align: right;
 }
 
 .overlapSummary {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
 }
@@ -744,7 +746,7 @@
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, #d39b32 20%, var(--lumiverse-border));
   background: rgba(211, 155, 50, 0.09);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text);
 }
@@ -768,12 +770,12 @@
 
 .emptyState {
   padding: 28px 18px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 .emptyStateSmall {
   padding: 14px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 @keyframes diagnosticsSpin {
@@ -803,7 +805,7 @@
 
   .modal {
     width: 100%;
-    max-height: 92vh;
+    max-height: calc(92vh / var(--lumiverse-ui-scale, 1));
     border-radius: 16px;
   }
 

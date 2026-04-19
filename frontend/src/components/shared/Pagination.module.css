@@ -19,7 +19,7 @@
   background: var(--lumiverse-input-bg, rgba(255, 255, 255, 0.05));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   outline: none;
 }
@@ -29,7 +29,7 @@
 }
 
 .perPageLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -74,7 +74,7 @@
   background: transparent;
   border: 1px solid transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast, 0.15s);
 }
@@ -101,12 +101,12 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint, rgba(255, 255, 255, 0.25));
   user-select: none;
 }
 
 .info {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint, rgba(255, 255, 255, 0.25));
 }

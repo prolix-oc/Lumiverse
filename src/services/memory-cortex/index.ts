@@ -124,6 +124,21 @@ const cortexResultCache = new Map<string, CachedCortexEntry>();
 const inflightCortexQueries = new Map<string, Promise<CortexResult>>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+/** Race a shared promise against an abort signal so a dedup joiner can bail
+ *  out early without cancelling the shared upstream work for other joiners. */
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
+    );
+  });
+}
+
 function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): string {
   return JSON.stringify({
     chatId: query.chatId,
@@ -202,6 +217,7 @@ export async function queryLinkedCortex(
   userId: string,
   config?: MemoryCortexConfig,
   queryText?: string,
+  signal?: AbortSignal,
 ): Promise<LinkedCortexResult> {
   const cfg = config ?? getCortexConfig(userId);
   const linked = getLinkedCortexData(userId, chatId);
@@ -228,11 +244,12 @@ export async function queryLinkedCortex(
               topK,
               includeConsolidations: false,
               includeRelationships,
-            }, cfg);
+            }, cfg, signal);
             // Enrich vault with retrieved memories from source chat
             vault.memories = result.memories;
             vault.arcContext = result.arcContext;
           } catch (err) {
+            if (signal?.aborted) return;
             console.warn(`[cortex] Vault memory enrichment failed for vault ${vault.vaultId} (source chat ${sourceChatId}):`, err);
           }
         })(),
@@ -255,9 +272,10 @@ export async function queryLinkedCortex(
               topK,
               includeConsolidations: false,
               includeRelationships,
-            }, cfg);
+            }, cfg, signal);
             interlinkResults.push({ targetChatId: target.chatId, targetChatName: target.chatName, result });
           } catch (err) {
+            if (signal?.aborted) return;
             console.warn(`[cortex] Interlink query failed for chat ${target.chatId}:`, err);
           }
         })(),
@@ -266,6 +284,13 @@ export async function queryLinkedCortex(
   }
 
   await Promise.all(promises);
+
+  // Don't cache a partial result assembled after an abort — the next live
+  // generation should re-run the linked queries instead of reading an
+  // abort-truncated snapshot.
+  if (signal?.aborted) {
+    return { vaults, interlinks: interlinkResults };
+  }
 
   const result: LinkedCortexResult = { vaults, interlinks: interlinkResults };
   linkedCortexResultCache.set(chatId, { result, queriedAt: Date.now() });
@@ -284,13 +309,17 @@ export async function queryLinkedCortex(
 export async function queryCortex(
   query: CortexQuery,
   config?: MemoryCortexConfig,
+  signal?: AbortSignal,
 ): Promise<CortexResult> {
   const cfg = config ?? getCortexConfig(query.userId);
   if (!cfg.enabled) return EMPTY_CORTEX_RESULT;
+  if (signal?.aborted) return EMPTY_CORTEX_RESULT;
 
   const queryKey = buildCortexQueryKey(query, cfg);
   const inflight = inflightCortexQueries.get(queryKey);
-  if (inflight) return inflight;
+  // Dedup join: race against the caller's signal so an aborting joiner bails
+  // out without cancelling the shared in-flight retrieval for other callers.
+  if (inflight) return raceWithSignal(inflight, signal);
 
   const runQuery = (async (): Promise<CortexResult> => {
     // Time-bound the retrieval to prevent hanging promises from accumulating
@@ -298,35 +327,47 @@ export async function queryCortex(
     const timeoutMs = cfg.retrievalTimeoutMs ?? 60000;
     let result: CortexResult;
 
-    if (timeoutMs > 0) {
+    if (timeoutMs > 0 || signal) {
       const TIMEOUT = Symbol("cortex-timeout");
       // AbortController lets the retrieval pipeline bail out early instead of
       // continuing to run in the background after the timeout fires.
-      const ac = new AbortController();
-      const timer = setTimeout(() => {
-        console.warn(`[memory-cortex] Retrieval timed out after ${timeoutMs}ms`);
-        ac.abort();
-      }, timeoutMs);
+      const timeoutController = new AbortController();
+      const timer = timeoutMs > 0
+        ? setTimeout(() => {
+            console.warn(`[memory-cortex] Retrieval timed out after ${timeoutMs}ms`);
+            timeoutController.abort();
+          }, timeoutMs)
+        : null;
+
+      // Forward the caller's abort into the retrieval's signal so a user stop
+      // tears down the embedding + LanceDB work instead of letting it run on.
+      const combinedSignal = signal
+        ? AbortSignal.any([signal, timeoutController.signal])
+        : timeoutController.signal;
 
       let raced: CortexResult | typeof TIMEOUT;
       try {
         raced = await Promise.race([
-          queryCortexImpl(query, cfg, ac.signal),
+          queryCortexImpl(query, cfg, combinedSignal),
           new Promise<typeof TIMEOUT>((resolve) => {
-            ac.signal.addEventListener("abort", () => resolve(TIMEOUT), { once: true });
+            combinedSignal.addEventListener("abort", () => resolve(TIMEOUT), { once: true });
           }),
         ]);
       } finally {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       }
 
       if (raced === TIMEOUT) {
-        // Do NOT cache timeouts — leave any existing cache entry intact so
-        // future generations can still use stale-but-real results instead of
-        // falling through to the slow vector retrieval fallback.
+        // Do NOT cache timeouts / aborts — leave any existing cache entry
+        // intact so future generations can still use stale-but-real results
+        // instead of falling through to the slow vector retrieval fallback.
+        const aborted = signal?.aborted === true;
         return {
           ...EMPTY_CORTEX_RESULT,
-          stats: { ...EMPTY_CORTEX_RESULT.stats, timedOut: true },
+          stats: {
+            ...EMPTY_CORTEX_RESULT.stats,
+            ...(aborted ? { aborted: true } : { timedOut: true }),
+          },
         };
       }
 

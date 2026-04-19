@@ -15,14 +15,14 @@
 
 .title {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.01em;
 }
 
 .subtitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin: 0;
   padding: 0 24px;
@@ -47,7 +47,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg-dark);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   resize: vertical;
   font-family: inherit;
@@ -74,7 +74,7 @@
 .btn {
   padding: 8px 18px;
   border-radius: var(--lcs-radius-sm, 8px);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--lumiverse-border);

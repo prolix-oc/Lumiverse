@@ -22,14 +22,14 @@
 
 .title {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.01em;
 }
 
 .subtitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-weight: 400;
 }
@@ -56,7 +56,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg-dark);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   transition: border-color 180ms ease;
 }
@@ -138,7 +138,7 @@
 }
 
 .cardName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -150,7 +150,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -168,7 +168,7 @@
   background: var(--lumiverse-primary-010);
   border: 1px solid var(--lumiverse-primary-050);
   color: var(--lumiverse-primary);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -198,7 +198,7 @@
   border: 1px solid var(--lumiverse-primary-050);
   background: var(--lumiverse-bg-dark);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   outline: none;
 }
@@ -208,7 +208,7 @@
   text-align: center;
   padding: 32px 16px;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 .loading {
@@ -218,7 +218,7 @@
   padding: 40px 16px;
   color: var(--lumiverse-text-dim);
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 /* ── New chat button ── */
@@ -234,7 +234,7 @@
   border: 1px dashed var(--lumiverse-primary-050);
   background: var(--lumiverse-primary-010);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all 180ms ease;

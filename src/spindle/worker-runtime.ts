@@ -28,6 +28,7 @@ import type {
   PersonaDTO,
   PersonaCreateDTO,
   PersonaUpdateDTO,
+  StreamChunkDTO,
 } from "lumiverse-spindle-types";
 
 // ─── State ───────────────────────────────────────────────────────────────
@@ -39,6 +40,10 @@ const eventHandlers = new Map<string, Set<(payload: unknown, userId?: string) =>
 const pendingResponses = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
+>();
+const streamingGenerations = new Map<
+  string,
+  { push: (chunk: StreamChunkDTO) => void; fail: (reason: unknown) => void }
 >();
 let interceptHandler:
   | ((
@@ -68,6 +73,156 @@ function request(msg: WorkerToHost & { requestId: string }): Promise<unknown> {
     pendingResponses.set(msg.requestId, { resolve, reject });
     post(msg);
   });
+}
+
+/** Build a real AbortError-shaped DOMException so `err.name === "AbortError"` works. */
+function makeAbortError(reason?: unknown): Error {
+  // DOMException is available in Bun workers; fall back to a plain Error-shape.
+  const message = typeof reason === "string" ? reason : "Generation aborted";
+  if (typeof DOMException === "function") {
+    return new DOMException(message, "AbortError");
+  }
+  const err = new Error(message);
+  err.name = "AbortError";
+  return err;
+}
+
+/**
+ * Issue a `request_generation` RPC with optional AbortSignal support.
+ *
+ * `AbortSignal` can't cross the worker→host boundary (it's not
+ * structured-cloneable), so the signal is stripped from `input` before
+ * posting and instead we post a `cancel_generation` message when it fires.
+ * If the signal is already aborted, we reject synchronously without
+ * bothering the host.
+ */
+function requestGeneration(input: any): Promise<unknown> {
+  const signal: AbortSignal | undefined = input?.signal;
+  const { signal: _omit, ...payload } = input ?? {};
+  void _omit;
+
+  if (signal?.aborted) {
+    return Promise.reject(makeAbortError((signal.reason as any)?.message));
+  }
+
+  const requestId = crypto.randomUUID();
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      // Tell the host to tear down the upstream LLM request. The host will
+      // still respond with an `AbortError`-prefixed error which the
+      // `response` handler converts into a DOMException when rejecting.
+      post({ type: "cancel_generation", requestId });
+    };
+
+    pendingResponses.set(requestId, {
+      resolve: (value) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      reject: (reason) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(reason);
+      },
+    });
+
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    post({ type: "request_generation", requestId, input: payload });
+  });
+}
+
+/**
+ * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
+ * that yields `StreamChunkDTO` values as the host forwards them. The
+ * generator throws on `generation_stream_error` (with `AbortError` shape
+ * preserved) and returns after the terminal `done` chunk.
+ *
+ * If the consumer breaks out of the `for await` loop early, the generator's
+ * `finally` posts a `cancel_generation` message so the host can tear down
+ * the upstream LLM request — this mirrors the explicit `AbortSignal` path.
+ */
+function requestGenerationStream(input: any): AsyncGenerator<StreamChunkDTO, void, void> {
+  const signal: AbortSignal | undefined = input?.signal;
+  const { signal: _omit, ...payload } = input ?? {};
+  void _omit;
+
+  if (signal?.aborted) {
+    const err = makeAbortError((signal.reason as any)?.message);
+    return (async function* (): AsyncGenerator<StreamChunkDTO, void, void> {
+      throw err;
+    })();
+  }
+
+  const requestId = crypto.randomUUID();
+
+  type QueueItem =
+    | { kind: "chunk"; chunk: StreamChunkDTO }
+    | { kind: "error"; error: unknown };
+
+  const queue: QueueItem[] = [];
+  let waiter: ((item: QueueItem) => void) | null = null;
+  let terminated = false;
+
+  const push = (chunk: StreamChunkDTO) => {
+    if (terminated) return;
+    if (chunk.type === "done") terminated = true;
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w({ kind: "chunk", chunk });
+    } else {
+      queue.push({ kind: "chunk", chunk });
+    }
+  };
+
+  const fail = (err: unknown) => {
+    if (terminated) return;
+    terminated = true;
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w({ kind: "error", error: err });
+    } else {
+      queue.push({ kind: "error", error: err });
+    }
+  };
+
+  streamingGenerations.set(requestId, { push, fail });
+
+  const onAbort = () => {
+    post({ type: "cancel_generation", requestId });
+  };
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  post({ type: "request_generation_stream", requestId, input: payload });
+
+  return (async function* (): AsyncGenerator<StreamChunkDTO, void, void> {
+    try {
+      while (true) {
+        const item = queue.length > 0
+          ? queue.shift()!
+          : await new Promise<QueueItem>((resolve) => { waiter = resolve; });
+
+        if (item.kind === "error") throw item.error;
+
+        yield item.chunk;
+        if (item.chunk.type === "done") return;
+      }
+    } finally {
+      streamingGenerations.delete(requestId);
+      signal?.removeEventListener("abort", onAbort);
+      // If the consumer broke out before the terminal `done`/error chunk,
+      // tell the host to abort the upstream LLM request.
+      if (!terminated) {
+        post({ type: "cancel_generation", requestId });
+      }
+    }
+  })();
 }
 
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
@@ -147,28 +302,19 @@ const spindleApi: SpindleAPI = {
 
   generate: {
     async raw(input) {
-      const requestId = crypto.randomUUID();
-      return request({
-        type: "request_generation",
-        requestId,
-        input: { ...input, type: "raw" },
-      });
+      return requestGeneration({ ...input, type: "raw" });
     },
     async quiet(input) {
-      const requestId = crypto.randomUUID();
-      return request({
-        type: "request_generation",
-        requestId,
-        input: { ...input, type: "quiet" },
-      });
+      return requestGeneration({ ...input, type: "quiet" });
     },
     async batch(input) {
-      const requestId = crypto.randomUUID();
-      return request({
-        type: "request_generation",
-        requestId,
-        input: { ...input, type: "batch" },
-      });
+      return requestGeneration({ ...input, type: "batch" });
+    },
+    rawStream(input) {
+      return requestGenerationStream({ ...input, type: "raw" });
+    },
+    quietStream(input) {
+      return requestGenerationStream({ ...input, type: "quiet" });
     },
     async dryRun(input, userId?: string) {
       const requestId = crypto.randomUUID();
@@ -1515,11 +1661,16 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       }
 
       try {
+        const payload = {
+          toolName: msg.toolName,
+          args: msg.args,
+          requestId: msg.requestId,
+          ...(msg.councilMember ? { councilMember: msg.councilMember } : {}),
+          ...(msg.contextMessages ? { contextMessages: msg.contextMessages } : {}),
+        };
         let result: string | undefined;
         for (const handler of handlers) {
-          const val = await Promise.resolve(
-            handler({ toolName: msg.toolName, args: msg.args, requestId: msg.requestId })
-          );
+          const val = await Promise.resolve(handler(payload));
           if (val !== undefined && val !== null && result === undefined) {
             result = String(val);
           }
@@ -1564,12 +1715,36 @@ self.onmessage = async (event: MessageEvent<HostToWorker>) => {
       break;
     }
 
+    case "generation_stream_chunk": {
+      const stream = streamingGenerations.get(msg.requestId);
+      if (stream) stream.push(msg.chunk);
+      break;
+    }
+
+    case "generation_stream_error": {
+      const stream = streamingGenerations.get(msg.requestId);
+      if (stream) {
+        if (msg.error.startsWith("AbortError:")) {
+          stream.fail(makeAbortError(msg.error.slice("AbortError:".length).trim()));
+        } else {
+          stream.fail(new Error(msg.error));
+        }
+      }
+      break;
+    }
+
     case "response": {
       const pending = pendingResponses.get(msg.requestId);
       if (pending) {
         pendingResponses.delete(msg.requestId);
         if (msg.error) {
-          pending.reject(new Error(msg.error));
+          // Convert host-side abort errors back into a real DOMException so
+          // extensions can do `err.name === "AbortError"` the usual way.
+          if (msg.error.startsWith("AbortError:")) {
+            pending.reject(makeAbortError(msg.error.slice("AbortError:".length).trim()));
+          } else {
+            pending.reject(new Error(msg.error));
+          }
         } else {
           pending.resolve(msg.result);
         }

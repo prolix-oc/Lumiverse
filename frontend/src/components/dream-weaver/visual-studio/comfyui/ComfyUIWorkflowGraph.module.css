@@ -118,19 +118,19 @@
 
 .graphNodeType {
   color: var(--lumiverse-primary);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .graphNodeTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.3;
 }
 
 .graphNodeMeta {
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
 }

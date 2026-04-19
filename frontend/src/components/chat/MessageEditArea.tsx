@@ -1,4 +1,5 @@
 import { Brain } from 'lucide-react'
+import { useCallback, useEffect, useRef } from 'react'
 import styles from './MessageEditArea.module.css'
 
 interface MessageEditAreaProps {
@@ -10,11 +11,34 @@ interface MessageEditAreaProps {
   onChangeReasoning?: (value: string) => void
 }
 
+// Auto-grow a textarea to fit its content, bounded by its CSS min/max-height.
+function autoResize(el: HTMLTextAreaElement | null) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
 export default function MessageEditArea({
   editContent, onChangeContent, onSave, onCancel,
   editReasoning, onChangeReasoning,
 }: MessageEditAreaProps) {
   const hasReasoning = editReasoning != null && onChangeReasoning != null
+  const contentRef = useRef<HTMLTextAreaElement>(null)
+  const reasoningRef = useRef<HTMLTextAreaElement>(null)
+
+  // Fit to initial content on mount, and re-fit when the value changes externally.
+  useEffect(() => { autoResize(contentRef.current) }, [editContent])
+  useEffect(() => { autoResize(reasoningRef.current) }, [editReasoning])
+
+  const handleContentChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    onChangeContent(e.target.value)
+    autoResize(e.currentTarget)
+  }, [onChangeContent])
+
+  const handleReasoningChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    onChangeReasoning?.(e.target.value)
+    autoResize(e.currentTarget)
+  }, [onChangeReasoning])
 
   return (
     <div className={styles.editArea}>
@@ -25,9 +49,10 @@ export default function MessageEditArea({
             <span>Reasoning</span>
           </div>
           <textarea
+            ref={reasoningRef}
             className={`${styles.editTextarea} ${styles.reasoningTextarea}`}
             value={editReasoning}
-            onChange={(e) => onChangeReasoning(e.target.value)}
+            onChange={handleReasoningChange}
             placeholder="Reasoning content (optional)"
           />
         </div>
@@ -39,9 +64,10 @@ export default function MessageEditArea({
           </div>
         )}
         <textarea
+          ref={contentRef}
           className={styles.editTextarea}
           value={editContent}
-          onChange={(e) => onChangeContent(e.target.value)}
+          onChange={handleContentChange}
           autoFocus
         />
       </div>

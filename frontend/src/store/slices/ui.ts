@@ -58,4 +58,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
 
   lastRegenFeedback: '',
   setLastRegenFeedback: (text) => set({ lastRegenFeedback: text }),
+
+  editingMessageId: null,
+  setEditingMessageId: (id) => set({ editingMessageId: id }),
 })

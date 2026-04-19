@@ -4,7 +4,7 @@ import { IconBolt } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import { Toggle } from '@/components/shared/Toggle'
-import type { ReasoningSettings, ReasoningEffort } from '@/types/store'
+import type { ReasoningSettings, ReasoningEffort, ThinkingDisplay } from '@/types/store'
 import styles from './PresetManager.module.css'
 import clsx from 'clsx'
 
@@ -103,6 +103,7 @@ export default function PresetManager() {
 
   const isToggleOnly = activeProvider ? TOGGLE_ONLY_PROVIDERS.has(activeProvider) : false
   const effortOptions = getEffortOptions(activeProvider, activeModel)
+  const isAnthropic = activeProvider === 'anthropic'
 
   const updateReasoning = useCallback(
     (partial: Partial<ReasoningSettings>) => {
@@ -204,6 +205,25 @@ export default function PresetManager() {
             ))}
           </select>
         </div>
+
+        {/* Anthropic-only: thinking.display field on the Messages API */}
+        {isAnthropic && (
+          <div className={styles.fieldGroup}>
+            <span className={styles.label}>Thinking Display</span>
+            <select
+              className={styles.select}
+              value={reasoningSettings.thinkingDisplay ?? 'auto'}
+              onChange={(e) => updateReasoning({ thinkingDisplay: e.target.value as ThinkingDisplay })}
+            >
+              <option value="auto">Auto (model default)</option>
+              <option value="summarized">Summarized</option>
+              <option value="omitted">Omitted</option>
+            </select>
+            <span className={styles.toggleDesc}>
+              Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.
+            </span>
+          </div>
+        )}
 
         {/* Keep N reasoning blocks in history */}
         <div className={styles.fieldGroup}>

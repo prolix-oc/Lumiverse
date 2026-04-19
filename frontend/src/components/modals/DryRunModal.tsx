@@ -153,7 +153,7 @@ export default function DryRunModal() {
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats, contextClipStats } = modalProps
 
   const [messagesOpen, setMessagesOpen] = useState(
     messages.length <= MESSAGES_AUTO_COLLAPSE_THRESHOLD,
@@ -162,6 +162,11 @@ export default function DryRunModal() {
   const [paramsOpen, setParamsOpen] = useState(false)
   const [wiStatsOpen, setWiStatsOpen] = useState(false)
   const [memStatsOpen, setMemStatsOpen] = useState(false)
+  // Auto-open the budget section when clipping is in a problem state so
+  // users discover why their chat history is missing without hunting.
+  const [budgetOpen, setBudgetOpen] = useState(
+    Boolean(contextClipStats?.budgetInvalid) || (contextClipStats?.messagesDropped ?? 0) > 0,
+  )
   const [rawView, setRawView] = useState<'off' | RawPromptView>('off')
   const [copied, setCopied] = useState(false)
 
@@ -227,7 +232,13 @@ export default function DryRunModal() {
                   size={14}
                   className={clsx(styles.chevron, messagesOpen && styles.chevronOpen)}
                 />
-                Messages ({messages.length})
+                Messages ({messages.length}
+                {contextClipStats?.enabled && contextClipStats.messagesDropped > 0 && (
+                  <span style={{ color: '#ffab00', marginLeft: 6 }}>
+                    , {contextClipStats.messagesDropped} clipped
+                  </span>
+                )}
+                )
               </button>
               {messagesOpen && messages.length > 0 && (
                 <div className={styles.messagesCollapsibleBody}>
@@ -431,6 +442,143 @@ export default function DryRunModal() {
                           ))}
                         </>
                       )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Context Budget — surfaces history clipping so users understand
+                why their 600-message chat shrank to 240 in the prompt. */}
+            {contextClipStats && (
+              <div className={styles.collapsible}>
+                <button
+                  type="button"
+                  className={styles.collapsibleHeader}
+                  onClick={() => setBudgetOpen((o) => !o)}
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(styles.chevron, budgetOpen && styles.chevronOpen)}
+                  />
+                  Context Budget
+                  {!contextClipStats.enabled && (
+                    <span className={styles.breakdownSource} style={{ marginLeft: 6 }}>
+                      (no max_context_length set — clipping disabled)
+                    </span>
+                  )}
+                  {contextClipStats.enabled && contextClipStats.budgetInvalid && (
+                    <span style={{ color: '#ff5470', marginLeft: 6 }}>
+                      (budget invalid — context size ≤ reserved response tokens)
+                    </span>
+                  )}
+                  {contextClipStats.enabled && !contextClipStats.budgetInvalid && contextClipStats.messagesDropped > 0 && (
+                    <span style={{ color: '#ffab00', marginLeft: 6 }}>
+                      ({contextClipStats.messagesDropped} message{contextClipStats.messagesDropped === 1 ? '' : 's'} clipped, {contextClipStats.tokensDropped.toLocaleString()} tokens)
+                    </span>
+                  )}
+                  {contextClipStats.enabled && !contextClipStats.budgetInvalid && contextClipStats.messagesDropped === 0 && (
+                    <span className={styles.breakdownSource} style={{ marginLeft: 6 }}>
+                      (fits within budget)
+                    </span>
+                  )}
+                </button>
+                {budgetOpen && (
+                  <div className={styles.collapsibleBody}>
+                    {contextClipStats.enabled && contextClipStats.budgetInvalid && (
+                      <div
+                        className={styles.breakdownEntry}
+                        style={{
+                          marginBottom: 8,
+                          background: 'rgba(255, 84, 112, 0.08)',
+                          borderLeft: '3px solid #ff5470',
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
+                          gap: 4,
+                        }}
+                      >
+                        <span className={styles.breakdownLabel} style={{ color: '#ff5470' }}>
+                          Budget cannot fit any chat history
+                        </span>
+                        <span className={styles.breakdownSource}>
+                          input budget = max_context ({contextClipStats.maxContext.toLocaleString()})
+                          {' − '}max_tokens ({contextClipStats.maxResponseTokens.toLocaleString()})
+                          {' − '}safety ({contextClipStats.safetyMargin.toLocaleString()}) ={' '}
+                          {contextClipStats.inputBudget.toLocaleString()}. Raise Context Size or
+                          lower Max Tokens.
+                        </span>
+                      </div>
+                    )}
+                    <div className={styles.breakdownList}>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Max context length</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.maxContext > 0
+                            ? `${contextClipStats.maxContext.toLocaleString()} tokens`
+                            : '— (unset)'}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Reserved for response</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.maxResponseTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Safety margin</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.safetyMargin.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Input budget (history allowance)</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.budgetInvalid ? { color: '#ff5470' } : undefined}
+                        >
+                          {contextClipStats.inputBudget.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Fixed overhead (system / WI / persona / etc.)</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.fixedTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Chat history before clip</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.chatHistoryTokensBefore.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Chat history after clip</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.chatHistoryTokensAfter.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Messages dropped</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.messagesDropped > 0 ? { color: '#ffab00' } : undefined}
+                        >
+                          {contextClipStats.messagesDropped.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Tokens dropped</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.tokensDropped > 0 ? { color: '#ffab00' } : undefined}
+                        >
+                          {contextClipStats.tokensDropped.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Tokenizer used</span>
+                        <span className={styles.breakdownSource}>{contextClipStats.tokenizerUsed}</span>
+                      </div>
                     </div>
                   </div>
                 )}

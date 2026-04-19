@@ -32,7 +32,7 @@
 
 .title {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   white-space: nowrap;
 }
@@ -88,7 +88,7 @@
 }
 
 .label {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   text-transform: uppercase;
@@ -101,7 +101,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   font-family: inherit;
   transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
@@ -118,7 +118,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
   min-height: 180px;
   resize: vertical;
@@ -138,7 +138,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   cursor: pointer;
   transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
@@ -229,7 +229,7 @@
 }
 
 .categoryName {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -239,7 +239,7 @@
 }
 
 .categoryCount {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   flex-shrink: 0;
 }
@@ -249,7 +249,7 @@
    ============================================================================ */
 
 .badge {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   padding: 2px 7px;
   border-radius: 10px;
   text-transform: uppercase;
@@ -295,7 +295,7 @@
 }
 
 .triggerBadge {
-  font-size: 8px;
+  font-size: calc(8px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   padding: 1px 4px;
   border-radius: 6px;
@@ -306,7 +306,7 @@
 }
 
 .groupBadge {
-  font-size: 8px;
+  font-size: calc(8px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   padding: 1px 5px;
   border-radius: 999px;
@@ -353,7 +353,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -385,7 +385,7 @@
 
 .btnSmall {
   padding: 5px 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 /* ============================================================================
@@ -440,7 +440,7 @@
   border: none;
   padding: 2px;
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   width: 100%;
   color: var(--lumiverse-text);
   outline: none;
@@ -451,7 +451,7 @@
 }
 
 .macroGroupTitle {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -466,7 +466,7 @@
   padding: 5px 12px;
   cursor: pointer;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   margin: 0 4px;
   transition: background var(--lumiverse-transition-fast);
 }
@@ -477,12 +477,12 @@
 
 .macroSyntax {
   font-family: var(--lumiverse-font-mono, monospace);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary);
 }
 
 .macroDesc {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-left: 8px;
   text-align: right;
@@ -514,7 +514,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   border-radius: 8px;
   text-align: left;
@@ -534,7 +534,7 @@
 }
 
 .sectionLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -553,7 +553,7 @@
    ============================================================================ */
 
 .postHistoryNote {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-warning);
   padding: 6px 10px;
   background: rgba(245, 158, 11, 0.06);
@@ -593,7 +593,7 @@
 }
 
 .accordionTitle {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.6px;
@@ -602,7 +602,7 @@
 }
 
 .accordionBadge {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 10px;
@@ -641,7 +641,7 @@
 }
 
 .sliderLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   letter-spacing: 0.2px;
 }
@@ -658,7 +658,7 @@
   width: 72px;
   padding: 3px 6px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
   text-align: right;
   outline: none;
@@ -740,7 +740,7 @@
 }
 
 .settingsFieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
 }
 
@@ -760,7 +760,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
   transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
 }
@@ -779,7 +779,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
   line-height: 1.5;
   resize: vertical;
@@ -793,7 +793,7 @@
 }
 
 .settingsHint {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -803,7 +803,7 @@
   background: transparent;
   border: 1px solid rgba(128, 128, 128, 0.15);
   color: var(--lumiverse-text-dim);
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -825,7 +825,7 @@
 }
 
 .samplerLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -846,7 +846,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
   line-height: 1.5;
   resize: vertical;
@@ -861,7 +861,7 @@
 }
 
 .jsonError {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #ef4444);
   display: flex;
   align-items: center;
@@ -882,7 +882,7 @@
   background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1));
   border: 1px solid var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.12));
   color: var(--lumiverse-text);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
 }
 
@@ -912,19 +912,19 @@
 }
 
 .connectionSource {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
 }
 
 .connectionDot {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   opacity: 0.4;
 }
 
 .connectionModel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -945,7 +945,7 @@
 }
 
 .profileLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -969,7 +969,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -1016,7 +1016,7 @@
 }
 
 .profileSourceBadge {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary);
   opacity: 0.8;
@@ -1033,7 +1033,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   border-bottom: 1px solid var(--lumiverse-border);
   transition: background var(--lumiverse-transition-fast);
@@ -1085,7 +1085,7 @@
 
 .presetNameTitle {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.01em;
@@ -1105,7 +1105,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg-dark);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   font-family: inherit;
   transition: border-color var(--lumiverse-transition-fast);
@@ -1131,7 +1131,7 @@
 .presetNameBtn {
   padding: 8px 18px;
   border-radius: var(--lcs-radius-sm, 8px);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--lumiverse-border);
@@ -1224,7 +1224,7 @@
   background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 400;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -1263,7 +1263,7 @@
 }
 
 .blockName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1271,7 +1271,7 @@
 }
 
 .blockPreview {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1287,7 +1287,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 8px;
@@ -1325,7 +1325,7 @@
 
 .previewContent {
   padding: 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
@@ -1345,7 +1345,7 @@
 }
 
 .previewDiagWarn {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-warning);
   display: flex;
   align-items: center;
@@ -1353,7 +1353,7 @@
 }
 
 .previewDiagError {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #ef4444);
   display: flex;
   align-items: center;

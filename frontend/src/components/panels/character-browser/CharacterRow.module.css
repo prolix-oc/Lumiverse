@@ -68,7 +68,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-010);
@@ -81,7 +81,7 @@
 
 .name {
   display: block;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -91,7 +91,7 @@
 
 .creator {
   display: block;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -103,7 +103,7 @@
 }
 
 .tag {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   padding: 1px 5px;
   border-radius: 4px;
   border: 1px solid;

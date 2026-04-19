@@ -1,6 +1,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
   display: flex;
@@ -15,7 +17,7 @@
 }
 
 .modal {
-  width: clamp(340px, 94vw, 420px);
+  width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), 420px);
   background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));
   border: 1px solid var(--lumiverse-border);
   border-radius: 14px;
@@ -32,14 +34,14 @@
 }
 
 .title {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin: 0;
 }
 
 .hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin: 0 0 12px;
   line-height: 1.5;
@@ -53,7 +55,7 @@
   border-radius: 8px;
   outline: none;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   box-sizing: border-box;
 }
 
@@ -71,7 +73,7 @@
   background: rgba(220, 60, 60, 0.1);
   border: 1px solid rgba(220, 60, 60, 0.2);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #dc3c3c);
   white-space: pre-wrap;
 }
@@ -89,7 +91,7 @@
   background: transparent;
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
 }
 
@@ -106,7 +108,7 @@
   background: var(--lumiverse-primary);
   border: none;
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
@@ -128,8 +130,8 @@
   }
 
   .modal {
-    width: 100vw;
-    max-width: 100vw;
+    width: calc(100vw / var(--lumiverse-ui-scale, 1));
+    max-width: calc(100vw / var(--lumiverse-ui-scale, 1));
     border-radius: 14px 14px 0 0;
     padding: 20px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
   }

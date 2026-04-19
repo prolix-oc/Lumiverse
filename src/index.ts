@@ -50,6 +50,12 @@ const { seedOwner, backfillUserIds, getFirstUserId } = await import("./auth/seed
 const { operatorService } = await import("./services/operator.service");
 await seedOwner();
 backfillUserIds();
+
+// Load the operator-configured trusted host allowlist now that the owner is
+// known — the Host-header middleware in app.ts reads from this cache.
+const { load: loadTrustedHosts } = await import("./services/trusted-hosts.service");
+loadTrustedHosts();
+
 runStartupDatabaseMaintenance(db, getDatabasePath(), getFirstUserId());
 startDatabaseMonitor(() => db, getDatabasePath());
 startAutomaticDatabaseMaintenance(
@@ -140,7 +146,11 @@ setTimeout(() => {
 if (env.trustAnyOrigin) {
   console.log("[Auth] Trusted origins: ALL (TRUST_ANY_ORIGIN enabled)");
 } else {
-  console.log(`[Auth] Trusted origins:\n${env.trustedOrigins.map((o) => `  • ${o}`).join("\n")}`);
+  const { getSnapshot: getTrustedHostsSnapshot } = await import("./services/trusted-hosts.service");
+  const snapshot = getTrustedHostsSnapshot();
+  const baselineLines = snapshot.baseline.map((e) => `  • ${e.host} (${e.source})`);
+  const configuredLines = snapshot.configured.map((h) => `  • ${h} (configured)`);
+  console.log(`[Auth] Trusted origins:\n${[...baselineLines, ...configuredLines].join("\n")}`);
 }
 
 // --- Graceful shutdown ---

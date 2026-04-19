@@ -1,6 +1,7 @@
 import type {
   CouncilSettings,
   CouncilMember,
+  CouncilMemberContext,
   CouncilToolResult,
   CouncilExecutionResult,
   CouncilToolDefinition,
@@ -211,8 +212,19 @@ async function executeMemberTools(
 ): Promise<CouncilToolResult[]> {
   const results: CouncilToolResult[] = [];
 
+  // Resolve the backing Lumia item once — reused for identity prompt and the
+  // CouncilMemberContext delivered to extension tool invocations.
+  let lumiaItem: ReturnType<typeof packsSvc.getLumiaItem> = null;
+  try {
+    lumiaItem = packsSvc.getLumiaItem(input.userId, member.itemId);
+  } catch {
+    // Item may be missing (pack uninstalled mid-flight) — fall back to null.
+  }
+
+  const memberContext = buildMemberContext(member, lumiaItem);
+
   // Build member identity context
-  const identityMsg = buildMemberIdentity(input.userId, member);
+  const identityMsg = buildMemberIdentity(member, lumiaItem);
 
   for (const toolName of member.tools) {
     if (input.signal?.aborted) {
@@ -261,6 +273,15 @@ async function executeMemberTools(
           // Extension tools receive the exact same context as sidecar tools —
           // system enrichment (character, persona, world info) plus the full
           // chat history governed by the sidecar context window setting.
+          //
+          // Context is delivered two ways for the same invocation:
+          //   1. `args.context` — flattened string (role prefixes elided for
+          //      system messages, multipart content dropped). Kept for
+          //      backwards compatibility with extensions already reading it.
+          //   2. `contextMessages` (top-level payload field) — structured
+          //      LlmMessageDTO[], role boundaries preserved, multipart text
+          //      extracted. Delivered via worker-host so it can't collide
+          //      with user-space `args` (same rationale as `councilMember`).
           const bareToolName = extToolReg!.name;
           const contextSummary = contextMessages
             .map((m) => {
@@ -280,7 +301,9 @@ async function executeMemberTools(
               // attempted __userId injection before posting to the worker.
               __deadlineMs: Date.now() + settings.toolsSettings.timeoutMs,
             },
-            settings.toolsSettings.timeoutMs
+            settings.toolsSettings.timeoutMs,
+            memberContext,
+            contextMessages
           );
         } else {
           content = await invokeSidecarTool(
@@ -339,19 +362,51 @@ async function executeMemberTools(
  * worker and reach back via the RPC bridge under that identity. Passing the
  * raw userId to the tool handler would let a malicious extension impersonate
  * the user via its own internal state, defeating the worker boundary.
+ *
+ * `councilMember` is a trusted host-built snapshot of the assigned member's
+ * identity/personality fields — delivered to the extension handler alongside
+ * the invocation args so the tool can tailor its output to that member.
  */
 async function invokeExtensionToolViaWorker(
   userId: string,
   extensionId: string,
   toolName: string,
   args: Record<string, unknown>,
-  timeoutMs: number
+  timeoutMs: number,
+  councilMember?: CouncilMemberContext,
+  contextMessages?: LlmMessage[]
 ): Promise<string> {
   const host = getWorkerHost(extensionId);
   if (!host) {
     throw new Error(`Extension worker '${extensionId}' is not running`);
   }
-  return host.invokeExtensionTool(toolName, args, timeoutMs);
+  return host.invokeExtensionTool(toolName, args, timeoutMs, councilMember, contextMessages);
+}
+
+/**
+ * Build the CouncilMemberContext snapshot passed to extension tool invocations.
+ * Sourced from the member's council-settings row plus (when available) the
+ * backing Lumia item's personality fields. Missing item => personality fields
+ * are empty strings, avatar is null, packName falls back to member.packName.
+ */
+function buildMemberContext(
+  member: CouncilMember,
+  item: ReturnType<typeof packsSvc.getLumiaItem>
+): CouncilMemberContext {
+  return {
+    memberId: member.id,
+    itemId: member.itemId,
+    packId: member.packId,
+    packName: member.packName,
+    name: member.itemName,
+    role: member.role ?? "",
+    chance: member.chance,
+    avatarUrl: item?.avatar_url ?? null,
+    definition: item?.definition ?? "",
+    personality: item?.personality ?? "",
+    behavior: item?.behavior ?? "",
+    genderIdentity: item?.gender_identity ?? 0,
+  };
 }
 
 /** Call the sidecar LLM for a single tool. */
@@ -522,23 +577,21 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
 }
 
 /** Build the identity/personality context for a Lumia council member. */
-function buildMemberIdentity(userId: string, member: CouncilMember): string {
+function buildMemberIdentity(
+  member: CouncilMember,
+  item: ReturnType<typeof packsSvc.getLumiaItem>
+): string {
   let identity = `You are a council member named "${member.itemName}".`;
 
-  try {
-    const item = packsSvc.getLumiaItem(userId, member.itemId);
-    if (item) {
-      const parts: string[] = [];
-      if (item.definition) parts.push(`### Your Physical Identity ###\n${item.definition}`);
-      if (item.personality) parts.push(`### Your Personality ###\n${item.personality}`);
-      if (item.behavior) parts.push(`### Your Behavioral Patterns ###\n${item.behavior}`);
-      if (parts.length > 0) {
-        identity += `\n\n### WHO YOU ARE ###\n\n${parts.join("\n\n")}`;
-        identity += `\n\n### INSTRUCTION ###\nYou MUST answer ALL tool calls and contributions through the lens of your personality, behavior, and identity described above. Your biases, quirks, speech patterns, and perspective should color every observation and suggestion you make. Do NOT provide generic or neutral responses—filter everything through who you are. Your unique voice and worldview must be evident in every contribution.`;
-      }
+  if (item) {
+    const parts: string[] = [];
+    if (item.definition) parts.push(`### Your Physical Identity ###\n${item.definition}`);
+    if (item.personality) parts.push(`### Your Personality ###\n${item.personality}`);
+    if (item.behavior) parts.push(`### Your Behavioral Patterns ###\n${item.behavior}`);
+    if (parts.length > 0) {
+      identity += `\n\n### WHO YOU ARE ###\n\n${parts.join("\n\n")}`;
+      identity += `\n\n### INSTRUCTION ###\nYou MUST answer ALL tool calls and contributions through the lens of your personality, behavior, and identity described above. Your biases, quirks, speech patterns, and perspective should color every observation and suggestion you make. Do NOT provide generic or neutral responses—filter everything through who you are. Your unique voice and worldview must be evident in every contribution.`;
     }
-  } catch {
-    // Item may not exist — fall back to name-only identity
   }
 
   return identity;

@@ -1,6 +1,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   z-index: 10001;
   display: flex;
   align-items: center;
@@ -13,8 +15,8 @@
 }
 
 .modal {
-  width: clamp(340px, 94vw, min(1200px, var(--lumiverse-content-max-width, 1200px)));
-  height: clamp(400px, 88vh, 860px);
+  width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(1200px, var(--lumiverse-content-max-width, 1200px)));
+  height: clamp(400px, calc(88vh / var(--lumiverse-ui-scale, 1)), 860px);
   background: var(--lumiverse-bg-deep);
   border: 1px solid var(--lumiverse-border);
   border-radius: 16px;
@@ -35,7 +37,7 @@
 }
 
 .title {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -69,7 +71,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   text-align: left;
   transition: all var(--lumiverse-transition-fast);
@@ -97,12 +99,12 @@
 
 .errorText {
   color: var(--lumiverse-error);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .successText {
   color: var(--lumiverse-primary);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .embeddingChecklist {
@@ -130,7 +132,7 @@
 }
 
 .embeddingChecklistEyebrow {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -138,13 +140,13 @@
 }
 
 .embeddingChecklistTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .embeddingChecklistSubtitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
   color: var(--lumiverse-text-muted);
 }
@@ -162,13 +164,13 @@
 }
 
 .embeddingChecklistScoreValue {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
 
 .embeddingChecklistScoreLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -222,7 +224,7 @@
   border-radius: 10px;
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border-neutral);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--lumiverse-text-muted);
@@ -244,14 +246,14 @@
 }
 
 .embeddingChecklistItemLabel {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   line-height: 1.35;
   color: var(--lumiverse-text);
 }
 
 .embeddingChecklistItemDescription {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
 }
@@ -264,7 +266,7 @@
   min-height: 22px;
   padding: 0 9px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -340,12 +342,12 @@
 .poolIdentifier {
   color: var(--lumiverse-text-dim);
   font-weight: 500;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .poolNumbers {
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   text-align: right;
 }
 
@@ -393,7 +395,7 @@
 }
 
 .sectionTitle {
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin-bottom: 4px;
@@ -410,7 +412,7 @@
 }
 
 .fieldLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -421,7 +423,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -430,7 +432,7 @@
 }
 
 .placeholder {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -465,7 +467,7 @@
 }
 
 .displayModeLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   transition: color var(--lumiverse-transition-fast);
 }
@@ -655,7 +657,7 @@
 .segmentedBtn {
   flex: 1;
   padding: 7px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-align: center;
   background: transparent;
@@ -703,7 +705,7 @@
 }
 
 .rangeValue {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary);
   min-width: 36px;
@@ -723,7 +725,7 @@
 }
 
 .subsectionTitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -737,7 +739,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -756,7 +758,7 @@
 }
 
 .imgOptSliderValue {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--lumiverse-primary);
@@ -792,12 +794,12 @@
 /* .smallBtn, .iconBtnCompact — migrated to shared Button component */
 
 .helperText {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
 .warningText {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-warning);
 }
 
@@ -835,13 +837,13 @@
 }
 
 .cardTitle {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   font-weight: 600;
 }
 
 .cardMeta {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -863,7 +865,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   font-family: inherit;
 }
@@ -913,13 +915,13 @@
 }
 
 .lumihubStatusText {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .lumihubMeta {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -934,7 +936,7 @@
 }
 
 .lumihubDisclosureTitle {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -942,7 +944,7 @@
 }
 
 .lumihubDisclosureText {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
   color: var(--lumiverse-text-muted);
 }
@@ -953,7 +955,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -978,7 +980,7 @@
   border: 1px solid var(--lumiverse-primary);
   background: var(--lumiverse-primary-020);
   color: var(--lumiverse-primary);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -1002,8 +1004,8 @@
   }
 
   .modal {
-    width: 100vw;
-    height: calc(var(--app-viewport-height, 100dvh) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    width: calc(100vw / var(--lumiverse-ui-scale, 1));
+    height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
     border-radius: 0;
   }
 

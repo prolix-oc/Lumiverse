@@ -268,6 +268,12 @@ if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
           (target instanceof HTMLElement && target.isContentEditable))) return
 
+    // The chat InputArea self-positions above the keyboard via
+    // --app-keyboard-inset-bottom; scrolling an ancestor here drags the
+    // absolutely-positioned bar upward with the content (regression: input
+    // "flies to top" on focus).
+    if ((target as HTMLElement).closest('[data-component="InputArea"]')) return
+
     const container = findScrollContainer((target as HTMLElement).parentElement)
     if (!container) return
 

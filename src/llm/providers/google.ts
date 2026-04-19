@@ -1,5 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import { readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
 
 export class GoogleProvider implements LlmProvider {
@@ -89,11 +90,11 @@ export class GoogleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
     const body = this.buildBody(request);
 
+    // NOTE: signal intentionally NOT passed to fetch — see src/llm/stream-utils.ts.
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: request.signal,
     });
 
     if (!res.ok) {
@@ -107,7 +108,7 @@ export class GoogleProvider implements LlmProvider {
 
     try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithAbort(reader, request.signal);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });

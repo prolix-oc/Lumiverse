@@ -31,12 +31,12 @@
 }
 
 .label {
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--lumiverse-font-scale, 1));
   font-weight: 600;
 }
 
 .subtitle {
-  font-size: 0.6875rem;
+  font-size: calc(0.6875rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-secondary, #797384);
 }
 
@@ -58,7 +58,7 @@
   background: transparent;
   color: var(--lumiverse-text-secondary, #797384);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   transition: color 0.15s, border-color 0.15s;
 }
 

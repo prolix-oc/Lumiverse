@@ -30,6 +30,26 @@ const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
  *  User-configurable via EmbeddingConfig.request_timeout (seconds). */
 const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 120_000; // 120 seconds
 
+/** Combine an optional external abort signal with an internal timeout into a
+ *  single signal. Used so callers (like an active generation) can cancel an
+ *  in-flight embedding request without waiting for its own timeout. */
+function linkTimeoutSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const timeoutController = new AbortController();
+  const timer = timeoutMs > 0
+    ? setTimeout(() => timeoutController.abort(), timeoutMs)
+    : null;
+  const combined = external
+    ? AbortSignal.any([external, timeoutController.signal])
+    : timeoutController.signal;
+  return {
+    signal: combined,
+    cleanup: () => { if (timer) clearTimeout(timer); },
+  };
+}
+
 export type EmbeddingProvider =
   | "openai-compatible"
   | "openai"
@@ -199,7 +219,7 @@ function clampFloat(v: unknown, min: number, max: number, fallback: number): num
  * Any chat whose stored hash doesn't match the current hash will get
  * its chunks rebuilt on the next generation.
  */
-export const LTCM_FORMAT_VERSION = 2;
+export const LTCM_FORMAT_VERSION = 3;
 
 /**
  * Compute a deterministic hash from the settings that affect how chunks
@@ -1198,6 +1218,18 @@ export async function updateEmbeddingConfig(
  * Parse embedding responses from OpenAI-compatible, Ollama /api/embed, and Ollama /api/embeddings formats.
  */
 function parseEmbeddingResponse(payload: any, expectedCount: number): number[][] {
+  // Some providers (notably OpenRouter) return HTTP 200 with an error envelope
+  // like `{ error: { message, code } }` when the request was shaped correctly
+  // but couldn't be served (unsupported model, no routing provider, etc.).
+  // Surface that instead of the generic "Unrecognized" error.
+  if (payload && typeof payload === "object" && payload.error) {
+    const err = payload.error;
+    const msg = typeof err === "string"
+      ? err
+      : (err.message || err.code || JSON.stringify(err));
+    throw new Error(`Embedding provider returned an error: ${msg}`);
+  }
+
   // OpenAI format: { data: [{ embedding: number[] }, ...] }
   if (Array.isArray(payload.data) && payload.data.length > 0 && payload.data[0].embedding) {
     const vectors = payload.data.map((d: any) => d.embedding || []);
@@ -1223,7 +1255,15 @@ function parseEmbeddingResponse(payload: any, expectedCount: number): number[][]
     return [payload.embedding];
   }
 
-  throw new Error("Unrecognized embedding response format");
+  const preview = (() => {
+    try {
+      const s = JSON.stringify(payload);
+      return s.length > 400 ? `${s.slice(0, 400)}…` : s;
+    } catch {
+      return String(payload);
+    }
+  })();
+  throw new Error(`Unrecognized embedding response format — payload: ${preview}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,7 +1288,7 @@ async function requestVertexEmbeddings(
   cfg: EmbeddingConfig,
   apiKey: string,
   texts: string[],
-  options?: { omitDimensions?: boolean }
+  options?: { omitDimensions?: boolean; signal?: AbortSignal }
 ): Promise<number[][]> {
   const sa = parseServiceAccount(apiKey);
   const accessToken = await getAccessToken(sa);
@@ -1272,6 +1312,7 @@ async function requestVertexEmbeddings(
   if (useEmbedContent) {
     const results: number[][] = [];
     for (const text of texts) {
+      if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
       const body: Record<string, any> = {
         content: { role: "user", parts: [{ text }] },
       };
@@ -1281,6 +1322,7 @@ async function requestVertexEmbeddings(
         accessToken,
         body,
         timeoutMs,
+        options?.signal,
       );
       const values = vec?.embedding?.values;
       if (!Array.isArray(values)) {
@@ -1301,6 +1343,7 @@ async function requestVertexEmbeddings(
     accessToken,
     body,
     timeoutMs,
+    options?.signal,
   );
   const preds = payload?.predictions;
   if (!Array.isArray(preds) || preds.length !== texts.length) {
@@ -1317,9 +1360,8 @@ async function requestVertexEmbeddings(
   });
 }
 
-async function postVertex<T>(url: string, accessToken: string, body: Record<string, any>, timeoutMs: number): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function postVertex<T>(url: string, accessToken: string, body: Record<string, any>, timeoutMs: number, externalSignal?: AbortSignal): Promise<T> {
+  const { signal, cleanup } = linkTimeoutSignal(externalSignal, timeoutMs);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -1329,15 +1371,16 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
   } catch (err: any) {
     if (err?.name === "AbortError") {
+      if (externalSignal?.aborted) throw err;
       throw new Error(`Vertex embedding request timed out after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
-    clearTimeout(timer);
+    cleanup();
   }
   if (!res.ok) {
     const msg = await res.text().catch(() => "Vertex embedding request failed");
@@ -1349,7 +1392,7 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
 async function requestEmbeddings(
   userId: string,
   texts: string[],
-  options?: { omitDimensions?: boolean }
+  options?: { omitDimensions?: boolean; signal?: AbortSignal }
 ): Promise<number[][]> {
   // Resolve which user's settings + API key actually drive this call. In gate
   // mode non-owners inherit the owner's config and use the owner's key.
@@ -1359,6 +1402,7 @@ async function requestEmbeddings(
   const apiKey = await secretsSvc.getSecret(ctx.userId, EMBEDDING_SECRET_KEY);
   if (!apiKey) throw new Error("Embedding API key is not configured");
   if (!texts.length) return [];
+  if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
 
   if (cfg.provider === "google_vertex") {
     return requestVertexEmbeddings(cfg, apiKey, texts, options);
@@ -1396,8 +1440,7 @@ async function requestEmbeddings(
   const timeoutMs = cfg.request_timeout > 0
     ? cfg.request_timeout * 1000
     : DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { signal, cleanup } = linkTimeoutSignal(options?.signal, timeoutMs);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -1407,15 +1450,17 @@ async function requestEmbeddings(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
   } catch (err: any) {
     if (err?.name === "AbortError") {
+      // Distinguish external cancel (caller-initiated) from our own timeout.
+      if (options?.signal?.aborted) throw err;
       throw new Error(`Embedding request timed out after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
-    clearTimeout(timeout);
+    cleanup();
   }
 
   if (!res.ok) {
@@ -1428,8 +1473,12 @@ async function requestEmbeddings(
   return vectors;
 }
 
-export async function embedTexts(userId: string, texts: string[]): Promise<number[][]> {
-  return requestEmbeddings(userId, texts);
+export async function embedTexts(
+  userId: string,
+  texts: string[],
+  options?: { signal?: AbortSignal },
+): Promise<number[][]> {
+  return requestEmbeddings(userId, texts, options);
 }
 
 function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
@@ -1443,10 +1492,23 @@ function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
 }
 
 /**
- * In-flight dedup: prevents concurrent requestEmbeddings() calls for the
- * same text. Key = cache key (model-aware), Value = pending promise.
+ * In-flight dedup with ref-counted abort: prevents concurrent
+ * requestEmbeddings() calls for the same text AND lets the shared upstream
+ * fetch be torn down when every caller has aborted.
+ *
+ * - `controller` aborts the shared upstream fetch.
+ * - `liveJoiners` is the number of joiners that haven't aborted yet.
+ * - `hasUncancellableJoiner` pins the fetch as unabortable when at least
+ *   one joiner passed no signal — otherwise an aborting joiner could
+ *   starve a no-signal caller (e.g. a background vectorization batch).
  */
-const inflightEmbeddings = new Map<string, Promise<number[]>>();
+interface InflightEmbeddingEntry {
+  promise: Promise<number[]>;
+  controller: AbortController;
+  liveJoiners: number;
+  hasUncancellableJoiner: boolean;
+}
+const inflightEmbeddings = new Map<string, InflightEmbeddingEntry>();
 
 /**
  * Cache-aware embedding. Checks in-memory LRU cache first, batches only
@@ -1455,8 +1517,13 @@ const inflightEmbeddings = new Map<string, Promise<number[]>>();
  * Single-text calls are deduped: if another caller is already fetching the
  * same text, we share its promise instead of making a second API call.
  */
-export async function cachedEmbedTexts(userId: string, texts: string[]): Promise<number[][]> {
+export async function cachedEmbedTexts(
+  userId: string,
+  texts: string[],
+  options?: { signal?: AbortSignal },
+): Promise<number[][]> {
   if (!texts.length) return [];
+  if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
   const cfg = await getEmbeddingConfig(userId);
   const fingerprint = getModelFingerprint(cfg);
 
@@ -1466,21 +1533,8 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
     const cached = embeddingCache.get(key);
     if (cached) return [cached];
 
-    // Join an in-flight request for the same text instead of making a duplicate API call
-    const inflight = inflightEmbeddings.get(key);
-    if (inflight) return [await inflight];
-
-    const promise = requestEmbeddings(userId, texts).then(vecs => {
-      const vec = vecs[0];
-      embeddingCache.set(key, vec);
-      inflightEmbeddings.delete(key);
-      return vec;
-    }, err => {
-      inflightEmbeddings.delete(key);
-      throw err;
-    });
-    inflightEmbeddings.set(key, promise);
-    return [await promise];
+    const vec = await joinOrStartInflight(userId, texts, key, options?.signal);
+    return [vec];
   }
 
   // Multi-text path: LRU cache check, batch uncached
@@ -1499,7 +1553,7 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
 
   if (uncachedIndices.length > 0) {
     const uncachedTexts = uncachedIndices.map((i) => texts[i]);
-    const vectors = await requestEmbeddings(userId, uncachedTexts);
+    const vectors = await requestEmbeddings(userId, uncachedTexts, options);
     for (let j = 0; j < uncachedIndices.length; j++) {
       const idx = uncachedIndices[j];
       results[idx] = vectors[j];
@@ -1508,6 +1562,101 @@ export async function cachedEmbedTexts(userId: string, texts: string[]): Promise
   }
 
   return results as number[][];
+}
+
+/**
+ * Attach to an in-flight shared fetch or start a new one. The shared fetch's
+ * own AbortController is aborted only when every cancellable joiner has
+ * aborted AND no uncancellable joiner is attached.
+ */
+function joinOrStartInflight(
+  userId: string,
+  texts: string[],
+  key: string,
+  signal: AbortSignal | undefined,
+): Promise<number[]> {
+  const existing = inflightEmbeddings.get(key);
+  if (existing) {
+    return attachJoiner(existing, signal);
+  }
+
+  const controller = new AbortController();
+  const entry: InflightEmbeddingEntry = {
+    promise: null as unknown as Promise<number[]>,
+    controller,
+    liveJoiners: 0,
+    hasUncancellableJoiner: false,
+  };
+
+  entry.promise = requestEmbeddings(userId, texts, { signal: controller.signal }).then(
+    (vecs) => {
+      const vec = vecs[0];
+      embeddingCache.set(key, vec);
+      inflightEmbeddings.delete(key);
+      return vec;
+    },
+    (err) => {
+      inflightEmbeddings.delete(key);
+      throw err;
+    },
+  );
+  inflightEmbeddings.set(key, entry);
+
+  return attachJoiner(entry, signal);
+}
+
+function attachJoiner(
+  entry: InflightEmbeddingEntry,
+  signal: AbortSignal | undefined,
+): Promise<number[]> {
+  if (!signal) {
+    entry.hasUncancellableJoiner = true;
+    return entry.promise;
+  }
+
+  entry.liveJoiners++;
+  const onAbort = () => {
+    entry.liveJoiners--;
+    // Tear down the shared upstream only when every cancellable joiner has
+    // aborted and no uncancellable joiner is waiting on the result.
+    if (!entry.hasUncancellableJoiner && entry.liveJoiners <= 0) {
+      entry.controller.abort();
+    }
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+
+  // Wrap the shared promise so this caller's await rejects on their own abort
+  // without waiting for the shared work. The shared work may still continue
+  // for other joiners; refcount decides when to actually cancel upstream.
+  return new Promise<number[]>((resolve, reject) => {
+    const onLocalAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onLocalAbort, { once: true });
+    entry.promise.then(
+      (v) => {
+        signal.removeEventListener("abort", onLocalAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onLocalAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+/** Race a shared promise against an abort signal so the caller's await can
+ *  reject on cancel without killing the shared upstream request. */
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      v => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      e => { signal.removeEventListener("abort", onAbort); reject(e); },
+    );
+  });
 }
 
 export async function testEmbeddingConfig(
@@ -1881,9 +2030,11 @@ export async function searchWorldBookEntriesHybridWithVector(
   worldBookId: string,
   queryText: string,
   vector: number[],
-  limit = 8
+  limit = 8,
+  signal?: AbortSignal,
 ): Promise<WorldBookSearchCandidate[]> {
   await ensureWorldBookVectorVersion(userId);
+  if (signal?.aborted) return [];
   const table = await getTableIfExists();
   if (!table) {
     console.debug("[embeddings] WI vector search: no LanceDB table exists yet (entries may not be indexed)");
@@ -1902,7 +2053,7 @@ export async function searchWorldBookEntriesHybridWithVector(
     .limit(effectiveLimit) as any;
   // Refine with full vectors after PQ approximate search for better accuracy
   if (vectorIndexReady) query.refineFactor(5);
-  const vectorRows = await query.toArray();
+  const vectorRows = await raceWithSignal(query.toArray() as Promise<any[]>, signal);
 
   if (vectorRows.length === 0) {
     console.debug("[embeddings] WI vector search: 0 rows from LanceDB for book=%s (limit=%d)", worldBookId.slice(0, 8), effectiveLimit);
@@ -1922,15 +2073,18 @@ export async function searchWorldBookEntriesHybridWithVector(
     });
   }
 
-  if (trimmedQuery) {
+  if (trimmedQuery && !signal?.aborted) {
     try {
-      const lexicalRows = await table
-        .query()
-        .fullTextSearch(trimmedQuery)
-        .where(filter)
-        .select(["source_id", "content", "_score", "metadata_json"])
-        .limit(effectiveLimit)
-        .toArray();
+      const lexicalRows = await raceWithSignal(
+        table
+          .query()
+          .fullTextSearch(trimmedQuery)
+          .where(filter)
+          .select(["source_id", "content", "_score", "metadata_json"])
+          .limit(effectiveLimit)
+          .toArray() as Promise<any[]>,
+        signal,
+      );
 
       for (const row of lexicalRows) {
         const entryId = String(row.source_id);
@@ -2307,7 +2461,9 @@ export async function searchChatChunks(
   queryText?: string,
   hybridWeightMode?: "keyword_first" | "balanced" | "vector_first",
   allowedChunkIds?: Set<string>,
+  signal?: AbortSignal,
 ): Promise<Array<{ chunk_id: string; score: number; content: string; metadata: any }>> {
+  if (signal?.aborted) return [];
   const table = await getTableIfExists();
   if (!table) return [];
 
@@ -2340,8 +2496,9 @@ export async function searchChatChunks(
         .rerank(reranker)
         .select(["source_id", "content", "_distance", "_relevance_score", "metadata_json", "vector"])
         .limit(fetchLimit);
-      rows = await applyRefineFactor(q).toArray();
+      rows = await raceWithSignal(applyRefineFactor(q).toArray() as Promise<any[]>, signal);
     } catch {
+      if (signal?.aborted) return [];
       // FTS index may not exist yet — fall back to vector-only
       const q = table
         .query()
@@ -2349,7 +2506,7 @@ export async function searchChatChunks(
         .where(filter)
         .select(["source_id", "content", "_distance", "metadata_json", "vector"])
         .limit(fetchLimit);
-      rows = await applyRefineFactor(q).toArray();
+      rows = await raceWithSignal(applyRefineFactor(q).toArray() as Promise<any[]>, signal);
     }
   } else {
     const q = table
@@ -2358,7 +2515,7 @@ export async function searchChatChunks(
       .where(filter)
       .select(["source_id", "content", "_distance", "metadata_json", "vector"])
       .limit(fetchLimit);
-    rows = await applyRefineFactor(q).toArray();
+    rows = await raceWithSignal(applyRefineFactor(q).toArray() as Promise<any[]>, signal);
   }
 
   // Parse rows and collect metadata
@@ -2666,8 +2823,10 @@ export async function searchDatabankChunks(
   vector: number[],
   limit = 4,
   queryText?: string,
+  signal?: AbortSignal,
 ): Promise<Array<{ chunk_id: string; score: number; content: string; metadata: any }>> {
   if (databankIds.length === 0) return [];
+  if (signal?.aborted) return [];
 
   const table = await getTableIfExists();
   if (!table) return [];
@@ -2691,15 +2850,16 @@ export async function searchDatabankChunks(
         .rerank(reranker)
         .select(["source_id", "content", "_distance", "_relevance_score", "metadata_json"])
         .limit(fetchLimit);
-      rows = await applyRefineFactor(q).toArray();
+      rows = await raceWithSignal(applyRefineFactor(q).toArray() as Promise<any[]>, signal);
     } catch {
+      if (signal?.aborted) return [];
       const q = table
         .query()
         .nearestTo(vector)
         .where(filter)
         .select(["source_id", "content", "_distance", "metadata_json"])
         .limit(fetchLimit);
-      rows = await applyRefineFactor(q).toArray();
+      rows = await raceWithSignal(applyRefineFactor(q).toArray() as Promise<any[]>, signal);
     }
   } else {
     const q = table
@@ -2708,7 +2868,7 @@ export async function searchDatabankChunks(
       .where(filter)
       .select(["source_id", "content", "_distance", "metadata_json"])
       .limit(fetchLimit);
-    rows = await applyRefineFactor(q).toArray();
+    rows = await raceWithSignal(applyRefineFactor(q).toArray() as Promise<any[]>, signal);
   }
 
   const results: Array<{ chunk_id: string; score: number; content: string; metadata: any }> = [];

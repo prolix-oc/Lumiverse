@@ -29,9 +29,11 @@ import * as tokenizerSvc from "./tokenizer.service";
 import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
 import * as pool from "./generation-pool.service";
+import * as summarizePool from "./summarize-pool.service";
 import { detectExpression, detectMultiCharacterExpression, getExpressionDetectionSettings } from "./expression-detection.service";
 import { hasExpressions, getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { getSidecarSettings } from "./sidecar-settings.service";
+import { abortChatBackground, abortUserBackgrounds, abortAllBackgrounds } from "./chat-background.service";
 
 interface GenerateInput {
   userId: string;
@@ -89,6 +91,8 @@ interface GenerationLifecycle {
   maxContext?: number;
   /** Council named results (for expression detection and other post-generation hooks) */
   councilNamedResults?: Record<string, string>;
+  /** Context-budget clipping stats (for GENERATION_STARTED payload + breakdown). */
+  contextClipStats?: import("../llm/types").ContextClipStats;
 }
 
 export interface RawGenerateInput {
@@ -113,6 +117,12 @@ export interface QuietGenerateInput {
   tools?: ToolDefinition[];
   /** Optional abort signal — when fired, cancels the in-flight HTTP request. */
   signal?: AbortSignal;
+  /**
+   * Optional chat id. Currently used by the summarize path to track in-flight
+   * jobs in the summarize pool so frontends can recover state on reconnect or
+   * chat-switch. Ignored by `quietGenerate`.
+   */
+  chat_id?: string;
 }
 
 export interface DryRunResult {
@@ -152,11 +162,18 @@ export interface DryRunResult {
     };
   };
   memoryStats?: import("../llm/types").MemoryStats;
+  contextClipStats?: import("../llm/types").ContextClipStats;
 }
 
 export interface BatchGenerateInput {
   requests: RawGenerateInput[];
   concurrent?: boolean;
+  /**
+   * Optional abort signal — when fired, every still-pending sub-request is
+   * cancelled. Already-completed sub-requests keep their results in the
+   * returned array; cancelled ones surface as `{ success: false, error: "AbortError" }`.
+   */
+  signal?: AbortSignal;
 }
 
 export interface BatchResultItem {
@@ -192,6 +209,7 @@ interface PromptPipelineResult {
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   worldInfoStats?: DryRunResult["worldInfoStats"];
   memoryStats?: import("../llm/types").MemoryStats;
+  contextClipStats?: import("../llm/types").ContextClipStats;
   deferredWiState?: { chatId: string; partial: Record<string, any> };
   spindleContext: SpindleContext;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
@@ -240,6 +258,27 @@ function errorMessage(err: unknown): string {
     return (err as any).message;
   }
   try { return String(err); } catch { return "Unknown error"; }
+}
+
+/**
+ * Race a promise against an AbortSignal. If the signal fires before the
+ * promise settles, rejects with the signal's reason (or a standard AbortError).
+ * Used to tear down long-running pipelines (prompt assembly, etc.) whose inner
+ * awaits may not all be signal-aware — the race guarantees the caller unwinds
+ * immediately on abort instead of stalling behind a blocking op.
+ */
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
+    );
+  });
 }
 
 // Track active generations for stop support
@@ -339,7 +378,17 @@ async function runPromptPipeline(opts: {
   precomputedVectorEntries?: VectorActivatedEntry[];
   regenFeedback?: string;
   regenFeedbackPosition?: "system" | "user";
+  signal?: AbortSignal;
 }): Promise<PromptPipelineResult> {
+  // Yield to the event loop before entering the assembly pipeline so a stop
+  // clicked in the first few ticks after the generation starts can actually
+  // be processed. Without this yield the pipeline runs back-to-back from the
+  // caller's await through contextHandlerChain and the dynamic prefetch
+  // import, synchronously blocking the HTTP server from picking up the stop
+  // request.
+  await new Promise<void>(r => setTimeout(r, 0));
+  if (opts.signal?.aborted) throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
+
   // Build spindle context
   let spindleContext: SpindleContext = {
     chatId: opts.chatId,
@@ -359,6 +408,7 @@ async function runPromptPipeline(opts: {
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
+  let contextClipStats: import("../llm/types").ContextClipStats | undefined;
   let deferredWiState: { chatId: string; partial: Record<string, any> } | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
 
@@ -368,7 +418,9 @@ async function runPromptPipeline(opts: {
     messages = opts.inputMessages;
   } else {
     // Batch-prefetch all data the assembly pipeline needs in ~7 queries
-    // instead of the ~35-40 scattered individual calls inside assemblePrompt
+    // instead of the ~35-40 scattered individual calls inside assemblePrompt.
+    // Thread the signal so prefetch yields + bails out if the user aborts
+    // during its synchronous DB reads.
     const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
     const prefetched = await prefetchAssemblyData({
       userId: opts.userId,
@@ -379,6 +431,7 @@ async function runPromptPipeline(opts: {
       generationType: opts.generationType as GenerationType,
       excludeMessageId: opts.excludeMessageId,
       targetCharacterId: opts.targetCharacterId,
+      signal: opts.signal,
     });
 
     // All presets (classic and lumi) go through the same assembly path
@@ -398,6 +451,7 @@ async function runPromptPipeline(opts: {
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
       prefetched,
+      signal: opts.signal,
     });
 
     messages = assemblyResult.messages;
@@ -407,6 +461,7 @@ async function runPromptPipeline(opts: {
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     worldInfoStats = assemblyResult.worldInfoStats;
     memoryStats = assemblyResult.memoryStats;
+    contextClipStats = assemblyResult.contextClipStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
     macroEnv = assemblyResult.macroEnv;
@@ -498,7 +553,7 @@ async function runPromptPipeline(opts: {
   // Merge parameters: assembled (from preset) < interceptor overrides < request overrides
   const parameters: GenerationParameters = { ...assembledParams, ...interceptorParameters, ...opts.inputParameters };
 
-  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
+  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, contextClipStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -563,15 +618,24 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     activeChatGenerations.delete(chatKey);
   }
 
+  // Tear down any fire-and-forget background work (cortex cache warming,
+  // databank retrieval) left over from prior generations on this chat.
+  // Successful completions don't abort their own controllers, so without
+  // this, slow embedding APIs can accumulate orphan tasks across sends.
+  abortChatBackground(input.userId, input.chat_id);
+
   // Register this generation early (before council) so it can be tracked and aborted
   const abortController = new AbortController();
   activeGenerations.set(generationId, { controller: abortController, userId: input.userId, chatId: input.chat_id, startedAt: Date.now() });
   activeChatGenerations.set(chatKey, generationId);
 
-  // Helper: bail out cleanly if aborted during the setup phase
+  // Helper: bail out cleanly if aborted during the setup phase.
+  // Throws the same DOMException shape that fetch / AbortSignal.any use so
+  // intermediate catches that sniff `err.name === "AbortError"` re-throw
+  // rather than swallowing it.
   const checkAborted = () => {
     if (abortController.signal.aborted) {
-      throw new Error("Generation aborted");
+      throw abortController.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
   };
 
@@ -581,6 +645,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   try {
 
   const connection = resolveConnection(input.userId, input.connection_id);
+  presetsSvc.assertUsablePreset(input.userId, input.preset_id, connection.preset_id);
   const { provider, apiKey, apiUrl } = await resolveProviderAndKey(input.userId, connection.id);
 
   // Resolve character name for saved messages — prefer target_character_id for group chats
@@ -812,6 +877,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
           wiBookIds,
           wiEntries,
           councilMessages,
+          abortController.signal,
         );
         councilWiActivated = mergeActivatedWorldInfoEntries(
           councilWiActivated,
@@ -983,24 +1049,33 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   checkAborted();
 
   // Run shared prompt pipeline — cortex retrieval runs concurrently inside assembly.
-  const pipeline = await runPromptPipeline({
-    userId: input.userId,
-    chatId: input.chat_id,
-    connectionId: input.connection_id,
-    presetId: input.preset_id,
-    personaId: input.persona_id,
-    generationType: genType,
-    impersonateMode: genType === "impersonate" ? (input.impersonate_mode || "prompts") : undefined,
-    inputMessages: input.messages,
-    inputParameters: input.parameters,
-    excludeMessageId,
-    targetCharacterId: input.target_character_id,
-    councilToolResults,
-    councilNamedResults,
-    precomputedVectorEntries,
-    regenFeedback: input.regen_feedback,
-    regenFeedbackPosition: input.regen_feedback_position,
-  });
+  // Raced against the abort signal so a stop request tears down the setup phase
+  // immediately, even when an inner await (e.g. databank mention resolution with
+  // large docs) is sleeping on a non-signal-aware op. The race rejects with a
+  // DOMException("Aborted","AbortError") which is caught below and converted into
+  // a GENERATION_STOPPED event so the frontend clears its streaming state.
+  const pipeline = await raceWithSignal(
+    runPromptPipeline({
+      userId: input.userId,
+      chatId: input.chat_id,
+      connectionId: input.connection_id,
+      presetId: input.preset_id,
+      personaId: input.persona_id,
+      generationType: genType,
+      impersonateMode: genType === "impersonate" ? (input.impersonate_mode || "prompts") : undefined,
+      inputMessages: input.messages,
+      inputParameters: input.parameters,
+      excludeMessageId,
+      targetCharacterId: input.target_character_id,
+      councilToolResults,
+      councilNamedResults,
+      precomputedVectorEntries,
+      regenFeedback: input.regen_feedback,
+      regenFeedbackPosition: input.regen_feedback_position,
+      signal: abortController.signal,
+    }),
+    abortController.signal,
+  );
 
   let { messages } = pipeline;
   const { parameters: mergedParams, breakdown, activatedWorldInfo, deliberationHandledByMacro } = pipeline;
@@ -1049,6 +1124,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   lifecycle.providerName = provider.name;
   lifecycle.maxContext = mergedParams.max_context_length as number | undefined;
   lifecycle.councilNamedResults = councilNamedResults;
+  lifecycle.contextClipStats = pipeline.contextClipStats;
 
   // Strip internal-only keys before they reach the provider
   delete mergedParams.max_context_length;
@@ -1070,13 +1146,24 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
     if (preset) lifecycle.presetName = preset.name;
   }
 
+  // Final abort checkpoint between assembly completion and runGeneration
+  // entry. If the user stopped while prompt assembly was winding down,
+  // bail out here instead of emitting GENERATION_STARTED (with breakdown)
+  // and then tearing the stream down on the first iter.next() race.
+  checkAborted();
+
   // Run generation in the background
   runGeneration(generationId, provider, apiKey, apiUrl, connection.model, messages, mergedParams, input.userId, input.chat_id, lifecycle, abortController.signal, inlineTools, pipeline.assistantPrefill, pipeline.macroEnv);
 
     } catch (err: any) {
-      // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted
+      // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted.
+      // Only clear the per-chat mapping if it still points at THIS generation —
+      // a newer startGeneration on the same chat may have already taken over the
+      // chatKey (see line 590), and wiping it would strand the new generation.
       activeGenerations.delete(generationId);
-      activeChatGenerations.delete(chatKey);
+      if (activeChatGenerations.get(chatKey) === generationId) {
+        activeChatGenerations.delete(chatKey);
+      }
 
       // Clean up any pending council retry decision
       const pendingRetry = pendingCouncilRetries.get(generationId);
@@ -1142,6 +1229,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
   }
 
   const connection = resolveConnection(input.userId, input.connection_id);
+  presetsSvc.assertUsablePreset(input.userId, input.preset_id, connection.preset_id);
   const { provider } = await resolveProviderAndKey(input.userId, connection.id);
 
   const pipeline = await runPromptPipeline({
@@ -1189,6 +1277,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     tokenCount,
     worldInfoStats: pipeline.worldInfoStats,
     memoryStats: pipeline.memoryStats,
+    contextClipStats: pipeline.contextClipStats,
   };
 }
 
@@ -1217,6 +1306,7 @@ async function runGeneration(
     targetMessageId: lifecycle.targetMessageId,
     characterId: lifecycle.targetCharacterId,
     characterName: lifecycle.characterName,
+    contextClipStats: lifecycle.contextClipStats,
   }, userId);
 
   let fullContent = "";
@@ -1438,6 +1528,7 @@ async function runGeneration(
   const poolEntry = pool.getPoolEntry(generationId);
   if (poolEntry) poolEntry.wasStreaming = useStreaming;
 
+  let emittedStopped = false;
   try {
     // Non-streaming path: call generate() once, then synthesize a single-chunk stream
     const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
@@ -1453,11 +1544,34 @@ async function runGeneration(
           };
         })();
 
-    for await (const chunk of stream) {
+    // Drive the iterator manually so each `.next()` can be raced against the
+    // abort signal. Providers intentionally don't pass the signal into
+    // `fetch()` (a Bun-Windows stream-cancel workaround), which means a stop
+    // clicked during the initial fetch wait — before any chunk arrives —
+    // would otherwise stall until the upstream LLM responds. Racing at this
+    // level unwinds immediately on abort; the in-flight fetch completes
+    // silently in the background and the generator's own finally cancels
+    // the reader.
+    const iter = stream[Symbol.asyncIterator]();
+    while (true) {
+      let result: IteratorResult<StreamChunk, void>;
+      try {
+        result = await raceWithSignal(iter.next(), signal);
+      } catch (err) {
+        // Signal won the race. Tell the generator to clean up (best-effort)
+        // and rethrow so the outer catch handles emission.
+        try { await iter.return?.(undefined); } catch { /* best-effort */ }
+        throw err;
+      }
+      if (result.done) break;
+      const chunk = result.value;
+
       if (signal.aborted) {
         const persisted = await persistPartialContent();
         pool.stopPool(generationId);
         eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: persisted.content }, userId);
+        emittedStopped = true;
+        try { await iter.return?.(undefined); } catch { /* best-effort */ }
         break;
       }
 
@@ -1487,6 +1601,17 @@ async function runGeneration(
       if (chunk.finish_reason) {
         break;
       }
+    }
+
+    // Clean exit after abort — the stream may have returned done:true via
+    // readWithAbort without ever re-entering the for-await body, so the
+    // in-loop STOPPED emission above never fired. Emit now so the frontend
+    // gets its completion signal and can unblock its streaming UI.
+    if (signal.aborted && !emittedStopped) {
+      const persisted = await persistPartialContent();
+      pool.stopPool(generationId);
+      eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: persisted.content }, userId);
+      emittedStopped = true;
     }
 
     if (!signal.aborted) {
@@ -1679,12 +1804,30 @@ async function runGeneration(
     // user-initiated stop, not an error. On Bun for Windows the thrown value
     // may be `null` in this case, which is why errorMessage() is used.
     if (signal.aborted) {
-      pool.stopPool(generationId);
-      eventBus.emit(EventType.GENERATION_STOPPED, {
-        generationId,
-        chatId,
-        content: fullContent,
-      }, userId);
+      // Skip if the post-loop / in-loop branch already emitted — catches
+      // the case where a later .next() race threw AFTER the loop body's
+      // STOPPED emission had already fired.
+      if (!emittedStopped) {
+        // Persist whatever was already streamed — same recovery as the
+        // non-abort error path. Without this, cancelling mid-stream wiped the
+        // message even though the tokens had already rendered for the user.
+        // Yield a macrotask first so the provider's stream teardown finishes
+        // before we kick off SQLite writes; on Bun-Windows, interleaving DB
+        // work with ReadableStream teardown was a reproducible panic trigger.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        let savedContent = fullContent;
+        try {
+          const persisted = await persistPartialContent();
+          savedContent = persisted.content;
+        } catch { /* best-effort; fall back to in-memory content */ }
+        pool.stopPool(generationId);
+        eventBus.emit(EventType.GENERATION_STOPPED, {
+          generationId,
+          chatId,
+          content: savedContent,
+        }, userId);
+        emittedStopped = true;
+      }
     } else {
       const msg = errorMessage(err);
       // Socket drops, provider 5xx mid-stream, etc. — persist whatever was
@@ -1850,6 +1993,10 @@ export function stopGeneration(generationId: string): boolean {
   const entry = activeGenerations.get(generationId);
   if (!entry) return false;
   entry.controller.abort();
+  // Tear down any fire-and-forget background work for this chat too —
+  // the user asked to stop, so cache-warming cortex/databank queries
+  // should die with the visible generation.
+  abortChatBackground(entry.userId, entry.chatId);
   return true;
 }
 
@@ -1859,6 +2006,7 @@ export function stopUserGenerations(userId: string): void {
       entry.controller.abort();
     }
   }
+  abortUserBackgrounds(userId);
 }
 
 export function stopChatGenerations(userId: string, chatId: string): void {
@@ -1868,6 +2016,7 @@ export function stopChatGenerations(userId: string, chatId: string): void {
     const entry = activeGenerations.get(genId);
     if (entry) entry.controller.abort();
   }
+  abortChatBackground(userId, chatId);
 }
 
 export function stopAllGenerations(): void {
@@ -1876,6 +2025,7 @@ export function stopAllGenerations(): void {
   }
   activeGenerations.clear();
   activeChatGenerations.clear();
+  abortAllBackgrounds();
 }
 
 /** Returns the active generationId for a chat, if any. */
@@ -1939,7 +2089,17 @@ async function consumeStream(
 
 // --- Extension generation (stateless, synchronous, no WS events) ---
 
-export async function rawGenerate(userId: string, input: RawGenerateInput & { signal?: AbortSignal }): Promise<GenerationResponse> {
+interface PreparedGenerationCall {
+  provider: LlmProvider;
+  apiKey: string;
+  apiUrl: string;
+  request: GenerationRequest;
+}
+
+async function prepareRawCall(
+  userId: string,
+  input: RawGenerateInput & { signal?: AbortSignal }
+): Promise<PreparedGenerationCall> {
   const { provider, apiKey, apiUrl } = await resolveRawProviderAndKey(userId, input);
   const request: GenerationRequest = {
     messages: input.messages,
@@ -1948,18 +2108,13 @@ export async function rawGenerate(userId: string, input: RawGenerateInput & { si
     tools: input.tools,
     signal: input.signal,
   };
-
-  // Use streaming when tools are present — some providers only emit tool call
-  // deltas correctly via the streaming path. Consume the stream internally to
-  // produce a complete response.
-  if (input.tools && input.tools.length > 0) {
-    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
-  }
-
-  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+  return { provider, apiKey, apiUrl, request };
 }
 
-export async function quietGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
+async function prepareQuietCall(
+  userId: string,
+  input: QuietGenerateInput
+): Promise<PreparedGenerationCall> {
   const connection = resolveConnection(userId, input.connection_id);
   const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
 
@@ -1977,8 +2132,16 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
   if (reasoningSetting?.value?.apiReasoning) {
     const effort = reasoningSetting.value.reasoningEffort || "auto";
     if (effort !== "auto") {
-      injectReasoningParams(mergedParams, provider.name, effort, connection.model || undefined);
+      injectReasoningParams(mergedParams, provider.name, effort, connection.model || undefined, reasoningSetting.value.thinkingDisplay);
     }
+  } else if (reasoningSetting?.value && reasoningSetting.value.apiReasoning === false) {
+    // Authoritative off-switch: strip any reasoning fields that may have been
+    // spread in from preset.parameters so native thinking is never requested.
+    delete (mergedParams as any).thinking;
+    delete (mergedParams as any).output_config;
+    delete (mergedParams as any).thinkingConfig;
+    delete (mergedParams as any).reasoning;
+    delete (mergedParams as any).reasoning_effort;
   }
 
   // Inject connection-level metadata flags into parameters (e.g. use_responses_api)
@@ -2007,13 +2170,60 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
     signal: input.signal,
   };
 
+  return { provider, apiKey, apiUrl, request };
+}
+
+export async function rawGenerate(userId: string, input: RawGenerateInput & { signal?: AbortSignal }): Promise<GenerationResponse> {
+  const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input);
+
   // Use streaming when tools are present — some providers only emit tool call
-  // deltas correctly via the streaming path.
+  // deltas correctly via the streaming path. Consume the stream internally to
+  // produce a complete response.
   if (input.tools && input.tools.length > 0) {
     return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
   }
 
   return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+}
+
+export async function quietGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
+  const { provider, apiKey, apiUrl, request } = await prepareQuietCall(userId, input);
+
+  // Use streaming when tools are present — some providers only emit tool call
+  // deltas correctly via the streaming path.
+  if (request.tools && request.tools.length > 0) {
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+  }
+
+  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+}
+
+/**
+ * Streaming variant of {@link rawGenerate}. Returns the raw provider stream
+ * iterator with the caller's `AbortSignal` already wired in. Used by
+ * Spindle's `request_generation_stream` RPC to pipe chunks back to the
+ * extension worker.
+ */
+export async function rawGenerateStream(
+  userId: string,
+  input: RawGenerateInput & { signal?: AbortSignal }
+): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
+  const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input);
+  return provider.generateStream(apiKey, apiUrl, { ...request, stream: true });
+}
+
+/**
+ * Streaming variant of {@link quietGenerate}. Same parameter resolution as
+ * `quietGenerate` (preset merge, reasoning injection, connection metadata)
+ * but returns the underlying provider stream iterator instead of an
+ * aggregated response.
+ */
+export async function quietGenerateStream(
+  userId: string,
+  input: QuietGenerateInput
+): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
+  const { provider, apiKey, apiUrl, request } = await prepareQuietCall(userId, input);
+  return provider.generateStream(apiKey, apiUrl, { ...request, stream: true });
 }
 
 /**
@@ -2022,59 +2232,84 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
  * When using sidecar, applies sidecar model/temperature/maxTokens overrides.
  */
 export async function summarizeGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
-  let connectionId = input.connection_id;
-  let sidecarModel: string | undefined;
-  let sidecarParams: Record<string, unknown> = {};
+  const chatId = input.chat_id;
+  // One generationId per summary invocation — tracked in summarize-pool so the
+  // WS completion/failure events can be correlated by the frontend even when
+  // multiple tabs kick off summaries for the same chat.
+  const generationId = crypto.randomUUID();
 
-  // If no explicit connection, resolve via shared sidecar settings
-  if (!connectionId) {
-    const sidecar = getSidecarSettings(userId);
-    if (sidecar.connectionProfileId) {
-      connectionId = sidecar.connectionProfileId;
-      if (sidecar.model) sidecarModel = sidecar.model;
-      sidecarParams = {
-        temperature: sidecar.temperature,
-        top_p: sidecar.topP,
-        max_tokens: sidecar.maxTokens,
-      };
+  if (chatId) {
+    summarizePool.startSummarizePool({ generationId, userId, chatId });
+  }
+
+  try {
+    let connectionId = input.connection_id;
+    let sidecarModel: string | undefined;
+    let sidecarParams: Record<string, unknown> = {};
+
+    // If no explicit connection, resolve via shared sidecar settings
+    if (!connectionId) {
+      const sidecar = getSidecarSettings(userId);
+      if (sidecar.connectionProfileId) {
+        connectionId = sidecar.connectionProfileId;
+        if (sidecar.model) sidecarModel = sidecar.model;
+        sidecarParams = {
+          temperature: sidecar.temperature,
+          top_p: sidecar.topP,
+          max_tokens: sidecar.maxTokens,
+        };
+      }
     }
-  }
 
-  const connection = resolveConnection(userId, connectionId);
-  const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
+    const connection = resolveConnection(userId, connectionId);
+    const { provider, apiKey, apiUrl } = await resolveProviderAndKey(userId, connection.id);
 
-  // Merge: preset defaults < sidecar overrides < request overrides
-  let mergedParams: GenerationParameters = {};
-  if (connection.preset_id) {
-    const preset = presetsSvc.getPreset(userId, connection.preset_id);
-    if (preset) {
-      mergedParams = { ...preset.parameters };
+    // Merge: preset defaults < sidecar overrides < request overrides
+    let mergedParams: GenerationParameters = {};
+    if (connection.preset_id) {
+      const preset = presetsSvc.getPreset(userId, connection.preset_id);
+      if (preset) {
+        mergedParams = { ...preset.parameters };
+      }
     }
-  }
-  mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
+    mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
 
-  // Inject connection-level metadata flags
-  if (connection.metadata?.use_responses_api) {
-    mergedParams.use_responses_api = true;
-  }
-  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
-    mergedParams._openrouter = connection.metadata.openrouter;
-  }
+    // Inject connection-level metadata flags
+    if (connection.metadata?.use_responses_api) {
+      mergedParams.use_responses_api = true;
+    }
+    if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
+      mergedParams._openrouter = connection.metadata.openrouter;
+    }
 
-  const request: GenerationRequest = {
-    messages: input.messages,
-    model: sidecarModel || connection.model,
-    parameters: mergedParams,
-    tools: input.tools,
-  };
+    const request: GenerationRequest = {
+      messages: input.messages,
+      model: sidecarModel || connection.model,
+      parameters: mergedParams,
+      tools: input.tools,
+    };
 
-  // Use streaming when tools are present — some providers only emit tool call
-  // deltas correctly via the streaming path.
-  if (input.tools && input.tools.length > 0) {
-    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+    // Use streaming when tools are present — some providers only emit tool call
+    // deltas correctly via the streaming path.
+    const result = input.tools && input.tools.length > 0
+      ? await consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }))
+      : await provider.generate(apiKey, apiUrl, { ...request, stream: false });
+
+    if (chatId) {
+      summarizePool.completeSummarizePool({ generationId, userId, chatId });
+    }
+    return result;
+  } catch (err: any) {
+    if (chatId) {
+      summarizePool.failSummarizePool({
+        generationId,
+        userId,
+        chatId,
+        error: err?.message || "Summary generation failed",
+      });
+    }
+    throw err;
   }
-
-  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
 }
 
 /**
@@ -2110,7 +2345,7 @@ function applyPostProcessing(messages: LlmMessage[], mode: string): void {
 export async function batchGenerate(userId: string, input: BatchGenerateInput): Promise<BatchResultItem[]> {
   const processOne = async (req: RawGenerateInput, index: number): Promise<BatchResultItem> => {
     try {
-      const result = await rawGenerate(userId, req);
+      const result = await rawGenerate(userId, { ...req, signal: input.signal });
       return {
         index,
         success: true,
@@ -2129,6 +2364,10 @@ export async function batchGenerate(userId: string, input: BatchGenerateInput): 
 
   const results: BatchResultItem[] = [];
   for (let i = 0; i < input.requests.length; i++) {
+    if (input.signal?.aborted) {
+      results.push({ index: i, success: false, error: "AbortError: Generation aborted" });
+      continue;
+    }
     results.push(await processOne(input.requests[i], i));
   }
   return results;

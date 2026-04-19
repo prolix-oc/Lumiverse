@@ -101,28 +101,46 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     }
   }, [position, onClose])
 
-  // Clamp to viewport
+  // Clamp to viewport.
+  //
+  // Coordinate spaces under `body > * { zoom: var(--lumiverse-ui-scale) }`:
+  //  - Mouse clientX/Y and window.innerWidth/Height are in raw viewport px.
+  //  - CSS `top/left` are interpreted in the zoom's layout space (pre-zoom).
+  //  - getBoundingClientRect() returns rendered (post-zoom) coords.
+  // So layout_left × scale = rendered_left, and rect.width is already rendered.
+  // To keep the menu inside the viewport we compute a new layout_left such
+  // that its post-zoom right edge ≤ vw - 8.
   useLayoutEffect(() => {
     if (!position || !ref.current) return
     const el = ref.current
+    const uiScale = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale'),
+    ) || 1
     const rect = el.getBoundingClientRect()
     const vw = window.innerWidth
     const vh = window.innerHeight
     if (rect.right > vw - 8) {
-      el.style.left = `${vw - rect.width - 8}px`
+      el.style.left = `${(vw - rect.width - 8) / uiScale}px`
     }
     if (rect.bottom > vh - 8) {
-      el.style.top = `${vh - rect.height - 8}px`
+      el.style.top = `${(vh - rect.height - 8) / uiScale}px`
     }
   }, [position])
 
   if (!position) return null
 
+  // Mouse coords are in raw viewport space; CSS `top/left` here are resolved
+  // in the zoom's layout space. Divide by ui-scale so the rendered position
+  // lines up with the click point at any UI scale.
+  const uiScale = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale'),
+  ) || 1
+
   return createPortal(
     <div
       ref={ref}
       className={styles.contextMenu}
-      style={{ top: position.y, left: position.x }}
+      style={{ top: position.y / uiScale, left: position.x / uiScale }}
       onClick={(e) => e.stopPropagation()}
     >
       {items.map((entry) => {

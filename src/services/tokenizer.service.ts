@@ -20,6 +20,9 @@ async function validateTokenizerUrl(url: string, label: string): Promise<void> {
   await validateHost(parsed.hostname);
 }
 
+/** Display name reported when no real tokenizer could be resolved for a model. */
+export const APPROXIMATE_TOKENIZER_NAME = "approximate";
+
 /** A loaded tokenizer instance with a count(text) method. */
 interface TokenizerInstance {
   count: (text: string) => number;
@@ -262,28 +265,8 @@ export async function countBreakdown(
   breakdown: AssemblyBreakdownEntry[],
   chatHistoryMessages?: LlmMessage[]
 ): Promise<TokenCountResult> {
-  const tokenizerId = getTokenizerIdForModel(modelId);
-  let tokenizerName: string | null = null;
-
-  // Resolve instance and name once, then count synchronously for each entry
-  let instance: TokenizerInstance | null = null;
-  if (tokenizerId) {
-    const config = getConfig(tokenizerId);
-    tokenizerName = config?.name || null;
-    try {
-      instance = await getInstance(tokenizerId);
-    } catch {
-      // fall through to approximate counting
-    }
-  }
-
-  const countText = (text: string): number => {
-    if (!text) return 0;
-    if (instance) {
-      try { return instance.count(text); } catch { /* fall through */ }
-    }
-    return Math.ceil(text.length / 4);
-  };
+  const tokenizerId = modelId ? getTokenizerIdForModel(modelId) : null;
+  const { count: countText, name: tokenizerName } = await resolveCounter(modelId);
 
   const entries: TokenCountBreakdownEntry[] = [];
   let totalTokens = 0;
@@ -322,6 +305,41 @@ export async function countBreakdown(
     breakdown: entries,
     tokenizer_id: tokenizerId,
     tokenizer_name: tokenizerName,
+  };
+}
+
+/**
+ * Resolve a synchronous token counter for a model. Loads the tokenizer
+ * instance (cached after first use), returns a `count(text)` that runs
+ * in-process with zero per-call await overhead, and a display `name`.
+ *
+ * When no tokenizer can be resolved (unknown model, fetch failure, etc.),
+ * falls back to the `char/4` heuristic and reports the name as `"approximate"`.
+ *
+ * Intended for hot loops (e.g. context-budget clipping) that tokenize every
+ * message in the assembled prompt and need to avoid async overhead per call.
+ */
+export async function resolveCounter(modelId: string): Promise<{ count: (text: string) => number; name: string }> {
+  const tokenizerId = modelId ? getTokenizerIdForModel(modelId) : null;
+  if (tokenizerId) {
+    const config = getConfig(tokenizerId);
+    try {
+      const instance = await getInstance(tokenizerId);
+      const name = config?.name || tokenizerId;
+      return {
+        count: (text: string) => {
+          if (!text) return 0;
+          try { return instance.count(text); } catch { return Math.ceil(text.length / 4); }
+        },
+        name,
+      };
+    } catch {
+      // fall through to approximate
+    }
+  }
+  return {
+    count: (text: string) => (text ? Math.ceil(text.length / 4) : 0),
+    name: APPROXIMATE_TOKENIZER_NAME,
   };
 }
 

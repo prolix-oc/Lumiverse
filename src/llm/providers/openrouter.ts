@@ -85,7 +85,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
 
   protected extraHeaders(): Record<string, string> {
     return {
-      "HTTP-Referer": "https://lumiverse.app",
+      "HTTP-Referer": "https://lumiverse.chat",
       "X-Title": "Lumiverse",
       "X-OpenRouter-Categories": "ai-chat,roleplay",
     };

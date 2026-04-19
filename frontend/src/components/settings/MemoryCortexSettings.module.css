@@ -5,7 +5,7 @@
 }
 
 .loadingText {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   padding: 20px;
   text-align: center;
@@ -25,7 +25,7 @@
   gap: 8px;
   padding: 10px 14px;
   background: var(--lumiverse-fill-subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -53,13 +53,13 @@
 }
 
 .infoLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
 
 .infoValue {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   display: flex;
   align-items: center;
@@ -98,7 +98,7 @@
 }
 
 .statusLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -109,7 +109,7 @@
   padding: 16px;
   border: 1px dashed var(--lumiverse-border);
   border-radius: 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
 }
@@ -164,12 +164,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
 }
 
 .presetCardDesc {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
   margin: 0;
@@ -207,13 +207,13 @@
 }
 
 .formatterLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .formatterDesc {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   line-height: 1.4;
   color: var(--lumiverse-text-muted);
 }
@@ -222,7 +222,7 @@
 
 .whitelistHint {
   padding: 8px 14px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
   border-top: 1px solid var(--lumiverse-border);
@@ -242,7 +242,7 @@
   border-radius: 6px;
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
 }
@@ -261,7 +261,7 @@
   border-radius: 6px;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -292,7 +292,7 @@
   border-radius: 4px;
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
@@ -306,7 +306,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   border-radius: 2px;
   padding: 0;
@@ -328,7 +328,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: color var(--lumiverse-transition-fast);
@@ -347,7 +347,7 @@
   border-radius: 4px;
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   text-align: right;
   outline: none;
 }
@@ -362,7 +362,7 @@
   border-radius: 4px;
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
   cursor: pointer;
 }
@@ -375,7 +375,7 @@
 
 .hintText {
   padding: 6px 14px 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-dim);
 }
@@ -391,7 +391,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);

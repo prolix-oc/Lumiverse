@@ -11,7 +11,7 @@
   justify-content: center;
   min-height: 350px;
   color: var(--lumiverse-text-muted);
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--lumiverse-font-scale, 1));
   text-align: center;
 }
 

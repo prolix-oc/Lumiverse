@@ -1,5 +1,6 @@
 import type { LlmProvider } from "../provider";
 import type { ProviderCapabilities } from "../param-schema";
+import { readWithAbort } from "../stream-utils";
 import type { GenerationRequest, GenerationResponse, StreamChunk, ToolCallResult, LlmMessage, LlmMessagePart } from "../types";
 
 /**
@@ -95,11 +96,11 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/chat/completions`;
     const body = this.buildBody(request, true);
 
+    // NOTE: signal intentionally NOT passed to fetch — see src/llm/stream-utils.ts.
     const res = await fetch(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
     });
 
     if (!res.ok) {
@@ -120,7 +121,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
 
     try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithAbort(reader, request.signal);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });

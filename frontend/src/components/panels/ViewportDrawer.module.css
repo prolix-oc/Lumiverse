@@ -95,6 +95,8 @@
 .backdrop {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   z-index: 9991;
   background: var(--lumiverse-fill-heavy);
@@ -231,7 +233,7 @@
 /* ── Tab label ── */
 
 .tabLabel {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   line-height: 1;
   color: var(--lumiverse-text-dim);
@@ -303,7 +305,7 @@
   border-radius: 7px;
   background: var(--lumiverse-accent);
   color: var(--lumiverse-accent-fg);
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -340,7 +342,7 @@
 }
 
 .panelTitle {
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -381,12 +383,12 @@
 }
 
 .stubPanel p {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
 }
 
 .stubPanel span {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -394,7 +396,7 @@
 
 @media (max-width: 600px) {
   .wrapper {
-    --drawer-panel-w: 100vw !important;
+    --drawer-panel-w: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
   }
 
   .drawerTab {
@@ -409,7 +411,7 @@
   }
 
   .drawer {
-    width: 100vw !important;
+    width: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
     flex-direction: column !important;
   }
 

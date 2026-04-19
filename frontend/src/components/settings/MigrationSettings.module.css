@@ -11,14 +11,14 @@
 }
 
 .title {
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin: 0;
 }
 
 .subtitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin: 0;
 }
@@ -58,7 +58,7 @@
   gap: 8px;
   padding: 8px 12px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .validGood {
@@ -89,7 +89,7 @@
 }
 
 .selectLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-dim);
 }
@@ -100,7 +100,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
 }
 
@@ -123,7 +123,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 .scanRow > label {
@@ -132,12 +132,12 @@
 
 .scanCount {
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   white-space: nowrap;
 }
 
 .scanWarning {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-warning, #f59e0b);
   padding: 4px 0;
 }
@@ -158,7 +158,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   font-family: inherit;
@@ -195,7 +195,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   background: var(--lumiverse-fill-subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -222,7 +222,7 @@
 }
 
 .progressPhase {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   text-transform: capitalize;
@@ -243,7 +243,7 @@
 }
 
 .progressLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -254,7 +254,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   background: var(--lumiverse-bg);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono, monospace);
   display: flex;
   flex-direction: column;
@@ -280,7 +280,7 @@
   gap: 8px;
   padding: 14px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 .resultSuccess {
@@ -301,11 +301,11 @@
   display: flex;
   justify-content: space-between;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .targetInfo {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   padding: 8px 12px;
   border-radius: 6px;

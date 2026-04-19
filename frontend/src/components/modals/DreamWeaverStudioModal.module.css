@@ -6,7 +6,7 @@
 .shell {
   display: flex;
   flex-direction: column;
-  min-height: min(88vh, 920px);
+  min-height: min(calc(88vh / var(--lumiverse-ui-scale, 1)), 920px);
   min-width: 0;
 }
 
@@ -51,7 +51,7 @@
 .subtitle {
   margin: 4px 0 0;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -72,7 +72,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -109,7 +109,7 @@
   border-color: var(--lumiverse-danger-030, var(--lumiverse-border));
   background: var(--lumiverse-danger-015, var(--lumiverse-fill-subtle));
   color: var(--lumiverse-danger, var(--lumiverse-text));
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -138,7 +138,7 @@
 .finalizedTitle {
   margin: 0;
   color: var(--lumiverse-text);
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
 }
 
@@ -148,7 +148,7 @@
 .emptyCard {
   margin: 6px 0 0;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -186,7 +186,7 @@
 .summaryLabel,
 .variantIndex {
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -232,7 +232,7 @@
 .strandTitle {
   display: block;
   color: var(--lumiverse-text);
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
 }
 
@@ -240,7 +240,7 @@
   display: block;
   margin-top: 4px;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -287,13 +287,13 @@
 
 .fieldLabel {
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
 }
 
 .fieldHint {
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -338,7 +338,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-danger, var(--lumiverse-text-dim));
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
 }
 

@@ -1,4 +1,4 @@
-import { get, post, del } from './client'
+import { get, post, put, del } from './client'
 import type { OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
 
 export type OperatorStatus = OperatorStatusPayload
@@ -137,8 +137,29 @@ export interface DatabaseMaintenanceResult {
   state: DatabaseMaintenanceState | null
 }
 
+export type TrustedHostSource = 'hostname' | 'mdns' | 'reverse-dns' | 'tailscale' | 'lan-ip' | 'env' | 'configured'
+
+export interface TrustedHostEntry {
+  host: string
+  source: TrustedHostSource
+}
+
+export interface TrustedHostsResponse {
+  configured: string[]
+  baseline: TrustedHostEntry[]
+  hostname: string
+  suggestions: TrustedHostEntry[]
+}
+
+export interface TrustedHostsUpdateResponse {
+  configured: string[]
+  baseline: TrustedHostEntry[]
+}
+
 export const operatorApi = {
   getStatus: () => get<OperatorStatus>('/operator/status'),
+  getTrustedHosts: () => get<TrustedHostsResponse>('/operator/trusted-hosts'),
+  putTrustedHosts: (hosts: string[]) => put<TrustedHostsUpdateResponse>('/operator/trusted-hosts', { hosts }),
   getDatabase: () => get<OperatorDatabaseStatus>('/operator/database'),
   getLogs: (limit = 150) => get<OperatorLogsResponse>('/operator/logs', { limit }),
   subscribeLogs: () => post<{ subscribed: boolean }>('/operator/logs/subscribe'),

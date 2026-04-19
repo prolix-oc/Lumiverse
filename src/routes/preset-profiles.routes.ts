@@ -127,7 +127,9 @@ app.get("/resolve/:chatId", (c) => {
   const chat = chatsSvc.getChat(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
-  const resolved = svc.resolveProfile(userId, presetId, chatId, chat.character_id);
+  const resolved = svc.resolveProfile(userId, presetId, chatId, chat.character_id, {
+    isGroup: chat.metadata?.group === true,
+  });
   return c.json(resolved);
 });
 

@@ -17,6 +17,7 @@ import type {
   ThemeOverrideDTO,
   SpindleCommandDTO,
   SpindleCommandContextDTO,
+  CouncilMemberContext,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
@@ -47,6 +48,7 @@ import * as imageGenConnSvc from "../services/image-gen-connections.service";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import "../image-gen/index";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
+import { getTextContent, type LlmMessage } from "../llm/types";
 import { getDb } from "../db/connection";
 import {
   getMessages as getChatMessages,
@@ -281,6 +283,13 @@ export class WorkerHost {
     string,
     { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
   >();
+  /**
+   * AbortControllers for in-flight `request_generation` calls, keyed by the
+   * worker-supplied `requestId`. The worker posts `cancel_generation` with the
+   * same id when an extension's `AbortSignal` fires; the host calls
+   * `controller.abort()` to tear down the upstream LLM request.
+   */
+  private generationAbortControllers = new Map<string, AbortController>();
   private interceptorUnregister: (() => void) | null = null;
   private contextHandlerUnregister: (() => void) | null = null;
   private registeredMacroNames = new Set<string>();
@@ -493,6 +502,13 @@ export class WorkerHost {
     }
     this.pendingRequests.clear();
 
+    // Abort any in-flight generations so upstream HTTP requests don't leak
+    // past the extension's lifetime.
+    for (const controller of this.generationAbortControllers.values()) {
+      controller.abort();
+    }
+    this.generationAbortControllers.clear();
+
     this.worker = null;
   }
 
@@ -516,11 +532,26 @@ export class WorkerHost {
   /**
    * Invoke an extension-registered tool and wait for the result.
    * Used by council execution to route tool calls to the owning extension.
+   *
+   * `councilMember` — when provided by the council execution path — is a
+   * trusted, host-built snapshot of the assigned member's identity and
+   * personality fields. It is delivered alongside the invocation args so the
+   * extension handler can personalise its tool output. The context is sourced
+   * entirely server-side and kept on a separate top-level field so user-space
+   * `args` cannot collide with or spoof it.
+   *
+   * `contextMessages` — when provided — are the structured chat messages that
+   * were also flattened into `args.context` for backwards compatibility.
+   * Forwarded on its own top-level field (same rationale as `councilMember`:
+   * host-provided truth that must not collide with user-space `args`).
+   * Multipart content is flattened to its text portion via `getTextContent`.
    */
   invokeExtensionTool(
     toolName: string,
     args: Record<string, unknown>,
-    timeoutMs = 30_000
+    timeoutMs = 30_000,
+    councilMember?: CouncilMemberContext,
+    contextMessages?: LlmMessage[]
   ): Promise<string> {
     const requestId = crypto.randomUUID();
 
@@ -534,11 +565,21 @@ export class WorkerHost {
       sanitizedArgs[key] = value;
     }
 
+    const contextMessagesDTO: LlmMessageDTO[] | undefined = contextMessages?.map(
+      (m) => ({
+        role: m.role,
+        content: getTextContent(m),
+        ...(m.name ? { name: m.name } : {}),
+      })
+    );
+
     this.postToWorker({
       type: "tool_invocation",
       requestId,
       toolName,
       args: sanitizedArgs,
+      ...(councilMember ? { councilMember } : {}),
+      ...(contextMessagesDTO ? { contextMessages: contextMessagesDTO } : {}),
     });
 
     return new Promise((resolve, reject) => {
@@ -650,6 +691,12 @@ export class WorkerHost {
         break;
       case "request_generation":
         this.handleGeneration(msg.requestId, msg.input);
+        break;
+      case "request_generation_stream":
+        this.handleGenerationStream(msg.requestId, msg.input);
+        break;
+      case "cancel_generation":
+        this.handleCancelGeneration(msg.requestId);
         break;
       // ─── Dry Run (gated: "generation") ───────────────────────────────
       case "generate_dry_run":
@@ -1439,6 +1486,11 @@ export class WorkerHost {
     }
     this.enforceScopedUser(resolvedUserId);
 
+    // Register an AbortController so the worker can cancel via
+    // `cancel_generation` if the extension aborts its AbortSignal.
+    const abortController = new AbortController();
+    this.generationAbortControllers.set(requestId, abortController);
+
     try {
       let result: unknown;
       switch (input.type) {
@@ -1450,6 +1502,7 @@ export class WorkerHost {
             parameters: input.parameters,
             connection_id: input.connection_id,
             tools: input.tools,
+            signal: abortController.signal,
           });
           break;
         case "quiet":
@@ -1458,12 +1511,14 @@ export class WorkerHost {
             connection_id: input.connection_id,
             parameters: input.parameters,
             tools: input.tools,
+            signal: abortController.signal,
           });
           break;
         case "batch":
           result = await generateSvc.batchGenerate(resolvedUserId, {
             requests: input.requests || [],
             concurrent: input.concurrent,
+            signal: abortController.signal,
           });
           break;
         default:
@@ -1471,11 +1526,158 @@ export class WorkerHost {
       }
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
+      // Surface aborts with a stable error name so the worker can synthesise
+      // a real DOMException AbortError on the extension side.
+      const aborted = abortController.signal.aborted || err?.name === "AbortError";
       this.postToWorker({
         type: "response",
         requestId,
-        error: err.message,
+        error: aborted ? "AbortError: Generation aborted" : err?.message ?? String(err),
       });
+    } finally {
+      this.generationAbortControllers.delete(requestId);
+    }
+  }
+
+  private handleCancelGeneration(requestId: string): void {
+    const controller = this.generationAbortControllers.get(requestId);
+    if (!controller) return;
+    controller.abort();
+    // The map entry is cleared in handleGeneration / handleGenerationStream's
+    // finally block once the awaited service call rejects.
+  }
+
+  /**
+   * Streaming counterpart to {@link handleGeneration}. Forwards each chunk
+   * from the upstream provider to the worker as a `generation_stream_chunk`
+   * message, then emits a terminal `done` chunk built from the accumulator.
+   * On abort/error, sends `generation_stream_error` instead.
+   *
+   * Only `raw` and `quiet` types are supported here — `batch` is a
+   * convenience wrapper and intentionally not exposed for streaming.
+   */
+  private async handleGenerationStream(
+    requestId: string,
+    input: any
+  ): Promise<void> {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+      this.postToWorker({
+        type: "generation_stream_error",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`,
+      });
+      return;
+    }
+
+    const resolvedUserId = this.resolveEffectiveUserId(input.userId);
+    if (!resolvedUserId) {
+      this.postToWorker({
+        type: "generation_stream_error",
+        requestId,
+        error: "userId is required for operator-scoped extensions",
+      });
+      return;
+    }
+    try {
+      this.enforceScopedUser(resolvedUserId);
+    } catch (err: any) {
+      this.postToWorker({
+        type: "generation_stream_error",
+        requestId,
+        error: err?.message ?? String(err),
+      });
+      return;
+    }
+
+    const abortController = new AbortController();
+    this.generationAbortControllers.set(requestId, abortController);
+
+    try {
+      let stream: AsyncGenerator<import("../llm/types").StreamChunk, void, unknown>;
+      switch (input.type) {
+        case "raw":
+          stream = await generateSvc.rawGenerateStream(resolvedUserId, {
+            provider: input.provider || "",
+            model: input.model || "",
+            messages: input.messages || [],
+            parameters: input.parameters,
+            connection_id: input.connection_id,
+            tools: input.tools,
+            signal: abortController.signal,
+          });
+          break;
+        case "quiet":
+          stream = await generateSvc.quietGenerateStream(resolvedUserId, {
+            messages: input.messages || [],
+            connection_id: input.connection_id,
+            parameters: input.parameters,
+            tools: input.tools,
+            signal: abortController.signal,
+          });
+          break;
+        default:
+          throw new Error(`Streaming is not supported for generation type: ${input.type}`);
+      }
+
+      let content = "";
+      let reasoning = "";
+      let finishReason = "stop";
+      let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
+      let usage: import("../llm/types").GenerationResponse["usage"];
+
+      for await (const chunk of stream) {
+        if (abortController.signal.aborted) break;
+        if (chunk.token) {
+          content += chunk.token;
+          this.postToWorker({
+            type: "generation_stream_chunk",
+            requestId,
+            chunk: { type: "token", token: chunk.token },
+          });
+        }
+        if (chunk.reasoning) {
+          reasoning += chunk.reasoning;
+          this.postToWorker({
+            type: "generation_stream_chunk",
+            requestId,
+            chunk: { type: "reasoning", token: chunk.reasoning },
+          });
+        }
+        if (chunk.finish_reason) finishReason = chunk.finish_reason;
+        if (chunk.tool_calls) toolCalls = chunk.tool_calls;
+        if (chunk.usage) usage = chunk.usage;
+      }
+
+      if (abortController.signal.aborted) {
+        this.postToWorker({
+          type: "generation_stream_error",
+          requestId,
+          error: "AbortError: Generation aborted",
+        });
+        return;
+      }
+
+      this.postToWorker({
+        type: "generation_stream_chunk",
+        requestId,
+        chunk: {
+          type: "done",
+          content,
+          reasoning: reasoning || undefined,
+          finish_reason: finishReason,
+          tool_calls: toolCalls,
+          usage,
+        },
+      });
+    } catch (err: any) {
+      const aborted = abortController.signal.aborted || err?.name === "AbortError";
+      this.postToWorker({
+        type: "generation_stream_error",
+        requestId,
+        error: aborted ? "AbortError: Generation aborted" : err?.message ?? String(err),
+      });
+    } finally {
+      this.generationAbortControllers.delete(requestId);
     }
   }
 

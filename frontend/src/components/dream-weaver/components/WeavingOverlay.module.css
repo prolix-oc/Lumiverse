@@ -53,7 +53,7 @@
 
 .weavingEyebrow {
   margin: 0;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -62,14 +62,14 @@
 
 .weavingTitle {
   margin: 0;
-  font-size: 24px;
+  font-size: calc(24px * var(--lumiverse-font-scale, 1));
   line-height: 1.1;
   color: var(--lumiverse-text);
 }
 
 .weavingText {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   color: var(--lumiverse-text-muted);
 }
@@ -92,7 +92,7 @@
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 12%, var(--lumiverse-border));
   background: color-mix(in srgb, var(--lumiverse-primary) 5%, var(--lumiverse-bg-elevated));
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   transition: opacity 0.25s, border-color 0.25s, background 0.25s, color 0.25s;
 }
 
@@ -125,6 +125,6 @@
 
 @media (max-width: 640px) {
   .weavingTitle {
-    font-size: 21px;
+    font-size: calc(21px * var(--lumiverse-font-scale, 1));
   }
 }
