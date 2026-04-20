@@ -807,7 +807,7 @@ export function registerLumiaMacros(): void {
     returnType: "boolean",
     handler: (ctx) => {
       const council = getCouncil(ctx);
-      return (council.councilMode && (council.members?.length ?? 0) > 0) ? "yes" : "no";
+      return council.councilMode ? "yes" : "no";
     },
   });
 
