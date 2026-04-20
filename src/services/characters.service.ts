@@ -23,17 +23,27 @@ function rowToSummary(row: any): CharacterSummary {
   };
 }
 
-/** Escape special FTS5 query characters and append prefix wildcard */
+/**
+ * Build an FTS5 MATCH query for the trigram tokenizer. Each whitespace-delimited
+ * token is wrapped in a quoted phrase (substring needle); tokens are AND-ed
+ * together. Embedded double quotes are escaped by doubling per FTS5 syntax.
+ *
+ * Returns "" when the trimmed input is shorter than the trigram minimum (3
+ * chars). Callers must fall back to LIKE in that case — see `buildLikeFallback`.
+ */
 function sanitizeFtsQuery(input: string): string {
-  // Remove FTS5 operators/syntax characters
-  const cleaned = input.replace(/[":*()^{}~\-]/g, " ").trim();
-  if (!cleaned) return "";
-  // Split into tokens, add prefix wildcard to each for partial matching
-  return cleaned
+  const trimmed = input.trim();
+  if (trimmed.length < 3) return "";
+  return trimmed
     .split(/\s+/)
     .filter(Boolean)
-    .map((t) => `"${t}"*`)
+    .map((t) => `"${t.replace(/"/g, '""')}"`)
     .join(" ");
+}
+
+/** Escape SQL LIKE metacharacters so a raw user query is matched literally. */
+function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, "\\$&");
 }
 
 export interface SummaryQueryOptions {
@@ -62,14 +72,26 @@ export function listCharacterSummaries(
   const whereClauses: string[] = ["c.user_id = ?"];
   const whereParams: any[] = [userId];
 
-  // FTS5 search
+  // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
+  // trigram cannot match (common for 2-char CJK names like 魔王).
   let fromClause = "characters c";
+  let usedFts = false;
   if (search) {
     const ftsQuery = sanitizeFtsQuery(search);
     if (ftsQuery) {
       fromClause = "characters c JOIN characters_fts fts ON fts.rowid = c.rowid";
       whereClauses.push("characters_fts MATCH ?");
       whereParams.push(ftsQuery);
+      usedFts = true;
+    } else {
+      const trimmed = search.trim();
+      if (trimmed) {
+        const like = `%${escapeLike(trimmed)}%`;
+        whereClauses.push(
+          "(c.name LIKE ? ESCAPE '\\' OR c.creator LIKE ? ESCAPE '\\' OR c.tags LIKE ? ESCAPE '\\')"
+        );
+        whereParams.push(like, like, like);
+      }
     }
   }
 
@@ -94,8 +116,10 @@ export function listCharacterSummaries(
 
   // Sort
   let orderBy: string;
-  if (search && !sort) {
-    orderBy = "ORDER BY rank"; // FTS5 relevance
+  if (usedFts && !sort) {
+    orderBy = "ORDER BY rank"; // FTS5 relevance — only valid when MATCH was used
+  } else if (search && !sort) {
+    orderBy = "ORDER BY c.updated_at DESC"; // LIKE fallback has no rank column
   } else {
     switch (sort) {
       case "name":
@@ -150,6 +174,15 @@ function listCharacterSummariesDiscover(
       extraJoin = "JOIN characters_fts fts ON fts.rowid = c.rowid";
       whereClauses.push("characters_fts MATCH ?");
       whereParams.push(ftsQuery);
+    } else {
+      const trimmed = search.trim();
+      if (trimmed) {
+        const like = `%${escapeLike(trimmed)}%`;
+        whereClauses.push(
+          "(c.name LIKE ? ESCAPE '\\' OR c.creator LIKE ? ESCAPE '\\' OR c.tags LIKE ? ESCAPE '\\')"
+        );
+        whereParams.push(like, like, like);
+      }
     }
   }
 

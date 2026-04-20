@@ -290,15 +290,24 @@ const ENTRY_SORT_COLUMNS = {
 
 export type EntrySortKey = keyof typeof ENTRY_SORT_COLUMNS;
 
-/** Escape special FTS5 query characters and append prefix wildcard */
+/**
+ * Build an FTS5 MATCH query for the trigram tokenizer. Embedded double quotes
+ * are escaped by doubling per FTS5 syntax. Returns "" when the trimmed input is
+ * shorter than the trigram minimum (3 chars) — callers fall back to LIKE.
+ */
 function sanitizeEntryFtsQuery(input: string): string {
-  const cleaned = input.replace(/[":*()^{}~\-]/g, " ").trim();
-  if (!cleaned) return "";
-  return cleaned
+  const trimmed = input.trim();
+  if (trimmed.length < 3) return "";
+  return trimmed
     .split(/\s+/)
     .filter(Boolean)
-    .map((t) => `"${t}"*`)
+    .map((t) => `"${t.replace(/"/g, '""')}"`)
     .join(" ");
+}
+
+/** Escape SQL LIKE metacharacters so a raw user query is matched literally. */
+function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, "\\$&");
 }
 
 export function listEntriesPaginated(
@@ -317,8 +326,8 @@ export function listEntriesPaginated(
   const direction = options?.sortDir === "desc" ? "DESC" : "ASC";
   const collate = sortKey === "name" ? " COLLATE NOCASE" : "";
 
-  const ftsQuery = options?.search ? sanitizeEntryFtsQuery(options.search) : "";
-  if (!ftsQuery) {
+  const rawSearch = options?.search?.trim() ?? "";
+  if (!rawSearch) {
     // Fast path: no search — use cached paginated query
     return paginatedQuery(
       `SELECT * FROM world_book_entries WHERE world_book_id = ? ORDER BY ${column}${collate} ${direction}, id ASC`,
@@ -329,13 +338,26 @@ export function listEntriesPaginated(
     );
   }
 
-  // FTS path: JOIN world_book_entries_fts, scoped by world_book_id, sorted by
-  // explicit column (never by FTS rank — users already picked a sort order).
+  const ftsQuery = sanitizeEntryFtsQuery(rawSearch);
   const db = getDb();
-  const whereStr = "e.world_book_id = ? AND world_book_entries_fts MATCH ?";
-  const params = [worldBookId, ftsQuery];
-  const fromClause =
-    "world_book_entries e JOIN world_book_entries_fts fts ON fts.rowid = e.rowid";
+
+  let fromClause: string;
+  let whereStr: string;
+  let params: any[];
+
+  if (ftsQuery) {
+    // FTS path (trigram): JOIN world_book_entries_fts, scoped by world_book_id.
+    fromClause = "world_book_entries e JOIN world_book_entries_fts fts ON fts.rowid = e.rowid";
+    whereStr = "e.world_book_id = ? AND world_book_entries_fts MATCH ?";
+    params = [worldBookId, ftsQuery];
+  } else {
+    // LIKE fallback — trigram can't match 1–2 char queries (e.g. 2-char CJK).
+    const like = `%${escapeLike(rawSearch)}%`;
+    fromClause = "world_book_entries e";
+    whereStr =
+      "e.world_book_id = ? AND (e.comment LIKE ? ESCAPE '\\' OR e.content LIKE ? ESCAPE '\\' OR e.key LIKE ? ESCAPE '\\' OR e.keysecondary LIKE ? ESCAPE '\\')";
+    params = [worldBookId, like, like, like, like];
+  }
 
   const countRow = db
     .query(`SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`)
