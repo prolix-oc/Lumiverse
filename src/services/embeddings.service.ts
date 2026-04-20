@@ -1565,6 +1565,94 @@ export async function cachedEmbedTexts(
 }
 
 /**
+ * llama.cpp's /v1/embeddings endpoint rejects requests whose cumulative token
+ * count exceeds the server's `n_ubatch` (physical batch size, default 512).
+ * The error surfaces as HTTP 500 "input is too large to process. increase the
+ * physical batch size" — not a timeout — so the caller's timeout-only retry
+ * never kicks in. Detect it (plus timeouts and a few other transient shapes)
+ * so callers can halve and retry down to size 1 without user intervention.
+ */
+function isRetryableBatchError(err: Error): boolean {
+  const m = err.message;
+  if (/timed out|abort/i.test(m)) return true;
+  if (/too large to process|physical batch size|increase.*batch.*size/i.test(m)) return true;
+  if (/exceeds.*context|context.*exceed/i.test(m)) return true;
+  if (/\(413\)|\(500\)|\(503\)/.test(m)) return true;
+  return false;
+}
+
+function looksLikePhysicalBatchLimit(err: Error): boolean {
+  return /too large to process|physical batch size|exceeds.*context/i.test(err.message);
+}
+
+/**
+ * Embed a list of items with automatic batch-halving on transient errors.
+ *
+ * For llama.cpp-style backends where the server's `n_ubatch` caps per-request
+ * token volume, the user can't know the right `batch_size` in advance — a
+ * batch that works for 256-token chunks will blow up on 2048-token ones. This
+ * wrapper starts at `initialBatchSize`, halves on retryable failures, and
+ * processes surviving sub-batches via `onBatchReady`. Items that still fail
+ * at size 1 are surfaced via `onItemFailed` so callers can record error state
+ * and move on rather than aborting the whole run.
+ */
+export async function embedWithAdaptiveBatching<T>(
+  userId: string,
+  items: T[],
+  initialBatchSize: number,
+  getText: (item: T) => string,
+  onBatchReady: (items: T[], texts: string[], vectors: number[][]) => Promise<void>,
+  onItemFailed: (items: T[], error: Error) => void,
+  options?: { signal?: AbortSignal; label?: string },
+): Promise<void> {
+  if (items.length === 0) return;
+  const bs = Math.max(1, Math.min(initialBatchSize, 200));
+  const label = options?.label ?? "embed";
+
+  const process = async (batch: T[], currentSize: number): Promise<void> => {
+    if (options?.signal?.aborted) {
+      onItemFailed(batch, options.signal.reason instanceof Error
+        ? options.signal.reason
+        : new Error("Aborted"));
+      return;
+    }
+    const texts = batch.map(getText);
+    try {
+      const vectors = await cachedEmbedTexts(userId, texts, { signal: options?.signal });
+      await onBatchReady(batch, texts, vectors);
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      if (isRetryableBatchError(e) && currentSize > 1) {
+        const half = Math.max(1, Math.floor(currentSize / 2));
+        console.warn(
+          `[embeddings] ${label}: batch of ${batch.length} failed (${e.message}); retrying in sub-batches of ${half}`,
+        );
+        for (let j = 0; j < batch.length; j += half) {
+          await process(batch.slice(j, j + half), half);
+        }
+        return;
+      }
+      if (currentSize === 1 && looksLikePhysicalBatchLimit(e)) {
+        onItemFailed(
+          batch,
+          new Error(
+            `${e.message} — a single input still exceeds the server's physical batch size. ` +
+            `For llama.cpp, restart llama-server with a larger --ubatch-size / -ub (and matching --batch-size / -b), ` +
+            `or reduce the source chunk size.`,
+          ),
+        );
+      } else {
+        onItemFailed(batch, e);
+      }
+    }
+  };
+
+  for (let i = 0; i < items.length; i += bs) {
+    await process(items.slice(i, i + bs), bs);
+  }
+}
+
+/**
  * Attach to an in-flight shared fetch or start a new one. The shared fetch's
  * own AbortController is aborted only when every cancellable joiner has
  * aborted AND no uncancellable joiner is attached.
@@ -1913,15 +2001,13 @@ export async function reindexWorldBookEntries(
 
   await ensureWorldBookVectorVersion(userId);
 
-  /** Process a batch of entries: embed, upsert into LanceDB, update state.
-   *  On timeout/abort failures, retries with halved batch size (min 1).
-   *  Returns the entries that permanently failed after all retries. */
-  const processBatch = async (batch: WorldBookEntry[], currentBatchSize: number): Promise<void> => {
-    try {
-      const searchTexts = batch.map((entry) => buildWorldBookEntrySearchText(entry));
-      const vectors = await cachedEmbedTexts(userId, searchTexts);
+  await embedWithAdaptiveBatching(
+    userId,
+    toIndex,
+    batchSize,
+    (entry) => buildWorldBookEntrySearchText(entry),
+    async (batch, searchTexts, vectors) => {
       const now = Math.floor(Date.now() / 1000);
-
       const rows: EmbeddingRow[] = batch.map((entry, idx) => ({
         id: rowId(userId, "world_book_entry", entry.id, 0),
         user_id: userId,
@@ -1951,36 +2037,16 @@ export async function reindexWorldBookEntries(
       progress.indexed += batch.length;
       progress.current += batch.length;
       emitProgress();
-    } catch (err) {
-      const isTimeout = err instanceof Error && /timed out|abort/i.test(err.message);
-
-      // Retry with smaller batches if the failure looks like a timeout and
-      // we can still split further.
-      if (isTimeout && currentBatchSize > 1) {
-        const half = Math.max(1, Math.floor(currentBatchSize / 2));
-        console.warn(
-          `[embeddings] Batch of ${batch.length} timed out, retrying in sub-batches of ${half}`
-        );
-        for (let j = 0; j < batch.length; j += half) {
-          await processBatch(batch.slice(j, j + half), half);
-        }
-        return;
-      }
-
-      // Permanent failure — mark entries as errored.
+    },
+    (batch, err) => {
       console.warn("[embeddings] Batch embedding failed:", err);
-      const message = err instanceof Error ? err.message : "Batch vector indexing failed";
-      updateWorldBookEntriesVectorState(batch.map((entry) => entry.id), "error", null, message);
+      updateWorldBookEntriesVectorState(batch.map((entry) => entry.id), "error", null, err.message);
       progress.failed += batch.length;
       progress.current += batch.length;
       emitProgress();
-    }
-  };
-
-  for (let i = 0; i < toIndex.length; i += batchSize) {
-    const batch = toIndex.slice(i, i + batchSize);
-    await processBatch(batch, batchSize);
-  }
+    },
+    { label: "WB reindex" },
+  );
 
   // Compact all fragments into fewer files, prune old versions, and
   // rebuild vector index so freshly-upserted rows are fully indexed.
@@ -2409,13 +2475,13 @@ export async function reindexChatMessages(
   }
 
   const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
-  for (let i = 0; i < chunksToUpsert.length; i += batchSize) {
-    const batch = chunksToUpsert.slice(i, i + batchSize);
-    try {
-      const texts = batch.map((c) => c.content.trim());
-      const vectors = await cachedEmbedTexts(userId, texts);
+  await embedWithAdaptiveBatching(
+    userId,
+    chunksToUpsert,
+    batchSize,
+    (c) => c.content.trim(),
+    async (batch, _texts, vectors) => {
       const now = Math.floor(Date.now() / 1000);
-
       const rows: EmbeddingRow[] = batch.map((c, idx) => ({
         id: rowId(userId, "chat_chunk", c.chunkId, 0),
         user_id: userId,
@@ -2440,10 +2506,12 @@ export async function reindexChatMessages(
           .whenNotMatchedInsertAll()
           .execute(asLanceRows(rows));
       });
-    } catch (err) {
+    },
+    (_batch, err) => {
       console.warn("[embeddings] Batch chat embedding failed:", err);
-    }
-  }
+    },
+    { label: "chat memory" },
+  );
 
   if (chunksToDelete.length > 0 || chunksToUpsert.length > 0) {
     console.info(`[embeddings] Synced chat memory for ${chatId.split('-')[0]}... (+${chunksToUpsert.length} updated, -${chunksToDelete.length} removed)`);
@@ -2842,13 +2910,13 @@ export async function rebuildVaultEmbeddings(
   const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
   let embedded = 0;
 
-  for (let i = 0; i < valid.length; i += batchSize) {
-    const batch = valid.slice(i, i + batchSize);
-    try {
-      const texts = batch.map((c) => c.content.trim());
-      const vectors = await cachedEmbedTexts(userId, texts);
+  await embedWithAdaptiveBatching(
+    userId,
+    valid,
+    batchSize,
+    (c) => c.content.trim(),
+    async (batch, _texts, vectors) => {
       const now = Math.floor(Date.now() / 1000);
-
       const rows: EmbeddingRow[] = batch.map((c, idx) => ({
         id: rowId(userId, "vault_chunk", c.vaultChunkId, 0),
         user_id: userId,
@@ -2874,10 +2942,12 @@ export async function rebuildVaultEmbeddings(
           .execute(asLanceRows(rows));
       });
       embedded += rows.length;
-    } catch (err) {
+    },
+    (_batch, err) => {
       console.warn("[embeddings] Batch vault rebuild failed:", err);
-    }
-  }
+    },
+    { label: "vault rebuild" },
+  );
 
   if (embedded > 0) scheduleOptimize();
   return { embedded };
