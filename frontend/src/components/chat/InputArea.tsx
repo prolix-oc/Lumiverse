@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect, type KeyboardEvent } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
@@ -14,6 +14,7 @@ import { imagesApi } from '@/api/images'
 import { getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
+import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import AuthorsNotePanel from './AuthorsNotePanel'
 import { databankApi } from '@/api/databank'
@@ -75,6 +76,9 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const queueLockRef = useRef(false)
   const touchTimerRef = useRef<number>(0)
   const isStreaming = useStore((s) => s.isStreaming)
+  const editingMessageId = useStore((s) => s.editingMessageId)
+  const isMobile = useIsMobile()
+  const hideForMobileEdit = isMobile && !!editingMessageId
   const activeGenerationId = useStore((s) => s.activeGenerationId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
@@ -1170,11 +1174,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
       data-component="InputArea"
       ref={containerRef}
       className={styles.container}
-      style={screenCornerRadius ? {
-        borderRadius: inputFocused
-          ? 'var(--lcs-radius, 14px)'
-          : `var(--lcs-radius, 14px) var(--lcs-radius, 14px) ${screenCornerRadius}px ${screenCornerRadius}px`,
-      } : undefined}
+      style={(() => {
+        const s: CSSProperties = {}
+        if (screenCornerRadius) {
+          s.borderRadius = inputFocused
+            ? 'var(--lcs-radius, 14px)'
+            : `var(--lcs-radius, 14px) var(--lcs-radius, 14px) ${screenCornerRadius}px ${screenCornerRadius}px`
+        }
+        if (hideForMobileEdit) s.display = 'none'
+        return Object.keys(s).length ? s : undefined
+      })()}
     >
       {/* Author's Note Panel */}
       <AuthorsNotePanel

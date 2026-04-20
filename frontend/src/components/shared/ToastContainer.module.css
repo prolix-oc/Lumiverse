@@ -9,6 +9,8 @@
   max-width: 420px;
   width: 100%;
   padding: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   box-sizing: border-box;
 }
 
