@@ -37,7 +37,7 @@ export function getSpindleSettings(userId: string | null | undefined): SpindleSe
 
 /**
  * Resolve the effective interceptor timeout for an extension. Manifest override
- * wins over the user-level setting; both are clamped to [MIN, MAX].
+ * wins over the user's Spindle setting; both are clamped to [MIN, MAX].
  */
 export function resolveInterceptorTimeout(
   manifestTimeoutMs: number | undefined,

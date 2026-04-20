@@ -59,7 +59,7 @@ Seed files let you ship default data (config templates, databases, assets) that 
 
 ## Interceptor Timeout
 
-Extensions that register a pre-generation interceptor are bound by a wall-clock budget. The host resolves this budget **per run**, so both the manifest value and the user's global Spindle setting take effect on the next generation without requiring the extension to re-register.
+Extensions that register a pre-generation interceptor are bound by a wall-clock budget. The host resolves this budget **per run**, so both the manifest value and the user's Spindle setting take effect on the next generation without requiring the extension to re-register.
 
 Resolution order (highest priority first):
 

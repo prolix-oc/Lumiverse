@@ -6,7 +6,7 @@ import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
-import SpindleGlobalSettings from './SpindleGlobalSettings'
+import SpindleSettings from './SpindleSettings'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -370,7 +370,7 @@ export default function SpindlePanel() {
 
       {importSummary && <div className={styles.importSummary}>{importSummary}</div>}
 
-      <SpindleGlobalSettings />
+      <SpindleSettings />
 
       <SpindleUIControlPanel />
 

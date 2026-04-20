@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Timer } from 'lucide-react'
 import { settingsApi } from '@/api/settings'
 import { toast } from '@/lib/toast'
-import styles from './SpindleGlobalSettings.module.css'
+import styles from './SpindleSettings.module.css'
 
 const KEY = 'spindleSettings'
 const DEFAULT_SECONDS = 10
@@ -14,7 +14,7 @@ function clamp(n: number): number {
   return Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Math.round(n)))
 }
 
-export default function SpindleGlobalSettings() {
+export default function SpindleSettings() {
   const [seconds, setSeconds] = useState<number>(DEFAULT_SECONDS)
   const [draft, setDraft] = useState<string>(String(DEFAULT_SECONDS))
   const [loading, setLoading] = useState(true)

@@ -114,12 +114,12 @@ Interceptors run inside a wall-clock budget. When the budget is exceeded, the in
 The budget is resolved **per run**, immediately before each invocation, in this order:
 
 1. **`interceptorTimeoutMs` in your `spindle.json`** — a per-extension override shipped with the manifest
-2. **`spindleSettings.interceptorTimeoutMs`** — the user's global setting (adjustable in the Spindle panel)
+2. **`spindleSettings.interceptorTimeoutMs`** — the user's setting (adjustable in the Spindle panel)
 3. **Default `10000` ms** — applied when neither of the above is set
 
 All values are clamped to **`[1000, 300000]` ms** (1 second to 5 minutes).
 
-Because resolution is per-run, users can change their global Spindle timeout in settings and the new value takes effect on the next generation — your extension does not need to re-register.
+Because resolution is per-run, users can change the Spindle timeout in the Spindle panel and the new value takes effect on the next generation — your extension does not need to re-register.
 
 ### Picking a timeout
 
