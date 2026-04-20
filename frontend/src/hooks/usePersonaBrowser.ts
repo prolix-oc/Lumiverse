@@ -64,11 +64,21 @@ export function usePersonaBrowser() {
   }, [personas.length, loadPersonas])
 
   // Fuse.js instance
+  //
+  // ignoreLocation + minMatchCharLength=2 are required for CJK / Unicode
+  // substring search. Fuse's default Bitap scoring anchors matches near
+  // `location: 0` and penalises anything further away — which shreds
+  // relevance for unspaced scripts (Chinese, Japanese, Korean, Thai) where
+  // the entire phrase is one unbroken run. ignoreLocation makes Fuse score
+  // by match quality regardless of position; minMatchCharLength: 2 lets
+  // short CJK names like 魔王 / 勇者 match without being filtered out.
   const fuse = useMemo(
     () =>
       new Fuse(personas, {
         keys: ['name', 'title', 'description'],
         threshold: 0.3,
+        ignoreLocation: true,
+        minMatchCharLength: 2,
       }),
     [personas]
   )
