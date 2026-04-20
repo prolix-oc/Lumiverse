@@ -88,6 +88,29 @@
   filter: none !important;
 }
 
+/* Transient navigation highlight — greeting switch, deep-link scroll-to, etc. */
+.highlight {
+  animation: minimalHighlightPulse 1600ms ease-out forwards;
+}
+
+@keyframes minimalHighlightPulse {
+  0% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 0 var(--lumiverse-primary-040, rgba(130, 100, 255, 0.4));
+  }
+  15% {
+    outline: 2px solid var(--lumiverse-primary);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px var(--lumiverse-primary-020, rgba(130, 100, 255, 0.2));
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
 /* Streaming state — GPU optimization */
 .streaming {
   will-change: opacity, transform;

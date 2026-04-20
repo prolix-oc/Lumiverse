@@ -186,6 +186,10 @@ export interface UISlice {
   // Message editing (globally single-slot)
   editingMessageId: string | null
   setEditingMessageId: (id: string | null) => void
+
+  // Transient highlight target for navigation feedback (e.g. greeting switch)
+  highlightedMessageId: string | null
+  setHighlightedMessageId: (id: string | null) => void
 }
 
 // ---- OOC Style Type ----

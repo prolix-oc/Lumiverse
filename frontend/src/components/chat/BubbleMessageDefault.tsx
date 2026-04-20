@@ -154,6 +154,7 @@ export default function BubbleMessageDefault({
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
+  const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const cardRef = useRef<HTMLDivElement>(null)
   const { handleSwipe } = useSwipeAction(message, chatId)
   const onSwipeLeft = useCallback(() => handleSwipe('left'), [handleSwipe])
@@ -177,6 +178,7 @@ export default function BubbleMessageDefault({
         isHidden && styles.hidden,
         isSelectMode && isSelected && styles.selected,
         isSelectMode && styles.selectMode,
+        isHighlighted && styles.highlight,
       )}
       data-component="BubbleMessage"
       data-part={isUser ? 'user' : isActivelyStreaming ? 'streaming' : 'character'}

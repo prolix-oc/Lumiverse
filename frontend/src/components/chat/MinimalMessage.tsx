@@ -145,6 +145,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
+  const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
@@ -173,6 +174,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
         isHidden && styles.hidden,
         isSelectMode && isSelected && styles.selected,
         isSelectMode && styles.selectMode,
+        isHighlighted && styles.highlight,
       )}
       data-message-id={message.id}
       onClick={isSelectMode ? onToggleSelect : undefined}

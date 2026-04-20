@@ -19,6 +19,7 @@ export default function GreetingNav({ message, chatId, variant = 'minimal' }: Gr
   const isGroupChat = useStore((s) => s.isGroupChat)
   const characters = useStore((s) => s.characters)
   const updateMessage = useStore((s) => s.updateMessage)
+  const setHighlightedMessageId = useStore((s) => s.setHighlightedMessageId)
   const [character, setCharacter] = useState<Character | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
 
@@ -50,19 +51,33 @@ export default function GreetingNav({ message, chatId, variant = 'minimal' }: Gr
       if (!character) return
       const greetings = [character.first_mes, ...(character.alternate_greetings || [])]
       const newContent = greetings[greetingIndex]
-      if (!newContent || newContent === message.content) {
-        setPickerOpen(false)
-        return
-      }
-      try {
-        await messagesApi.update(chatId, message.id, { content: newContent })
-        updateMessage(message.id, { content: newContent })
-      } catch (err) {
-        console.error('[GreetingNav] Failed to update greeting:', err)
+      const contentChanged = !!newContent && newContent !== message.content
+      if (contentChanged) {
+        try {
+          await messagesApi.update(chatId, message.id, { content: newContent })
+          updateMessage(message.id, { content: newContent })
+        } catch (err) {
+          console.error('[GreetingNav] Failed to update greeting:', err)
+        }
       }
       setPickerOpen(false)
+
+      // Let the modal unmount before scrolling so the greeting isn't obscured.
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-message-id="${message.id}"]`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+        setHighlightedMessageId(message.id)
+        window.setTimeout(() => {
+          // Only clear if we're still the highlighted one — avoid stomping
+          // a newer highlight target.
+          const current = useStore.getState().highlightedMessageId
+          if (current === message.id) setHighlightedMessageId(null)
+        }, 1700)
+      })
     },
-    [character, chatId, message.id, message.content, updateMessage]
+    [character, chatId, message.id, message.content, updateMessage, setHighlightedMessageId]
   )
 
   if (!character || !character.alternate_greetings?.length) return null
