@@ -155,21 +155,8 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     return () => document.removeEventListener('mousedown', handle)
   }, [open])
 
-  // Close on viewport resize / scroll (prevents stale portal positioning)
-  useEffect(() => {
-    if (!open || !portal) return
-    const close = () => setOpen(false)
-    window.addEventListener('resize', close)
-    window.addEventListener('scroll', close, true)
-    return () => {
-      window.removeEventListener('resize', close)
-      window.removeEventListener('scroll', close, true)
-    }
-  }, [open, portal])
-
-  // Position portal-rendered popover against the trigger
-  useLayoutEffect(() => {
-    if (!open || !portal || !triggerRef.current) return
+  const reposition = useCallback(() => {
+    if (!triggerRef.current) return
     const r = triggerRef.current.getBoundingClientRect()
     const width = Math.max(r.width, minWidth ?? 240)
     setPos({
@@ -177,7 +164,31 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       left: align === 'right' ? r.right - width : r.left,
       width,
     })
-  }, [open, portal, align, minWidth])
+  }, [align, minWidth])
+
+  // Reposition rather than close on scroll/resize: focusing the search input
+  // (mobile keyboard opens → viewport resize) or scrollIntoView inside the
+  // option list would otherwise dismiss the popover the instant it opened.
+  // Scrolls that originate inside the popover are ignored so the internal
+  // option list can scroll freely.
+  useEffect(() => {
+    if (!open || !portal) return
+    const handleScroll = (e: Event) => {
+      if (popoverRef.current && popoverRef.current.contains(e.target as Node)) return
+      reposition()
+    }
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
+  }, [open, portal, reposition])
+
+  useLayoutEffect(() => {
+    if (!open || !portal) return
+    reposition()
+  }, [open, portal, reposition])
 
   // Focus search input when opened
   useEffect(() => {

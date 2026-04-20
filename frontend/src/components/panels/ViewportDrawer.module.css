@@ -3,7 +3,13 @@
 .wrapper {
   position: fixed;
   top: env(safe-area-inset-top, 0px);
-  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  /* The `bottom: calc(0 - var(--ios-viewport-offset))` pattern used on pure
+     backdrops (ModalShell, PackBrowser overlay, etc.) is defensive viewport
+     overhang — harmless when the element is just a dimmed layer, but the
+     drawer's wrapper IS the scrollable content container, so extending past
+     the visible viewport puts the last ~safe-area-inset-top of .panelContent
+     off-screen and makes the bottom of tab content unreachable on iPhone. */
+  bottom: 0;
   z-index: 9992;
   display: flex;
   align-items: stretch;

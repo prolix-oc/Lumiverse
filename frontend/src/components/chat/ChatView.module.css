@@ -102,9 +102,13 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 4px 12px 0;
+  padding: 6px 12px;
   gap: 4px;
   flex-shrink: 0;
+  background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
+  border-bottom: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .toolbarBtn {

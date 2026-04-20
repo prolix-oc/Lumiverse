@@ -61,6 +61,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
+  // Android IME predictive text fires input events mid-composition where
+  // `selectionStart` sits at the *start* of the composing span, not the caret
+  // the user sees. Running `@`/`#` detection against that value causes the
+  // autocomplete popover to flicker open on the wrong token and can make the
+  // caret visually "jump back" onto the partial word. We gate detection on
+  // this ref and re-run once on `compositionend` with the committed text.
+  const isComposingRef = useRef(false)
   const [hashQuery, setHashQuery] = useState<string | null>(null)
   const [hashStartIndex, setHashStartIndex] = useState(0)
   const [databankResults, setDatabankResults] = useState<AutocompleteResult[]>([])
@@ -1067,17 +1074,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [])
 
-  // Auto-resize textarea
-  const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
-    setText(val)
-    const ta = e.target
-    ta.style.height = 'auto'
-    ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'
-
-    // Detect # trigger for databank autocomplete
+  // Detect `#`/`@` autocomplete triggers from the textarea's current value
+  // and caret position. Pulled out of `handleInput` so `compositionend` can
+  // re-run the same scan once IME input has fully committed.
+  const runAutocompleteDetection = useCallback((ta: HTMLTextAreaElement) => {
+    const val = ta.value
     const cursorPos = ta.selectionStart ?? val.length
     const textBeforeCursor = val.slice(0, cursorPos)
+
     const hashIdx = textBeforeCursor.lastIndexOf('#')
     if (hashIdx >= 0) {
       const charBefore = hashIdx > 0 ? textBeforeCursor[hashIdx - 1] : ' '
@@ -1086,7 +1090,6 @@ export default function InputArea({ chatId }: InputAreaProps) {
         if (!fragment.includes(' ') && fragment.length > 0) {
           setHashQuery(fragment)
           setHashStartIndex(hashIdx)
-          // `#` takes precedence if both tokens are active on the same keystroke
           setAtQuery(null)
           return
         }
@@ -1094,7 +1097,6 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     setHashQuery(null)
 
-    // Detect @ trigger for group member autocomplete (group chats only)
     if (isGroupChat) {
       const atIdx = textBeforeCursor.lastIndexOf('@')
       if (atIdx >= 0) {
@@ -1111,6 +1113,36 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     setAtQuery(null)
   }, [isGroupChat])
+
+  // Auto-resize textarea
+  const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value
+    setText(val)
+    const ta = e.target
+    ta.style.height = 'auto'
+    ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'
+
+    // Skip trigger detection while an IME is composing (Android predictive
+    // text, CJK input, etc.). `selectionStart` is unreliable mid-composition
+    // and would flicker the popover or re-anchor `atStartIndex` incorrectly.
+    if (isComposingRef.current) return
+
+    runAutocompleteDetection(ta)
+  }, [runAutocompleteDetection])
+
+  const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true
+  }, [])
+
+  const handleCompositionEnd = useCallback((e: React.CompositionEvent<HTMLTextAreaElement>) => {
+    isComposingRef.current = false
+    const ta = e.currentTarget
+    // Mirror React's onChange state for the final committed value — some
+    // Android IMEs (Gboard swipe, Samsung Keyboard) commit via composition
+    // without firing a trailing `input` event.
+    if (ta.value !== text) setText(ta.value)
+    runAutocompleteDetection(ta)
+  }, [runAutocompleteDetection, text])
 
   // Highlighted mirror content — rendered behind a transparent-text textarea.
   // We only wrap the exact slug tokens that resolve to a known group member;
@@ -1897,6 +1929,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
             onChange={handleInput}
             onScroll={handleTextareaScroll}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
             placeholder="Type a message..."

@@ -468,21 +468,58 @@
 
 /* Mirror layer that renders @mention pills behind the (transparent) textarea.
    Font / padding / line-height / wrap rules MUST stay locked to `.textarea`
-   so wrapped glyphs land on the same x/y as the caret. */
+   so wrapped glyphs land on the same x/y as the caret. Every text-metric
+   property (kerning, ligatures, letter-spacing, tab-size, etc.) is pinned
+   explicitly — UA defaults for <textarea> vs <div> differ on Android, and
+   any divergence compounds across a line into visible caret drift. */
 .textareaMirror {
   position: absolute;
   inset: 0;
+  box-sizing: border-box;
   font-family: inherit;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-weight: inherit;
+  font-style: normal;
+  font-variant-ligatures: none;
+  font-variant-numeric: normal;
+  font-feature-settings: normal;
+  font-kerning: none;
+  font-synthesis: none;
   line-height: 1.5;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-indent: 0;
+  text-rendering: auto;
+  text-transform: none;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   padding: 9px 14px;
   color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
   white-space: pre-wrap;
-  word-break: break-word;
-  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  /* Reserve the same scrollbar gutter the textarea reserves so both wrap at
+     identical content widths. scrollbar-width keeps the gutter deterministic
+     across Firefox/Chromium; -webkit-scrollbar rules below hide the visible
+     thumb so only the textarea's scrollbar is visible on Android/iOS. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
   pointer-events: none;
   user-select: none;
   z-index: 0;
+}
+
+.textareaMirror::-webkit-scrollbar {
+  width: 3px;
+}
+
+.textareaMirror::-webkit-scrollbar-thumb,
+.textareaMirror::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Pills must be layout-neutral — no padding, margin, or font-weight change
@@ -518,17 +555,40 @@
   color: transparent;
   -webkit-text-fill-color: transparent;
   caret-color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  box-sizing: border-box;
   font-family: inherit;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-weight: inherit;
+  font-style: normal;
+  font-variant-ligatures: none;
+  font-variant-numeric: normal;
+  font-feature-settings: normal;
+  font-kerning: none;
+  font-synthesis: none;
   line-height: 1.5;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-indent: 0;
+  text-rendering: auto;
+  text-transform: none;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   padding: 9px 14px;
   min-height: 40px;
   max-height: 180px;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* Match the mirror's gutter so wrap widths stay identical once the
+     textarea grows past its max-height and a scrollbar appears. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
   position: relative;
   z-index: 1;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .textarea::placeholder {
