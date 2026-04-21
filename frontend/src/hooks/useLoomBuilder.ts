@@ -15,7 +15,6 @@ import {
   DEFAULT_ADVANCED_SETTINGS,
   SAMPLER_PARAMS,
 } from '@/lib/loom/constants'
-import { generateUUID } from '@/lib/uuid'
 import {
   createNewLoomPreset,
   marshalPreset,
@@ -23,10 +22,11 @@ import {
   unmarshalPreset,
   detectSupportedParams,
   getAvailableMacros,
-  importFromSTPreset,
   exportToSTPreset,
   normalizeCategoryBlockState,
   toggleBlockWithCategoryRules,
+  coerceImportedLoomPreset,
+  looksLikeLegacyPresetData,
 } from '@/lib/loom/service'
 
 export function useLoomBuilder() {
@@ -353,23 +353,25 @@ export function useLoomBuilder() {
     }
   }, [activePreset])
 
-  // Import from legacy preset JSON
-  const importFromST = useCallback(async (stData: any, fileName: string) => {
+  const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     setIsLoading(true)
     try {
-      const name = stData.name || fileName.replace(/\.json$/i, '') || 'Imported Preset'
-      const loom = importFromSTPreset(stData, name)
+      const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
+      const loom = coerceImportedLoomPreset(payload, fallbackName)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = unmarshalPreset(created)
       await refreshRegistry()
       setActiveLoomPreset(created.id)
       setActivePreset(newLoom)
 
-      // Import embedded regex scripts if present, filed under the preset name
-      const embeddedRegex = stData.extensions?.regex_scripts
+      // Legacy presets can embed regex scripts. Import them even if the user
+      // picked the wrong import button so both import paths stay resilient.
+      const embeddedRegex = looksLikeLegacyPresetData(payload)
+        ? payload.extensions?.regex_scripts
+        : null
       if (Array.isArray(embeddedRegex) && embeddedRegex.length > 0) {
         try {
-          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: name, preset_id: created.id })
+          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: loom.name, preset_id: created.id })
           if (regexResult.imported > 0) {
             const { loadRegexScripts } = useStore.getState() as any
             if (loadRegexScripts) await loadRegexScripts()
@@ -390,29 +392,15 @@ export function useLoomBuilder() {
     }
   }, [refreshRegistry, setActiveLoomPreset])
 
+  // Import from legacy preset JSON
+  const importFromST = useCallback(async (stData: any, fileName: string) => {
+    return persistImportedPreset(stData, fileName)
+  }, [persistImportedPreset])
+
   // Import from file (internal JSON format)
   const importFromFile = useCallback(async (jsonData: any) => {
-    setIsLoading(true)
-    try {
-      const loom: LoomPreset = {
-        ...jsonData,
-        id: generateUUID(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }
-      const created = await presetsApi.create(marshalPreset(loom))
-      const newLoom = unmarshalPreset(created)
-      await refreshRegistry()
-      setActiveLoomPreset(created.id)
-      setActivePreset(newLoom)
-      return newLoom
-    } catch (err: any) {
-      setError(err.message)
-      throw err
-    } finally {
-      setIsLoading(false)
-    }
-  }, [refreshRegistry, setActiveLoomPreset])
+    return persistImportedPreset(jsonData)
+  }, [persistImportedPreset])
 
   // Export internal JSON
   const exportInternal = useCallback(() => {

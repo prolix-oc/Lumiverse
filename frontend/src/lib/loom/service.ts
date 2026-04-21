@@ -87,6 +87,56 @@ function migratePreset(preset: LoomPreset): LoomPreset {
   return preset
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
+  if (Array.isArray(promptOrder)) {
+    return promptOrder.some((entry) => isRecord(entry) && Array.isArray(entry.order))
+  }
+  if (isRecord(promptOrder)) {
+    return Object.values(promptOrder).some((entry) => isRecord(entry) && Array.isArray(entry.order))
+  }
+  return false
+}
+
+export function looksLikeLegacyPresetData(data: unknown): data is STPresetData {
+  return isRecord(data)
+    && (Array.isArray(data.prompts) || hasLegacyPromptOrderShape(data.prompt_order))
+}
+
+function looksLikeBackendLoomPresetData(data: unknown): data is Preset {
+  return isRecord(data)
+    && Array.isArray(data.prompt_order)
+    && isRecord(data.parameters)
+    && isRecord(data.prompts)
+    && isRecord(data.metadata)
+}
+
+function looksLikeLoomPresetData(data: unknown): data is LoomPreset {
+  return isRecord(data) && Array.isArray(data.blocks)
+}
+
+export function coerceImportedLoomPreset(data: unknown, fallbackName: string): LoomPreset {
+  if (looksLikeLoomPresetData(data)) {
+    return migratePreset({
+      ...data,
+      name: data.name || fallbackName,
+    })
+  }
+
+  if (looksLikeBackendLoomPresetData(data)) {
+    return unmarshalPreset(data)
+  }
+
+  if (looksLikeLegacyPresetData(data)) {
+    return importFromSTPreset(data, fallbackName)
+  }
+
+  throw new Error('Unrecognized preset JSON format')
+}
+
 function coerceCategoryMode(mode: unknown): PromptBlock['categoryMode'] {
   return mode === 'radio' || mode === 'checkbox' ? mode : null
 }
@@ -431,6 +481,9 @@ interface STPresetData {
   name?: string
   prompts?: STPrompt[]
   prompt_order?: Record<string, { order?: Array<{ identifier: string; enabled?: boolean }> }>
+  extensions?: {
+    regex_scripts?: unknown[]
+  }
   // Root-level behavior prompts (ST stores these outside the prompts array)
   continue_nudge_prompt?: string
   impersonation_prompt?: string
@@ -461,7 +514,11 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
   const wikiCategoryMatch = rawName.match(WIKI_CATEGORY_PATTERN)
   const wikiSubCategoryMatch = !wikiCategoryMatch ? rawName.match(WIKI_SUBCATEGORY_PATTERN) : null
   const isLegacyCategory = rawName.startsWith(CATEGORY_MARKER)
-  const isCategory = isLegacyCategory || !!wikiCategoryMatch || !!wikiSubCategoryMatch
+  // Only treat wiki-style tags as categories when the prompt is acting like a
+  // heading. Ordinary prompts can legitimately use angle brackets or ===title===
+  // names, and those must round-trip as normal blocks.
+  const isWikiHeading = (!p.content || !p.content.trim()) && (!!wikiCategoryMatch || !!wikiSubCategoryMatch)
+  const isCategory = isLegacyCategory || isWikiHeading
 
   let displayName = rawName
   if (wikiCategoryMatch) displayName = wikiCategoryMatch[1].trim()

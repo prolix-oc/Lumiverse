@@ -32,11 +32,21 @@ export function createDrawerTabHandle(
   root.setAttribute('data-spindle-drawer-tab', tabId)
 
   const activateHandlers = new Set<() => void>()
+  const unsubscribeStore = useStore.subscribe((state, previousState) => {
+    if (state.drawerTab !== tabId || previousState.drawerTab === tabId) return
+    for (const handler of activateHandlers) {
+      try { handler() } catch { /* no-op */ }
+    }
+  })
 
   getStore().registerDrawerTab({
     id: tabId,
     extensionId,
     title: options.title,
+    shortName: options.shortName,
+    description: options.description,
+    keywords: options.keywords,
+    headerTitle: options.headerTitle,
     iconUrl: options.iconUrl,
     iconSvg: options.iconSvg,
     badge: null,
@@ -59,11 +69,9 @@ export function createDrawerTabHandle(
       const store = getStore()
       store.setDrawerTab(tabId)
       store.openDrawer(tabId)
-      for (const handler of activateHandlers) {
-        try { handler() } catch { /* no-op */ }
-      }
     },
     destroy() {
+      unsubscribeStore()
       getStore().unregisterDrawerTab(tabId)
       activateHandlers.clear()
     },
