@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { evaluate, buildEnv, resolveGroupCharacterNames, registry, initMacros } from "../macros";
 import { getEffectiveCharacterName } from "../types/character";
-import type { MacroEnv, MacroHandler, MacroDefinition } from "../macros";
+import type { Chat } from "../types/chat";
+import type { MacroEnv } from "../macros";
 import * as chatsSvc from "../services/chats.service";
 import * as charactersSvc from "../services/characters.service";
 import * as personasSvc from "../services/personas.service";
 import * as connectionsSvc from "../services/connections.service";
+import { populateLumiaLoomContext } from "../services/prompt-assembly.service";
 
 // Ensure macros are initialized
 initMacros();
@@ -141,7 +143,7 @@ function buildEnvFromIds(userId: string, body: {
           return c ? getEffectiveCharacterName(c) : undefined;
         });
         const isGroup = !!chat.metadata?.group;
-        return buildEnv({
+        const env = buildEnv({
           character,
           persona,
           chat,
@@ -152,6 +154,8 @@ function buildEnvFromIds(userId: string, body: {
           groupCharacterNames,
           targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
+        populateLumiaLoomContext(env, userId, chat);
+        return env;
       }
     }
   }
@@ -166,15 +170,25 @@ function buildEnvFromIds(userId: string, body: {
         ? connectionsSvc.getConnection(userId, body.connection_id)
         : connectionsSvc.getDefaultConnection(userId);
 
-      return buildEnv({
+      const chat: Chat = {
+        id: "",
+        character_id: character.id,
+        name: "",
+        metadata: {},
+        created_at: 0,
+        updated_at: 0,
+      };
+      const env = buildEnv({
         character,
         persona,
-        chat: { id: "", character_id: character.id, name: "", metadata: {}, created_at: 0, updated_at: 0 },
+        chat,
         messages: [],
         generationType: "normal",
         connection,
         dynamicMacros: body.dynamic_macros,
       });
+      populateLumiaLoomContext(env, userId, chat);
+      return env;
     }
   }
 

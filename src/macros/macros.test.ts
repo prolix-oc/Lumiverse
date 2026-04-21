@@ -1001,6 +1001,111 @@ describe("Regex Reference macros", () => {
   });
 });
 
+describe("Lumia and council macros", () => {
+  test("lumiaCouncilDeliberation resolves pre-generation council results without toolsSettings.enabled", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: ["detect_scene"],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [
+        {
+          memberId: "member-1",
+          memberName: "Mira",
+          toolName: "detect_scene",
+          toolDisplayName: "Scene Analysis",
+          success: true,
+          content: "Moonlight, rain, and a tense confrontation in the alley.",
+        },
+      ],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaCouncilDeliberation}}", env);
+    expect(result).toContain("## Council Deliberation");
+    expect(result).toContain("Mira");
+    expect(result).toContain("Moonlight, rain, and a tense confrontation in the alley.");
+  });
+
+  test("lumiaCouncilToolsActive reflects actual tool output", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    expect(await ev("{{lumiaCouncilToolsActive}}", env)).toBe("no");
+
+    env.extra.council.toolResults = [
+      {
+        memberId: "member-1",
+        memberName: "Mira",
+        toolName: "detect_scene",
+        toolDisplayName: "Scene Analysis",
+        success: true,
+        content: "A storm is closing in.",
+      },
+    ];
+
+    expect(await ev("{{lumiaCouncilToolsActive}}", env)).toBe("yes");
+  });
+
+  test("lumiaCouncilToolsList resolves from configured member tools", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: ["detect_scene", "detect_expression"],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "inline" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaCouncilToolsList}}", env);
+    expect(result).toContain("detect_scene");
+    expect(result).toContain("Mira");
+  });
+
+  test("loomStyle resolves from loom context", async () => {
+    const env = makeEnv();
+    env.extra.loom = {
+      selectedStyles: [
+        { id: "style-1", name: "Noir", content: "Lean into clipped, rain-soaked noir prose.", category: "style" },
+      ],
+      selectedUtils: [],
+      selectedRetrofits: [],
+      summary: "",
+    };
+
+    expect(await ev("{{loomStyle}}", env)).toBe("Lean into clipped, rain-soaked noir prose.");
+  });
+});
+
 // ===========================================================================
 // EDGE CASES
 // ===========================================================================

@@ -77,7 +77,7 @@ function getCouncil(ctx: MacroExecContext) {
   return (ctx.env.extra.council ?? {}) as {
     councilMode: boolean;
     members: CouncilMemberData[];
-    toolsSettings: { enabled: boolean; [k: string]: any };
+    toolsSettings: { [k: string]: any };
     memberItems: Record<string, LumiaItemData>;
     toolResults: Array<{
       memberId: string;
@@ -90,6 +90,19 @@ function getCouncil(ctx: MacroExecContext) {
     }>;
     namedResults: Record<string, string>;
   };
+}
+
+function hasConfiguredCouncilTools(ctx: MacroExecContext): boolean {
+  const council = getCouncil(ctx);
+  if (!council.councilMode) return false;
+  return (council.members ?? []).some((member) => Array.isArray(member.tools) && member.tools.length > 0);
+}
+
+function hasCouncilToolOutput(ctx: MacroExecContext): boolean {
+  const council = getCouncil(ctx);
+  if (!council.councilMode) return false;
+  if ((council.toolResults?.length ?? 0) > 0) return true;
+  return Object.keys(council.namedResults ?? {}).length > 0;
 }
 
 function getOoc(ctx: MacroExecContext) {
@@ -492,8 +505,6 @@ function buildQuirksContent(ctx: MacroExecContext): string {
 
 function buildDeliberationContent(ctx: MacroExecContext): string {
   const council = getCouncil(ctx);
-  if (!council.toolsSettings?.enabled) return "";
-
   const results = council.toolResults ?? [];
   const successResults = results.filter((r) => r.success);
   if (successResults.length === 0) return "";
@@ -837,7 +848,7 @@ export function registerLumiaMacros(): void {
     builtIn: true,
     name: "lumiaCouncilDeliberation",
     category: "Lumia",
-    description: "Council tool execution results and deliberation instructions. Empty when tools disabled or no results.",
+    description: "Council tool execution results and deliberation instructions. Empty when no council results are available.",
     returnType: "string",
     handler: (ctx) => {
       // Mark that this macro was evaluated so the fallback injection is skipped
@@ -870,8 +881,7 @@ export function registerLumiaMacros(): void {
     description: "Returns 'yes' or 'no' for council tools status. Conditional compatible.",
     returnType: "boolean",
     handler: (ctx) => {
-      const council = getCouncil(ctx);
-      return (council.councilMode && council.toolsSettings?.enabled) ? "yes" : "no";
+      return hasCouncilToolOutput(ctx) ? "yes" : "no";
     },
   });
 
@@ -880,11 +890,11 @@ export function registerLumiaMacros(): void {
     builtIn: true,
     name: "lumiaCouncilToolsList",
     category: "Lumia",
-    description: "Lists available council tools with member attribution. Only returns content in inline mode.",
+    description: "Lists configured council tools with member attribution.",
     returnType: "string",
     handler: (ctx) => {
       const council = getCouncil(ctx);
-      if (!council.councilMode || !council.toolsSettings?.enabled) return "";
+      if (!hasConfiguredCouncilTools(ctx)) return "";
 
       const members = council.members ?? [];
       if (members.length === 0) return "";
