@@ -107,9 +107,17 @@ export function useCharacterBrowser() {
   }, [])
 
   useEffect(() => {
-    return wsClient.on(EventType.CHARACTER_EDITED, () => {
+    const refresh = () => {
       setFetchVersion((v) => v + 1)
-    })
+    }
+    const offCreated = wsClient.on(EventType.CHARACTER_CREATED, refresh)
+    const offEdited = wsClient.on(EventType.CHARACTER_EDITED, refresh)
+    const offDeleted = wsClient.on(EventType.CHARACTER_DELETED, refresh)
+    return () => {
+      offCreated()
+      offEdited()
+      offDeleted()
+    }
   }, [])
 
   // ─── Server-side paginated summaries (the fast path) ────────────────────

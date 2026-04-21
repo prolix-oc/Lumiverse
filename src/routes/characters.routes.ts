@@ -564,17 +564,8 @@ app.post("/:id/avatar", async (c) => {
   const file = formData.get("avatar") as File | null;
   if (!file) return c.json({ error: "avatar file is required" }, 400);
 
-  // Clean up old image if present
-  if (char.image_id) images.deleteImage(userId, char.image_id);
-  if (char.avatar_path) await files.deleteAvatar(char.avatar_path);
-
-  const image = await images.uploadImage(userId, file);
-  svc.setCharacterImage(userId, char.id, image.id);
-  svc.setCharacterAvatar(userId, char.id, image.filename);
-  const updated = svc.getCharacter(userId, char.id);
+  const updated = await svc.replaceCharacterAvatar(userId, char.id, file);
   if (!updated) return c.json({ error: "Not found" }, 404);
-
-  eventBus.emit(EventType.CHARACTER_EDITED, { id: char.id, character: updated }, userId);
   return c.json(updated);
 });
 

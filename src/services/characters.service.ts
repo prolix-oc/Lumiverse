@@ -4,6 +4,8 @@ import { EventType } from "../ws/events";
 import type { Character, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+import * as filesSvc from "./files.service";
+import * as imagesSvc from "./images.service";
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
@@ -433,7 +435,9 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
       now
     );
 
-  return getCharacter(userId, id)!;
+  const character = getCharacter(userId, id)!;
+  eventBus.emit(EventType.CHARACTER_CREATED, { id, character }, userId);
+  return character;
 }
 
 export function updateCharacter(userId: string, id: string, input: UpdateCharacterInput): Character | null {
@@ -491,6 +495,24 @@ export function setCharacterImage(userId: string, id: string, imageId: string): 
   return result.changes > 0;
 }
 
+export async function replaceCharacterAvatar(userId: string, id: string, file: File): Promise<Character | null> {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+
+  if (existing.image_id) imagesSvc.deleteImage(userId, existing.image_id);
+  if (existing.avatar_path) await filesSvc.deleteAvatar(existing.avatar_path);
+
+  const image = await imagesSvc.uploadImage(userId, file);
+  setCharacterImage(userId, id, image.id);
+  setCharacterAvatar(userId, id, image.filename);
+
+  const updated = getCharacter(userId, id);
+  if (!updated) return null;
+
+  eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
 export function duplicateCharacter(userId: string, id: string): Character | null {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
@@ -526,7 +548,7 @@ export function duplicateCharacter(userId: string, id: string): Character | null
     );
 
   const character = getCharacter(userId, newId)!;
-  eventBus.emit(EventType.CHARACTER_EDITED, { id: newId, character }, userId);
+  eventBus.emit(EventType.CHARACTER_CREATED, { id: newId, character }, userId);
   return character;
 }
 

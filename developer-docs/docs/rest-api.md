@@ -1,8 +1,49 @@
 # REST API Reference
 
-Extensions can also be managed via the HTTP API.
+Lumiverse exposes two useful HTTP surfaces for developers:
 
-## Endpoints
+- the app's core `/api/v1/settings` endpoints for persisted user preferences
+- the `/api/v1/spindle/*` endpoints for managing installed extensions
+
+## Settings API
+
+Use the settings endpoints when you need to inspect or update persisted host preferences.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/settings` | List all settings as `{ key, value, updated_at }[]` |
+| `GET` | `/api/v1/settings/:key` | Get a single setting row |
+| `PUT` | `/api/v1/settings` | Bulk upsert settings from a flat `{ key: value }` object |
+| `PUT` | `/api/v1/settings/:key` | Upsert one setting from `{ value }` |
+| `DELETE` | `/api/v1/settings/:key` | Delete a single setting row |
+
+### Landing Page Display Settings
+
+The landing page layout is controlled by persisted display settings:
+
+| Key | Type | Description |
+|---|---|---|
+| `landingPageLayoutMode` | `'cards' \| 'compact'` | Switches the home screen between the existing card gallery and the compact adaptive recent-chat list. |
+| `landingPageChatsDisplayed` | `number` | Controls the recent-chat batch size loaded per request. |
+
+```bash
+# Switch the landing page to the compact adaptive list view
+curl -X PUT http://localhost:7860/api/v1/settings/landingPageLayoutMode \
+  -H 'Content-Type: application/json' \
+  -d '{ "value": "compact" }'
+
+# Or update multiple display settings in one request
+curl -X PUT http://localhost:7860/api/v1/settings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "landingPageLayoutMode": "compact",
+    "landingPageChatsDisplayed": 24
+  }'
+```
+
+## Spindle Extension Endpoints
+
+Extensions can also be managed via the HTTP API.
 
 | Method | Endpoint | Description |
 |---|---|---|

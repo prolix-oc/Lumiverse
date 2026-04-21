@@ -499,10 +499,20 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.CHARACTER_CREATED, (payload: { id: string; character?: import('@/types/api').Character }) => {
+        if (payload?.character) {
+          store.getState().updateCharacter(payload.id, payload.character)
+        }
+      }),
+
       wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string; character?: import('@/types/api').Character }) => {
         if (payload?.character) {
           store.getState().updateCharacter(payload.id, payload.character)
         }
+      }),
+
+      wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
+        store.getState().removeCharacter(payload.id)
       }),
 
       wsClient.on(EventType.PERSONA_CHANGED, (payload: { id: string; persona?: import('@/types/api').Persona; deleted?: boolean }) => {

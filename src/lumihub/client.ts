@@ -283,6 +283,7 @@ class LumiHubWSClient {
     if (this.eventListenersRegistered) return;
     this.eventListenersRegistered = true;
     const trigger = () => this.debouncedManifestSync();
+    eventBus.on(EventType.CHARACTER_CREATED, trigger);
     eventBus.on(EventType.CHARACTER_EDITED, trigger);
     eventBus.on(EventType.CHARACTER_DELETED, trigger);
     eventBus.on(EventType.LUMIHUB_INSTALL_COMPLETED, trigger);

@@ -15,6 +15,7 @@ import type {
   PermissionDeniedDetail,
   PermissionChangedDetail,
   CharacterDTO,
+  CharacterAvatarUploadDTO,
   CharacterCreateDTO,
   CharacterUpdateDTO,
   ChatDTO,
@@ -1123,6 +1124,11 @@ const spindleApi: RuntimeSpindleAPI = {
     async create(input: CharacterCreateDTO, userId?: string): Promise<CharacterDTO> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "characters_create", requestId, input, userId });
+      return result as CharacterDTO;
+    },
+    async setAvatar(characterId: string, avatar: CharacterAvatarUploadDTO, userId?: string): Promise<CharacterDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "characters_set_avatar", requestId, characterId, avatar, userId });
       return result as CharacterDTO;
     },
     async update(characterId: string, input: CharacterUpdateDTO, userId?: string): Promise<CharacterDTO> {

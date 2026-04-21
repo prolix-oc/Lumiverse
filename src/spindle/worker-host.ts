@@ -7,6 +7,7 @@ import type {
   ExtensionInfo,
   ConnectionProfileDTO,
   CharacterDTO,
+  CharacterAvatarUploadDTO,
   ChatDTO,
   WorldBookDTO,
   WorldBookEntryDTO,
@@ -1013,6 +1014,9 @@ export class WorkerHost {
         break;
       case "characters_create":
         this.handleCharactersCreate(msg.requestId, msg.input, msg.userId);
+        break;
+      case "characters_set_avatar":
+        this.handleCharactersSetAvatar(msg.requestId, msg.characterId, msg.avatar, msg.userId);
         break;
       case "characters_update":
         this.handleCharactersUpdate(msg.requestId, msg.characterId, msg.input, msg.userId);
@@ -4016,6 +4020,44 @@ export class WorkerHost {
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
+  }
+
+  private handleCharactersSetAvatar(
+    requestId: string,
+    characterId: string,
+    avatar: CharacterAvatarUploadDTO,
+    userId?: string,
+  ): void {
+    (async () => {
+      try {
+        if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+          throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
+        }
+        const resolvedUserId = this.resolveEffectiveUserId(userId);
+        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+        this.enforceScopedUser(resolvedUserId);
+
+        if (!(avatar?.data instanceof Uint8Array) || avatar.data.byteLength === 0) {
+          throw new Error("Avatar data must be a non-empty Uint8Array");
+        }
+
+        const mimeType = typeof avatar.mime_type === "string" && avatar.mime_type.trim()
+          ? avatar.mime_type.trim()
+          : "image/png";
+        const filename = typeof avatar.filename === "string" && avatar.filename.trim()
+          ? avatar.filename.trim()
+          : "avatar.png";
+
+        const avatarBytes = Uint8Array.from(avatar.data);
+        const file = new File([avatarBytes.buffer], filename, { type: mimeType });
+        const updated = await charactersSvc.replaceCharacterAvatar(resolvedUserId, characterId, file);
+        if (!updated) throw new Error("Character not found");
+
+        this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(updated) });
+      } catch (err: any) {
+        this.postToWorker({ type: "response", requestId, error: err.message });
+      }
+    })();
   }
 
   private handleCharactersUpdate(requestId: string, characterId: string, input: any, userId?: string): void {
