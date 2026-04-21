@@ -7,8 +7,10 @@ No permission is required. This is a free-tier API.
 ## Usage
 
 ```ts
-// Count plain text against the user's default main connection model
-const textCount = await spindle.tokens.countText('Hello from my extension')
+// Count plain text against an explicit model id
+const textCount = await spindle.tokens.countText('Hello from my extension', {
+  model: 'gpt-4o-mini',
+})
 
 // Count a message array against the selected sidecar model
 const messages = await spindle.chat.getMessages(chatId)
@@ -24,7 +26,20 @@ spindle.log.info(
 )
 ```
 
-## Model Source
+## Model Resolution
+
+All three methods accept two optional knobs:
+
+- `options.model` — explicit model ID override
+- `options.modelSource` — resolve from the user's configured main or sidecar selection
+
+Resolution precedence is:
+
+1. `options.model`
+2. `options.modelSource`
+3. default to `'main'`
+
+### `modelSource`
 
 All three methods accept an optional `options.modelSource`:
 
@@ -32,6 +47,21 @@ All three methods accept an optional `options.modelSource`:
 - `'sidecar'` — use the user's selected sidecar model, or fall back to that sidecar connection's configured model when the sidecar model override is empty
 
 If omitted, `modelSource` defaults to `'main'`.
+
+### Explicit `model`
+
+If your extension already knows which model it wants to count against, pass it directly:
+
+```ts
+const conn = await spindle.connections.get(connectionId)
+if (!conn) throw new Error('Connection not found')
+
+const result = await spindle.tokens.countMessages(messages, {
+  model: conn.model,
+})
+```
+
+When `model` is supplied, the result reports `modelSource: 'explicit'`.
 
 ## Methods
 
@@ -83,7 +113,7 @@ const result = await spindle.tokens.countChat(chatId, {
 type TokenCountResultDTO = {
   total_tokens: number
   model: string
-  modelSource: 'main' | 'sidecar'
+  modelSource: 'main' | 'sidecar' | 'explicit'
   tokenizer_id: string | null
   tokenizer_name: string
   approximate: boolean
@@ -94,7 +124,7 @@ type TokenCountResultDTO = {
 |---|---|---|
 | `total_tokens` | `number` | Computed token count for the supplied text or messages |
 | `model` | `string` | Model ID that was actually used to resolve the tokenizer |
-| `modelSource` | `'main' \| 'sidecar'` | Which configuration source supplied the model |
+| `modelSource` | `'main' \| 'sidecar' \| 'explicit'` | Which configuration source supplied the model |
 | `tokenizer_id` | `string \| null` | Matched tokenizer ID, or `null` when no exact tokenizer mapping was found |
 | `tokenizer_name` | `string` | Human-readable tokenizer label |
 | `approximate` | `boolean` | `true` when Lumiverse fell back to the approximate char/4 heuristic |
@@ -107,6 +137,7 @@ These helpers reject when the server cannot resolve the requested model context.
 - the default connection exists but does not have a model configured
 - no sidecar connection is configured and `modelSource` is `'sidecar'`
 - the selected sidecar connection no longer exists
+- `model` is supplied but is an empty string
 - `countChat(chatId)` is called for a chat the extension cannot access
 
 ## Notes
@@ -116,4 +147,4 @@ These helpers reject when the server cannot resolve the requested model context.
 - `countMessages()` flattens messages as `role + newline + content`, matching the backend's shared token-count helper for chat-style message arrays.
 
 !!! note
-    For user-scoped extensions, the user context is inferred automatically. For operator-scoped extensions, pass `options.userId` when counting text or message arrays. `countChat(chatId)` derives ownership from the chat itself and rejects if you provide a mismatched `userId`.
+    For user-scoped extensions, the user context is inferred automatically. For operator-scoped extensions, pass `options.userId` when counting text or message arrays. `countChat(chatId)` derives ownership from the chat itself and rejects if you provide a mismatched `userId`. Passing an explicit `model` does not require connection access permissions because token counting only uses Lumiverse's tokenizer mapping, not API keys or live provider calls.

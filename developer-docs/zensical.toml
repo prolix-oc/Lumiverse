@@ -34,6 +34,7 @@ nav = [
     { "Storage" = "backend-api/storage.md" },
     { "Ephemeral Storage" = "backend-api/ephemeral-storage.md" },
     { "Variables" = "backend-api/variables.md" },
+    { "Tokens" = "backend-api/tokens.md" },
     { "Characters" = "backend-api/characters.md" },
     { "Chats" = "backend-api/chats.md" },
     { "World Books" = "backend-api/world-books.md" },

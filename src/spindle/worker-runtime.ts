@@ -31,7 +31,7 @@ import type {
   StreamChunkDTO,
 } from "lumiverse-spindle-types";
 
-type TokenModelSource = "main" | "sidecar";
+type TokenModelSource = "main" | "sidecar" | "explicit";
 
 type TokenCountResult = {
   total_tokens: number;
@@ -48,6 +48,7 @@ type RuntimeWorkerToHost =
       type: "tokens_count_text";
       requestId: string;
       text: string;
+      model?: string;
       modelSource?: TokenModelSource;
       userId?: string;
     }
@@ -55,6 +56,7 @@ type RuntimeWorkerToHost =
       type: "tokens_count_messages";
       requestId: string;
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+      model?: string;
       modelSource?: TokenModelSource;
       userId?: string;
     }
@@ -62,18 +64,19 @@ type RuntimeWorkerToHost =
       type: "tokens_count_chat";
       requestId: string;
       chatId: string;
+      model?: string;
       modelSource?: TokenModelSource;
       userId?: string;
     };
 
 type RuntimeSpindleAPI = SpindleAPI & {
   tokens: {
-    countText(text: string, options?: { modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
+    countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
     countMessages(
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-      options?: { modelSource?: TokenModelSource; userId?: string }
+      options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
     ): Promise<TokenCountResult>;
-    countChat(chatId: string, options?: { modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
+    countChat(chatId: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
   };
 };
 
@@ -898,12 +901,13 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   tokens: {
-    async countText(text: string, options?: { modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
+    async countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "tokens_count_text",
         requestId,
         text,
+        model: options?.model,
         modelSource: options?.modelSource,
         userId: options?.userId,
       });
@@ -911,24 +915,26 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async countMessages(
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-      options?: { modelSource?: TokenModelSource; userId?: string }
+      options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
     ): Promise<TokenCountResult> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "tokens_count_messages",
         requestId,
         messages,
+        model: options?.model,
         modelSource: options?.modelSource,
         userId: options?.userId,
       });
       return result as TokenCountResult;
     },
-    async countChat(chatId: string, options?: { modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
+    async countChat(chatId: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "tokens_count_chat",
         requestId,
         chatId,
+        model: options?.model,
         modelSource: options?.modelSource,
         userId: options?.userId,
       });

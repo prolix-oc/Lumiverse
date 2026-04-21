@@ -84,7 +84,7 @@ import { join, resolve, relative, sep } from "path";
 
 const EPHEMERAL_MAX_FILES = 250;
 
-type TokenModelSource = "main" | "sidecar";
+type TokenModelSource = "main" | "sidecar" | "explicit";
 
 type TokenCountResult = {
   total_tokens: number;
@@ -101,6 +101,7 @@ type RuntimeWorkerToHost =
       type: "tokens_count_text";
       requestId: string;
       text: string;
+      model?: string;
       modelSource?: TokenModelSource;
       userId?: string;
     }
@@ -108,6 +109,7 @@ type RuntimeWorkerToHost =
       type: "tokens_count_messages";
       requestId: string;
       messages: Array<Pick<LlmMessageDTO, "role" | "content">>;
+      model?: string;
       modelSource?: TokenModelSource;
       userId?: string;
     }
@@ -115,6 +117,7 @@ type RuntimeWorkerToHost =
       type: "tokens_count_chat";
       requestId: string;
       chatId: string;
+      model?: string;
       modelSource?: TokenModelSource;
       userId?: string;
     };
@@ -1124,13 +1127,13 @@ export class WorkerHost {
         break;
       // ─── Token Counting (free tier) ───────────────────────────────────
       case "tokens_count_text":
-        this.handleTokensCountText(msg.requestId, msg.text, msg.modelSource, msg.userId);
+        this.handleTokensCountText(msg.requestId, msg.text, msg.model, msg.modelSource, msg.userId);
         break;
       case "tokens_count_messages":
-        this.handleTokensCountMessages(msg.requestId, msg.messages, msg.modelSource, msg.userId);
+        this.handleTokensCountMessages(msg.requestId, msg.messages, msg.model, msg.modelSource, msg.userId);
         break;
       case "tokens_count_chat":
-        this.handleTokensCountChat(msg.requestId, msg.chatId, msg.modelSource, msg.userId);
+        this.handleTokensCountChat(msg.requestId, msg.chatId, msg.model, msg.modelSource, msg.userId);
         break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
       case "push_send":
@@ -5130,8 +5133,17 @@ export class WorkerHost {
 
   private async resolveTokenCountModel(
     userId: string,
+    explicitModel?: string,
     modelSource: TokenModelSource = "main"
   ): Promise<{ model: string; modelSource: TokenModelSource }> {
+    if (explicitModel !== undefined) {
+      const model = String(explicitModel).trim();
+      if (!model) {
+        throw new Error("model must be a non-empty string");
+      }
+      return { model, modelSource: "explicit" };
+    }
+
     if (modelSource === "sidecar") {
       const sidecar = getSidecarSettings(userId);
       if (!sidecar.connectionProfileId) {
@@ -5167,9 +5179,10 @@ export class WorkerHost {
   private async buildTokenCountResult(
     userId: string,
     input: string | tokenizerSvc.TokenCountMessageLike[],
+    explicitModel?: string,
     modelSource: TokenModelSource = "main"
   ): Promise<TokenCountResult> {
-    const { model, modelSource: resolvedSource } = await this.resolveTokenCountModel(userId, modelSource);
+    const { model, modelSource: resolvedSource } = await this.resolveTokenCountModel(userId, explicitModel, modelSource);
     const tokenizerId = tokenizerSvc.getTokenizerIdForModel(model);
     const { count, name } = await tokenizerSvc.resolveCounter(model);
     const text = Array.isArray(input)
@@ -5189,6 +5202,7 @@ export class WorkerHost {
   private async handleTokensCountText(
     requestId: string,
     text: string,
+    model?: string,
     modelSource?: TokenModelSource,
     userId?: string
   ): Promise<void> {
@@ -5199,7 +5213,7 @@ export class WorkerHost {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
-      const result = await this.buildTokenCountResult(resolvedUserId, text, modelSource);
+      const result = await this.buildTokenCountResult(resolvedUserId, text, model, modelSource);
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -5209,6 +5223,7 @@ export class WorkerHost {
   private async handleTokensCountMessages(
     requestId: string,
     messages: Array<Pick<LlmMessageDTO, "role" | "content">>,
+    model?: string,
     modelSource?: TokenModelSource,
     userId?: string
   ): Promise<void> {
@@ -5217,7 +5232,7 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
       const normalized = this.normalizeTokenCountMessages(messages);
-      const result = await this.buildTokenCountResult(resolvedUserId, normalized, modelSource);
+      const result = await this.buildTokenCountResult(resolvedUserId, normalized, model, modelSource);
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -5227,6 +5242,7 @@ export class WorkerHost {
   private async handleTokensCountChat(
     requestId: string,
     chatId: string,
+    model?: string,
     modelSource?: TokenModelSource,
     userId?: string
   ): Promise<void> {
@@ -5245,7 +5261,7 @@ export class WorkerHost {
         content: message.content,
       }));
 
-      const result = await this.buildTokenCountResult(chatOwnerId, messages, modelSource);
+      const result = await this.buildTokenCountResult(chatOwnerId, messages, model, modelSource);
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });

@@ -23,7 +23,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Storage](storage.md) | Free | Scoped file storage (extension + per-user) |
 | [Ephemeral Storage](ephemeral-storage.md) | `ephemeral_storage` | Temporary storage with TTL and quotas |
 | [Variables](variables.md) | Free | Local (chat-scoped) and global variable access |
-| [Tokens](tokens.md) | Free | Count text, message arrays, or stored chats against the main or sidecar model |
+| [Tokens](tokens.md) | Free | Count text, message arrays, or stored chats against an explicit model or the main/sidecar model |
 | [Characters](characters.md) | `characters` | CRUD on character cards |
 | [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [World Books](world-books.md) | `world_books` | CRUD on world books and entries |
