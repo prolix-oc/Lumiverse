@@ -1437,7 +1437,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
       if (importTypeRef.current === 'st') {
         await importFromST(json, file.name)
       } else {
-        await importFromFile(json)
+        await importFromFile(json, file.name)
       }
     } catch (err) {
       console.error('[LoomBuilder] Import failed:', err)

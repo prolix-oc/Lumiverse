@@ -26,6 +26,7 @@ import {
   normalizeCategoryBlockState,
   toggleBlockWithCategoryRules,
   coerceImportedLoomPreset,
+  detectImportedPresetKind,
   looksLikeLegacyPresetData,
 } from '@/lib/loom/service'
 
@@ -364,8 +365,8 @@ export function useLoomBuilder() {
       setActiveLoomPreset(created.id)
       setActivePreset(newLoom)
 
-      // Legacy presets can embed regex scripts. Import them even if the user
-      // picked the wrong import button so both import paths stay resilient.
+      // Legacy presets can embed regex scripts, so import them alongside the
+      // preset creation on the dedicated legacy path.
       const embeddedRegex = looksLikeLegacyPresetData(payload)
         ? payload.extensions?.regex_scripts
         : null
@@ -394,12 +395,20 @@ export function useLoomBuilder() {
 
   // Import from legacy preset JSON
   const importFromST = useCallback(async (stData: any, fileName: string) => {
+    if (detectImportedPresetKind(stData) === 'loom') {
+      toast.warning('This file is a Loom preset. Use "Import Loom JSON" instead.', { title: 'Preset Import' })
+      return null
+    }
     return persistImportedPreset(stData, fileName)
   }, [persistImportedPreset])
 
   // Import from file (internal JSON format)
-  const importFromFile = useCallback(async (jsonData: any) => {
-    return persistImportedPreset(jsonData)
+  const importFromFile = useCallback(async (jsonData: any, fileName?: string) => {
+    if (detectImportedPresetKind(jsonData) === 'legacy') {
+      toast.warning('This file is a legacy preset. Use "Import Legacy Preset" instead.', { title: 'Preset Import' })
+      return null
+    }
+    return persistImportedPreset(jsonData, fileName)
   }, [persistImportedPreset])
 
   // Export internal JSON

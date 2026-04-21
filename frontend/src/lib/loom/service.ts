@@ -106,7 +106,7 @@ export function looksLikeLegacyPresetData(data: unknown): data is STPresetData {
     && (Array.isArray(data.prompts) || hasLegacyPromptOrderShape(data.prompt_order))
 }
 
-function looksLikeBackendLoomPresetData(data: unknown): data is Preset {
+export function looksLikeBackendLoomPresetData(data: unknown): data is Preset {
   return isRecord(data)
     && Array.isArray(data.prompt_order)
     && isRecord(data.parameters)
@@ -114,8 +114,20 @@ function looksLikeBackendLoomPresetData(data: unknown): data is Preset {
     && isRecord(data.metadata)
 }
 
-function looksLikeLoomPresetData(data: unknown): data is LoomPreset {
+export function looksLikeLoomPresetData(data: unknown): data is LoomPreset {
   return isRecord(data) && Array.isArray(data.blocks)
+}
+
+export function detectImportedPresetKind(data: unknown): 'loom' | 'legacy' | null {
+  if (looksLikeLoomPresetData(data) || looksLikeBackendLoomPresetData(data)) {
+    return 'loom'
+  }
+
+  if (looksLikeLegacyPresetData(data)) {
+    return 'legacy'
+  }
+
+  return null
 }
 
 export function coerceImportedLoomPreset(data: unknown, fallbackName: string): LoomPreset {
