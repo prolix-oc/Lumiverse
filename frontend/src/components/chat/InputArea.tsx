@@ -56,6 +56,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
   const [characterName, setCharacterName] = useState('')
+  const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -147,6 +148,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
       .then((chat) => setAltFieldSelections((chat.metadata?.alternate_field_selections as Record<string, string>) || {}))
       .catch(() => setAltFieldSelections({}))
   }, [chatId, hasAltFields])
+
+  useEffect(() => {
+    if (!chatId) { setImpersonationPresetId(null); return }
+    chatsApi.get(chatId, { messages: false })
+      .then((chat) => {
+        const value = chat.metadata?.impersonation_preset_id
+        setImpersonationPresetId(typeof value === 'string' && value ? value : null)
+      })
+      .catch(() => setImpersonationPresetId(null))
+  }, [chatId])
 
   const handleAltFieldSelect = useCallback(async (field: string, variantId: string | null) => {
     const newSelections = { ...altFieldSelections }
@@ -845,11 +856,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
     const nonce = ++generationNonceRef.current
     beginStreaming(undefined, 'impersonate')
     try {
+      const forcedPresetId = mode === 'oneliner' ? impersonationPresetId : null
       const res = await generateApi.start({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: forcedPresetId || getActivePresetForGeneration() || undefined,
+        force_preset_id: !!forcedPresetId,
         generation_type: 'impersonate',
         impersonate_mode: mode,
       })
@@ -863,7 +876,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Impersonation Failed' })
     }
-  }, [chatId, isStreaming, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, activeProfileId, activePersonaId, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
@@ -1454,26 +1467,32 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   <span>Manage Chats</span>
                 </span>
               </button>
-              {isGroupChat && (
-                <button
-                  type="button"
-                  className={styles.popRowBtn}
-                  onClick={async () => {
-                    setOpenPopover(null)
-                    try {
-                      const chat = await chatsApi.get(chatId, { messages: false })
-                      openModal('groupSettings', { chatId, chatName: chat.name || '', metadata: chat.metadata || {} })
-                    } catch (err) {
-                      console.error('[InputArea] Failed to load group settings:', err)
-                    }
-                  }}
-                >
-                  <span className={styles.personaMain}>
-                    <Settings2 size={14} />
-                    <span>Group Settings</span>
-                  </span>
-                </button>
-              )}
+              <button
+                type="button"
+                className={styles.popRowBtn}
+                onClick={async () => {
+                  setOpenPopover(null)
+                  try {
+                    const chat = await chatsApi.get(chatId, { messages: false })
+                    openModal('chatSettings', {
+                      chatId,
+                      chatName: chat.name || '',
+                      metadata: chat.metadata || {},
+                      onSaved: (updatedChat: import('@/types/api').Chat) => {
+                        const value = updatedChat.metadata?.impersonation_preset_id
+                        setImpersonationPresetId(typeof value === 'string' && value ? value : null)
+                      },
+                    })
+                  } catch (err) {
+                    console.error('[InputArea] Failed to load chat settings:', err)
+                  }
+                }}
+              >
+                <span className={styles.personaMain}>
+                  <Settings2 size={14} />
+                  <span>{isGroupChat ? 'Group Settings' : 'Chat Settings'}</span>
+                </span>
+              </button>
               {!isGroupChat && activeCharacterId && (
                 <button
                   type="button"

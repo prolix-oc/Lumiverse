@@ -273,7 +273,12 @@ function GroupProfile({
     if (!chatId) return
     try {
       const chat = await chatsApi.get(chatId, { messages: false })
-      openModal('groupSettings', { chatId, chatName: chat.name || '', metadata: chat.metadata || {} })
+      openModal('chatSettings', {
+        chatId,
+        chatName: chat.name || '',
+        metadata: chat.metadata || {},
+        onSaved: (updatedChat: import('@/types/api').Chat) => setChatName(updatedChat.name || ''),
+      })
     } catch (err) {
       console.error('[GroupProfile] Failed to load chat:', err)
     }

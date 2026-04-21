@@ -14,6 +14,7 @@ export interface GenerateRequest {
   connection_id?: string
   persona_id?: string
   preset_id?: string
+  force_preset_id?: boolean
   message_id?: string
   continue_from?: string
   force_name?: string

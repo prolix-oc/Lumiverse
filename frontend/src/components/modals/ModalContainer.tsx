@@ -21,7 +21,7 @@ import RegexImportModal from './RegexImportModal'
 import RegenFeedbackModal from './RegenFeedbackModal'
 import PersonaAddonsModal from './PersonaAddonsModal'
 import GlobalAddonsLibraryModal from './GlobalAddonsLibraryModal'
-import GroupSettingsModal from './GroupSettingsModal'
+import ChatSettingsModal from './GroupSettingsModal'
 import CustomCSSModal from './CustomCSSModal'
 import { DreamWeaverStudio } from '@/components/dream-weaver/DreamWeaverStudio'
 
@@ -105,7 +105,7 @@ export default function ModalContainer() {
       {activeModal === 'regexImport' && <RegexImportModal />}
       {activeModal === 'personaAddons' && <PersonaAddonsModal />}
       {activeModal === 'globalAddonsLibrary' && <GlobalAddonsLibraryModal />}
-      {activeModal === 'groupSettings' && <GroupSettingsModal />}
+      {(activeModal === 'chatSettings' || activeModal === 'groupSettings') && <ChatSettingsModal />}
       {activeModal === 'memoryCortexDiagnostics' && (
         <MemoryCortexDiagnosticsModal
           chatId={modalProps.chatId}

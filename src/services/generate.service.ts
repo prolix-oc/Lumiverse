@@ -44,6 +44,7 @@ interface GenerateInput {
   connection_id?: string;
   persona_id?: string;
   preset_id?: string;
+  force_preset_id?: boolean;
   message_id?: string;
   messages?: LlmMessage[];
   parameters?: GenerationParameters;
@@ -434,6 +435,7 @@ async function runPromptPipeline(opts: {
   chatId: string;
   connectionId?: string;
   presetId?: string;
+  forcePresetId?: boolean;
   personaId?: string;
   generationType: string;
   impersonateMode?: ImpersonateMode;
@@ -495,6 +497,7 @@ async function runPromptPipeline(opts: {
       chatId: opts.chatId,
       connectionId: opts.connectionId,
       presetId: opts.presetId,
+      forcePresetId: opts.forcePresetId,
       personaId: opts.personaId,
       generationType: opts.generationType as GenerationType,
       excludeMessageId: opts.excludeMessageId,
@@ -508,6 +511,7 @@ async function runPromptPipeline(opts: {
       chatId: opts.chatId,
       connectionId: opts.connectionId,
       presetId: opts.presetId,
+      forcePresetId: opts.forcePresetId,
       personaId: opts.personaId,
       generationType: opts.generationType as GenerationType,
       impersonateMode: opts.impersonateMode,
@@ -723,6 +727,18 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
   try {
 
   const connection = resolveConnection(input.userId, input.connection_id);
+  if (
+    input.force_preset_id
+    && genType === "impersonate"
+    && input.impersonate_mode === "oneliner"
+    && input.preset_id
+    && !presetsSvc.getPreset(input.userId, input.preset_id)
+  ) {
+    console.warn("[generate] Clearing stale chat impersonation preset override %s for chat %s", input.preset_id, input.chat_id);
+    chatsSvc.mergeChatMetadata(input.userId, input.chat_id, { impersonation_preset_id: undefined });
+    input.preset_id = undefined;
+    input.force_preset_id = false;
+  }
   presetsSvc.assertUsablePreset(input.userId, input.preset_id, connection.preset_id);
   const { provider, apiKey, apiUrl } = await resolveProviderAndKey(input.userId, connection.id);
 
@@ -1156,6 +1172,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       chatId: input.chat_id,
       connectionId: input.connection_id,
       presetId: input.preset_id,
+      forcePresetId: input.force_preset_id,
       personaId: input.persona_id,
       generationType: genType,
       impersonateMode: genType === "impersonate" ? (input.impersonate_mode || "prompts") : undefined,

@@ -19,6 +19,11 @@ const DEFAULT_PREFERENCES: PushNotificationPreferences = {
   },
 };
 
+// PushForge derives the VAPID JWT exp from the message TTL. Using the exact
+// 24h maximum is brittle because small clock skew between us and the push
+// service can push exp over the spec limit and trigger a 403.
+const PUSH_TTL_SECONDS = 23 * 60 * 60;
+
 // ── Subscription CRUD ───────────────────────────────────────────────
 
 export function listSubscriptions(userId: string): PushSubscriptionRecord[] {
@@ -96,7 +101,7 @@ export async function sendPushToUser(
             payload: notification as any,
             adminContact: "mailto:noreply@lumiverse.app",
             options: {
-              ttl: 86400,
+              ttl: PUSH_TTL_SECONDS,
               urgency: "high",
             },
           },

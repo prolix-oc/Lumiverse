@@ -524,13 +524,15 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // preset_id, then any more-specific preset-profile binding can override that
   // preset selection for the active chat/character context.
   const requestedPresetId = ctx.presetId || connection?.preset_id || null;
-  const resolvedProfile = presetProfilesSvc.resolveProfile(
-    ctx.userId,
-    requestedPresetId,
-    chat.id,
-    characterId,
-    { isGroup: chat.metadata?.group === true }
-  );
+  const resolvedProfile = ctx.forcePresetId && ctx.presetId
+    ? { preset_id: ctx.presetId, binding: null, source: "none" as const }
+    : presetProfilesSvc.resolveProfile(
+        ctx.userId,
+        requestedPresetId,
+        chat.id,
+        characterId,
+        { isGroup: chat.metadata?.group === true }
+      );
   const resolvedPresetId = resolvedProfile.preset_id;
 
   let preset: Preset | null = null;

@@ -108,6 +108,8 @@ export interface AssemblyContext {
   chatId: string;
   connectionId?: string;
   presetId?: string;
+  /** When true, bypass preset-profile preset selection and use presetId directly. */
+  forcePresetId?: boolean;
   generationType: GenerationType;
   personaId?: string;
   /** For impersonate: controls how much of the preset is included. */
