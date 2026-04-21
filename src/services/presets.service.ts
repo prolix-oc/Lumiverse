@@ -238,6 +238,7 @@ export function deletePreset(userId: string, id: string): boolean {
   // the now-deleted preset. Covers defaults, per-character, and per-chat.
   for (const s of settingsSvc.getAllSettings(userId)) {
     if (s.key !== "presetProfileDefaults"
+      && !s.key.startsWith("presetProfileDefaults:")
       && !s.key.startsWith("presetProfile:character:")
       && !s.key.startsWith("presetProfile:chat:")) continue;
     if (s.value && typeof s.value === "object" && (s.value as any).preset_id === id) {

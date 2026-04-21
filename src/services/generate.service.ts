@@ -319,7 +319,10 @@ export function resolveCouncilRetry(
   pendingCouncilRetries.delete(generationId);
   // Clear the pool flag
   const poolEntry = pool.getPoolEntry(generationId);
-  if (poolEntry) poolEntry.councilRetryPending = false;
+  if (poolEntry) {
+    poolEntry.councilRetryPending = false;
+    delete poolEntry.councilToolsFailure;
+  }
   pending.resolve(decision);
   return true;
 }
@@ -950,7 +953,22 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
 
             // Mark pool entry so the active endpoint surfaces the pending state to chat heads
             const poolEntry = pool.getPoolEntry(generationId);
-            if (poolEntry) poolEntry.councilRetryPending = true;
+            if (poolEntry) {
+              poolEntry.councilRetryPending = true;
+              poolEntry.councilToolsFailure = {
+                generationId,
+                chatId: input.chat_id,
+                failedTools: failedResults.map((r) => ({
+                  memberId: r.memberId,
+                  memberName: r.memberName,
+                  toolName: r.toolName,
+                  toolDisplayName: r.toolDisplayName,
+                  error: r.error,
+                })),
+                successCount: councilResult.results.length - failedResults.length,
+                failedCount: failedResults.length,
+              };
+            }
 
             // Pause indefinitely — no short timer. The frontend controls when to
             // show the modal (only when the user navigates to this chat). A 10-minute
@@ -959,7 +977,10 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
               const timeout = setTimeout(() => {
                 console.debug("[council] Safety cap reached for %s — auto-continuing", generationId);
                 pendingCouncilRetries.delete(generationId);
-                if (poolEntry) poolEntry.councilRetryPending = false;
+                if (poolEntry) {
+                  poolEntry.councilRetryPending = false;
+                  delete poolEntry.councilToolsFailure;
+                }
                 resolve("continue");
               }, COUNCIL_RETRY_SAFETY_CAP_MS);
               pendingCouncilRetries.set(generationId, { userId: input.userId, resolve, timeout });

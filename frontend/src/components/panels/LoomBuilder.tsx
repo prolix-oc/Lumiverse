@@ -1234,10 +1234,27 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   // mutate activePreset) don't re-fire this effect and fight the toggle by
   // re-applying the binding.
   const activePresetRef = useRef(activePreset)
+  const lastProfileContextRef = useRef<string | null>(null)
   activePresetRef.current = activePreset
 
   useEffect(() => {
     if (!presetProfiles.isResolved) return
+
+    const contextKey = `${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeSource}`
+    const contextChanged = lastProfileContextRef.current !== contextKey
+    if (contextChanged) {
+      lastProfileContextRef.current = contextKey
+    }
+
+    if (
+      presetProfiles.resolvedPresetId
+      && presetProfiles.resolvedPresetId !== activePresetRef.current?.id
+      && (contextChanged || !activePresetRef.current?.id)
+    ) {
+      presetProfiles.selectResolvedPreset()
+      return
+    }
+
     const binding = presetProfiles.activeBinding
     const currentBlocks = activePresetRef.current?.blocks
     if (!binding || !currentBlocks?.length) return
@@ -1252,7 +1269,10 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     }
   }, [
     presetProfiles.isResolved,
+    presetProfiles.resolvedPresetId,
+    presetProfiles.selectResolvedPreset,
     presetProfiles.activeBinding,
+    presetProfiles.activeSource,
     presetProfiles.activeChatId,
     presetProfiles.activeCharacterId,
     activePreset?.id,
@@ -1523,7 +1543,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                 className={s.profileBtn}
                 onClick={presetProfiles.captureDefaults}
                 disabled={presetProfiles.isLoading}
-                title="Capture current block states as defaults"
+                title="Capture the current preset and block states as this preset's defaults"
                 type="button"
               >
                 <Camera size={10} /> Capture Defaults
@@ -1533,7 +1553,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                 className={clsx(s.profileBtn, s.profileBtnActive)}
                 onClick={reapplyDefaults}
                 disabled={presetProfiles.isLoading}
-                title="Reapply default block states"
+                title="Reapply this preset's default block states"
                 type="button"
               >
                 <RotateCcw size={10} /> Defaults
@@ -1558,7 +1578,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                 title={
                   !presetProfiles.activeCharacterId ? 'No active character — open a chat first'
                     : !presetProfiles.hasDefaults ? 'Capture defaults first'
-                      : 'Bind current block states to this character'
+                      : 'Bind the current preset and block states to this character'
                 }
                 type="button"
               >
@@ -1569,7 +1589,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                 className={clsx(s.profileBtn, s.profileBtnActive)}
                 onClick={presetProfiles.bindToCharacter}
                 disabled={presetProfiles.isLoading || !presetProfiles.activeCharacterId}
-                title="Rebind current block states to this character"
+                title="Rebind the current preset and block states to this character"
                 type="button"
               >
                 <RotateCcw size={10} /> Character
@@ -1594,7 +1614,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                 title={
                   !presetProfiles.activeChatId ? 'No active chat — open a chat first'
                     : !presetProfiles.hasDefaults ? 'Capture defaults first'
-                      : 'Bind current block states to this chat'
+                      : 'Bind the current preset and block states to this chat'
                 }
                 type="button"
               >
@@ -1605,7 +1625,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                 className={clsx(s.profileBtn, s.profileBtnActive)}
                 onClick={presetProfiles.bindToChat}
                 disabled={presetProfiles.isLoading || !presetProfiles.activeChatId}
-                title="Rebind current block states to this chat"
+                title="Rebind the current preset and block states to this chat"
                 type="button"
               >
                 <RotateCcw size={10} /> Chat

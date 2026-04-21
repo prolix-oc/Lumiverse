@@ -38,6 +38,20 @@ export interface PooledTokensEntry {
   acknowledged?: boolean;
   /** True while the generation is paused waiting for user to decide on failed council tools */
   councilRetryPending?: boolean;
+  /** Details for a paused council retry decision so clients can recover the modal after reconnects. */
+  councilToolsFailure?: {
+    generationId: string;
+    chatId: string;
+    failedTools: {
+      memberId: string;
+      memberName: string;
+      toolName: string;
+      toolDisplayName: string;
+      error?: string;
+    }[];
+    successCount: number;
+    failedCount: number;
+  };
   /** Timestamp (ms) when the LLM streaming request was initiated (post-assembly, post-council) */
   streamingStartedAt?: number;
   /** Timestamp (ms) when the first token (content or reasoning) arrived from the provider */

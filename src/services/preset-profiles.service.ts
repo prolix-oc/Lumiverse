@@ -8,7 +8,10 @@ import type { PromptBlock } from "../types/preset";
 // Setting key conventions
 // ---------------------------------------------------------------------------
 
-const DEFAULTS_KEY = "presetProfileDefaults";
+const LEGACY_DEFAULTS_KEY = "presetProfileDefaults";
+function defaultsKey(presetId: string): string {
+  return `presetProfileDefaults:${presetId}`;
+}
 function characterKey(characterId: string): string {
   return `presetProfile:character:${characterId}`;
 }
@@ -20,9 +23,55 @@ function chatKey(chatId: string): string {
 // Defaults
 // ---------------------------------------------------------------------------
 
-export function getDefaults(userId: string): PresetProfileBinding | null {
-  const s = settingsSvc.getSetting(userId, DEFAULTS_KEY);
-  return s ? (s.value as PresetProfileBinding) : null;
+export function getDefaults(userId: string, presetId: string): PresetProfileBinding | null {
+  const s = settingsSvc.getSetting(userId, defaultsKey(presetId));
+  if (s) return s.value as PresetProfileBinding;
+
+  // Legacy fallback: older builds stored a single shared defaults snapshot.
+  const legacy = settingsSvc.getSetting(userId, LEGACY_DEFAULTS_KEY);
+  if (!legacy) return null;
+  const value = legacy.value as PresetProfileBinding;
+  return value?.preset_id === presetId ? value : null;
+}
+
+function getDefaultsForBinding(
+  userId: string,
+  binding: PresetProfileBinding
+): PresetProfileBinding | null {
+  return getDefaults(userId, binding.preset_id);
+}
+
+function createBinding(
+  presetId: string,
+  blockStates: Record<string, boolean>,
+  linkedToDefaults?: boolean
+): PresetProfileBinding {
+  return {
+    preset_id: presetId,
+    block_states: blockStates,
+    captured_at: Math.floor(Date.now() / 1000),
+    ...(linkedToDefaults ? { linked_to_defaults: true } : {}),
+  };
+}
+
+function resolveSpecificBinding(
+  userId: string,
+  source: "chat" | "character",
+  binding: PresetProfileBinding
+): ResolvedPresetProfile {
+  if (binding.linked_to_defaults) {
+    return {
+      preset_id: binding.preset_id,
+      binding: getDefaultsForBinding(userId, binding),
+      source,
+    };
+  }
+
+  return {
+    preset_id: binding.preset_id,
+    binding,
+    source,
+  };
 }
 
 export function captureDefaults(
@@ -30,17 +79,19 @@ export function captureDefaults(
   presetId: string,
   blockStates: Record<string, boolean>
 ): PresetProfileBinding {
-  const binding: PresetProfileBinding = {
-    preset_id: presetId,
-    block_states: blockStates,
-    captured_at: Math.floor(Date.now() / 1000),
-  };
-  settingsSvc.putSetting(userId, DEFAULTS_KEY, binding);
+  const binding = createBinding(presetId, blockStates);
+  settingsSvc.putSetting(userId, defaultsKey(presetId), binding);
   return binding;
 }
 
-export function deleteDefaults(userId: string): boolean {
-  return settingsSvc.deleteSetting(userId, DEFAULTS_KEY);
+export function deleteDefaults(userId: string, presetId: string): boolean {
+  const deleted = settingsSvc.deleteSetting(userId, defaultsKey(presetId));
+  const legacy = settingsSvc.getSetting(userId, LEGACY_DEFAULTS_KEY);
+  if (legacy && (legacy.value as PresetProfileBinding)?.preset_id === presetId) {
+    settingsSvc.deleteSetting(userId, LEGACY_DEFAULTS_KEY);
+    return true;
+  }
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,11 +116,7 @@ export function setCharacterBinding(
   const character = charactersSvc.getCharacter(userId, characterId);
   if (!character) throw new Error("Character not found");
 
-  const binding: PresetProfileBinding = {
-    preset_id: presetId,
-    block_states: blockStates,
-    captured_at: Math.floor(Date.now() / 1000),
-  };
+  const binding = createBinding(presetId, blockStates);
   settingsSvc.putSetting(userId, characterKey(characterId), binding);
   return binding;
 }
@@ -104,12 +151,7 @@ export function setChatBinding(
   const chat = chatsSvc.getChat(userId, chatId);
   if (!chat) throw new Error("Chat not found");
 
-  const binding: PresetProfileBinding = {
-    preset_id: presetId,
-    block_states: blockStates ?? {},
-    captured_at: Math.floor(Date.now() / 1000),
-    ...(linkedToDefaults ? { linked_to_defaults: true } : {}),
-  };
+  const binding = createBinding(presetId, blockStates ?? {}, linkedToDefaults);
   settingsSvc.putSetting(userId, chatKey(chatId), binding);
   return binding;
 }
@@ -127,38 +169,37 @@ export function deleteChatBinding(
 
 export function resolveProfile(
   userId: string,
-  presetId: string,
+  fallbackPresetId: string | null,
   chatId: string,
   characterId: string,
   options: { isGroup?: boolean } = {}
 ): ResolvedPresetProfile {
   // 1. Chat-level binding (most specific)
   const chatBinding = getChatBinding(userId, chatId);
-  if (chatBinding && chatBinding.preset_id === presetId) {
-    // If this binding is linked to defaults, skip to defaults resolution
-    // so that updating the defaults propagates to all linked chats.
-    if (!chatBinding.linked_to_defaults) {
-      return { binding: chatBinding, source: "chat" };
-    }
+  if (chatBinding) {
+    return resolveSpecificBinding(userId, "chat", chatBinding);
   }
 
   // 2. Character-level binding — skipped in group chats. Per-member bindings
   //    would be ambiguous (which member wins?), so group chats are chat-only.
   if (!options.isGroup) {
     const charBinding = getCharacterBinding(userId, characterId);
-    if (charBinding && charBinding.preset_id === presetId) {
-      return { binding: charBinding, source: "character" };
+    if (charBinding) {
+      return resolveSpecificBinding(userId, "character", charBinding);
     }
   }
 
-  // 3. Default snapshot — also used when chat binding delegates via linked_to_defaults
-  const defaults = getDefaults(userId);
-  if (defaults && defaults.preset_id === presetId) {
-    return { binding: defaults, source: "defaults" };
+  // 3. Default snapshot — defaults are stored per preset, so they only apply
+  //    when there isn't a more specific chat/character binding.
+  if (fallbackPresetId) {
+    const defaults = getDefaults(userId, fallbackPresetId);
+    if (defaults) {
+      return { preset_id: defaults.preset_id, binding: defaults, source: "defaults" };
+    }
   }
 
   // 4. No matching binding — use raw preset block states
-  return { binding: null, source: "none" };
+  return { preset_id: fallbackPresetId, binding: null, source: "none" };
 }
 
 // ---------------------------------------------------------------------------

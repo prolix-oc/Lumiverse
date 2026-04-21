@@ -86,6 +86,8 @@ app.get("/status/:chatId", (c) => {
     active,
     generationId: entry.generationId,
     status: entry.status,
+    councilRetryPending: entry.councilRetryPending || false,
+    councilToolsFailure: entry.councilToolsFailure,
     content: entry.content,
     reasoning: entry.reasoning,
     tokenSeq: entry.tokenSeq,

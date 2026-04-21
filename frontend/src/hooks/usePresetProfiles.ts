@@ -30,6 +30,7 @@ export function usePresetProfiles(
 ) {
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const setActiveLoomPreset = useStore((s) => s.setActiveLoomPreset)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const addToast = useStore((s) => s.addToast)
 
@@ -38,11 +39,12 @@ export function usePresetProfiles(
   const [charSlot, setCharSlot] = useState<CharSlot>(EMPTY_CHAR_SLOT)
   const [isLoading, setIsLoading] = useState(false)
 
-  // Load defaults on mount / preset change
+  // Load defaults for the currently selected preset. Defaults are stored per
+  // preset, so switching presets should load a different default snapshot.
   useEffect(() => {
     if (!presetId) { setDefaults(null); return }
     let cancelled = false
-    presetProfilesApi.getDefaults()
+    presetProfilesApi.getDefaults(presetId)
       .then((d) => { if (!cancelled) setDefaults(d) })
       .catch(() => { if (!cancelled) setDefaults(null) })
     return () => { cancelled = true }
@@ -52,7 +54,7 @@ export function usePresetProfiles(
   // cancelled flag, and the slot is keyed by the chat id it was fetched for so
   // downstream consumers can tell whether it's fresh for the current chat.
   useEffect(() => {
-    if (!activeChatId || !presetId) {
+    if (!activeChatId) {
       setChatSlot(EMPTY_CHAT_SLOT)
       return
     }
@@ -65,11 +67,11 @@ export function usePresetProfiles(
       .then((b) => { if (!cancelled) setChatSlot({ for: target, binding: b }) })
       .catch(() => { if (!cancelled) setChatSlot({ for: target, binding: null }) })
     return () => { cancelled = true }
-  }, [activeChatId, presetId])
+  }, [activeChatId])
 
   // Load character binding when character changes (same pattern as chat).
   useEffect(() => {
-    if (!activeCharacterId || !presetId) {
+    if (!activeCharacterId) {
       setCharSlot(EMPTY_CHAR_SLOT)
       return
     }
@@ -80,7 +82,7 @@ export function usePresetProfiles(
       .then((b) => { if (!cancelled) setCharSlot({ for: target, binding: b }) })
       .catch(() => { if (!cancelled) setCharSlot({ for: target, binding: null }) })
     return () => { cancelled = true }
-  }, [activeCharacterId, presetId])
+  }, [activeCharacterId])
 
   // A binding is only considered "for" the current context if its `for` id
   // still matches the store's active id. Anything else is stale.
@@ -92,9 +94,9 @@ export function usePresetProfiles(
   // blocks with a stale binding mid-transition.
   const chatResolved = !activeChatId || chatSlot.for === activeChatId
   const characterResolved = !activeCharacterId || charSlot.for === activeCharacterId
-  const isResolved = Boolean(presetId) && chatResolved && characterResolved
+  const isResolved = chatResolved && characterResolved
 
-  const hasDefaults = defaults !== null && defaults.preset_id === presetId
+  const hasDefaults = defaults !== null
 
   // Capture defaults
   const captureDefaults = useCallback(async () => {
@@ -113,9 +115,10 @@ export function usePresetProfiles(
 
   // Clear defaults
   const clearDefaults = useCallback(async () => {
+    if (!presetId) return
     setIsLoading(true)
     try {
-      await presetProfilesApi.deleteDefaults()
+      await presetProfilesApi.deleteDefaults(presetId)
       setDefaults(null)
       addToast({ type: 'info', message: 'Default block states cleared' })
     } catch {
@@ -123,7 +126,7 @@ export function usePresetProfiles(
     } finally {
       setIsLoading(false)
     }
-  }, [addToast])
+  }, [presetId, addToast])
 
   // Bind to current chat
   const bindToChat = useCallback(async () => {
@@ -132,7 +135,7 @@ export function usePresetProfiles(
     try {
       const binding = await presetProfilesApi.setChatBinding(activeChatId, presetId, snapshotBlockStates(blocks))
       setChatSlot({ for: activeChatId, binding })
-      addToast({ type: 'success', message: 'Block states bound to this chat' })
+      addToast({ type: 'success', message: 'Preset and block states bound to this chat' })
     } catch {
       addToast({ type: 'error', message: 'Failed to bind to chat' })
     } finally {
@@ -162,7 +165,7 @@ export function usePresetProfiles(
     try {
       const binding = await presetProfilesApi.setCharacterBinding(activeCharacterId, presetId, snapshotBlockStates(blocks))
       setCharSlot({ for: activeCharacterId, binding })
-      addToast({ type: 'success', message: 'Block states bound to this character' })
+      addToast({ type: 'success', message: 'Preset and block states bound to this character' })
     } catch {
       addToast({ type: 'error', message: 'Failed to bind to character' })
     } finally {
@@ -189,24 +192,40 @@ export function usePresetProfiles(
   // ambiguous — backend resolveProfile applies the same gate).
   const characterBindingEnabled = !isGroupChat
 
+  const resolvedPresetId = useMemo(() => {
+    if (chatBinding) return chatBinding.preset_id
+    if (characterBindingEnabled && characterBinding) return characterBinding.preset_id
+    return presetId
+  }, [chatBinding, characterBinding, characterBindingEnabled, presetId])
+
   // Resolved active binding (chat > character > defaults > none)
   const activeBinding = useMemo(() => {
-    if (chatBinding && chatBinding.preset_id === presetId) return chatBinding
-    if (characterBindingEnabled && characterBinding && characterBinding.preset_id === presetId) return characterBinding
-    if (defaults && defaults.preset_id === presetId) return defaults
+    if (chatBinding) {
+      if (chatBinding.linked_to_defaults) {
+        return defaults && defaults.preset_id === chatBinding.preset_id ? defaults : null
+      }
+      return chatBinding
+    }
+    if (characterBindingEnabled && characterBinding) return characterBinding
+    if (defaults) return defaults
     return null
-  }, [chatBinding, characterBinding, defaults, presetId, characterBindingEnabled])
+  }, [chatBinding, characterBinding, defaults, characterBindingEnabled])
 
   // Determine active source
   const activeSource: 'chat' | 'character' | 'defaults' | 'none' = (() => {
-    if (chatBinding && chatBinding.preset_id === presetId) return 'chat'
-    if (characterBindingEnabled && characterBinding && characterBinding.preset_id === presetId) return 'character'
-    if (defaults && defaults.preset_id === presetId) return 'defaults'
+    if (chatBinding) return 'chat'
+    if (characterBindingEnabled && characterBinding) return 'character'
+    if (defaults) return 'defaults'
     return 'none'
   })()
 
-  const hasChatBinding = chatBinding !== null && chatBinding.preset_id === presetId
-  const hasCharacterBinding = characterBindingEnabled && characterBinding !== null && characterBinding.preset_id === presetId
+  const hasChatBinding = chatBinding !== null
+  const hasCharacterBinding = characterBindingEnabled && characterBinding !== null
+
+  const selectResolvedPreset = useCallback(() => {
+    if (!resolvedPresetId || resolvedPresetId === presetId) return
+    setActiveLoomPreset(resolvedPresetId)
+  }, [resolvedPresetId, presetId, setActiveLoomPreset])
 
   return {
     // State
@@ -216,6 +235,7 @@ export function usePresetProfiles(
     characterBindingEnabled,
     activeSource,
     activeBinding,
+    resolvedPresetId,
     isResolved,
     isLoading,
     defaults,
@@ -230,6 +250,7 @@ export function usePresetProfiles(
     // Actions
     captureDefaults,
     clearDefaults,
+    selectResolvedPreset,
     bindToChat,
     unbindChat,
     bindToCharacter,

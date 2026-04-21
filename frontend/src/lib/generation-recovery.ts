@@ -25,6 +25,28 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
   const latest = useStore.getState()
   if (latest.activeChatId !== chatId) return
 
+   if (
+    genStatus.active &&
+    genStatus.generationId &&
+    genStatus.status === 'council' &&
+    genStatus.councilRetryPending &&
+    genStatus.councilToolsFailure
+  ) {
+    latest.startStreaming(genStatus.generationId, genStatus.targetMessageId)
+    latest.setCouncilExecuting(false)
+
+    const existingFailure = latest.councilToolsFailure
+    if (existingFailure?.generationId !== genStatus.generationId) {
+      latest.setCouncilToolsFailure(genStatus.councilToolsFailure)
+      const { showCouncilRetryModal } = await import('@/hooks/useCouncilEvents')
+      const current = useStore.getState()
+      if (current.activeChatId === chatId) {
+        showCouncilRetryModal(genStatus.councilToolsFailure)
+      }
+    }
+    return
+  }
+
   if (genStatus.active && genStatus.generationId && genStatus.status === 'streaming') {
     latest.startStreaming(genStatus.generationId, genStatus.targetMessageId)
     if (genStatus.content) latest.replaceStreamContent(genStatus.content)

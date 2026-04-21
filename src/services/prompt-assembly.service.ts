@@ -520,11 +520,27 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
     : connectionsSvc.getDefaultConnection(ctx.userId));
 
-  // Resolve preset: request presetId takes priority, then connection's preset_id
-  const resolvedPresetId = ctx.presetId || connection?.preset_id;
-  let preset: Preset | null = pf?.preset !== undefined ? pf.preset : null;
-  if (!pf && resolvedPresetId) {
-    preset = presetsSvc.getPreset(ctx.userId, resolvedPresetId);
+  // Resolve preset: request presetId takes priority, then connection's
+  // preset_id, then any more-specific preset-profile binding can override that
+  // preset selection for the active chat/character context.
+  const requestedPresetId = ctx.presetId || connection?.preset_id || null;
+  const resolvedProfile = presetProfilesSvc.resolveProfile(
+    ctx.userId,
+    requestedPresetId,
+    chat.id,
+    characterId,
+    { isGroup: chat.metadata?.group === true }
+  );
+  const resolvedPresetId = resolvedProfile.preset_id;
+
+  let preset: Preset | null = null;
+  const prefetchedPreset = pf?.preset !== undefined ? pf.preset : null;
+  if (resolvedPresetId) {
+    preset = prefetchedPreset?.id === resolvedPresetId
+      ? prefetchedPreset
+      : presetsSvc.getPreset(ctx.userId, resolvedPresetId);
+  } else {
+    preset = prefetchedPreset;
   }
 
   // Extract Loom structures from preset
@@ -534,19 +550,9 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   const completionSettings: CompletionSettings = prompts.completionSettings ?? {};
   const samplerOverrides: SamplerOverrides | null = preset?.parameters?.samplerOverrides ?? null;
 
-  // Apply preset profile binding — override block enabled states based on
-  // chat/character/default binding (if one exists for this preset)
-  if (resolvedPresetId && blocks.length) {
-    const resolved = presetProfilesSvc.resolveProfile(
-      ctx.userId,
-      resolvedPresetId,
-      chat.id,
-      characterId,
-      { isGroup: chat.metadata?.group === true }
-    );
-    if (resolved.binding) {
-      presetProfilesSvc.applyProfileToBlocks(blocks, resolved.binding);
-    }
+  // Apply preset profile binding after the effective preset has been resolved.
+  if (resolvedProfile.binding && blocks.length) {
+    presetProfilesSvc.applyProfileToBlocks(blocks, resolvedProfile.binding);
   }
   presetProfilesSvc.normalizeCategoryBlockStates(blocks);
 

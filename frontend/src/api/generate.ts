@@ -135,6 +135,20 @@ export interface GenerationStatusResponse {
   active: boolean
   generationId?: string
   status?: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  councilRetryPending?: boolean
+  councilToolsFailure?: {
+    generationId: string
+    chatId: string
+    failedTools: {
+      memberId: string
+      memberName: string
+      toolName: string
+      toolDisplayName: string
+      error?: string
+    }[]
+    successCount: number
+    failedCount: number
+  }
   content?: string
   reasoning?: string
   tokenSeq?: number

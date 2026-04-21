@@ -1,13 +1,14 @@
 /**
- * A preset profile binding captures a snapshot of which prompt blocks are
- * enabled/disabled in a given preset. These snapshots can be bound to a
- * specific character or chat so that block states are automatically restored
- * when the user switches context.
+ * A preset profile binding captures both the preset selection and a snapshot of
+ * which prompt blocks are enabled/disabled in that preset. These snapshots can
+ * be bound to a specific character or chat so that Lumiverse can switch to the
+ * bound preset first, then restore its block states when the user switches
+ * context.
  *
  * Resolution order during prompt assembly:
  *   1. Chat binding   (presetProfile:chat:{chatId})
  *   2. Character binding (presetProfile:character:{characterId})
- *   3. Default snapshot   (presetProfileDefaults)
+ *   3. Default snapshot   (presetProfileDefaults:{presetId})
  *   4. Raw preset block states (no override)
  */
 export interface PresetProfileBinding {
@@ -26,6 +27,8 @@ export interface PresetProfileBinding {
 }
 
 export interface ResolvedPresetProfile {
+  /** Which preset should be used after binding resolution */
+  preset_id: string | null;
   /** The binding that was applied, or null if none matched */
   binding: PresetProfileBinding | null;
   /** Where the binding came from */
