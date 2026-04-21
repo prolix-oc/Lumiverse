@@ -18,7 +18,7 @@ import {
 } from "./prompt-assembly.service";
 import * as charactersSvc from "./characters.service";
 import { getEffectiveCharacterName } from "../types/character";
-import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationRequest, type GenerationResponse, type StreamChunk, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition } from "../llm/types";
+import { getTextContent, type LlmMessage, type GenerationParameters, type GenerationRequest, type GenerationResponse, type StreamChunk, type GenerationType, type ImpersonateMode, type AssemblyBreakdownEntry, type ActivatedWorldInfoEntry, type ToolDefinition, type ToolCallResult } from "../llm/types";
 import { interceptorPipeline } from "../spindle/interceptor-pipeline";
 import { contextHandlerChain } from "../spindle/context-handler";
 import { executeCouncil, collectWorldInfoForCouncil, formatDeliberation, type CouncilEnrichment } from "./council/council-execution.service";
@@ -35,6 +35,8 @@ import { hasExpressions, getExpressionConfig, getExpressionGroups } from "./expr
 import { getSidecarSettings } from "./sidecar-settings.service";
 import { abortChatBackground, abortUserBackgrounds, abortAllBackgrounds } from "./chat-background.service";
 import { createCooperativeYielder } from "../llm/stream-utils";
+import { getMcpClientManager } from "./mcp-client-manager";
+import { parseMcpToolName } from "./council/mcp-tools";
 
 interface GenerateInput {
   userId: string;
@@ -219,6 +221,13 @@ interface PromptPipelineResult {
   macroEnv?: import("../macros/types").MacroEnv;
 }
 
+interface InlineMcpToolResult {
+  callId: string;
+  qualifiedName: string;
+  toolName: string;
+  result: string;
+}
+
 /**
  * If the generated content contains an unclosed reasoning/thinking tag
  * (e.g. generation was interrupted mid-thought), append the closing tag
@@ -259,6 +268,61 @@ function errorMessage(err: unknown): string {
     return (err as any).message;
   }
   try { return String(err); } catch { return "Unknown error"; }
+}
+
+function parseInlineQualifiedToolName(name: string): string | null {
+  const splitIdx = name.indexOf("_");
+  if (splitIdx <= 0 || splitIdx >= name.length - 1) return null;
+  return name.slice(splitIdx + 1);
+}
+
+async function executeInlineMcpToolCalls(
+  userId: string,
+  toolCalls: ToolCallResult[],
+  timeoutMs: number,
+): Promise<InlineMcpToolResult[]> {
+  const results: InlineMcpToolResult[] = [];
+
+  for (const toolCall of toolCalls) {
+    const qualifiedName = parseInlineQualifiedToolName(toolCall.name);
+    if (!qualifiedName) continue;
+
+    const mcpMatch = parseMcpToolName(userId, qualifiedName);
+    if (!mcpMatch) continue;
+
+    const result = await getMcpClientManager().callTool(
+      userId,
+      mcpMatch.serverId,
+      mcpMatch.toolName,
+      toolCall.args ?? {},
+      timeoutMs,
+    );
+
+    results.push({
+      callId: toolCall.call_id,
+      qualifiedName,
+      toolName: mcpMatch.toolName,
+      result,
+    });
+  }
+
+  return results;
+}
+
+function formatInlineMcpToolResults(results: InlineMcpToolResult[]): string {
+  const lines = [
+    "## Inline MCP Tool Results",
+    "The model requested MCP tool calls during generation. Use these results to continue the reply naturally.",
+    "",
+  ];
+
+  for (const result of results) {
+    lines.push(`### ${result.toolName}`);
+    lines.push(result.result || "(empty result)");
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -1562,80 +1626,111 @@ async function runGeneration(
 
   let emittedStopped = false;
   try {
-    // Non-streaming path: call generate() once, then synthesize a single-chunk stream
-    const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
-      ? provider.generateStream(apiKey, apiUrl, { messages, model, parameters, stream: true, tools, signal })
-      : (async function* () {
-          const result = await provider.generate(apiKey, apiUrl, { messages, model, parameters, stream: false, tools, signal });
-          yield {
-            token: result.content,
-            reasoning: result.reasoning,
-            finish_reason: result.finish_reason,
-            tool_calls: result.tool_calls,
-            usage: result.usage,
-          };
-        })();
+    const inlineMcpTimeoutMs = tools?.length
+      ? getCouncilSettings(userId).toolsSettings.timeoutMs
+      : 30_000;
+    let generationMessages = messages;
 
-    // Drive the iterator manually so each `.next()` can be raced against the
-    // abort signal. Providers intentionally don't pass the signal into
-    // `fetch()` (a Bun-Windows stream-cancel workaround), which means a stop
-    // clicked during the initial fetch wait — before any chunk arrives —
-    // would otherwise stall until the upstream LLM responds. Racing at this
-    // level unwinds immediately on abort; the in-flight fetch completes
-    // silently in the background and the generator's own finally cancels
-    // the reader.
-    const iter = stream[Symbol.asyncIterator]();
-    const maybeYieldDuringStream = createCooperativeYielder(32, signal);
-    while (true) {
-      let result: IteratorResult<StreamChunk, void>;
-      try {
-        result = await raceWithSignal(iter.next(), signal);
-      } catch (err) {
-        // Signal won the race. Tell the generator to clean up (best-effort)
-        // and rethrow so the outer catch handles emission.
-        try { await iter.return?.(undefined); } catch { /* best-effort */ }
-        throw err;
+    for (let inlineRound = 0; inlineRound < 3; inlineRound++) {
+      let pendingToolCalls: ToolCallResult[] | undefined;
+
+      // Non-streaming path: call generate() once, then synthesize a single-chunk stream
+      const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
+        ? provider.generateStream(apiKey, apiUrl, { messages: generationMessages, model, parameters, stream: true, tools, signal })
+        : (async function* () {
+            const result = await provider.generate(apiKey, apiUrl, { messages: generationMessages, model, parameters, stream: false, tools, signal });
+            yield {
+              token: result.content,
+              reasoning: result.reasoning,
+              finish_reason: result.finish_reason,
+              tool_calls: result.tool_calls,
+              usage: result.usage,
+            };
+          })();
+
+      // Drive the iterator manually so each `.next()` can be raced against the
+      // abort signal. Providers intentionally don't pass the signal into
+      // `fetch()` (a Bun-Windows stream-cancel workaround), which means a stop
+      // clicked during the initial fetch wait — before any chunk arrives —
+      // would otherwise stall until the upstream LLM responds. Racing at this
+      // level unwinds immediately on abort; the in-flight fetch completes
+      // silently in the background and the generator's own finally cancels
+      // the reader.
+      const iter = stream[Symbol.asyncIterator]();
+      const maybeYieldDuringStream = createCooperativeYielder(32, signal);
+      while (true) {
+        let result: IteratorResult<StreamChunk, void>;
+        try {
+          result = await raceWithSignal(iter.next(), signal);
+        } catch (err) {
+          // Signal won the race. Tell the generator to clean up (best-effort)
+          // and rethrow so the outer catch handles emission.
+          try { await iter.return?.(undefined); } catch { /* best-effort */ }
+          throw err;
+        }
+        if (result.done) break;
+        const chunk = result.value;
+
+        if (signal.aborted) {
+          const persisted = await persistPartialContent();
+          pool.stopPool(generationId);
+          eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: persisted.content }, userId);
+          emittedStopped = true;
+          try { await iter.return?.(undefined); } catch { /* best-effort */ }
+          break;
+        }
+
+        // Emit reasoning tokens (provider thinking/extended thinking)
+        if (chunk.reasoning) {
+          if (!reasoningStartedAt) reasoningStartedAt = Date.now();
+          fullReasoning += chunk.reasoning;
+          const seq = pool.appendPoolReasoning(generationId, chunk.reasoning);
+          eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
+            generationId,
+            chatId,
+            token: chunk.reasoning,
+            type: "reasoning",
+            seq,
+          }, userId);
+        }
+
+        if (chunk.token) {
+          processContentToken(chunk.token);
+        }
+
+        if (chunk.tool_calls) {
+          pendingToolCalls = chunk.tool_calls;
+        }
+
+        // Capture provider usage data (token counts) from the stream
+        if (chunk.usage) {
+          streamUsage = chunk.usage;
+        }
+
+        await maybeYieldDuringStream();
+
+        if (chunk.finish_reason) {
+          break;
+        }
       }
-      if (result.done) break;
-      const chunk = result.value;
 
       if (signal.aborted) {
-        const persisted = await persistPartialContent();
-        pool.stopPool(generationId);
-        eventBus.emit(EventType.GENERATION_STOPPED, { generationId, chatId, content: persisted.content }, userId);
-        emittedStopped = true;
-        try { await iter.return?.(undefined); } catch { /* best-effort */ }
         break;
       }
 
-      // Emit reasoning tokens (provider thinking/extended thinking)
-      if (chunk.reasoning) {
-        if (!reasoningStartedAt) reasoningStartedAt = Date.now();
-        fullReasoning += chunk.reasoning;
-        const seq = pool.appendPoolReasoning(generationId, chunk.reasoning);
-        eventBus.emit(EventType.STREAM_TOKEN_RECEIVED, {
-          generationId,
-          chatId,
-          token: chunk.reasoning,
-          type: "reasoning",
-          seq,
-        }, userId);
-      }
+      const inlineMcpResults = pendingToolCalls?.length
+        ? await executeInlineMcpToolCalls(userId, pendingToolCalls, inlineMcpTimeoutMs)
+        : [];
 
-      if (chunk.token) {
-        processContentToken(chunk.token);
-      }
-
-      // Capture provider usage data (token counts) from the stream
-      if (chunk.usage) {
-        streamUsage = chunk.usage;
-      }
-
-      await maybeYieldDuringStream();
-
-      if (chunk.finish_reason) {
+      if (inlineMcpResults.length === 0) {
         break;
       }
+
+      generationMessages = [
+        ...generationMessages,
+        ...(fullContent ? [{ role: "assistant", content: fullContent } satisfies LlmMessage] : []),
+        { role: "system", content: formatInlineMcpToolResults(inlineMcpResults) },
+      ];
     }
 
     // Clean exit after abort — the stream may have returned done:true via

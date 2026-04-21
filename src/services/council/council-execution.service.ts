@@ -27,6 +27,7 @@ import { toolRegistry } from "../../spindle/tool-registry";
 import { getWorkerHost } from "../../spindle/lifecycle";
 import { getExpressionLabels, hasExpressions } from "../expressions.service";
 import { getSidecarSettings } from "../sidecar-settings.service";
+import { getToolChoiceParams } from "../memory-cortex/salience-sidecar";
 import type { SidecarConfig } from "lumiverse-spindle-types";
 
 const MAX_RETRIES = 3;
@@ -257,14 +258,22 @@ async function executeMemberTools(
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         if (isMcpTool) {
-          // Route to connected MCP server — the sidecar determines the arguments
-          // via function calling, but for council mode we pass an empty args object
-          // and let the MCP server handle the execution.
+          const plannedArgs = await planMcpToolArgs(
+            input.userId,
+            sidecar,
+            toolDef,
+            member,
+            identityMsg,
+            contextMessages,
+            settings.toolsSettings.timeoutMs,
+            input.signal,
+          );
+
           content = await getMcpClientManager().callTool(
             input.userId,
             mcpMatch!.serverId,
             mcpMatch!.toolName,
-            {},
+            plannedArgs,
             settings.toolsSettings.timeoutMs
           );
         } else if (isExtensionTool) {
@@ -476,6 +485,102 @@ ${tool.prompt}${dynamicSuffix}${brevityNote}${userControlNote}`;
   });
 
   return response.content || "";
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function toolSchemaRequiresArgs(tool: CouncilToolDefinition): boolean {
+  const schema = tool.inputSchema ?? {};
+  const required = Array.isArray((schema as any).required) ? (schema as any).required : [];
+  const properties = (schema as any).properties;
+  return required.length > 0 || (properties && Object.keys(properties).length > 0);
+}
+
+async function planMcpToolArgs(
+  userId: string,
+  sidecar: SidecarConfig,
+  tool: CouncilToolDefinition,
+  member: CouncilMember,
+  identityMsg: string,
+  contextMessages: LlmMessage[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  if (!toolSchemaRequiresArgs(tool)) {
+    return {};
+  }
+
+  if (!sidecar.connectionProfileId || !sidecar.model) {
+    throw new Error(`Sidecar connection is required to plan MCP tool arguments for "${tool.displayName}"`);
+  }
+
+  const conn = connectionsSvc.getConnection(userId, sidecar.connectionProfileId);
+  if (!conn) throw new Error("Sidecar connection not found");
+
+  const roleNote = member.role
+    ? `\nYour role on the council is: ${member.role}\nUse that perspective when selecting tool arguments.`
+    : "";
+
+  const planningTool = {
+    name: "call_mcp_tool",
+    description: `Prepare the arguments for the MCP tool \"${tool.displayName}\".`,
+    parameters: tool.inputSchema ?? { type: "object", properties: {}, required: [] },
+  };
+
+  const response = await rawGenerate(userId, {
+    provider: conn.provider,
+    model: sidecar.model,
+    connection_id: sidecar.connectionProfileId,
+    messages: [
+      {
+        role: "system",
+        content: `${identityMsg}${roleNote}
+
+You are preparing arguments for an MCP tool call.
+
+## MCP Tool
+${tool.displayName}
+${tool.description}
+
+Select the most appropriate arguments from the story context and call the provided tool exactly once. If the schema allows an empty object, use it when no arguments are needed. Do not answer in prose.`,
+      },
+      ...contextMessages,
+      {
+        role: "user",
+        content: `Review the story context above and prepare the arguments for ${tool.displayName}.`,
+      },
+    ],
+    parameters: {
+      temperature: sidecar.temperature,
+      top_p: sidecar.topP,
+      max_tokens: Math.min(sidecar.maxTokens, Math.max(128, timeoutMs / 100)),
+      ...getToolChoiceParams(conn.provider),
+    },
+    tools: [planningTool],
+    signal,
+  });
+
+  const plannedCall = response.tool_calls?.find((call) => call.name === planningTool.name);
+  if (plannedCall) {
+    return plannedCall.args ?? {};
+  }
+
+  const parsed = parseJsonObject(response.content);
+  if (parsed) {
+    return parsed;
+  }
+
+  throw new Error(`Failed to plan arguments for MCP tool "${tool.displayName}"`);
 }
 
 /** Build the shared context messages (chat history, character info, world info, etc.).

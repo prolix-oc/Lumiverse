@@ -66,19 +66,89 @@ interface McpClientEntry {
   userId: string;
 }
 
+interface DisconnectOptions {
+  reason?: string;
+  clearReconnect?: boolean;
+  resetBackoff?: boolean;
+}
+
 class McpClientManager {
   private clients = new Map<string, McpClientEntry>();
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private reconnectAttempts = new Map<string, number>();
 
   private key(userId: string, serverId: string): string {
     return `${userId}:${serverId}`;
   }
 
+  private cancelReconnect(key: string): void {
+    const timer = this.reconnectTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(key);
+    }
+  }
+
+  private scheduleReconnect(userId: string, serverId: string, reason: string, immediate = false): void {
+    const k = this.key(userId, serverId);
+    if (this.clients.has(k) || this.reconnectTimers.has(k)) return;
+
+    const server = mcpServersSvc.getServer(userId, serverId);
+    if (!server || !server.is_enabled) {
+      this.reconnectAttempts.delete(k);
+      this.cancelReconnect(k);
+      return;
+    }
+
+    const attempt = this.reconnectAttempts.get(k) ?? 0;
+    const delayMs = immediate ? 0 : Math.min(30_000, 1_000 * Math.max(1, 2 ** attempt));
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(k);
+      void this.runScheduledReconnect(userId, serverId, reason);
+    }, delayMs);
+    this.reconnectTimers.set(k, timer);
+  }
+
+  private async runScheduledReconnect(userId: string, serverId: string, reason: string): Promise<void> {
+    const k = this.key(userId, serverId);
+    if (this.clients.has(k)) {
+      this.reconnectAttempts.delete(k);
+      return;
+    }
+
+    const server = mcpServersSvc.getServer(userId, serverId);
+    if (!server || !server.is_enabled) {
+      this.reconnectAttempts.delete(k);
+      return;
+    }
+
+    try {
+      const status = await this.connect(userId, server);
+      if (status.connected) {
+        this.reconnectAttempts.delete(k);
+        console.log(`[MCP] Reconnected to "${server.name}" after ${reason}`);
+        return;
+      }
+
+      const nextAttempt = (this.reconnectAttempts.get(k) ?? 0) + 1;
+      this.reconnectAttempts.set(k, nextAttempt);
+      this.scheduleReconnect(userId, serverId, reason);
+    } catch (err) {
+      const nextAttempt = (this.reconnectAttempts.get(k) ?? 0) + 1;
+      this.reconnectAttempts.set(k, nextAttempt);
+      console.warn(`[MCP] Reconnect attempt failed for "${server.name}" after ${reason}:`, err);
+      this.scheduleReconnect(userId, serverId, reason);
+    }
+  }
+
   async connect(userId: string, server: McpServerProfile): Promise<McpServerStatus> {
     const k = this.key(userId, server.id);
+    this.cancelReconnect(k);
 
     // Disconnect existing if re-connecting
     if (this.clients.has(k)) {
-      await this.disconnect(userId, server.id);
+      await this.disconnect(userId, server.id, { reason: "replaced", resetBackoff: false });
     }
 
     let transport: Transport;
@@ -108,6 +178,7 @@ class McpClientManager {
         this.clients.delete(k);
         mcpServersSvc.updateServerStatus(server.id, userId, { last_error: "Connection closed" });
         eventBus.emit(EventType.MCP_SERVER_DISCONNECTED, { id: server.id, name: server.name, reason: "closed" }, userId);
+        this.scheduleReconnect(userId, server.id, "connection close");
       }
     };
 
@@ -132,6 +203,7 @@ class McpClientManager {
       userId,
     };
     this.clients.set(k, entry);
+    this.reconnectAttempts.delete(k);
 
     mcpServersSvc.updateServerStatus(server.id, userId, {
       last_connected_at: Math.floor(Date.now() / 1000),
@@ -149,8 +221,16 @@ class McpClientManager {
     return status;
   }
 
-  async disconnect(userId: string, serverId: string): Promise<void> {
+  async disconnect(userId: string, serverId: string, options: DisconnectOptions = {}): Promise<void> {
     const k = this.key(userId, serverId);
+    const reason = options.reason ?? "manual";
+    if (options.clearReconnect !== false) {
+      this.cancelReconnect(k);
+    }
+    if (options.resetBackoff !== false) {
+      this.reconnectAttempts.delete(k);
+    }
+
     const entry = this.clients.get(k);
     if (!entry) return;
 
@@ -163,14 +243,20 @@ class McpClientManager {
 
     eventBus.emit(
       EventType.MCP_SERVER_DISCONNECTED,
-      { id: serverId, name: entry.serverName, reason: "manual" },
+      { id: serverId, name: entry.serverName, reason },
       userId
     );
   }
 
   async reconnect(userId: string, server: McpServerProfile): Promise<McpServerStatus> {
-    await this.disconnect(userId, server.id);
+    await this.disconnect(userId, server.id, { reason: "reconnect", resetBackoff: false });
     return this.connect(userId, server);
+  }
+
+  updateCachedProfile(userId: string, server: McpServerProfile): void {
+    const entry = this.clients.get(this.key(userId, server.id));
+    if (!entry) return;
+    entry.serverName = server.name;
   }
 
   getStatus(userId: string, serverId: string): McpServerStatus | null {
@@ -219,31 +305,50 @@ class McpClientManager {
     const entry = this.clients.get(this.key(userId, serverId));
     if (!entry) throw new Error(`MCP server not connected: ${serverId}`);
 
-    const resultPromise = entry.client.callTool({ name: toolName, arguments: args });
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`MCP tool "${toolName}" timed out after ${timeoutMs}ms`)), timeoutMs)
-    );
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-    const result = await Promise.race([resultPromise, timeoutPromise]);
+    try {
+      const resultPromise = entry.client.callTool({ name: toolName, arguments: args });
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`MCP tool "${toolName}" timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      });
 
-    if (result.isError) {
-      const errContent = Array.isArray(result.content)
-        ? result.content.map((c: any) => c.text || JSON.stringify(c)).join("\n")
-        : String(result.content);
-      throw new Error(`MCP tool error: ${errContent}`);
+      const result = await Promise.race([resultPromise, timeoutPromise]);
+
+      if (result.isError) {
+        const errContent = Array.isArray(result.content)
+          ? result.content.map((c: any) => c.text || JSON.stringify(c)).join("\n")
+          : String(result.content);
+        throw new Error(`MCP tool error: ${errContent}`);
+      }
+
+      // Serialize content blocks to string
+      if (Array.isArray(result.content)) {
+        return result.content
+          .map((c: any) => {
+            if (c.type === "text") return c.text;
+            return JSON.stringify(c);
+          })
+          .join("\n");
+      }
+
+      return typeof result.content === "string" ? result.content : JSON.stringify(result.content);
+    } catch (err: any) {
+      if (err?.message?.includes("timed out after")) {
+        console.warn(`[MCP] Tool "${toolName}" timed out on server ${serverId}; recycling connection`);
+        await this.disconnect(userId, serverId, {
+          reason: "timeout",
+          clearReconnect: false,
+          resetBackoff: false,
+        });
+        this.scheduleReconnect(userId, serverId, `tool timeout (${toolName})`, true);
+      }
+      throw err;
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
-
-    // Serialize content blocks to string
-    if (Array.isArray(result.content)) {
-      return result.content
-        .map((c: any) => {
-          if (c.type === "text") return c.text;
-          return JSON.stringify(c);
-        })
-        .join("\n");
-    }
-
-    return typeof result.content === "string" ? result.content : JSON.stringify(result.content);
   }
 
   async autoConnectAll(): Promise<void> {
