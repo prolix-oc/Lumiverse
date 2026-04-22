@@ -20,6 +20,8 @@ export interface GenerateRequest {
   force_name?: string
   generation_type?: GenerationType
   impersonate_mode?: ImpersonateMode
+  /** For impersonate: free-form text from the input box, appended to the impersonation prompt. */
+  impersonate_input?: string
   target_character_id?: string
   regen_feedback?: string
   regen_feedback_position?: 'system' | 'user'

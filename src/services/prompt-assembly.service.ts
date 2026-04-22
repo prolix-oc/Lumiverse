@@ -1457,12 +1457,17 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // Impersonate type: append impersonation prompt
   if (ctx.generationType === "impersonate") {
     const prompt = promptBehavior.impersonationPrompt;
+    const userInput = typeof ctx.impersonateInput === "string" ? ctx.impersonateInput.trim() : "";
+    let resolved = "";
     if (prompt) {
-      const resolved = (await evaluate(prompt, macroEnv, registry)).text;
-      if (resolved) {
-        result.push({ role: "system", content: resolved });
-        breakdown.push({ type: "utility", name: "Impersonation Prompt", role: "system", content: resolved });
-      }
+      resolved = (await evaluate(prompt, macroEnv, registry)).text;
+    }
+    if (userInput) {
+      resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
+    }
+    if (resolved) {
+      result.push({ role: "system", content: resolved });
+      breakdown.push({ type: "utility", name: "Impersonation Prompt", role: "system", content: resolved });
     }
   }
 
@@ -4430,12 +4435,17 @@ async function onelinerImpersonation(
 
   // Impersonation prompt
   const prompt = promptBehavior.impersonationPrompt;
+  const userInput = typeof ctx.impersonateInput === "string" ? ctx.impersonateInput.trim() : "";
+  let resolved = "";
   if (prompt) {
-    const resolved = (await evaluate(prompt, macroEnv, registry)).text;
-    if (resolved) {
-      result.push({ role: "system", content: resolved });
-      breakdown.push({ type: "utility", name: "Impersonation Prompt", role: "system", content: resolved });
-    }
+    resolved = (await evaluate(prompt, macroEnv, registry)).text;
+  }
+  if (userInput) {
+    resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
+  }
+  if (resolved) {
+    result.push({ role: "system", content: resolved });
+    breakdown.push({ type: "utility", name: "Impersonation Prompt", role: "system", content: resolved });
   }
 
   // assistantImpersonation prefill — sent as actual assistant message

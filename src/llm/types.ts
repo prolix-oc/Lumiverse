@@ -116,6 +116,8 @@ export interface AssemblyContext {
   personaId?: string;
   /** For impersonate: controls how much of the preset is included. */
   impersonateMode?: ImpersonateMode;
+  /** For impersonate: free-form user text from the input box, appended to the impersonation prompt. */
+  impersonateInput?: string;
   /** For regenerate: exclude this message from chat history (it has a blank swipe). */
   excludeMessageId?: string;
   /** For group chats: generate a response as this specific character. */

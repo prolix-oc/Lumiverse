@@ -47,6 +47,7 @@ function slugifyName(name: string): string {
 export default function InputArea({ chatId }: InputAreaProps) {
   const navigate = useNavigate()
   const [text, setText] = useState('')
+  const [lastImpersonateInput, setLastImpersonateInput] = useState<string>('')
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
@@ -271,6 +272,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   // Restore draft on mount or chat switch
   useEffect(() => {
+    setLastImpersonateInput('')
     if (!saveDraftInput) return
     try {
       const saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId)
@@ -854,7 +856,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isStreaming) return
     const nonce = ++generationNonceRef.current
+    const impersonateInput = text.trim()
     beginStreaming(undefined, 'impersonate')
+    // Stash the input so the user can restore it after the run, and clear the box.
+    if (impersonateInput) {
+      setLastImpersonateInput(impersonateInput)
+      setText('')
+      try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
+      if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    }
     try {
       const forcedPresetId = mode === 'oneliner' ? impersonationPresetId : null
       const res = await generateApi.start({
@@ -865,6 +875,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         force_preset_id: !!forcedPresetId,
         generation_type: 'impersonate',
         impersonate_mode: mode,
+        impersonate_input: impersonateInput || undefined,
       })
       if (generationNonceRef.current !== nonce) return
       startStreaming(res.generationId)
@@ -876,7 +887,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Impersonation Failed' })
     }
-  }, [chatId, isStreaming, activeProfileId, activePersonaId, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, text, activeProfileId, activePersonaId, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
 
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
@@ -1575,6 +1586,33 @@ export default function InputArea({ chatId }: InputAreaProps) {
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
               <div className={styles.extrasSection}>
                 <div className={styles.quickSetName}>Impersonate</div>
+                {lastImpersonateInput && (
+                  <button
+                    type="button"
+                    className={styles.popRowBtn}
+                    title={lastImpersonateInput}
+                    onClick={() => {
+                      setOpenPopover(null)
+                      setText((prev) => prev ? `${prev}\n${lastImpersonateInput}` : lastImpersonateInput)
+                      setLastImpersonateInput('')
+                      requestAnimationFrame(() => {
+                        if (textareaRef.current) {
+                          textareaRef.current.style.height = 'auto'
+                          textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 180) + 'px'
+                          textareaRef.current.focus()
+                        }
+                      })
+                    }}
+                  >
+                    <span className={styles.personaMain}>
+                      <ScrollText size={14} />
+                      <span className={styles.personaNameGroup}>
+                        <span>Restore last input</span>
+                        <span className={styles.personaTitle}>{lastImpersonateInput.length > 60 ? lastImpersonateInput.slice(0, 60) + '…' : lastImpersonateInput}</span>
+                      </span>
+                    </span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className={styles.popRowBtn}
