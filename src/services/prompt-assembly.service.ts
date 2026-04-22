@@ -29,7 +29,7 @@ import {
   sanitizeForVectorization,
   type SanitizeOptions,
 } from "../utils/content-sanitizer";
-import { getReasoningStripOptions } from "../utils/reasoning-strip";
+import { getReasoningStripOptions, hasReasoningDelimiters, resolveReasoningDelimiters } from "../utils/reasoning-strip";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as globalAddonsSvc from "./global-addons.service";
@@ -3703,11 +3703,11 @@ function stripReasoningFromChatHistory(
   const keepInHistory = reasoningSettings.keepInHistory ?? -1;
   if (keepInHistory === -1) return;
 
-  const rawPrefix = (reasoningSettings.prefix ?? "<think>\n").replace(/^\n+|\n+$/g, "");
-  const rawSuffix = (reasoningSettings.suffix ?? "\n</think>").replace(/^\n+|\n+$/g, "");
+  const delimiters = resolveReasoningDelimiters(reasoningSettings);
+  if (!hasReasoningDelimiters(delimiters)) return;
 
-  const escapedPrefix = rawPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedSuffix = rawSuffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedPrefix = delimiters.prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedSuffix = delimiters.suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`\\s*${escapedPrefix}[\\s\\S]*?${escapedSuffix}\\s*`, "g");
 
   const endIdx = firstChatIdx + historyCount;

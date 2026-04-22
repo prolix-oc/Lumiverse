@@ -49,6 +49,12 @@ import {
 } from "./council/tool-runtime";
 import { executeHostCouncilTool } from "./council/host-tools";
 import * as packsSvc from "./packs.service";
+import {
+  GuidedReasoningStreamParser,
+  closeUnterminatedDelimitedReasoning,
+  extractDelimitedReasoning,
+  resolveReasoningDelimiters,
+} from "../utils/reasoning-strip";
 
 interface GenerateInput {
   userId: string;
@@ -251,22 +257,8 @@ interface InlineCouncilToolResult {
 function closeUnterminatedReasoningTags(userId: string, content: string): string {
   if (!content) return content;
 
-  // Get user's configured reasoning tags, fallback to defaults
   const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
-  const prefix = ((reasoningSetting?.value?.prefix as string) || "<think>\n").replace(/^\n+|\n+$/g, "");
-  const suffix = ((reasoningSetting?.value?.suffix as string) || "\n</think>").replace(/^\n+|\n+$/g, "");
-
-  // Check if content has an opening tag without a matching close
-  const lastOpenIdx = content.lastIndexOf(prefix);
-  if (lastOpenIdx === -1) return content;
-
-  const afterOpen = content.indexOf(suffix, lastOpenIdx + prefix.length);
-  if (afterOpen === -1) {
-    // Unclosed tag — append the suffix
-    return content + suffix;
-  }
-
-  return content;
+  return closeUnterminatedDelimitedReasoning(content, resolveReasoningDelimiters(reasoningSetting?.value));
 }
 
 /**
@@ -1563,15 +1555,8 @@ async function runGeneration(
   // bypasses this — it's already separated at the provider level.
   const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
   const cotAutoParse = reasoningSetting?.value?.autoParse === true;
-  const cotPrefix = cotAutoParse
-    ? ((reasoningSetting?.value?.prefix as string) || "<think>\n").replace(/^\n+|\n+$/g, "")
-    : "";
-  const cotSuffix = cotAutoParse
-    ? ((reasoningSetting?.value?.suffix as string) || "\n</think>").replace(/^\n+|\n+$/g, "")
-    : "";
-  let cotPhase: "detecting" | "reasoning" | "content" = cotAutoParse && cotPrefix ? "detecting" : "content";
-  let cotDetectBuffer = "";
-  let cotSuffixBuffer = "";
+  const cotDelimiters = resolveReasoningDelimiters(reasoningSetting?.value);
+  const cotParser = new GuidedReasoningStreamParser(cotDelimiters, cotAutoParse);
 
   function emitContentToken(text: string) {
     if (!text) return;
@@ -1595,93 +1580,16 @@ async function runGeneration(
     }, userId);
   }
 
-  function processReasoningChunk(token: string) {
-    cotSuffixBuffer += token;
-    const suffixIdx = cotSuffixBuffer.indexOf(cotSuffix);
-    if (suffixIdx !== -1) {
-      emitReasoningToken(cotSuffixBuffer.slice(0, suffixIdx));
-      const afterSuffix = cotSuffixBuffer.slice(suffixIdx + cotSuffix.length);
-      cotPhase = "content";
-      cotSuffixBuffer = "";
-      if (afterSuffix) emitContentToken(afterSuffix);
-    } else {
-      // Emit chars that can't be part of the suffix (safe lookback)
-      const safe = cotSuffixBuffer.length - cotSuffix.length;
-      if (safe > 0) {
-        emitReasoningToken(cotSuffixBuffer.slice(0, safe));
-        cotSuffixBuffer = cotSuffixBuffer.slice(safe);
-      }
-    }
-  }
-
   function processContentToken(token: string) {
-    if (cotPhase === "content") {
-      if (!cotPrefix) {
-        emitContentToken(token);
-        return;
-      }
-      // Scan content for reasoning prefix re-entry (handles mid-response thinking tags)
-      cotDetectBuffer += token;
-      const prefixIdx = cotDetectBuffer.indexOf(cotPrefix);
-      if (prefixIdx !== -1) {
-        // Full prefix found — emit content before it, switch to reasoning
-        if (prefixIdx > 0) emitContentToken(cotDetectBuffer.slice(0, prefixIdx));
-        cotPhase = "reasoning";
-        const afterPrefix = cotDetectBuffer.slice(prefixIdx + cotPrefix.length);
-        cotDetectBuffer = "";
-        if (afterPrefix) processReasoningChunk(afterPrefix);
-        return;
-      }
-      // Check if the buffer tail could be the start of the prefix (partial match)
-      let partialLen = Math.min(cotDetectBuffer.length, cotPrefix.length - 1);
-      while (partialLen > 0) {
-        if (cotPrefix.startsWith(cotDetectBuffer.slice(-partialLen))) break;
-        partialLen--;
-      }
-      // Emit everything that's definitely content (not a potential prefix start)
-      const safeLen = cotDetectBuffer.length - partialLen;
-      if (safeLen > 0) {
-        emitContentToken(cotDetectBuffer.slice(0, safeLen));
-        cotDetectBuffer = cotDetectBuffer.slice(safeLen);
-      }
-      return;
-    }
-    if (cotPhase === "detecting") {
-      cotDetectBuffer += token;
-      const trimmed = cotDetectBuffer.trimStart();
-      if (trimmed.length >= cotPrefix.length && trimmed.startsWith(cotPrefix)) {
-        cotPhase = "reasoning";
-        const afterPrefix = trimmed.slice(cotPrefix.length);
-        cotDetectBuffer = "";
-        if (afterPrefix) processReasoningChunk(afterPrefix);
-      } else if (cotPrefix.startsWith(trimmed)) {
-        // Partial match — keep buffering
-      } else {
-        // No prefix at response start — switch to content which also scans for prefix
-        cotPhase = "content";
-        const buf = cotDetectBuffer;
-        cotDetectBuffer = "";
-        processContentToken(buf);
-      }
-      return;
-    }
-    processReasoningChunk(token);
+    const parsed = cotParser.push(token);
+    if (parsed.reasoning) emitReasoningToken(parsed.reasoning);
+    if (parsed.content) emitContentToken(parsed.content);
   }
 
   function flushCotBuffers() {
-    if (cotDetectBuffer) {
-      if (cotPhase === "reasoning") {
-        emitReasoningToken(cotDetectBuffer);
-      } else {
-        emitContentToken(cotDetectBuffer);
-      }
-      cotDetectBuffer = "";
-    }
-    if (cotPhase === "reasoning" && cotSuffixBuffer) {
-      emitReasoningToken(cotSuffixBuffer);
-      cotSuffixBuffer = "";
-    }
-    cotPhase = "content";
+    const parsed = cotParser.flush();
+    if (parsed.reasoning) emitReasoningToken(parsed.reasoning);
+    if (parsed.content) emitContentToken(parsed.content);
   }
 
   // Persist whatever was streamed before termination. Shared between user-
@@ -1908,28 +1816,11 @@ async function runGeneration(
       // in ways the streaming state machine didn't catch, and ensures the
       // saved message content is always clean of reasoning tag markup.
       {
-        const ppPrefix = ((reasoningSetting?.value?.prefix as string) || "<think>\n").replace(/^\n+|\n+$/g, "");
-        const ppSuffix = ((reasoningSetting?.value?.suffix as string) || "\n</think>").replace(/^\n+|\n+$/g, "");
-        if (ppPrefix && ppSuffix && fullContent.includes(ppPrefix)) {
-          let cleaned = fullContent;
-          let extracted = "";
-          let idx = cleaned.indexOf(ppPrefix);
-          while (idx !== -1) {
-            const endIdx = cleaned.indexOf(ppSuffix, idx + ppPrefix.length);
-            if (endIdx !== -1) {
-              extracted += cleaned.slice(idx + ppPrefix.length, endIdx);
-              cleaned = cleaned.slice(0, idx) + cleaned.slice(endIdx + ppSuffix.length);
-            } else {
-              // Unclosed tag — extract everything after prefix
-              extracted += cleaned.slice(idx + ppPrefix.length);
-              cleaned = cleaned.slice(0, idx);
-              break;
-            }
-            idx = cleaned.indexOf(ppPrefix);
-          }
-          if (extracted) {
-            fullContent = cleaned;
-            fullReasoning = (fullReasoning ? fullReasoning + "\n" : "") + extracted;
+        if (cotAutoParse) {
+          const extracted = extractDelimitedReasoning(fullContent, cotDelimiters);
+          if (extracted.reasoning) {
+            fullContent = extracted.cleaned;
+            fullReasoning = (fullReasoning ? fullReasoning + "\n" : "") + extracted.reasoning;
           }
         }
       }
