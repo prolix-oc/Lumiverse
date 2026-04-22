@@ -241,12 +241,74 @@ export class AnthropicProvider implements LlmProvider {
     });
   }
 
+  private isAnthropicSystemTextBlock(value: unknown): value is { type: "text"; text: string; [key: string]: unknown } {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    return record.type === "text" && typeof record.text === "string";
+  }
+
+  /**
+   * Anthropic's `system` field accepts either a plain string or an array of
+   * Anthropic text blocks. Preserve valid Anthropic-native blocks as-is, and
+   * only flatten foreign/custom shapes into plain text.
+   */
+  private normalizeSystemParam(value: unknown): string | Array<{ type: "text"; text: string; [key: string]: unknown }> | undefined {
+    if (typeof value === "string") {
+      return value || undefined;
+    }
+    if (this.isAnthropicSystemTextBlock(value)) {
+      return [value];
+    }
+    if (Array.isArray(value) && value.length > 0 && value.every((item) => this.isAnthropicSystemTextBlock(item))) {
+      return value;
+    }
+
+    const chunks: string[] = [];
+
+    const visit = (input: unknown) => {
+      if (typeof input === "string") {
+        if (input) chunks.push(input);
+        return;
+      }
+      if (Array.isArray(input)) {
+        for (const item of input) visit(item);
+        return;
+      }
+      if (!input || typeof input !== "object") return;
+
+      const record = input as Record<string, unknown>;
+      if (this.isAnthropicSystemTextBlock(record)) {
+        if (record.text) chunks.push(record.text);
+        return;
+      }
+      if (typeof record.text === "string") {
+        if (record.text) chunks.push(record.text);
+        return;
+      }
+      if (typeof record.content === "string") {
+        if (record.content) chunks.push(record.content);
+        return;
+      }
+      if (record.content !== undefined) {
+        visit(record.content);
+        return;
+      }
+      if (Array.isArray(record.parts)) {
+        visit(record.parts);
+      }
+    };
+
+    visit(value);
+    if (chunks.length === 0) return undefined;
+    return chunks.join("\n\n");
+  }
+
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
   private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming"]);
 
   /** Keys explicitly handled by Anthropic's buildBody — excluded from passthrough. */
   private static readonly HANDLED_PARAMS = new Set([
-    "temperature", "max_tokens", "top_p", "top_k", "stop", "thinking", "output_config",
+    "temperature", "max_tokens", "top_p", "top_k", "stop", "thinking", "output_config", "system",
   ]);
 
   private buildBody(request: GenerationRequest, stream: boolean): any {
@@ -263,8 +325,11 @@ export class AnthropicProvider implements LlmProvider {
       stream,
     };
 
+    const normalizedParamSystem = this.normalizeSystemParam(params.system);
     if (systemMessages.length > 0) {
       body.system = systemMessages.map((m) => getTextContent(m)).join("\n\n");
+    } else if (normalizedParamSystem) {
+      body.system = normalizedParamSystem;
     }
 
     if (params.temperature !== undefined) body.temperature = params.temperature;
