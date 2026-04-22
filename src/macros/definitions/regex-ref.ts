@@ -54,6 +54,11 @@ export function registerRegexRefMacros(): void {
 
       try {
         let result: string;
+        let findRegex = script.find_regex;
+
+        if (script.substitute_macros !== "none") {
+          findRegex = (await evaluate(findRegex, ctx.env, registry)).text;
+        }
 
         if (script.substitute_macros === "raw") {
           // "raw" mode: substitute capture groups BEFORE macro resolution
@@ -61,7 +66,7 @@ export function registerRegexRefMacros(): void {
           // collection runs in the regex sandbox so a malicious script
           // pattern can't freeze the assembly thread.
           const matches = await regexCollectSandboxed(
-            script.find_regex,
+            findRegex,
             script.flags,
             text,
             REGEX_REF_TIMEOUT_MS,
@@ -98,7 +103,7 @@ export function registerRegexRefMacros(): void {
               : resolved;
           }
           result = await regexReplaceSandboxed(
-            script.find_regex,
+            findRegex,
             script.flags,
             text,
             replaceString,

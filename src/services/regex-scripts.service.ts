@@ -531,6 +531,19 @@ function rebuildFromMatches(
 }
 
 /**
+ * Resolve macros in a regex find pattern based on the substitute_macros mode.
+ * The result stays as plain regex source, so `$` is not escaped here.
+ */
+async function resolveFindMacros(
+  findRegex: string,
+  mode: RegexScript["substitute_macros"],
+  macroEnv: MacroEnv,
+): Promise<string> {
+  if (mode === "none") return findRegex;
+  return (await evaluate(findRegex, macroEnv, registry)).text;
+}
+
+/**
  * Resolve macros in a regex replacement string based on the substitute_macros mode.
  * - "none": return as-is
  * - "raw": resolve macros, result may contain regex back-references ($1, etc.)
@@ -557,9 +570,8 @@ async function resolveReplacementMacros(
  * Apply regex scripts to content string.
  * Returns the transformed content.
  *
- * When `macroEnv` is provided, scripts with `substitute_macros` set to "raw" or
- * "escaped" will have their replacement strings resolved through the macro engine
- * before being applied.
+ * When `macroEnv` is provided, scripts with `substitute_macros` enabled resolve
+ * both their `find_regex` and `replace_string` through the macro engine.
  *
  * For "raw" mode, capture groups ($1, $2, etc.) are substituted into the
  * replacement template BEFORE macro resolution, so macros can reference
@@ -585,13 +597,18 @@ export async function applyRegexScripts(
     }
 
     try {
+      let findRegex = script.find_regex;
+      if (macroEnv && script.substitute_macros !== "none") {
+        findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv);
+      }
+
       if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
         // BEFORE macro resolution so $1, $2, etc. are available inside macros.
         // Match collection runs in the regex sandbox so a pathological
         // user-authored pattern can't freeze the event loop here.
         const matches: SandboxMatch[] = await regexCollectSandboxed(
-          script.find_regex,
+          findRegex,
           script.flags,
           result,
           REGEX_SCRIPT_TIMEOUT_MS,
@@ -615,7 +632,7 @@ export async function applyRegexScripts(
           replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
         }
         result = await regexReplaceSandboxed(
-          script.find_regex,
+          findRegex,
           script.flags,
           result,
           replaceString,

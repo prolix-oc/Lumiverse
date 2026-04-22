@@ -9,6 +9,7 @@ export enum EventType {
   MESSAGE_EDITED = 'MESSAGE_EDITED',
   MESSAGE_DELETED = 'MESSAGE_DELETED',
   MESSAGE_SWIPED = 'MESSAGE_SWIPED',
+  CHAT_CHANGED = 'CHAT_CHANGED',
   GENERATION_STARTED = 'GENERATION_STARTED',
   STREAM_TOKEN_RECEIVED = 'STREAM_TOKEN_RECEIVED',
   GENERATION_ENDED = 'GENERATION_ENDED',
@@ -246,6 +247,12 @@ export interface MessageEditedPayload {
 export interface MessageDeletedPayload {
   chatId: string
   messageId: string
+}
+
+export interface ChatChangedPayload {
+  chat?: import('./api').Chat
+  chatId?: string
+  reattributedUserMessages?: number
 }
 
 export type MessageSwipeAction = 'added' | 'updated' | 'deleted' | 'navigated'

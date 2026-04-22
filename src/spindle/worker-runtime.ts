@@ -49,6 +49,16 @@ type MacroInvocationState = {
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
+  | {
+      type: "user_storage_write_binary";
+      requestId: string;
+      path: string;
+      data: Uint8Array;
+      userId?: string;
+    }
+  | { type: "user_storage_move"; requestId: string; from: string; to: string; userId?: string }
+  | { type: "user_storage_stat"; requestId: string; path: string; userId?: string }
   | {
       type: "tokens_count_text";
       requestId: string;
@@ -82,6 +92,18 @@ type RuntimeSpindleAPI = SpindleAPI & {
       options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
     ): Promise<TokenCountResult>;
     countChat(chatId: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
+  };
+  userStorage: SpindleAPI["userStorage"] & {
+    readBinary(path: string, userId?: string): Promise<Uint8Array>;
+    writeBinary(path: string, data: Uint8Array, userId?: string): Promise<void>;
+    move(from: string, to: string, userId?: string): Promise<void>;
+    stat(path: string, userId?: string): Promise<{
+      exists: boolean;
+      isFile: boolean;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedAt: string;
+    }>;
   };
 };
 
@@ -585,6 +607,21 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       await request({ type: "user_storage_write", requestId, path, data, userId });
     },
+    async readBinary(path: string, userId?: string): Promise<Uint8Array> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "user_storage_read_binary",
+        requestId,
+        path,
+        userId,
+      });
+      return result as Uint8Array;
+    },
+    async writeBinary(path: string, data: Uint8Array, userId?: string): Promise<void> {
+      assertMutationAllowed("spindle.userStorage.writeBinary()");
+      const requestId = crypto.randomUUID();
+      await request({ type: "user_storage_write_binary", requestId, path, data, userId });
+    },
     async delete(path: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.delete()");
       const requestId = crypto.randomUUID();
@@ -609,6 +646,28 @@ const spindleApi: RuntimeSpindleAPI = {
       assertMutationAllowed("spindle.userStorage.mkdir()");
       const requestId = crypto.randomUUID();
       await request({ type: "user_storage_mkdir", requestId, path, userId });
+    },
+    async move(from: string, to: string, userId?: string): Promise<void> {
+      assertMutationAllowed("spindle.userStorage.move()");
+      const requestId = crypto.randomUUID();
+      await request({ type: "user_storage_move", requestId, from, to, userId });
+    },
+    async stat(path: string, userId?: string): Promise<{
+      exists: boolean;
+      isFile: boolean;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedAt: string;
+    }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "user_storage_stat", requestId, path, userId });
+      return result as {
+        exists: boolean;
+        isFile: boolean;
+        isDirectory: boolean;
+        sizeBytes: number;
+        modifiedAt: string;
+      };
     },
     async getJson<T>(
       path: string,

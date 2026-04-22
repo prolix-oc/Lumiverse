@@ -8,6 +8,7 @@ import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
 import { toast } from '@/lib/toast'
+import { invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import type {
@@ -18,6 +19,7 @@ import type {
   MessageEditedPayload,
   MessageDeletedPayload,
   MessageSwipedPayload,
+  ChatChangedPayload,
   LumiPipelineStartedPayload,
   LumiModuleDonePayload,
   LumiPipelineCompletedPayload,
@@ -60,6 +62,8 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_SENT, (payload: MessageSentPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
+          invalidateDisplayRegexCache()
+
           // Suppress completed assistant messages while streaming — the streaming
           // card already displays the content. GENERATION_ENDED will reconcile
           // the full message list, preventing a duplicate bubble flash.
@@ -100,6 +104,8 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
+          invalidateDisplayRegexCache()
+
           // During a continue, the backend updates the target message with combined
           // content right before GENERATION_ENDED. Skip the update while streaming
           // to avoid a brief content duplication frame — reconciliation after
@@ -119,6 +125,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.removeMessage(payload.messageId)
+          invalidateDisplayRegexCache()
         }
       }),
 
@@ -126,6 +133,15 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.updateMessage(payload.message.id, payload.message)
+          invalidateDisplayRegexCache()
+        }
+      }),
+
+      wsClient.on(EventType.CHAT_CHANGED, (payload: ChatChangedPayload) => {
+        const state = store.getState()
+        const changedChatId = payload.chat?.id ?? payload.chatId
+        if (changedChatId === state.activeChatId) {
+          invalidateDisplayRegexCache()
         }
       }),
 
