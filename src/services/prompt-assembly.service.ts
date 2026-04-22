@@ -671,7 +671,8 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         if (!embCfg.enabled) return;
         if (dbSignal.aborted) return;
         const queryText = messages.slice(-6).map(m => m.content).join(" ");
-        await databankSvc.searchDatabanks(ctx.userId, ctx.chatId, dbIds, queryText, 4, dbSignal);
+        const retrievalTopK = databankSvc.loadDatabankSettings(ctx.userId).retrievalTopK;
+        await databankSvc.searchDatabanks(ctx.userId, ctx.chatId, dbIds, queryText, retrievalTopK, dbSignal);
       })().catch(err => {
         if (dbSignal.aborted) return;
         console.warn("[prompt-assembly] Background databank query failed:", err);
@@ -841,6 +842,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     "contextFilters",
     "summarization",
     "chatMemorySettings",
+    "databankSettings",
     "council_settings",
   ]);
 
@@ -872,6 +874,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   const chatMemSettings = cortexChatMemSettings ?? (chatMemSettingsRaw
     ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
     : null);
+  const databankSettings = databankSvc.normalizeDatabankSettings(settingsMap.get("databankSettings"));
   const perChatOverrides = cortexPerChatOverrides ?? ((chat.metadata?.memory_settings as import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null);
 
   // Memory Cortex: use warm cache hits only. On a cold miss, fall back
@@ -929,7 +932,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // ---- Databank retrieval ----
   // Use the warm-cache pattern: check if a previous generation cached results.
   // The background pre-flight fires alongside cortex (added below).
-  const databankResult = databankSvc.getCachedDatabankResult(ctx.userId, ctx.chatId);
+  const databankResult = databankSvc.getCachedDatabankResult(ctx.userId, ctx.chatId, databankSettings.retrievalTopK);
   const activeDatabankIds = databankSvc.resolveActiveDatabankIds(
     ctx.userId,
     ctx.chatId,

@@ -326,7 +326,8 @@ app.post("/search", async (c) => {
     ? Array.isArray(characterId) ? characterId : [characterId]
     : [];
   const activeBankIds = databank.resolveActiveDatabankIds(userId, chatId || "", characterIds);
-  const results = await databank.searchDirect(userId, activeBankIds, query, limit || 8);
+  const defaultLimit = databank.loadDatabankSettings(userId).retrievalTopK;
+  const results = await databank.searchDirect(userId, activeBankIds, query, limit || defaultLimit);
   return c.json({ data: results });
 });
 

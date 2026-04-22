@@ -20,8 +20,8 @@ interface CachedResult {
 
 const resultCache = new Map<string, CachedResult>();
 
-function cacheKey(userId: string, chatId: string): string {
-  return `${userId}:${chatId}`;
+function cacheKey(userId: string, chatId: string, limit: number): string {
+  return `${userId}:${chatId}:${limit}`;
 }
 
 /**
@@ -30,18 +30,22 @@ function cacheKey(userId: string, chatId: string): string {
  * any future test fixture re-using chat ids) can never serve another user's
  * results from the in-memory cache.
  */
-export function getCachedDatabankResult(userId: string, chatId: string): DatabankRetrievalResult | null {
-  const cached = resultCache.get(cacheKey(userId, chatId));
+export function getCachedDatabankResult(userId: string, chatId: string, limit: number): DatabankRetrievalResult | null {
+  const key = cacheKey(userId, chatId, limit);
+  const cached = resultCache.get(key);
   if (!cached) return null;
   if (Date.now() - cached.cachedAt > CACHE_TTL_MS) {
-    resultCache.delete(cacheKey(userId, chatId));
+    resultCache.delete(key);
     return null;
   }
   return cached.result;
 }
 
 export function clearCache(userId: string, chatId: string): void {
-  resultCache.delete(cacheKey(userId, chatId));
+  const prefix = `${userId}:${chatId}:`;
+  for (const key of resultCache.keys()) {
+    if (key.startsWith(prefix)) resultCache.delete(key);
+  }
 }
 
 // ─── Search ───────────────────────────────────────────────────
@@ -91,7 +95,7 @@ export async function searchDatabanks(
     // A truncated or abort-interrupted result shouldn't poison the next
     // generation's warm cache.
     if (!signal?.aborted) {
-      resultCache.set(cacheKey(userId, chatId), { result, cachedAt: Date.now() });
+      resultCache.set(cacheKey(userId, chatId, limit), { result, cachedAt: Date.now() });
     }
 
     return result;

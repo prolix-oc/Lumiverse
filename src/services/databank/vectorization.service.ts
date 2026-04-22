@@ -10,6 +10,7 @@ import * as embeddingsSvc from "../embeddings.service";
 import * as crud from "./databank-crud.service";
 import { parseDocument } from "./document-parser.service";
 import { chunkDocument } from "./document-chunker.service";
+import { loadDatabankSettings } from "./databank-settings.service";
 import type { DatabankDocument } from "./types";
 
 const BATCH_SIZE = 50;
@@ -39,7 +40,12 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     }
 
     // 2. Chunk the text
-    const chunkResults = chunkDocument(parsed.text);
+    const databankSettings = loadDatabankSettings(userId);
+    const chunkResults = chunkDocument(parsed.text, {
+      targetTokens: databankSettings.chunkTargetTokens,
+      maxTokens: databankSettings.chunkMaxTokens,
+      overlapTokens: databankSettings.chunkOverlapTokens,
+    });
     if (chunkResults.length === 0) {
       crud.updateDocumentStatus(docId, "error", { errorMessage: "No chunks produced from document" });
       emitStatus(userId, doc, "error", "No chunks produced from document");

@@ -2,12 +2,30 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Database, Plus, Trash2, Upload, Search, FileText, RefreshCw, Globe, User, MessageSquare, X, ChevronDown, Check } from 'lucide-react'
 import { useStore } from '@/store'
 import { databankApi } from '@/api/databank'
+import { settingsApi } from '@/api/settings'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
 import type { Databank, DatabankDocument } from '@/api/databank'
+import type { DatabankSettings } from '@/types/databank-settings'
 import styles from './DatabankPanel.module.css'
 
 type Scope = 'global' | 'character' | 'chat'
+
+const DEFAULT_DATABANK_SETTINGS: DatabankSettings = {
+  chunkTargetTokens: 800,
+  chunkMaxTokens: 1600,
+  chunkOverlapTokens: 120,
+  retrievalTopK: 4,
+}
+
+function normalizeDatabankSettings(value: unknown): DatabankSettings {
+  const raw = (value && typeof value === 'object') ? value as Partial<DatabankSettings> : {}
+  const target = Math.min(2000, Math.max(200, Math.floor(raw.chunkTargetTokens ?? DEFAULT_DATABANK_SETTINGS.chunkTargetTokens)))
+  const max = Math.min(4000, Math.max(target, Math.floor(raw.chunkMaxTokens ?? DEFAULT_DATABANK_SETTINGS.chunkMaxTokens)))
+  const overlap = Math.min(500, Math.max(0, Math.floor(raw.chunkOverlapTokens ?? DEFAULT_DATABANK_SETTINGS.chunkOverlapTokens)))
+  const retrievalTopK = Math.min(20, Math.max(1, Math.floor(raw.retrievalTopK ?? DEFAULT_DATABANK_SETTINGS.retrievalTopK)))
+  return { chunkTargetTokens: target, chunkMaxTokens: max, chunkOverlapTokens: overlap, retrievalTopK }
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -52,11 +70,64 @@ export default function DatabankPanel() {
   const [chatMetadata, setChatMetadata] = useState<Record<string, any>>({})
   const [charPickerOpen, setCharPickerOpen] = useState(false)
   const [chatPickerOpen, setChatPickerOpen] = useState(false)
+  const [databankSettings, setDatabankSettings] = useState<DatabankSettings>(DEFAULT_DATABANK_SETTINGS)
+  const [databankSettingsLoading, setDatabankSettingsLoading] = useState(true)
+  const [databankSettingsSaving, setDatabankSettingsSaving] = useState(false)
+  const [databankSettingsStatus, setDatabankSettingsStatus] = useState<string | null>(null)
+  const [reprocessingAll, setReprocessingAll] = useState(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const databankSettingsLoadedRef = useRef(false)
+  const databankSettingsDirtyRef = useRef(false)
 
   // Load all banks for cross-reference selectors
   useEffect(() => {
     databankApi.list({ limit: 200 }).then((r) => setAllBanks(r.data)).catch(() => {})
   }, [databanks]) // refresh when databanks change (create/delete)
+
+  useEffect(() => {
+    let cancelled = false
+    setDatabankSettingsLoading(true)
+    settingsApi.get('databankSettings')
+      .then((row) => {
+        if (cancelled) return
+        setDatabankSettings(normalizeDatabankSettings(row.value))
+        databankSettingsLoadedRef.current = true
+      })
+      .catch(() => {
+        if (cancelled) return
+        setDatabankSettings(DEFAULT_DATABANK_SETTINGS)
+        databankSettingsLoadedRef.current = true
+      })
+      .finally(() => {
+        if (!cancelled) setDatabankSettingsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (!databankSettingsLoadedRef.current || !databankSettingsDirtyRef.current) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setDatabankSettingsSaving(true)
+    setDatabankSettingsStatus('Saving databank settings...')
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await settingsApi.put('databankSettings', databankSettings)
+        databankSettingsDirtyRef.current = false
+        setDatabankSettingsStatus('Databank settings saved')
+      } catch (e: any) {
+        setDatabankSettingsStatus(e?.body?.error || e?.message || 'Failed to save databank settings')
+      } finally {
+        setDatabankSettingsSaving(false)
+      }
+    }, 400)
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
+  }, [databankSettings])
 
   // Load character databank bindings
   useEffect(() => {
@@ -196,6 +267,11 @@ export default function DatabankPanel() {
     } catch { /* ignore */ }
   }, [selectedDatabankId, updateBankStore])
 
+  const handleDatabankSettingsUpdate = useCallback((patch: Partial<DatabankSettings>) => {
+    databankSettingsDirtyRef.current = true
+    setDatabankSettings((current) => normalizeDatabankSettings({ ...current, ...patch }))
+  }, [])
+
   // ── Upload files ──
   const handleFiles = useCallback(async (files: FileList | File[]) => {
     if (!selectedDatabankId) return
@@ -223,6 +299,36 @@ export default function DatabankPanel() {
       setError(e.message)
     }
   }, [selectedDatabankId, removeDatabankDocument])
+
+  const handleReprocessDoc = useCallback(async (docId: string) => {
+    if (!selectedDatabankId) return
+    try {
+      updateDatabankDocument(docId, { status: 'pending', errorMessage: null })
+      await databankApi.reprocessDocument(selectedDatabankId, docId)
+    } catch (e: any) {
+      setError(e?.body?.error || e?.message || 'Failed to reprocess document')
+      await loadDocs()
+    }
+  }, [selectedDatabankId, updateDatabankDocument, loadDocs])
+
+  const handleReprocessAll = useCallback(async () => {
+    const docsToReprocess = databankDocuments.filter((doc) => doc.status !== 'pending' && doc.status !== 'processing')
+    if (!selectedDatabankId || docsToReprocess.length === 0) return
+    setError(null)
+    setReprocessingAll(true)
+    try {
+      const docIds = docsToReprocess.map((doc) => doc.id)
+      docIds.forEach((docId) => updateDatabankDocument(docId, { status: 'pending', errorMessage: null }))
+      for (const docId of docIds) {
+        await databankApi.reprocessDocument(selectedDatabankId, docId)
+      }
+    } catch (e: any) {
+      setError(e?.body?.error || e?.message || 'Failed to reprocess databank documents')
+      await loadDocs()
+    } finally {
+      setReprocessingAll(false)
+    }
+  }, [selectedDatabankId, databankDocuments, updateDatabankDocument, loadDocs])
 
   // ── Scrape URL ──
   const [scrapeUrl, setScrapeUrl] = useState('')
@@ -265,6 +371,7 @@ export default function DatabankPanel() {
   const filteredDocs = docSearch
     ? databankDocuments.filter((d) => d.name.toLowerCase().includes(docSearch.toLowerCase()))
     : databankDocuments
+  const reprocessableDocs = databankDocuments.filter((doc) => doc.status !== 'pending' && doc.status !== 'processing')
 
   const activeCharBanks = allBanks.filter((b) => charDatabankIds.includes(b.id))
   const activeChatBanks = allBanks.filter((b) => chatDatabankIds.includes(b.id))
@@ -400,6 +507,68 @@ export default function DatabankPanel() {
         ))}
       </div>
 
+      <div className={styles.bankDetails}>
+        <div className={styles.settingsHeaderRow}>
+          <div>
+            <div className={styles.settingsTitle}>Databank Retrieval</div>
+            <div className={styles.settingsHint}>Applies to all databanks. Reprocess existing documents after changing chunk sizes.</div>
+          </div>
+          <span className={styles.settingsStatus}>
+            {databankSettingsLoading ? 'Loading...' : databankSettingsSaving ? 'Saving...' : databankSettingsStatus ?? 'Ready'}
+          </span>
+        </div>
+        <div className={styles.settingsGrid}>
+          <div className={styles.fieldGroup}>
+            <label className={styles.fieldLabel}>Chunk Target Tokens</label>
+            <input
+              className={styles.fieldInput}
+              type="number"
+              min={200}
+              max={2000}
+              value={databankSettings.chunkTargetTokens}
+              disabled={databankSettingsLoading}
+              onChange={(e) => handleDatabankSettingsUpdate({ chunkTargetTokens: Number(e.target.value) || DEFAULT_DATABANK_SETTINGS.chunkTargetTokens })}
+            />
+          </div>
+          <div className={styles.fieldGroup}>
+            <label className={styles.fieldLabel}>Chunk Max Tokens</label>
+            <input
+              className={styles.fieldInput}
+              type="number"
+              min={200}
+              max={4000}
+              value={databankSettings.chunkMaxTokens}
+              disabled={databankSettingsLoading}
+              onChange={(e) => handleDatabankSettingsUpdate({ chunkMaxTokens: Number(e.target.value) || DEFAULT_DATABANK_SETTINGS.chunkMaxTokens })}
+            />
+          </div>
+          <div className={styles.fieldGroup}>
+            <label className={styles.fieldLabel}>Chunk Overlap Tokens</label>
+            <input
+              className={styles.fieldInput}
+              type="number"
+              min={0}
+              max={500}
+              value={databankSettings.chunkOverlapTokens}
+              disabled={databankSettingsLoading}
+              onChange={(e) => handleDatabankSettingsUpdate({ chunkOverlapTokens: Number(e.target.value) || 0 })}
+            />
+          </div>
+          <div className={styles.fieldGroup}>
+            <label className={styles.fieldLabel}>Retrieved Chunks</label>
+            <input
+              className={styles.fieldInput}
+              type="number"
+              min={1}
+              max={20}
+              value={databankSettings.retrievalTopK}
+              disabled={databankSettingsLoading}
+              onChange={(e) => handleDatabankSettingsUpdate({ retrievalTopK: Number(e.target.value) || DEFAULT_DATABANK_SETTINGS.retrievalTopK })}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Character picker for character scope */}
       {databankScopeFilter === 'character' && (
         <select
@@ -476,6 +645,18 @@ export default function DatabankPanel() {
       {/* Upload Zone */}
       {selectedDatabankId && (
         <>
+          <div className={styles.toolbarRow}>
+            <button
+              className={styles.secondaryBtn}
+              onClick={handleReprocessAll}
+              disabled={reprocessingAll || reprocessableDocs.length === 0}
+              title="Reprocess all documents in this databank"
+            >
+              <RefreshCw size={13} className={reprocessingAll ? styles.spin : ''} />
+              <span>{reprocessingAll ? 'Reprocessing...' : 'Reprocess All'}</span>
+            </button>
+            <span className={styles.toolbarHint}>Needed for existing documents after chunk-size changes.</span>
+          </div>
           <div
             className={`${styles.uploadZone} ${dragging ? styles.uploadZoneDragging : ''}`}
             onDragOver={handleDragOver}
@@ -555,10 +736,19 @@ export default function DatabankPanel() {
                   {formatFileSize(doc.fileSize)}
                   {doc.totalChunks > 0 && ` \u00B7 ${doc.totalChunks} chunks`}
                   {doc.slug && <span> &middot; #{doc.slug}</span>}
+                  {doc.errorMessage && <span> &middot; {doc.errorMessage}</span>}
                 </div>
               </div>
               <div className={styles.docActions}>
                 <StatusBadge status={doc.status} />
+                <button
+                  className={styles.smallActionBtn}
+                  onClick={(e) => { e.stopPropagation(); handleReprocessDoc(doc.id) }}
+                  title="Reprocess document"
+                  disabled={doc.status === 'pending' || doc.status === 'processing'}
+                >
+                  <RefreshCw size={12} />
+                </button>
                 <button
                   className={styles.smallDeleteBtn}
                   onClick={(e) => { e.stopPropagation(); handleDeleteDoc(doc.id) }}

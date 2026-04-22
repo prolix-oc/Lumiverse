@@ -206,6 +206,37 @@
   margin-top: 6px;
 }
 
+.settingsHeaderRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settingsTitle {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.settingsHint {
+  margin-top: 2px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.settingsStatus {
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  white-space: nowrap;
+}
+
+.settingsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 /* ── Top Bar ── */
 .topBar {
   display: flex;
@@ -334,6 +365,45 @@
   border-color: var(--lumiverse-primary);
   background: color-mix(in srgb, var(--lumiverse-primary) 5%, transparent);
   color: var(--lumiverse-primary);
+}
+
+.toolbarRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.secondaryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.secondaryBtn:hover:not(:disabled) {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.secondaryBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.toolbarHint {
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
 }
 
 .uploadIcon {
@@ -542,11 +612,42 @@
   opacity: 0;
 }
 
+.smallActionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  opacity: 0;
+}
+
+.docRow:hover .smallActionBtn,
 .docRow:hover .smallDeleteBtn {
   opacity: 1;
+}
+
+.smallActionBtn:hover {
+  background: color-mix(in srgb, var(--lumiverse-primary) 15%, transparent);
+  color: var(--lumiverse-primary);
 }
 
 .smallDeleteBtn:hover {
   background: color-mix(in srgb, var(--lumiverse-danger) 15%, transparent);
   color: var(--lumiverse-danger);
+}
+
+@media (max-width: 640px) {
+  .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsHeaderRow {
+    flex-direction: column;
+  }
 }
