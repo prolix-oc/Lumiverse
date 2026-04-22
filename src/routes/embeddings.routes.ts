@@ -30,8 +30,24 @@ app.post("/test", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json<{ text?: string }>();
   const sample = body.text?.trim() || "Lumiverse embedding connectivity test.";
-  const result = await embeddingsSvc.testEmbeddingConfig(userId, sample);
-  return c.json({ success: true, ...result, applied_dimensions: result.dimension });
+  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!cfg.enabled) {
+    return c.json({
+      error: "Embeddings are disabled. World books still fall back to keyword matching; enable embeddings to run a vector connectivity test.",
+    }, 400);
+  }
+  if (!cfg.has_api_key) {
+    return c.json({ error: "No embedding API key is configured." }, 400);
+  }
+
+  try {
+    const result = await embeddingsSvc.testEmbeddingConfig(userId, sample);
+    return c.json({ success: true, ...result, applied_dimensions: result.dimension });
+  } catch (err: any) {
+    const msg = err?.message || "Embedding test failed";
+    const status = /disabled|not configured/i.test(msg) ? 400 : 502;
+    return c.json({ error: msg }, status);
+  }
 });
 
 app.post("/world-books/:bookId/reindex", async (c) => {

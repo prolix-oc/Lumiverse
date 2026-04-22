@@ -4,6 +4,8 @@ import type { CreateCharacterInput } from "../types/character";
 import type { CreateRegexScriptInput, RegexTarget } from "../types/regex-script";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
 const MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024; // 100 MB (PNG text chunks)
 const MAX_CHARX_SIZE = 1000 * 1024 * 1024; // 1000 MB
 // Cap on the total bytes produced by .charx ZIP decompression. fflate's
@@ -34,6 +36,50 @@ export class CharacterImportError extends Error {
     this.code = code;
     this.status = status ?? (code === "file_too_large" || code === "archive_decompresses_too_large" ? 413 : 400);
   }
+}
+
+export type CharacterImportFormat = "png" | "charx" | "jpeg_polyglot" | "jpeg" | "json" | "unknown";
+
+function bufferStartsWith(buffer: Uint8Array, signature: Uint8Array): boolean {
+  return buffer.length >= signature.length && signature.every((byte, i) => buffer[i] === byte);
+}
+
+function looksLikePng(header: Uint8Array): boolean {
+  return bufferStartsWith(header, PNG_SIGNATURE);
+}
+
+function looksLikeZip(header: Uint8Array): boolean {
+  return bufferStartsWith(header, ZIP_SIGNATURE);
+}
+
+function looksLikeJpeg(header: Uint8Array): boolean {
+  return bufferStartsWith(header, JPEG_SIGNATURE);
+}
+
+function looksLikeJsonText(header: Uint8Array): boolean {
+  const sample = new TextDecoder().decode(header.subarray(0, 1024));
+  const trimmed = sample.replace(/^\uFEFF/, "").trimStart();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+export async function detectCharacterImportFormat(file: File): Promise<CharacterImportFormat> {
+  const nameLower = file.name?.toLowerCase() ?? "";
+  const peekSize = Math.min(file.size, 10_000_000);
+  const header = new Uint8Array(await file.slice(0, peekSize).arrayBuffer());
+
+  if (looksLikePng(header)) return "png";
+  if (looksLikeZip(header)) return "charx";
+  if (looksLikeJpeg(header)) return looksLikeJpegZipPolyglot(header) ? "jpeg_polyglot" : "jpeg";
+  if (looksLikeJsonText(header)) return "json";
+
+  if (file.type === "image/png" || nameLower.endsWith(".png")) return "png";
+  if (nameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed") {
+    return "charx";
+  }
+  if (/\.jpe?g$/i.test(nameLower) || file.type === "image/jpeg") return "jpeg";
+  if (nameLower.endsWith(".json") || file.type === "application/json" || file.type === "text/json") return "json";
+
+  return "unknown";
 }
 
 /**

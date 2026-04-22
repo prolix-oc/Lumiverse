@@ -591,7 +591,6 @@ app.post("/import-bulk", async (c) => {
 
     for (const file of files) {
       const filename = file.name || "unknown";
-      const filenameLower = filename.toLowerCase();
       try {
         let cardInput;
         let avatarFile: File | null = null;
@@ -600,18 +599,12 @@ app.post("/import-bulk", async (c) => {
         let risuModule: cardSvc.RisuModule | null = null;
         let expressionAssets: cardSvc.CharxExpressionAsset[] = [];
 
-        // Detect JPEG+ZIP polyglot (RisuAI card format)
-        const isJpeg = /\.jpe?g$/i.test(filenameLower) || file.type === "image/jpeg";
-        let isJpegPolyglot = false;
-        if (isJpeg) {
-          const peek = new Uint8Array(await file.slice(0, Math.min(file.size, 5_000_000)).arrayBuffer());
-          isJpegPolyglot = cardSvc.looksLikeJpegZipPolyglot(peek);
-        }
+        const detectedFormat = await cardSvc.detectCharacterImportFormat(file);
 
-        if (file.type === "image/png" || filenameLower.endsWith(".png")) {
+        if (detectedFormat === "png") {
           cardInput = await cardSvc.extractCardFromPng(file);
           avatarFile = file;
-        } else if (filenameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed" || isJpegPolyglot) {
+        } else if (detectedFormat === "charx" || detectedFormat === "jpeg_polyglot") {
           const charxResult = await cardSvc.extractCardFromCharx(file);
           cardInput = charxResult.card;
           avatarFile = charxResult.avatarFile;
@@ -619,7 +612,7 @@ app.post("/import-bulk", async (c) => {
           charxAssetFiles = charxResult.assetFiles;
           risuModule = charxResult.risuModule;
           expressionAssets = charxResult.expressionAssets;
-        } else if (isJpeg) {
+        } else if (detectedFormat === "jpeg") {
           // Plain JPEG with no embedded data — skip
           results.push({ filename, success: false, error: "JPEG file does not contain embedded character card data" });
           continue;
@@ -769,22 +762,9 @@ app.post("/import", async (c) => {
       const file = formData.get("file") as File | null;
       if (!file) return c.json({ error: "file is required" }, 400);
 
-      const nameLower = file.name?.toLowerCase() ?? "";
+      const detectedFormat = await cardSvc.detectCharacterImportFormat(file);
 
-      // Detect file format — JPEG+ZIP polyglots (RisuAI card format) route to the CharX pipeline
-      const isPng = file.type === "image/png" || nameLower.endsWith(".png");
-      const isCharx = nameLower.endsWith(".charx") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
-      const isJpeg = /\.jpe?g$/i.test(nameLower) || file.type === "image/jpeg";
-      let isJpegPolyglot = false;
-      if (isJpeg && !isPng && !isCharx) {
-        const peek = new Uint8Array(await file.slice(0, Math.min(file.size, 5_000_000)).arrayBuffer());
-        isJpegPolyglot = cardSvc.looksLikeJpegZipPolyglot(peek);
-        if (!isJpegPolyglot) {
-          return c.json({ error: "JPEG file does not contain embedded character card data" }, 400);
-        }
-      }
-
-      if (isPng) {
+      if (detectedFormat === "png") {
         // PNG card — extract embedded JSON + use as avatar
         const cardInput = await cardSvc.extractCardFromPng(file);
         const character = svc.createCharacter(userId, cardInput);
@@ -794,7 +774,7 @@ app.post("/import", async (c) => {
         autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
         return c.json({ character: imported }, 201);
-      } else if (isCharx || isJpegPolyglot) {
+      } else if (detectedFormat === "charx" || detectedFormat === "jpeg_polyglot") {
         // CHARX archive (or JPEG+ZIP polyglot) — ZIP with card.json + optional avatar + gallery images + modules
         const charxResult = await cardSvc.extractCardFromCharx(file);
         const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles, expressionGroupAnalysis } = charxResult;
@@ -1028,6 +1008,8 @@ app.post("/import", async (c) => {
           character: imported,
           ...(lumiverseModulesSummary ? { lumiverse_modules: lumiverseModulesSummary } : {}),
         }, 201);
+      } else if (detectedFormat === "jpeg") {
+        return c.json({ error: "JPEG file does not contain embedded character card data" }, 400);
       } else {
         // JSON file — read text content, parse card spec
         const text = await file.text();

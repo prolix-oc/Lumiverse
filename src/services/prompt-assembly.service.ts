@@ -3111,7 +3111,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const queryText = buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3);
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
 
-  if (!cfg.enabled) blockerMessages.push("Embeddings are disabled.");
+  if (!cfg.enabled) blockerMessages.push("Embeddings are disabled, so lorebooks will use keyword matching only.");
   if (!cfg.has_api_key) blockerMessages.push("No embedding API key is configured.");
   if (!cfg.dimensions) blockerMessages.push("Embeddings have not been tested yet, so dimensions are still unknown.");
   if (!cfg.vectorize_world_books) blockerMessages.push("World-book vectorization is disabled in embeddings settings.");
