@@ -2285,10 +2285,12 @@ async function prepareRawCall(
   input: RawGenerateInput & { signal?: AbortSignal }
 ): Promise<PreparedGenerationCall> {
   const { provider, apiKey, apiUrl } = await resolveRawProviderAndKey(userId, input);
+  const parameters: GenerationParameters = { ...(input.parameters || {}) };
+  applyApiReasoningOffSwitch(userId, provider.name, input.model, parameters);
   const request: GenerationRequest = {
     messages: input.messages,
     model: input.model,
-    parameters: input.parameters,
+    parameters,
     tools: input.tools,
     signal: input.signal,
   };
@@ -2461,6 +2463,8 @@ export async function summarizeGenerate(userId: string, input: QuietGenerateInpu
     if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
       mergedParams._openrouter = connection.metadata.openrouter;
     }
+
+    applyApiReasoningOffSwitch(userId, provider.name, sidecarModel || connection.model, mergedParams);
 
     const request: GenerationRequest = {
       messages: input.messages,
