@@ -82,15 +82,19 @@ export class AnthropicProvider implements LlmProvider {
 
     const data = await res.json() as any;
     const blocks = data.content || [];
-    const textContent = blocks
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text)
-      .join("");
-    const thinkingContent = blocks
-      .filter((c: any) => !suppressThinking || c.type !== "thinking")
-      .filter((c: any) => c.type === "thinking")
-      .map((c: any) => c.thinking)
-      .join("");
+    let textContent = "";
+    let thinkingContent = "";
+    for (const block of blocks) {
+      if (block?.type === "text") {
+        textContent += block.text || "";
+      } else if (block?.type === "thinking") {
+        if (suppressThinking) {
+          textContent += block.thinking || "";
+        } else {
+          thinkingContent += block.thinking || "";
+        }
+      }
+    }
 
     const toolUseBlocks = blocks.filter((c: any) => c.type === "tool_use");
     const toolCalls: ToolCallResult[] | undefined = toolUseBlocks.length > 0
@@ -172,7 +176,9 @@ export class AnthropicProvider implements LlmProvider {
             }
           } else if (data.type === "content_block_delta") {
             if (data.delta?.type === "thinking_delta") {
-              if (!suppressThinking) {
+              if (suppressThinking) {
+                yield { token: data.delta.thinking };
+              } else {
                 yield { token: "", reasoning: data.delta.thinking };
               }
             } else if (data.delta?.type === "text_delta") {
