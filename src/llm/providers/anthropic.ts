@@ -309,6 +309,7 @@ export class AnthropicProvider implements LlmProvider {
       systemType: Array.isArray(systemValue) ? "array" : typeof systemValue,
       systemLength: typeof systemValue === "string" ? systemValue.length : null,
       systemEscaped: JSON.stringify(systemValue),
+      payloadEscaped: JSON.stringify(body),
     });
   }
 

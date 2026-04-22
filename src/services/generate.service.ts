@@ -744,6 +744,14 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
 
   // Resolve character name for saved messages — prefer target_character_id for group chats
   const chat = chatsSvc.getChat(input.userId, input.chat_id);
+  if (genType === "normal") {
+    const lastMessage = chatsSvc.getLastMessage(input.userId, input.chat_id);
+    const attachments = Array.isArray(lastMessage?.extra?.attachments) ? lastMessage.extra.attachments : [];
+    const hasAttachments = attachments.length > 0;
+    if (lastMessage?.is_user && lastMessage.content.trim().length === 0 && !hasAttachments) {
+      throw new Error("Cannot generate from an empty user message.");
+    }
+  }
   let characterName = "Assistant";
   const targetCharId = input.target_character_id || chat?.character_id;
   if (targetCharId) {
