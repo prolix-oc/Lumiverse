@@ -36,6 +36,40 @@ interface LoomItemData {
   [k: string]: any;
 }
 
+function normalizeLumiaItem(item: any): LumiaItemData | null {
+  if (!item || typeof item !== "object") return null;
+  return {
+    ...item,
+    id: String(item.id ?? ""),
+    name: String(item.name ?? item.lumiaName ?? ""),
+    definition: String(item.definition ?? item.lumiaDefinition ?? ""),
+    personality: String(item.personality ?? item.lumiaPersonality ?? ""),
+    behavior: String(item.behavior ?? item.lumiaBehavior ?? ""),
+    gender_identity: Number(item.gender_identity ?? item.genderIdentity ?? 0),
+  };
+}
+
+function normalizeLumiaItems(items: unknown): LumiaItemData[] {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => normalizeLumiaItem(item)).filter((item): item is LumiaItemData => item !== null);
+}
+
+function normalizeLoomItem(item: any): LoomItemData | null {
+  if (!item || typeof item !== "object") return null;
+  return {
+    ...item,
+    id: String(item.id ?? ""),
+    name: String(item.name ?? item.loomName ?? ""),
+    content: String(item.content ?? item.loomContent ?? ""),
+    category: String(item.category ?? item.loomCategory ?? ""),
+  };
+}
+
+function normalizeLoomItems(items: unknown): LoomItemData[] {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => normalizeLoomItem(item)).filter((item): item is LoomItemData => item !== null);
+}
+
 interface CouncilMemberData {
   id: string;
   itemId: string;
@@ -61,7 +95,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 function getLumia(ctx: MacroExecContext) {
-  return (ctx.env.extra.lumia ?? {}) as {
+  const lumia = (ctx.env.extra.lumia ?? {}) as {
     selectedDefinition: LumiaItemData | null;
     selectedBehaviors: LumiaItemData[];
     selectedPersonalities: LumiaItemData[];
@@ -70,6 +104,15 @@ function getLumia(ctx: MacroExecContext) {
     quirksEnabled: boolean;
     allItems: LumiaItemData[];
     randomLumia?: LumiaItemData;
+  };
+
+  return {
+    ...lumia,
+    selectedDefinition: normalizeLumiaItem(lumia.selectedDefinition),
+    selectedBehaviors: normalizeLumiaItems(lumia.selectedBehaviors),
+    selectedPersonalities: normalizeLumiaItems(lumia.selectedPersonalities),
+    allItems: normalizeLumiaItems(lumia.allItems),
+    randomLumia: normalizeLumiaItem(lumia.randomLumia) ?? undefined,
   };
 }
 
@@ -113,10 +156,24 @@ function getOoc(ctx: MacroExecContext) {
   };
 }
 
+function getLoomSelections(ctx: MacroExecContext) {
+  const loom = (ctx.env.extra.loom ?? {}) as {
+    selectedStyles?: LoomItemData[];
+    selectedUtils?: LoomItemData[];
+    selectedRetrofits?: LoomItemData[];
+  };
+
+  return {
+    selectedStyles: normalizeLoomItems(loom.selectedStyles),
+    selectedUtils: normalizeLoomItems(loom.selectedUtils),
+    selectedRetrofits: normalizeLoomItems(loom.selectedRetrofits),
+  };
+}
+
 /** Get the full LumiaItem for a council member, from preloaded memberItems. */
 function getMemberItem(ctx: MacroExecContext, member: CouncilMemberData): LumiaItemData | null {
   const council = getCouncil(ctx);
-  return council.memberItems?.[member.itemId] ?? null;
+  return normalizeLumiaItem(council.memberItems?.[member.itemId]);
 }
 
 /** Ensure a random Lumia is picked for this generation (cached in env.extra). */
@@ -686,7 +743,7 @@ export function registerLumiaMacros(): void {
     returnType: "string",
     args: [{ name: "property", optional: true, description: "'len' to get count" }],
     handler: (ctx) => {
-      const loom = (ctx.env.extra.loom ?? {}) as { selectedStyles?: LoomItemData[] };
+      const loom = getLoomSelections(ctx);
       if (ctx.args[0] === "len") return String(loom.selectedStyles?.length ?? 0);
       return getLoomContent(loom.selectedStyles ?? []);
     },
@@ -701,7 +758,7 @@ export function registerLumiaMacros(): void {
     returnType: "string",
     args: [{ name: "property", optional: true, description: "'len' to get count" }],
     handler: (ctx) => {
-      const loom = (ctx.env.extra.loom ?? {}) as { selectedUtils?: LoomItemData[] };
+      const loom = getLoomSelections(ctx);
       if (ctx.args[0] === "len") return String(loom.selectedUtils?.length ?? 0);
       return getLoomContent(loom.selectedUtils ?? []);
     },
@@ -716,7 +773,7 @@ export function registerLumiaMacros(): void {
     returnType: "string",
     args: [{ name: "property", optional: true, description: "'len' to get count" }],
     handler: (ctx) => {
-      const loom = (ctx.env.extra.loom ?? {}) as { selectedRetrofits?: LoomItemData[] };
+      const loom = getLoomSelections(ctx);
       if (ctx.args[0] === "len") return String(loom.selectedRetrofits?.length ?? 0);
       return getLoomContent(loom.selectedRetrofits ?? []);
     },

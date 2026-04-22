@@ -1104,6 +1104,62 @@ describe("Lumia and council macros", () => {
 
     expect(await ev("{{loomStyle}}", env)).toBe("Lean into clipped, rain-soaked noir prose.");
   });
+
+  test("Lumia selection macros resolve legacy camelCase item payloads", async () => {
+    const env = makeEnv();
+    env.extra.lumia = {
+      selectedDefinition: {
+        id: "lumia-1",
+        lumiaName: "Astra",
+        lumiaDefinition: "A halo-crowned archivist woven from starlight.",
+      },
+      selectedBehaviors: [
+        {
+          id: "lumia-2",
+          lumiaName: "Vel",
+          lumiaBehavior: "She circles tense scenes before committing to a single sharp move.",
+        },
+      ],
+      selectedPersonalities: [
+        {
+          id: "lumia-3",
+          lumiaName: "Morrow",
+          lumiaPersonality: "Patient, curious, and slightly cruel when she smells weakness.",
+        },
+      ],
+      chimeraMode: false,
+      quirks: "",
+      quirksEnabled: true,
+      allItems: [],
+    };
+
+    expect(await ev("{{lumiaDef}}", env)).toBe("A halo-crowned archivist woven from starlight.");
+    expect(await ev("{{lumiaBehavior}}", env)).toBe("She circles tense scenes before committing to a single sharp move.");
+    expect(await ev("{{lumiaPersonality}}", env)).toBe("Patient, curious, and slightly cruel when she smells weakness.");
+  });
+
+  test("Loom selection macros resolve legacy camelCase item payloads", async () => {
+    const env = makeEnv();
+    env.extra.loom = {
+      selectedStyles: [
+        { id: "style-1", loomName: "Noir", loomContent: "Write with rain-slick fatalism.", loomCategory: "narrative_style" },
+      ],
+      selectedUtils: [
+        { id: "util-1", loomName: "Cadence", loomContent: "Vary sentence length for controlled momentum.", loomCategory: "loom_utility" },
+      ],
+      selectedRetrofits: [
+        { id: "retro-1", loomName: "Pressure", loomContent: "Keep the character's old wound active in every confrontation.", loomCategory: "retrofit" },
+      ],
+      summary: "",
+    };
+
+    expect(await ev("{{loomStyle}}", env)).toBe("Write with rain-slick fatalism.");
+    expect(await ev("{{loomUtils}}", env)).toBe("Vary sentence length for controlled momentum.");
+    expect(await ev("{{loomRetrofits}}", env)).toBe("Keep the character's old wound active in every confrontation.");
+    expect(await ev("{{loomStyle::len}}", env)).toBe("1");
+    expect(await ev("{{loomUtils::len}}", env)).toBe("1");
+    expect(await ev("{{loomRetrofits::len}}", env)).toBe("1");
+  });
 });
 
 // ===========================================================================
