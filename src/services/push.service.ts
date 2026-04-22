@@ -152,6 +152,10 @@ export function initPushListeners(): void {
     const userId = event.userId;
     if (!userId) return;
 
+    // Foreground users already receive the live result/error in-app. Skip the
+    // push entirely so active sessions do not get duplicate device alerts.
+    if (eventBus.isUserVisible(userId)) return;
+
     const payload = event.payload;
     const isError = !!payload.error;
 
