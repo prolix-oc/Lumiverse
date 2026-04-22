@@ -55,6 +55,7 @@ export class AnthropicProvider implements LlmProvider {
 
     if (!res.ok) {
       const err = await res.text();
+      this.logSystemValidationError(body, err);
       throw new Error(`Anthropic API error ${res.status}: ${err}`);
     }
 
@@ -107,6 +108,7 @@ export class AnthropicProvider implements LlmProvider {
 
     if (!res.ok) {
       const err = await res.text();
+      this.logSystemValidationError(body, err);
       throw new Error(`Anthropic API error ${res.status}: ${err}`);
     }
 
@@ -248,7 +250,7 @@ export class AnthropicProvider implements LlmProvider {
    */
   private normalizeSystemParam(value: unknown): string | undefined {
     if (typeof value === "string") {
-      return value || undefined;
+      return this.finalizeSystemText([value]);
     }
 
     const chunks: string[] = [];
@@ -283,8 +285,31 @@ export class AnthropicProvider implements LlmProvider {
     };
 
     visit(value);
-    if (chunks.length === 0) return undefined;
-    return chunks.join("\n\n");
+    return this.finalizeSystemText(chunks);
+  }
+
+  /**
+   * Canonicalize system content to the safest Anthropic form: a single trimmed
+   * string with whitespace-only chunks removed.
+   */
+  private finalizeSystemText(chunks: string[]): string | undefined {
+    const cleaned = chunks
+      .map((chunk) => chunk.trim())
+      .filter((chunk) => chunk.length > 0);
+    if (cleaned.length === 0) return undefined;
+    return cleaned.join("\n\n");
+  }
+
+  private logSystemValidationError(body: any, err: string): void {
+    if (!/invalid_request_error/i.test(err)) return;
+    if (!/system(?:\.\d+)?\s*:/i.test(err)) return;
+    const systemValue = body?.system;
+    console.error("[anthropic] system validation failed", {
+      model: body?.model,
+      systemType: Array.isArray(systemValue) ? "array" : typeof systemValue,
+      systemLength: typeof systemValue === "string" ? systemValue.length : null,
+      systemEscaped: JSON.stringify(systemValue),
+    });
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
@@ -311,7 +336,7 @@ export class AnthropicProvider implements LlmProvider {
 
     const normalizedParamSystem = this.normalizeSystemParam(params.system);
     if (systemMessages.length > 0) {
-      body.system = systemMessages.map((m) => getTextContent(m)).join("\n\n");
+      body.system = this.finalizeSystemText(systemMessages.map((m) => getTextContent(m)));
     } else if (normalizedParamSystem) {
       body.system = normalizedParamSystem;
     }
