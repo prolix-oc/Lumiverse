@@ -899,6 +899,17 @@ export class WorkerHost {
       case "user_storage_write":
         this.handleUserStorageWrite(msg.requestId, msg.path, msg.data, msg.userId);
         break;
+      case "user_storage_read_binary":
+        this.handleUserStorageReadBinary(msg.requestId, msg.path, msg.userId);
+        break;
+      case "user_storage_write_binary":
+        this.handleUserStorageWriteBinary(
+          msg.requestId,
+          msg.path,
+          msg.data,
+          msg.userId
+        );
+        break;
       case "user_storage_delete":
         this.handleUserStorageDelete(msg.requestId, msg.path, msg.userId);
         break;
@@ -910,6 +921,12 @@ export class WorkerHost {
         break;
       case "user_storage_mkdir":
         this.handleUserStorageMkdir(msg.requestId, msg.path, msg.userId);
+        break;
+      case "user_storage_move":
+        this.handleUserStorageMove(msg.requestId, msg.from, msg.to, msg.userId);
+        break;
+      case "user_storage_stat":
+        this.handleUserStorageStat(msg.requestId, msg.path, msg.userId);
         break;
       case "enclave_put":
         this.handleEnclavePut(msg.requestId, msg.key, msg.value, msg.userId);
@@ -2335,6 +2352,101 @@ export class WorkerHost {
       const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
       mkdirSync(fullPath, { recursive: true });
       this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleUserStorageReadBinary(requestId: string, path: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveUserScopedUserId(userId);
+      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
+      if (!existsSync(fullPath)) {
+        this.postToWorker({ type: "response", requestId, error: "File not found" });
+        return;
+      }
+      const data = readFileSync(fullPath);
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: new Uint8Array(data),
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleUserStorageWriteBinary(
+    requestId: string,
+    path: string,
+    data: Uint8Array,
+    userId?: string
+  ): void {
+    try {
+      const resolvedUserId = this.resolveUserScopedUserId(userId);
+      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
+      const dir = resolve(fullPath, "..");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(fullPath, data);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleUserStorageMove(
+    requestId: string,
+    from: string,
+    to: string,
+    userId?: string
+  ): void {
+    try {
+      const resolvedUserId = this.resolveUserScopedUserId(userId);
+      const fromPath = this.resolveUserStoragePath(from, resolvedUserId);
+      const toPath = this.resolveUserStoragePath(to, resolvedUserId);
+      if (!existsSync(fromPath)) {
+        this.postToWorker({ type: "response", requestId, error: "File not found" });
+        return;
+      }
+      mkdirSync(resolve(toPath, ".."), { recursive: true });
+      renameSync(fromPath, toPath);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleUserStorageStat(requestId: string, path: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveUserScopedUserId(userId);
+      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
+      if (!existsSync(fullPath)) {
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            exists: false,
+            isFile: false,
+            isDirectory: false,
+            sizeBytes: 0,
+            modifiedAt: new Date(0).toISOString(),
+          },
+        });
+        return;
+      }
+
+      const stat = statSync(fullPath);
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          exists: true,
+          isFile: stat.isFile(),
+          isDirectory: stat.isDirectory(),
+          sizeBytes: stat.size,
+          modifiedAt: new Date(stat.mtimeMs).toISOString(),
+        },
+      });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

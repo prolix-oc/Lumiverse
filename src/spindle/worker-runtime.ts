@@ -585,6 +585,27 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       await request({ type: "user_storage_write", requestId, path, data, userId });
     },
+    async readBinary(path: string, userId?: string): Promise<Uint8Array> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "user_storage_read_binary",
+        requestId,
+        path,
+        userId,
+      });
+      return result as Uint8Array;
+    },
+    async writeBinary(path: string, data: Uint8Array, userId?: string): Promise<void> {
+      assertMutationAllowed("spindle.userStorage.writeBinary()");
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "user_storage_write_binary",
+        requestId,
+        path,
+        data,
+        userId,
+      });
+    },
     async delete(path: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.delete()");
       const requestId = crypto.randomUUID();
@@ -609,6 +630,39 @@ const spindleApi: RuntimeSpindleAPI = {
       assertMutationAllowed("spindle.userStorage.mkdir()");
       const requestId = crypto.randomUUID();
       await request({ type: "user_storage_mkdir", requestId, path, userId });
+    },
+    async move(from: string, to: string, userId?: string): Promise<void> {
+      assertMutationAllowed("spindle.userStorage.move()");
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "user_storage_move",
+        requestId,
+        from,
+        to,
+        userId,
+      });
+    },
+    async stat(path: string, userId?: string): Promise<{
+      exists: boolean;
+      isFile: boolean;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedAt: string;
+    }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "user_storage_stat",
+        requestId,
+        path,
+        userId,
+      });
+      return result as {
+        exists: boolean;
+        isFile: boolean;
+        isDirectory: boolean;
+        sizeBytes: number;
+        modifiedAt: string;
+      };
     },
     async getJson<T>(
       path: string,

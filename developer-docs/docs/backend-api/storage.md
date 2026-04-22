@@ -98,6 +98,12 @@ await spindle.userStorage.write('notes.txt', 'Hello world', userId)
 // Read raw text
 const text = await spindle.userStorage.read('notes.txt', userId)
 
+// Write raw bytes (per user)
+await spindle.userStorage.writeBinary('avatar.png', pngBytes, userId)
+
+// Read raw bytes (per user)
+const bytes = await spindle.userStorage.readBinary('avatar.png', userId)
+
 // List files
 const files = await spindle.userStorage.list(undefined, userId)
 
@@ -106,6 +112,12 @@ const exists = await spindle.userStorage.exists('config.json', userId)
 
 // Create directory
 await spindle.userStorage.mkdir('cache/', userId)
+
+// Move / rename within the user's scope
+await spindle.userStorage.move('notes.txt', 'archive/notes.txt', userId)
+
+// Metadata
+const meta = await spindle.userStorage.stat('archive/notes.txt', userId)
 
 // Delete
 await spindle.userStorage.delete('notes.txt', userId)
@@ -117,12 +129,18 @@ await spindle.userStorage.delete('notes.txt', userId)
 |---|---|---|
 | `read(path, userId?)` | `Promise<string>` | Read a file as UTF-8 text |
 | `write(path, data, userId?)` | `Promise<void>` | Write a UTF-8 text file (creates directories as needed) |
+| `readBinary(path, userId?)` | `Promise<Uint8Array>` | Read a file as raw bytes |
+| `writeBinary(path, data, userId?)` | `Promise<void>` | Write raw bytes to a file |
 | `delete(path, userId?)` | `Promise<void>` | Delete a file |
 | `list(prefix?, userId?)` | `Promise<string[]>` | List files, optionally under a prefix/directory |
 | `exists(path, userId?)` | `Promise<boolean>` | Check if a file or directory exists |
 | `mkdir(path, userId?)` | `Promise<void>` | Create a directory (recursive) |
+| `move(from, to, userId?)` | `Promise<void>` | Move or rename a file within the user's scope |
+| `stat(path, userId?)` | `Promise<StatResult>` | Get file metadata (see [StatResult](#statresult) above) |
 | `getJson<T>(path, options?)` | `Promise<T>` | Read and parse a JSON file. Options: `{ fallback?: T; userId?: string }` |
 | `setJson(path, value, options?)` | `Promise<void>` | Serialize and write a JSON file. Options: `{ indent?: number; userId?: string }` |
+
+`move` resolves both `from` and `to` under the same user's scope — cross-user moves are not supported.
 
 **Storage location:** `{DATA_DIR}/users/{userId}/extensions/{identifier}/`
 
