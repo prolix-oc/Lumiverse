@@ -68,6 +68,8 @@ interface GenerateInput {
   parameters?: GenerationParameters;
   generation_type?: GenerationType;
   impersonate_mode?: ImpersonateMode;
+  /** For impersonate: free-form text from the user's input box, appended to the impersonation prompt. */
+  impersonate_input?: string;
   target_character_id?: string;
   regen_feedback?: string;
   regen_feedback_position?: "system" | "user";
@@ -525,6 +527,7 @@ async function runPromptPipeline(opts: {
   personaId?: string;
   generationType: string;
   impersonateMode?: ImpersonateMode;
+  impersonateInput?: string;
   inputMessages?: LlmMessage[];
   inputParameters?: GenerationParameters;
   excludeMessageId?: string;
@@ -601,6 +604,7 @@ async function runPromptPipeline(opts: {
       personaId: opts.personaId,
       generationType: opts.generationType as GenerationType,
       impersonateMode: opts.impersonateMode,
+      impersonateInput: opts.impersonateInput,
       excludeMessageId: opts.excludeMessageId,
       targetCharacterId: opts.targetCharacterId,
       councilToolResults: opts.councilToolResults,
@@ -1292,6 +1296,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
       personaId: input.persona_id,
       generationType: genType,
       impersonateMode: genType === "impersonate" ? (input.impersonate_mode || "prompts") : undefined,
+      impersonateInput: genType === "impersonate" ? input.impersonate_input : undefined,
       inputMessages: input.messages,
       inputParameters: input.parameters,
       excludeMessageId,
@@ -1469,6 +1474,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     personaId: input.persona_id,
     generationType: genType,
     impersonateMode: genType === "impersonate" ? (input.impersonate_mode || "prompts") : undefined,
+    impersonateInput: genType === "impersonate" ? input.impersonate_input : undefined,
     inputMessages: input.messages,
     inputParameters: input.parameters,
     excludeMessageId: input.exclude_message_id,
