@@ -63,7 +63,7 @@ Each Loom Tool has:
 - **Display Name** — What you see in the UI
 - **Description** — What the tool does
 - **Prompt** — The instruction sent to the sidecar
-- **Input Schema** — Expected output format
+- **Structured Fields / Input Schema** — The response shape you want back from the tool. In the editor, add fields for the named pieces of information you want the council member to return, then mention those fields in the prompt so the model knows to fill them.
 - **Result Variable** — Where the result is stored (accessible via `{{loomCouncilResult::variable_name}}`)
 - **Store in Deliberation** — Whether results appear in the deliberation block
 

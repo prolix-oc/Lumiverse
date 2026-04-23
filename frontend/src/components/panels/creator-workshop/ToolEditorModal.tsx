@@ -14,6 +14,7 @@ interface SchemaProperty {
   name: string
   type: string
   description: string
+  required: boolean
 }
 
 const TYPE_OPTIONS = [
@@ -26,10 +27,12 @@ const TYPE_OPTIONS = [
 function parseSchemaProps(schema: Record<string, any>): SchemaProperty[] {
   const props = schema?.properties
   if (!props || typeof props !== 'object') return []
+  const required = new Set(Array.isArray(schema?.required) ? schema.required : [])
   return Object.entries(props).map(([name, def]: [string, any]) => ({
     name,
     type: def?.type || 'string',
     description: def?.description || '',
+    required: required.has(name),
   }))
 }
 
@@ -40,9 +43,34 @@ function buildSchema(properties: SchemaProperty[]): Record<string, any> {
   for (const p of properties) {
     if (!p.name.trim()) continue
     props[p.name.trim()] = { type: p.type, description: p.description }
-    required.push(p.name.trim())
+    if (p.required) required.push(p.name.trim())
   }
-  return { type: 'object', properties: props, required }
+  return { type: 'object', properties: props, ...(required.length > 0 ? { required } : {}) }
+}
+
+function buildPromptGuide(properties: SchemaProperty[]): string {
+  const activeProps = properties.filter((prop) => prop.name.trim())
+  if (activeProps.length === 0) {
+    return [
+      'No structured fields configured.',
+      'Leave this section empty if you want a freeform council response.',
+    ].join('\n')
+  }
+
+  const lines = [
+    'Suggested instruction to add to your prompt:',
+    '',
+    'Return a concise response using these fields:',
+  ]
+
+  for (const prop of activeProps) {
+    const status = prop.required ? 'required' : 'optional'
+    const description = prop.description.trim() ? `: ${prop.description.trim()}` : ''
+    lines.push(`- ${prop.name.trim()} (${prop.type}, ${status})${description}`)
+  }
+
+  lines.push('Keep each field direct and easy for the council to use.')
+  return lines.join('\n')
 }
 
 export default function ToolEditorModal() {
@@ -102,12 +130,12 @@ export default function ToolEditorModal() {
   }, [handleClose])
 
   const addProperty = () => {
-    setSchemaProps([...schemaProps, { name: '', type: 'string', description: '' }])
+    setSchemaProps([...schemaProps, { name: '', type: 'string', description: '', required: true }])
   }
 
-  const updateProperty = (index: number, field: keyof SchemaProperty, value: string) => {
+  const updateProperty = (index: number, field: keyof SchemaProperty, value: string | boolean) => {
     const updated = [...schemaProps]
-    updated[index] = { ...updated[index], [field]: value }
+    updated[index] = { ...updated[index], [field]: value } as SchemaProperty
     setSchemaProps(updated)
   }
 
@@ -143,32 +171,48 @@ export default function ToolEditorModal() {
     }
   }
 
+  const generatedSchema = buildSchema(schemaProps)
+  const schemaPreview = Object.keys(generatedSchema).length > 0
+    ? JSON.stringify(generatedSchema, null, 2)
+    : '{}'
   const canSave = toolName.trim() && displayName.trim() && prompt.trim()
 
   return (
     <>
       <ModalShell isOpen onClose={handleClose} maxWidth={720} maxHeight="90vh" closeOnEscape={false} className={styles.modal}>
         <div className={styles.header}>
-          <h3 className={styles.title}>{editingItem ? 'Edit Tool' : 'Create Tool'}</h3>
+          <h3 className={styles.title}>{editingItem ? 'Edit Council Tool' : 'Create Council Tool'}</h3>
           <CloseButton onClick={handleClose} />
         </div>
 
         <div className={styles.body}>
+          <div className={styles.helpCard}>
+            <div className={styles.helpTitle}>How custom council tools work</div>
+            <div className={styles.helpText}>
+              Pack tools send a focused prompt to the sidecar during council deliberation. The prompt is the main instruction. Structured fields are optional, and help you define the sections or values you want the tool to return.
+            </div>
+            <div className={styles.helpList}>
+              <div>1. Write the prompt like instructions for a specialist council member.</div>
+              <div>2. Add structured fields only if you want a repeatable response shape.</div>
+              <div>3. Use a result variable if you want the raw result in <code>{'{{loomCouncilResult::your_variable}}'}</code>.</div>
+            </div>
+          </div>
+
           <EditorSection Icon={Wrench} title="Tool Details">
             <div className={styles.row}>
               <div className={styles.rowHalf}>
-                <FormField label="Tool Name" required hint="Internal identifier (snake_case)">
+                <FormField label="Tool Name" required hint="Internal identifier, usually unique within the pack. Use snake_case.">
                   <TextInput value={toolName} onChange={setToolName} placeholder="my_tool" autoFocus />
                 </FormField>
               </div>
               <div className={styles.rowHalf}>
-                <FormField label="Display Name" required>
+                <FormField label="Display Name" required hint="The label council editors will see.">
                   <TextInput value={displayName} onChange={setDisplayName} placeholder="My Tool" />
                 </FormField>
               </div>
             </div>
 
-            <FormField label="Description">
+            <FormField label="Description" hint="Explain when this tool should be used and what kind of guidance it gives.">
               <TextInput value={description} onChange={setDescription} placeholder="What this tool does..." />
             </FormField>
 
@@ -178,33 +222,68 @@ export default function ToolEditorModal() {
           </EditorSection>
 
           <EditorSection Icon={Code} title="Tool Prompt">
-            <FormField label="Prompt" required hint="Instructions the AI receives when using this tool">
-              <TextArea value={prompt} onChange={setPrompt} placeholder="You are a tool that..." rows={5} />
+            <FormField label="Prompt" required hint="This is the main instruction the council member follows. Be explicit about scope, tone, and what the final answer should contain.">
+              <TextArea value={prompt} onChange={setPrompt} placeholder="You are a council specialist who reviews the latest story context and returns concise, actionable guidance..." rows={6} />
             </FormField>
+
+            <div className={styles.subtleCard}>
+              <div className={styles.subtleCardTitle}>Prompt helper</div>
+              <div className={styles.subtleCardText}>
+                For pack-created council tools, the fields below do not replace your prompt. If you want a structured response, tell the model to return those fields explicitly.
+              </div>
+              <pre className={styles.codeBlock}>{buildPromptGuide(schemaProps)}</pre>
+            </div>
           </EditorSection>
 
-          <EditorSection Icon={Settings} title="Input Schema" defaultExpanded={schemaProps.length > 0}>
+          <EditorSection Icon={Settings} title="Structured Output Fields" defaultExpanded={schemaProps.length > 0}>
+            <div className={styles.subtleCard}>
+              <div className={styles.subtleCardTitle}>What this means</div>
+              <div className={styles.subtleCardText}>
+                Add fields for the pieces of information you want back from the tool. Use `string` for most text, `boolean` for yes or no, `integer` for whole numbers, and `number` for decimals. Leave this empty if the tool should answer in freeform prose.
+              </div>
+            </div>
+
             {schemaProps.map((prop, i) => (
               <div key={i} className={styles.schemaRow}>
                 <div className={styles.schemaFields}>
                   <div className={styles.schemaFieldRow}>
-                    <TextInput value={prop.name} onChange={(v) => updateProperty(i, 'name', v)} placeholder="Property name" />
+                    <TextInput value={prop.name} onChange={(v) => updateProperty(i, 'name', v)} placeholder="field_name" />
                     <Select value={prop.type} onChange={(v) => updateProperty(i, 'type', v)} options={TYPE_OPTIONS} />
                   </div>
-                  <TextInput value={prop.description} onChange={(v) => updateProperty(i, 'description', v)} placeholder="Description" />
+                  <TextInput value={prop.description} onChange={(v) => updateProperty(i, 'description', v)} placeholder="What should go in this field?" />
+                  <label className={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={prop.required}
+                      onChange={(e) => updateProperty(i, 'required', e.target.checked)}
+                    />
+                    Required field
+                  </label>
                 </div>
                 <button type="button" className={styles.schemaRemoveBtn} onClick={() => removeProperty(i)}>
                   <Trash2 size={14} />
-                </button>
+                  </button>
               </div>
             ))}
             <button type="button" className={styles.addPropertyBtn} onClick={addProperty}>
-              <Plus size={14} /> Add Property
+              <Plus size={14} /> Add Field
             </button>
+
+            <div className={styles.previewBlock}>
+              <div className={styles.previewTitle}>Generated schema preview</div>
+              <pre className={styles.codeBlock}>{schemaPreview}</pre>
+            </div>
           </EditorSection>
 
           <EditorSection Icon={Settings} title="Result Routing" defaultExpanded={false}>
-            <FormField label="Result Variable" hint="Variable name to store the tool's output">
+            <div className={styles.subtleCard}>
+              <div className={styles.subtleCardTitle}>Where the result goes</div>
+              <div className={styles.subtleCardText}>
+                Store in deliberation to let the whole council read this tool's output. Add a result variable when you also want the raw output available to prompts and presets through <code>{'{{loomCouncilResult::your_variable}}'}</code>.
+              </div>
+            </div>
+
+            <FormField label="Result Variable" hint="Optional. Saves the tool output under a macro-friendly name like scene_data or continuity_notes.">
               <TextInput value={resultVariable} onChange={setResultVariable} placeholder="result_var" />
             </FormField>
 
@@ -217,6 +296,9 @@ export default function ToolEditorModal() {
               >
                 <span className={styles.toggleKnob} />
               </button>
+            </div>
+            <div className={styles.inlineHint}>
+              Turn this off for variable-only tools whose output should be consumed by macros or other logic without appearing in the shared council deliberation block.
             </div>
           </EditorSection>
         </div>

@@ -25,6 +25,63 @@
   gap: 14px;
 }
 
+.helpCard,
+.subtleCard,
+.previewBlock {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.helpCard {
+  padding: 12px;
+}
+
+.helpTitle,
+.subtleCardTitle,
+.previewTitle {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.helpText,
+.subtleCardText,
+.inlineHint {
+  margin-top: 6px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+  color: var(--lumiverse-text-muted);
+}
+
+.helpList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+}
+
+.subtleCard,
+.previewBlock {
+  padding: 10px;
+  margin-top: 10px;
+}
+
+.codeBlock {
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lumiverse-bg) 88%, black 12%);
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .row {
   display: flex;
   gap: 12px;
@@ -51,6 +108,18 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.checkboxLabel input {
+  margin: 0;
 }
 
 .schemaFieldRow {
@@ -149,6 +218,10 @@
   transform: translateX(16px);
 }
 
+.inlineHint {
+  margin-top: 8px;
+}
+
 .footer {
   display: flex;
   justify-content: flex-end;
@@ -158,3 +231,9 @@
   flex-shrink: 0;
 }
 
+@media (max-width: 640px) {
+  .row,
+  .schemaFieldRow {
+    flex-direction: column;
+  }
+}
