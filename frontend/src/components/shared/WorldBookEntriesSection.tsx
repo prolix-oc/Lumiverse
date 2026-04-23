@@ -17,6 +17,12 @@ import {
   Tag,
   Trash2,
   X,
+  ArrowBigUp,
+  ArrowBigDown,
+  BetweenHorizontalStart,
+  BetweenHorizontalEnd,
+  Lock,
+  Zap,
 } from 'lucide-react'
 import {
   DndContext,
@@ -38,7 +44,6 @@ import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
-import NumberStepper from '@/components/shared/NumberStepper'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import SearchableSelect from '@/components/shared/SearchableSelect'
@@ -111,6 +116,8 @@ interface EntryRowProps {
   onUpdate: (entryId: string, updates: Record<string, any>) => void
   onDebouncedUpdate: (entryId: string, updates: Record<string, any>) => void
   onOpenMenu: (entryId: string, position: ContextMenuPos) => void
+  onOpenTypeMenu: (entryId: string, position: ContextMenuPos) => void
+  onOpenPositionMenu: (entryId: string, position: ContextMenuPos) => void
 }
 
 function SortableEntryRow({
@@ -124,6 +131,8 @@ function SortableEntryRow({
   onUpdate,
   onDebouncedUpdate,
   onOpenMenu,
+  onOpenTypeMenu,
+  onOpenPositionMenu,
 }: EntryRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: entry.id,
@@ -184,21 +193,46 @@ function SortableEntryRow({
           </div>
 
           <div className={styles.entryIdentity}>
-            <span className={styles.entryComment}>{entry.comment || '(unnamed)'}</span>
-            <div className={styles.entryMeta}>
-              <span className={clsx(styles.entryBadge, entry.constant ? styles.badgeConstant : entry.vectorized ? styles.badgeVector : styles.badgeTrigger)}>
-                {entry.constant ? 'Constant' : entry.vectorized ? 'Vector' : 'Trigger'}
-              </span>
-              <span className={styles.entryMetaItem}>
-                {entry.position === 4
-                  ? `@ Depth ${entry.depth}`
-                  : POSITION_SHORT[entry.position] ?? `Pos ${entry.position}`}
-              </span>
-              <span className={styles.entryMetaItem}>Ord {entry.order_value}</span>
+              <span className={styles.entryComment}>{entry.comment || '(unnamed)'}</span>
+              <div className={styles.entryMeta}>
+                <button
+                  type="button"
+                  className={clsx(
+                    styles.typeBadgeBtn,
+                    styles.entryBadge,
+                    entry.constant ? styles.badgeConstant : entry.vectorized ? styles.badgeVector : styles.badgeTrigger,
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    onOpenTypeMenu(entry.id, { x: rect.right, y: rect.bottom + 4 })
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  title="Change entry type"
+                  aria-label={`Change entry type from ${getEntryType(entry)}`}
+                >
+                  <span>{entry.constant ? 'Constant' : entry.vectorized ? 'Vector' : 'Trigger'}</span>
+                  <ChevronDown size={11} />
+                </button>
+                <button
+                  type="button"
+                  className={clsx(styles.positionBadgeBtn, styles.entryMetaItem)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    onOpenPositionMenu(entry.id, { x: rect.right, y: rect.bottom + 4 })
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  title="Change entry position"
+                  aria-label={`Change entry position from ${POSITION_SHORT[entry.position] ?? `Pos ${entry.position}`}`}
+                >
+                  <span>{POSITION_SHORT[entry.position] ?? `Pos ${entry.position}`}</span>
+                  <ChevronDown size={11} />
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div className={styles.entryActions} {...controlWrapProps}>
+            <div className={styles.entryActions} {...controlWrapProps}>
             <button
               type="button"
               className={styles.expandBtn}
@@ -223,68 +257,6 @@ function SortableEntryRow({
           </div>
         </div>
 
-        <div className={styles.quickControls} {...controlWrapProps}>
-          <label className={styles.quickField}>
-            <span className={styles.quickLabel}>Type</span>
-            <select
-              className={styles.quickSelect}
-              value={getEntryType(entry)}
-              onChange={(e) => {
-                const next = e.target.value as 'trigger' | 'constant' | 'vector'
-                onUpdate(entry.id, {
-                  constant: next === 'constant',
-                  vectorized: next === 'vector',
-                })
-              }}
-            >
-              {TYPE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-
-          <label className={styles.quickField}>
-            <span className={styles.quickLabel}>Position</span>
-            <select
-              className={styles.quickSelect}
-              value={entry.position}
-              onChange={(e) => onUpdate(entry.id, { position: Number(e.target.value) })}
-            >
-              {POSITION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-
-          {entry.position === 4 && (
-            <label className={styles.quickFieldStepper}>
-              <span className={styles.quickLabel}>Depth</span>
-              <NumberStepper
-                value={entry.depth}
-                min={0}
-                onChange={(value) => onUpdate(entry.id, { depth: value ?? 0 })}
-              />
-            </label>
-          )}
-
-          <label className={styles.quickFieldStepper}>
-            <span className={styles.quickLabel}>Order</span>
-            <NumberStepper
-              value={entry.order_value}
-              onChange={(value) => onUpdate(entry.id, { order_value: value ?? 0 })}
-            />
-          </label>
-
-          <label className={styles.quickFieldToggle}>
-            <span className={styles.quickLabel}>Enabled</span>
-            <input
-              type="checkbox"
-              className={styles.inlineToggle}
-              checked={!entry.disabled}
-              onChange={() => onUpdate(entry.id, { disabled: !entry.disabled })}
-            />
-          </label>
-        </div>
       </div>
 
       {expanded && (
@@ -345,6 +317,8 @@ export default function WorldBookEntriesSection({
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entryId: string; position: ContextMenuPos } | null>(null)
+  const [typeMenu, setTypeMenu] = useState<{ entryId: string; position: ContextMenuPos } | null>(null)
+  const [positionMenu, setPositionMenu] = useState<{ entryId: string; position: ContextMenuPos } | null>(null)
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null)
   const [moveCopyState, setMoveCopyState] = useState<MoveCopyModalState | null>(null)
   const [renumberState, setRenumberState] = useState<RenumberState | null>(null)
@@ -473,6 +447,8 @@ export default function WorldBookEntriesSection({
     setSelectMode(false)
     setSelectedIds([])
     setContextMenu(null)
+    setTypeMenu(null)
+    setPositionMenu(null)
   }, [selectedBookId, worldBookEntryViewPrefs])
 
   useEffect(() => {
@@ -679,6 +655,8 @@ export default function WorldBookEntriesSection({
   }, [dragEnabled, entries, selectedBookId, refetchCurrentPage])
 
   const selectedEntry = contextMenu ? entries.find((entry) => entry.id === contextMenu.entryId) ?? null : null
+  const selectedTypeEntry = typeMenu ? entries.find((entry) => entry.id === typeMenu.entryId) ?? null : null
+  const selectedPositionEntry = positionMenu ? entries.find((entry) => entry.id === positionMenu.entryId) ?? null : null
   const contextMenuItems: ContextMenuEntry[] = selectedEntry
     ? [
         {
@@ -746,6 +724,45 @@ export default function WorldBookEntriesSection({
           },
         },
       ]
+    : []
+  const typeMenuItems: ContextMenuEntry[] = selectedTypeEntry
+    ? TYPE_OPTIONS.map((option) => ({
+        key: option.value,
+        label: option.label,
+        icon: option.value === 'trigger'
+          ? <Zap size={14} />
+          : option.value === 'constant'
+            ? <Lock size={14} />
+            : <Search size={14} />,
+        active: getEntryType(selectedTypeEntry) === option.value,
+        onClick: () => {
+          updateEntry(selectedTypeEntry.id, {
+            constant: option.value === 'constant',
+            vectorized: option.value === 'vector',
+          })
+          setTypeMenu(null)
+        },
+      }))
+    : []
+  const positionMenuItems: ContextMenuEntry[] = selectedPositionEntry
+    ? POSITION_OPTIONS.map((option) => ({
+        key: String(option.value),
+        label: option.label,
+        icon: option.value === 0
+          ? <ArrowBigUp size={14} />
+          : option.value === 1
+            ? <ArrowBigDown size={14} />
+            : option.value === 2
+              ? <BetweenHorizontalStart size={14} />
+              : option.value === 3
+                ? <BetweenHorizontalEnd size={14} />
+                : <Hash size={14} />,
+        active: selectedPositionEntry.position === option.value,
+        onClick: () => {
+          updateEntry(selectedPositionEntry.id, { position: option.value })
+          setPositionMenu(null)
+        },
+      }))
     : []
 
   return (
@@ -933,6 +950,8 @@ export default function WorldBookEntriesSection({
                     onUpdate={updateEntry}
                     onDebouncedUpdate={debouncedUpdateEntry}
                     onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
+                    onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
+                    onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
                   />
                 ))}
                 {entries.length === 0 && (
@@ -963,6 +982,18 @@ export default function WorldBookEntriesSection({
         position={contextMenu?.position ?? null}
         items={contextMenuItems}
         onClose={() => setContextMenu(null)}
+      />
+
+      <ContextMenu
+        position={typeMenu?.position ?? null}
+        items={typeMenuItems}
+        onClose={() => setTypeMenu(null)}
+      />
+
+      <ContextMenu
+        position={positionMenu?.position ?? null}
+        items={positionMenuItems}
+        onClose={() => setPositionMenu(null)}
       />
 
       {deleteState && (

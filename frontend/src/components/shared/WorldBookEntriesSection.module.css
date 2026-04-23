@@ -225,7 +225,9 @@
 
 .dragHandle,
 .moreBtn,
-.expandBtn {
+.expandBtn,
+.typeBadgeBtn,
+.positionBadgeBtn {
   width: 24px;
   height: 24px;
   display: inline-flex;
@@ -240,9 +242,38 @@
 
 .dragHandle:hover,
 .moreBtn:hover,
-.expandBtn:hover {
+.expandBtn:hover,
+.typeBadgeBtn:hover,
+.positionBadgeBtn:hover {
   border-color: var(--lumiverse-border);
   color: var(--lumiverse-text);
+}
+
+.typeBadgeBtn {
+  width: auto;
+  height: auto;
+  padding: 2px 8px;
+  gap: 4px;
+  border-color: var(--lumiverse-border);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.typeBadgeBtn span {
+  white-space: nowrap;
+}
+
+.positionBadgeBtn {
+  width: auto;
+  height: auto;
+  padding: 2px 8px;
+  gap: 4px;
+  border-color: var(--lumiverse-border);
+  cursor: pointer;
+}
+
+.positionBadgeBtn span {
+  white-space: nowrap;
 }
 
 .expandBtn {
@@ -286,7 +317,14 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.entryMeta::-webkit-scrollbar {
+  display: none;
 }
 
 .entryBadge,
@@ -430,6 +468,14 @@
 
   .expandBtn span {
     display: none;
+  }
+
+  .typeBadgeBtn {
+    padding-right: 6px;
+  }
+
+  .positionBadgeBtn {
+    padding-right: 6px;
   }
 
   .entryComment {
