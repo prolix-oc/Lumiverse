@@ -18,6 +18,7 @@ import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { useAutoSummarization } from '@/hooks/useAutoSummarization'
+import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import styles from './App.module.css'
 
 export default function App() {
@@ -33,14 +34,14 @@ export default function App() {
   const isMobile = useIsMobile()
   const dockPanels = useStore((s) => s.dockPanels)
   const hiddenPlacements = useStore((s) => s.hiddenPlacements)
+  const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
 
   const dockInsets = useMemo(() => {
     let left = 0, right = 0, top = 0, bottom = 0
     for (const p of dockPanels) {
       if (hiddenPlacements.includes(p.id)) continue
       const size = p.collapsed ? 36 : p.size
-      // On mobile, left/right docks render as top sheets (bottom conflicts with input area)
-      const edge = isMobile && (p.edge === 'left' || p.edge === 'right') ? 'top' : p.edge
+      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile)
       switch (edge) {
         case 'left': left = Math.max(left, size); break
         case 'right': right = Math.max(right, size); break
@@ -49,7 +50,7 @@ export default function App() {
       }
     }
     return { left, right, top, bottom }
-  }, [dockPanels, hiddenPlacements, isMobile])
+  }, [dockPanels, hiddenPlacements, isMobile, dockPanelDesktopSide])
 
   const loadSettings = useStore((s) => s.loadSettings)
   const isAuthenticated = useStore((s) => s.isAuthenticated)

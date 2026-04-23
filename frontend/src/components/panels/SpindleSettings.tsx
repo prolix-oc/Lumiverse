@@ -1,10 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Timer } from 'lucide-react'
-import { settingsApi } from '@/api/settings'
+import { PanelsLeftRight, Timer } from 'lucide-react'
+import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import styles from './SpindleSettings.module.css'
 
-const KEY = 'spindleSettings'
 const DEFAULT_SECONDS = 10
 const MIN_SECONDS = 1
 const MAX_SECONDS = 300
@@ -15,51 +14,35 @@ function clamp(n: number): number {
 }
 
 export default function SpindleSettings() {
-  const [seconds, setSeconds] = useState<number>(DEFAULT_SECONDS)
+  const spindleSettings = useStore((s) => s.spindleSettings)
+  const setSetting = useStore((s) => s.setSetting)
   const [draft, setDraft] = useState<string>(String(DEFAULT_SECONDS))
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    let alive = true
-    settingsApi
-      .get(KEY)
-      .then((row) => {
-        if (!alive) return
-        const ms = Number(row?.value?.interceptorTimeoutMs)
-        const value = Number.isFinite(ms) && ms > 0 ? clamp(ms / 1000) : DEFAULT_SECONDS
-        setSeconds(value)
-        setDraft(String(value))
-      })
-      .catch(() => {
-        if (!alive) return
-        setSeconds(DEFAULT_SECONDS)
-        setDraft(String(DEFAULT_SECONDS))
-      })
-      .finally(() => {
-        if (alive) setLoading(false)
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
+    const ms = Number(spindleSettings.interceptorTimeoutMs)
+    const value = Number.isFinite(ms) && ms > 0 ? clamp(ms / 1000) : DEFAULT_SECONDS
+    setDraft(String(value))
+  }, [spindleSettings.interceptorTimeoutMs])
 
   const commit = useCallback(async () => {
     const parsed = clamp(parseInt(draft, 10))
     setDraft(String(parsed))
-    if (parsed === seconds) return
-    setSaving(true)
-    try {
-      await settingsApi.put(KEY, { interceptorTimeoutMs: parsed * 1000 })
-      setSeconds(parsed)
-      toast.success(`Extension interceptor timeout set to ${parsed}s`, { title: 'Spindle' })
-    } catch (err: any) {
-      toast.error(err?.body?.error || err?.message || 'Failed to save', { title: 'Spindle' })
-      setDraft(String(seconds))
-    } finally {
-      setSaving(false)
-    }
-  }, [draft, seconds])
+    if (parsed === clamp(spindleSettings.interceptorTimeoutMs / 1000)) return
+    setSetting('spindleSettings', {
+      ...spindleSettings,
+      interceptorTimeoutMs: parsed * 1000,
+    })
+    toast.success(`Extension interceptor timeout set to ${parsed}s`, { title: 'Spindle' })
+  }, [draft, spindleSettings, setSetting])
+
+  const updateDockSide = useCallback((dockPanelDesktopSide: 'left' | 'right') => {
+    if (spindleSettings.dockPanelDesktopSide === dockPanelDesktopSide) return
+    setSetting('spindleSettings', {
+      ...spindleSettings,
+      dockPanelDesktopSide,
+    })
+    toast.success(`Extension dock panels will open on the ${dockPanelDesktopSide}`, { title: 'Spindle' })
+  }, [spindleSettings, setSetting])
 
   return (
     <div className={styles.card}>
@@ -74,7 +57,6 @@ export default function SpindleSettings() {
             max={MAX_SECONDS}
             step={1}
             value={draft}
-            disabled={loading || saving}
             className={styles.input}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
@@ -93,6 +75,34 @@ export default function SpindleSettings() {
         extensions do heavier retrieval or context assembly before the LLM call at the cost of a
         longer delay before generation starts. Range {MIN_SECONDS}–{MAX_SECONDS}s (default {DEFAULT_SECONDS}s). Individual
         extensions can override this via their manifest.
+      </p>
+
+      <div className={styles.headerRow}>
+        <span className={styles.label}>
+          <PanelsLeftRight size={12} /> Dock panel side
+        </span>
+        <div className={styles.segmented}>
+          <button
+            type="button"
+            className={styles.segmentedBtn}
+            data-active={spindleSettings.dockPanelDesktopSide === 'left'}
+            onClick={() => updateDockSide('left')}
+          >
+            Left
+          </button>
+          <button
+            type="button"
+            className={styles.segmentedBtn}
+            data-active={spindleSettings.dockPanelDesktopSide === 'right'}
+            onClick={() => updateDockSide('right')}
+          >
+            Right
+          </button>
+        </div>
+      </div>
+      <p className={styles.hint}>
+        Side-mounted extension dock panels follow this desktop preference. On mobile, those same dock
+        panels always collapse into a top sheet so they do not compete with the chat input area.
       </p>
     </div>
   )

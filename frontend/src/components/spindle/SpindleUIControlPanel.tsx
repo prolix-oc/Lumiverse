@@ -1,6 +1,8 @@
 import { Eye, EyeOff } from 'lucide-react'
 import { IconApps } from '@tabler/icons-react'
 import { useStore } from '@/store'
+import useIsMobile from '@/hooks/useIsMobile'
+import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import styles from './SpindleUIControlPanel.module.css'
 import clsx from 'clsx'
 
@@ -13,11 +15,18 @@ export default function SpindleUIControlPanel() {
   const togglePlacementVisibility = useStore((s) => s.togglePlacementVisibility)
   const showAllPlacements = useStore((s) => s.showAllPlacements)
   const hideAllPlacements = useStore((s) => s.hideAllPlacements)
+  const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
+  const isMobile = useIsMobile()
 
   const allItems = [
     ...drawerTabs.map((t) => ({ id: t.id, label: t.title, kind: 'Drawer Tab', ext: t.extensionId })),
     ...floatWidgets.map((w) => ({ id: w.id, label: w.tooltip || 'Float Widget', kind: 'Float Widget', ext: w.extensionId })),
-    ...dockPanels.map((p) => ({ id: p.id, label: p.title, kind: `Dock (${p.edge})`, ext: p.extensionId })),
+    ...dockPanels.map((p) => ({
+      id: p.id,
+      label: p.title,
+      kind: `Dock (${resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile)})`,
+      ext: p.extensionId,
+    })),
     ...appMounts.map((m) => ({ id: m.id, label: 'App Mount', kind: 'App Mount', ext: m.extensionId })),
   ]
 

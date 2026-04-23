@@ -370,6 +370,7 @@ export interface SettingsSlice {
   chatHeadsOpacity: number
   customCSS: CustomCSSSettings
   componentOverrides: Record<string, import('@/lib/componentOverrides').ComponentOverride>
+  spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
@@ -397,6 +398,11 @@ export interface DrawerSettings {
   customPanelWidth: number
   showTabLabels: boolean
   hiddenTabIds: string[]
+}
+
+export interface SpindleSettings {
+  interceptorTimeoutMs: number
+  dockPanelDesktopSide: 'left' | 'right'
 }
 
 // ---- Loom Registry Entry ----

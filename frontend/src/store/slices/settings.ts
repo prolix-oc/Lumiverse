@@ -103,9 +103,10 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'componentOverrides',
   'chatHeadsEnabled',
   'chatHeadsSize',
-  'chatHeadsDirection',
-  'chatHeadsOpacity',
-  'voiceSettings',
+    'chatHeadsDirection',
+    'chatHeadsOpacity',
+    'spindleSettings',
+    'voiceSettings',
 ])
 
 // ── Debounced batch persistence ──────────────────────────────────────────
@@ -316,6 +317,10 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   chatHeadsOpacity: 1,
   customCSS: { css: '', enabled: false, revision: 0, bundleId: null },
   componentOverrides: {},
+  spindleSettings: {
+    interceptorTimeoutMs: 10_000,
+    dockPanelDesktopSide: 'right',
+  },
   voiceSettings: {
     sttProvider: 'webspeech' as const,
     sttLanguage: 'en-US',
