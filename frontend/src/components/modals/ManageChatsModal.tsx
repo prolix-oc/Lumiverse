@@ -280,10 +280,16 @@ export default function ManageChatsModal() {
 
       setImportingSt(true)
       let imported = 0
+      let speakerFallbackCount = 0
       const failures: { name: string; reason: string }[] = []
       for (const file of fileList) {
         try {
-          await chatsApi.importFromSt(characterId, file)
+          if (isGroupContext) {
+            const result = await chatsApi.importGroupFromSt(groupCharacterIds, file, characterId)
+            speakerFallbackCount += result.speaker_name_fallback_count || 0
+          } else {
+            await chatsApi.importFromSt(characterId, file)
+          }
           imported++
         } catch (err: any) {
           console.error('[ManageChats] Failed to import ST chat:', file.name, err)
@@ -291,10 +297,14 @@ export default function ManageChatsModal() {
         }
       }
       if (imported > 0) await fetchChats()
+      const fallbackSuffix = isGroupContext && speakerFallbackCount > 0
+        ? ` Speaker attribution fell back to names for ${speakerFallbackCount} message${speakerFallbackCount === 1 ? '' : 's'}.`
+        : ''
       if (imported > 0 && failures.length === 0) {
-        toast.success(`Imported ${imported} chat${imported === 1 ? '' : 's'}`)
+        if (fallbackSuffix) toast.warning(`Imported ${imported} chat${imported === 1 ? '' : 's'}.${fallbackSuffix}`)
+        else toast.success(`Imported ${imported} chat${imported === 1 ? '' : 's'}`)
       } else if (imported > 0 && failures.length > 0) {
-        toast.warning(`Imported ${imported}, failed ${failures.length}: ${failures[0].name} — ${failures[0].reason}`)
+        toast.warning(`Imported ${imported}, failed ${failures.length}: ${failures[0].name} — ${failures[0].reason}.${fallbackSuffix}`.trim())
       } else if (failures.length === 1) {
         toast.error(`Failed to import ${failures[0].name}: ${failures[0].reason}`)
       } else if (failures.length > 1) {
@@ -302,7 +312,7 @@ export default function ManageChatsModal() {
       }
       setImportingSt(false)
     },
-    [characterId, fetchChats]
+    [characterId, fetchChats, groupCharacterIds, isGroupContext]
   )
 
   return (
@@ -349,27 +359,23 @@ export default function ManageChatsModal() {
               style={{ display: 'none' }}
               onChange={handleImportFile}
             />
-            {!isGroupContext && (
-              <>
-                <Button
-                  size="sm"
-                  icon={importingSt ? <Spinner size={13} /> : <Upload size={13} />}
-                  onClick={handleImportStClick}
-                  disabled={importingSt}
-                  title="Import chat from SillyTavern JSONL"
-                >
-                  Import ST
-                </Button>
-                <input
-                  ref={stFileInputRef}
-                  type="file"
-                  accept=".jsonl"
-                  multiple
-                  style={{ display: 'none' }}
-                  onChange={handleImportStFile}
-                />
-              </>
-            )}
+            <Button
+              size="sm"
+              icon={importingSt ? <Spinner size={13} /> : <Upload size={13} />}
+              onClick={handleImportStClick}
+              disabled={importingSt}
+              title={isGroupContext ? 'Import group chat from SillyTavern JSONL' : 'Import chat from SillyTavern JSONL'}
+            >
+              Import ST
+            </Button>
+            <input
+              ref={stFileInputRef}
+              type="file"
+              accept=".jsonl"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleImportStFile}
+            />
           </div>
 
           <div className={styles.body}>

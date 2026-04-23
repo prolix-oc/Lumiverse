@@ -109,6 +109,14 @@ export const chatsApi = {
     fd.append('file', file)
     return upload<{ chat_id: string; name: string; message_count: number }>('/chats/import-st', fd)
   },
+
+  importGroupFromSt(characterIds: string[], file: File, greetingCharacterId?: string) {
+    const fd = new FormData()
+    for (const characterId of characterIds) fd.append('character_ids', characterId)
+    if (greetingCharacterId) fd.append('greeting_character_id', greetingCharacterId)
+    fd.append('file', file)
+    return upload<{ chat_id: string; name: string; message_count: number; speaker_name_fallback_count: number }>('/chats/import-st-group', fd)
+  },
 }
 
 export const messagesApi = {
