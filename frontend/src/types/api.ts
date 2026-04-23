@@ -221,6 +221,9 @@ export interface ProviderInfo {
   id: string
   name: string
   default_url: string
+  capabilities?: {
+    parameters?: Record<string, unknown>
+  }
 }
 
 export interface ConnectionTestResult {

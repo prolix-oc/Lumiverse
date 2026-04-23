@@ -20,7 +20,7 @@ import {
   marshalPreset,
   marshalUpdate,
   unmarshalPreset,
-  detectSupportedParams,
+  detectSupportedParamsFromProviders,
   getAvailableMacros,
   exportToSTPreset,
   normalizeCategoryBlockState,
@@ -37,6 +37,7 @@ export function useLoomBuilder() {
   const setLoomRegistry = useStore((s) => s.setLoomRegistry)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
+  const providers = useStore((s) => s.providers)
 
   const [activePreset, setActivePreset] = useState<LoomPreset | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -473,16 +474,16 @@ export function useLoomBuilder() {
         mainApi: 'openai',
         source: profile.provider,
         model: profile.model,
-        supportedParams: detectSupportedParams(profile.provider),
+        supportedParams: detectSupportedParamsFromProviders(profile.provider, providers),
       }
     }
     return {
       mainApi: 'unknown',
       source: null,
       model: null,
-      supportedParams: detectSupportedParams(null),
+      supportedParams: detectSupportedParamsFromProviders(null, providers),
     }
-  }, [activeProfileId, profiles])
+  }, [activeProfileId, profiles, providers])
 
   const refreshConnectionProfile = useCallback(() => {
     // Connection profile is derived from store, no manual refresh needed

@@ -163,7 +163,7 @@ export const SAMPLER_PARAMS: SamplerParam[] = [
 // dropped silently before reaching the API, so surfacing them in the UI would
 // be misleading.
 export const PROVIDER_PARAMS: Record<string, Set<string>> = {
-  openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
   anthropic: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
   google: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
   google_vertex: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
@@ -185,7 +185,7 @@ export const PROVIDER_PARAMS: Record<string, Set<string>> = {
   custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
 }
 
-export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty'])
+export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty'])
 
 // ============================================================================
 // PROVIDER DISPLAY NAMES

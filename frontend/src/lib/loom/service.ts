@@ -1,4 +1,4 @@
-import type { Preset, CreatePresetInput, UpdatePresetInput } from '@/types/api'
+import type { Preset, CreatePresetInput, UpdatePresetInput, ProviderInfo } from '@/types/api'
 import type {
   PromptBlock,
   PromptVariableValue,
@@ -375,6 +375,38 @@ export function computeGroups(blocks: PromptBlock[] | undefined): CategoryGroup[
 export function detectSupportedParams(provider: string | null): Set<string> {
   if (!provider) return DEFAULT_PROVIDER_PARAMS
   return PROVIDER_PARAMS[provider] || DEFAULT_PROVIDER_PARAMS
+}
+
+const PROVIDER_PARAM_KEY_TO_SAMPLER_KEY: Record<string, string> = {
+  max_tokens: 'maxTokens',
+  temperature: 'temperature',
+  top_p: 'topP',
+  min_p: 'minP',
+  top_k: 'topK',
+  frequency_penalty: 'frequencyPenalty',
+  presence_penalty: 'presencePenalty',
+  repetition_penalty: 'repetitionPenalty',
+}
+
+export function detectSupportedParamsFromProviders(
+  provider: string | null,
+  providers: ProviderInfo[] | null | undefined,
+): Set<string> {
+  if (!provider) return DEFAULT_PROVIDER_PARAMS
+
+  const providerInfo = providers?.find((entry) => entry.id === provider)
+  const capabilityKeys = providerInfo?.capabilities?.parameters
+
+  if (capabilityKeys && typeof capabilityKeys === 'object') {
+    const supported = new Set<string>(['contextSize'])
+    for (const apiKey of Object.keys(capabilityKeys)) {
+      const samplerKey = PROVIDER_PARAM_KEY_TO_SAMPLER_KEY[apiKey]
+      if (samplerKey) supported.add(samplerKey)
+    }
+    return supported
+  }
+
+  return detectSupportedParams(provider)
 }
 
 // ============================================================================

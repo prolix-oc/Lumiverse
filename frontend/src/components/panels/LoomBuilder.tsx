@@ -644,8 +644,14 @@ interface SamplerSliderProps {
   onChange: (key: string, value: number | null) => void
 }
 
+function isSamplerParamSet(param: SamplerParam, value: number | null | undefined) {
+  if (value === null || value === undefined) return false
+  if (param.optIn && value === param.defaultHint) return false
+  return true
+}
+
 function SamplerSlider({ param, value, onChange }: SamplerSliderProps) {
-  const isSet = value !== null && value !== undefined
+  const isSet = isSamplerParamSet(param, value)
   const hasIncludeToggle = !!param.includeToggle
   const isIncluded = hasIncludeToggle ? isSet : true
   const trackRef = useRef<HTMLDivElement>(null)
@@ -816,7 +822,7 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
   const visibleParams = samplerParams.filter(p => supported.has(p.key))
   const activeCount = visibleParams.filter(p => {
     const v = overrides[p.key]
-    return v !== null && v !== undefined
+    return isSamplerParamSet(p, v)
   }).length
 
   const handleChangeParam = (key: string, value: number | null) => {
@@ -847,7 +853,7 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
         onClick={() => { setIsExpanded(!isExpanded); if (!isExpanded) onRefreshProfile() }}
       >
         <Settings2 size={12} style={{ color: isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)', flexShrink: 0 }} />
-        <span className={s.accordionTitle}>Generation</span>
+        <span className={s.accordionTitle}>Samplers</span>
         {activeCount > 0 && <span className={s.accordionBadge}>{activeCount}</span>}
         {body.enabled && <Code2 size={10} style={{ color: 'var(--lumiverse-primary)', flexShrink: 0 }} />}
         {isExpanded ? <ChevronDown size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} /> : <ChevronRight size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} />}
