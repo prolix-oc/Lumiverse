@@ -14,6 +14,8 @@ export default function NotificationSettings() {
 
   const {
     isSupported,
+    supportChecked,
+    unsupportedReason,
     isSubscribed,
     permissionState,
     subscriptions,
@@ -25,6 +27,12 @@ export default function NotificationSettings() {
 
   const [subscribing, setSubscribing] = useState(false)
   const [testing, setTesting] = useState(false)
+
+  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled') => {
+    if (reason === 'disabled') return 'Push notifications are disabled in settings'
+    if (reason === 'event_disabled') return 'Generation completed notifications are disabled'
+    return 'No subscriptions to send to'
+  }
 
   const updatePrefs = (patch: Partial<typeof prefs>) => {
     setSetting('pushNotificationPreferences', { ...prefs, ...patch })
@@ -56,11 +64,11 @@ export default function NotificationSettings() {
   const handleTest = async () => {
     setTesting(true)
     try {
-      const ok = await testPush()
-      if (ok) {
+      const result = await testPush()
+      if (result.success) {
         addToast({ type: 'info', message: 'Test notification sent' })
       } else {
-        addToast({ type: 'warning', message: 'No subscriptions to send to' })
+        addToast({ type: 'warning', message: describeTestFailure(result.reason) })
       }
     } catch (err: any) {
       addToast({ type: 'error', message: err.message || 'Test failed' })
@@ -83,7 +91,11 @@ export default function NotificationSettings() {
       <div className={styles.container}>
         <div className={styles.unsupported}>
           <BellOff size={16} />
-          <span>Push notifications are not supported in this browser.</span>
+          <span>
+            {supportChecked
+              ? (unsupportedReason || 'Push notifications are not supported in this browser.')
+              : 'Checking push notification support...'}
+          </span>
         </div>
       </div>
     )

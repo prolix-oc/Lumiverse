@@ -10,6 +10,7 @@ export class WebSocketClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private url: string
   private shouldReconnect = true
+  private visibilityCleanup: Array<() => void> = []
 
   constructor(url?: string) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -130,21 +131,39 @@ export class WebSocketClient {
 
   private startVisibilityTracking() {
     this.stopVisibilityTracking()
-    // Send current state immediately on connect
+
+    const handler = () => this.sendVisibility()
+    this.visibilityHandler = handler
+
+    const addListener = (
+      target: Document | Window,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+    ) => {
+      target.addEventListener(type, listener)
+      this.visibilityCleanup.push(() => target.removeEventListener(type, listener))
+    }
+
+    // Send current state immediately on connect, then refresh it from every
+    // lifecycle event that commonly fires during backgrounding/suspension.
     this.sendVisibility()
-    this.visibilityHandler = () => this.sendVisibility()
-    document.addEventListener('visibilitychange', this.visibilityHandler)
+    addListener(document, 'visibilitychange', handler)
+    addListener(window, 'focus', handler)
+    addListener(window, 'blur', handler)
+    addListener(window, 'pageshow', handler)
+    addListener(window, 'pagehide', () => this.sendVisibility(true))
+    addListener(window, 'beforeunload', () => this.sendVisibility(true))
   }
 
   private stopVisibilityTracking() {
-    if (this.visibilityHandler) {
-      document.removeEventListener('visibilitychange', this.visibilityHandler)
-      this.visibilityHandler = null
-    }
+    for (const cleanup of this.visibilityCleanup) cleanup()
+    this.visibilityCleanup = []
+    this.visibilityHandler = null
   }
 
-  private sendVisibility() {
-    this.send({ type: 'visibility', visible: document.visibilityState === 'visible' })
+  private sendVisibility(forceHidden = false) {
+    const visible = !forceHidden && document.visibilityState === 'visible' && document.hasFocus()
+    this.send({ type: 'visibility', visible })
   }
 
   private scheduleReconnect() {

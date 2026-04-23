@@ -57,13 +57,10 @@ app.delete("/subscriptions/:id", (c) => {
 
 app.post("/subscriptions/test", async (c) => {
   const userId = c.get("userId");
-  const sent = await pushSvc.sendPushToUser(userId, {
-    title: "Lumiverse",
-    body: "Push notifications are working!",
-    tag: "test",
-    data: { url: "/" },
+  const result = await pushSvc.dispatchGenerationEndedPush(userId, {
+    content: "Automatic push notifications are working!",
   });
-  return c.json({ success: sent > 0, sent });
+  return c.json({ success: result.sent > 0, ...result });
 });
 
 export { app as pushRoutes };

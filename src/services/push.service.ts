@@ -11,6 +11,17 @@ import type {
   PushNotificationPreferences,
 } from "../types/push";
 
+interface GenerationEndedPushPayload {
+  chatId?: string;
+  content?: string;
+  error?: string;
+}
+
+export interface PushDispatchResult {
+  sent: number;
+  reason?: "no_subscriptions" | "disabled" | "event_disabled";
+}
+
 const DEFAULT_PREFERENCES: PushNotificationPreferences = {
   enabled: true,
   events: {
@@ -142,7 +153,80 @@ export async function sendPushToUser(
 function getPreferences(userId: string): PushNotificationPreferences {
   const setting = getSetting(userId, "pushNotificationPreferences");
   if (!setting) return DEFAULT_PREFERENCES;
-  return { ...DEFAULT_PREFERENCES, ...setting.value };
+  const stored = setting.value as Partial<PushNotificationPreferences> | null | undefined;
+  return {
+    ...DEFAULT_PREFERENCES,
+    ...stored,
+    events: {
+      ...DEFAULT_PREFERENCES.events,
+      ...(stored?.events ?? {}),
+    },
+  };
+}
+
+async function buildGenerationEndedNotification(
+  payload: GenerationEndedPushPayload
+): Promise<PushPayload> {
+  const chatId = payload.chatId;
+  const isError = !!payload.error;
+
+  // Resolve character name for the notification title when the chat still exists.
+  let characterName = "Lumiverse";
+  if (chatId) {
+    try {
+      const chat = getDb()
+        .query("SELECT character_id FROM chats WHERE id = ?")
+        .get(chatId) as { character_id: string } | undefined;
+      if (chat) {
+        const char = getDb()
+          .query("SELECT name FROM characters WHERE id = ?")
+          .get(chat.character_id) as { name: string } | undefined;
+        if (char?.name) characterName = char.name;
+      }
+    } catch {
+      // Fallback to the generic app title.
+    }
+  }
+
+  const targetUrl = chatId ? `/#/chat/${chatId}` : "/";
+
+  return isError
+    ? {
+        title: "Generation Failed",
+        body: (payload.error as string).slice(0, 120),
+        tag: chatId ? `generation-error-${chatId}` : "generation-error-test",
+        data: { url: targetUrl, chatId, characterName },
+      }
+    : {
+        title: characterName,
+        body: (payload.content ?? "Your generation finished.").slice(0, 120),
+        tag: chatId ? `generation-${chatId}` : "generation-test",
+        data: { url: targetUrl, chatId, characterName },
+      };
+}
+
+export async function dispatchGenerationEndedPush(
+  userId: string,
+  payload: GenerationEndedPushPayload
+): Promise<PushDispatchResult> {
+  const prefs = getPreferences(userId);
+  if (!prefs.enabled) return { sent: 0, reason: "disabled" };
+
+  const isError = !!payload.error;
+  if (isError && !prefs.events.generation_error) {
+    return { sent: 0, reason: "event_disabled" };
+  }
+  if (!isError && !prefs.events.generation_ended) {
+    return { sent: 0, reason: "event_disabled" };
+  }
+
+  if (listSubscriptions(userId).length === 0) {
+    return { sent: 0, reason: "no_subscriptions" };
+  }
+
+  const notification = await buildGenerationEndedNotification(payload);
+  const sent = await sendPushToUser(userId, notification);
+  return { sent };
 }
 
 // ── EventBus Integration ────────────────────────────────────────────
@@ -152,52 +236,7 @@ export function initPushListeners(): void {
     const userId = event.userId;
     if (!userId) return;
 
-    // Foreground users already receive the live result/error in-app. Skip the
-    // push entirely so active sessions do not get duplicate device alerts.
-    if (eventBus.isUserVisible(userId)) return;
-
-    const payload = event.payload;
-    const isError = !!payload.error;
-
-    const prefs = getPreferences(userId);
-    if (!prefs.enabled) return;
-
-    if (isError && !prefs.events.generation_error) return;
-    if (!isError && !prefs.events.generation_ended) return;
-
-    const chatId = payload.chatId as string;
-
-    // Resolve character name for the notification title
-    let characterName = "Character";
-    try {
-      const chat = getDb()
-        .query("SELECT character_id FROM chats WHERE id = ?")
-        .get(chatId) as { character_id: string } | undefined;
-      if (chat) {
-        const char = getDb()
-          .query("SELECT name FROM characters WHERE id = ?")
-          .get(chat.character_id) as { name: string } | undefined;
-        if (char) characterName = char.name;
-      }
-    } catch {
-      // Fallback to generic name
-    }
-
-    const notification: PushPayload = isError
-      ? {
-          title: "Generation Failed",
-          body: (payload.error as string).slice(0, 120),
-          tag: `generation-error-${chatId}`,
-          data: { url: `/#/chat/${chatId}`, chatId, characterName },
-        }
-      : {
-          title: characterName,
-          body: ((payload.content as string) ?? "").slice(0, 120),
-          tag: `generation-${chatId}`,
-          data: { url: `/#/chat/${chatId}`, chatId, characterName },
-        };
-
-    await sendPushToUser(userId, notification).catch((err) => {
+    await dispatchGenerationEndedPush(userId, event.payload as GenerationEndedPushPayload).catch((err) => {
       console.error("[push] Failed to send push notifications:", err);
     });
   });

@@ -105,7 +105,9 @@ self.addEventListener('push', (event) => {
     image?: string
   }
 
-  // Suppress if user is actively looking at the app (WS handles in-app)
+  // Device-local suppression only: if this device already has an active
+  // foreground Lumiverse window, skip the native notification here while still
+  // allowing other subscribed devices to alert normally.
   const showNotification = self.clients
     .matchAll({ type: 'window', includeUncontrolled: true })
     .then(async (clients) => {

@@ -1,5 +1,53 @@
 import { useState, useEffect, useCallback } from 'react'
-import { pushApi, type PushSubscriptionRecord } from '@/api/push'
+import { pushApi, type PushSubscriptionRecord, type PushTestResult } from '@/api/push'
+
+interface PushCapability {
+  checked: boolean
+  supported: boolean
+  reason: string | null
+}
+
+const DEFAULT_PUSH_CAPABILITY: PushCapability = {
+  checked: false,
+  supported: false,
+  reason: null,
+}
+
+async function detectPushCapability(): Promise<Omit<PushCapability, 'checked'>> {
+  if (!window.isSecureContext) {
+    return { supported: false, reason: 'Push requires HTTPS or localhost.' }
+  }
+  if (!('serviceWorker' in navigator)) {
+    return { supported: false, reason: 'Service workers are not available in this browser.' }
+  }
+  if (!('PushManager' in window)) {
+    return { supported: false, reason: 'The Push API is not available in this browser.' }
+  }
+  if (!('Notification' in window)) {
+    return { supported: false, reason: 'Notifications are not available in this browser.' }
+  }
+  if (!('showNotification' in ServiceWorkerRegistration.prototype)) {
+    return { supported: false, reason: 'Service worker notifications are not supported here.' }
+  }
+
+  try {
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+    ])
+
+    if (!registration) {
+      return { supported: false, reason: 'The service worker is not ready yet.' }
+    }
+    if (!registration.pushManager) {
+      return { supported: false, reason: 'Push registration is not available on the active service worker.' }
+    }
+  } catch {
+    return { supported: false, reason: 'The service worker failed to become ready for push registration.' }
+  }
+
+  return { supported: true, reason: null }
+}
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
@@ -11,9 +59,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 export function usePushSubscription() {
-  const [isSupported] = useState(
-    () => 'PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window
-  )
+  const [capability, setCapability] = useState<PushCapability>(DEFAULT_PUSH_CAPABILITY)
   const [isSubscribed, setIsSubscribed] = useState(false)
   const [subscriptions, setSubscriptions] = useState<PushSubscriptionRecord[]>([])
   const [permissionState, setPermissionState] = useState<NotificationPermission>(
@@ -22,18 +68,41 @@ export function usePushSubscription() {
 
   // Check current subscription status on mount
   useEffect(() => {
-    if (!isSupported) return
+    let cancelled = false
 
-    navigator.serviceWorker.ready.then(async (reg) => {
-      const sub = await reg.pushManager.getSubscription()
-      setIsSubscribed(!!sub)
+    detectPushCapability().then((result) => {
+      if (cancelled) return
+      setCapability({ checked: true, ...result })
+      if (!result.supported) return
+
+      navigator.serviceWorker.ready.then(async (reg) => {
+        if (cancelled) return
+        const sub = await reg.pushManager.getSubscription()
+        if (!cancelled) setIsSubscribed(!!sub)
+      }).catch(() => {
+        if (!cancelled) {
+          setCapability({
+            checked: true,
+            supported: false,
+            reason: 'The service worker failed to become ready for push registration.',
+          })
+        }
+      })
+
+      pushApi.listSubscriptions().then((rows) => {
+        if (!cancelled) setSubscriptions(rows)
+      }).catch(() => {})
     })
 
-    pushApi.listSubscriptions().then(setSubscriptions).catch(() => {})
-  }, [isSupported])
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const subscribe = useCallback(async (): Promise<boolean> => {
-    if (!isSupported) return false
+    if (!capability.supported) {
+      throw new Error(capability.reason || 'Push notifications are not supported in this browser.')
+    }
 
     const permission = await Notification.requestPermission()
     setPermissionState(permission)
@@ -53,7 +122,7 @@ export function usePushSubscription() {
       return [record, ...filtered]
     })
     return true
-  }, [isSupported])
+  }, [capability])
 
   const unsubscribe = useCallback(async (id: string): Promise<void> => {
     await pushApi.unsubscribe(id)
@@ -85,9 +154,8 @@ export function usePushSubscription() {
     setIsSubscribed(false)
   }, [subscriptions])
 
-  const testPush = useCallback(async (): Promise<boolean> => {
-    const result = await pushApi.test()
-    return result.success
+  const testPush = useCallback(async (): Promise<PushTestResult> => {
+    return pushApi.test()
   }, [])
 
   const refresh = useCallback(async () => {
@@ -96,7 +164,9 @@ export function usePushSubscription() {
   }, [])
 
   return {
-    isSupported,
+    isSupported: capability.supported,
+    supportChecked: capability.checked,
+    unsupportedReason: capability.reason,
     isSubscribed,
     permissionState,
     subscriptions,
