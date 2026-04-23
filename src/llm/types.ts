@@ -206,6 +206,29 @@ export interface MemoryStats {
   settingsSource: "global" | "per_chat";
 }
 
+export interface DatabankStats {
+  enabled: boolean;
+  embeddingsEnabled: boolean;
+  activeBankCount: number;
+  activeDatabankIds: string[];
+  chunksRetrieved: number;
+  injectionMethod: "macro" | "fallback" | "none" | "disabled";
+  retrievalState:
+    | "cache_hit"
+    | "awaited_prefetch"
+    | "awaited_direct"
+    | "skipped_no_active_banks"
+    | "skipped_embeddings_disabled";
+  retrievedChunks: Array<{
+    score: number;
+    tokenEstimate: number;
+    documentName: string;
+    databankId: string;
+    preview: string;
+  }>;
+  queryPreview: string;
+}
+
 /**
  * Result of the context-budget clipping step that runs at the end of prompt
  * assembly. When `enabled` is true and `messagesDropped > 0`, oldest chat
@@ -281,6 +304,8 @@ export interface AssemblyResult {
   };
   /** Statistics from long-term memory retrieval. */
   memoryStats?: MemoryStats;
+  /** Statistics from databank retrieval. */
+  databankStats?: DatabankStats;
   /** Context-budget clipping stats. Present when assembly went through the
    *  token-budget clip step (i.e. the preset-driven path, not legacyAssembly). */
   contextClipStats?: ContextClipStats;

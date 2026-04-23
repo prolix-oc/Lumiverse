@@ -1,4 +1,4 @@
-import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry, type MemoryStats, type ContextClipStats } from "../llm/types";
+import { getTextContent, type LlmMessage, type AssemblyContext, type AssemblyResult, type AssemblyBreakdownEntry, type GenerationType, type ActivatedWorldInfoEntry, type MemoryStats, type DatabankStats, type ContextClipStats } from "../llm/types";
 import { resolveCounter, APPROXIMATE_TOKENIZER_NAME } from "./tokenizer.service";
 import type { PromptBlock, PromptBehavior, CompletionSettings, SamplerOverrides, AuthorsNote, AdvancedSettings, PromptVariableDef, PromptVariableValue } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
@@ -658,22 +658,47 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     characterDatabankIds: memoryIsolated ? [] : getCharacterDatabankIds(character?.extensions),
     chatDatabankIds: (chat.metadata?.chat_databank_ids as string[] | undefined) ?? [],
   };
+  const activeDatabankIds = databankSvc.resolveActiveDatabankIds(
+    ctx.userId,
+    ctx.chatId,
+    databankCharIds,
+    databankCrossRefs,
+  );
+  const databankQueryPreview = messages.slice(-6).map(m => m.content).join(" ");
+  let databankEmbeddingConfigPromise: Promise<Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>> | null = null;
+  const getDatabankEmbeddingConfig = () => {
+    if (pf?.embeddingConfig) {
+      return Promise.resolve(pf.embeddingConfig);
+    }
+    if (!databankEmbeddingConfigPromise) {
+      databankEmbeddingConfigPromise = embeddingsSvc.getEmbeddingConfig(ctx.userId);
+    }
+    return databankEmbeddingConfigPromise;
+  };
+  let databankPrefetchPromise: Promise<import("./databank").DatabankRetrievalResult> | null = null;
   {
-    const dbIds = databankSvc.resolveActiveDatabankIds(ctx.userId, ctx.chatId, databankCharIds, databankCrossRefs);
-    if (dbIds.length > 0) {
+    if (activeDatabankIds.length > 0) {
       const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
       const dbSignal = ctx.signal
         ? AbortSignal.any([ctx.signal, chatBgSignal])
         : chatBgSignal;
 
-      void (async () => {
-        const embCfg = pf?.embeddingConfig ?? await embeddingsSvc.getEmbeddingConfig(ctx.userId);
-        if (!embCfg.enabled) return;
-        if (dbSignal.aborted) return;
-        const queryText = messages.slice(-6).map(m => m.content).join(" ");
+      databankPrefetchPromise = (async () => {
+        const embCfg = await getDatabankEmbeddingConfig();
+        if (!embCfg.enabled) return { chunks: [], formatted: "", count: 0 };
+        if (dbSignal.aborted) return { chunks: [], formatted: "", count: 0 };
         const retrievalTopK = databankSvc.loadDatabankSettings(ctx.userId).retrievalTopK;
-        await databankSvc.searchDatabanks(ctx.userId, ctx.chatId, dbIds, queryText, retrievalTopK, dbSignal);
-      })().catch(err => {
+        return await databankSvc.searchDatabanks(
+          ctx.userId,
+          ctx.chatId,
+          activeDatabankIds,
+          databankQueryPreview,
+          retrievalTopK,
+          dbSignal,
+        );
+      })();
+
+      void databankPrefetchPromise.catch(err => {
         if (dbSignal.aborted) return;
         console.warn("[prompt-assembly] Background databank query failed:", err);
       });
@@ -931,14 +956,33 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
 
   // ---- Databank retrieval ----
   // Use the warm-cache pattern: check if a previous generation cached results.
-  // The background pre-flight fires alongside cortex (added below).
-  const databankResult = databankSvc.getCachedDatabankResult(ctx.userId, ctx.chatId, databankSettings.retrievalTopK);
-  const activeDatabankIds = databankSvc.resolveActiveDatabankIds(
-    ctx.userId,
-    ctx.chatId,
-    databankCharIds,
-    databankCrossRefs,
-  );
+  // On a cold miss, await the pre-flight query so the current generation still
+  // gets databank context instead of only warming the cache for the next send.
+  const databankEmbCfg = await getDatabankEmbeddingConfig();
+  let databankResult = databankSvc.getCachedDatabankResult(ctx.userId, ctx.chatId, databankSettings.retrievalTopK);
+  let databankRetrievalState: DatabankStats["retrievalState"] = "skipped_no_active_banks";
+  if (activeDatabankIds.length === 0) {
+    databankResult = { chunks: [], formatted: "", count: 0 };
+  } else if (!databankEmbCfg.enabled) {
+    databankRetrievalState = "skipped_embeddings_disabled";
+    databankResult = { chunks: [], formatted: "", count: 0 };
+  } else if (databankResult) {
+    databankRetrievalState = "cache_hit";
+  } else if (databankPrefetchPromise) {
+    databankResult = await databankPrefetchPromise;
+    databankRetrievalState = "awaited_prefetch";
+  } else {
+    databankResult = await databankSvc.searchDatabanks(
+      ctx.userId,
+      ctx.chatId,
+      activeDatabankIds,
+      databankQueryPreview,
+      databankSettings.retrievalTopK,
+      ctx.signal,
+    );
+    databankRetrievalState = "awaited_direct";
+  }
+
   macroEnv.extra.databank = {
     chunks: databankResult?.chunks ?? [],
     formatted: databankResult?.formatted ?? "",
@@ -1624,6 +1668,25 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     queryPreview: memoryResult.queryPreview,
     settingsSource: memoryResult.settingsSource,
   };
+  const databankStats: DatabankStats = {
+    enabled: activeDatabankIds.length > 0,
+    embeddingsEnabled: databankEmbCfg.enabled,
+    activeBankCount: activeDatabankIds.length,
+    activeDatabankIds,
+    chunksRetrieved: databankResult.count,
+    injectionMethod: activeDatabankIds.length === 0 || !databankEmbCfg.enabled ? "disabled"
+      : databankResult.count > 0 ? (macroHandlesDatabank ? "macro" : "fallback")
+      : "none",
+    retrievalState: databankRetrievalState,
+    retrievedChunks: databankResult.chunks.map(c => ({
+      score: c.score,
+      tokenEstimate: Math.ceil(c.content.length / 4),
+      documentName: c.documentName,
+      databankId: c.databankId,
+      preview: c.content,
+    })),
+    queryPreview: databankQueryPreview,
+  };
 
   // Recompute the chat_history breakdown entry's bounds from the actual final
   // message positions. The entry was pushed during the chat history loop with
@@ -1661,6 +1724,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     activatedWorldInfo: activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
     worldInfoStats,
     memoryStats,
+    databankStats,
     contextClipStats,
     deferredWiState,
     deliberationHandledByMacro: !!(macroEnv.extra as any)._deliberationMacroUsed,

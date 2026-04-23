@@ -54,6 +54,8 @@ import {
   closeUnterminatedDelimitedReasoning,
   extractDelimitedReasoning,
   resolveReasoningDelimiters,
+  separateDelimitedReasoning,
+  wrapDelimitedReasoningStream,
 } from "../utils/reasoning-strip";
 
 interface GenerateInput {
@@ -186,6 +188,7 @@ export interface DryRunResult {
     };
   };
   memoryStats?: import("../llm/types").MemoryStats;
+  databankStats?: import("../llm/types").DatabankStats;
   contextClipStats?: import("../llm/types").ContextClipStats;
 }
 
@@ -233,6 +236,7 @@ interface PromptPipelineResult {
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   worldInfoStats?: DryRunResult["worldInfoStats"];
   memoryStats?: import("../llm/types").MemoryStats;
+  databankStats?: import("../llm/types").DatabankStats;
   contextClipStats?: import("../llm/types").ContextClipStats;
   deferredWiState?: { chatId: string; partial: Record<string, any> };
   spindleContext: SpindleContext;
@@ -261,6 +265,32 @@ function closeUnterminatedReasoningTags(userId: string, content: string): string
 
   const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
   return closeUnterminatedDelimitedReasoning(content, resolveReasoningDelimiters(reasoningSetting?.value));
+}
+
+function getReasoningParseConfig(userId: string): { enabled: boolean; delimiters: ReturnType<typeof resolveReasoningDelimiters> } {
+  const reasoningSetting = settingsSvc.getSetting(userId, "reasoningSettings");
+  return {
+    enabled: reasoningSetting?.value?.autoParse === true,
+    delimiters: resolveReasoningDelimiters(reasoningSetting?.value),
+  };
+}
+
+function applyDelimitedReasoningParsing(userId: string, response: GenerationResponse): GenerationResponse {
+  const { enabled, delimiters } = getReasoningParseConfig(userId);
+  const parsed = separateDelimitedReasoning(response.content, response.reasoning, delimiters, enabled);
+  return {
+    ...response,
+    content: parsed.content,
+    ...(parsed.reasoning ? { reasoning: parsed.reasoning } : {}),
+  };
+}
+
+function wrapDelimitedReasoningForUser(
+  userId: string,
+  stream: AsyncGenerator<StreamChunk, void, unknown>,
+): AsyncGenerator<StreamChunk, void, unknown> {
+  const { enabled, delimiters } = getReasoningParseConfig(userId);
+  return wrapDelimitedReasoningStream(stream, delimiters, enabled);
 }
 
 /**
@@ -567,6 +597,7 @@ async function runPromptPipeline(opts: {
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
+  let databankStats: import("../llm/types").DatabankStats | undefined;
   let contextClipStats: import("../llm/types").ContextClipStats | undefined;
   let deferredWiState: { chatId: string; partial: Record<string, any> } | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
@@ -623,6 +654,7 @@ async function runPromptPipeline(opts: {
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     worldInfoStats = assemblyResult.worldInfoStats;
     memoryStats = assemblyResult.memoryStats;
+    databankStats = assemblyResult.databankStats;
     contextClipStats = assemblyResult.contextClipStats;
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
@@ -727,7 +759,7 @@ async function runPromptPipeline(opts: {
   const effectiveConnection = resolveConnection(opts.userId, spindleContext.connectionId || opts.connectionId);
   applyApiReasoningOffSwitch(opts.userId, effectiveConnection.provider, effectiveConnection.model, parameters);
 
-  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, contextClipStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
+  return { messages, parameters, breakdown, chatHistoryMessages, assistantPrefill, activatedWorldInfo, worldInfoStats, memoryStats, databankStats, contextClipStats, deferredWiState, spindleContext, deliberationHandledByMacro, macroEnv };
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -1512,6 +1544,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     tokenCount,
     worldInfoStats: pipeline.worldInfoStats,
     memoryStats: pipeline.memoryStats,
+    databankStats: pipeline.databankStats,
     contextClipStats: pipeline.contextClipStats,
   };
 }
@@ -2259,6 +2292,7 @@ export function stopGenerationSweep(): void {
 
 async function consumeStream(
   stream: AsyncGenerator<StreamChunk, void, unknown>,
+  userId?: string,
 ): Promise<GenerationResponse> {
   let content = "";
   let reasoning = "";
@@ -2266,7 +2300,8 @@ async function consumeStream(
   let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
   let usage: GenerationResponse["usage"];
 
-  for await (const chunk of stream) {
+  const source = userId ? wrapDelimitedReasoningForUser(userId, stream) : stream;
+  for await (const chunk of source) {
     if (chunk.token) content += chunk.token;
     if (chunk.reasoning) reasoning += chunk.reasoning;
     if (chunk.usage) usage = chunk.usage;
@@ -2374,10 +2409,10 @@ export async function rawGenerate(userId: string, input: RawGenerateInput & { si
   // deltas correctly via the streaming path. Consume the stream internally to
   // produce a complete response.
   if (input.tools && input.tools.length > 0) {
-    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }), userId);
   }
 
-  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+  return applyDelimitedReasoningParsing(userId, await provider.generate(apiKey, apiUrl, { ...request, stream: false }));
 }
 
 export async function quietGenerate(userId: string, input: QuietGenerateInput): Promise<GenerationResponse> {
@@ -2386,10 +2421,10 @@ export async function quietGenerate(userId: string, input: QuietGenerateInput): 
   // Use streaming when tools are present — some providers only emit tool call
   // deltas correctly via the streaming path.
   if (request.tools && request.tools.length > 0) {
-    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
+    return consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }), userId);
   }
 
-  return provider.generate(apiKey, apiUrl, { ...request, stream: false });
+  return applyDelimitedReasoningParsing(userId, await provider.generate(apiKey, apiUrl, { ...request, stream: false }));
 }
 
 /**
@@ -2403,7 +2438,7 @@ export async function rawGenerateStream(
   input: RawGenerateInput & { signal?: AbortSignal }
 ): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
   const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input);
-  return provider.generateStream(apiKey, apiUrl, { ...request, stream: true });
+  return wrapDelimitedReasoningForUser(userId, provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
 }
 
 /**
@@ -2417,7 +2452,7 @@ export async function quietGenerateStream(
   input: QuietGenerateInput
 ): Promise<AsyncGenerator<StreamChunk, void, unknown>> {
   const { provider, apiKey, apiUrl, request } = await prepareQuietCall(userId, input);
-  return provider.generateStream(apiKey, apiUrl, { ...request, stream: true });
+  return wrapDelimitedReasoningForUser(userId, provider.generateStream(apiKey, apiUrl, { ...request, stream: true }));
 }
 
 /**
@@ -2488,8 +2523,8 @@ export async function summarizeGenerate(userId: string, input: QuietGenerateInpu
     // Use streaming when tools are present — some providers only emit tool call
     // deltas correctly via the streaming path.
     const result = input.tools && input.tools.length > 0
-      ? await consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }))
-      : await provider.generate(apiKey, apiUrl, { ...request, stream: false });
+      ? await consumeStream(provider.generateStream(apiKey, apiUrl, { ...request, stream: true }), userId)
+      : applyDelimitedReasoningParsing(userId, await provider.generate(apiKey, apiUrl, { ...request, stream: false }));
 
     if (chatId) {
       summarizePool.completeSummarizePool({ generationId, userId, chatId });

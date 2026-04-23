@@ -1,4 +1,5 @@
 import * as settingsSvc from "../services/settings.service";
+import type { StreamChunk } from "../llm/types";
 import type { SanitizeOptions } from "./content-sanitizer";
 
 export interface ReasoningDelimiters {
@@ -9,6 +10,11 @@ export interface ReasoningDelimiters {
 export interface ExtractDelimitedReasoningResult {
   cleaned: string;
   reasoning: string;
+}
+
+export interface ParsedDelimitedReasoning {
+  content: string;
+  reasoning?: string;
 }
 
 export function normalizeReasoningDelimiter(value: unknown, fallback: string): string {
@@ -56,6 +62,25 @@ export function extractDelimitedReasoning(content: string, delimiters: Reasoning
   }
 
   return { cleaned, reasoning };
+}
+
+export function separateDelimitedReasoning(
+  content: string,
+  existingReasoning: string | undefined,
+  delimiters: ReasoningDelimiters,
+  enabled: boolean,
+): ParsedDelimitedReasoning {
+  if (!enabled) return { content, reasoning: existingReasoning || undefined };
+
+  const extracted = extractDelimitedReasoning(content, delimiters);
+  const mergedReasoning = [existingReasoning, extracted.reasoning]
+    .filter((value): value is string => !!value)
+    .join("\n");
+
+  return {
+    content: extracted.cleaned,
+    reasoning: mergedReasoning || undefined,
+  };
 }
 
 export class GuidedReasoningStreamParser {
@@ -163,6 +188,57 @@ export class GuidedReasoningStreamParser {
     }
     this.phase = "content";
     return { content, reasoning };
+  }
+}
+
+export async function* wrapDelimitedReasoningStream(
+  stream: AsyncGenerator<StreamChunk, void, unknown>,
+  delimiters: ReasoningDelimiters,
+  enabled: boolean,
+): AsyncGenerator<StreamChunk, void, unknown> {
+  if (!enabled || !hasReasoningDelimiters(delimiters)) {
+    yield* stream;
+    return;
+  }
+
+  const parser = new GuidedReasoningStreamParser(delimiters, true);
+  let trailingChunk: Omit<StreamChunk, "token" | "reasoning"> | null = null;
+
+  for await (const chunk of stream) {
+    const parsed = parser.push(chunk.token || "");
+    const reasoning = [parsed.reasoning, chunk.reasoning]
+      .filter((value): value is string => !!value)
+      .join("");
+
+    if (parsed.content || reasoning || chunk.usage || chunk.tool_calls) {
+      yield {
+        token: parsed.content,
+        ...(reasoning ? { reasoning } : {}),
+        ...(chunk.usage ? { usage: chunk.usage } : {}),
+        ...(chunk.tool_calls ? { tool_calls: chunk.tool_calls } : {}),
+      };
+    }
+
+    if (chunk.finish_reason) {
+      trailingChunk = {
+        finish_reason: chunk.finish_reason,
+      };
+    }
+  }
+
+  const flushed = parser.flush();
+  if (flushed.content || flushed.reasoning) {
+    yield {
+      token: flushed.content,
+      ...(flushed.reasoning ? { reasoning: flushed.reasoning } : {}),
+    };
+  }
+
+  if (trailingChunk) {
+    yield {
+      token: "",
+      ...trailingChunk,
+    };
   }
 }
 

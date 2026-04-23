@@ -153,7 +153,7 @@ export default function DryRunModal() {
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats, contextClipStats } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats, databankStats, contextClipStats } = modalProps
 
   const [messagesOpen, setMessagesOpen] = useState(
     messages.length <= MESSAGES_AUTO_COLLAPSE_THRESHOLD,
@@ -162,6 +162,7 @@ export default function DryRunModal() {
   const [paramsOpen, setParamsOpen] = useState(false)
   const [wiStatsOpen, setWiStatsOpen] = useState(false)
   const [memStatsOpen, setMemStatsOpen] = useState(false)
+  const [databankStatsOpen, setDatabankStatsOpen] = useState(false)
   // Auto-open the budget section when clipping is in a problem state so
   // users discover why their chat history is missing without hunting.
   const [budgetOpen, setBudgetOpen] = useState(
@@ -203,6 +204,17 @@ export default function DryRunModal() {
     () => JSON.stringify(parameters, null, 2),
     [parameters],
   )
+
+  const databankRetrievalStateLabel = useMemo(() => {
+    switch (databankStats?.retrievalState) {
+      case 'cache_hit': return 'cache hit'
+      case 'awaited_prefetch': return 'awaited prefetch'
+      case 'awaited_direct': return 'direct fetch'
+      case 'skipped_embeddings_disabled': return 'embeddings disabled'
+      case 'skipped_no_active_banks': return 'no active banks'
+      default: return null
+    }
+  }, [databankStats?.retrievalState])
 
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(1100px, var(--lumiverse-content-max-width, 1100px)))" className={styles.modal}>
@@ -436,6 +448,76 @@ export default function DryRunModal() {
                             <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4, paddingLeft: 8 }}>
                               <span className={styles.breakdownLabel}>
                                 #{i + 1} — score: {chunk.score.toFixed(4)}, ~{chunk.tokenEstimate} tokens
+                              </span>
+                              <ChunkPreview text={chunk.preview} />
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Databank Stats */}
+            {databankStats && (
+              <div className={styles.collapsible}>
+                <button
+                  type="button"
+                  className={styles.collapsibleHeader}
+                  onClick={() => setDatabankStatsOpen((o) => !o)}
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(styles.chevron, databankStatsOpen && styles.chevronOpen)}
+                  />
+                  Databanks ({databankStats.activeBankCount} active, {databankStats.chunksRetrieved} retrieved)
+                </button>
+                {databankStatsOpen && (
+                  <div className={styles.collapsibleBody}>
+                    <div className={styles.breakdownList}>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Embeddings enabled</span>
+                        <span className={styles.breakdownTokens}>{databankStats.embeddingsEnabled ? 'Yes' : 'No'}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Injection method</span>
+                        <span className={styles.breakdownTokens}>{databankStats.injectionMethod}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Retrieval state</span>
+                        <span className={styles.breakdownTokens}>{databankRetrievalStateLabel ?? databankStats.retrievalState}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Active databanks</span>
+                        <span className={styles.breakdownTokens}>{databankStats.activeBankCount}</span>
+                      </div>
+                      {databankStats.activeDatabankIds.length > 0 && (
+                        <div className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <span className={styles.breakdownLabel}>Active databank IDs</span>
+                          <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'auto', fontSize: 11 }}>
+                            {databankStats.activeDatabankIds.join('\n')}
+                          </span>
+                        </div>
+                      )}
+                      {databankStats.queryPreview && (
+                        <div className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <span className={styles.breakdownLabel}>Query preview</span>
+                          <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'auto', fontSize: 11 }}>
+                            {databankStats.queryPreview}
+                          </span>
+                        </div>
+                      )}
+                      {databankStats.retrievedChunks.length > 0 && (
+                        <>
+                          <div className={styles.breakdownEntry} style={{ marginTop: 8 }}>
+                            <span className={styles.breakdownLabel} style={{ fontWeight: 600 }}>Retrieved Chunks</span>
+                          </div>
+                          {databankStats.retrievedChunks.map((chunk, i) => (
+                            <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4, paddingLeft: 8 }}>
+                              <span className={styles.breakdownLabel}>
+                                #{i + 1} — {chunk.documentName}, score: {chunk.score.toFixed(4)}, ~{chunk.tokenEstimate} tokens
                               </span>
                               <ChunkPreview text={chunk.preview} />
                             </div>

@@ -122,6 +122,28 @@ export interface DryRunResponse {
     queryPreview: string
     settingsSource: 'global' | 'per_chat'
   }
+  databankStats?: {
+    enabled: boolean
+    embeddingsEnabled: boolean
+    activeBankCount: number
+    activeDatabankIds: string[]
+    chunksRetrieved: number
+    injectionMethod: 'macro' | 'fallback' | 'none' | 'disabled'
+    retrievalState:
+      | 'cache_hit'
+      | 'awaited_prefetch'
+      | 'awaited_direct'
+      | 'skipped_no_active_banks'
+      | 'skipped_embeddings_disabled'
+    retrievedChunks: Array<{
+      score: number
+      tokenEstimate: number
+      documentName: string
+      databankId: string
+      preview: string
+    }>
+    queryPreview: string
+  }
   contextClipStats?: import('@/types/ws-events').ContextClipStats
 }
 

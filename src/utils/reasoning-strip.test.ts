@@ -4,6 +4,8 @@ import {
   closeUnterminatedDelimitedReasoning,
   extractDelimitedReasoning,
   resolveReasoningDelimiters,
+  separateDelimitedReasoning,
+  wrapDelimitedReasoningStream,
 } from "./reasoning-strip";
 
 describe("GuidedReasoningStreamParser", () => {
@@ -51,5 +53,39 @@ describe("reasoning delimiter helpers", () => {
   test("closes unterminated reasoning only when a valid delimiter pair exists", () => {
     expect(closeUnterminatedDelimitedReasoning("<think>half", { prefix: "<think>", suffix: "</think>" })).toBe("<think>half</think>");
     expect(closeUnterminatedDelimitedReasoning("<think>half", { prefix: "<think>", suffix: "" })).toBe("<think>half");
+  });
+
+  test("separates tagged CoT from visible content and preserves provider reasoning", () => {
+    expect(
+      separateDelimitedReasoning("Answer<think>plan</think>", "native", { prefix: "<think>", suffix: "</think>" }, true),
+    ).toEqual({
+      content: "Answer",
+      reasoning: "native\nplan",
+    });
+  });
+
+  test("wraps streamed tagged CoT into reasoning chunks", async () => {
+    async function* source() {
+      yield { token: "<thi" };
+      yield { token: "nk>plan</think>Answer", usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } };
+      yield { token: "", finish_reason: "stop" as const };
+    }
+
+    const chunks = [];
+    for await (const chunk of wrapDelimitedReasoningStream(source(), { prefix: "<think>", suffix: "</think>" }, true)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      {
+        token: "Answer",
+        reasoning: "plan",
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+      },
+      {
+        token: "",
+        finish_reason: "stop",
+      },
+    ]);
   });
 });
