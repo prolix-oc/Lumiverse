@@ -59,6 +59,13 @@ app.get("/:id/models", async (c) => {
   return c.json(result);
 });
 
+app.get("/:id/nanogpt-usage", async (c) => {
+  const userId = c.get("userId");
+  const result = await svc.fetchNanoGptSubscriptionUsage(userId, c.req.param("id"));
+  if (!result) return c.json({ error: "Failed to fetch NanoGPT usage" }, 502);
+  return c.json(result);
+});
+
 app.get("/:id/regions", async (c) => {
   const userId = c.get("userId");
   const result = await svc.listConnectionRegions(userId, c.req.param("id"));

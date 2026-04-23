@@ -23,6 +23,43 @@ export interface ImageGenConnectionModelsPreviewInput {
   api_key?: string;
 }
 
+export interface NanoGptUsageWindow {
+  used: number;
+  remaining: number;
+  percentUsed: number;
+  resetAt: number | null;
+}
+
+export interface NanoGptSubscriptionUsage {
+  active: boolean;
+  limits: {
+    weeklyInputTokens: number | null;
+    dailyImages: number | null;
+  };
+  weeklyInputTokens: NanoGptUsageWindow | null;
+  dailyImages: NanoGptUsageWindow | null;
+  period: {
+    currentPeriodEnd: string | null;
+  };
+  state: string | null;
+  graceUntil: string | null;
+}
+
+function resolveNanoGptSubscriptionUsageUrl(profile: { api_url?: string | null }): string {
+  const fallback = "https://nano-gpt.com/api/subscription/v1/usage";
+  const rawUrl = (profile.api_url || "").trim() || "https://nano-gpt.com/api/v1";
+
+  try {
+    const url = new URL(rawUrl);
+    url.pathname = "/api/subscription/v1/usage";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return fallback;
+  }
+}
+
 function rowToProfile(row: any): ImageGenConnectionProfile {
   return {
     ...row,
@@ -319,5 +356,51 @@ export async function listConnectionModelsBySubtype(
     return { models, provider: profile.provider };
   } catch (err: any) {
     return { models: [], provider: profile.provider, error: err.message || "Failed to fetch models" };
+  }
+}
+
+export async function fetchNanoGptSubscriptionUsage(userId: string, id: string): Promise<NanoGptSubscriptionUsage | null> {
+  const profile = getConnection(userId, id);
+  if (!profile || profile.provider !== "nanogpt") return null;
+
+  const apiKey = await secretsSvc.getSecret(userId, imageGenConnectionSecretKey(id));
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch(resolveNanoGptSubscriptionUsageUrl(profile), {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+    if (!res.ok) return null;
+
+    const raw = await res.json() as any;
+    const weekly = raw?.weeklyInputTokens;
+    return {
+      active: !!raw?.active,
+      limits: {
+        weeklyInputTokens: typeof raw?.limits?.weeklyInputTokens === "number" ? raw.limits.weeklyInputTokens : null,
+        dailyImages: typeof raw?.limits?.dailyImages === "number" ? raw.limits.dailyImages : null,
+      },
+      weeklyInputTokens: weekly ? {
+        used: typeof weekly.used === "number" ? weekly.used : 0,
+        remaining: typeof weekly.remaining === "number" ? weekly.remaining : 0,
+        percentUsed: typeof weekly.percentUsed === "number" ? weekly.percentUsed : 0,
+        resetAt: typeof weekly.resetAt === "number" ? weekly.resetAt : null,
+      } : null,
+      dailyImages: raw?.dailyImages ? {
+        used: typeof raw.dailyImages.used === "number" ? raw.dailyImages.used : 0,
+        remaining: typeof raw.dailyImages.remaining === "number" ? raw.dailyImages.remaining : 0,
+        percentUsed: typeof raw.dailyImages.percentUsed === "number" ? raw.dailyImages.percentUsed : 0,
+        resetAt: typeof raw.dailyImages.resetAt === "number" ? raw.dailyImages.resetAt : null,
+      } : null,
+      period: {
+        currentPeriodEnd: typeof raw?.period?.currentPeriodEnd === "string" ? raw.period.currentPeriodEnd : null,
+      },
+      state: typeof raw?.state === "string" ? raw.state : null,
+      graceUntil: typeof raw?.graceUntil === "string" ? raw.graceUntil : null,
+    };
+  } catch {
+    return null;
   }
 }

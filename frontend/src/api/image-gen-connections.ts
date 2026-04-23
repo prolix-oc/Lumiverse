@@ -8,6 +8,7 @@ import type {
   ImageGenConnectionModelsResult,
   ImageGenConnectionModelsPreviewInput,
   ImageGenProviderInfo,
+  NanoGptSubscriptionUsage,
   PollinationsAuthUrlRequest,
   PollinationsAuthUrlResponse,
 } from '@/types/api'
@@ -43,6 +44,10 @@ export const imageGenConnectionsApi = {
 
   models(id: string) {
     return get<ImageGenConnectionModelsResult>(`/image-gen-connections/${id}/models`)
+  },
+
+  nanogptUsage(id: string) {
+    return get<NanoGptSubscriptionUsage>(`/image-gen-connections/${id}/nanogpt-usage`)
   },
 
   previewModels(input: ImageGenConnectionModelsPreviewInput) {

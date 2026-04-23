@@ -236,6 +236,28 @@ export interface ConnectionModelsResult {
   error?: string
 }
 
+export interface NanoGptUsageWindow {
+  used: number
+  remaining: number
+  percentUsed: number
+  resetAt: number | null
+}
+
+export interface NanoGptSubscriptionUsage {
+  active: boolean
+  limits: {
+    weeklyInputTokens: number | null
+    dailyImages: number | null
+  }
+  weeklyInputTokens: NanoGptUsageWindow | null
+  dailyImages: NanoGptUsageWindow | null
+  period: {
+    currentPeriodEnd: string | null
+  }
+  state: string | null
+  graceUntil: string | null
+}
+
 export interface ConnectionModelsPreviewInput {
   connection_id?: string;
   provider: string;

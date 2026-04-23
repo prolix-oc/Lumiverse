@@ -2,7 +2,7 @@ import { get, post, put, del } from './client'
 import type {
   ConnectionProfile, CreateConnectionProfileInput, UpdateConnectionProfileInput,
   PaginatedResult, ConnectionTestResult, ConnectionModelsResult, ProviderInfo,
-  ConnectionModelsPreviewInput,
+  ConnectionModelsPreviewInput, NanoGptSubscriptionUsage,
   PollinationsAuthUrlRequest, PollinationsAuthUrlResponse,
 } from '@/types/api'
 
@@ -37,6 +37,10 @@ export const connectionsApi = {
 
   models(id: string) {
     return get<ConnectionModelsResult>(`/connections/${id}/models`)
+  },
+
+  nanogptUsage(id: string) {
+    return get<NanoGptSubscriptionUsage>(`/connections/${id}/nanogpt-usage`)
   },
 
   previewModels(input: ConnectionModelsPreviewInput) {

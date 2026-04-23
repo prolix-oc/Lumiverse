@@ -208,6 +208,14 @@
   color: var(--lumiverse-text-muted);
 }
 
+.nanoGptUsageBar .creditCell:first-child {
+  flex: 1.2;
+}
+
+.nanoGptUsageBar .creditCell + .creditCell {
+  padding-left: 14px;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }

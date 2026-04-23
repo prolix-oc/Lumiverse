@@ -83,7 +83,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     setModelsLoading(true)
     try {
       const metadata: Record<string, any> = { ...profile?.metadata }
-      if (showSubscriptionApiToggle) {
+      if (provider === 'nanogpt') {
         metadata.use_subscription_api = useSubscriptionApi
       } else {
         delete metadata.use_subscription_api
@@ -107,7 +107,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, isVertexAI, profile?.id, profile?.metadata, provider, showSubscriptionApiToggle, useSubscriptionApi, vertexRegion])
+  }, [apiKey, apiUrl, isVertexAI, profile?.id, profile?.metadata, provider, useSubscriptionApi, vertexRegion])
 
   useEffect(() => {
     if (profile?.id) fetchModels()

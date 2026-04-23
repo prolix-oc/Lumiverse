@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ImageIcon, Trash2, Edit3, Zap, Check, Loader, Star, Copy, MoreVertical } from 'lucide-react'
+import { ImageIcon, Trash2, Edit3, Zap, Check, Star, Copy, MoreVertical, RefreshCw } from 'lucide-react'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
-import type { ImageGenConnectionProfile, ImageGenProviderInfo, CreateImageGenConnectionInput } from '@/types/api'
+import type { ImageGenConnectionProfile, ImageGenProviderInfo, CreateImageGenConnectionInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ImageGenConnectionForm from './ImageGenConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import { Spinner } from '@/components/shared/Spinner'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
 
@@ -11,6 +12,20 @@ const PROVIDER_COLORS: Record<string, string> = {
   google_gemini: '#4285f4',
   nanogpt: '#10b981',
   novelai: '#8b5cf6',
+}
+
+function formatTimeUntil(resetAt: number | null) {
+  if (!resetAt) return 'Unknown'
+
+  const diffMs = Math.max(0, resetAt - Date.now())
+  const totalMinutes = Math.floor(diffMs / 60000)
+  const days = Math.floor(totalMinutes / (60 * 24))
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60)
+  const minutes = totalMinutes % 60
+
+  if (days > 0) return `${days}d, ${hours}h`
+  if (hours > 0) return `${hours}h, ${minutes}m`
+  return `${minutes}m`
 }
 
 interface Props {
@@ -27,13 +42,36 @@ export default function ImageGenConnectionItem({ profile, isActive, providers, o
   const [editing, setEditing] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [nanoGptUsage, setNanoGptUsage] = useState<NanoGptSubscriptionUsage | null>(null)
+  const [nanoGptUsageLoading, setNanoGptUsageLoading] = useState(false)
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
+
+  const isNanoGpt = profile.provider === 'nanogpt'
+  const showNanoGptUsage = isNanoGpt && isActive && profile.has_api_key && !editing
 
   useEffect(() => {
     if (!testResult) return
     const timer = setTimeout(() => setTestResult(null), 5000)
     return () => clearTimeout(timer)
   }, [testResult])
+
+  useEffect(() => {
+    if (!showNanoGptUsage) { setNanoGptUsage(null); return }
+    setNanoGptUsageLoading(true)
+    imageGenConnectionsApi.nanogptUsage(profile.id)
+      .then(setNanoGptUsage)
+      .catch(() => setNanoGptUsage(null))
+      .finally(() => setNanoGptUsageLoading(false))
+  }, [showNanoGptUsage, profile.id])
+
+  const refreshNanoGptUsage = useCallback(() => {
+    if (!showNanoGptUsage) return
+    setNanoGptUsageLoading(true)
+    imageGenConnectionsApi.nanogptUsage(profile.id)
+      .then(setNanoGptUsage)
+      .catch(() => setNanoGptUsage(null))
+      .finally(() => setNanoGptUsageLoading(false))
+  }, [showNanoGptUsage, profile.id])
 
   const handleTest = useCallback(async () => {
     setTesting(true)
@@ -127,6 +165,25 @@ export default function ImageGenConnectionItem({ profile, isActive, providers, o
       {testResult && (
         <div className={clsx(styles.testMessage, testResult.success ? styles.testMessageSuccess : styles.testMessageFail)}>
           {testResult.message}
+        </div>
+      )}
+      {showNanoGptUsage && nanoGptUsage?.dailyImages && (
+        <div className={styles.creditsBar}>
+          <div className={styles.creditCell}>
+            <span className={styles.creditLabel}>Images Left</span>
+            <span className={styles.creditValue}>
+              {nanoGptUsage.limits.dailyImages !== null
+                ? `${nanoGptUsage.dailyImages.remaining} / ${nanoGptUsage.limits.dailyImages}`
+                : String(nanoGptUsage.dailyImages.remaining)}
+            </span>
+          </div>
+          <div className={styles.creditCell}>
+            <span className={styles.creditLabel}>Resets In</span>
+            <span className={styles.creditValue}>{formatTimeUntil(nanoGptUsage.dailyImages.resetAt)}</span>
+          </div>
+          <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+            {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
+          </button>
         </div>
       )}
     </div>
