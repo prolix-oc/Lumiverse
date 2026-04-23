@@ -20,7 +20,7 @@ interface ModelComboboxProps {
   emptyMessage?: string
   loadingMessage?: string
   browseHint?: string
-  appearance?: 'compact' | 'editor'
+  appearance?: 'compact' | 'standard' | 'editor'
 }
 
 export default function ModelCombobox({
@@ -90,7 +90,11 @@ export default function ModelCombobox({
     <div
       className={clsx(
         styles.combobox,
-        appearance === 'editor' ? styles.comboboxEditor : styles.comboboxCompact,
+        appearance === 'editor'
+          ? styles.comboboxEditor
+          : appearance === 'standard'
+            ? styles.comboboxStandard
+            : styles.comboboxCompact,
       )}
       ref={ref}
     >

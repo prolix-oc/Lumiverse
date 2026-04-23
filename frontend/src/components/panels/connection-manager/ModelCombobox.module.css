@@ -13,6 +13,16 @@
   --model-combobox-dropdown-bg: var(--lumiverse-bg);
 }
 
+.comboboxStandard {
+  --model-combobox-radius: 8px;
+  --model-combobox-input-bg: var(--lumiverse-bg);
+  --model-combobox-input-border: var(--lumiverse-border);
+  --model-combobox-input-padding: 10px 12px;
+  --model-combobox-input-font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  --model-combobox-refresh-size: 38px;
+  --model-combobox-dropdown-bg: var(--lumiverse-bg-elevated);
+}
+
 .comboboxEditor {
   --model-combobox-radius: 12px;
   --model-combobox-input-bg: var(--lumiverse-bg);

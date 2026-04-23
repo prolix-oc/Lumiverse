@@ -398,6 +398,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           modelLabels={modelLabels}
           loading={modelsLoading}
           onRefresh={fetchModels}
+          appearance="standard"
           placeholder={isVertexAI ? 'gemini-2.5-flash' : 'gpt-4o'}
         />
       </FormField>
