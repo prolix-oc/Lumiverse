@@ -301,8 +301,8 @@ export default function DreamWeaverPanel() {
           />
         </div>
 
-        {/* Persona + Connection */}
-        <div className={styles.grid2}>
+        {/* Persona / Connection / Model */}
+        <div className={styles.selectorsGrid}>
           <div className={styles.field}>
             <span className={styles.fieldLabel}>Persona</span>
             <SearchableSelect
@@ -334,24 +334,22 @@ export default function DreamWeaverPanel() {
               portal
             />
           </div>
-        </div>
-
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>Model</span>
-          <ModelCombobox
-            value={selectedModel}
-            onChange={setSelectedModel}
-            models={connectionModels}
-            modelLabels={connectionModelLabels}
-            loading={connectionModelsLoading}
-            onRefresh={fetchConnectionModels}
-            autoRefreshOnFocus
-            refreshKey={resolvedConnectionId ?? ''}
-            placeholder="Leave empty to use connection default"
-            emptyMessage={resolvedConnectionId ? 'No models returned for this connection. Enter one manually or leave it blank to use the connection default.' : 'No connection available.'}
-            browseHint={resolvedConnectionId ? 'Click into the field to browse models for the selected Dream Weaver connection, or leave it blank to use that profile\'s default model.' : 'Select a connection profile first.'}
-            disabled={!resolvedConnectionId}
-          />
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Model</span>
+            <ModelCombobox
+              value={selectedModel}
+              onChange={setSelectedModel}
+              models={connectionModels}
+              modelLabels={connectionModelLabels}
+              loading={connectionModelsLoading}
+              onRefresh={fetchConnectionModels}
+              autoRefreshOnFocus
+              refreshKey={resolvedConnectionId ?? ''}
+              placeholder="Leave empty to use connection default"
+              emptyMessage={resolvedConnectionId ? 'No models returned for this connection. Enter one manually or leave it blank to use the connection default.' : 'No connection available.'}
+              disabled={!resolvedConnectionId}
+            />
+          </div>
         </div>
 
         {/* Refine — collapsed by default */}

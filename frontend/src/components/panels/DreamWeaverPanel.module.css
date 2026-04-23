@@ -21,17 +21,22 @@
   color: var(--lumiverse-text-muted);
 }
 
-/* ── Persona / Connection row ── */
+/* ── Selector row ── */
 
-.grid2 {
+.selectorsGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
-@container (max-width: 260px) {
-  .grid2 {
-    grid-template-columns: 1fr;
+@container (min-width: 360px) {
+  .selectorsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 560px) {
+  .selectorsGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import clsx from 'clsx'
 import { RefreshCw, Search } from 'lucide-react'
 import { TextInput } from '@/components/shared/FormComponents'
 import { Spinner } from '@/components/shared/Spinner'
@@ -19,6 +20,7 @@ interface ModelComboboxProps {
   emptyMessage?: string
   loadingMessage?: string
   browseHint?: string
+  appearance?: 'compact' | 'editor'
 }
 
 export default function ModelCombobox({
@@ -35,6 +37,7 @@ export default function ModelCombobox({
   emptyMessage = 'No models found. Enter one manually.',
   loadingMessage = 'Loading models...',
   browseHint,
+  appearance = 'compact',
 }: ModelComboboxProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -84,7 +87,13 @@ export default function ModelCombobox({
   const shouldShowDropdown = open && (loading || models.length > 0 || (autoRefreshOnFocus && !!onRefresh))
 
   return (
-    <div className={styles.combobox} ref={ref}>
+    <div
+      className={clsx(
+        styles.combobox,
+        appearance === 'editor' ? styles.comboboxEditor : styles.comboboxCompact,
+      )}
+      ref={ref}
+    >
       <div className={styles.inputRow}>
         <TextInput
           value={value}
@@ -92,9 +101,16 @@ export default function ModelCombobox({
           placeholder={placeholder || 'gpt-4o'}
           onFocus={handleFocus}
           disabled={disabled}
+          className={clsx(styles.input, appearance === 'editor' && styles.inputEditor)}
         />
         {onRefresh && (
-          <button type="button" className={styles.refreshBtn} onClick={handleRefresh} disabled={loading || disabled} title="Refresh models">
+          <button
+            type="button"
+            className={clsx(styles.refreshBtn, appearance === 'editor' && styles.refreshBtnEditor)}
+            onClick={handleRefresh}
+            disabled={loading || disabled}
+            title="Refresh models"
+          >
             {loading ? <Spinner size={14} /> : <RefreshCw size={14} />}
           </button>
         )}

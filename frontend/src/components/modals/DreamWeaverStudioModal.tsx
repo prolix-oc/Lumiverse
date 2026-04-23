@@ -952,9 +952,9 @@ export default function DreamWeaverStudioModal() {
                         onRefresh={fetchConnectionModels}
                         autoRefreshOnFocus
                         refreshKey={effectiveConnectionId || ''}
+                        appearance="editor"
                         placeholder="Leave empty to use connection default"
                         emptyMessage={effectiveConnectionId ? 'No models returned for this connection. Enter one manually or leave it blank to use the connection default.' : 'No connection available.'}
-                        browseHint={effectiveConnectionId ? 'Click into the field to browse models for the active Dream Weaver connection, or leave it blank to use that profile\'s default model.' : 'Select a connection profile first.'}
                         disabled={!effectiveConnectionId}
                       />
                     </Field>
