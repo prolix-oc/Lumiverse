@@ -1,16 +1,18 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Download, Upload, X, Paintbrush, Code2, ChevronDown, ChevronUp, ShieldAlert, Globe, RotateCcw, Package, Trash2 } from 'lucide-react'
 import { ModalShell } from '@/components/shared/ModalShell'
+import { themeAssetsApi } from '@/api/theme-assets'
 import { useStore } from '@/store'
 import { validateCSS, sanitizeCSS } from '@/lib/cssValidator'
 import { validateTSX } from '@/lib/componentTranspiler'
 import { CSS_MODULE_REGISTRY, generateSelector, type CSSModuleEntry } from '@/lib/cssModuleRegistry'
 import { getComponentTemplate } from '@/lib/componentTemplates'
-import { createThemePack, exportThemePack, importThemePack, packSummary } from '@/lib/themePack'
+import { createThemePack, exportThemePack, importThemePack, packSummary, type ThemePackAsset } from '@/lib/themePack'
 import { toast } from '@/lib/toast'
 import { css } from '@codemirror/lang-css'
 import { javascript } from '@codemirror/lang-javascript'
-import CodeEditor from '@/components/panels/custom-css/CSSEditor'
+import CodeEditor, { type CodeEditorHandle } from '@/components/panels/custom-css/CSSEditor'
+import ThemeAssetsPanel from '@/components/panels/custom-css/ThemeAssetsPanel'
 import PropsReference from './PropsReference'
 import styles from './CustomCSSModal.module.css'
 import clsx from 'clsx'
@@ -21,10 +23,25 @@ const GLOBAL_KEY = '__global__'
 const cssLang = css()
 const tsxLang = javascript({ jsx: true, typescript: true })
 
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer()
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
+  return btoa(binary)
+}
+
+function base64ToFile(dataBase64: string, filename: string, mimeType: string): File {
+  const binary = atob(dataBase64)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new File([bytes], filename, { type: mimeType })
+}
+
 export default function CustomCSSModal() {
   const closeModal = useStore((s) => s.closeModal)
   const customCSS = useStore((s) => s.customCSS)
   const setCustomCSS = useStore((s) => s.setCustomCSS)
+  const ensureThemeBundleId = useStore((s) => s.ensureThemeBundleId)
   const toggleCustomCSS = useStore((s) => s.toggleCustomCSS)
   const componentOverrides = useStore((s) => s.componentOverrides)
   const setComponentCSS = useStore((s) => s.setComponentCSS)
@@ -39,8 +56,15 @@ export default function CustomCSSModal() {
   const [selected, setSelected] = useState<string>(GLOBAL_KEY)
   const [activeTab, setActiveTab] = useState<EditorTab>('css')
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const cssEditorRef = useRef<CodeEditorHandle | null>(null)
 
   const isGlobal = selected === GLOBAL_KEY
+
+  useEffect(() => {
+    if (activeTab === 'css' && !customCSS.bundleId) {
+      ensureThemeBundleId()
+    }
+  }, [activeTab, customCSS.bundleId, ensureThemeBundleId])
 
   // ── Filtered + grouped component list ──
   const filtered = useMemo(() => {
@@ -110,6 +134,25 @@ export default function CustomCSSModal() {
     [activeTab, currentCSS, currentTSX],
   )
 
+  const assetBundleId = customCSS.bundleId
+
+  const buildPackAssets = useCallback(async (): Promise<ThemePackAsset[]> => {
+    const bundleId = customCSS.bundleId
+    if (!bundleId) return []
+    const assets = await themeAssetsApi.list(bundleId)
+    return Promise.all(assets.map(async (asset) => {
+      const blob = await themeAssetsApi.getBlob(asset.id)
+      return {
+        slug: asset.slug,
+        originalFilename: asset.original_filename,
+        mimeType: asset.mime_type,
+        tags: asset.tags,
+        metadata: asset.metadata || {},
+        dataBase64: await blobToBase64(blob),
+      }
+    }))
+  }, [customCSS.bundleId])
+
   // ── Export / Import ──
   const handleExport = useCallback(() => {
     const content = activeTab === 'css' ? currentCSS : currentTSX
@@ -140,23 +183,48 @@ export default function CustomCSSModal() {
   }, [activeTab, handleCSSChange, handleTSXChange])
 
   // ── Pack-level export / import / reset ──
-  const handleExportPack = useCallback(() => {
-    const pack = createThemePack(theme, customCSS, componentOverrides, {
-      name: theme?.name || 'Custom Theme',
-    })
-    exportThemePack(pack)
-    toast.success('Theme pack exported')
-  }, [theme, customCSS, componentOverrides])
+  const handleExportPack = useCallback(async () => {
+    try {
+      const assets = await buildPackAssets()
+      const pack = createThemePack(theme, customCSS, componentOverrides, assets, {
+        name: theme?.name || 'Custom Theme',
+      })
+      exportThemePack(pack)
+      toast.success('Theme bundle exported as .lumitheme')
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || 'Failed to export .lumitheme bundle')
+    }
+  }, [buildPackAssets, theme, customCSS, componentOverrides])
 
   const handleImportPack = useCallback(async () => {
-    const pack = await importThemePack()
-    if (!pack) {
-      toast.error('Invalid or cancelled theme pack import')
+    const result = await importThemePack()
+    if (!result) {
+      toast.info('Theme import cancelled')
       return
     }
-    const summary = packSummary(pack)
-    applyThemePack(pack)
-    toast.success(`Applied "${pack.name}": ${summary.join(', ')}`)
+    if (result.error) {
+      toast.error(result.error.message)
+      return
+    }
+    const pack = result.pack
+    const localBundleId = crypto.randomUUID()
+    const localizedPack = { ...pack, bundleId: localBundleId }
+    try {
+      for (const asset of localizedPack.assets) {
+        const file = base64ToFile(asset.dataBase64, asset.originalFilename, asset.mimeType)
+        await themeAssetsApi.upload(file, {
+          bundleId: localBundleId,
+          slug: asset.slug,
+          tags: asset.tags,
+          metadata: asset.metadata,
+        })
+      }
+      const summary = packSummary(localizedPack)
+      applyThemePack(localizedPack)
+      toast.success(`Applied "${pack.name}" from theme bundle: ${summary.join(', ')}`)
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || 'Failed to import bundled theme assets')
+    }
   }, [applyThemePack])
 
   const handleResetAll = useCallback(() => {
@@ -199,6 +267,10 @@ export default function CustomCSSModal() {
     return o && (o.css?.trim() || o.tsx?.trim())
   }, [componentOverrides])
 
+  const handleInsertAssetReference = useCallback((text: string) => {
+    cssEditorRef.current?.replaceSelection(text)
+  }, [])
+
   return (
     <ModalShell
       isOpen
@@ -238,11 +310,11 @@ export default function CustomCSSModal() {
               <Upload size={12} /> Import
             </button>
             <span className={styles.headerDivider} />
-            <button type="button" className={styles.actionBtn} onClick={handleExportPack} title="Export full theme pack">
-              <Package size={12} /> Pack
+            <button type="button" className={styles.actionBtn} onClick={() => { void handleExportPack() }} title="Export .lumitheme bundle">
+              <Package size={12} /> Export .lumitheme
             </button>
-            <button type="button" className={styles.actionBtn} onClick={handleImportPack} title="Import theme pack">
-              <Package size={12} /> Load
+            <button type="button" className={styles.actionBtn} onClick={() => { void handleImportPack() }} title="Import .lumitheme bundle or legacy JSON pack">
+              <Package size={12} /> Import Theme
             </button>
             <button type="button" className={clsx(styles.actionBtn, styles.dangerBtn)} onClick={handleResetAll} title="Reset all overrides">
               <Trash2 size={12} />
@@ -363,11 +435,15 @@ export default function CustomCSSModal() {
 
             <div className={styles.editorContainer}>
               {activeTab === 'css' ? (
-                <CodeEditor key={`css:${selected}`} value={currentCSS} onChange={handleCSSChange} language={cssLang} />
+                <CodeEditor ref={cssEditorRef} key={`css:${selected}`} value={currentCSS} onChange={handleCSSChange} language={cssLang} />
               ) : !isGlobal ? (
                 <CodeEditor key={`tsx:${selected}`} value={effectiveTSX} onChange={handleTSXChange} language={tsxLang} />
               ) : null}
             </div>
+
+            {activeTab === 'css' && assetBundleId && (
+              <ThemeAssetsPanel bundleId={assetBundleId} onInsertReference={handleInsertAssetReference} />
+            )}
 
             {/* Props reference panel — shown on TSX tab for documented components */}
             {activeTab === 'tsx' && !isGlobal && componentTemplate && (

@@ -311,7 +311,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   chatHeadsSize: 48,
   chatHeadsDirection: 'column' as const,
   chatHeadsOpacity: 1,
-  customCSS: { css: '', enabled: false, revision: 0 },
+  customCSS: { css: '', enabled: false, revision: 0, bundleId: null },
   componentOverrides: {},
   voiceSettings: {
     sttProvider: 'webspeech' as const,
@@ -367,6 +367,16 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
       return { customCSS }
     }),
 
+  ensureThemeBundleId: () => {
+    const current = get().customCSS.bundleId
+    if (current) return current
+    const bundleId = crypto.randomUUID()
+    const customCSS = { ...get().customCSS, bundleId }
+    set({ customCSS })
+    persistKey('customCSS', customCSS)
+    return bundleId
+  },
+
   toggleCustomCSS: (enabled) =>
     set((state) => {
       const customCSS = { ...state.customCSS, enabled }
@@ -410,7 +420,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
 
   resetAllOverrides: () => {
     const componentOverrides = {}
-    const customCSS = { css: '', enabled: false, revision: 0 }
+    const customCSS = { ...get().customCSS, css: '', enabled: false, revision: 0 }
     persistKey('componentOverrides', componentOverrides)
     persistKey('customCSS', customCSS)
     set({ componentOverrides, customCSS })
@@ -426,7 +436,12 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     }
 
     // Layer 2: Global CSS
-    const customCSS = { css: pack.globalCSS || '', enabled: !!pack.globalCSS.trim(), revision: Date.now() }
+    const customCSS = {
+      css: pack.globalCSS || '',
+      enabled: !!pack.globalCSS.trim(),
+      revision: Date.now(),
+      bundleId: pack.bundleId || crypto.randomUUID(),
+    }
     patch.customCSS = customCSS
     persistKey('customCSS', customCSS)
 

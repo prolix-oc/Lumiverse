@@ -52,6 +52,7 @@ import { mcpServersRoutes } from "./routes/mcp-servers.routes";
 import { databankRoutes } from "./routes/databank.routes";
 import { globalAddonsRoutes } from "./routes/global-addons.routes";
 import { webSearchRoutes } from "./routes/web-search.routes";
+import { themeAssetsRoutes } from "./routes/theme-assets.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
@@ -87,7 +88,7 @@ app.use("/api/*", async (c, next) => {
 
 app.use("/api/*", async (c, next) => {
   const path = c.req.path;
-  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/characters/import" || path.startsWith("/api/v1/world-books/import") || path === "/api/v1/images" || path.endsWith("/expressions/upload-zip") || path === "/api/v1/stt/transcribe" || path === "/api/v1/chats/import" || path === "/api/v1/chats/import-st") {
+  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/characters/import" || path.startsWith("/api/v1/world-books/import") || path === "/api/v1/images" || path === "/api/v1/theme-assets" || path.endsWith("/expressions/upload-zip") || path === "/api/v1/stt/transcribe" || path === "/api/v1/chats/import" || path === "/api/v1/chats/import-st") {
     return next();
   }
   return bodyLimit({
@@ -234,6 +235,7 @@ app.route("/api/v1/connections", connectionsRoutes);
 app.route("/api/v1/openrouter", openrouterRoutes);
 app.route("/api/v1/files", filesRoutes);
 app.route("/api/v1/images", imagesRoutes);
+app.route("/api/v1/theme-assets", themeAssetsRoutes);
 app.route("/api/v1/generate", generateRoutes);
 app.route("/api/v1/providers", providersRoutes);
 app.route("/api/v1/macros", macrosRoutes);

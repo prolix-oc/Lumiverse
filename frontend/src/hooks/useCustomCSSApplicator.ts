@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useStore } from '@/store'
 import { validateCSS, sanitizeCSS } from '@/lib/cssValidator'
+import { rewriteThemeAssetUrls } from '@/lib/themeAssetCss'
 import { toast } from '@/lib/toast'
 
 const STYLE_ID = 'lumiverse-user-css'
@@ -33,13 +34,13 @@ export function useCustomCSSApplicator() {
 
     // Global CSS (if enabled)
     if (customCSS.enabled && customCSS.css.trim()) {
-      parts.push(sanitizeCSS(customCSS.css))
+      parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
     }
 
     // Per-component CSS (from enabled overrides)
     for (const [, override] of Object.entries(componentOverrides)) {
       if (override.enabled && override.css?.trim()) {
-        parts.push(sanitizeCSS(override.css))
+        parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
       }
     }
 
@@ -61,7 +62,7 @@ export function useCustomCSSApplicator() {
     } else {
       toast.error(`Custom CSS error: ${result.error}`)
     }
-  }, [customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
+  }, [customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
 
   // Cleanup on unmount
   useEffect(() => {

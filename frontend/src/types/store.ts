@@ -308,6 +308,7 @@ export interface CustomCSSSettings {
   css: string
   enabled: boolean
   revision: number
+  bundleId: string | null
 }
 
 // ---- Settings Slice ----
@@ -364,6 +365,7 @@ export interface SettingsSlice {
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCustomCSS: (css: string) => void
+  ensureThemeBundleId: () => string
   toggleCustomCSS: (enabled: boolean) => void
   setComponentCSS: (componentName: string, css: string) => void
   setComponentTSX: (componentName: string, tsx: string) => void
