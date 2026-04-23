@@ -515,36 +515,38 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
     const content = entry.content;
     if (!hasMeaningfulWorldInfoContent(entry)) continue;
     const role = normalizeRole(entry.role);
+    const entryLabel = getWorldInfoEntryLabel(entry);
 
     switch (entry.position) {
       case 0:
-        cache.before.push({ content, role });
+        cache.before.push({ content, role, entryLabel });
         break;
       case 1:
-        cache.after.push({ content, role });
+        cache.after.push({ content, role, entryLabel });
         break;
       case 2:
-        cache.anBefore.push({ content, role });
+        cache.anBefore.push({ content, role, entryLabel });
         break;
       case 3:
-        cache.anAfter.push({ content, role });
+        cache.anAfter.push({ content, role, entryLabel });
         break;
       case 4:
         cache.depth.push({
           content,
           depth: entry.depth,
           role,
+          entryLabel,
         });
         break;
       case 5:
-        cache.emBefore.push({ content, role });
+        cache.emBefore.push({ content, role, entryLabel });
         break;
       case 6:
-        cache.emAfter.push({ content, role });
+        cache.emAfter.push({ content, role, entryLabel });
         break;
       default:
         // Unknown position — treat as "before"
-        cache.before.push({ content, role });
+        cache.before.push({ content, role, entryLabel });
         break;
     }
   }
@@ -554,6 +556,19 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
 
 function hasMeaningfulWorldInfoContent(entry: Pick<WorldBookEntry, "content">): boolean {
   return typeof entry.content === "string" && entry.content.trim().length > 0;
+}
+
+function getWorldInfoEntryLabel(entry: Pick<WorldBookEntry, "id" | "comment" | "key" | "keysecondary">): string {
+  const comment = entry.comment?.trim();
+  if (comment) return comment;
+
+  const primaryKeys = entry.key?.map((key) => key.trim()).filter(Boolean) ?? [];
+  if (primaryKeys.length > 0) return primaryKeys.join(", ");
+
+  const secondaryKeys = entry.keysecondary?.map((key) => key.trim()).filter(Boolean) ?? [];
+  if (secondaryKeys.length > 0) return secondaryKeys.join(", ");
+
+  return `(unnamed entry ${entry.id.slice(0, 8)})`;
 }
 
 function normalizeRole(role: string | null): "system" | "user" | "assistant" {

@@ -1203,7 +1203,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         for (const entry of wiCache.before) {
           const role = (block.role as LlmMessage["role"]) || entry.role;
           result.push({ role, content: entry.content });
-          breakdown.push({ type: "world_info", name: "World Info Before", role, content: entry.content });
+          breakdown.push({
+            type: "world_info",
+            name: formatWorldInfoBreakdownName("World Info Before", entry.entryLabel),
+            role,
+            content: entry.content,
+          });
         }
       }
       continue;
@@ -1215,7 +1220,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
         for (const entry of wiCache.after) {
           const role = (block.role as LlmMessage["role"]) || entry.role;
           result.push({ role, content: entry.content });
-          breakdown.push({ type: "world_info", name: "World Info After", role, content: entry.content });
+          breakdown.push({
+            type: "world_info",
+            name: formatWorldInfoBreakdownName("World Info After", entry.entryLabel),
+            role,
+            content: entry.content,
+          });
         }
       }
       continue;
@@ -1373,7 +1383,12 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     const insertAt = Math.max(0, result.length - depthEntry.depth);
     const role = depthEntry.role as LlmMessage["role"];
     result.splice(insertAt, 0, { role, content: depthEntry.content });
-    breakdown.push({ type: "world_info", name: `WI Depth ${depthEntry.depth}`, role: depthEntry.role, content: depthEntry.content });
+    breakdown.push({
+      type: "world_info",
+      name: formatWorldInfoBreakdownName(`WI Depth ${depthEntry.depth}`, depthEntry.entryLabel),
+      role: depthEntry.role,
+      content: depthEntry.content,
+    });
   }
 
   // ---- Author's Note injection ----
@@ -3542,7 +3557,7 @@ export async function collectChatVectorMemory(
 function injectWorldInfoAt(
   result: LlmMessage[],
   breakdown: AssemblyBreakdownEntry[],
-  entries: Array<{ content: string; role: "system" | "user" | "assistant" }>,
+  entries: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>,
   insertAt: number,
   name: string,
 ): number {
@@ -3550,10 +3565,19 @@ function injectWorldInfoAt(
   let idx = Math.max(0, Math.min(insertAt, result.length));
   for (const entry of entries) {
     result.splice(idx, 0, { role: entry.role, content: entry.content });
-    breakdown.push({ type: "world_info", name, role: entry.role, content: entry.content });
+    breakdown.push({
+      type: "world_info",
+      name: formatWorldInfoBreakdownName(name, entry.entryLabel),
+      role: entry.role,
+      content: entry.content,
+    });
     idx++;
   }
   return entries.length;
+}
+
+function formatWorldInfoBreakdownName(positionLabel: string, entryLabel: string): string {
+  return `${positionLabel}: ${entryLabel}`;
 }
 
 function pruneEmptyWorldInfoEntriesInPlace<T extends { content: string }>(entries: T[]): void {

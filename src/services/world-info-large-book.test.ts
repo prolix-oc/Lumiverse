@@ -123,7 +123,7 @@ describe("finalizeActivatedWorldInfoEntries", () => {
     ]);
 
     expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["real"]);
-    expect(result.cache.before).toEqual([{ role: "system", content: "Useful lore" }]);
+    expect(result.cache.before).toEqual([{ role: "system", content: "Useful lore", entryLabel: "(unnamed entry real)" }]);
   });
 });
 

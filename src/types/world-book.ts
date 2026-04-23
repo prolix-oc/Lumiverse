@@ -265,11 +265,11 @@ export type UpdateWorldBookEntryInput = CreateWorldBookEntryInput;
 // --- World Info Assembly Cache ---
 
 export interface WorldInfoCache {
-  before: Array<{ content: string; role: "system" | "user" | "assistant" }>;         // position 0
-  after: Array<{ content: string; role: "system" | "user" | "assistant" }>;          // position 1
-  anBefore: Array<{ content: string; role: "system" | "user" | "assistant" }>;       // position 2
-  anAfter: Array<{ content: string; role: "system" | "user" | "assistant" }>;        // position 3
-  depth: Array<{ content: string; depth: number; role: "system" | "user" | "assistant" }>; // position 4
-  emBefore: Array<{ content: string; role: "system" | "user" | "assistant" }>;       // position 5
-  emAfter: Array<{ content: string; role: "system" | "user" | "assistant" }>;        // position 6
+  before: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;         // position 0
+  after: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;          // position 1
+  anBefore: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;       // position 2
+  anAfter: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;        // position 3
+  depth: Array<{ content: string; depth: number; role: "system" | "user" | "assistant"; entryLabel: string }>; // position 4
+  emBefore: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;       // position 5
+  emAfter: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;        // position 6
 }
