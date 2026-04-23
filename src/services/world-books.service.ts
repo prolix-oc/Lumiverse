@@ -4,6 +4,9 @@ import type {
   CreateWorldBookInput, UpdateWorldBookInput,
   CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
   WorldBookVectorIndexStatus, WorldBookVectorSummary,
+  DuplicateWorldBookEntryInput,
+  WorldBookEntryBulkActionInput,
+  WorldBookEntryBulkActionResult,
 } from "../types/world-book";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -75,6 +78,64 @@ function shouldResetVectorIndex(input: UpdateWorldBookEntryInput): boolean {
     input.keysecondary !== undefined ||
     input.disabled !== undefined
   );
+}
+
+function touchWorldBook(worldBookId: string, timestamp: number = Math.floor(Date.now() / 1000)): void {
+  getDb().query("UPDATE world_books SET updated_at = ? WHERE id = ?").run(timestamp, worldBookId);
+}
+
+function cloneEntryExtensions(extensions: Record<string, any>): Record<string, any> {
+  return JSON.parse(JSON.stringify(extensions || {}));
+}
+
+function normalizeKeywordList(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function getEntriesForBook(userId: string, worldBookId: string, entryIds: string[]): WorldBookEntry[] {
+  if (entryIds.length === 0) return [];
+  const uniqueIds = [...new Set(entryIds)];
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const rows = getDb().query(
+    `SELECT e.*
+     FROM world_book_entries e
+     JOIN world_books w ON e.world_book_id = w.id
+     WHERE w.user_id = ? AND e.world_book_id = ? AND e.id IN (${placeholders})`
+  ).all(userId, worldBookId, ...uniqueIds) as any[];
+  return rows.map(rowToEntry);
+}
+
+function setEntriesPendingReindex(entryIds: string[]): void {
+  if (entryIds.length === 0) return;
+  const placeholders = entryIds.map(() => "?").join(", ");
+  getDb().query(
+    `UPDATE world_book_entries
+     SET vector_index_status = 'pending', vector_indexed_at = NULL, vector_index_error = NULL
+     WHERE id IN (${placeholders})`
+  ).run(...entryIds);
+}
+
+function queueReindexForEntries(userId: string, entries: WorldBookEntry[]): void {
+  for (const entry of entries) {
+    if (!entry.vectorized) {
+      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+      });
+      continue;
+    }
+    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+    });
+    vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+  }
 }
 
 function queueWorldBookEntriesForIndexing(userId: string, worldBookId: string): void {
@@ -499,7 +560,7 @@ export function createEntry(userId: string, worldBookId: string, input: CreateWo
       now, now
     );
 
-  getDb().query("UPDATE world_books SET updated_at = ? WHERE id = ?").run(now, worldBookId);
+  touchWorldBook(worldBookId, now);
   const created = getEntry(userId, id)!;
   if (created.vectorized) {
     vectorizationQueue.queueWorldBookEntryVectorization(userId, created.id);
@@ -554,6 +615,7 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   values.push(id);
 
   getDb().query(`UPDATE world_book_entries SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+  touchWorldBook(existing.world_book_id, values[values.length - 2]);
   const updated = getEntry(userId, id)!;
   if (updated.vectorized) {
     if (shouldResetVectorIndex(input) || updated.vector_index_status !== "indexed") {
@@ -574,11 +636,205 @@ export function deleteEntry(userId: string, id: string): boolean {
 
   const deleted = getDb().query("DELETE FROM world_book_entries WHERE id = ?").run(id).changes > 0;
   if (deleted) {
+    touchWorldBook(entry.world_book_id);
     void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, id).catch((err: unknown) => {
       console.warn("[embeddings] Failed to remove world book entry vectors:", err);
     });
   }
   return deleted;
+}
+
+export function duplicateEntry(userId: string, entryId: string, input?: DuplicateWorldBookEntryInput): WorldBookEntry | null {
+  const existing = getEntry(userId, entryId);
+  if (!existing) return null;
+
+  const targetBookId = input?.target_book_id || existing.world_book_id;
+  const targetBook = getWorldBook(userId, targetBookId);
+  if (!targetBook) return null;
+
+  const duplicatedComment = existing.comment
+    ? `${existing.comment} (Copy)`
+    : "Copy";
+
+  return createEntry(userId, targetBook.id, {
+    key: [...existing.key],
+    keysecondary: [...existing.keysecondary],
+    content: existing.content,
+    comment: duplicatedComment,
+    position: existing.position,
+    depth: existing.depth,
+    role: existing.role || undefined,
+    order_value: existing.order_value,
+    selective: existing.selective,
+    constant: existing.constant,
+    disabled: existing.disabled,
+    group_name: existing.group_name,
+    group_override: existing.group_override,
+    group_weight: existing.group_weight,
+    probability: existing.probability,
+    scan_depth: existing.scan_depth ?? undefined,
+    case_sensitive: existing.case_sensitive,
+    match_whole_words: existing.match_whole_words,
+    automation_id: existing.automation_id || undefined,
+    use_regex: existing.use_regex,
+    prevent_recursion: existing.prevent_recursion,
+    exclude_recursion: existing.exclude_recursion,
+    delay_until_recursion: existing.delay_until_recursion,
+    priority: existing.priority,
+    sticky: existing.sticky,
+    cooldown: existing.cooldown,
+    delay: existing.delay,
+    selective_logic: existing.selective_logic,
+    use_probability: existing.use_probability,
+    vectorized: existing.vectorized,
+    extensions: cloneEntryExtensions(existing.extensions),
+  });
+}
+
+export function reorderEntries(userId: string, worldBookId: string, orderedIds: string[]): boolean {
+  const book = getWorldBook(userId, worldBookId);
+  if (!book) return false;
+  const uniqueIds = [...new Set(orderedIds)];
+  if (uniqueIds.length === 0) return false;
+
+  const entries = listEntries(userId, worldBookId);
+  if (uniqueIds.length !== entries.length) return false;
+  const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
+  if (uniqueIds.some((id) => !entryMap.has(id))) return false;
+
+  const currentValues = entries.map((entry) => entry.order_value).sort((a, b) => a - b);
+  const strictlyIncreasing = currentValues.every((value, index) => index === 0 || value > currentValues[index - 1]);
+  const normalizedValues = strictlyIncreasing
+    ? currentValues
+    : entries.map((_, index) => index);
+  const now = Math.floor(Date.now() / 1000);
+  const db = getDb();
+
+  db.transaction(() => {
+    const stmt = db.query("UPDATE world_book_entries SET order_value = ?, updated_at = ? WHERE id = ? AND world_book_id = ?");
+    uniqueIds.forEach((entryId, index) => {
+      stmt.run(normalizedValues[index], now, entryId, worldBookId);
+    });
+    touchWorldBook(worldBookId, now);
+  })();
+
+  return true;
+}
+
+export function bulkOperateEntries(
+  userId: string,
+  worldBookId: string,
+  input: WorldBookEntryBulkActionInput,
+): WorldBookEntryBulkActionResult | null {
+  const book = getWorldBook(userId, worldBookId);
+  if (!book) return null;
+
+  const uniqueIds = [...new Set(input.entry_ids || [])];
+  if (uniqueIds.length === 0) {
+    throw new Error("entry_ids is required");
+  }
+
+  const entries = getEntriesForBook(userId, worldBookId, uniqueIds);
+  if (entries.length !== uniqueIds.length) {
+    throw new Error("One or more entries were not found in this world book");
+  }
+
+  const orderedEntries = uniqueIds.map((id) => entries.find((entry) => entry.id === id)!);
+  const now = Math.floor(Date.now() / 1000);
+  const db = getDb();
+
+  if (input.action === "delete") {
+    db.transaction(() => {
+      const stmt = db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?");
+      uniqueIds.forEach((entryId) => stmt.run(entryId, worldBookId));
+      touchWorldBook(worldBookId, now);
+    })();
+    for (const entry of orderedEntries) {
+      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+      });
+    }
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
+  if (input.action === "move") {
+    const targetBook = getWorldBook(userId, input.target_book_id);
+    if (!targetBook) {
+      throw new Error("Target world book not found");
+    }
+
+    db.transaction(() => {
+      const stmt = db.query(
+        `UPDATE world_book_entries
+         SET world_book_id = ?, updated_at = ?, vector_index_status = ?, vector_indexed_at = NULL, vector_index_error = NULL
+         WHERE id = ? AND world_book_id = ?`
+      );
+      orderedEntries.forEach((entry) => {
+        stmt.run(
+          targetBook.id,
+          now,
+          entry.vectorized ? "pending" : "not_enabled",
+          entry.id,
+          worldBookId,
+        );
+      });
+      touchWorldBook(worldBookId, now);
+      touchWorldBook(targetBook.id, now);
+    })();
+
+    queueReindexForEntries(userId, orderedEntries);
+    return { action: input.action, affected: uniqueIds.length, target_book_id: targetBook.id };
+  }
+
+  if (input.action === "renumber") {
+    const step = Number.isFinite(input.step) && input.step && input.step > 0 ? Math.trunc(input.step) : 1;
+    const direction = input.direction === "desc" ? "desc" : "asc";
+    const start = input.start != null ? Math.trunc(input.start) : orderedEntries[0]?.order_value ?? 0;
+    db.transaction(() => {
+      const stmt = db.query("UPDATE world_book_entries SET order_value = ?, updated_at = ? WHERE id = ? AND world_book_id = ?");
+      orderedEntries.forEach((entry, index) => {
+        const delta = step * index;
+        const nextValue = direction === "desc" ? start - delta : start + delta;
+        stmt.run(nextValue, now, entry.id, worldBookId);
+      });
+      touchWorldBook(worldBookId, now);
+    })();
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
+  if (input.action === "add_keyword") {
+    const keyword = input.keyword.trim();
+    if (!keyword) {
+      throw new Error("keyword is required");
+    }
+    const target = input.target === "secondary" ? "secondary" : "primary";
+    db.transaction(() => {
+      const stmt = db.query(
+        `UPDATE world_book_entries
+         SET key = ?, keysecondary = ?, updated_at = ?
+         WHERE id = ? AND world_book_id = ?`
+      );
+      orderedEntries.forEach((entry) => {
+        const nextPrimary = target === "primary"
+          ? normalizeKeywordList([...entry.key, keyword])
+          : normalizeKeywordList(entry.key);
+        const nextSecondary = target === "secondary"
+          ? normalizeKeywordList([...entry.keysecondary, keyword])
+          : normalizeKeywordList(entry.keysecondary);
+        stmt.run(JSON.stringify(nextPrimary), JSON.stringify(nextSecondary), now, entry.id, worldBookId);
+      });
+      touchWorldBook(worldBookId, now);
+    })();
+
+    const affectedVectorized = orderedEntries.filter((entry) => entry.vectorized);
+    setEntriesPendingReindex(affectedVectorized.map((entry) => entry.id));
+    for (const entry of affectedVectorized) {
+      vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+    }
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
+  throw new Error("Unsupported bulk action");
 }
 
 // --- Import helpers ---

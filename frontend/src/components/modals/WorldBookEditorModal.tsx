@@ -11,6 +11,7 @@ import PostImportWorldBookModal from '@/components/shared/PostImportWorldBookMod
 import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookDiagnosticsModal'
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
+import WorldBookEntriesSection from '@/components/shared/WorldBookEntriesSection'
 import Pagination from '@/components/shared/Pagination'
 import type { WorldBook, WorldBookEntry, WorldBookVectorSummary } from '@/types/api'
 
@@ -501,129 +502,11 @@ export default function WorldBookEditorModal() {
                 </div>
               </div>
 
-              {/* Entries header */}
-              <div className={styles.entryListHeader}>
-                <span className={styles.entryListTitle}>
-                  Entries ({entryTotal})
-                </span>
-                <button
-                  type="button"
-                  className={styles.newEntryBtn}
-                  onClick={handleCreateEntry}
-                >
-                  <Plus size={12} />
-                  <span>New Entry</span>
-                </button>
-              </div>
-
-              <div className={styles.entrySortRow}>
-                <select
-                  className={styles.entrySortSelect}
-                  value={entrySortBy}
-                  onChange={(e) => handleSortByChange(e.target.value as EntrySortBy)}
-                  title="Sort entries by"
-                >
-                  {SORT_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>Sort: {opt.label}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className={styles.entrySortDirBtn}
-                  onClick={toggleSortDir}
-                  title={entrySortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
-                >
-                  {entrySortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-                  <ArrowUpDown size={10} />
-                </button>
-              </div>
-
-              <label className={styles.entrySearch}>
-                <Search size={14} className={styles.entrySearchIcon} />
-                <input
-                  type="text"
-                  className={styles.entrySearchInput}
-                  placeholder="Search all entries..."
-                  value={entrySearchFilter}
-                  onChange={(e) => setEntrySearchFilter(e.target.value)}
-                />
-              </label>
-
-              {/* Entry list */}
-              <div className={styles.entryList}>
-                {entries.map((entry) => (
-                  <div key={entry.id}>
-                    <div
-                      className={clsx(styles.entryRow, selectedEntryId === entry.id && styles.entryRowActive, entry.disabled && styles.entryRowDisabled)}
-                      onClick={() => setSelectedEntryId(entry.id === selectedEntryId ? null : entry.id)}
-                    >
-                      <div className={styles.entryTop}>
-                        <span className={styles.entryComment}>
-                          {entry.comment || '(unnamed)'}
-                        </span>
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <Toggle.Checkbox
-                            checked={!entry.disabled}
-                            onChange={() => updateEntry(entry.id, { disabled: !entry.disabled })}
-                            className={styles.entryToggle}
-                          />
-                        </span>
-                        <span
-                          className={styles.entryDeleteBtn}
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDeleteEntryConfirm(entry.id)
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.stopPropagation()
-                              setDeleteEntryConfirm(entry.id)
-                            }
-                          }}
-                        >
-                          <Trash2 size={11} />
-                        </span>
-                      </div>
-                      <div className={styles.entryMeta}>
-                        <span className={clsx(styles.entryBadge, entry.constant ? styles.badgeConstant : entry.vectorized ? styles.badgeVector : styles.badgeTrigger)}>
-                          {entry.constant ? 'Constant' : entry.vectorized ? 'Vector' : 'Trigger'}
-                        </span>
-                        <span className={styles.entryMetaItem}>Ord: {entry.order_value}</span>
-                        {entry.position === 4
-                          ? <span className={styles.entryMetaItem}>@ Depth {entry.depth}</span>
-                          : <span className={styles.entryMetaItem}>{POSITION_SHORT[entry.position] ?? `Pos ${entry.position}`}</span>
-                        }
-                      </div>
-                    </div>
-                    {/* Inline editor below selected entry */}
-                    {selectedEntryId === entry.id && (
-                      <WorldBookEntryEditor
-                        entry={entry}
-                        onUpdate={debouncedUpdateEntry}
-                        onImmediateUpdate={updateEntry}
-                      />
-                    )}
-                  </div>
-                ))}
-                {entries.length === 0 && (
-                  <div className={styles.entryEmptyState}>
-                    {debouncedEntrySearch ? 'No entries match your search' : 'No entries yet'}
-                  </div>
-                )}
-              </div>
-              {entryTotalPages > 1 && (
-                <Pagination
-                  currentPage={entryPage}
-                  totalPages={entryTotalPages}
-                  onPageChange={(p) => {
-                    setEntryPage(p)
-                    setSelectedEntryId(null)
-                  }}
-                  totalItems={entryTotal}
-                />
-              )}
+              <WorldBookEntriesSection
+                books={books}
+                selectedBookId={selectedBookId}
+                onRefreshVectorSummary={loadVectorSummary}
+              />
             </div>
           ) : (
             <div className={styles.content}>

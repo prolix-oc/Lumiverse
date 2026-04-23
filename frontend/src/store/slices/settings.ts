@@ -74,6 +74,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'globalWorldBooks',
   // World info activation settings (budget, scan depth, recursion)
   'worldInfoSettings',
+  'worldBookEntryViewPrefs',
   // Image generation settings
   'imageGeneration',
   // Summarization settings
@@ -295,6 +296,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
     maxTokenBudget: 0,
     minPriority: 0,
   },
+  worldBookEntryViewPrefs: {},
   promptBias: '',
   guidedGenerations: [],
   quickReplySets: [],

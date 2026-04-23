@@ -4,6 +4,8 @@ import type {
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
   PaginatedResult, WorldBookDiagnostics, WorldBookReindexProgress,
   WorldBookReindexResult, WorldBookVectorSummary,
+  DuplicateWorldBookEntryInput, ReorderWorldBookEntriesInput,
+  WorldBookEntryBulkActionInput, WorldBookEntryBulkActionResult,
 } from '@/types/api'
 
 export const worldBooksApi = {
@@ -47,6 +49,18 @@ export const worldBooksApi = {
 
   createEntry(bookId: string, input: CreateWorldBookEntryInput) {
     return post<WorldBookEntry>(`/world-books/${bookId}/entries`, input)
+  },
+
+  duplicateEntry(bookId: string, entryId: string, input: DuplicateWorldBookEntryInput = {}) {
+    return post<WorldBookEntry>(`/world-books/${bookId}/entries/${entryId}/duplicate`, input)
+  },
+
+  reorderEntries(bookId: string, input: ReorderWorldBookEntriesInput) {
+    return post<{ success: boolean; count: number }>(`/world-books/${bookId}/entries/reorder`, input)
+  },
+
+  bulkEntryAction(bookId: string, input: WorldBookEntryBulkActionInput) {
+    return post<WorldBookEntryBulkActionResult>(`/world-books/${bookId}/entries/bulk`, input)
   },
 
   updateEntry(bookId: string, entryId: string, input: UpdateWorldBookEntryInput) {

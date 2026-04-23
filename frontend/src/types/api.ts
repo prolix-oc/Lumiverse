@@ -831,6 +831,52 @@ export interface CreateWorldBookEntryInput {
   extensions?: Record<string, any>;
 }
 
+export interface DuplicateWorldBookEntryInput {
+  target_book_id?: string | null;
+}
+
+export interface ReorderWorldBookEntriesInput {
+  ordered_ids: string[];
+}
+
+export interface WorldBookEntryBulkDeleteInput {
+  action: 'delete';
+  entry_ids: string[];
+}
+
+export interface WorldBookEntryBulkMoveInput {
+  action: 'move';
+  entry_ids: string[];
+  target_book_id: string;
+}
+
+export interface WorldBookEntryBulkRenumberInput {
+  action: 'renumber';
+  entry_ids: string[];
+  start?: number | null;
+  step?: number;
+  direction?: 'asc' | 'desc';
+}
+
+export interface WorldBookEntryBulkAddKeywordInput {
+  action: 'add_keyword';
+  entry_ids: string[];
+  keyword: string;
+  target?: 'primary' | 'secondary';
+}
+
+export type WorldBookEntryBulkActionInput =
+  | WorldBookEntryBulkDeleteInput
+  | WorldBookEntryBulkMoveInput
+  | WorldBookEntryBulkRenumberInput
+  | WorldBookEntryBulkAddKeywordInput;
+
+export interface WorldBookEntryBulkActionResult {
+  action: WorldBookEntryBulkActionInput['action'];
+  affected: number;
+  target_book_id?: string;
+}
+
 export interface EmbeddingConfig {
   enabled: boolean;
   provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'nanogpt';

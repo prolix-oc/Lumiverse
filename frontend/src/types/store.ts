@@ -311,6 +311,16 @@ export interface CustomCSSSettings {
   bundleId: string | null
 }
 
+export type WorldBookEntrySortBy = 'custom' | 'priority' | 'created' | 'updated' | 'name'
+export type WorldBookEntrySortDir = 'asc' | 'desc'
+export type WorldBookEntryPageSize = 50 | 100 | 200 | 'all'
+
+export interface WorldBookEntryViewPreference {
+  sortBy: WorldBookEntrySortBy
+  sortDir: WorldBookEntrySortDir
+  pageSize: WorldBookEntryPageSize
+}
+
 // ---- Settings Slice ----
 export interface SettingsSlice {
   landingPageChatsDisplayed: number
@@ -345,6 +355,7 @@ export interface SettingsSlice {
   promptBias: string
   globalWorldBooks: string[]
   worldInfoSettings: import('./api').WorldInfoSettings
+  worldBookEntryViewPrefs: Record<string, WorldBookEntryViewPreference>
   regenFeedback: RegenFeedbackSettings
   swipeGesturesEnabled: boolean
   showMessageTokenCount: boolean
