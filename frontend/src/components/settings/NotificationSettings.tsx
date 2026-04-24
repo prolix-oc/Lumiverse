@@ -16,6 +16,8 @@ export default function NotificationSettings() {
     isSupported,
     supportChecked,
     unsupportedReason,
+    registrationStatus,
+    registrationReason,
     isSubscribed,
     permissionState,
     subscriptions,
@@ -154,10 +156,20 @@ export default function NotificationSettings() {
             </span>
           </div>
           <div className={styles.infoRow}>
+            <span className={styles.infoLabel}>Service Worker</span>
+            <span className={styles.infoValue}>
+              <span className={clsx(styles.statusDot, registrationStatus === 'ready' ? styles.statusActive : styles.statusInactive)} />
+              {describeRegistrationStatus(registrationStatus)}
+            </span>
+          </div>
+          <div className={styles.infoRow}>
             <span className={styles.infoLabel}>Total Devices</span>
             <span className={styles.infoValue}>{subscriptions.length}</span>
           </div>
         </div>
+        {registrationReason && registrationStatus !== 'ready' && (
+          <div className={styles.emptyRow}>{registrationReason}</div>
+        )}
       </div>
 
       {/* ── Events Section ──────────────────────────────────────────── */}
@@ -232,4 +244,11 @@ function parseUserAgent(ua: string): string {
   if (ua.includes('Firefox')) return 'Firefox'
   if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari'
   return 'Browser'
+}
+
+function describeRegistrationStatus(status: 'ready' | 'pending' | 'missing' | 'error'): string {
+  if (status === 'ready') return 'Ready'
+  if (status === 'pending') return 'Activating'
+  if (status === 'missing') return 'Missing'
+  return 'Error'
 }

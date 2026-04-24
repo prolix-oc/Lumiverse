@@ -343,7 +343,13 @@ function DataMaintenanceSection() {
 function PwaCapabilitiesSection() {
   const addToast = useStore((s) => s.addToast)
   const pwaFeatures = checkPwaFeatures()
-  const { isSupported, supportChecked, unsupportedReason } = usePushSubscription()
+  const {
+    isSupported,
+    supportChecked,
+    unsupportedReason,
+    registrationStatus,
+    registrationReason,
+  } = usePushSubscription()
   const [countdown, setCountdown] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
 
@@ -415,6 +421,24 @@ function PwaCapabilitiesSection() {
           </span>
         </div>
         <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>SW Registration State</span>
+          <span className={styles.infoValue}>{describePushRegistrationState(registrationStatus)}</span>
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>Secure Context</span>
+          <span className={styles.infoValue}>{window.isSecureContext ? 'Yes' : 'No'}</span>
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>SW Controller</span>
+          <span className={styles.infoValue}>{navigator.serviceWorker?.controller ? 'Present' : 'Missing'}</span>
+        </div>
+        {registrationReason && registrationStatus !== 'ready' && (
+          <div className={styles.infoRow}>
+            <span className={styles.infoLabel}>SW Detail</span>
+            <span className={styles.infoValue}>{registrationReason}</span>
+          </div>
+        )}
+        <div className={styles.infoRow}>
           <span className={styles.infoLabel}>Delayed Push Test</span>
           <span className={styles.infoValue}>
             <button
@@ -440,4 +464,11 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <span className={styles.infoValue}>{value}</span>
     </div>
   )
+}
+
+function describePushRegistrationState(status: 'ready' | 'pending' | 'missing' | 'error'): string {
+  if (status === 'ready') return 'Ready'
+  if (status === 'pending') return 'Activating'
+  if (status === 'missing') return 'Missing'
+  return 'Error'
 }
