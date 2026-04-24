@@ -4408,6 +4408,8 @@ function buildParameters(
  *                `thinking.display` field. On Opus 4.7+ the API defaults to 'omitted' when
  *                unset, so users must opt in to 'summarized' to receive summary text.
  * - Google:      thinkingConfig.thinkingLevel (3.x) or thinkingBudget (2.5)
+ * - DeepSeek:    thinking + reasoning_effort (OpenAI-format API). Effort is
+ *                normalized to high/max per the official docs.
  * - OpenRouter:  reasoning: { effort } with values: none/minimal/low/medium/high/xhigh
  * - NanoGPT:     reasoning: { effort } with values: none/minimal/low/medium/high.
  *                Object form is used so `reasoning.exclude = true` can suppress
@@ -4477,6 +4479,25 @@ export function injectReasoningParams(
       const validEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
       params.reasoning = { effort: validEfforts.has(effort) ? effort : "high" };
     }
+  } else if (providerName === "deepseek") {
+    // DeepSeek's official OpenAI-format API expects a top-level `thinking`
+    // toggle and top-level `reasoning_effort`, not Anthropic-style
+    // `output_config` and not the generic `reasoning: { effort }` object.
+    // Docs: low/medium -> high, xhigh -> max.
+    if (!params.thinking) {
+      params.thinking = { type: "enabled" };
+    }
+
+    if (params.reasoning_effort === undefined) {
+      let mappedEffort = "high";
+      if (effort === "max" || effort === "xhigh") mappedEffort = "max";
+      else if (effort === "high" || effort === "medium" || effort === "low") mappedEffort = "high";
+      params.reasoning_effort = mappedEffort;
+    }
+
+    // Avoid sending the generic compatibility shape alongside DeepSeek's
+    // official reasoning controls.
+    delete params.reasoning;
   } else if (providerName === "nanogpt") {
     // NanoGPT: object form `reasoning: { effort }` — docs state top-level
     // `reasoning_effort` and nested `reasoning.effort` are equivalent, but the
@@ -4535,6 +4556,11 @@ export function applyProviderReasoningOffSwitch(
   }
 
   delete params.output_config;
+
+  if (providerName === "deepseek") {
+    params.thinking = { type: "disabled" };
+    return;
+  }
 
   if (providerName === "nanogpt") {
     params.reasoning = { exclude: true };
