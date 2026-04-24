@@ -197,15 +197,17 @@
   padding: 10px 20px;
   border-bottom: 1px solid var(--lumiverse-border);
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabBar::-webkit-scrollbar {
-  display: none;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 .tab {
+  flex: 0 0 auto;
   padding: 6px 14px;
   border-radius: 20px;
   background: transparent;

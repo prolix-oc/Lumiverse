@@ -28,7 +28,12 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   padding-bottom: 4px;
   scrollbar-width: thin;
 }
@@ -41,6 +46,7 @@
 }
 
 .variantTab {
+  flex: 0 0 auto;
   padding: 4px 10px;
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   background: var(--lumiverse-fill);
