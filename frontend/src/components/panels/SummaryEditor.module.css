@@ -23,6 +23,7 @@
   text-align: left;
   color: var(--lumiverse-text);
   transition: background var(--lumiverse-transition-fast);
+  min-width: 0;
 }
 
 .chevron {
@@ -48,6 +49,7 @@
 
 .sectionTitle {
   flex: 1;
+  min-width: 0;
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
@@ -254,6 +256,19 @@
   gap: 12px;
 }
 
+@media (max-width: 600px) {
+  .fieldRow,
+  .fieldRow3 {
+    grid-template-columns: 1fr;
+  }
+
+  .sectionHeader,
+  .toggleRow,
+  .promptBlockHeader {
+    flex-wrap: wrap;
+  }
+}
+
 /* ─── Warning box ─────────────────────────────────────────── */
 .warning {
   display: flex;
@@ -361,4 +376,3 @@
   border-radius: 4px;
   cursor: help;
 }
-
