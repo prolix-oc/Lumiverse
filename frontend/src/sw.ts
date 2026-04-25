@@ -105,9 +105,8 @@ self.addEventListener('push', (event) => {
     image?: string
   }
 
-  // Device-local suppression only: if this device already has an active
-  // foreground Lumiverse window, skip the native notification here while still
-  // allowing other subscribed devices to alert normally.
+  // Backend suppression is user-wide, but keep this device-local check as a
+  // last line of defense in case a push arrives while this client is active.
   const showNotification = self.clients
     .matchAll({ type: 'window', includeUncontrolled: true })
     .then(async (clients) => {

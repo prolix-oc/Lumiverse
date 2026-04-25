@@ -30,9 +30,10 @@ export default function NotificationSettings() {
   const [subscribing, setSubscribing] = useState(false)
   const [testing, setTesting] = useState(false)
 
-  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled') => {
+  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active') => {
     if (reason === 'disabled') return 'Push notifications are disabled in settings'
     if (reason === 'event_disabled') return 'Generation completed notifications are disabled'
+    if (reason === 'user_active') return 'Push notifications are suppressed while you are actively viewing Lumiverse'
     return 'No subscriptions to send to'
   }
 

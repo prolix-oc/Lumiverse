@@ -8,7 +8,8 @@ import { healFormattingArtifacts } from '@/lib/formatHealing'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import {
-  stripAndDispatchMessageTags,
+  dispatchMessageTagIntercepts,
+  stripMessageTags,
   subscribeTagInterceptorRegistry,
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
@@ -634,10 +635,16 @@ export default function MessageContent({
     getTagInterceptorRegistryVersion,
     getTagInterceptorRegistryVersion,
   )
-  const interceptorCleanedContent = useMemo(
-    () => stripAndDispatchMessageTags(content, { messageId, chatId, isUser, isStreaming }),
+  const interceptedMessageTags = useMemo(
+    () => stripMessageTags(content, { messageId, chatId, isUser, isStreaming }),
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
   )
+
+  useLayoutEffect(() => {
+    dispatchMessageTagIntercepts(interceptedMessageTags.intercepts)
+  }, [interceptedMessageTags.intercepts])
+
+  const interceptorCleanedContent = interceptedMessageTags.content
 
   // Resolve Risu asset tags before regex/macro processing:
   // 1. <img="AssetName"> (Risu custom syntax) → markdown image

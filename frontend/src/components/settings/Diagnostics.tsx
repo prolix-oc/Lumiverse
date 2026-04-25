@@ -353,9 +353,10 @@ function PwaCapabilitiesSection() {
   const [countdown, setCountdown] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
 
-  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled') => {
+  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active') => {
     if (reason === 'disabled') return 'Push notifications are disabled in settings.'
     if (reason === 'event_disabled') return 'Generation completed notifications are disabled in settings.'
+    if (reason === 'user_active') return 'Push notifications are suppressed while you are actively viewing Lumiverse.'
     return 'No push subscriptions found. Subscribe in Notifications settings first.'
   }
 

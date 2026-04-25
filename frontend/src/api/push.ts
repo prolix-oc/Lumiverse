@@ -13,7 +13,7 @@ export interface PushSubscriptionRecord {
 export interface PushTestResult {
   success: boolean
   sent: number
-  reason?: 'no_subscriptions' | 'disabled' | 'event_disabled'
+  reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active'
 }
 
 export const pushApi = {

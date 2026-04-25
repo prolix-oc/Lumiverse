@@ -434,6 +434,44 @@
   margin: 8px 0;
 }
 
+.prose :global(.spindle-message-tag-pending) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 22%, var(--lumiverse-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 8%, transparent);
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+}
+
+.prose :global(.spindle-message-tag-pending-dot) {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--lumiverse-primary, #8c82ff);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 45%, transparent);
+  animation: spindle-message-tag-pending-pulse 1.25s ease-in-out infinite;
+}
+
+@keyframes spindle-message-tag-pending-pulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 30%, transparent);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
 /* ── HTML Islands (Shadow DOM isolated content) ── */
 .htmlIsland {
   display: block;

@@ -7,8 +7,14 @@ type InterceptorHandler = (payload: SpindleMessageTagIntercept) => void
 
 type RegisteredTagInterceptor = {
   extensionId: string
+  extensionName: string
   options: SpindleMessageTagInterceptorOptions
   handler: InterceptorHandler
+}
+
+type PendingTagIntercept = {
+  payload: SpindleMessageTagIntercept
+  interceptor: RegisteredTagInterceptor
 }
 
 const tagInterceptors = new Map<string, RegisteredTagInterceptor[]>()
@@ -66,11 +72,27 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function pendingIndicator(interceptor: RegisteredTagInterceptor): string {
+  const name = escapeHtml(interceptor.extensionName || 'Extension')
+  const id = escapeHtml(interceptor.extensionId)
+  return `<div class="spindle-message-tag-pending" data-spindle-extension-id="${id}"><span class="spindle-message-tag-pending-dot"></span><span>${name} is processing this part of the message...</span></div>`
+}
+
 function deliveryKey(payload: SpindleMessageTagIntercept, interceptor: RegisteredTagInterceptor): string {
   const scope = payload.messageId || payload.chatId || 'global'
   return [
     interceptor.extensionId,
     scope,
+    payload.isStreaming ? 'streaming' : 'final',
     payload.tagName,
     payload.fullMatch,
   ].join('::')
@@ -78,6 +100,7 @@ function deliveryKey(payload: SpindleMessageTagIntercept, interceptor: Registere
 
 export function registerTagInterceptor(
   extensionId: string,
+  extensionName: string,
   options: SpindleMessageTagInterceptorOptions,
   handler: InterceptorHandler,
 ): () => void {
@@ -94,6 +117,7 @@ export function registerTagInterceptor(
 
   const item: RegisteredTagInterceptor = {
     extensionId,
+    extensionName,
     options: normalizedOptions,
     handler,
   }
@@ -126,17 +150,18 @@ export function unregisterTagInterceptorsByExtension(extensionId: string): void 
   }
 }
 
-export function stripAndDispatchMessageTags(
+export function stripMessageTags(
   content: string,
   context: { messageId?: string; chatId?: string; isUser?: boolean; isStreaming?: boolean },
-): string {
-  if (!content || tagInterceptors.size === 0) return content
+): { content: string; intercepts: PendingTagIntercept[] } {
+  if (!content || tagInterceptors.size === 0) return { content, intercepts: [] }
 
   let output = content
+  const intercepts: PendingTagIntercept[] = []
 
   for (const [tagName, interceptors] of tagInterceptors) {
     if (interceptors.length === 0) continue
-    const re = new RegExp(`<${escapeRegex(tagName)}\\b([^>]*)>([\\s\\S]*?)</${escapeRegex(tagName)}>` , 'gi')
+    const re = new RegExp(`<${escapeRegex(tagName)}\\b([^>]*)>([\\s\\S]*?)</${escapeRegex(tagName)}>`, 'gi')
 
     output = output.replace(re, (fullMatch, attrsRaw, inner) => {
       const attrs = parseAttrs(String(attrsRaw || ''))
@@ -155,15 +180,7 @@ export function stripAndDispatchMessageTags(
       let shouldRemove = false
       for (const interceptor of interceptors) {
         if (!attrsMatch(interceptor.options.attrs, attrs)) continue
-        const key = deliveryKey(payload, interceptor)
-        if (!delivered.has(key)) {
-          delivered.add(key)
-          try {
-            interceptor.handler({ ...payload, extensionId: interceptor.extensionId })
-          } catch (err) {
-            console.error(`[Spindle] Tag interceptor failed (${interceptor.extensionId}):`, err)
-          }
-        }
+        intercepts.push({ payload, interceptor })
         if (interceptor.options.removeFromMessage !== false) {
           shouldRemove = true
         }
@@ -171,7 +188,32 @@ export function stripAndDispatchMessageTags(
 
       return shouldRemove ? '' : fullMatch
     })
+
+    if (context.isStreaming) {
+      const hiddenInterceptors = interceptors.filter((interceptor) => interceptor.options.removeFromMessage !== false)
+      if (hiddenInterceptors.length === 0) continue
+
+      const openRe = new RegExp(`<${escapeRegex(tagName)}\\b([^>]*)>[\\s\\S]*$`, 'i')
+      output = output.replace(openRe, (partialMatch, attrsRaw) => {
+        const attrs = parseAttrs(String(attrsRaw || ''))
+        const interceptor = hiddenInterceptors.find((entry) => attrsMatch(entry.options.attrs, attrs))
+        return interceptor ? pendingIndicator(interceptor) : partialMatch
+      })
+    }
   }
 
-  return output
+  return { content: output, intercepts }
+}
+
+export function dispatchMessageTagIntercepts(intercepts: PendingTagIntercept[]): void {
+  for (const { payload, interceptor } of intercepts) {
+    const key = deliveryKey(payload, interceptor)
+    if (delivered.has(key)) continue
+    delivered.add(key)
+    try {
+      interceptor.handler({ ...payload, extensionId: interceptor.extensionId })
+    } catch (err) {
+      console.error(`[Spindle] Tag interceptor failed (${interceptor.extensionId}):`, err)
+    }
+  }
 }

@@ -426,7 +426,7 @@ async function doLoadFrontendExtension(
       },
       messages: {
         registerTagInterceptor(options, handler) {
-          return registerTagInterceptor(extensionId, options, handler)
+          return registerTagInterceptor(extensionId, manifest.name || manifest.identifier || 'Extension', options, handler)
         },
       },
       manifest,

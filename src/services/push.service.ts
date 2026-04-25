@@ -19,7 +19,7 @@ interface GenerationEndedPushPayload {
 
 export interface PushDispatchResult {
   sent: number;
-  reason?: "no_subscriptions" | "disabled" | "event_disabled";
+  reason?: "no_subscriptions" | "disabled" | "event_disabled" | "user_active";
 }
 
 const DEFAULT_PREFERENCES: PushNotificationPreferences = {
@@ -92,6 +92,8 @@ export async function sendPushToUser(
   userId: string,
   notification: PushPayload
 ): Promise<number> {
+  if (eventBus.isUserVisible(userId)) return 0;
+
   const subs = listSubscriptions(userId);
   if (subs.length === 0) return 0;
 
@@ -211,6 +213,12 @@ export async function dispatchGenerationEndedPush(
 ): Promise<PushDispatchResult> {
   const prefs = getPreferences(userId);
   if (!prefs.enabled) return { sent: 0, reason: "disabled" };
+
+  // Presence is user-wide, not device-local: if any Lumiverse session is
+  // currently visible and focused, suppress push fanout to every device.
+  if (eventBus.isUserVisible(userId)) {
+    return { sent: 0, reason: "user_active" };
+  }
 
   const isError = !!payload.error;
   if (isError && !prefs.events.generation_error) {
