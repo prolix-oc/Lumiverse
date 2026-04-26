@@ -295,6 +295,7 @@ const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
 const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details)\b/i
 const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
+const NO_ISLAND_ATTR_RE = /\bdata-no-island\b/i
 
 /** Detect HTML blocks with enough inline styling to warrant island extraction. */
 function hasSignificantInlineStyles(html: string): boolean {
@@ -366,6 +367,13 @@ function extractHtmlIslands(
       }
 
       const blockContent = blockLines.join('\n')
+
+      const openingTagEnd = blockContent.indexOf('>')
+      const openingTag = openingTagEnd >= 0 ? blockContent.slice(0, openingTagEnd) : blockContent
+      if (NO_ISLAND_ATTR_RE.test(openingTag)) {
+        output.push(...blockLines)
+        continue
+      }
 
       // Isolate if balanced and contains <style> or significant inline styling
       if (depth <= 0 && (/<style[\s>]/i.test(blockContent) || hasSignificantInlineStyles(blockContent))) {
