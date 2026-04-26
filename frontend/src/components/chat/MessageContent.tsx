@@ -525,6 +525,46 @@ function IsolatedHtml({ html }: { html: string }) {
   return <div ref={ref} className={styles.htmlIsland} />
 }
 
+/**
+ * dangerouslySetInnerHTML wrapper that preserves IMG element identity by
+ * src across innerHTML replacements, so images don't redo the cache lookup,
+ * decode, paint cycle on every chat re-render.
+ */
+function ProseHtml({ html, className }: { html: string; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const lastHtmlRef = useRef<string | null>(null)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (lastHtmlRef.current === html) return
+
+    const stableImgs = new Map<string, HTMLImageElement>()
+    if (lastHtmlRef.current !== null) {
+      for (const img of el.querySelectorAll<HTMLImageElement>('img[src]')) {
+        const src = img.getAttribute('src')
+        if (src && !stableImgs.has(src)) stableImgs.set(src, img)
+      }
+    }
+
+    el.innerHTML = html
+    lastHtmlRef.current = html
+
+    if (stableImgs.size === 0) return
+    for (const newImg of el.querySelectorAll<HTMLImageElement>('img[src]')) {
+      const src = newImg.getAttribute('src')
+      if (!src) continue
+      const preserved = stableImgs.get(src)
+      if (preserved && newImg.parentNode) {
+        newImg.replaceWith(preserved)
+        stableImgs.delete(src)
+      }
+    }
+  }, [html])
+
+  return <div ref={ref} className={className} />
+}
+
 // Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
 const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
 
@@ -754,7 +794,7 @@ export default function MessageContent({
             elements.push(
               piece.type === 'island'
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
-                : <div key={`${i}-${p}`} className={styles.prose} dangerouslySetInnerHTML={{ __html: piece.content }} />
+                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
             )
           }
         }
@@ -775,7 +815,7 @@ export default function MessageContent({
             elements.push(
               piece.type === 'island'
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
-                : <div key={`${i}-${p}`} className={styles.prose} dangerouslySetInnerHTML={{ __html: piece.content }} />
+                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
             )
           }
         }
