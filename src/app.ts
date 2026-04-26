@@ -235,6 +235,16 @@ app.use("/api/auth/*", async (c, next) => {
   );
 });
 
+// Global security headers — applied to every response.
+// frame-src / child-src are enforced via the frontend HTML meta tag as well;
+// these headers complement it by preventing the app from being embedded in
+// external frames and hardening the overall document boundary.
+app.use("*", async (c, next) => {
+  await next();
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
+});
+
 // BetterAuth handler — BEFORE auth middleware
 // Rewrite the request URL to use the actual Host header so BetterAuth
 // constructs the correct redirect URLs and cookie domains when accessed via

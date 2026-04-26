@@ -223,7 +223,10 @@ async function gracefulShutdown(signal: string) {
   const { stopRateLimitSweep } = await import("./middleware/rate-limit");
   stopRateLimitSweep();
 
-  // 5d. Stop the Vertex AI token cache sweep.
+  // 5d. Stop the WS stale-client sweep timer.
+  eventBus.stopSweep();
+
+  // 5e. Stop the Vertex AI token cache sweep.
   const { stopVertexTokenSweep } = await import("./llm/providers/google-vertex");
   stopVertexTokenSweep();
 

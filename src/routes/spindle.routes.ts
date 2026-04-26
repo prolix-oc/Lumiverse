@@ -548,7 +548,7 @@ app.get("/:id/frontend", async (c) => {
     headers: {
       "Content-Type": "application/javascript",
       "Cache-Control": "no-cache",
-      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none';",
+      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; upgrade-insecure-requests;",
     },
   });
 });

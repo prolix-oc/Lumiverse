@@ -15,6 +15,11 @@ export function createDOMHelper(extensionId: string): SpindleDOMHelper {
       const sanitized = DOMPurify.sanitize(html, {
         ADD_ATTR: [DATA_ATTR],
         RETURN_DOM_FRAGMENT: true,
+        // Explicitly forbid frame-based elements — Spindle extensions must never use
+        // iframes, frames, objects, or embeds. These are blocked by CSP as well, but
+        // we also strip them at the sanitization layer for defense-in-depth.
+        FORBID_TAGS: ['iframe', 'frame', 'object', 'embed', 'form'],
+        FORBID_ATTR: ['formaction'],
       })
 
       // Wrap in a container so we can track it

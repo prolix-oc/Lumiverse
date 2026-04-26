@@ -3324,6 +3324,31 @@ function isVectorEligibleWorldInfoEntry(entry: import("../types/world-book").Wor
   return entry.vectorized && !entry.disabled && (entry.content || "").trim().length > 0;
 }
 
+// ─── Vector WI retrieval cache (short-TTL for rapid dry-run optimization) ───
+
+const VECTOR_WI_CACHE_TTL_MS = 30_000;
+
+interface CachedVectorWiResult {
+  result: VectorWorldInfoRetrievalResult;
+  cachedAt: number;
+}
+
+const vectorWiCache = new Map<string, CachedVectorWiResult>();
+
+function getCachedVectorWiResult(cacheKey: string): VectorWorldInfoRetrievalResult | null {
+  const cached = vectorWiCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > VECTOR_WI_CACHE_TTL_MS) {
+    vectorWiCache.delete(cacheKey);
+    return null;
+  }
+  return cached.result;
+}
+
+function setCachedVectorWiResult(cacheKey: string, result: VectorWorldInfoRetrievalResult): void {
+  vectorWiCache.set(cacheKey, { result, cachedAt: Date.now() });
+}
+
 export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
   chatId: string,
@@ -3360,6 +3385,16 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const queryText = buildWorldInfoVectorQueryPreview(messages, cfg.preferred_context_size || 3);
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
 
+  // Check short-TTL cache for rapid dry-run reuse.
+  const cacheKey = `${userId}:${chatId}:${worldBookIds.join(",")}:${eligibleEntries
+    .map((e) => `${e.id}:${e.content?.length ?? 0}`)
+    .join(",")}:${queryText}:${cfg.enabled ? 1 : 0}:${cfg.vectorize_world_books ? 1 : 0}:${cfg.dimensions ?? 0}`;
+  const cached = getCachedVectorWiResult(cacheKey);
+  if (cached) {
+    console.debug("[prompt-assembly] Vector WI cache hit for chat %s", chatId);
+    return cached;
+  }
+
   if (!cfg.enabled) blockerMessages.push("Embeddings are disabled, so lorebooks will use keyword matching only.");
   if (!cfg.has_api_key) blockerMessages.push("No embedding API key is configured.");
   if (!cfg.dimensions) blockerMessages.push("Embeddings have not been tested yet, so dimensions are still unknown.");
@@ -3368,7 +3403,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   if (eligibleEntries.length === 0) blockerMessages.push("This chat has no vector-enabled, non-disabled, non-empty lorebook entries to search.");
 
   if (blockerMessages.length > 0) {
-    return {
+    const result = {
       ...emptyResult,
       queryPreview: queryText,
       eligibleCount: eligibleEntries.length,
@@ -3376,6 +3411,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
       cap: topK,
       blockerMessages,
     };
+    setCachedVectorWiResult(cacheKey, result);
+    return result;
   }
 
   try {
@@ -3398,7 +3435,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
 
     if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     if (!queryVector || queryVector.length === 0) {
-      return {
+      const result = {
         ...emptyResult,
         queryPreview: queryText,
         eligibleCount: eligibleEntries.length,
@@ -3406,6 +3443,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
         cap: topK,
         blockerMessages: ["The embedding provider returned an empty query vector."],
       };
+      setCachedVectorWiResult(cacheKey, result);
+      return result;
     }
 
     const byId = new Map(eligibleEntries.map((entry) => [entry.id, entry]));
@@ -3505,7 +3544,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
         })),
     ];
 
-    return {
+    const result = {
       entries: shortlistedEntries,
       candidateTrace,
       queryPreview: queryText,
@@ -3519,6 +3558,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
       cap,
       blockerMessages,
     };
+    setCachedVectorWiResult(cacheKey, result);
+    return result;
   } catch (err) {
     // Caller-initiated abort bubbles up so the whole pipeline can unwind
     // instead of silently returning an empty result and continuing.

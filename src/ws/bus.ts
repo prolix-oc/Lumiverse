@@ -3,15 +3,20 @@ import { EventType, type EventMessage } from "./events";
 
 type Listener = (event: EventMessage) => void;
 
+const CLIENT_SWEEP_INTERVAL_MS = 60_000;
+const CLIENT_TIMEOUT_MS = 120_000;
+
 class EventBus {
   private server: import("bun").Server<unknown> | null = null;
   private clientToUser = new Map<ServerWebSocket<unknown>, string>();
   private sessionToClient = new Map<string, ServerWebSocket<unknown>>();
   private clientToSession = new Map<ServerWebSocket<unknown>, string>();
+  private clientLastActivity = new Map<ServerWebSocket<unknown>, number>();
   private listeners = new Map<EventType, Set<Listener>>();
   /** Per-user visibility: true if at least one session reports visible. */
   private userVisibility = new Map<string, Map<string, boolean>>();
   private userAllHiddenSince = new Map<string, number>();
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Store the Bun server reference so we can use native publish(). */
   setServer(server: import("bun").Server<unknown>): void {
@@ -35,6 +40,7 @@ class EventBus {
     }
 
     this.clientToUser.set(ws, userId);
+    this.clientLastActivity.set(ws, Date.now());
 
     // Subscribe to per-user topic and system broadcast topic.
     // Bun's native pub/sub handles delivery in Zig — no JS iteration needed.
@@ -44,6 +50,8 @@ class EventBus {
     } catch {
       // Socket may already be closed
     }
+
+    this.startSweep();
   }
 
   removeClient(ws: ServerWebSocket<unknown>): void {
@@ -57,6 +65,7 @@ class EventBus {
         // Socket may already be closed
       }
       this.clientToUser.delete(ws);
+      this.clientLastActivity.delete(ws);
       if (sessionId) this.removeSessionVisibility(userId, sessionId);
     }
     if (sessionId) {
@@ -65,6 +74,49 @@ class EventBus {
         this.sessionToClient.delete(sessionId);
       }
       this.clientToSession.delete(ws);
+    }
+  }
+
+  /** Refresh activity timestamp for a known socket. Called on any message. */
+  touchClient(ws: ServerWebSocket<unknown>): void {
+    if (this.clientToUser.has(ws)) {
+      this.clientLastActivity.set(ws, Date.now());
+    }
+  }
+
+  // ─── Sweep ───────────────────────────────────────────────────────────
+
+  private startSweep(): void {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => this.sweep(), CLIENT_SWEEP_INTERVAL_MS);
+    if (typeof (this.sweepTimer as { unref?: () => void }).unref === "function") {
+      (this.sweepTimer as { unref: () => void }).unref();
+    }
+  }
+
+  stopSweep(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+  }
+
+  private sweep(): void {
+    const now = Date.now();
+    let closed = 0;
+    for (const [ws, lastActivity] of this.clientLastActivity) {
+      if (now - lastActivity > CLIENT_TIMEOUT_MS) {
+        try {
+          ws.close(1001, "Timeout");
+        } catch {
+          // Already closed; remove tracking below
+        }
+        this.removeClient(ws);
+        closed++;
+      }
+    }
+    if (closed > 0) {
+      console.log(`[WS] Sweep closed ${closed} stale client(s) (timeout ${CLIENT_TIMEOUT_MS}ms)`);
     }
   }
 

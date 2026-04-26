@@ -88,6 +88,61 @@ export interface FinalizeWorldInfoOptions {
   preserveOrder?: boolean;
 }
 
+// ─── Activation cache (short-TTL for rapid dry-run optimization) ───
+
+const WI_ACTIVATION_CACHE_TTL_MS = 30_000;
+
+interface CachedActivationResult {
+  result: ActivationResult;
+  cachedAt: number;
+}
+
+const wiActivationCache = new Map<string, CachedActivationResult>();
+
+function computeWiActivationCacheKey(input: ActivationInput): string {
+  const entries = input.entries;
+  const messages = input.messages;
+  const wiState = input.wiState;
+  const settings = input.settings ?? {};
+  const entrySig = entries
+    .map(
+      (e) =>
+        `${e.uid}:${e.disabled ? 1 : 0}:${e.constant ? 1 : 0}:${e.priority}:${e.key?.length ?? 0}:${e.keysecondary?.length ?? 0}:${e.content?.length ?? 0}`
+    )
+    .join("|");
+  const msgSig = messages.map((m) => `${m.id}:${m.content?.length ?? 0}`).join("|");
+  const stateSig = JSON.stringify(wiState);
+  const settingsSig = JSON.stringify(settings);
+  return `${entrySig}::${msgSig}::${stateSig}::${settingsSig}`;
+}
+
+function deepCloneWiState(state: WiState): WiState {
+  return JSON.parse(JSON.stringify(state));
+}
+
+function getCachedActivationResult(cacheKey: string): ActivationResult | null {
+  const cached = wiActivationCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > WI_ACTIVATION_CACHE_TTL_MS) {
+    wiActivationCache.delete(cacheKey);
+    return null;
+  }
+  return {
+    ...cached.result,
+    wiState: deepCloneWiState(cached.result.wiState),
+  };
+}
+
+function setCachedActivationResult(cacheKey: string, result: ActivationResult): void {
+  wiActivationCache.set(cacheKey, {
+    result: {
+      ...result,
+      wiState: deepCloneWiState(result.wiState),
+    },
+    cachedAt: Date.now(),
+  });
+}
+
 /**
  * Run full World Info activation pipeline.
  *
@@ -97,6 +152,10 @@ export interface FinalizeWorldInfoOptions {
  * budget enforcement → bucket by position.
  */
 export function activateWorldInfo(input: ActivationInput): ActivationResult {
+  const cacheKey = computeWiActivationCacheKey(input);
+  const cached = getCachedActivationResult(cacheKey);
+  if (cached) return cached;
+
   const { entries, messages, wiState } = input;
   const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...input.settings };
 
@@ -198,7 +257,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     queryPreview: "",
   };
 
-  return { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
+  const result: ActivationResult = { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
+  setCachedActivationResult(cacheKey, result);
+  return result;
 }
 
 export function finalizeActivatedWorldInfoEntries(

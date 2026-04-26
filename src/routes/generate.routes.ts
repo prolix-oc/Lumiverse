@@ -28,7 +28,7 @@ function chatRoute(handler: (input: any) => Promise<any>, extras?: Record<string
     const body = await c.req.json();
     if (!body.chat_id) return c.json({ error: "chat_id is required" }, 400);
     try {
-      const result = await handler({ ...body, userId, ...extras });
+      const result = await handler({ ...body, userId, signal: c.req.raw.signal, ...extras });
       return c.json(result);
     } catch (err: any) {
       return c.json({ error: err.message }, 400);

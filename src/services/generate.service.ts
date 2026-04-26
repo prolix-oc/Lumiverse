@@ -79,6 +79,8 @@ interface GenerateInput {
   /** Dry-run only: reassemble as if this message were absent from history
    *  (used to reconstruct the prompt that produced an existing assistant turn). */
   exclude_message_id?: string;
+  /** Optional abort signal — when fired, cancels an in-flight dry run. */
+  signal?: AbortSignal;
 }
 
 /** Lifecycle context passed from startGeneration → runGeneration */
@@ -1574,6 +1576,7 @@ export async function dryRunGeneration(input: GenerateInput): Promise<DryRunResu
     inputParameters: input.parameters,
     excludeMessageId: input.exclude_message_id,
     targetCharacterId: input.target_character_id,
+    signal: input.signal,
   });
 
   // Compute token counts for the breakdown

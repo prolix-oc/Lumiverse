@@ -112,6 +112,10 @@ export const wsHandler = upgradeWebSocket((c) => {
     },
     async onMessage(event, ws) {
       try {
+        // Refresh activity timestamp for sweep — any inbound message counts
+        const raw = (ws as any).raw as import("bun").ServerWebSocket<unknown>;
+        if (raw) eventBus.touchClient(raw);
+
         const data = JSON.parse(event.data as string);
         if (data.type === "ping") {
           ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));

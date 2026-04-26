@@ -68,6 +68,12 @@ async function doLoadFrontendExtension(
     const mod: SpindleFrontendModule = await import(/* @vite-ignore */ blobUrl)
     URL.revokeObjectURL(blobUrl)
 
+    // SECURITY: Spindle extensions execute in the main document context.
+    // IFrames, frames, objects, and embeds are EXPLICITLY prohibited and
+    // blocked by the document CSP (frame-src 'none'). Extension views must
+    // use the provided placement APIs (mount, drawer, dock, float) which
+    // inject content directly into the React-managed DOM — never via frames.
+
     if (typeof mod.setup !== 'function') {
       console.warn(`[Spindle:${manifest.identifier}] Frontend module missing setup()`)
       return

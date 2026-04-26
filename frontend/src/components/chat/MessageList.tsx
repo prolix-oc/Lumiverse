@@ -465,8 +465,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   // Unified scroll guard: watches scrollHeight changes caused by streaming
   // tokens, extension mounts, lazy image loads, or virtual row resizing.
-  // When pinned we follow the bottom; when floating we compensate so the
-  // viewport stays locked to the same reading position.
+  // When pinned we follow the bottom; when floating we leave the viewport
+  // alone so the user can read without being pushed around by new content.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -496,17 +496,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       // handled it — don't double-compensate.
       if (Math.abs(scrollTopDelta - heightDelta) < 2) return
 
+      // Only auto-scroll when the user is already pinned to the bottom.
+      // If they have scrolled up to read older messages, anchor the view
+      // so streaming tokens (or any other bottom growth) don't push content
+      // up the screen.
       if (isPinnedRef.current) {
         isProgrammaticScrollRef.current = true
         latest.scrollTop = latest.scrollHeight - latest.clientHeight
-      } else if (
-        heightDelta > 0
-        && !(isCoarsePointer && !isPinnedRef.current && (touchMomentumHoldRef.current || rowVirtualizer.isScrolling))
-      ) {
-        // Only compensate for growth. Shrinkage is either handled by the
-        // virtualizer or is minor enough to ignore.
-        isProgrammaticScrollRef.current = true
-        latest.scrollTop += heightDelta
       }
     }
 
