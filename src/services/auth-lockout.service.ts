@@ -133,6 +133,13 @@ class AuthLockoutService {
     details: Record<string, unknown> = {},
     now = Date.now(),
   ): FailureResult {
+    // Don't lock out loopback — it's almost always the server owner, and
+    // polling components (Operator Panel, generation recovery watchdog) can
+    // hit 401s rapidly when a session expires.  Rate-limiting still applies.
+    if (clientId === "127.0.0.1" || clientId === "::1" || clientId === "unknown") {
+      return { count: 0, lockout: null };
+    }
+
     const state = getOrCreateState(clientId, now);
     state.failures[reason] += 1;
     state.lastReason = reason;
