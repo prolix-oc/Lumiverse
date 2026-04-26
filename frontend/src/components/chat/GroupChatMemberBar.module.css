@@ -1,42 +1,76 @@
 /* ── Group Chat Member Bar ── */
-.bar {
+.barWrapper {
   position: sticky;
   top: -16px;
   z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
   margin: -16px -20px 4px;
   border-radius: 0 0 var(--lcs-radius-sm, 8px) var(--lcs-radius-sm, 8px);
   background: var(--lumiverse-bg, rgba(18, 18, 24, 0.95));
   border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
   border-top: none;
   flex-shrink: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: hidden;
 }
 
-:global([data-glass]) .bar {
+:global([data-glass]) .barWrapper {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 @media (max-width: 768px) {
-  .bar {
+  .barWrapper {
     top: -8px;
     margin: -8px -8px 4px;
   }
 }
 
 @media (max-width: 480px) {
-  .bar {
+  .barWrapper {
     top: -6px;
     margin: -6px -6px 4px;
   }
 }
 
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
 .bar::-webkit-scrollbar {
   display: none;
+}
+
+/* Scroll fade indicators */
+.scrollFade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  z-index: 11;
+  transition: opacity 200ms ease;
+}
+
+.scrollFadeLeft {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    var(--lumiverse-bg, rgba(18, 18, 24, 0.95)) 0%,
+    transparent 100%
+  );
+}
+
+.scrollFadeRight {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    var(--lumiverse-bg, rgba(18, 18, 24, 0.95)) 0%,
+    transparent 100%
+  );
 }
 
 .member {

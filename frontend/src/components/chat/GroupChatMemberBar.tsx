@@ -8,6 +8,7 @@ import { Plus, VolumeX, Volume2, UserMinus } from 'lucide-react'
 import { IconBolt } from '@tabler/icons-react'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
+import useHorizontalScroll from '@/hooks/useHorizontalScroll'
 import styles from './GroupChatMemberBar.module.css'
 import clsx from 'clsx'
 
@@ -36,6 +37,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   const openModal = useStore((s) => s.openModal)
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [barRef, { canScrollLeft, canScrollRight }] = useHorizontalScroll<HTMLDivElement>()
 
   const handleForceGenerate = useCallback(
     async (characterId: string) => {
@@ -158,35 +160,39 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   }, [contextMenu, contextIsMuted, isStreaming, handleForceGenerateFromMenu, handleToggleMute, handleRemoveMember])
 
   return (
-    <div className={styles.bar}>
-      {groupCharacterIds.map((id) => (
-        <MemberButton
-          key={id}
-          id={id}
-          chatId={chatId}
-          characters={characters}
-          isActive={id === activeGroupCharacterId}
-          isMuted={mutedCharacterIds.includes(id)}
-          isStreaming={isStreaming}
-          onForceGenerate={handleForceGenerate}
-          onOpenContextMenu={openContextMenu}
+    <div className={styles.barWrapper}>
+      {canScrollLeft && <div className={clsx(styles.scrollFade, styles.scrollFadeLeft)} aria-hidden="true" />}
+      {canScrollRight && <div className={clsx(styles.scrollFade, styles.scrollFadeRight)} aria-hidden="true" />}
+      <div ref={barRef} className={styles.bar}>
+        {groupCharacterIds.map((id) => (
+          <MemberButton
+            key={id}
+            id={id}
+            chatId={chatId}
+            characters={characters}
+            isActive={id === activeGroupCharacterId}
+            isMuted={mutedCharacterIds.includes(id)}
+            isStreaming={isStreaming}
+            onForceGenerate={handleForceGenerate}
+            onOpenContextMenu={openContextMenu}
+          />
+        ))}
+
+        <button
+          type="button"
+          className={styles.addMemberBtn}
+          onClick={() => openModal('addGroupMember', { chatId })}
+          title="Add member to group"
+        >
+          <Plus size={16} />
+        </button>
+
+        <ContextMenu
+          position={contextMenu}
+          items={menuItems}
+          onClose={() => setContextMenu(null)}
         />
-      ))}
-
-      <button
-        type="button"
-        className={styles.addMemberBtn}
-        onClick={() => openModal('addGroupMember', { chatId })}
-        title="Add member to group"
-      >
-        <Plus size={16} />
-      </button>
-
-      <ContextMenu
-        position={contextMenu}
-        items={menuItems}
-        onClose={() => setContextMenu(null)}
-      />
+      </div>
     </div>
   )
 }
