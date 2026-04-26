@@ -34,7 +34,7 @@ export interface PooledTokensEntry {
   completedMessageId?: string;
   completedAt?: number;
   error?: string;
-  /** Whether the user has acknowledged (viewed) a terminal generation */
+  /** Legacy field retained for old in-memory entries; attention is client-local. */
   acknowledged?: boolean;
   /** True while the generation is paused waiting for user to decide on failed council tools */
   councilRetryPending?: boolean;
@@ -73,10 +73,7 @@ const chatIndex = new Map<string, string>();
 /** Terminal statuses that indicate a generation is no longer active */
 const TERMINAL_STATUSES: Set<PoolStatus> = new Set(["completed", "stopped", "error"]);
 
-/** TTL for acknowledged terminal entries before cleanup */
-const TERMINAL_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-/** Safety cap: unacknowledged entries are swept after this to prevent memory leaks */
+/** Safety cap: terminal entries are swept after this to prevent memory leaks */
 const UNACKNOWLEDGED_MAX_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Sweep interval */
@@ -212,30 +209,25 @@ export function getActivePoolsForUser(userId: string): PooledTokensEntry[] {
 }
 
 /**
- * Return all entries the user should see as chat heads:
- * active generations + terminal ones not yet acknowledged.
+ * Return all entries the user should see as chat heads. Status is backend
+ * authoritative; clients may only clear their own local attention indicator.
  */
 export function getChatHeadPoolsForUser(userId: string): PooledTokensEntry[] {
   const results: PooledTokensEntry[] = [];
   for (const entry of pool.values()) {
     if (entry.userId !== userId) continue;
-    if (!TERMINAL_STATUSES.has(entry.status) || !entry.acknowledged) {
-      results.push(entry);
-    }
+    results.push(entry);
   }
   return results;
 }
 
 /**
- * Mark all terminal entries for a chat as acknowledged.
- * Called when the user navigates to the chat or clicks the chat head.
+ * Legacy no-op. Chat-head attention is client-local so one client cannot hide
+ * terminal state from another client that missed the terminal WebSocket event.
  */
 export function acknowledgeChat(userId: string, chatId: string): void {
-  for (const entry of pool.values()) {
-    if (entry.userId === userId && entry.chatId === chatId && TERMINAL_STATUSES.has(entry.status)) {
-      entry.acknowledged = true;
-    }
-  }
+  void userId;
+  void chatId;
 }
 
 export function removePoolEntry(generationId: string): void {
@@ -271,8 +263,7 @@ function sweep(): void {
   for (const [id, entry] of pool) {
     if (!TERMINAL_STATUSES.has(entry.status) || !entry.completedAt) continue;
     const age = now - entry.completedAt;
-    // Acknowledged entries use the short TTL; unacknowledged get the safety cap
-    const ttl = entry.acknowledged ? TERMINAL_TTL_MS : UNACKNOWLEDGED_MAX_TTL_MS;
+    const ttl = UNACKNOWLEDGED_MAX_TTL_MS;
     if (age > ttl) {
       removePoolEntry(id);
     }

@@ -72,6 +72,8 @@ app.post("/acknowledge", async (c) => {
   const userId = c.get("userId");
   const { chatId } = await c.req.json<{ chatId: string }>();
   if (!chatId) return c.json({ error: "chatId required" }, 400);
+  // Compatibility no-op: chat-head attention is client-local so one client
+  // cannot hide terminal backend status from another connected client.
   poolSvc.acknowledgeChat(userId, chatId);
   return c.json({ acknowledged: true });
 });

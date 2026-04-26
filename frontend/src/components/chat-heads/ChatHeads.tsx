@@ -492,7 +492,7 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
       )}
 
       {/* Completed: red unread notification badge */}
-      {isCompleted && (
+      {isCompleted && !head.attentionCleared && (
         <div className={`${styles.notifPip} ${styles.notifPipUnread}`} />
       )}
 

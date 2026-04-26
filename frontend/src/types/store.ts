@@ -1084,6 +1084,7 @@ export interface ChatHeadEntry {
   status: ChatHeadStatus
   model: string
   startedAt: number
+  attentionCleared?: boolean
 }
 
 export interface ChatHeadsSlice {
@@ -1092,6 +1093,7 @@ export interface ChatHeadsSlice {
   chatHeadsPosition: { xPct: number; yPct: number }
   addChatHead: (head: ChatHeadEntry) => void
   updateChatHead: (generationId: string, updates: Partial<ChatHeadEntry>) => void
+  deleteChatHead: (chatId: string) => void
   removeChatHead: (chatId: string) => void
   setChatHeadsPosition: (pos: { xPct: number; yPct: number }) => void
   /** Re-sync persisted heads against the backend's active generation list */

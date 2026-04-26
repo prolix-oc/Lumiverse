@@ -379,6 +379,9 @@ export function useWebSocket() {
         // otherwise the persisted 'completed' head would spawn the moment they navigate away.
         if (payload.chatId && payload.generationId) {
           if (payload.chatId === state.activeChatId) {
+            state.updateChatHead(payload.generationId, {
+              status: payload.error ? 'error' : 'completed',
+            })
             state.removeChatHead(payload.chatId)
           } else {
             state.updateChatHead(payload.generationId, {
@@ -434,6 +437,7 @@ export function useWebSocket() {
         // doesn't reappear when they navigate away.
         if (payload.chatId && payload.generationId) {
           if (payload.chatId === state.activeChatId) {
+            state.updateChatHead(payload.generationId, { status: 'stopped' })
             state.removeChatHead(payload.chatId)
           } else {
             state.updateChatHead(payload.generationId, { status: 'stopped' })
@@ -504,6 +508,7 @@ export function useWebSocket() {
         if (activeChatId) {
           recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
         }
+        store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
       }),
 
       // Re-sync settings when another tab (or the old page's keepalive flush)
@@ -746,7 +751,7 @@ export function useWebSocket() {
       // Chat deletion — remove lingering chat head so it doesn't navigate to a dead chat
       wsClient.on(EventType.CHAT_DELETED, (payload: { id: string }) => {
         if (payload?.id) {
-          store.getState().removeChatHead(payload.id)
+          store.getState().deleteChatHead(payload.id)
         }
       }),
 
@@ -882,6 +887,7 @@ export function useWebSocket() {
       if (activeChatId) {
         recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
       }
+      store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
 
@@ -896,9 +902,17 @@ export function useWebSocket() {
       recoverPooledGeneration(state.activeChatId).catch(() => { /* best-effort */ })
     }, 4000)
 
+    const chatHeadReconcile = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      const heads = store.getState().chatHeads
+      if (!heads.some((h) => h.status === 'assembling' || h.status === 'council' || h.status === 'council_failed' || h.status === 'reasoning' || h.status === 'streaming')) return
+      store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
+    }, 4000)
+
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       clearInterval(recoveryWatchdog)
+      clearInterval(chatHeadReconcile)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }
