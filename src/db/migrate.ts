@@ -1,17 +1,38 @@
 import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { healCorruptDatabase } from "./maintenance";
 
 export async function runMigrations(db: Database, migrationsDir?: string): Promise<void> {
   const dir = migrationsDir || join(import.meta.dir, "migrations");
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS _migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      applied_at INTEGER NOT NULL DEFAULT (unixepoch())
-    )
-  `);
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `);
+    // Quick sanity check to surface corruption immediately
+    db.query("SELECT name FROM _migrations LIMIT 1").all();
+  } catch (err: any) {
+    if (err?.code && typeof err.code === "string" && err.code.startsWith("SQLITE_CORRUPT")) {
+      console.warn(`[db] WARNING: SQLite database disk image is malformed (${err.code}) during migration init. Entering recovery path...`);
+      healCorruptDatabase(db);
+      
+      // Retry table creation
+      db.run(`
+        CREATE TABLE IF NOT EXISTS _migrations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `);
+    } else {
+      throw err;
+    }
+  }
 
   const applied = new Set(
     db.query("SELECT name FROM _migrations").all().map((r: any) => r.name)
