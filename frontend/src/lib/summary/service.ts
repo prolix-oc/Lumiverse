@@ -128,7 +128,7 @@ export async function generateSummary(opts: GenerateSummaryOpts): Promise<string
     if (result.reasoning) {
       throw new Error('Model returned only reasoning with no summary content')
     }
-    throw new Error(\`No summary generated (finish reason: \${result.finish_reason || 'unknown'})\`)
+    throw new Error(`No summary generated (finish reason: ${result.finish_reason || 'unknown'})`)
   }
 
   // Store summary in chat metadata
