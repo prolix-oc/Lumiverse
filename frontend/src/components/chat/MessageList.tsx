@@ -59,9 +59,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const touchMomentumHoldRef = useRef(false)
   const touchMomentumTimerRef = useRef<number | null>(null)
   const rangeWarmTimerRef = useRef<number | null>(null)
-  const initialLoadRepinPendingRef = useRef(false)
-  const initialLoadUserInterruptedRef = useRef(false)
-  const initialLoadRepinTimerRef = useRef<number | null>(null)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   )
@@ -95,8 +92,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     lastScrollTopRef.current = 0
     measuredRowHeightsRef.current = new Map()
     averageMeasuredHeightRef.current = null
-    initialLoadRepinPendingRef.current = true
-    initialLoadUserInterruptedRef.current = false
   }, [chatId])
 
   const setPrependVisualOffset = useCallback((next: number) => {
@@ -187,9 +182,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       }
       if (rangeWarmTimerRef.current != null) {
         window.clearTimeout(rangeWarmTimerRef.current)
-      }
-      if (initialLoadRepinTimerRef.current != null) {
-        window.clearTimeout(initialLoadRepinTimerRef.current)
       }
     }
   }, [])
@@ -309,10 +301,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const virtualItems = rowVirtualizer.getVirtualItems()
 
-  useEffect(() => {
-    rowVirtualizer.measure()
-  }, [rowVirtualizer, mobileRangeWarm])
-
   // Gate that keeps the keyboard/safe-zone repin from fighting the unified
   // scroll guard while streaming is active.
   const isStreamingRef = useRef(isStreaming)
@@ -337,30 +325,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       lastScrollTopRef.current = latest.scrollTop
     })
   }, [rowVirtualizer, setPrependVisualOffset, visibleMessages.length])
-
-  useEffect(() => {
-    if (!initialLoadRepinPendingRef.current || initialLoadUserInterruptedRef.current) return
-    if (visibleMessages.length === 0 || loadingOlder) return
-    if (mobileRangeWarm) return
-
-    if (initialLoadRepinTimerRef.current != null) {
-      window.clearTimeout(initialLoadRepinTimerRef.current)
-    }
-
-    initialLoadRepinTimerRef.current = window.setTimeout(() => {
-      initialLoadRepinTimerRef.current = null
-      if (!initialLoadRepinPendingRef.current || initialLoadUserInterruptedRef.current) return
-      scrollToHistoryBottom('auto')
-      initialLoadRepinPendingRef.current = false
-    }, 80)
-
-    return () => {
-      if (initialLoadRepinTimerRef.current != null) {
-        window.clearTimeout(initialLoadRepinTimerRef.current)
-        initialLoadRepinTimerRef.current = null
-      }
-    }
-  }, [chatId, loadingOlder, mobileRangeWarm, scrollToHistoryBottom, visibleMessages.length])
 
   const avatarUrl = isImpersonateStream
     ? getPersonaAvatar(activePersonaId, activePersona?.image_id ?? null)
@@ -422,7 +386,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
     if (event.deltaY < -30) {
-      initialLoadUserInterruptedRef.current = true
       isPinnedRef.current = false
       suppressNextPinUpdateRef.current = true
     }
@@ -441,7 +404,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const previousY = touchYRef.current
     const nextY = event.touches[0]?.clientY ?? null
     if (previousY != null && nextY != null && nextY > previousY + 10) {
-      initialLoadUserInterruptedRef.current = true
       isPinnedRef.current = false
       suppressNextPinUpdateRef.current = true
     }
@@ -763,9 +725,32 @@ interface VirtualRowProps {
 }
 
 function VirtualRow({ index, messageId, start, visualOffset, measureElement, children }: VirtualRowProps) {
+  const elRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const el = elRef.current
+    if (!el) return
+
+    // Initial measure during commit, before paint
+    measureElement(el)
+
+    // Own immediate ResizeObserver bypasses the virtualizer's rAF-batched
+    // observer so dynamic content (extension interceptor injections, lazy
+    // images, etc.) updates row heights without a one-frame delay.
+    const ro = new ResizeObserver(() => {
+      measureElement(el)
+    })
+    ro.observe(el)
+
+    return () => {
+      ro.disconnect()
+      measureElement(null)
+    }
+  }, [measureElement])
+
   return (
     <div
-      ref={measureElement}
+      ref={elRef}
       data-index={index}
       data-message-id={messageId}
       className={styles.virtualRow}

@@ -522,6 +522,13 @@ export interface CouncilSlice {
   loadCouncilSettings: () => Promise<void>
   saveCouncilSettings: (partial: Partial<CouncilSettings>) => Promise<void>
   loadAvailableTools: () => Promise<void>
+  /** Set merged council tools from pre-fetched data (bootstrap payload).
+   *  Same merge rules as `loadAvailableTools`, zero network round trips. */
+  hydrateCouncilTools: (
+    councilTools: CouncilToolDefinition[],
+    spindleTools: import('lumiverse-spindle-types').ToolRegistration[],
+    extensions: Array<{ id: string; name: string }>
+  ) => void
 
   addCouncilMember: (member: CouncilMember) => void
   addCouncilMembersFromPack: (packId: string) => number
@@ -916,6 +923,8 @@ export interface RegexSlice {
   regexScripts: RegexScript[]
   regexEditingId: string | null
   loadRegexScripts: () => Promise<void>
+  /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */
+  setRegexScripts: (scripts: RegexScript[]) => void
   addRegexScript: (input: CreateRegexScriptInput) => Promise<RegexScript>
   updateRegexScript: (id: string, updates: UpdateRegexScriptInput) => Promise<void>
   removeRegexScript: (id: string) => Promise<void>

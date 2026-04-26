@@ -88,7 +88,11 @@ export default function SpindlePanel() {
     [loadingAction, extensionOperationStatus]
   )
 
+  // Extensions are also loaded on auth and resynced on WS events
+  // (see `useWebSocket.ts`), so if the store is already populated we skip
+  // the redundant mount-time fetch — the list is kept fresh by the WS layer.
   useEffect(() => {
+    if (useStore.getState().extensions.length > 0) return
     loadExtensions()
   }, [loadExtensions])
 

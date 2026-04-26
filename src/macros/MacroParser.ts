@@ -15,8 +15,11 @@ const DEFAULT_FLAGS: MacroFlags = {
 };
 
 // LRU cache for parsed ASTs — avoids re-lexing/parsing the same template strings
-// (e.g. preset blocks that are identical across generations).
-const AST_CACHE_MAX = 32;
+// (e.g. preset blocks, WI entry content, structural macros that repeat across
+// generations). Capacity is set high enough that a typical generation (20-30
+// preset blocks + 100+ WI entries + structural macros + utility prompts) stays
+// fully cached without thrashing.
+const AST_CACHE_MAX = 128;
 const astCache = new Map<string, AstNode[]>();
 
 /**
@@ -24,19 +27,28 @@ const astCache = new Map<string, AstNode[]>();
  * Input is first lexed, then the token stream is walked to produce nodes.
  * After initial parse, opening/closing scoped macros are paired.
  *
- * Results are cached (LRU, up to 32 entries) for repeated calls with the
+ * Results are cached (LRU, up to 128 entries) for repeated calls with the
  * same template string. The returned AST must NOT be mutated by callers.
+ *
+ * LRU maintenance: on cache hit we promote the entry (delete + re-insert)
+ * so frequently-used templates stay resident. On miss we evict the oldest
+ * entry (Map iteration order = insertion order) only when at capacity.
  */
 export function parse(input: string): AstNode[] {
   const cached = astCache.get(input);
-  if (cached) return cached;
+  if (cached) {
+    // Promote to most-recently-used position (Map insertion order)
+    astCache.delete(input);
+    astCache.set(input, cached);
+    return cached;
+  }
 
   const tokens = lex(input);
   const ctx = new ParseContext(tokens);
   const nodes = parseDocument(ctx);
   const result = pairScopedMacros(nodes);
 
-  // Evict oldest entry if at capacity (simple LRU: Map iteration order = insertion order)
+  // Evict oldest entry if at capacity
   if (astCache.size >= AST_CACHE_MAX) {
     const first = astCache.keys().next().value;
     if (first !== undefined) astCache.delete(first);

@@ -3,7 +3,8 @@ import { wsClient } from './client'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { hasUnsavedSettings } from '@/store/slices/settings'
-import { routeBackendMessage } from '@/lib/spindle/loader'
+import { routeBackendMessage, loadFrontendExtension } from '@/lib/spindle/loader'
+import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
@@ -636,6 +637,16 @@ export function useWebSocket() {
           payload.operation,
           payload.name ?? null
         )
+        if (payload.operation === 'updated' && payload.extensionId) {
+          // Force a list refresh so the status dot reflects the post-restart state
+          syncExtensions(true)
+          const ext = useStore.getState().extensions.find((e) => e.id === payload.extensionId)
+          if (ext?.enabled && ext?.has_frontend) {
+            spindleApi.getManifest(payload.extensionId)
+              .then((manifest) => loadFrontendExtension(payload.extensionId!, manifest, true))
+              .catch((err) => console.error('[Spindle] Failed to reload frontend after update:', err))
+          }
+        }
       }),
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_PROGRESS, (payload: { total: number; completed: number; failed: number; currentExtensionId?: string; currentName?: string; phase?: string }) => {

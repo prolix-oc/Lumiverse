@@ -52,6 +52,7 @@ export function registerChatUtilsMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "chatAge",
     category: "Chat Utils",
     description: "Human-readable time since the chat was created",
@@ -67,6 +68,7 @@ export function registerChatUtilsMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "counter",
     category: "Chat Utils",
     description: "Increment a named counter (local variable) and return the new value",
@@ -84,6 +86,7 @@ export function registerChatUtilsMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "toggle",
     category: "Chat Utils",
     description: "Toggle a named boolean (local variable) and return the new value",
@@ -101,6 +104,7 @@ export function registerChatUtilsMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "charTags",
     category: "Chat Utils",
     description: "Comma-separated list of the character's tags",
@@ -114,6 +118,7 @@ export function registerChatUtilsMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "charTag",
     category: "Chat Utils",
     description: "Check if the character has a specific tag (returns 'true' or 'false')",

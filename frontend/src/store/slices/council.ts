@@ -1,12 +1,46 @@
 import type { StateCreator } from 'zustand'
 import type { CouncilSlice } from '@/types/store'
-import type { CouncilMember, CouncilSettings, CouncilToolsSettings, CouncilToolDefinition } from 'lumiverse-spindle-types'
+import type { CouncilMember, CouncilSettings, CouncilToolsSettings, CouncilToolDefinition, ExtensionInfo, ToolRegistration } from 'lumiverse-spindle-types'
 import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS } from 'lumiverse-spindle-types'
 import { councilApi } from '@/api/council'
 import { spindleApi } from '@/api/spindle'
 import { generateUUID } from '@/lib/uuid'
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Merge rules shared between network refresh (`loadAvailableTools`) and
+ *  bootstrap hydration (`hydrateCouncilTools`). Spindle extension tools are
+ *  converted to CouncilToolDefinition shape first; built-in / DLC tools
+ *  from the backend overwrite them on name collision. */
+function mergeCouncilAndSpindleTools(
+  councilTools: CouncilToolDefinition[],
+  spindleTools: ToolRegistration[],
+  extensions: Array<{ id: string; name: string }>,
+): CouncilToolDefinition[] {
+  const extNameMap = new Map<string, string>()
+  for (const ext of extensions) extNameMap.set(ext.id, ext.name)
+
+  // Use qualified name (extension_id:name) as key to match the council API format.
+  const merged = new Map<string, CouncilToolDefinition>()
+  for (const reg of spindleTools) {
+    const qualifiedName = `${reg.extension_id}:${reg.name}`
+    merged.set(qualifiedName, {
+      name: qualifiedName,
+      displayName: reg.display_name,
+      description: reg.description,
+      category: 'extension',
+      prompt: reg.description,
+      inputSchema: reg.parameters,
+      storeInDeliberation: true,
+      extensionName: extNameMap.get(reg.extension_id) || reg.extension_id,
+    })
+  }
+  // Council tools (built-in + DLC) overwrite extension tools on name collision
+  for (const tool of councilTools) {
+    merged.set(tool.name, tool)
+  }
+  return Array.from(merged.values())
+}
 
 function debouncedSave(settings: CouncilSettings) {
   if (saveTimer) clearTimeout(saveTimer)
@@ -83,37 +117,19 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
         spindleApi.list().catch(() => ({ extensions: [], isPrivileged: false })),
       ])
 
-      // Build extension_id → display name lookup
-      const extNameMap = new Map<string, string>()
-      for (const ext of extensionList.extensions) {
-        extNameMap.set(ext.id, ext.name)
-      }
-
-      // Convert spindle ToolRegistrations → CouncilToolDefinition and merge.
-      // Use qualified name (extension_id:name) as key to match the council API format.
-      const merged = new Map<string, CouncilToolDefinition>()
-      for (const reg of spindleTools) {
-        const qualifiedName = `${reg.extension_id}:${reg.name}`
-        merged.set(qualifiedName, {
-          name: qualifiedName,
-          displayName: reg.display_name,
-          description: reg.description,
-          category: 'extension',
-          prompt: reg.description,
-          inputSchema: reg.parameters,
-          storeInDeliberation: true,
-          extensionName: extNameMap.get(reg.extension_id) || reg.extension_id,
-        })
-      }
-      // Council tools (built-in + DLC) overwrite extension tools on name collision
-      for (const tool of councilTools) {
-        merged.set(tool.name, tool)
-      }
-
-      set({ availableCouncilTools: Array.from(merged.values()) })
+      const merged = mergeCouncilAndSpindleTools(councilTools, spindleTools, extensionList.extensions)
+      set({ availableCouncilTools: merged })
     } catch (err) {
       console.error('[council] Failed to load tools:', err)
     }
+  },
+
+  /** Apply council tools from an external source (e.g. the bootstrap payload).
+   *  Uses the same merge rules as `loadAvailableTools` but skips the three
+   *  network round trips — callers supply the already-fetched data. */
+  hydrateCouncilTools: (councilTools, spindleTools, extensions) => {
+    const merged = mergeCouncilAndSpindleTools(councilTools, spindleTools, extensions)
+    set({ availableCouncilTools: merged })
   },
 
   addCouncilMember: (member: CouncilMember) => {

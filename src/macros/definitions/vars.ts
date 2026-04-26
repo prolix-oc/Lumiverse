@@ -25,6 +25,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "setvar",
     category: "Variables",
     description: "Set a local variable (returns empty string)",
@@ -43,6 +44,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "addvar",
     category: "Variables",
     description: "Add a numeric value to a local variable",
@@ -63,6 +65,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "incvar",
     category: "Variables",
     description: "Increment a local variable by 1",
@@ -79,6 +82,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "decvar",
     category: "Variables",
     description: "Decrement a local variable by 1",
@@ -95,6 +99,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "hasvar",
     category: "Variables",
     description: "Check if a local variable exists (returns 'true' or 'false')",
@@ -109,6 +114,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "deletevar",
     category: "Variables",
     description: "Delete a local variable",
@@ -143,6 +149,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "setgvar",
     category: "Variables",
     description: "Set a global variable",
@@ -162,6 +169,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "addgvar",
     category: "Variables",
     description: "Add a numeric value to a global variable",
@@ -183,6 +191,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "incgvar",
     category: "Variables",
     description: "Increment a global variable by 1",
@@ -200,6 +209,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "decgvar",
     category: "Variables",
     description: "Decrement a global variable by 1",
@@ -217,6 +227,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "hasgvar",
     category: "Variables",
     description: "Check if a global variable exists (returns 'true' or 'false')",
@@ -231,6 +242,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "deletegvar",
     category: "Variables",
     description: "Delete a global variable",
@@ -264,6 +276,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "setchatvar",
     category: "Variables",
     description: "Set a chat-scoped persisted variable (persists across generations)",
@@ -283,6 +296,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "addchatvar",
     category: "Variables",
     description: "Add a numeric value to a chat-scoped persisted variable",
@@ -304,6 +318,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "incchatvar",
     category: "Variables",
     description: "Increment a chat-scoped persisted variable by 1",
@@ -321,6 +336,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "decchatvar",
     category: "Variables",
     description: "Decrement a chat-scoped persisted variable by 1",
@@ -338,6 +354,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "haschatvar",
     category: "Variables",
     description: "Check if a chat-scoped persisted variable exists (returns 'true' or 'false')",
@@ -351,6 +368,7 @@ export function registerVariableMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "deletechatvar",
     category: "Variables",
     description: "Delete a chat-scoped persisted variable",

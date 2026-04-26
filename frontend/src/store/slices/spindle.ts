@@ -68,6 +68,10 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))
+    if (updated.enabled && updated.has_frontend) {
+      const manifest = await spindleApi.getManifest(id)
+      await loadFrontendExtension(id, manifest, true)
+    }
   },
 
   switchBranch: async (id: string, branch: string) => {
@@ -75,6 +79,10 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))
+    if (updated.enabled && updated.has_frontend) {
+      const manifest = await spindleApi.getManifest(id)
+      await loadFrontendExtension(id, manifest, true)
+    }
   },
 
   removeExtension: async (id: string) => {

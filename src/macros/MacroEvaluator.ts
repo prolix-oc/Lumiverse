@@ -41,9 +41,11 @@ export async function evaluate(
   const diagnostics: MacroDiagnostic[] = [];
   let text = processed;
 
-  // Iterative evaluation: re-evaluate if output still contains macros
-  // (handles macros that resolve to text containing other macros)
-  const MAX_ITERATIONS = 5;
+  // Iterative evaluation: most macros are now recursively expanded inline
+  // (see evaluateMacroNode). The outer loop acts as a safety net for the
+  // rare case where a macro result depends on state mutated by a later macro
+  // in the same template that hasn't been evaluated yet.
+  const MAX_ITERATIONS = 2;
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     if (env.signal?.aborted) throw env.signal.reason ?? new DOMException("Aborted", "AbortError");
     const ast = parse(text);
@@ -130,22 +132,27 @@ async function evaluateMacroNode(
   const dynamicLookup = env._dynamicMacrosLower;
   if (!def && dynamicLookup && dynamicLookup.has(dynamicKey)) {
     const dynamic = dynamicLookup.get(dynamicKey)!;
-    if (typeof dynamic === "string") return dynamic;
-    if (typeof dynamic === "function") {
-      return String(
+    let rawResult: string;
+    if (typeof dynamic === "string") {
+      rawResult = dynamic;
+    } else if (typeof dynamic === "function") {
+      rawResult = String(
         await Promise.resolve(
           dynamic(buildExecContext(node, [], env, registry, globalOffset, depth, diagnostics))
         )
       );
-    }
-    if (typeof dynamic === "object" && dynamic.handler) {
-      return String(
+    } else if (typeof dynamic === "object" && dynamic.handler) {
+      rawResult = String(
         await Promise.resolve(
           dynamic.handler(buildExecContext(node, [], env, registry, globalOffset, depth, diagnostics))
         )
       );
+    } else {
+      rawResult = String(dynamic);
     }
-    return String(dynamic);
+    // Dynamic macros don't carry a terminal flag, so always check for nested
+    // macros to stay consistent with registry macro behavior.
+    return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, diagnostics);
   }
 
   if (!def) {
@@ -169,7 +176,18 @@ async function evaluateMacroNode(
   const ctx = buildExecContext(node, resolvedArgs, env, registry, globalOffset, depth, diagnostics);
 
   try {
-    return String(await Promise.resolve(def.handler(ctx)));
+    const rawResult = String(await Promise.resolve(def.handler(ctx)));
+
+    // Recursive inline expansion: if the handler returned text containing
+    // unresolved macros, expand them immediately rather than deferring to
+    // the next outer pass. This collapses multi-pass chains (e.g.
+    // {{getvar::x}} → "{{user}}" → "Alice") into a single depth-first pass.
+    // Terminal macros (guaranteed never to return {{...}}) skip the check.
+    if (!def.terminal) {
+      return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, diagnostics);
+    }
+
+    return rawResult;
   } catch (err: any) {
     diagnostics.push({
       level: "error",
@@ -179,6 +197,28 @@ async function evaluateMacroNode(
     });
     return "";
   }
+}
+
+/**
+ * If `text` contains unresolved macro markers, parse and recursively evaluate
+ * it inline. Returns the original text when no markers remain or when
+ * expansion converges (no change).
+ */
+async function expandIfNeeded(
+  text: string,
+  env: MacroEnv,
+  registry: MacroRegistry,
+  globalOffset: number,
+  depth: number,
+  diagnostics: MacroDiagnostic[],
+): Promise<string> {
+  if (!text.includes("{{") || depth >= MAX_NESTING_DEPTH) return text;
+  const innerAst = parse(text);
+  const expanded = await evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, diagnostics);
+  // Convergence guard: avoid infinite recursion from self-referential
+  // variables (e.g., x = "{{getvar::x}}") by checking if expansion
+  // actually changed the text.
+  return expanded !== text ? expanded : text;
 }
 
 async function evaluateScopedMacroNode(
@@ -236,7 +276,14 @@ async function evaluateScopedMacroNode(
   };
 
   try {
-    return String(await Promise.resolve(def.handler(ctx)));
+    const rawResult = String(await Promise.resolve(def.handler(ctx)));
+
+    // Recursive inline expansion — same pattern as evaluateMacroNode.
+    if (!def.terminal) {
+      return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, diagnostics);
+    }
+
+    return rawResult;
   } catch (err: any) {
     diagnostics.push({
       level: "error",

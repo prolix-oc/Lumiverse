@@ -764,6 +764,7 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
     try {
       const detailed = await collectVectorActivatedWorldInfoDetailed(
         ctx.userId,
+        ctx.chatId,
         wiSources.worldBookIds,
         wiEntries,
         messages,
@@ -773,12 +774,26 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
       vectorRetrievalDetails = detailed;
 
       if (detailed.blockerMessages.length > 0) {
-        console.debug(
-          "[prompt-assembly] Vector WI blocked: %s (eligible=%d, books=%d)",
-          detailed.blockerMessages.join("; "),
-          detailed.eligibleCount,
-          wiSources.worldBookIds.length,
+        // Only log actionable blockers. Suppress benign states where the user
+        // simply hasn't opted into vector search (embeddings disabled, no
+        // vector-enabled entries, etc.). Log when vectorized entries exist but
+        // can't be searched, or when config is incomplete (no API key, etc.).
+        const benignBlockers = new Set([
+          "Embeddings are disabled, so lorebooks will use keyword matching only.",
+          "World-book vectorization is disabled in embeddings settings.",
+          "This chat has no vector-enabled, non-disabled, non-empty lorebook entries to search.",
+        ]);
+        const hasActionableBlocker = detailed.blockerMessages.some(
+          (m) => !benignBlockers.has(m)
         );
+        if (hasActionableBlocker || detailed.eligibleCount > 0) {
+          console.debug(
+            "[prompt-assembly] Vector WI blocked: %s (eligible=%d, books=%d)",
+            detailed.blockerMessages.join("; "),
+            detailed.eligibleCount,
+            wiSources.worldBookIds.length,
+          );
+        }
       } else {
         console.debug(
           "[prompt-assembly] Vector WI retrieval: eligible=%d, hits=%d, afterThreshold=%d, afterRerank=%d, shortlisted=%d (topK=%d)",
@@ -1075,13 +1090,24 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
   // ---- Resolve macros in world info entries ----
   // WI entry content may contain macros (e.g. {{user}}, {{char}}, {{time}}).
   // Resolve them before injection so all positions get macro-evaluated content.
-  for (const bucket of [wiCache.before, wiCache.after, wiCache.anBefore, wiCache.anAfter, wiCache.emBefore, wiCache.emAfter] as Array<Array<{ content: string }>>) {
-    for (const entry of bucket) {
-      entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
+  // Flattened into a single loop across all buckets with cooperative yields
+  // every 8 entries so /generate/stop can land during large lorebooks.
+  {
+    const allWiEntries: Array<{ content: string }>[] = [
+      wiCache.before, wiCache.after, wiCache.anBefore, wiCache.anAfter,
+      wiCache.emBefore, wiCache.emAfter, wiCache.depth,
+    ];
+    let wiEvalCounter = 0;
+    for (const bucket of allWiEntries) {
+      for (const entry of bucket) {
+        if ((wiEvalCounter++ & 7) === 0) {
+          await yieldAndCheckAbort(ctx.signal);
+        } else if (ctx.signal?.aborted) {
+          throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
+        }
+        entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
+      }
     }
-  }
-  for (const entry of wiCache.depth) {
-    entry.content = (await evaluate(entry.content, macroEnv, registry)).text;
   }
   pruneEmptyWorldInfoCacheEntries(wiCache);
 
@@ -1205,7 +1231,16 @@ export async function assemblePrompt(ctx: AssemblyContext): Promise<AssemblyResu
           throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
         }
         const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
-        const resolvedContent = healFormattingArtifacts((await evaluate(msg.content, macroEnv, registry)).text);
+        // Inline fast-path: most stored messages contain no macro markers.
+        // Skip the full evaluate() call (lex → parse → AST walk → diagnostics
+        // alloc) when no markers are present. This mirrors the evaluator's own
+        // fast-path but avoids the function-call overhead and 4 string scans
+        // that evaluate() performs before reaching its early return.
+        const rawContent = msg.content;
+        const needsEval = rawContent.includes("{{") || rawContent.includes("<USER>") || rawContent.includes("<BOT>") || rawContent.includes("<CHAR>");
+        const resolvedContent = needsEval
+          ? healFormattingArtifacts((await evaluate(rawContent, macroEnv, registry)).text)
+          : rawContent;
         historyParts.push(resolvedContent);
         const attachments = Array.isArray(msg.extra?.attachments) ? msg.extra.attachments : [];
         if (attachments.length > 0) {
@@ -2130,9 +2165,28 @@ async function resolveWorldInfoOutlets(
   const resolved = new Map<string, string>(templates);
   macroEnv.extra.worldInfoOutlets = Object.fromEntries(resolved);
 
+  // Build a dependency map: for each template, record which outlet names it
+  // references via {{outlet::name}}. On subsequent passes we only re-evaluate
+  // templates that depend on an outlet whose resolved value changed.
+  const dependsOn = new Map<string, Set<string>>();
+  for (const [name, template] of templates) {
+    const deps = new Set<string>();
+    const outletPattern = /\{\{outlet::([^}]+)\}\}/gi;
+    let match: RegExpExecArray | null;
+    while ((match = outletPattern.exec(template)) !== null) {
+      const dep = match[1].trim().toLowerCase();
+      if (dep && dep !== name.toLowerCase()) deps.add(dep);
+    }
+    dependsOn.set(name, deps);
+  }
+
+  // Track which outlets changed in the previous pass. On pass 0, evaluate all.
+  let changedOutlets: Set<string> | null = null; // null = evaluate all
+
   for (let pass = 0; pass < 5; pass++) {
     let changed = false;
     let index = 0;
+    const newlyChanged = new Set<string>();
 
     for (const [name, template] of templates) {
       if ((index++ & 15) === 0) {
@@ -2141,15 +2195,34 @@ async function resolveWorldInfoOutlets(
         throw signal.reason ?? new DOMException("Aborted", "AbortError");
       }
 
+      // On passes after the first, skip templates that don't depend on any
+      // outlet that changed in the previous pass.
+      if (changedOutlets !== null) {
+        const deps = dependsOn.get(name);
+        if (deps && deps.size > 0) {
+          let hasDirtyDep = false;
+          for (const dep of deps) {
+            if (changedOutlets.has(dep)) { hasDirtyDep = true; break; }
+          }
+          if (!hasDirtyDep) continue;
+        } else if (deps) {
+          // No deps and not the first pass — skip
+          continue;
+        }
+      }
+
       const next = (await evaluate(template, macroEnv, registry)).text;
       if (resolved.get(name) !== next) {
         resolved.set(name, next);
         changed = true;
+        newlyChanged.add(name.toLowerCase());
       }
     }
 
     macroEnv.extra.worldInfoOutlets = Object.fromEntries(resolved);
     if (!changed) break;
+    // Next pass only re-evaluates templates that depend on outlets changed THIS pass
+    changedOutlets = newlyChanged;
   }
 
   return macroEnv.extra.worldInfoOutlets as Record<string, string>;
@@ -3253,6 +3326,7 @@ function isVectorEligibleWorldInfoEntry(entry: import("../types/world-book").Wor
 
 export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
+  chatId: string,
   worldBookIds: string[],
   entries: WorldBookEntryModel[],
   messages: Message[],
@@ -3306,7 +3380,22 @@ export async function collectVectorActivatedWorldInfoDetailed(
 
   try {
     if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+
+    // Attempt to reuse a previously cached query vector for this chat.
+    // The cache is keyed by chat + query text hash and has a 5-minute TTL.
+    let queryVector = await embeddingsSvc.getCachedQueryVector(chatId, queryText);
+    if (!queryVector) {
+      const [vec] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+      queryVector = vec;
+      if (queryVector && queryVector.length > 0) {
+        try {
+          embeddingsSvc.cacheQueryVector(chatId, queryText, queryVector);
+        } catch {
+          // Non-critical cache write failure
+        }
+      }
+    }
+
     if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     if (!queryVector || queryVector.length === 0) {
       return {
@@ -3450,12 +3539,13 @@ export async function collectVectorActivatedWorldInfoDetailed(
 
 export async function collectVectorActivatedWorldInfo(
   userId: string,
+  chatId: string,
   worldBookIds: string[],
   entries: import("../types/world-book").WorldBookEntry[],
   messages: Message[],
   signal?: AbortSignal,
 ): Promise<VectorActivatedEntry[]> {
-  const result = await collectVectorActivatedWorldInfoDetailed(userId, worldBookIds, entries, messages, signal);
+  const result = await collectVectorActivatedWorldInfoDetailed(userId, chatId, worldBookIds, entries, messages, signal);
   return result.entries;
 }
 
@@ -3492,7 +3582,7 @@ export async function getActivatedWorldInfoForChat(
   });
 
   const vectorActivated = await collectVectorActivatedWorldInfo(
-    userId, wiSources.worldBookIds, wiSources.entries, messages,
+    userId, chatId, wiSources.worldBookIds, wiSources.entries, messages,
   );
   return mergeActivatedWorldInfoEntries(
     wiResult.activatedEntries,
@@ -4074,7 +4164,8 @@ function applyContextFilters(
 /**
  * Apply CompletionSettings as a post-processing pass on the assembled messages.
  * Handles squashSystemMessages, useSystemPrompt, and namesBehavior
- * in a single O(n) pass (where possible).
+ * in a single O(n) pass using write-pointer compaction for system message
+ * squashing (avoids O(n²) splice-in-loop).
  */
 function applyCompletionSettings(
   result: LlmMessage[],
@@ -4083,50 +4174,57 @@ function applyCompletionSettings(
   persona: Persona | null,
   generationType: GenerationType,
 ): void {
-  // Single forward pass: squash consecutive system messages + convert system→user
-  // + apply namesBehavior
   const squash = settings.squashSystemMessages;
   const noSystem = settings.useSystemPrompt === false;
   const namesBehavior = settings.namesBehavior ?? 0;
 
-  let i = 0;
-  while (i < result.length) {
-    const msg = result[i];
+  // When squashing, use write-pointer compaction to avoid O(n²) splices.
+  // Read pointer advances through every message; write pointer only advances
+  // when we emit a message. Consecutive system messages are merged into the
+  // write-pointer's current position.
+  let write = 0;
+  for (let read = 0; read < result.length; read++) {
+    let msg = result[read];
 
-    // Squash: merge consecutive system messages
-    if (squash && msg.role === "system" && i > 0 && result[i - 1].role === "system") {
-      result[i - 1] = { ...result[i - 1], content: result[i - 1].content + "\n\n" + msg.content };
-      result.splice(i, 1);
-      continue; // re-check same index
+    // Squash: merge consecutive system messages into the previous written message
+    if (squash && msg.role === "system" && write > 0 && result[write - 1].role === "system") {
+      result[write - 1] = { ...result[write - 1], content: result[write - 1].content + "\n\n" + msg.content };
+      continue; // don't advance write pointer
     }
 
     // useSystemPrompt false: convert system → user
     if (noSystem && msg.role === "system") {
-      result[i] = { ...msg, role: "user" };
+      msg = { ...msg, role: "user" };
     }
 
     // namesBehavior: 1 = add name field, 2 = prepend "Name: " to content
     if (namesBehavior === 1 && (msg.role === "user" || msg.role === "assistant")) {
       const name = msg.role === "user" ? (persona?.name ?? "User") : getEffectiveCharacterName(character);
-      result[i] = { ...result[i], name };
+      msg = { ...msg, name };
     } else if (namesBehavior === 2 && (msg.role === "user" || msg.role === "assistant")) {
       const name = msg.role === "user" ? (persona?.name ?? "User") : getEffectiveCharacterName(character);
-      if (typeof result[i].content === "string") {
-        result[i] = { ...result[i], content: `${name}: ${result[i].content}` };
+      if (typeof msg.content === "string") {
+        msg = { ...msg, content: `${name}: ${msg.content}` };
       } else {
-        const parts = [...result[i].content as import("../llm/types").LlmMessagePart[]];
+        const parts = [...msg.content as import("../llm/types").LlmMessagePart[]];
         const textIdx = parts.findIndex((p) => p.type === "text");
         if (textIdx >= 0) {
           const tp = parts[textIdx] as import("../llm/types").LlmTextPart;
           parts[textIdx] = { type: "text", text: `${name}: ${tp.text}` };
         }
-        result[i] = { ...result[i], content: parts };
+        msg = { ...msg, content: parts };
       }
     }
 
-    i++;
+    if (write !== read) result[write] = msg;
+    else if (msg !== result[read]) result[write] = msg;
+    write++;
   }
 
+  // Truncate the array to the compacted length
+  if (write < result.length) {
+    result.length = write;
+  }
 }
 
 /**

@@ -12,6 +12,9 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
     set({ regexScripts: res.data })
   },
 
+  /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */
+  setRegexScripts: (scripts: RegexScript[]) => set({ regexScripts: scripts }),
+
   addRegexScript: async (input: CreateRegexScriptInput) => {
     const script = await regexApi.create(input)
     set((s) => ({ regexScripts: [...s.regexScripts, script] }))

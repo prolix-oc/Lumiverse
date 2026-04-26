@@ -53,6 +53,7 @@ import { databankRoutes } from "./routes/databank.routes";
 import { globalAddonsRoutes } from "./routes/global-addons.routes";
 import { webSearchRoutes } from "./routes/web-search.routes";
 import { themeAssetsRoutes } from "./routes/theme-assets.routes";
+import { bootstrapRoutes } from "./routes/bootstrap.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
@@ -371,6 +372,7 @@ app.route("/api/v1/mcp-servers", mcpServersRoutes);
 app.route("/api/v1/databanks", databankRoutes);
 app.route("/api/v1/web-search", webSearchRoutes);
 app.route("/api/v1/global-addons", globalAddonsRoutes);
+app.route("/api/v1/bootstrap", bootstrapRoutes);
 
 // Issue single-use WS tickets (behind auth middleware)
 app.post("/api/v1/ws-ticket", (c) => {

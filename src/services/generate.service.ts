@@ -1179,6 +1179,7 @@ export async function startGeneration(input: GenerateInput): Promise<{ generatio
         // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
         const vectorActivated = await collectVectorActivatedWorldInfo(
           input.userId,
+          input.chat_id,
           wiBookIds,
           wiEntries,
           councilMessages,

@@ -5,6 +5,7 @@ const ELSE_MARKER = "\x00ELSE_MARKER\x00";
 export function registerCoreMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "space",
     category: "Core",
     description: "Inserts a literal space character",
@@ -14,6 +15,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "newline",
     category: "Core",
     description: "Inserts a literal newline character",
@@ -24,6 +26,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "noop",
     category: "Core",
     description: "No operation — resolves to empty string",
@@ -33,6 +36,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "trim",
     category: "Core",
     description: "Trim whitespace from scoped content or surrounding whitespace in post mode",
@@ -51,6 +55,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "comment",
     category: "Core",
     description: "Comment — resolves to empty string, content is ignored",
@@ -61,6 +66,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "//",
     category: "Core",
     description: "Inline comment shorthand — resolves to empty string",
@@ -79,6 +85,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "reverse",
     category: "Core",
     description: "Reverse a string",
@@ -108,6 +115,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "banned",
     category: "Core",
     description: "Placeholder for banned tokens — resolves to empty",
@@ -137,19 +145,13 @@ export function registerCoreMacros(): void {
       }
       let conditionStr = (await ctx.resolveNodes(conditionNodes)).trim();
 
-      // Iteratively re-resolve the condition string. A single resolve pass only
-      // walks the AST one level deep — if the resolved value itself contains
-      // macro markers (e.g. a character description that embeds {{user}} or
-      // {{char}}), those need additional passes to resolve. This mirrors the
-      // top-level evaluate() loop. Stops when nothing changes (genuinely
-      // unresolvable, e.g. an unknown macro reconstructed as {{name}}) or when
-      // no markers remain.
-      const MAX_CONDITION_PASSES = 5;
-      for (let i = 0; i < MAX_CONDITION_PASSES; i++) {
-        if (!conditionStr.includes("{{")) break;
+      // With recursive inline expansion, resolveNodes already fully expands
+      // nested macros. One safety re-resolve covers the rare edge case where
+      // a macro result depends on state mutated by a later macro in the same
+      // template that hasn't been evaluated yet.
+      if (conditionStr.includes("{{")) {
         const next = (await ctx.resolve(conditionStr)).trim();
-        if (next === conditionStr) break;
-        conditionStr = next;
+        if (next !== conditionStr) conditionStr = next;
       }
 
       // Handle ! prefix negation (ST compat: {{if !condition}})

@@ -3,6 +3,7 @@ import { registry } from "../MacroRegistry";
 export function registerRandomMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "random",
     category: "Random",
     description:
@@ -36,6 +37,7 @@ export function registerRandomMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "pick",
     category: "Random",
     description: "Pick a random item from a list of arguments. Stable per evaluation when seeded.",
@@ -50,6 +52,7 @@ export function registerRandomMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "roll",
     category: "Random",
     description: "Roll dice in NdS format (e.g., 2d6). Returns total.",

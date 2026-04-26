@@ -37,7 +37,8 @@ function getManifestSignature(manifest: SpindleManifest): string {
 
 async function doLoadFrontendExtension(
   extensionId: string,
-  manifest: SpindleManifest
+  manifest: SpindleManifest,
+  force = false
 ): Promise<void> {
   const generation = (loadGeneration.get(extensionId) || 0) + 1
   loadGeneration.set(extensionId, generation)
@@ -46,7 +47,7 @@ async function doLoadFrontendExtension(
   const manifestSignature = getManifestSignature(manifest)
   const existing = loadedExtensions.get(extensionId)
 
-  if (existing?.manifestSignature === manifestSignature) {
+  if (!force && existing?.manifestSignature === manifestSignature) {
     return
   }
 
@@ -474,14 +475,15 @@ async function doLoadFrontendExtension(
 
 export async function loadFrontendExtension(
   extensionId: string,
-  manifest: SpindleManifest
+  manifest: SpindleManifest,
+  force = false
 ): Promise<void> {
   const pending = loadInFlight.get(extensionId)
   const next = (pending || Promise.resolve())
     .catch(() => {
       // continue queue even after previous failure
     })
-    .then(() => doLoadFrontendExtension(extensionId, manifest))
+    .then(() => doLoadFrontendExtension(extensionId, manifest, force))
 
   loadInFlight.set(extensionId, next)
   try {

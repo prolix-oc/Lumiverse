@@ -1862,6 +1862,88 @@ function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined)
   });
 }
 
+// ---------------------------------------------------------------------------
+// Query vector cache — read/write
+// ---------------------------------------------------------------------------
+
+const QUERY_CACHE_TTL_SECONDS = 300; // 5 minutes
+
+function computeQueryHash(queryText: string): string {
+  return Bun.hash(queryText).toString(36);
+}
+
+/**
+ * Look up a previously-cached query vector for a chat. Returns the vector if
+ * found and not expired, otherwise null.
+ */
+export async function getCachedQueryVector(
+  chatId: string,
+  queryText: string,
+): Promise<number[] | null> {
+  try {
+    const db = getDb();
+    const hash = computeQueryHash(queryText);
+    const now = Math.floor(Date.now() / 1000);
+
+    const row = db.query<{ vector_json: string }, [string, string, number]>(
+      `SELECT vector_json FROM query_vector_cache
+       WHERE chat_id = ? AND query_hash = ? AND expires_at > ?`
+    ).get(chatId, hash, now);
+
+    if (!row) return null;
+
+    // Update hit stats
+    db.query(
+      `UPDATE query_vector_cache
+       SET hit_count = hit_count + 1, last_used_at = ?
+       WHERE chat_id = ? AND query_hash = ?`
+    ).run(now, chatId, hash);
+
+    return JSON.parse(row.vector_json);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist a query vector so future generations for the same chat + query text
+ * can skip the embedding API call entirely.
+ */
+export function cacheQueryVector(
+  chatId: string,
+  queryText: string,
+  vector: number[],
+): void {
+  try {
+    const db = getDb();
+    const hash = computeQueryHash(queryText);
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = now + QUERY_CACHE_TTL_SECONDS;
+
+    db.query(
+      `INSERT INTO query_vector_cache
+       (id, chat_id, query_hash, query_text, vector_json, hit_count, created_at, last_used_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+       ON CONFLICT(chat_id, query_hash) DO UPDATE SET
+         vector_json = excluded.vector_json,
+         query_text = excluded.query_text,
+         last_used_at = excluded.last_used_at,
+         expires_at = excluded.expires_at`
+    ).run(
+      crypto.randomUUID(),
+      chatId,
+      hash,
+      queryText,
+      JSON.stringify(vector),
+      now,
+      now,
+      expiresAt,
+    );
+  } catch {
+    // Non-critical cache write failure — silently ignore
+  }
+}
+
 export async function testEmbeddingConfig(
   userId: string,
   text: string

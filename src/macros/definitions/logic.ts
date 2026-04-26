@@ -3,6 +3,7 @@ import { registry } from "../MacroRegistry";
 export function registerLogicMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "switch",
     category: "Logic",
     description:
@@ -28,6 +29,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "default",
     category: "Logic",
     description: "Return the first truthy value, or the fallback",
@@ -46,6 +48,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "and",
     category: "Logic",
     description: "Logical AND — returns 'true' if all arguments are truthy, else ''",
@@ -59,6 +62,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "or",
     category: "Logic",
     description: "Logical OR — returns 'true' if any argument is truthy, else ''",
@@ -72,6 +76,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "not",
     category: "Logic",
     description: "Logical NOT — returns 'true' if value is falsy, else ''",
@@ -84,6 +89,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "eq",
     category: "Logic",
     description: "Equality check — returns 'true' if a == b (numeric-aware)",
@@ -104,6 +110,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "ne",
     category: "Logic",
     description: "Inequality check — returns 'true' if a != b",
@@ -124,6 +131,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "gt",
     category: "Logic",
     description: "Greater-than check — returns 'true' if a > b",
@@ -141,6 +149,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "lt",
     category: "Logic",
     description: "Less-than check — returns 'true' if a < b",
@@ -158,6 +167,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "gte",
     category: "Logic",
     description: "Greater-than-or-equal check — returns 'true' if a >= b",
@@ -175,6 +185,7 @@ export function registerLogicMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "lte",
     category: "Logic",
     description: "Less-than-or-equal check — returns 'true' if a <= b",

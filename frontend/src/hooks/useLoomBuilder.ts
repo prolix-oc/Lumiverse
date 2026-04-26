@@ -98,10 +98,14 @@ export function useLoomBuilder() {
     }
   }, [setLoomRegistry])
 
-  // Load registry on mount
+  // Load registry on mount. The registry is kept in the store across panel
+  // open/close cycles, and every mutation path below (create/delete/rename/
+  // duplicate/save) already calls `refreshRegistry()` itself, so skip the
+  // redundant mount-time fetch when the cache is populated.
   useEffect(() => {
+    if (Object.keys(loomRegistry).length > 0) return
     refreshRegistry()
-  }, [refreshRegistry])
+  }, [loomRegistry, refreshRegistry])
 
   // Create a new preset
   const createPreset = useCallback(async (name: string, description?: string) => {

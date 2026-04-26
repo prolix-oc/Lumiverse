@@ -275,6 +275,19 @@
 .actionsWrap {
   flex-shrink: 0;
   align-self: flex-start;
+  opacity: 0;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.card:hover .actionsWrap {
+  opacity: 1;
+}
+
+/* Touch devices: keep actions visible for deliberate tapping */
+@media (hover: none) {
+  .actionsWrap {
+    opacity: 0.5;
+  }
 }
 
 /* ── Mobile: pull actions out of flex flow ── */

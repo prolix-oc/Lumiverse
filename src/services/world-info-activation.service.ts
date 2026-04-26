@@ -327,6 +327,8 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
   const state: ScanState = makeScanState();
 
   // Pass 0 base: scan messages once per unique effective scan_depth.
+  // Pre-compute scan text per depth key and memoize so entries sharing the
+  // same effective depth don't rebuild the same concatenated string.
   const depthBuckets = new Map<string, Set<string>>();
   const depthKey = (d: number | null) => (d === null ? "all" : String(d));
   for (const e of conditional) {
@@ -337,9 +339,14 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
     if (!set) { set = new Set(); depthBuckets.set(k, set); }
     set.add(e.uid);
   }
+  const scanTextCache = new Map<string, string>();
   for (const [k, scope] of depthBuckets) {
     const d = k === "all" ? null : Number(k);
-    const text = buildScanText(messages, d, "");
+    let text = scanTextCache.get(k);
+    if (text === undefined) {
+      text = buildScanText(messages, d, "");
+      scanTextCache.set(k, text);
+    }
     matcher.scanChunk(text, state, scope);
   }
 
@@ -426,17 +433,29 @@ function handleNoMatch(state: WiEntryState, entry: WorldBookEntry): void {
 }
 
 function buildScanText(messages: Message[], scanDepth: number | null, recursionText = ""): string {
-  const base = (() => {
-    if (scanDepth === null || scanDepth <= 0) {
-      return messages.map(m => m.content).join("\n");
-    }
-    const slice = messages.slice(-scanDepth);
-    return slice.map(m => m.content).join("\n");
-  })();
+  const base = scanDepth === null || scanDepth <= 0 || scanDepth >= messages.length
+    ? joinMessageContents(messages)
+    : joinMessageContents(messages.slice(-scanDepth));
 
   if (!recursionText) return base;
   if (!base) return recursionText;
   return `${base}\n${recursionText}`;
+}
+
+/**
+ * Join message content strings with newline separator. Avoids the intermediate
+ * array allocation that `messages.map(m => m.content).join("\n")` would create
+ * by building the result string directly in a single pass.
+ */
+function joinMessageContents(messages: Message[]): string {
+  if (messages.length === 0) return "";
+  if (messages.length === 1) return messages[0].content;
+  let result = messages[0].content;
+  for (let i = 1; i < messages.length; i++) {
+    result += "\n";
+    result += messages[i].content;
+  }
+  return result;
 }
 
 /**

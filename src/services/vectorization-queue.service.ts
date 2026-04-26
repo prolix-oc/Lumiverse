@@ -171,7 +171,7 @@ class VectorizationQueue {
     try {
       const cfg = await embeddingsSvc.getEmbeddingConfig(jobs[0].userId);
       const texts = chunks.map((c) => c.content);
-      const vectors = await embeddingsSvc.embedTexts(jobs[0].userId, texts);
+      const vectors = await embeddingsSvc.cachedEmbedTexts(jobs[0].userId, texts);
       const refreshedChats = new Set<string>();
 
       // Batch upsert all vectors in a single LanceDB mergeInsert call

@@ -1,23 +1,7 @@
 .actions {
   display: flex;
   gap: 2px;
-  opacity: 0;
-  transition: opacity var(--lumiverse-transition-fast);
   align-self: flex-start;
   flex-shrink: 0;
   margin-top: 4px;
 }
-
-/* Show on parent card hover */
-:global(.card):hover .actions,
-*:hover > .actions {
-  opacity: 1;
-}
-
-/* Touch devices: keep actions visible for deliberate tapping */
-@media (hover: none) {
-  .actions {
-    opacity: 0.5;
-  }
-}
-

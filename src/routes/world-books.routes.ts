@@ -506,7 +506,7 @@ app.post("/:id/diagnostics", async (c) => {
       });
 
   const vectorDetail = isAttached
-    ? await collectVectorActivatedWorldInfoDetailed(userId, [bookId], bookEntries, messages)
+    ? await collectVectorActivatedWorldInfoDetailed(userId, chat.id, [bookId], bookEntries, messages)
       : {
         entries: [],
         candidateTrace: [],

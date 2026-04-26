@@ -84,6 +84,10 @@ export interface MacroDefinition {
   aliases?: string[];
   /** When true, extension macros cannot overwrite this definition */
   builtIn?: boolean;
+  /** When true, the handler's return value is guaranteed to never contain
+   *  unresolved macro markers ({{...}}). Skips the post-handler recursive
+   *  expansion check for a small performance win on hot-path macros. */
+  terminal?: boolean;
   handler: MacroHandler;
 }
 
