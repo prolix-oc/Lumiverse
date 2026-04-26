@@ -6368,9 +6368,9 @@ export class WorkerHost {
     try {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       const settings = councilSettingsSvc.getCouncilSettings(resolvedUserId);
-      this.resolveRequest(requestId, settings);
+      this.postToWorker({ type: "response", requestId, result: settings });
     } catch (err) {
-      this.rejectRequest(requestId, String(err));
+      this.postToWorker({ type: "response", requestId, error: String(err) });
     }
   }
 
@@ -6388,9 +6388,9 @@ export class WorkerHost {
         return buildCouncilMemberContext(member, item);
       });
 
-      this.resolveRequest(requestId, membersCtx);
+      this.postToWorker({ type: "response", requestId, result: membersCtx });
     } catch (err) {
-      this.rejectRequest(requestId, String(err));
+      this.postToWorker({ type: "response", requestId, error: String(err) });
     }
   }
 
@@ -6398,9 +6398,9 @@ export class WorkerHost {
     try {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       const items = packsSvc.getAllLumiaItems(resolvedUserId);
-      this.resolveRequest(requestId, items);
+      this.postToWorker({ type: "response", requestId, result: items });
     } catch (err) {
-      this.rejectRequest(requestId, String(err));
+      this.postToWorker({ type: "response", requestId, error: String(err) });
     }
   }
 
