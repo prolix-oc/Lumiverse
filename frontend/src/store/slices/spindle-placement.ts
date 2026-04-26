@@ -172,7 +172,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     }))
   },
 
-  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'visible' | 'fullscreen' | 'preFullscreen'>>) => {
+  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'fullscreen' | 'preFullscreen'>>) => {
     set((state) => ({
       floatWidgets: state.floatWidgets.map((w) =>
         w.id === widgetId ? { ...w, ...updates } : w

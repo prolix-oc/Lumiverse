@@ -55,6 +55,7 @@ export interface SummarizeStatusResponse {
 
 export interface QuietGenerateResponse {
   content: string
+  reasoning?: string
   finish_reason: string
   usage?: {
     prompt_tokens: number

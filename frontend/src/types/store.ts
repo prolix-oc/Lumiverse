@@ -866,7 +866,7 @@ export interface SpindlePlacementSlice {
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void
-  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'visible' | 'fullscreen' | 'preFullscreen'>>) => void
+  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'fullscreen' | 'preFullscreen'>>) => void
 
   registerDockPanel: (panel: DockPanelState) => void
   unregisterDockPanel: (panelId: string) => void
