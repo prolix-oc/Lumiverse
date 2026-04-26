@@ -96,6 +96,10 @@
     -ms-overflow-style: none;
   }
 
+  .virtualRow {
+    will-change: auto;
+  }
+
   .list::-webkit-scrollbar {
     width: 0;
     height: 0;

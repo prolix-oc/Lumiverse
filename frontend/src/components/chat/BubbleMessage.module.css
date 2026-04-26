@@ -626,3 +626,31 @@
     left: auto;
   }
 }
+
+@media (hover: none) and (pointer: coarse) {
+  .card,
+  .hidden {
+    transition: none;
+  }
+
+  .card,
+  .card:hover,
+  :global([data-no-bubble-hover]) .card:hover {
+    box-shadow:
+      0 0 0 0.5px var(--lcs-glass-border),
+      0 1px 4px rgba(0, 0, 0, 0.18),
+      0 6px 14px rgba(0, 0, 0, 0.08);
+  }
+
+  :global([data-glass][data-chat-bg]) .card {
+    backdrop-filter: none;
+  }
+
+  .avatarBg {
+    display: none;
+  }
+
+  .streaming {
+    will-change: auto;
+  }
+}

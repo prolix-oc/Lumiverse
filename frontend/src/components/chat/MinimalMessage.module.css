@@ -330,3 +330,23 @@
     font-size: calc(14px * var(--lumiverse-font-scale, 1));
   }
 }
+
+@media (hover: none) and (pointer: coarse) {
+  .card,
+  .hidden {
+    transition: none;
+  }
+
+  .card,
+  .card:hover {
+    box-shadow: none;
+  }
+
+  :global([data-glass][data-chat-bg]) .card {
+    backdrop-filter: none;
+  }
+
+  .streaming {
+    will-change: auto;
+  }
+}

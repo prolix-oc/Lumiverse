@@ -1,6 +1,10 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useVirtualizer, defaultRangeExtractor, type Range } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
+import {
+  subscribeTagInterceptorRegistry,
+  getTagInterceptorRegistryVersion,
+} from '@/lib/spindle/message-interceptors'
 import { useStore } from '@/store'
 import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
@@ -26,6 +30,12 @@ const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
 const MOBILE_MOMENTUM_SETTLE_MS = 260
+const MOBILE_RANGE_WARM_MS = 1200
+
+function getTopLoadThreshold(clientHeight: number, isCoarsePointer: boolean) {
+  if (!isCoarsePointer) return TOP_LOAD_THRESHOLD
+  return Math.max(TOP_LOAD_THRESHOLD, Math.round(clientHeight * 1.15), 420)
+}
 
 function clampEstimate(value: number) {
   return Math.max(MIN_MEASURED_ROW_HEIGHT, Math.min(MAX_ESTIMATED_ROW_HEIGHT, value))
@@ -40,14 +50,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const touchYRef = useRef<number | null>(null)
   const { visibleMessages, hasMore, loadMore, loadingOlder, justPrependedRef } = useChunkedMessages(messages, chatId)
   const lastScrollHeightRef = useRef(0)
+  const lastScrollTopRef = useRef(0)
   const measuredRowHeightsRef = useRef<Map<string, number>>(new Map())
   const averageMeasuredHeightRef = useRef<number | null>(null)
+  const prependVisualOffsetRef = useRef(0)
   const isPrependingRef = useRef(false)
   const suppressNextPinUpdateRef = useRef(false)
   const touchMomentumHoldRef = useRef(false)
   const touchMomentumTimerRef = useRef<number | null>(null)
+  const rangeWarmTimerRef = useRef<number | null>(null)
+  const initialLoadRepinPendingRef = useRef(false)
+  const initialLoadUserInterruptedRef = useRef(false)
+  const initialLoadRepinTimerRef = useRef<number | null>(null)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  )
+  const [mobileRangeWarm, setMobileRangeWarm] = useState(true)
+  const [prependVisualOffset, setPrependVisualOffsetState] = useState(0)
+  const interceptorRegistryVersion = useSyncExternalStore(
+    subscribeTagInterceptorRegistry,
+    getTagInterceptorRegistryVersion,
+    getTagInterceptorRegistryVersion,
   )
 
   useEffect(() => {
@@ -69,9 +92,29 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // Re-arm top-pagination on chat switch.
   useEffect(() => {
     topLoadArmedRef.current = true
+    lastScrollTopRef.current = 0
     measuredRowHeightsRef.current = new Map()
     averageMeasuredHeightRef.current = null
+    initialLoadRepinPendingRef.current = true
+    initialLoadUserInterruptedRef.current = false
   }, [chatId])
+
+  const setPrependVisualOffset = useCallback((next: number) => {
+    const clamped = Math.max(0, Math.round(next))
+    prependVisualOffsetRef.current = clamped
+    setPrependVisualOffsetState((prev) => (prev === clamped ? prev : clamped))
+  }, [])
+
+  const warmMobileRange = useCallback((duration = MOBILE_RANGE_WARM_MS) => {
+    setMobileRangeWarm(true)
+    if (rangeWarmTimerRef.current != null) {
+      window.clearTimeout(rangeWarmTimerRef.current)
+    }
+    rangeWarmTimerRef.current = window.setTimeout(() => {
+      setMobileRangeWarm(false)
+      rangeWarmTimerRef.current = null
+    }, duration)
+  }, [isCoarsePointer])
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingReasoning = useStore((s) => s.streamingReasoning)
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
@@ -126,13 +169,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   useEffect(() => {
     measuredRowHeightsRef.current = new Map()
     averageMeasuredHeightRef.current = null
-    rowVirtualizer.measure()
   }, [displayMode, isCoarsePointer])
+
+  useEffect(() => {
+    warmMobileRange()
+  }, [chatId, warmMobileRange])
+
+  useEffect(() => {
+    if (interceptorRegistryVersion === 0) return
+    warmMobileRange(1500)
+  }, [interceptorRegistryVersion, warmMobileRange])
 
   useEffect(() => {
     return () => {
       if (touchMomentumTimerRef.current != null) {
         window.clearTimeout(touchMomentumTimerRef.current)
+      }
+      if (rangeWarmTimerRef.current != null) {
+        window.clearTimeout(rangeWarmTimerRef.current)
+      }
+      if (initialLoadRepinTimerRef.current != null) {
+        window.clearTimeout(initialLoadRepinTimerRef.current)
       }
     }
   }, [])
@@ -155,12 +212,34 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const codeBlockCount = (content.match(/```/g)?.length ?? 0) / 2
     const imageCount = message.extra?.attachments?.filter((a) => a.type === 'image').length ?? 0
     const audioCount = message.extra?.attachments?.filter((a) => a.type === 'audio').length ?? 0
+    const inlineStyleCount = content.match(/\bstyle\s*=/gi)?.length ?? 0
+    const htmlBlockCount = content.match(/<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|tr|td|th|iframe|svg|video|audio)\b/gi)?.length ?? 0
+    const hasStyledHtml = /<style[\s>]|\bstyle\s*=|<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|iframe|svg|video|audio)\b/i.test(content)
+    const customTagCount = content.match(/<([a-z][\w]*-[\w-]*)\b[^>]*>([\s\S]*?)<\/\1>/gi)?.length ?? 0
+    const selfClosingCustomTagCount = content.match(/<([a-z][\w]*-[\w-]*)\b[^>]*\/>/gi)?.length ?? 0
+    const hasExtensionTags = customTagCount > 0 || selfClosingCustomTagCount > 0
     const base = isBubble ? (isPhoneWidth ? 88 : isCompactWidth ? 96 : 104) : 76
     const lineHeight = 23
     const mediaHeight = imageCount > 0 ? (isPhoneWidth ? 190 : isCompactWidth ? 220 : 250) : 0
     const audioHeight = audioCount * 58
     const codeHeight = codeBlockCount * 44
-    const contentEstimate = base + lineCount * lineHeight + mediaHeight + audioHeight + codeHeight
+    const htmlBoost = hasStyledHtml
+      ? Math.min(520, 120 + htmlBlockCount * 26 + inlineStyleCount * 18)
+      : 0
+    const htmlFloor = hasStyledHtml
+      ? (isPhoneWidth ? 240 : isCompactWidth ? 300 : 340)
+      : 0
+    const extensionTagBoost = hasExtensionTags
+      ? Math.min(360, 110 + customTagCount * 72 + selfClosingCustomTagCount * 56)
+      : 0
+    const extensionTagFloor = hasExtensionTags
+      ? (isPhoneWidth ? 190 : isCompactWidth ? 230 : 260)
+      : 0
+    const contentEstimate = Math.max(
+      base + lineCount * lineHeight + mediaHeight + audioHeight + codeHeight + htmlBoost + extensionTagBoost,
+      htmlFloor,
+      extensionTagFloor,
+    )
     const average = averageMeasuredHeightRef.current
 
     // Blend content heuristics with the measured chat average so unknown rows
@@ -168,19 +247,21 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     return clampEstimate(average ? (contentEstimate * 0.7 + average * 0.3) : contentEstimate)
   }, [isBubble])
 
-  const rangeExtractor = useCallback((range: { startIndex: number; endIndex: number; count: number }) => {
-    const extraBefore = isCoarsePointer ? 18 : 0
-    const extraAfter = isCoarsePointer ? 6 : 0
+  const rangeExtractor = useCallback((range: Range) => {
+    const indexes = new Set(defaultRangeExtractor(range))
+    const nearTail = range.endIndex >= range.count - (isCoarsePointer ? 10 : 8)
+    const isWarm = mobileRangeWarm || nearTail
+    const extraBefore = isCoarsePointer ? (isWarm ? 72 : 32) : (isWarm ? 40 : 18)
+    const extraAfter = isCoarsePointer ? (isWarm ? 14 : 8) : (isWarm ? 8 : 4)
     const start = Math.max(0, range.startIndex - extraBefore)
     const end = Math.min(range.count - 1, range.endIndex + extraAfter)
-    const indexes: number[] = []
 
     for (let index = start; index <= end; index++) {
-      indexes.push(index)
+      indexes.add(index)
     }
 
-    return indexes
-  }, [isCoarsePointer])
+    return Array.from(indexes).sort((a, b) => a - b)
+  }, [isCoarsePointer, mobileRangeWarm])
 
   const getItemKey = useCallback(
     (index: number) => {
@@ -197,7 +278,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       const message = visibleMessages[index]
       return message ? estimateMessageSize(message) : estimateSize
     },
-    overscan: 12,
+    overscan: isCoarsePointer ? 20 : 14,
     getItemKey,
     rangeExtractor,
     useAnimationFrameWithResizeObserver: true,
@@ -228,6 +309,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const virtualItems = rowVirtualizer.getVirtualItems()
 
+  useEffect(() => {
+    rowVirtualizer.measure()
+  }, [rowVirtualizer, mobileRangeWarm])
+
   // Gate that keeps the keyboard/safe-zone repin from fighting the unified
   // scroll guard while streaming is active.
   const isStreamingRef = useRef(isStreaming)
@@ -241,6 +326,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     isPinnedRef.current = true
     isProgrammaticScrollRef.current = true
+    setPrependVisualOffset(0)
     rowVirtualizer.scrollToIndex(visibleMessages.length - 1, { align: 'end', behavior })
 
     requestAnimationFrame(() => {
@@ -248,8 +334,33 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (!latest) return
       isProgrammaticScrollRef.current = true
       latest.scrollTop = latest.scrollHeight - latest.clientHeight
+      lastScrollTopRef.current = latest.scrollTop
     })
-  }, [rowVirtualizer, visibleMessages.length])
+  }, [rowVirtualizer, setPrependVisualOffset, visibleMessages.length])
+
+  useEffect(() => {
+    if (!initialLoadRepinPendingRef.current || initialLoadUserInterruptedRef.current) return
+    if (visibleMessages.length === 0 || loadingOlder) return
+    if (mobileRangeWarm) return
+
+    if (initialLoadRepinTimerRef.current != null) {
+      window.clearTimeout(initialLoadRepinTimerRef.current)
+    }
+
+    initialLoadRepinTimerRef.current = window.setTimeout(() => {
+      initialLoadRepinTimerRef.current = null
+      if (!initialLoadRepinPendingRef.current || initialLoadUserInterruptedRef.current) return
+      scrollToHistoryBottom('auto')
+      initialLoadRepinPendingRef.current = false
+    }, 80)
+
+    return () => {
+      if (initialLoadRepinTimerRef.current != null) {
+        window.clearTimeout(initialLoadRepinTimerRef.current)
+        initialLoadRepinTimerRef.current = null
+      }
+    }
+  }, [chatId, loadingOlder, mobileRangeWarm, scrollToHistoryBottom, visibleMessages.length])
 
   const avatarUrl = isImpersonateStream
     ? getPersonaAvatar(activePersonaId, activePersona?.image_id ?? null)
@@ -279,9 +390,16 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     if (!el) return
 
+     const deltaTop = el.scrollTop - lastScrollTopRef.current
+    lastScrollTopRef.current = el.scrollTop
+
     if (isProgrammaticScrollRef.current) {
       isProgrammaticScrollRef.current = false
       return
+    }
+
+    if (prependVisualOffsetRef.current > 0 && deltaTop < 0) {
+      setPrependVisualOffset(prependVisualOffsetRef.current + deltaTop)
     }
 
     if (!suppressNextPinUpdateRef.current) {
@@ -289,18 +407,22 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
     suppressNextPinUpdateRef.current = false
 
-    if (el.scrollTop > TOP_LOAD_THRESHOLD) {
+    const topLoadThreshold = getTopLoadThreshold(el.clientHeight, isCoarsePointer)
+    const effectiveScrollTop = el.scrollTop + prependVisualOffsetRef.current
+
+    if (effectiveScrollTop > topLoadThreshold) {
       topLoadArmedRef.current = true
     }
 
-    if (el.scrollTop <= TOP_LOAD_THRESHOLD && topLoadArmedRef.current && hasMore && !loadingOlder) {
+    if (effectiveScrollTop <= topLoadThreshold && topLoadArmedRef.current && hasMore && !loadingOlder) {
       topLoadArmedRef.current = false
       loadMore()
     }
-  }, [hasMore, loadingOlder, loadMore])
+  }, [hasMore, isCoarsePointer, loadingOlder, loadMore, setPrependVisualOffset])
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
     if (event.deltaY < -30) {
+      initialLoadUserInterruptedRef.current = true
       isPinnedRef.current = false
       suppressNextPinUpdateRef.current = true
     }
@@ -319,6 +441,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const previousY = touchYRef.current
     const nextY = event.touches[0]?.clientY ?? null
     if (previousY != null && nextY != null && nextY > previousY + 10) {
+      initialLoadUserInterruptedRef.current = true
       isPinnedRef.current = false
       suppressNextPinUpdateRef.current = true
     }
@@ -344,17 +467,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (justPrependedRef.current) {
       isPrependingRef.current = true
       justPrependedRef.current = false
+      warmMobileRange(900)
       const heightDiff = el.scrollHeight - lastScrollHeightRef.current
       if (heightDiff > 0 && lastScrollHeightRef.current > 0) {
-        isProgrammaticScrollRef.current = true
-        el.scrollTop += heightDiff
+        if (!isPinnedRef.current) {
+          setPrependVisualOffset(prependVisualOffsetRef.current + heightDiff)
+        } else {
+          isProgrammaticScrollRef.current = true
+          el.scrollTop += heightDiff
+          lastScrollTopRef.current = el.scrollTop
+        }
       }
       isPrependingRef.current = false
     }
 
     lastScrollHeightRef.current = el.scrollHeight
+    lastScrollTopRef.current = el.scrollTop
 
-    if (el.scrollTop > TOP_LOAD_THRESHOLD) {
+    const topLoadThreshold = getTopLoadThreshold(el.clientHeight, isCoarsePointer)
+    const effectiveScrollTop = el.scrollTop + prependVisualOffsetRef.current
+
+    if (effectiveScrollTop > topLoadThreshold) {
       topLoadArmedRef.current = true
     }
 
@@ -366,7 +499,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         loadMore()
       })
     }
-  }, [virtualItems, justPrependedRef, hasMore, loadingOlder, loadMore])
+  }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, setPrependVisualOffset, warmMobileRange])
 
   // Unified scroll guard: watches scrollHeight changes caused by streaming
   // tokens, extension mounts, lazy image loads, or virtual row resizing.
@@ -404,7 +537,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (isPinnedRef.current) {
         isProgrammaticScrollRef.current = true
         latest.scrollTop = latest.scrollHeight - latest.clientHeight
-      } else if (heightDelta > 0 && !(isCoarsePointer && touchMomentumHoldRef.current)) {
+      } else if (
+        heightDelta > 0
+        && !(isCoarsePointer && !isPinnedRef.current && (touchMomentumHoldRef.current || rowVirtualizer.isScrolling))
+      ) {
         // Only compensate for growth. Shrinkage is either handled by the
         // virtualizer or is minor enough to ignore.
         isProgrammaticScrollRef.current = true
@@ -423,7 +559,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       mo.disconnect()
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
     }
-  }, [isCoarsePointer])
+  }, [isCoarsePointer, rowVirtualizer])
 
   // Re-pin to bottom when the input safe-zone changes — keyboard opening on
   // mobile/iOS PWA grows --lcs-input-safe-zone. Without this, the last
@@ -483,9 +619,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (el) {
       isPinnedRef.current = true
       isProgrammaticScrollRef.current = true
+      setPrependVisualOffset(0)
       el.scrollTop = el.scrollHeight - el.clientHeight
+      lastScrollTopRef.current = el.scrollTop
     }
-  }, [chatId])
+  }, [chatId, setPrependVisualOffset])
 
   useEffect(() => {
     const handleScrollToBottom = () => scrollToHistoryBottom('smooth')
@@ -507,7 +645,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       data-chat-scroll="true"
     >
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
-      {loadingOlder && (
+      {loadingOlder && !isCoarsePointer && (
         <div className={styles.loadingOlder}>Loading older messages...</div>
       )}
       <div
@@ -524,6 +662,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
               index={virtualRow.index}
               messageId={message.id}
               start={virtualRow.start}
+              visualOffset={prependVisualOffset}
               measureElement={rowVirtualizer.measureElement}
             >
               <MessageCard
@@ -618,18 +757,19 @@ interface VirtualRowProps {
   index: number
   messageId: string
   start: number
+  visualOffset: number
   measureElement: (el: Element | null) => void
   children: ReactNode
 }
 
-function VirtualRow({ index, messageId, start, measureElement, children }: VirtualRowProps) {
+function VirtualRow({ index, messageId, start, visualOffset, measureElement, children }: VirtualRowProps) {
   return (
     <div
       ref={measureElement}
       data-index={index}
       data-message-id={messageId}
       className={styles.virtualRow}
-      style={{ transform: `translateY(${start}px)` }}
+      style={{ transform: `translateY(${start - visualOffset}px)` }}
     >
       {children}
     </div>
