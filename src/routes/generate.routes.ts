@@ -6,6 +6,8 @@ import * as breakdownSvc from "../services/breakdown.service";
 import * as poolSvc from "../services/generation-pool.service";
 import * as summarizePoolSvc from "../services/summarize-pool.service";
 import { getSummarizationPromptDefaults } from "../services/summarization-prompts.service";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 const LOCALHOST_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
@@ -72,10 +74,11 @@ app.post("/acknowledge", async (c) => {
   const userId = c.get("userId");
   const { chatId } = await c.req.json<{ chatId: string }>();
   if (!chatId) return c.json({ error: "chatId required" }, 400);
-  // Compatibility no-op: chat-head attention is client-local so one client
-  // cannot hide terminal backend status from another connected client.
-  poolSvc.acknowledgeChat(userId, chatId);
-  return c.json({ acknowledged: true });
+  const generationIds = poolSvc.acknowledgeChat(userId, chatId);
+  if (generationIds.length > 0) {
+    eventBus.emit(EventType.GENERATION_ACKNOWLEDGED, { chatId, generationIds }, userId);
+  }
+  return c.json({ acknowledged: true, removed: generationIds.length, generationIds });
 });
 
 app.get("/status/:chatId", (c) => {

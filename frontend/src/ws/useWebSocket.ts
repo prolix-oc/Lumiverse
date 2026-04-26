@@ -15,6 +15,7 @@ import type {
   StreamTokenPayload,
   GenerationStartedPayload,
   GenerationEndedPayload,
+  GenerationAcknowledgedPayload,
   MessageSentPayload,
   MessageEditedPayload,
   MessageDeletedPayload,
@@ -379,10 +380,8 @@ export function useWebSocket() {
         // otherwise the persisted 'completed' head would spawn the moment they navigate away.
         if (payload.chatId && payload.generationId) {
           if (payload.chatId === state.activeChatId) {
-            state.updateChatHead(payload.generationId, {
-              status: payload.error ? 'error' : 'completed',
-            })
-            state.removeChatHead(payload.chatId)
+            state.deleteChatHead(payload.chatId)
+            generateApi.acknowledge(payload.chatId).catch(() => {})
           } else {
             state.updateChatHead(payload.generationId, {
               status: payload.error ? 'error' : 'completed',
@@ -437,12 +436,17 @@ export function useWebSocket() {
         // doesn't reappear when they navigate away.
         if (payload.chatId && payload.generationId) {
           if (payload.chatId === state.activeChatId) {
-            state.updateChatHead(payload.generationId, { status: 'stopped' })
-            state.removeChatHead(payload.chatId)
+            state.deleteChatHead(payload.chatId)
+            generateApi.acknowledge(payload.chatId).catch(() => {})
           } else {
             state.updateChatHead(payload.generationId, { status: 'stopped' })
           }
         }
+      }),
+
+      wsClient.on(EventType.GENERATION_ACKNOWLEDGED, (payload: GenerationAcknowledgedPayload) => {
+        if (!payload.chatId) return
+        store.getState().deleteChatHead(payload.chatId)
       }),
 
       wsClient.on(EventType.GENERATION_ERROR, () => {

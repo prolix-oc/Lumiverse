@@ -274,7 +274,7 @@ export const generateApi = {
   },
 
   acknowledge(chatId: string) {
-    return post<{ acknowledged: boolean }>('/generate/acknowledge', { chatId })
+    return post<{ acknowledged: boolean; removed: number; generationIds: string[] }>('/generate/acknowledge', { chatId })
   },
 
   councilRetry(generationId: string, decision: 'continue' | 'retry') {

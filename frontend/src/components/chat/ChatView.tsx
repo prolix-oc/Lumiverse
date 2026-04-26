@@ -4,6 +4,7 @@ import { UserRound, ListChecks } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
+import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
@@ -79,12 +80,13 @@ export default function ChatView() {
         setActiveChat(chatId, chat.character_id)
         setMessages(msgPage.data, msgPage.total)
 
-        // Clear completed/stopped chat heads — but keep active ones so they
-        // reappear if the user navigates away again while still generating
+        // Opening a chat acknowledges any terminal chat-head state globally so
+        // other devices stop showing a stale completed/stopped/error badge too.
         const existingHead = useStore.getState().chatHeads.find((h) => h.chatId === chatId)
         if (existingHead && (existingHead.status === 'completed' || existingHead.status === 'stopped' || existingHead.status === 'error')) {
-          useStore.getState().removeChatHead(chatId)
+          useStore.getState().deleteChatHead(chatId)
         }
+        generateApi.acknowledge(chatId).catch(() => {})
 
         // If there's a pending council tools failure for this chat, show the retry modal now
         const pendingFailure = useStore.getState().councilToolsFailure

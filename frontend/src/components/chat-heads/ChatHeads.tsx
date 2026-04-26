@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { X, EyeOff, Columns2, Rows2, Wrench, AlertTriangle } from 'lucide-react'
 import { useStore } from '@/store'
+import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import type { ChatHeadEntry } from '@/types/store'
@@ -305,7 +306,13 @@ export default function ChatHeads() {
         if (el) {
           const headEl = (el as HTMLElement).closest?.('[data-chat-id]') as HTMLElement | null
           if (headEl?.dataset.chatId) {
-            navigate(`/chat/${headEl.dataset.chatId}`)
+            const chatId = headEl.dataset.chatId
+            const clickedHead = useStore.getState().chatHeads.find((h) => h.chatId === chatId)
+            if (clickedHead && (clickedHead.status === 'completed' || clickedHead.status === 'stopped' || clickedHead.status === 'error')) {
+              useStore.getState().deleteChatHead(chatId)
+              generateApi.acknowledge(chatId).catch(() => {})
+            }
+            navigate(`/chat/${chatId}`)
           }
         }
       }

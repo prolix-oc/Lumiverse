@@ -209,25 +209,47 @@ export function getActivePoolsForUser(userId: string): PooledTokensEntry[] {
 }
 
 /**
- * Return all entries the user should see as chat heads. Status is backend
- * authoritative; clients may only clear their own local attention indicator.
+ * Return the latest pooled entry per chat that the user should see as a chat
+ * head. Older generations for the same chat are intentionally hidden.
  */
 export function getChatHeadPoolsForUser(userId: string): PooledTokensEntry[] {
   const results: PooledTokensEntry[] = [];
-  for (const entry of pool.values()) {
-    if (entry.userId !== userId) continue;
+  for (const generationId of chatIndex.values()) {
+    const entry = pool.get(generationId);
+    if (!entry || entry.userId !== userId) continue;
     results.push(entry);
   }
   return results;
 }
 
 /**
- * Legacy no-op. Chat-head attention is client-local so one client cannot hide
- * terminal state from another client that missed the terminal WebSocket event.
+ * Clear terminal chat-head state for a chat once a user actually opens it.
+ * Active generations are preserved so streaming recovery still works.
  */
-export function acknowledgeChat(userId: string, chatId: string): void {
-  void userId;
-  void chatId;
+export function acknowledgeChat(userId: string, chatId: string): string[] {
+  const currentGenerationId = chatIndex.get(`${userId}:${chatId}`);
+  if (currentGenerationId) {
+    const currentEntry = pool.get(currentGenerationId);
+    if (currentEntry && !TERMINAL_STATUSES.has(currentEntry.status)) {
+      return [];
+    }
+  }
+
+  const removed: string[] = [];
+  for (const [generationId, entry] of pool) {
+    if (entry.userId !== userId || entry.chatId !== chatId) continue;
+    if (!TERMINAL_STATUSES.has(entry.status)) continue;
+    removed.push(generationId);
+  }
+  for (const generationId of removed) {
+    removePoolEntry(generationId);
+  }
+  return removed;
+}
+
+export function clearAllPoolEntries(): void {
+  pool.clear();
+  chatIndex.clear();
 }
 
 export function removePoolEntry(generationId: string): void {

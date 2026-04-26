@@ -14,6 +14,7 @@ export enum EventType {
   STREAM_TOKEN_RECEIVED = 'STREAM_TOKEN_RECEIVED',
   GENERATION_ENDED = 'GENERATION_ENDED',
   GENERATION_STOPPED = 'GENERATION_STOPPED',
+  GENERATION_ACKNOWLEDGED = 'GENERATION_ACKNOWLEDGED',
   GENERATION_ERROR = 'GENERATION_ERROR',
   CHAT_CREATED = 'CHAT_CREATED',
   CHAT_DELETED = 'CHAT_DELETED',
@@ -241,6 +242,11 @@ export interface GenerationEndedPayload {
   error?: string
   tokenCount?: number
   generationMetrics?: GenerationMetrics
+}
+
+export interface GenerationAcknowledgedPayload {
+  chatId: string
+  generationIds: string[]
 }
 
 export interface MessageSentPayload {

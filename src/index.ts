@@ -45,6 +45,12 @@ await initVapidKeys();
 const db = initDatabase();
 await runMigrations(db);
 
+// Chat-head generation state is intentionally ephemeral. Clear any retained
+// in-memory pool state during startup so clients never resurrect stale heads
+// after a restart or hot-reload.
+const { clearAllPoolEntries } = await import("./services/generation-pool.service");
+clearAllPoolEntries();
+
 // Dynamic import: auth modules call getDb() at module level, so must load after initDatabase()
 const { seedOwner, backfillUserIds, getFirstUserId } = await import("./auth/seed");
 const { operatorService } = await import("./services/operator.service");
