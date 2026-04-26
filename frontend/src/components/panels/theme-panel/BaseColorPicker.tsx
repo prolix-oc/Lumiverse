@@ -88,12 +88,18 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
   const activeDef = COLOR_KEYS.find(c => c.key === activeKey)!
   const currentHex = baseColors[activeKey] || activeDef.defaultColor
   const rgb = hexToRgb(currentHex) || [147, 112, 219]
-  const [hue, sat, val] = rgbToHsv(rgb[0], rgb[1], rgb[2])
+  const [rawHue, sat, val] = rgbToHsv(rgb[0], rgb[1], rgb[2])
+  const [preservedHue, setPreservedHue] = useState(rawHue)
+  const hue = sat > 0 && val > 0 ? rawHue : preservedHue
 
   // Reset hex draft when active key changes or color is updated externally
   useEffect(() => {
     setHexDraft(null)
   }, [activeKey, currentHex])
+
+  useEffect(() => {
+    if (sat > 0 && val > 0) setPreservedHue(rawHue)
+  }, [rawHue, sat, val])
 
   // ── Canvas drawing ──
 
@@ -159,30 +165,24 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
     setColor(rgbToHex(r, g, b))
   }, [hue, setColor])
 
-  const handleCanvasDown = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleCanvasDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
     draggingCanvas.current = true
-    const pos = 'touches' in e ? e.touches[0] : e
-    pickFromCanvas(pos.clientX, pos.clientY)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    pickFromCanvas(e.clientX, e.clientY)
   }, [pickFromCanvas])
 
-  useEffect(() => {
-    const handleMove = (e: MouseEvent | TouchEvent) => {
-      if (!draggingCanvas.current) return
-      const pos = 'touches' in e ? e.touches[0] : e
-      pickFromCanvas(pos.clientX, pos.clientY)
-    }
-    const handleUp = () => { draggingCanvas.current = false }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('touchmove', handleMove)
-    window.addEventListener('touchend', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('touchmove', handleMove)
-      window.removeEventListener('touchend', handleUp)
-    }
+  const handleCanvasMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingCanvas.current) return
+    pickFromCanvas(e.clientX, e.clientY)
   }, [pickFromCanvas])
+
+  const handleCanvasUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    draggingCanvas.current = false
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }, [])
 
   // ── Hue slider interaction ──
 
@@ -192,34 +192,29 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
     const rect = el.getBoundingClientRect()
     const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
     const newHue = x * 360
+    setPreservedHue(newHue)
     const [r, g, b] = hsvToRgb(newHue, sat, val)
     setColor(rgbToHex(r, g, b))
   }, [sat, val, setColor])
 
-  const handleHueDown = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleHueDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
     draggingHue.current = true
-    const pos = 'touches' in e ? e.touches[0] : e
-    pickHue(pos.clientX)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    pickHue(e.clientX)
   }, [pickHue])
 
-  useEffect(() => {
-    const handleMove = (e: MouseEvent | TouchEvent) => {
-      if (!draggingHue.current) return
-      const pos = 'touches' in e ? e.touches[0] : e
-      pickHue(pos.clientX)
-    }
-    const handleUp = () => { draggingHue.current = false }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('touchmove', handleMove)
-    window.addEventListener('touchend', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('touchmove', handleMove)
-      window.removeEventListener('touchend', handleUp)
-    }
+  const handleHueMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingHue.current) return
+    pickHue(e.clientX)
   }, [pickHue])
+
+  const handleHueUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    draggingHue.current = false
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }, [])
 
   // ── Hex / RGB inputs ──
 
@@ -291,8 +286,11 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
       {/* Saturation / brightness canvas */}
       <div
         className={styles.canvasWrap}
-        onMouseDown={handleCanvasDown}
-        onTouchStart={handleCanvasDown}
+        onPointerDown={handleCanvasDown}
+        onPointerMove={handleCanvasMove}
+        onPointerUp={handleCanvasUp}
+        onPointerCancel={handleCanvasUp}
+        onLostPointerCapture={() => { draggingCanvas.current = false }}
       >
         <canvas ref={canvasRef} className={styles.canvas} />
         <div
@@ -305,8 +303,11 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
       <div
         ref={hueRef}
         className={styles.hueSliderWrap}
-        onMouseDown={handleHueDown}
-        onTouchStart={handleHueDown}
+        onPointerDown={handleHueDown}
+        onPointerMove={handleHueMove}
+        onPointerUp={handleHueUp}
+        onPointerCancel={handleHueUp}
+        onLostPointerCapture={() => { draggingHue.current = false }}
       >
         <div className={styles.hueThumb} style={{ left: huePct }} />
       </div>

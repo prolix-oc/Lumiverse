@@ -84,6 +84,8 @@
   overflow: hidden;
   cursor: crosshair;
   border: 1px solid var(--lumiverse-border);
+  touch-action: none;
+  user-select: none;
 }
 
 .canvas {
@@ -127,6 +129,8 @@
     hsl(360, 100%, 50%)
   );
   border: 1px solid var(--lumiverse-border);
+  touch-action: none;
+  user-select: none;
 }
 
 .hueThumb {
