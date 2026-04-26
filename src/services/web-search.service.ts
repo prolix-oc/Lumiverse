@@ -124,6 +124,7 @@ async function fetchSearxngResults(
     timeoutMs: settings.requestTimeoutMs,
     maxBytes: 2 * 1024 * 1024,
     headers,
+    allowLoopback: true,
   });
 
   if (!response.ok) {

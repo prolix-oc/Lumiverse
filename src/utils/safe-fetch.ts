@@ -60,9 +60,13 @@ function ipv4ToInt(ip: string): number {
 function isPrivateIPv4(ip: string): boolean {
   const addr = ipv4ToInt(ip);
   for (const [network, mask] of PRIVATE_V4_RANGES) {
-    if ((addr & mask) === network) return true;
+    if (((addr & mask) >>> 0) === network) return true;
   }
   return false;
+}
+
+function isLoopbackIPv4(ip: string): boolean {
+  return ((ipv4ToInt(ip) & 0xFF000000) >>> 0) === 0x7F000000;
 }
 
 function isPrivateIPv6(ip: string): boolean {
@@ -87,6 +91,14 @@ function isPrivateIPv6(ip: string): boolean {
   return false;
 }
 
+function isLoopbackIPv6(ip: string): boolean {
+  const normalized = ip.toLowerCase();
+  if (normalized === "::1") return true;
+
+  const v4Mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  return v4Mapped ? isLoopbackIPv4(v4Mapped[1]) : false;
+}
+
 export function isPrivateIp(ip: string): boolean {
   if (ip.includes(":")) return isPrivateIPv6(ip);
   return isPrivateIPv4(ip);
@@ -99,13 +111,18 @@ const BLOCKED_HOSTNAMES = new Set([
   "metadata.goog",
 ]);
 
-export async function validateHost(hostname: string): Promise<void> {
+export interface ValidateHostOptions {
+  allowLoopback?: boolean;
+}
+
+export async function validateHost(hostname: string, options?: ValidateHostOptions): Promise<void> {
   if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
     throw new SSRFError(`Blocked hostname: ${hostname}`);
   }
 
   // If hostname is already an IP literal, check directly
   if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+    if (options?.allowLoopback && isLoopbackIPv4(hostname)) return;
     if (isPrivateIPv4(hostname)) {
       throw new SSRFError(`URL resolves to private IP: ${hostname}`);
     }
@@ -113,6 +130,7 @@ export async function validateHost(hostname: string): Promise<void> {
   }
   if (hostname.startsWith("[") || hostname.includes(":")) {
     const bare = hostname.replace(/^\[|\]$/g, "");
+    if (options?.allowLoopback && isLoopbackIPv6(bare)) return;
     if (isPrivateIPv6(bare)) {
       throw new SSRFError(`URL resolves to private IP: ${bare}`);
     }
@@ -152,12 +170,14 @@ export async function validateHost(hostname: string): Promise<void> {
   }
 
   for (const ip of v4Addrs) {
+    if (options?.allowLoopback && isLoopbackIPv4(ip)) continue;
     if (isPrivateIPv4(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
     }
   }
 
   for (const ip of v6Addrs) {
+    if (options?.allowLoopback && isLoopbackIPv6(ip)) continue;
     if (isPrivateIPv6(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
     }
@@ -170,6 +190,7 @@ export interface SafeFetchOptions {
   maxBytes?: number;
   timeoutMs?: number;
   headers?: Record<string, string>;
+  allowLoopback?: boolean;
 }
 
 export async function safeFetch(
@@ -193,7 +214,7 @@ export async function safeFetch(
       throw new SSRFError(`Only http and https URLs are allowed, got: ${parsed.protocol}`);
     }
 
-    await validateHost(parsed.hostname);
+    await validateHost(parsed.hostname, { allowLoopback: options?.allowLoopback });
     // Warm Bun's DNS cache with the validated answer so the connect() that
     // fetch performs immediately below does not re-resolve and potentially
     // hit a flipped record.
