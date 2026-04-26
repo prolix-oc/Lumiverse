@@ -113,6 +113,7 @@ const BLOCKED_HOSTNAMES = new Set([
 
 export interface ValidateHostOptions {
   allowLoopback?: boolean;
+  allowPrivate?: boolean;
 }
 
 export async function validateHost(hostname: string, options?: ValidateHostOptions): Promise<void> {
@@ -123,6 +124,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
   // If hostname is already an IP literal, check directly
   if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
     if (options?.allowLoopback && isLoopbackIPv4(hostname)) return;
+    if (options?.allowPrivate && isPrivateIPv4(hostname)) return;
     if (isPrivateIPv4(hostname)) {
       throw new SSRFError(`URL resolves to private IP: ${hostname}`);
     }
@@ -131,6 +133,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
   if (hostname.startsWith("[") || hostname.includes(":")) {
     const bare = hostname.replace(/^\[|\]$/g, "");
     if (options?.allowLoopback && isLoopbackIPv6(bare)) return;
+    if (options?.allowPrivate && isPrivateIPv6(bare)) return;
     if (isPrivateIPv6(bare)) {
       throw new SSRFError(`URL resolves to private IP: ${bare}`);
     }
@@ -171,6 +174,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
 
   for (const ip of v4Addrs) {
     if (options?.allowLoopback && isLoopbackIPv4(ip)) continue;
+    if (options?.allowPrivate && isPrivateIPv4(ip)) continue;
     if (isPrivateIPv4(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
     }
@@ -178,10 +182,19 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
 
   for (const ip of v6Addrs) {
     if (options?.allowLoopback && isLoopbackIPv6(ip)) continue;
+    if (options?.allowPrivate && isPrivateIPv6(ip)) continue;
     if (isPrivateIPv6(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
     }
   }
+}
+
+export interface SafeFetchOptions {
+  maxBytes?: number;
+  timeoutMs?: number;
+  headers?: Record<string, string>;
+  allowLoopback?: boolean;
+  allowPrivate?: boolean;
 }
 
 // ─── safeFetch ────────────────────────────────────────────────────────────
@@ -214,7 +227,10 @@ export async function safeFetch(
       throw new SSRFError(`Only http and https URLs are allowed, got: ${parsed.protocol}`);
     }
 
-    await validateHost(parsed.hostname, { allowLoopback: options?.allowLoopback });
+    await validateHost(parsed.hostname, { 
+      allowLoopback: options?.allowLoopback,
+      allowPrivate: options?.allowPrivate
+    });
     // Warm Bun's DNS cache with the validated answer so the connect() that
     // fetch performs immediately below does not re-resolve and potentially
     // hit a flipped record.
