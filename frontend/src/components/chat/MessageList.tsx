@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
 import { useStore } from '@/store'
@@ -25,6 +25,7 @@ const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
+const MOBILE_MOMENTUM_SETTLE_MS = 260
 
 function clampEstimate(value: number) {
   return Math.max(MIN_MEASURED_ROW_HEIGHT, Math.min(MAX_ESTIMATED_ROW_HEIGHT, value))
@@ -43,6 +44,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const averageMeasuredHeightRef = useRef<number | null>(null)
   const isPrependingRef = useRef(false)
   const suppressNextPinUpdateRef = useRef(false)
+  const touchMomentumHoldRef = useRef(false)
+  const touchMomentumTimerRef = useRef<number | null>(null)
+  const [isCoarsePointer, setIsCoarsePointer] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const mediaQuery = window.matchMedia('(pointer: coarse)')
+    const update = () => setIsCoarsePointer(mediaQuery.matches)
+    update()
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', update)
+      return () => mediaQuery.removeEventListener('change', update)
+    }
+
+    mediaQuery.addListener(update)
+    return () => mediaQuery.removeListener(update)
+  }, [])
 
   // Re-arm top-pagination on chat switch.
   useEffect(() => {
@@ -104,15 +126,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   useEffect(() => {
     measuredRowHeightsRef.current = new Map()
     averageMeasuredHeightRef.current = null
-  }, [displayMode])
+    rowVirtualizer.measure()
+  }, [displayMode, isCoarsePointer])
+
+  useEffect(() => {
+    return () => {
+      if (touchMomentumTimerRef.current != null) {
+        window.clearTimeout(touchMomentumTimerRef.current)
+      }
+    }
+  }, [])
 
   const estimateMessageSize = useCallback((message: Message) => {
     const measured = measuredRowHeightsRef.current.get(message.id)
     if (measured) return measured
 
     const el = scrollRef.current
-    const width = Math.max(320, el?.clientWidth ?? 720)
-    const bubbleWidth = isBubble ? width - 48 : width * 0.82
+    const width = Math.max(240, el?.clientWidth ?? 720)
+    const isCompactWidth = width <= 768
+    const isPhoneWidth = width <= 480
+    const bubbleInset = isPhoneWidth ? 20 : isCompactWidth ? 28 : 48
+    const bubbleWidth = isBubble ? Math.max(180, width - bubbleInset) : width * (isCompactWidth ? 0.9 : 0.82)
     const charsPerLine = Math.max(24, Math.floor(bubbleWidth / 7.2))
     const content = message.swipes?.[message.swipe_id] ?? message.content ?? ''
     const explicitLines = content.split('\n').length
@@ -121,9 +155,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const codeBlockCount = (content.match(/```/g)?.length ?? 0) / 2
     const imageCount = message.extra?.attachments?.filter((a) => a.type === 'image').length ?? 0
     const audioCount = message.extra?.attachments?.filter((a) => a.type === 'audio').length ?? 0
-    const base = isBubble ? 104 : 76
+    const base = isBubble ? (isPhoneWidth ? 88 : isCompactWidth ? 96 : 104) : 76
     const lineHeight = 23
-    const mediaHeight = imageCount > 0 ? 250 : 0
+    const mediaHeight = imageCount > 0 ? (isPhoneWidth ? 190 : isCompactWidth ? 220 : 250) : 0
     const audioHeight = audioCount * 58
     const codeHeight = codeBlockCount * 44
     const contentEstimate = base + lineCount * lineHeight + mediaHeight + audioHeight + codeHeight
@@ -133,6 +167,20 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     // near the loaded tail don't all start from the same poor fixed estimate.
     return clampEstimate(average ? (contentEstimate * 0.7 + average * 0.3) : contentEstimate)
   }, [isBubble])
+
+  const rangeExtractor = useCallback((range: { startIndex: number; endIndex: number; count: number }) => {
+    const extraBefore = isCoarsePointer ? 18 : 0
+    const extraAfter = isCoarsePointer ? 6 : 0
+    const start = Math.max(0, range.startIndex - extraBefore)
+    const end = Math.min(range.count - 1, range.endIndex + extraAfter)
+    const indexes: number[] = []
+
+    for (let index = start; index <= end; index++) {
+      indexes.push(index)
+    }
+
+    return indexes
+  }, [isCoarsePointer])
 
   const getItemKey = useCallback(
     (index: number) => {
@@ -151,6 +199,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     },
     overscan: 12,
     getItemKey,
+    rangeExtractor,
     useAnimationFrameWithResizeObserver: true,
     measureElement: (element, entry) => {
       const size = entry?.borderBoxSize?.[0]?.blockSize
@@ -258,6 +307,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [])
 
   const handleTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    if (touchMomentumTimerRef.current != null) {
+      window.clearTimeout(touchMomentumTimerRef.current)
+      touchMomentumTimerRef.current = null
+    }
+    touchMomentumHoldRef.current = true
     touchYRef.current = event.touches[0]?.clientY ?? null
   }, [])
 
@@ -269,6 +323,16 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       suppressNextPinUpdateRef.current = true
     }
     touchYRef.current = nextY
+  }, [])
+
+  const releaseTouchMomentumHold = useCallback(() => {
+    if (touchMomentumTimerRef.current != null) {
+      window.clearTimeout(touchMomentumTimerRef.current)
+    }
+    touchMomentumTimerRef.current = window.setTimeout(() => {
+      touchMomentumHoldRef.current = false
+      touchMomentumTimerRef.current = null
+    }, MOBILE_MOMENTUM_SETTLE_MS)
   }, [])
 
   // Scroll anchoring: when older messages are prepended, adjust scrollTop so
@@ -340,7 +404,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (isPinnedRef.current) {
         isProgrammaticScrollRef.current = true
         latest.scrollTop = latest.scrollHeight - latest.clientHeight
-      } else if (heightDelta > 0) {
+      } else if (heightDelta > 0 && !(isCoarsePointer && touchMomentumHoldRef.current)) {
         // Only compensate for growth. Shrinkage is either handled by the
         // virtualizer or is minor enough to ignore.
         isProgrammaticScrollRef.current = true
@@ -359,7 +423,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       mo.disconnect()
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
     }
-  }, [])
+  }, [isCoarsePointer])
 
   // Re-pin to bottom when the input safe-zone changes — keyboard opening on
   // mobile/iOS PWA grows --lcs-input-safe-zone. Without this, the last
@@ -438,6 +502,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
+      onTouchEnd={releaseTouchMomentumHold}
+      onTouchCancel={releaseTouchMomentumHold}
       data-chat-scroll="true"
     >
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
