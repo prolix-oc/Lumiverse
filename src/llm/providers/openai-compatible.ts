@@ -15,6 +15,36 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
   abstract readonly defaultUrl: string;
   abstract readonly capabilities: ProviderCapabilities;
 
+  protected splitMirroredReasoning(
+    content: unknown,
+    reasoning: unknown,
+  ): { content: string; reasoning?: string } {
+    const resolvedContent = typeof content === "string" ? content : "";
+    const resolvedReasoning =
+      typeof reasoning === "string" && reasoning.length > 0
+        ? reasoning
+        : undefined;
+
+    if (!resolvedReasoning || !resolvedContent) {
+      return { content: resolvedContent, reasoning: resolvedReasoning };
+    }
+
+    // Some OpenAI-compatible reasoning models mirror the active thinking delta
+    // into both `reasoning(_content)` and `content`. Treat exact/trim-equal
+    // mirrors as reasoning-only so the chat stream doesn't show duplicates.
+    if (resolvedContent === resolvedReasoning) {
+      return { content: "", reasoning: resolvedReasoning };
+    }
+
+    const trimmedContent = resolvedContent.trim();
+    const trimmedReasoning = resolvedReasoning.trim();
+    if (trimmedContent && trimmedContent === trimmedReasoning) {
+      return { content: "", reasoning: resolvedReasoning };
+    }
+
+    return { content: resolvedContent, reasoning: resolvedReasoning };
+  }
+
   protected baseUrl(apiUrl: string): string {
     let url = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
     // Strip path suffixes the user may have included that we append ourselves
@@ -74,9 +104,14 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
         }))
       : undefined;
 
+    const normalized = this.splitMirroredReasoning(
+      choice?.message?.content,
+      choice?.message?.reasoning || choice?.message?.reasoning_content,
+    );
+
     return {
-      content: choice?.message?.content || "",
-      reasoning: choice?.message?.reasoning || choice?.message?.reasoning_content || undefined,
+      content: normalized.content,
+      reasoning: normalized.reasoning,
       finish_reason: toolCalls ? "tool_calls" : (choice?.finish_reason || "stop"),
       tool_calls: toolCalls,
       usage: data.usage
@@ -162,7 +197,9 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
             reasoningKey = "reasoning_content";
             reasoning = delta.reasoning_content;
           }
-          const content = delta?.content;
+          const normalized = this.splitMirroredReasoning(delta?.content, reasoning);
+          const content = normalized.content;
+          reasoning = normalized.reasoning;
 
           // Usage data arrives in the final chunk when stream_options.include_usage is true
           const usage = parsed.usage
@@ -180,7 +217,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
               : undefined;
             yield {
               token: content || "",
-              reasoning: reasoning || undefined,
+              reasoning,
               finish_reason: toolCalls ? "tool_calls" : finishReason,
               tool_calls: toolCalls,
               usage,
@@ -188,7 +225,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
           } else if (reasoning || content) {
             yield {
               token: content || "",
-              reasoning: reasoning || undefined,
+              reasoning,
               usage,
             };
           } else if (usage) {

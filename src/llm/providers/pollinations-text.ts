@@ -51,9 +51,14 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
 
     const data = (await res.json()) as any;
     const choice = data.choices?.[0];
+    const normalized = this.splitMirroredReasoning(
+      choice?.message?.content,
+      choice?.message?.reasoning || choice?.message?.reasoning_content,
+    );
+
     return {
-      content: choice?.message?.content || "",
-      reasoning: choice?.message?.reasoning || choice?.message?.reasoning_content || undefined,
+      content: normalized.content,
+      reasoning: normalized.reasoning,
       finish_reason: choice?.finish_reason || "stop",
       usage: data.usage
         ? {
@@ -124,10 +129,12 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
               reasoningKey = "reasoning_content";
               reasoning = delta.reasoning_content;
             }
-            const content = delta?.content;
+            const normalized = this.splitMirroredReasoning(delta?.content, reasoning);
+            const content = normalized.content;
+            reasoning = normalized.reasoning;
 
             if (reasoning || content) {
-              yield { token: content || "", reasoning: reasoning || undefined, finish_reason: finishReason || undefined };
+              yield { token: content || "", reasoning, finish_reason: finishReason || undefined };
             } else if (finishReason) {
               yield { token: "", finish_reason: finishReason };
             }
