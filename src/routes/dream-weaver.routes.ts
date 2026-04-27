@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import * as dreamWeaverSvc from "../services/dream-weaver/dream-weaver.service";
+import * as messagesSvc from "../services/dream-weaver/messages.service";
+import { listTools, getTool } from "../services/dream-weaver/tools/registry";
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { discoverCapabilities, getComfyUIObjectInfo } from "../image-gen/comfyui-discovery";
 import { detectInjectionPoints } from "../image-gen/comfyui-workflow-parser";
@@ -26,6 +28,34 @@ import { getDWGenParams, createDWTimeout } from "../services/dream-weaver/dw-gen
 import type { DreamWeaverVisualAsset, DW_DRAFT_V1 } from "../types/dream-weaver";
 
 const app = new Hono();
+
+const HELP_TOOL = {
+  name: "help",
+  displayName: "Help",
+  category: "lifecycle" as const,
+  userInvocable: true,
+  slashCommand: "/help",
+  description: "Show available Dream Weaver tools and command examples.",
+  conflictMode: "append" as const,
+};
+
+function buildToolHelpText(): string {
+  const tools = [HELP_TOOL, ...listTools().filter((tool) => tool.userInvocable)];
+  const lines = [
+    "Available Dream Weaver tools",
+    "",
+    "Type a slash command, then add optional guidance after it. Examples:",
+    "/appearance make the hair shorter and less polished",
+    "/personality push the cruelty into subtle social control",
+    "/add_lorebook add a rumor about the school parking lot",
+    "",
+    ...tools.map((tool) => {
+      const command = tool.slashCommand ?? `/${tool.name}`;
+      return `${command} — ${tool.displayName}: ${tool.description}`;
+    }),
+  ];
+  return lines.join("\n");
+}
 
 // Create session
 app.post("/sessions", async (c) => {
@@ -60,52 +90,11 @@ app.put("/sessions/:id", async (c) => {
   return c.json(session);
 });
 
-// Generate draft
-app.post("/sessions/:id/generate", async (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const session = dreamWeaverSvc.generateDraft(userId, sessionId);
-  return c.json(session);
-});
-
-// Generate world package (fire-and-forget — progress via WS events)
-app.post("/sessions/:id/generate/world", (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const session = dreamWeaverSvc.generateWorld(userId, sessionId);
-  return c.json(session);
-});
-
 // Finalize
 app.post("/sessions/:id/finalize", async (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("id");
   const result = await dreamWeaverSvc.finalize(userId, sessionId);
-  return c.json(result);
-});
-
-// Extend draft (additive generation)
-app.post("/sessions/:id/extend", async (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const body = await c.req.json();
-  const result = await dreamWeaverSvc.extendDraft(userId, sessionId, body);
-  return c.json(result);
-});
-
-// Sync world content
-app.post("/sessions/:id/sync-world", (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const result = dreamWeaverSvc.syncWorldToCharacter(userId, sessionId);
-  return c.json(result);
-});
-
-// Repair missing character-card data for legacy finalized sessions
-app.post("/sessions/:id/repair-character", (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const result = dreamWeaverSvc.repairCharacterCardDataFromSessionIfMissing(userId, sessionId);
   return c.json(result);
 });
 
@@ -115,6 +104,150 @@ app.delete("/sessions/:id", (c) => {
   const sessionId = c.req.param("id");
   dreamWeaverSvc.deleteSession(userId, sessionId);
   return c.json({ success: true });
+});
+
+app.get("/tools", (c) => {
+  const tools = [HELP_TOOL, ...listTools()].map((t) => ({
+    name: t.name,
+    displayName: t.displayName,
+    category: t.category,
+    userInvocable: t.userInvocable,
+    slashCommand: t.slashCommand ?? null,
+    description: t.description,
+    conflictMode: t.conflictMode,
+  }));
+  return c.json({ tools });
+});
+
+app.get("/sessions/:id/messages", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  const messages = messagesSvc.listMessages(userId, sessionId);
+  return c.json({ messages });
+});
+
+app.get("/sessions/:id/draft", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  const draft = messagesSvc.deriveDraft(userId, sessionId);
+  return c.json({ draft });
+});
+
+app.post("/sessions/:id/dream", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  dreamWeaverSvc.dreamFanOut(userId, sessionId);
+  return c.json({ ok: true });
+});
+
+app.post("/sessions/:id/invoke", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const body = await c.req.json() as {
+    tool: string;
+    args?: Record<string, unknown>;
+    nudge_text?: string | null;
+    supersedes_id?: string | null;
+    raw?: string | null;
+  };
+
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+
+  if (body.tool === "help") {
+    const userCommand = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "user_command",
+      payload: {
+        raw: body.raw?.trim() || "/help",
+        parsed: { tool: "help", args: {} },
+      },
+    });
+    const note = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "system_note",
+      payload: {
+        text: buildToolHelpText(),
+        level: "info",
+      },
+    });
+    return c.json({ userCommandId: userCommand.id, cardId: note.id });
+  }
+
+  const tool = getTool(body.tool);
+  if (!tool) return c.json({ error: `Unknown tool: ${body.tool}` }, 400);
+
+  const isRetryOrNudge = !!body.supersedes_id;
+  if (!tool.userInvocable && !isRetryOrNudge) {
+    return c.json({ error: `Tool ${body.tool} is not user-invocable` }, 403);
+  }
+
+  if (body.supersedes_id) {
+    messagesSvc.markSuperseded(userId, body.supersedes_id);
+  }
+
+  let userCommandId: string | null = null;
+  if (tool.userInvocable) {
+    const um = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "user_command",
+      payload: {
+        raw: body.raw?.trim() || tool.slashCommand || `/${tool.name}`,
+        parsed: { tool: tool.name, args: body.args ?? {} },
+      },
+    });
+    userCommandId = um.id;
+  }
+
+  const card = messagesSvc.appendMessage({
+    sessionId,
+    userId,
+    kind: "tool_card",
+    payload: {
+      tool: tool.name,
+      args: body.args ?? {},
+      output: null,
+      error: null,
+      nudge_text: body.nudge_text ?? null,
+      duration_ms: null,
+      token_usage: null,
+    },
+    toolName: tool.name,
+    status: "running",
+    supersedesId: body.supersedes_id ?? null,
+  });
+
+  void dreamWeaverSvc.runToolCard(userId, card.id);
+
+  return c.json({ userCommandId, cardId: card.id });
+});
+
+app.post("/sessions/:sid/messages/:mid/accept", (c) => {
+  const userId = c.get("userId");
+  const updated = messagesSvc.acceptToolCard(userId, c.req.param("mid"));
+  return c.json(updated);
+});
+
+app.post("/sessions/:sid/messages/:mid/reject", (c) => {
+  const userId = c.get("userId");
+  const updated = messagesSvc.rejectToolCard(userId, c.req.param("mid"));
+  return c.json(updated);
+});
+
+app.post("/sessions/:sid/messages/:mid/cancel", (c) => {
+  const userId = c.get("userId");
+  const messageId = c.req.param("mid");
+  dreamWeaverSvc.cancelToolCard(userId, messageId);
+  return c.json({ ok: true });
 });
 
 // Import ComfyUI workflow
@@ -245,8 +378,36 @@ app.post("/visual/tag-suggestions", async (c) => {
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
 
-  const draft = providedDraft ?? dreamWeaverSvc.parseStoredDreamWeaverDraft(session.draft);
-  if (!draft) {
+  // TODO: suggestVisualTags still expects DW_DRAFT_V1.
+  const derivedDraftV2 = messagesSvc.deriveDraft(userId, sessionId);
+  const draft: DW_DRAFT_V1 = providedDraft ?? {
+    format: "DW_DRAFT_V1",
+    version: 1,
+    kind: "character",
+    meta: { title: derivedDraftV2.name ?? "", summary: "", tags: [], content_rating: "sfw" },
+    card: {
+      name: derivedDraftV2.name ?? "",
+      appearance: derivedDraftV2.appearance ?? "",
+      appearance_data: (derivedDraftV2.appearance_data as Record<string, string> | undefined) ?? {},
+      description: derivedDraftV2.appearance ?? "",
+      personality: derivedDraftV2.personality ?? "",
+      scenario: derivedDraftV2.scenario ?? "",
+      first_mes: derivedDraftV2.first_mes ?? "",
+      system_prompt: "",
+      post_history_instructions: "",
+    },
+    voice_guidance: derivedDraftV2.voice_guidance
+      ? { compiled: derivedDraftV2.voice_guidance.compiled, rules: derivedDraftV2.voice_guidance.rules }
+      : { compiled: "", rules: { baseline: [], rhythm: [], diction: [], quirks: [], hard_nos: [] } },
+    alternate_fields: { description: [], personality: [], scenario: [] },
+    greetings: derivedDraftV2.greeting
+      ? [{ id: "greeting-0", label: "Greeting", content: derivedDraftV2.greeting }]
+      : [],
+    lorebooks: [],
+    npc_definitions: [],
+    regex_scripts: [],
+  };
+  if (!providedDraft && !derivedDraftV2.name && !derivedDraftV2.personality) {
     return c.json({ error: "Generate a Soul draft first." }, 400);
   }
 
@@ -306,7 +467,7 @@ app.post("/visual/jobs", async (c) => {
   const job = startDreamWeaverVisualJob({
     userId,
     sessionId,
-    draft: dreamWeaverSvc.parseStoredDreamWeaverDraft(session.draft),
+    draft: null,
     asset,
     connection,
     apiKey,

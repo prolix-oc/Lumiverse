@@ -144,3 +144,110 @@ export interface UpdateSessionInput {
   model?: string | null;
   draft?: DW_DRAFT_V1 | null;
 }
+
+export interface NpcEntry {
+  name: string;
+  description: string;
+  voice_notes?: string;
+}
+
+export interface LorebookEntry {
+  key: string[];
+  comment: string;
+  content: string;
+}
+
+export interface VoiceGuidance {
+  compiled: string;
+  rules: {
+    baseline: string[];
+    rhythm: string[];
+    diction: string[];
+    quirks: string[];
+    hard_nos: string[];
+  };
+}
+
+export interface DraftV2 {
+  name: string | null;
+  appearance: string | null;
+  appearance_data: Record<string, unknown> | null;
+  personality: string | null;
+  scenario: string | null;
+  first_mes: string | null;
+  greeting: string | null;
+  voice_guidance: VoiceGuidance | null;
+  lorebooks: LorebookEntry[];
+  npcs: NpcEntry[];
+}
+
+export const EMPTY_DRAFT_V2: DraftV2 = {
+  name: null,
+  appearance: null,
+  appearance_data: null,
+  personality: null,
+  scenario: null,
+  first_mes: null,
+  greeting: null,
+  voice_guidance: null,
+  lorebooks: [],
+  npcs: [],
+};
+
+export type DreamWeaverMessageKind =
+  | "user_command"
+  | "tool_card"
+  | "system_note"
+  | "dream_summary";
+
+export type ToolCardStatus =
+  | "running"
+  | "pending"
+  | "accepted"
+  | "rejected"
+  | "superseded";
+
+export interface DreamWeaverMessage {
+  id: string;
+  session_id: string;
+  user_id: string;
+  created_at: number;
+  seq: number;
+  kind: DreamWeaverMessageKind;
+  payload: Record<string, unknown>;
+  tool_name: string | null;
+  status: ToolCardStatus | null;
+  supersedes_id: string | null;
+}
+
+export interface DreamSummaryPayload {
+  dream_text: string;
+  tone: string | null;
+  dislikes: string | null;
+}
+
+export interface UserCommandPayload {
+  raw: string;
+  parsed: { tool: string; args: Record<string, unknown> };
+}
+
+export interface ToolCardPayload {
+  tool: string;
+  args: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  error: { message: string; code?: string } | null;
+  nudge_text: string | null;
+  duration_ms: number | null;
+  token_usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    tokenizer_name: string;
+    model: string;
+  } | null;
+}
+
+export interface SystemNotePayload {
+  text: string;
+  level: "info" | "warning";
+}

@@ -13,6 +13,7 @@ import {
 import clsx from 'clsx'
 import { connectionsApi } from '@/api/connections'
 import { dreamWeaverApi, type DreamWeaverSession } from '@/api/dream-weaver'
+import { dreamWeaverToolingApi } from '@/api/dream-weaver-tooling'
 import { personasApi } from '@/api/personas'
 import { settingsApi } from '@/api/settings'
 import {
@@ -195,9 +196,7 @@ export default function DreamWeaverPanel() {
     }
 
     const unsubs = [
-      wsClient.on(EventType.DREAM_WEAVER_GENERATING, refresh),
-      wsClient.on(EventType.DREAM_WEAVER_COMPLETE, refresh),
-      wsClient.on(EventType.DREAM_WEAVER_ERROR, refresh),
+      wsClient.on(EventType.DREAM_WEAVER_FINALIZED, refresh),
     ]
 
     return () => {
@@ -224,7 +223,7 @@ export default function DreamWeaverPanel() {
         model: selectedModel.trim() || undefined,
       })
       try {
-        await dreamWeaverApi.generateDraft(session.id)
+        await dreamWeaverToolingApi.dream(session.id)
       } catch (error: any) {
         const message = error?.body?.error || error?.message || 'Dream weaving failed'
         const recoveryMessage = `${message}. The session was saved in Previous Weaves so you can reopen it later.`

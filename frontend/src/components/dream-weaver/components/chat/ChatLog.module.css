@@ -1,0 +1,6 @@
+.log {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 16px 20px;
+  display: flex; flex-direction: column; gap: 12px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 3%, var(--lumiverse-bg-deep));
+}
