@@ -1193,40 +1193,50 @@ export default function InputArea({ chatId }: InputAreaProps) {
     runAutocompleteDetection(ta)
   }, [runAutocompleteDetection, text])
 
-  // Highlighted mirror content — rendered behind a transparent-text textarea.
-  // We only wrap the exact slug tokens that resolve to a known group member;
-  // anything else passes through as plain text. A trailing `\u200b` keeps the
-  // last line's height when the user's text ends with a newline.
+  // Background-only mirror content. The textarea renders the real visible text
+  // so caret geometry, drag-selection, and IME behavior stay native, while the
+  // mirror only paints pill backgrounds behind matching @/# tokens.
+  // A trailing `\u200b` keeps the last line's height when the user's text ends
+  // with a newline.
   const mirrorContent = useMemo(() => {
     const ZWSP = '\u200B'
-    if (!isGroupChat || !text) return text + ZWSP
+    if (!text) return ZWSP
 
     const slugMap = new Map<string, { muted: boolean }>()
-    for (const id of groupCharacterIds) {
-      const c = characters.find((ch) => ch.id === id)
-      if (!c) continue
-      const slug = slugifyName(c.name)
-      if (slug) slugMap.set(slug, { muted: mutedCharacterIds.includes(id) })
+    if (isGroupChat) {
+      for (const id of groupCharacterIds) {
+        const c = characters.find((ch) => ch.id === id)
+        if (!c) continue
+        const slug = slugifyName(c.name)
+        if (slug) slugMap.set(slug, { muted: mutedCharacterIds.includes(id) })
+      }
     }
-    if (slugMap.size === 0) return text + ZWSP
 
     const parts: React.ReactNode[] = []
-    const re = /(^|\s)@([a-z0-9][a-z0-9-]*)(?=\s|$|[.,!?;:])/gi
+    const re = /(^|\s)([@#])([a-z0-9][a-z0-9-]*)(?=\s|$|[.,!?;:])/gi
     let lastIndex = 0
     let match: RegExpExecArray | null
     while ((match = re.exec(text)) !== null) {
-      const [, lead, rawSlug] = match
-      const info = slugMap.get(rawSlug.toLowerCase())
-      if (!info) continue
+      const [, lead, trigger, rawSlug] = match
+      const normalizedSlug = rawSlug.toLowerCase()
+      const info = trigger === '@' ? slugMap.get(normalizedSlug) : null
+      const shouldHighlight = trigger === '#' || !!info
+      if (!shouldHighlight) continue
       const tagStart = match.index + lead.length
-      const tagEnd = tagStart + 1 + rawSlug.length
+      const tagEnd = tagStart + trigger.length + rawSlug.length
       if (tagStart > lastIndex) parts.push(text.slice(lastIndex, tagStart))
       parts.push(
         <span
           key={`mp-${tagStart}`}
-          className={info.muted ? styles.mentionPillMuted : styles.mentionPill}
+          className={
+            trigger === '#'
+              ? styles.documentPill
+              : info?.muted
+                ? styles.mentionPillMuted
+                : styles.mentionPill
+          }
         >
-          @{rawSlug}
+          {trigger}{rawSlug}
         </span>
       )
       lastIndex = tagEnd

@@ -496,7 +496,8 @@
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   padding: 9px 14px;
-  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  color: transparent;
+  -webkit-text-fill-color: transparent;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: normal;
@@ -527,17 +528,21 @@
    breathing room around the text comes from `box-shadow`, which paints
    outside the border box without affecting layout. */
 .mentionPill {
-  color: var(--lumiverse-primary, rgba(160, 150, 255, 1));
   background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%, transparent);
   border-radius: 4px;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%, transparent);
 }
 
 .mentionPillMuted {
-  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.7));
   background: color-mix(in srgb, var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6)) 16%, transparent);
   border-radius: 4px;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6)) 16%, transparent);
+}
+
+.documentPill {
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 18%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-info, #42a5f5) 18%, transparent);
 }
 
 .inputWrapper:focus-within {
@@ -552,8 +557,8 @@
   border: none;
   outline: none;
   background: transparent;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  -webkit-text-fill-color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
   caret-color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
   box-sizing: border-box;
   font-family: inherit;
@@ -589,6 +594,9 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: normal;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .textarea::placeholder {
@@ -703,6 +711,20 @@
 @media (min-width: 601px) {
   .popover {
     max-height: 320px;
+  }
+}
+
+@media (pointer: coarse) {
+  /* iOS/Android selection handles can be clipped when the focused textarea is
+     nested inside rounded wrappers that hide overflow or use paint
+     containment. Let the native selection UI escape while editing. */
+  .container:focus-within {
+    overflow: visible;
+    contain: layout style;
+  }
+
+  .inputWrapper:focus-within {
+    overflow: visible;
   }
 }
 
