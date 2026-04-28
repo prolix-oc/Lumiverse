@@ -9,6 +9,7 @@ import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/compo
 import { useLongPress } from '@/hooks/useLongPress'
 import { DRAWER_TABS, adaptExtensionTabs, sanitizeHiddenDrawerTabIds } from '@/lib/drawer-tab-registry'
 import styles from './ViewportDrawer.module.css'
+import DOMPurify from 'dompurify'
 import clsx from 'clsx'
 
 function ExtensionTabContent({ tabId }: { tabId: string }) {
@@ -235,7 +236,7 @@ export default function ViewportDrawer() {
                           {dt.iconSvg ? (
                             <span
                               className={styles.extIconSvg}
-                              dangerouslySetInnerHTML={{ __html: dt.iconSvg }}
+                              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(dt.iconSvg) }}
                             />
                           ) : dt.iconUrl ? (
                             <img src={dt.iconUrl} alt="" width={20} height={20} className={styles.extIconImg} />
