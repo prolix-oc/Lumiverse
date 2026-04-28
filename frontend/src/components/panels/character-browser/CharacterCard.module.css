@@ -229,30 +229,34 @@
 /* Compact variant (used in FavoritesSlider) */
 .compact {
   flex-direction: row;
-  padding: 6px 8px;
-  gap: 8px;
-  border-radius: 10px;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
-  box-shadow: none;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 12px;
+  gap: 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--lumiverse-fill-subtle) 0%, var(--lumiverse-fill) 100%);
+  border: 1px solid var(--lumiverse-border-neutral);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .compact:hover {
-  transform: none;
-  background: var(--lumiverse-fill-hover);
-  box-shadow: none;
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, var(--lumiverse-fill-hover) 0%, var(--lumiverse-fill) 100%);
+  border-color: var(--lumiverse-border-hover);
+  box-shadow: var(--lumiverse-shadow-sm);
 }
 
 .compact .imageWrap {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   aspect-ratio: 1;
-  border-radius: 50%;
+  border-radius: 12px;
   flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .compact .coverImg {
-  border-radius: 50%;
+  border-radius: 12px;
 }
 
 .compact .avatarFallback {
@@ -260,14 +264,31 @@
 }
 
 .compact .info {
-  padding: 0;
+  padding: 0 22px 0 0;
   align-items: flex-start;
+  justify-content: center;
   flex: 1;
   min-width: 0;
+  gap: 2px;
 }
 
 .compact .name {
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.25;
+}
+
+.compact .favBtn {
+  top: 50%;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border-color: transparent;
+  transform: translateY(-50%);
+}
+
+.compact .favBtn:hover {
+  transform: translateY(-50%) scale(1.06);
 }
 
 .compact .tags,

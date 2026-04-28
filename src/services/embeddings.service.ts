@@ -17,8 +17,10 @@ import {
   getAccessToken,
   vertexHostForLocation,
 } from "../llm/providers/google-vertex";
+import { getProvider } from "../llm/registry";
 import { getFirstUserId } from "../auth/seed";
 import { sanitizeForVectorization } from "../utils/content-sanitizer";
+import { describeProviderError } from "../utils/provider-errors";
 
 const EMBEDDING_SETTINGS_KEY = "embeddingConfig";
 const EMBEDDING_SECRET_KEY = "embedding_api_key";
@@ -30,6 +32,38 @@ const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
  *  upstream server from stalling the entire generation pipeline.
  *  User-configurable via EmbeddingConfig.request_timeout (seconds). */
 const DEFAULT_EMBEDDING_REQUEST_TIMEOUT_MS = 120_000; // 120 seconds
+
+function embeddingProviderSecretKey(provider: EmbeddingProvider): string {
+  return `${EMBEDDING_SECRET_KEY}_${provider}`;
+}
+
+async function getEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<string | null> {
+  const scopedKey = embeddingProviderSecretKey(provider);
+  const scoped = await secretsSvc.getSecret(userId, scopedKey);
+  if (scoped && scoped.length > 0) return scoped;
+
+  const legacy = await secretsSvc.getSecret(userId, EMBEDDING_SECRET_KEY);
+  if (!legacy || legacy.length === 0) return null;
+
+  await secretsSvc.putSecret(userId, scopedKey, legacy);
+  secretsSvc.deleteSecret(userId, EMBEDDING_SECRET_KEY);
+  return legacy;
+}
+
+async function hasEmbeddingSecret(userId: string, provider: EmbeddingProvider): Promise<boolean> {
+  const secret = await getEmbeddingSecret(userId, provider);
+  return !!secret && secret.length > 0;
+}
+
+async function putEmbeddingSecret(userId: string, provider: EmbeddingProvider, value: string): Promise<void> {
+  await secretsSvc.putSecret(userId, embeddingProviderSecretKey(provider), value);
+  secretsSvc.deleteSecret(userId, EMBEDDING_SECRET_KEY);
+}
+
+function deleteEmbeddingSecret(userId: string, provider: EmbeddingProvider): void {
+  secretsSvc.deleteSecret(userId, embeddingProviderSecretKey(provider));
+  secretsSvc.deleteSecret(userId, EMBEDDING_SECRET_KEY);
+}
 
 /** Combine an optional external abort signal with an internal timeout into a
  *  single signal. Used so callers (like an active generation) can cancel an
@@ -56,6 +90,7 @@ export type EmbeddingProvider =
   | "openai"
   | "openrouter"
   | "electronhub"
+  | "bananabread"
   | "nanogpt"
   | "google_vertex";
 
@@ -90,6 +125,12 @@ export interface EmbeddingConfigWithStatus extends EmbeddingConfig {
    *  is a non-owner receiving it by inheritance. Non-owners cannot mutate an
    *  inherited config and share the owner's API key / billing. */
   inherited?: boolean;
+}
+
+export interface EmbeddingModelsPreviewInput {
+  provider?: EmbeddingProvider;
+  api_url?: string;
+  api_key?: string;
 }
 
 export interface WorldBookEmbeddingMetadata {
@@ -330,6 +371,7 @@ const PROVIDER_DEFAULT_URL: Record<EmbeddingProvider, string> = {
   openai: "https://api.openai.com/v1/embeddings",
   openrouter: "https://openrouter.ai/api/v1/embeddings",
   electronhub: "https://api.electronhub.top/v1/embeddings",
+  bananabread: "http://localhost:8008/v1/embeddings",
   nanogpt: "https://nano-gpt.com/api/v1/embeddings",
   // Vertex derives its host from vertex_region — this is a cosmetic default.
   google_vertex: "https://aiplatform.googleapis.com",
@@ -526,12 +568,17 @@ export function stopVersionCheckCleanup(): void {
 }
 
 function providerDefaultModel(provider: EmbeddingProvider): string {
+  if (provider === "bananabread") return "mixedbread-ai/mxbai-embed-large-v1";
   if (provider === "nanogpt") return "text-embedding-3-small";
   if (provider === "openrouter") return "text-embedding-3-small";
   if (provider === "electronhub") return "text-embedding-3-small";
   if (provider === "openai") return "text-embedding-3-small";
   if (provider === "google_vertex") return "gemini-embedding-001";
   return "text-embedding-3-small";
+}
+
+function providerAllowsCustomApiUrl(provider: EmbeddingProvider): boolean {
+  return provider === "openai-compatible" || provider === "bananabread";
 }
 
 function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): EmbeddingConfig {
@@ -558,7 +605,7 @@ function defaultConfig(provider: EmbeddingProvider = "openai-compatible"): Embed
 }
 
 const VALID_EMBEDDING_PROVIDERS: EmbeddingProvider[] = [
-  "openai-compatible", "openai", "openrouter", "electronhub", "nanogpt", "google_vertex",
+  "openai-compatible", "openai", "openrouter", "electronhub", "bananabread", "nanogpt", "google_vertex",
 ];
 
 function normalizeConfig(input: any): EmbeddingConfig {
@@ -567,10 +614,13 @@ function normalizeConfig(input: any): EmbeddingConfig {
     ? rawProvider
     : "openai-compatible";
   const base = defaultConfig(provider);
+  const api_url = providerAllowsCustomApiUrl(provider)
+    ? (typeof input?.api_url === "string" && input.api_url.trim() ? input.api_url.trim() : base.api_url)
+    : base.api_url;
   return {
     enabled: input?.enabled !== undefined ? !!input.enabled : base.enabled,
     provider,
-    api_url: typeof input?.api_url === "string" && input.api_url.trim() ? input.api_url.trim() : base.api_url,
+    api_url,
     model: typeof input?.model === "string" && input.model.trim() ? input.model.trim() : base.model,
     dimensions: Number.isFinite(input?.dimensions) && input.dimensions > 0 ? Math.floor(input.dimensions) : null,
     send_dimensions: input?.send_dimensions !== undefined ? !!input.send_dimensions : base.send_dimensions,
@@ -1268,6 +1318,148 @@ export function getProviderDefaults(provider: EmbeddingProvider) {
   };
 }
 
+function normalizeEmbeddingApiUrlForModelListing(rawUrl: string): string {
+  const trimmed = rawUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+
+  try {
+    const parsed = new URL(trimmed);
+    let path = parsed.pathname.replace(/\/+$/, "");
+    if (/\/(embeddings|embed)$/.test(path)) {
+      path = path.replace(/\/(embeddings|embed)$/, "");
+    }
+    parsed.pathname = path || "/v1";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    const stripped = trimmed.replace(/\/(embeddings|embed)$/, "");
+    return stripped || trimmed;
+  }
+}
+
+function resolveNanoGptEmbeddingModelsUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) return "https://nano-gpt.com/api/v1/embedding-models";
+
+  try {
+    const parsed = new URL(trimmed);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    if (/\/embedding-models$/.test(path)) {
+      return trimmed;
+    }
+    if (/\/(embeddings|embed)$/.test(path)) {
+      parsed.pathname = path.replace(/\/(embeddings|embed)$/, "/embedding-models");
+    } else if (!path || path === "/") {
+      parsed.pathname = "/api/v1/embedding-models";
+    } else {
+      parsed.pathname = `${path}/embedding-models`;
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    const stripped = trimmed.replace(/\/(embeddings|embed)$/, "");
+    return `${stripped || trimmed}/embedding-models`;
+  }
+}
+
+async function fetchNanoGptEmbeddingModels(
+  apiKey: string,
+  rawUrl: string,
+): Promise<{ models: string[]; model_labels?: Record<string, string> }> {
+  const url = resolveNanoGptEmbeddingModelsUrl(rawUrl);
+  const res = await fetch(url, {
+    headers: {
+      ...(apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim().replace(/^Bearer\s+/i, "")}` } : {}),
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`NanoGPT model listing failed with ${res.status}`);
+  }
+
+  const payload = await res.json() as { data?: Array<{ id?: unknown; name?: unknown }> };
+  const labels: Record<string, string> = {};
+  const models = Array.isArray(payload?.data)
+    ? payload.data
+      .map((entry) => {
+        const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+        const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+        if (id && name && name !== id) {
+          labels[id] = name;
+        }
+        return id;
+      })
+      .filter(Boolean)
+      .sort()
+    : [];
+
+  return {
+    models,
+    model_labels: Object.keys(labels).length > 0 ? labels : undefined,
+  };
+}
+
+export async function previewEmbeddingModels(
+  userId: string,
+  input: EmbeddingModelsPreviewInput,
+): Promise<{ models: string[]; model_labels?: Record<string, string>; provider: EmbeddingProvider; error?: string }> {
+  const ctx = resolveEmbeddingUserContext(userId);
+  const base = readRawEmbeddingConfig(ctx.userId);
+  const provider = input.provider ?? base.provider;
+  const cfg = normalizeConfig({ ...base, ...input, provider });
+
+  let apiKey = input.api_key?.trim() || "";
+  if (!apiKey) {
+    apiKey = (await getEmbeddingSecret(ctx.userId, cfg.provider)) || "";
+  }
+
+  try {
+    if (cfg.provider === "nanogpt") {
+      const result = await fetchNanoGptEmbeddingModels(apiKey, cfg.api_url);
+      return { ...result, provider: cfg.provider };
+    }
+
+    if (cfg.provider === "openrouter") {
+      const providerImpl = getProvider("openrouter");
+      const { OpenRouterProvider } = await import("../llm/providers/openrouter");
+      if (providerImpl instanceof OpenRouterProvider) {
+        const richModels = await providerImpl.fetchModelsWithMetadata(apiKey, normalizeEmbeddingApiUrlForModelListing(cfg.api_url), {
+          outputModalities: "embeddings",
+        });
+        const models = richModels.map((m) => m.id).sort();
+        const model_labels: Record<string, string> = {};
+        for (const model of richModels) {
+          if (model.name && model.name !== model.id) model_labels[model.id] = model.name;
+        }
+        return {
+          models,
+          model_labels: Object.keys(model_labels).length > 0 ? model_labels : undefined,
+          provider: cfg.provider,
+        };
+      }
+    }
+
+    const providerName = cfg.provider === "openai-compatible" || cfg.provider === "bananabread"
+      ? "custom"
+      : cfg.provider;
+    const providerImpl = getProvider(providerName);
+    if (!providerImpl) {
+      return { models: [], provider: cfg.provider, error: `Unknown provider: ${cfg.provider}` };
+    }
+
+    const models = await providerImpl.listModels(apiKey, normalizeEmbeddingApiUrlForModelListing(cfg.api_url));
+    return { models, provider: cfg.provider };
+  } catch (err) {
+    return {
+      models: [],
+      provider: cfg.provider,
+      error: describeProviderError(err, "Failed to fetch embedding models"),
+    };
+  }
+}
+
 /** Raw per-user embedding config (no inheritance resolution). */
 function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
   const setting = settingsSvc.getSetting(userId, EMBEDDING_SETTINGS_KEY);
@@ -1299,7 +1491,7 @@ function resolveEmbeddingUserContext(callerUserId: string): { userId: string; in
 export async function getEmbeddingConfig(userId: string): Promise<EmbeddingConfigWithStatus> {
   const ctx = resolveEmbeddingUserContext(userId);
   const cfg = readRawEmbeddingConfig(ctx.userId);
-  const has_api_key = await secretsSvc.validateSecret(ctx.userId, EMBEDDING_SECRET_KEY);
+  const has_api_key = await hasEmbeddingSecret(ctx.userId, cfg.provider);
   return ctx.inherited
     ? { ...cfg, has_api_key, inherited: true }
     : { ...cfg, has_api_key };
@@ -1328,9 +1520,9 @@ export async function updateEmbeddingConfig(
   if (input.api_key !== undefined) {
     const next = (input.api_key || "").trim();
     if (next) {
-      await secretsSvc.putSecret(userId, EMBEDDING_SECRET_KEY, next);
+      await putEmbeddingSecret(userId, merged.provider, next);
     } else {
-      secretsSvc.deleteSecret(userId, EMBEDDING_SECRET_KEY);
+      deleteEmbeddingSecret(userId, merged.provider);
     }
   }
 
@@ -1354,7 +1546,7 @@ export async function updateEmbeddingConfig(
     await invalidateAllVectors(userId);
   }
 
-  const has_api_key = await secretsSvc.validateSecret(userId, EMBEDDING_SECRET_KEY);
+  const has_api_key = await hasEmbeddingSecret(userId, merged.provider);
   return { ...merged, has_api_key };
 }
 
@@ -1543,7 +1735,7 @@ async function requestEmbeddings(
   const ctx = resolveEmbeddingUserContext(userId);
   const cfg = readRawEmbeddingConfig(ctx.userId);
   if (!cfg.enabled) throw new Error("Embeddings are disabled for this user");
-  const apiKey = await secretsSvc.getSecret(ctx.userId, EMBEDDING_SECRET_KEY);
+  const apiKey = await getEmbeddingSecret(ctx.userId, cfg.provider);
   if (!apiKey) throw new Error("Embedding API key is not configured");
   if (!texts.length) return [];
   if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
@@ -1987,7 +2179,7 @@ export async function testEmbeddingConfig(
   const ctx = resolveEmbeddingUserContext(userId);
   if (ctx.inherited) {
     const ownerCfg = readRawEmbeddingConfig(ctx.userId);
-    const has_api_key = await secretsSvc.validateSecret(ctx.userId, EMBEDDING_SECRET_KEY);
+    const has_api_key = await hasEmbeddingSecret(ctx.userId, ownerCfg.provider);
     return {
       dimension: first.length,
       config: { ...ownerCfg, has_api_key, inherited: true },
@@ -1997,7 +2189,7 @@ export async function testEmbeddingConfig(
   const current = readRawEmbeddingConfig(userId);
   const updated = normalizeConfig({ ...current, dimensions: first.length });
   settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, updated);
-  const has_api_key = await secretsSvc.validateSecret(userId, EMBEDDING_SECRET_KEY);
+  const has_api_key = await hasEmbeddingSecret(userId, updated.provider);
 
   return {
     dimension: first.length,

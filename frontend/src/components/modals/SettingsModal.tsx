@@ -36,30 +36,6 @@ interface SettingsModalProps {
   onClose: () => void
 }
 
-function getEmbeddingModelPreviewProvider(provider: string): string {
-  return provider === 'openai-compatible' ? 'custom' : provider
-}
-
-function normalizeEmbeddingApiUrlForModelListing(rawUrl: string): string {
-  const trimmed = rawUrl.trim().replace(/\/+$/, '')
-  if (!trimmed) return ''
-
-  try {
-    const parsed = new URL(trimmed)
-    let path = parsed.pathname.replace(/\/+$/, '')
-    if (/\/(embeddings|embed)$/.test(path)) {
-      path = path.replace(/\/(embeddings|embed)$/, '')
-    }
-    parsed.pathname = path || '/v1'
-    parsed.search = ''
-    parsed.hash = ''
-    return parsed.toString().replace(/\/+$/, '')
-  } catch {
-    const stripped = trimmed.replace(/\/(embeddings|embed)$/, '')
-    return stripped || trimmed
-  }
-}
-
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const settingsActiveView = useStore((s) => s.settingsActiveView)
   const user = useStore((s) => s.user)
@@ -1414,6 +1390,7 @@ function EmbeddingsSettings() {
     try {
       const next = await embeddingsApi.getConfig()
       setCfg(next)
+      setApiKey('')
     } catch (err: any) {
       setError(err?.body?.error || err?.message || 'Failed to load embedding settings')
     } finally {
@@ -1435,7 +1412,12 @@ function EmbeddingsSettings() {
     openai: { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
     openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings', model: 'text-embedding-3-small' },
     electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings', model: 'text-embedding-3-small' },
+    bananabread: { api_url: 'http://localhost:8008/v1/embeddings', model: 'mixedbread-ai/mxbai-embed-large-v1' },
     nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings', model: 'text-embedding-3-small' },
+  }
+
+  const providerAllowsCustomApiUrl = (provider: EmbeddingConfig['provider']) => {
+    return provider === 'openai-compatible' || provider === 'bananabread'
   }
 
   const update = (patch: Partial<EmbeddingConfig>) => {
@@ -1504,11 +1486,10 @@ function EmbeddingsSettings() {
     if (!cfg) return
     setModelsLoading(true)
     try {
-      const result = await connectionsApi.previewModels({
-        provider: getEmbeddingModelPreviewProvider(cfg.provider),
-        api_url: normalizeEmbeddingApiUrlForModelListing(cfg.api_url) || undefined,
+      const result = await embeddingsApi.previewModels({
+        provider: cfg.provider,
+        api_url: cfg.api_url || undefined,
         api_key: apiKey.trim() || undefined,
-        output_modalities: cfg.provider === 'openrouter' ? 'embeddings' : undefined,
       })
       setModels(result.models || [])
       setModelLabels(result.model_labels || {})
@@ -1556,6 +1537,8 @@ function EmbeddingsSettings() {
   const checklistReady = completedChecklistCount === setupChecklist.length
 
   const inherited = !!cfg.inherited
+  const canEditApiUrl = providerAllowsCustomApiUrl(cfg.provider)
+  const defaultApiUrl = PROVIDER_DEFAULTS[cfg.provider]?.api_url || cfg.api_url
 
   return (
     <div className={styles.settingsSection}>
@@ -1638,17 +1621,32 @@ function EmbeddingsSettings() {
           <option value="openai">OpenAI</option>
           <option value="openrouter">OpenRouter</option>
           <option value="electronhub">ElectronHub</option>
+          <option value="bananabread">BananaBread</option>
           <option value="nanogpt">Nano-GPT</option>
         </select>
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>API URL</label>
-        <input className={styles.select} value={cfg.api_url} onChange={(e) => update({ api_url: e.target.value })} disabled={inherited} />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
-          Auto-appends /v1/embeddings to base domains and /embeddings to partial paths (e.g. /v1). Full paths ending in /embeddings are used as-is.
-        </span>
-      </div>
+      {canEditApiUrl ? (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>API URL</label>
+          <input className={styles.select} value={cfg.api_url} onChange={(e) => update({ api_url: e.target.value })} disabled={inherited} />
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
+            Auto-appends /v1/embeddings to base domains and /embeddings to partial paths (e.g. /v1). Full paths ending in /embeddings are used as-is.
+          </span>
+          {cfg.provider === 'bananabread' && (
+            <span className={styles.placeholder} style={{ marginTop: '4px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
+              BananaBread defaults to `http://localhost:8008/v1/embeddings` and uses its loaded model list from `/v1/models`.
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>API Endpoint</label>
+          <span className={styles.placeholder} style={{ fontSize: 'calc(12px * var(--lumiverse-font-scale, 1))' }}>
+            Uses the provider default: `{defaultApiUrl}`
+          </span>
+        </div>
+      )}
 
       <div className={styles.field}>
         <label className={styles.fieldLabel}>Embedding Model</label>
@@ -1661,7 +1659,7 @@ function EmbeddingsSettings() {
           onRefresh={fetchModels}
           autoRefreshOnFocus
           refreshKey={`${cfg.provider}:${cfg.api_url}`}
-          placeholder="text-embedding-3-small"
+          placeholder={PROVIDER_DEFAULTS[cfg.provider]?.model || 'text-embedding-3-small'}
           emptyMessage="No models returned for this provider. Enter one manually."
           browseHint="Click into the field to browse embedding-capable models for this provider, or type one manually."
           disabled={inherited}

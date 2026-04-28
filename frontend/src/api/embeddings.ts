@@ -1,5 +1,5 @@
 import { get, put, post, type RequestOptions } from './client'
-import type { EmbeddingConfig, ChatMemorySettings, WorldBookReindexResult } from '@/types/api'
+import type { EmbeddingConfig, ChatMemorySettings, WorldBookReindexResult, ConnectionModelsResult, EmbeddingModelsPreviewInput } from '@/types/api'
 
 /** Embedding operations can be slow (external API + vector DB writes). */
 const LONG: RequestOptions = { timeout: 60_000 }
@@ -11,6 +11,10 @@ export const embeddingsApi = {
 
   updateConfig(input: Partial<EmbeddingConfig> & { api_key?: string | null }) {
     return put<EmbeddingConfig>('/embeddings/config', input)
+  },
+
+  previewModels(input: EmbeddingModelsPreviewInput) {
+    return post<ConnectionModelsResult>('/embeddings/models/preview', input)
   },
 
   testConfig(text?: string) {

@@ -239,6 +239,12 @@ export interface ConnectionModelsResult {
   error?: string
 }
 
+export interface EmbeddingModelsPreviewInput {
+  provider?: EmbeddingConfig['provider']
+  api_url?: string
+  api_key?: string
+}
+
 export interface NanoGptUsageWindow {
   used: number
   remaining: number
@@ -881,7 +887,7 @@ export interface WorldBookEntryBulkActionResult {
 
 export interface EmbeddingConfig {
   enabled: boolean;
-  provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'nanogpt';
+  provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'bananabread' | 'nanogpt';
   api_url: string;
   model: string;
   dimensions: number | null;

@@ -26,6 +26,13 @@ app.put("/config", async (c) => {
   }
 });
 
+app.post("/models/preview", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const result = await embeddingsSvc.previewEmbeddingModels(userId, body);
+  return c.json(result);
+});
+
 app.post("/test", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json<{ text?: string }>();
