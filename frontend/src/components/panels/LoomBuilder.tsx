@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect, type ReactNode, Fragment } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect, useDeferredValue, type ReactNode, Fragment } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -73,7 +73,7 @@ import {
   DEFAULT_COMPLETION_SETTINGS,
   DEFAULT_ADVANCED_SETTINGS,
 } from '@/lib/loom/constants'
-import type { PromptBlock, PromptVariableDef, LoomConnectionProfile, SamplerParam, MacroGroup } from '@/lib/loom/types'
+import type { PromptBlock, PromptVariableDef, LoomConnectionProfile, SamplerParam, MacroGroup, CategoryGroup } from '@/lib/loom/types'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
 import { VariablesEditor } from './PromptVariablesEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -125,12 +125,13 @@ interface SortableCategoryItemProps {
   onDelete: (id: string) => void
   onToggle: (id: string) => void
   childCount: number
+  dragDisabled?: boolean
 }
 
 function SortableCategoryItem({
-  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount,
+  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
   const style = { transform: CSS.Transform.toString(transform), transition }
   const isDisabled = !block.enabled
   const displayName = block.name.replace(/^\u2501\s*/, '')
@@ -141,7 +142,12 @@ function SortableCategoryItem({
       className={clsx(s.item, s.categoryHeader, isDragging && s.itemDragging, isDisabled && s.itemDisabled)}
       style={style}
     >
-      <span {...attributes} {...listeners} className={s.dragHandle} title="Drag to reorder (moves all items in this category)">
+      <span
+        {...attributes}
+        {...listeners}
+        className={clsx(s.dragHandle, dragDisabled && s.dragHandleDisabled)}
+        title={dragDisabled ? 'Reordering disabled while searching' : 'Drag to reorder (moves all items in this category)'}
+      >
         <GripVertical size={14} />
       </span>
       <Button size="icon-sm" variant="ghost" onClick={onToggleCollapse} title={isCollapsed ? 'Expand category' : 'Collapse category'}>
@@ -179,10 +185,11 @@ interface SortableBlockItemProps {
   onDelete: (id: string) => void
   onToggle: (id: string) => void
   indented: boolean
+  dragDisabled?: boolean
 }
 
-function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented }: SortableBlockItemProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
+function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
   const style = { transform: CSS.Transform.toString(transform), transition }
   const isMarker = block.marker && block.marker !== 'category'
   const isDisabled = !block.enabled
@@ -194,7 +201,12 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented }: Sort
       className={clsx(s.item, isDragging && s.itemDragging, isMarker && s.marker, indented && s.itemIndented, isDisabled && s.itemDisabled)}
       style={style}
     >
-      <span {...attributes} {...listeners} className={s.dragHandle} title="Drag to reorder">
+      <span
+        {...attributes}
+        {...listeners}
+        className={clsx(s.dragHandle, dragDisabled && s.dragHandleDisabled)}
+        title={dragDisabled ? 'Reordering disabled while searching' : 'Drag to reorder'}
+      >
         <GripVertical size={14} />
       </span>
       <div className={clsx(s.blockContent, s.truncTooltip)} data-tooltip={block.name}>
@@ -1322,6 +1334,8 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [showPromptVariablesModal, setShowPromptVariablesModal] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const hasConfigurableVariables = useMemo(() => {
     return (activePreset?.blocks ?? []).some(
@@ -1333,6 +1347,11 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   const lastCollapsedPresetRef = useRef<string | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const scrollTopRef = useRef(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const deferredSearchQuery = useDeferredValue(searchQuery)
+  const trimmedSearchQuery = searchQuery.trim()
+  const deferredTrimmedSearchQuery = deferredSearchQuery.trim()
+  const isSearchVisible = isSearchOpen || trimmedSearchQuery.length > 0
 
   // Track scroll position so we can restore it after state-driven re-renders
   // (block saves, toggles, reorders) and after returning from the block editor.
@@ -1357,6 +1376,39 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
 
   const groups = useMemo(() => computeGroups(activePreset?.blocks), [activePreset?.blocks])
 
+  const searchTokens = useMemo(
+    () => deferredTrimmedSearchQuery.toLowerCase().split(/\s+/).filter(Boolean),
+    [deferredTrimmedSearchQuery],
+  )
+
+  const searchableBlockText = useMemo(() => {
+    const entries = (activePreset?.blocks ?? [])
+      .filter((block) => block.marker !== 'category')
+      .map((block) => [block.id, `${block.name}\n${block.content || ''}`.toLowerCase()] as const)
+    return new Map(entries)
+  }, [activePreset?.blocks])
+
+  const isSearchActive = searchTokens.length > 0
+
+  const displayedGroups = useMemo<CategoryGroup[]>(() => {
+    if (!isSearchActive) return groups
+
+    return groups
+      .map((group) => ({
+        ...group,
+        children: group.children.filter((block) => {
+          const searchableText = searchableBlockText.get(block.id) ?? ''
+          return searchTokens.every((token) => searchableText.includes(token))
+        }),
+      }))
+      .filter((group) => group.children.length > 0)
+  }, [groups, isSearchActive, searchableBlockText, searchTokens])
+
+  const searchMatchCount = useMemo(
+    () => displayedGroups.reduce((count, group) => count + group.children.length, 0),
+    [displayedGroups],
+  )
+
   useEffect(() => {
     if (activePreset?.blocks && activePresetId && activePresetId !== lastCollapsedPresetRef.current) {
       lastCollapsedPresetRef.current = activePresetId
@@ -1365,12 +1417,23 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     }
   }, [activePresetId, activePreset])
 
+  useEffect(() => {
+    setIsSearchOpen(false)
+    setSearchQuery('')
+  }, [activePresetId])
+
+  useEffect(() => {
+    if (!isSearchVisible) return
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [isSearchVisible])
+
   const visibleBlockIds = useMemo(() => {
     const ids: string[] = []
-    for (const group of groups) {
+    for (const group of displayedGroups) {
       if (group.categoryBlock) {
         ids.push(group.categoryBlock.id)
-        if (!collapsedCategories.has(group.categoryBlock.id)) {
+        if (isSearchActive || !collapsedCategories.has(group.categoryBlock.id)) {
           for (const child of group.children) ids.push(child.id)
         }
       } else {
@@ -1378,7 +1441,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
       }
     }
     return ids
-  }, [groups, collapsedCategories])
+  }, [displayedGroups, collapsedCategories, isSearchActive])
 
   const toggleCollapse = useCallback((categoryId: string) => {
     setCollapsedCategories(prev => {
@@ -1388,6 +1451,30 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
       return next
     })
   }, [])
+
+  const toggleSearch = useCallback(() => {
+    if (isSearchVisible) {
+      setSearchQuery('')
+      setIsSearchOpen(false)
+      return
+    }
+    setIsSearchOpen(true)
+  }, [isSearchVisible])
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery('')
+    searchInputRef.current?.focus()
+  }, [])
+
+  const handleSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    if (trimmedSearchQuery.length > 0) {
+      setSearchQuery('')
+      return
+    }
+    setIsSearchOpen(false)
+  }, [trimmedSearchQuery])
 
   const handleDragEnd = useCallback((event: any) => {
     const { active, over } = event
@@ -1536,19 +1623,60 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
         {/* Preset Selector */}
         <div className={s.toolbar}>
           <PresetSelector
-          registry={registry}
-          activePresetId={activePresetId}
-          activePresetName={activePreset?.name ?? null}
-          onSelect={selectPreset}
-          onCreate={createPreset}
-          onRename={handleRenamePreset}
-          onDuplicate={handleDuplicatePreset}
-          onDelete={handleDeletePreset}
-          onImport={handleImport}
-          onExport={handleExport}
-          onExportLegacy={() => setShowLegacyExportConfirm(true)}
-        />
-      </div>
+            registry={registry}
+            activePresetId={activePresetId}
+            activePresetName={activePreset?.name ?? null}
+            onSelect={selectPreset}
+            onCreate={createPreset}
+            onRename={handleRenamePreset}
+            onDuplicate={handleDuplicatePreset}
+            onDelete={handleDeletePreset}
+            onImport={handleImport}
+            onExport={handleExport}
+            onExportLegacy={() => setShowLegacyExportConfirm(true)}
+          />
+          <button
+            type="button"
+            className={clsx(s.btn, s.searchToggle, isSearchVisible && s.searchToggleActive)}
+            onClick={toggleSearch}
+            disabled={!activePreset}
+            title={isSearchVisible ? 'Close prompt search' : 'Search prompts'}
+          >
+            <Search size={14} />
+            {isSearchVisible ? 'Close Search' : 'Search'}
+          </button>
+          {activePreset && isSearchVisible && (
+            <div className={s.searchBarRow}>
+              <div className={s.searchField}>
+                <Search size={14} className={s.searchIcon} />
+                <input
+                  ref={searchInputRef}
+                  className={s.searchInput}
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                  placeholder="Search prompt titles and content..."
+                  inputMode="search"
+                  enterKeyHint="search"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+                {trimmedSearchQuery.length > 0 && (
+                  <button type="button" className={s.searchClear} onClick={clearSearch} title="Clear search">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <div className={s.searchMeta}>
+                {isSearchActive
+                  ? `${searchMatchCount} match${searchMatchCount === 1 ? '' : 'es'}`
+                  : 'Search prompt titles and content'}
+              </div>
+            </div>
+          )}
+       </div>
 
       {/* Connection profile */}
       {activePreset && connectionProfile && (() => {
@@ -1734,23 +1862,31 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
               <div style={{ fontSize: 'calc(14px * var(--lumiverse-font-scale, 1))' }}>No blocks yet</div>
               <div style={{ fontSize: 'calc(12px * var(--lumiverse-font-scale, 1))' }}>Add a prompt block or marker to get started.</div>
             </div>
+          ) : isSearchActive && searchMatchCount === 0 ? (
+            <div className={s.emptyState}>
+              <Search size={32} style={{ opacity: 0.3 }} />
+              <div style={{ fontSize: 'calc(14px * var(--lumiverse-font-scale, 1))', fontWeight: 500 }}>No matching prompts</div>
+              <div style={{ fontSize: 'calc(12px * var(--lumiverse-font-scale, 1))' }}>Search matches prompt titles and content within this preset.</div>
+              <button type="button" className={s.btn} onClick={clearSearch}>Clear Search</button>
+            </div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={visibleBlockIds} strategy={verticalListSortingStrategy}>
-                {groups.map(group => (
+                {displayedGroups.map(group => (
                   <Fragment key={group.categoryBlock?.id || 'ungrouped'}>
                     {group.categoryBlock && (
                       <SortableCategoryItem
                         block={group.categoryBlock}
-                        isCollapsed={collapsedCategories.has(group.categoryBlock.id)}
-                        onToggleCollapse={() => toggleCollapse(group.categoryBlock!.id)}
+                        isCollapsed={isSearchActive ? false : collapsedCategories.has(group.categoryBlock.id)}
+                        onToggleCollapse={isSearchActive ? () => {} : () => toggleCollapse(group.categoryBlock!.id)}
                         onEdit={handleEdit}
                         onDelete={handleDelete}
                         onToggle={toggleBlock}
                         childCount={group.children.length}
+                        dragDisabled={isSearchActive}
                       />
                     )}
-                    {(!group.categoryBlock || !collapsedCategories.has(group.categoryBlock.id)) &&
+                    {(!group.categoryBlock || isSearchActive || !collapsedCategories.has(group.categoryBlock.id)) &&
                       group.children.map(block => (
                         <SortableBlockItem
                           key={block.id}
@@ -1759,6 +1895,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
                           onDelete={handleDelete}
                           onToggle={toggleBlock}
                           indented={!!group.categoryBlock}
+                          dragDisabled={isSearchActive}
                         />
                       ))
                     }

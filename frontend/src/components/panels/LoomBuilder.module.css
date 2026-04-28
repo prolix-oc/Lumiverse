@@ -50,6 +50,89 @@
   flex-wrap: wrap;
 }
 
+.searchToggle {
+  flex-shrink: 0;
+}
+
+.searchToggleActive {
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-020);
+  background: var(--lumiverse-primary-010);
+}
+
+.searchBarRow {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.searchField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.searchField:focus-within {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010);
+}
+
+.searchIcon {
+  color: var(--lumiverse-text-dim);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  outline: none;
+  font-family: inherit;
+  -webkit-appearance: none;
+}
+
+.searchInput::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.searchClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  color: var(--lumiverse-text-dim);
+  flex-shrink: 0;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text);
+}
+
+.searchMeta {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ============================================================================
    SCROLL AREA
    ============================================================================ */
@@ -342,6 +425,15 @@
 
 .item:hover .dragHandle {
   opacity: 1;
+}
+
+.dragHandleDisabled {
+  cursor: default;
+  opacity: 0.18;
+}
+
+.item:hover .dragHandleDisabled {
+  opacity: 0.28;
 }
 
 .btn {
@@ -1174,6 +1266,16 @@
     border-radius: 14px 14px 0 0;
   }
 
+  .searchBarRow {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .searchMeta {
+    white-space: normal;
+  }
+
   .presetNameHeader {
     padding: 16px 18px 12px;
   }
@@ -1189,6 +1291,12 @@
   .presetNameActions .presetNameBtn {
     width: 100%;
     text-align: center;
+  }
+}
+
+@media screen and (max-width: 600px) {
+  .searchInput {
+    font-size: max(16px, calc(13px * var(--lumiverse-font-scale, 1)));
   }
 }
 
