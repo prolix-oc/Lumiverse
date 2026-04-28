@@ -6,11 +6,20 @@ type Listener = (event: EventMessage) => void;
 const CLIENT_SWEEP_INTERVAL_MS = 60_000;
 const CLIENT_TIMEOUT_MS = 120_000;
 
+function getUserTopic(userId: string): string {
+  return `user:${userId}`;
+}
+
+function getStreamTopic(userId: string, chatId: string): string {
+  return `stream:${userId}:${chatId}`;
+}
+
 class EventBus {
   private server: import("bun").Server<unknown> | null = null;
   private clientToUser = new Map<ServerWebSocket<unknown>, string>();
   private sessionToClient = new Map<string, ServerWebSocket<unknown>>();
   private clientToSession = new Map<ServerWebSocket<unknown>, string>();
+  private clientToFocusedChat = new Map<ServerWebSocket<unknown>, string>();
   private clientLastActivity = new Map<ServerWebSocket<unknown>, number>();
   private listeners = new Map<EventType, Set<Listener>>();
   /** Per-user visibility: true if at least one session reports visible. */
@@ -45,7 +54,7 @@ class EventBus {
     // Subscribe to per-user topic and system broadcast topic.
     // Bun's native pub/sub handles delivery in Zig — no JS iteration needed.
     try {
-      ws.subscribe(`user:${userId}`);
+      ws.subscribe(getUserTopic(userId));
       ws.subscribe("system");
     } catch {
       // Socket may already be closed
@@ -57,14 +66,19 @@ class EventBus {
   removeClient(ws: ServerWebSocket<unknown>): void {
     const userId = this.clientToUser.get(ws);
     const sessionId = this.clientToSession.get(ws);
+    const focusedChatId = this.clientToFocusedChat.get(ws);
     if (userId) {
       try {
-        ws.unsubscribe(`user:${userId}`);
+        ws.unsubscribe(getUserTopic(userId));
         ws.unsubscribe("system");
+        if (focusedChatId) {
+          ws.unsubscribe(getStreamTopic(userId, focusedChatId));
+        }
       } catch {
         // Socket may already be closed
       }
       this.clientToUser.delete(ws);
+      this.clientToFocusedChat.delete(ws);
       this.clientLastActivity.delete(ws);
       if (sessionId) this.removeSessionVisibility(userId, sessionId);
     }
@@ -81,6 +95,31 @@ class EventBus {
   touchClient(ws: ServerWebSocket<unknown>): void {
     if (this.clientToUser.has(ws)) {
       this.clientLastActivity.set(ws, Date.now());
+    }
+  }
+
+  /** Route stream tokens only to the session actively viewing a chat. */
+  setClientStreamFocus(
+    ws: ServerWebSocket<unknown>,
+    userId: string,
+    chatId: string | null,
+  ): void {
+    if (this.clientToUser.get(ws) !== userId) return;
+
+    const previousChatId = this.clientToFocusedChat.get(ws);
+    if (previousChatId === chatId) return;
+
+    try {
+      if (previousChatId) {
+        ws.unsubscribe(getStreamTopic(userId, previousChatId));
+        this.clientToFocusedChat.delete(ws);
+      }
+      if (chatId) {
+        ws.subscribe(getStreamTopic(userId, chatId));
+        this.clientToFocusedChat.set(ws, chatId);
+      }
+    } catch {
+      // Socket may already be closed
     }
   }
 
@@ -128,7 +167,12 @@ class EventBus {
     return () => this.listeners.get(event)?.delete(listener);
   }
 
-  emit(event: EventType, payload: any = {}, userId?: string): void {
+  emit(
+    event: EventType,
+    payload: any = {},
+    userId?: string,
+    options?: { topic?: string },
+  ): void {
     const message: EventMessage = {
       event,
       payload,
@@ -141,7 +185,7 @@ class EventBus {
     // Use Bun's native pub/sub for WebSocket delivery — single native call
     // instead of iterating over JS Maps and calling ws.send() per-socket.
     if (this.server) {
-      const topic = userId ? `user:${userId}` : "system";
+      const topic = options?.topic || (userId ? getUserTopic(userId) : "system");
       this.server.publish(topic, json);
     }
 

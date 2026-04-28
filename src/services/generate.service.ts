@@ -162,7 +162,7 @@ interface GenerationLifecycle {
   maxContext?: number;
   /** Council named results (for expression detection and other post-generation hooks) */
   councilNamedResults?: Record<string, string>;
-  /** Context-budget clipping stats (for GENERATION_STARTED payload + breakdown). */
+  /** Context-budget clipping stats (for GENERATION_IN_PROGRESS payload + breakdown). */
   contextClipStats?: import("../llm/types").ContextClipStats;
 }
 
@@ -2066,10 +2066,77 @@ async function runGeneration(
   macroEnv?: import("../macros/types").MacroEnv,
 ): Promise<void> {
   // GENERATION_STARTED was already emitted when the pool entry was created
-  // (before assembly). Now update to streaming status and push breakdown data.
+  // (before assembly). Once the provider stream is live, emit a lighter
+  // progress event with the resolved breakdown metadata.
   pool.setPoolStatus(generationId, "streaming");
+
+  type PendingStreamSegment = {
+    token: string;
+    type?: "reasoning";
+    seq: number;
+  };
+
+  const streamTopic = `stream:${userId}:${chatId}`;
+  const STREAM_EMIT_INTERVAL_MS = 40;
+  const STREAM_EMIT_MAX_CHARS = 768;
+  let pendingStreamSegments: PendingStreamSegment[] = [];
+  let pendingStreamChars = 0;
+  let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flushPendingStreamSegments(): void {
+    if (streamFlushTimer) {
+      clearTimeout(streamFlushTimer);
+      streamFlushTimer = null;
+    }
+    if (pendingStreamSegments.length === 0) return;
+
+    const segments = pendingStreamSegments;
+    pendingStreamSegments = [];
+    pendingStreamChars = 0;
+
+    for (const segment of segments) {
+      eventBus.emit(
+        EventType.STREAM_TOKEN_RECEIVED,
+        {
+          generationId,
+          chatId,
+          token: segment.token,
+          ...(segment.type ? { type: segment.type } : {}),
+          seq: segment.seq,
+        },
+        userId,
+        { topic: streamTopic },
+      );
+    }
+  }
+
+  function schedulePendingStreamFlush(): void {
+    if (streamFlushTimer) return;
+    streamFlushTimer = setTimeout(() => {
+      flushPendingStreamSegments();
+    }, STREAM_EMIT_INTERVAL_MS);
+  }
+
+  function queueStreamSegment(token: string, seq: number, type?: "reasoning"): void {
+    const previous = pendingStreamSegments[pendingStreamSegments.length - 1];
+    if (previous && previous.type === type) {
+      previous.token += token;
+      previous.seq = seq;
+    } else {
+      pendingStreamSegments.push({ token, seq, ...(type ? { type } : {}) });
+    }
+
+    pendingStreamChars += token.length;
+    if (pendingStreamChars >= STREAM_EMIT_MAX_CHARS) {
+      flushPendingStreamSegments();
+      return;
+    }
+
+    schedulePendingStreamFlush();
+  }
+
   eventBus.emit(
-    EventType.GENERATION_STARTED,
+    EventType.GENERATION_IN_PROGRESS,
     {
       generationId,
       chatId,
@@ -2113,16 +2180,7 @@ async function runGeneration(
     }
     fullContent += text;
     const seq = pool.appendPoolContent(generationId, text);
-    eventBus.emit(
-      EventType.STREAM_TOKEN_RECEIVED,
-      {
-        generationId,
-        chatId,
-        token: text,
-        seq,
-      },
-      userId,
-    );
+    queueStreamSegment(text, seq);
   }
 
   function emitReasoningToken(text: string) {
@@ -2130,17 +2188,7 @@ async function runGeneration(
     if (!reasoningStartedAt) reasoningStartedAt = Date.now();
     fullReasoning += text;
     const seq = pool.appendPoolReasoning(generationId, text);
-    eventBus.emit(
-      EventType.STREAM_TOKEN_RECEIVED,
-      {
-        generationId,
-        chatId,
-        token: text,
-        type: "reasoning",
-        seq,
-      },
-      userId,
-    );
+    queueStreamSegment(text, seq, "reasoning");
   }
 
   function processContentToken(token: string) {
@@ -2350,6 +2398,7 @@ async function runGeneration(
 
         if (signal.aborted) {
           const persisted = await persistPartialContent();
+          flushPendingStreamSegments();
           pool.stopPool(generationId);
           eventBus.emit(
             EventType.GENERATION_STOPPED,
@@ -2370,17 +2419,7 @@ async function runGeneration(
           if (!reasoningStartedAt) reasoningStartedAt = Date.now();
           fullReasoning += chunk.reasoning;
           const seq = pool.appendPoolReasoning(generationId, chunk.reasoning);
-          eventBus.emit(
-            EventType.STREAM_TOKEN_RECEIVED,
-            {
-              generationId,
-              chatId,
-              token: chunk.reasoning,
-              type: "reasoning",
-              seq,
-            },
-            userId,
-          );
+          queueStreamSegment(chunk.reasoning, seq, "reasoning");
         }
 
         if (chunk.token) {
@@ -2606,6 +2645,7 @@ async function runGeneration(
         }
       }
 
+      flushPendingStreamSegments();
       pool.completePool(generationId, messageId);
       eventBus.emit(
         EventType.GENERATION_ENDED,
@@ -2761,6 +2801,7 @@ async function runGeneration(
         } catch {
           /* best-effort; fall back to in-memory content */
         }
+        flushPendingStreamSegments();
         pool.stopPool(generationId);
         eventBus.emit(
           EventType.GENERATION_STOPPED,
@@ -2787,6 +2828,7 @@ async function runGeneration(
       } catch {
         /* best-effort; never let save failure shadow the original error */
       }
+      flushPendingStreamSegments();
       pool.errorPool(generationId, msg);
       eventBus.emit(
         EventType.GENERATION_ENDED,
@@ -2801,6 +2843,7 @@ async function runGeneration(
       );
     }
   } finally {
+    flushPendingStreamSegments();
     activeGenerations.delete(generationId);
     // Clean up per-chat lock (only if this generation still owns it — a newer
     // generation may have already replaced it via startGeneration).

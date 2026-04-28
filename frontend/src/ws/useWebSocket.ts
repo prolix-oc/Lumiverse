@@ -15,6 +15,7 @@ import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
+  GenerationInProgressPayload,
   GenerationEndedPayload,
   GenerationAcknowledgedPayload,
   MessageSentPayload,
@@ -44,6 +45,7 @@ function fetchLatestMessages(chatId: string) {
 export function useWebSocket() {
   const store = useStore
   const isAuthenticated = useStore((s) => s.isAuthenticated)
+  const activeChatId = useStore((s) => s.activeChatId)
   const lastExtensionSyncAtRef = useRef(0)
 
   useEffect(() => {
@@ -162,20 +164,6 @@ export function useWebSocket() {
             // called without a targetMessageId (e.g. regeneration flow).
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
-
-          // Notify the user when the backend clipped chat history to fit the
-          // configured context budget. Only surface for the currently-active
-          // chat — otherwise background generations would spam toasts.
-          const clip = payload.contextClipStats
-          if (clip?.enabled && clip.budgetInvalid) {
-            toast.error(
-              `Context size (${clip.maxContext.toLocaleString()}) is smaller than reserved response tokens — no history can fit. Raise Context Size or lower Max Tokens.`,
-            )
-          } else if (clip?.enabled && clip.messagesDropped > 0) {
-            toast.warning(
-              `Clipped ${clip.messagesDropped} message${clip.messagesDropped === 1 ? '' : 's'} to fit context budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
-            )
-          }
         }
         // Track as a chat head so it appears if user navigates away
         state.addChatHead({
@@ -190,11 +178,41 @@ export function useWebSocket() {
         })
       }),
 
+      wsClient.on(EventType.GENERATION_IN_PROGRESS, (payload: GenerationInProgressPayload) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          if (state.activeGenerationId !== payload.generationId) {
+            state.startStreaming(payload.generationId, payload.targetMessageId)
+          } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
+            state.setRegeneratingMessageId(payload.targetMessageId)
+          }
+
+          // Surface context clipping once the final assembly metadata is ready.
+          const clip = payload.contextClipStats
+          if (clip?.enabled && clip.budgetInvalid) {
+            toast.error(
+              `Context size (${clip.maxContext.toLocaleString()}) is smaller than reserved response tokens — no history can fit. Raise Context Size or lower Max Tokens.`,
+            )
+          } else if (clip?.enabled && clip.messagesDropped > 0) {
+            toast.warning(
+              `Clipped ${clip.messagesDropped} message${clip.messagesDropped === 1 ? '' : 's'} to fit context budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
+            )
+          }
+        }
+
+        state.updateChatHead(payload.generationId, {
+          status: 'streaming',
+          ...(payload.model ? { model: payload.model } : {}),
+          ...(payload.characterName ? { characterName: payload.characterName } : {}),
+          ...(payload.characterId ? { characterId: payload.characterId } : {}),
+        })
+      }),
+
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
           // Skip tokens already included in the pooled recovery content
-          if (state.lastPooledSeq != null && (payload as any).seq != null && (payload as any).seq <= state.lastPooledSeq) return
+          if (state.lastPooledSeq != null && payload.seq != null && payload.seq <= state.lastPooledSeq) return
           // Clear the watermark after the first new token arrives
           if (state.lastPooledSeq != null) state.setLastPooledSeq(null as any)
           if (payload.type === 'reasoning') {
@@ -932,4 +950,8 @@ export function useWebSocket() {
       wsClient.disconnect()
     }
   }, [isAuthenticated])
+
+  useEffect(() => {
+    wsClient.setFocusedChat(activeChatId)
+  }, [activeChatId])
 }

@@ -11,6 +11,7 @@ export class WebSocketClient {
   private url: string
   private shouldReconnect = true
   private visibilityCleanup: Array<() => void> = []
+  private focusedChatId: string | null = null
 
   constructor(url?: string) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -162,8 +163,18 @@ export class WebSocketClient {
   }
 
   private sendVisibility(forceHidden = false) {
-    const visible = !forceHidden && document.visibilityState === 'visible' && document.hasFocus()
+    const visible = !forceHidden && this.isDocumentVisible()
     this.send({ type: 'visibility', visible })
+    this.sendStreamFocus(forceHidden)
+  }
+
+  private sendStreamFocus(forceHidden = false) {
+    const chatId = !forceHidden && this.isDocumentVisible() ? this.focusedChatId : null
+    this.send({ type: 'stream_focus', chatId })
+  }
+
+  private isDocumentVisible() {
+    return document.visibilityState === 'visible' && document.hasFocus()
   }
 
   private scheduleReconnect() {
@@ -178,6 +189,11 @@ export class WebSocketClient {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data))
     }
+  }
+
+  setFocusedChat(chatId: string | null): void {
+    this.focusedChatId = chatId
+    this.sendStreamFocus()
   }
 
   get connected() {

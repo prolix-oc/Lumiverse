@@ -129,6 +129,14 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (data.type === "stream_focus") {
+          if (raw && userId) {
+            const chatId = typeof data.chatId === "string" ? data.chatId : null;
+            eventBus.setClientStreamFocus(raw, userId, chatId);
+          }
+          return;
+        }
+
         if (data.type === "SPINDLE_TEXT_EDITOR_RESULT") {
           if (userId && data.requestId) {
             eventBus.emit(EventType.SPINDLE_TEXT_EDITOR_RESULT, {

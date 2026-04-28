@@ -11,6 +11,7 @@ export enum EventType {
   MESSAGE_SWIPED = 'MESSAGE_SWIPED',
   CHAT_CHANGED = 'CHAT_CHANGED',
   GENERATION_STARTED = 'GENERATION_STARTED',
+  GENERATION_IN_PROGRESS = 'GENERATION_IN_PROGRESS',
   STREAM_TOKEN_RECEIVED = 'STREAM_TOKEN_RECEIVED',
   GENERATION_ENDED = 'GENERATION_ENDED',
   GENERATION_STOPPED = 'GENERATION_STOPPED',
@@ -188,8 +189,10 @@ export interface WSEvent<T = any> {
 
 export interface StreamTokenPayload {
   generationId: string
+  chatId: string
   token: string
   type?: 'text' | 'reasoning'
+  seq?: number
 }
 
 export interface ContextClipStats {
@@ -223,6 +226,10 @@ export interface GenerationStartedPayload {
     extensionId?: string
     extensionName?: string
   }>
+}
+
+export interface GenerationInProgressPayload extends GenerationStartedPayload {
+  model?: string
 }
 
 export interface GenerationMetrics {

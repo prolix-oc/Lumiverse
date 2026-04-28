@@ -1342,6 +1342,7 @@ export class WorkerHost {
   /** Generation-related events that require the `generation` permission. */
   private static readonly GENERATION_EVENTS = new Set([
     EventType.GENERATION_STARTED,
+    EventType.GENERATION_IN_PROGRESS,
     EventType.GENERATION_ENDED,
     EventType.GENERATION_STOPPED,
     EventType.STREAM_TOKEN_RECEIVED,

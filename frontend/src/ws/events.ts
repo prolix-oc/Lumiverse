@@ -3,6 +3,7 @@ export type {
   WSEvent,
   StreamTokenPayload,
   GenerationStartedPayload,
+  GenerationInProgressPayload,
   GenerationEndedPayload,
   MessageSentPayload,
   MessageEditedPayload,
