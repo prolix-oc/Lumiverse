@@ -1218,9 +1218,11 @@
 /* ── Link card ─────────────────────────────────────────────── */
 
 .linkCard {
-  display: flex;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 4px;
   padding: 10px 12px;
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
@@ -1271,6 +1273,9 @@
 }
 
 .linkInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   flex: 1;
   min-width: 0;
 }
@@ -1287,7 +1292,11 @@
 .linkMeta {
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
-  margin-top: 2px;
+  line-height: 1.35;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .linkBroken {
@@ -1321,6 +1330,7 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  justify-self: end;
 }
 
 /* ── Toggle switch ─────────────────────────────────────────── */
@@ -1382,6 +1392,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  grid-column: 1 / -1;
   width: 100%;
   font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
@@ -1646,9 +1657,11 @@
 }
 
 .linksPickerItem {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  min-height: 48px;
   padding: 8px 10px;
   border: none;
   border-radius: 6px;
@@ -1664,6 +1677,9 @@
 }
 
 .linksPickerItemInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   flex: 1;
   min-width: 0;
 }
@@ -1680,7 +1696,7 @@
 .linksPickerItemMeta {
   font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
-  margin-top: 1px;
+  line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1689,6 +1705,7 @@
 .linksPickerItemAction {
   color: var(--lumiverse-text-dim);
   flex-shrink: 0;
+  justify-self: end;
   transition: color 0.15s ease;
 }
 
@@ -1750,9 +1767,11 @@
 }
 
 .linksLibraryItem {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 6px;
   padding: 8px 10px;
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
@@ -1760,6 +1779,9 @@
 }
 
 .linksLibraryItemInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   flex: 1;
   min-width: 0;
 }
@@ -1776,7 +1798,7 @@
 .linksLibraryItemMeta {
   font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
-  margin-top: 1px;
+  line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1791,6 +1813,7 @@
   display: flex;
   gap: 2px;
   flex-shrink: 0;
+  justify-self: end;
 }
 
 .linksLibraryBtn {
@@ -1823,6 +1846,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  grid-column: 1 / -1;
   width: 100%;
 }
 
