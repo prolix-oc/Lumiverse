@@ -1,4 +1,6 @@
+import { useMemo } from 'react'
 import clsx from 'clsx'
+import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import styles from './OOCStyles.module.css'
 
 interface OOCMarginNoteProps {
@@ -9,6 +11,8 @@ interface OOCMarginNoteProps {
 }
 
 export default function OOCMarginNote({ content, avatarUrl, displayName, isAlt }: OOCMarginNoteProps) {
+  const safeContent = useMemo(() => sanitizeRichHtml(content), [content])
+
   return (
     <div className={clsx(styles.marginNote, isAlt && styles.marginNoteAlt)}>
       <div className={styles.marginTag}>
@@ -24,7 +28,7 @@ export default function OOCMarginNote({ content, avatarUrl, displayName, isAlt }
         <div className={styles.marginLabel}>{displayName}</div>
         <div
           className={styles.marginText}
-          dangerouslySetInnerHTML={{ __html: content }}
+          dangerouslySetInnerHTML={{ __html: safeContent }}
         />
       </div>
     </div>

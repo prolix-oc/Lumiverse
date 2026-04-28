@@ -1,6 +1,7 @@
 import { transform } from 'sucrase'
 import React, { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, memo, Fragment } from 'react'
 import clsx from 'clsx'
+import { validateComponentOverrideSource } from './componentOverrideSecurity'
 
 /**
  * Scope object injected into user TSX modules.
@@ -82,6 +83,11 @@ export interface TranspileResult {
 export function transpileComponent(source: string): TranspileResult {
   if (!source.trim()) return { component: null, error: null }
 
+  const safety = validateComponentOverrideSource(source)
+  if (!safety.valid) {
+    return { component: null, error: safety.error || 'Unsafe component override source' }
+  }
+
   // ── Step 1: Transpile TSX → JS ──
   let code: string
   try {
@@ -137,6 +143,10 @@ export function transpileComponent(source: string): TranspileResult {
  */
 export function validateTSX(source: string): { valid: boolean; error?: string } {
   if (!source.trim()) return { valid: true }
+
+  const safety = validateComponentOverrideSource(source)
+  if (!safety.valid) return safety
+
   try {
     transform(source, {
       transforms: ['typescript', 'jsx'],

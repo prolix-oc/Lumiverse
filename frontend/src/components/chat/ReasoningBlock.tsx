@@ -3,6 +3,7 @@ import { Marked } from 'marked'
 import { healFormattingArtifacts } from '@/lib/formatHealing'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
+import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import { ChevronRight, Brain } from 'lucide-react'
 import styles from './ReasoningBlock.module.css'
 import clsx from 'clsx'
@@ -117,7 +118,7 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
   const html = useMemo(
     () => {
       if (!isOpen || renderMode !== 'markdown') return ''
-      return md.parse(healFormattingArtifacts(deferredReasoning)) as string
+      return sanitizeRichHtml(md.parse(healFormattingArtifacts(deferredReasoning)) as string)
     },
     [deferredReasoning, isOpen, renderMode]
   )

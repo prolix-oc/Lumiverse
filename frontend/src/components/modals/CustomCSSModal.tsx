@@ -8,6 +8,7 @@ import { validateTSX } from '@/lib/componentTranspiler'
 import { CSS_MODULE_REGISTRY, generateSelector, type CSSModuleEntry } from '@/lib/cssModuleRegistry'
 import { getComponentTemplate, type PropDoc } from '@/lib/componentTemplates'
 import { createThemePack, exportThemePack, importThemePack, packSummary, type ThemePackAsset } from '@/lib/themePack'
+import { disableImportedThemePackTsx } from '@/lib/componentOverrideSecurity'
 import { toast } from '@/lib/toast'
 import { generateUUID } from '@/lib/uuid'
 import { css, cssLanguage } from '@codemirror/lang-css'
@@ -319,7 +320,8 @@ export default function CustomCSSModal() {
       toast.error(result.error.message)
       return
     }
-    const pack = result.pack
+    const imported = disableImportedThemePackTsx(result.pack)
+    const pack = imported.pack
     const localBundleId = generateUUID()
     const localizedPack = { ...pack, bundleId: localBundleId }
     try {
@@ -334,7 +336,10 @@ export default function CustomCSSModal() {
       }
       const summary = packSummary(localizedPack)
       applyThemePack(localizedPack)
-      toast.success(`Applied "${pack.name}" from theme bundle: ${summary.join(', ')}`)
+      const disabledNote = imported.disabledCount > 0
+        ? ` TSX overrides were imported disabled for manual review (${imported.disabledCount}).`
+        : ''
+      toast.success(`Applied "${pack.name}" from theme bundle: ${summary.join(', ')}.${disabledNote}`)
     } catch (err: any) {
       toast.error(err?.body?.error || err?.message || 'Failed to import bundled theme assets')
     }

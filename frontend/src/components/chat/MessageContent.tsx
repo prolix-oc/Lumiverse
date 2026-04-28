@@ -7,6 +7,7 @@ import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
 import { healFormattingArtifacts } from '@/lib/formatHealing'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { sanitizeHtmlIsland, sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import {
   dispatchMessageTagIntercepts,
   stripMessageTags,
@@ -499,7 +500,7 @@ function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] 
   const { content, islands } = extractHtmlIslands(raw, isStreaming)
 
   if (islands.length === 0) {
-    return [{ type: 'markup', content: formatContent(raw) }]
+    return [{ type: 'markup', content: sanitizeRichHtml(formatContent(raw)) }]
   }
 
   const html = formatContent(content)
@@ -508,14 +509,16 @@ function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] 
 
   for (const m of html.matchAll(ISLAND_RE)) {
     const before = html.slice(lastIdx, m.index!)
-    if (before.trim()) pieces.push({ type: 'markup', content: before })
+    if (before.trim()) pieces.push({ type: 'markup', content: sanitizeRichHtml(before) })
     const idx = parseInt(m[1], 10)
-    if (islands[idx] != null) pieces.push({ type: 'island', content: processMarkdownInIsland(islands[idx]) })
+    if (islands[idx] != null) {
+      pieces.push({ type: 'island', content: sanitizeHtmlIsland(processMarkdownInIsland(islands[idx])) })
+    }
     lastIdx = m.index! + m[0].length
   }
 
   const after = html.slice(lastIdx)
-  if (after.trim()) pieces.push({ type: 'markup', content: after })
+  if (after.trim()) pieces.push({ type: 'markup', content: sanitizeRichHtml(after) })
 
   return pieces
 }

@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import styles from './OOCStyles.module.css'
 
 interface OOCSocialCardProps {
@@ -7,6 +9,8 @@ interface OOCSocialCardProps {
 }
 
 export default function OOCSocialCard({ content, avatarUrl, displayName }: OOCSocialCardProps) {
+  const safeContent = useMemo(() => sanitizeRichHtml(content), [content])
+
   return (
     <div className={styles.socialCard}>
       <div className={styles.socialAvatarContainer}>
@@ -25,7 +29,7 @@ export default function OOCSocialCard({ content, avatarUrl, displayName }: OOCSo
         </div>
         <div
           className={styles.socialContent}
-          dangerouslySetInnerHTML={{ __html: content }}
+          dangerouslySetInnerHTML={{ __html: safeContent }}
         />
       </div>
     </div>

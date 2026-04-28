@@ -1,4 +1,6 @@
+import { useMemo } from 'react'
 import clsx from 'clsx'
+import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import styles from './OOCStyles.module.css'
 
 interface OOCWhisperBubbleProps {
@@ -9,6 +11,8 @@ interface OOCWhisperBubbleProps {
 }
 
 export default function OOCWhisperBubble({ content, avatarUrl, displayName, isAlt }: OOCWhisperBubbleProps) {
+  const safeContent = useMemo(() => sanitizeRichHtml(content), [content])
+
   return (
     <div className={clsx(styles.whisper, isAlt && styles.whisperAlt)}>
       <div className={styles.whisperAvatarWrap}>
@@ -26,7 +30,7 @@ export default function OOCWhisperBubble({ content, avatarUrl, displayName, isAl
         </div>
         <div
           className={styles.whisperText}
-          dangerouslySetInnerHTML={{ __html: content }}
+          dangerouslySetInnerHTML={{ __html: safeContent }}
         />
       </div>
     </div>

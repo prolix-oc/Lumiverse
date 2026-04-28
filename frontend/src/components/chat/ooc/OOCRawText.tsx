@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import styles from './OOCStyles.module.css'
 
 interface OOCRawTextProps {
@@ -5,10 +7,12 @@ interface OOCRawTextProps {
 }
 
 export default function OOCRawText({ content }: OOCRawTextProps) {
+  const safeContent = useMemo(() => sanitizeRichHtml(content), [content])
+
   return (
     <span
       className={styles.raw}
-      dangerouslySetInnerHTML={{ __html: content }}
+      dangerouslySetInnerHTML={{ __html: safeContent }}
     />
   )
 }
