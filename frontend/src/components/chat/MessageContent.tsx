@@ -1,4 +1,4 @@
-import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, useSyncExternalStore } from 'react'
+import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, useSyncExternalStore, useDeferredValue } from 'react'
 import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
 import { parseOOC } from '@/lib/oocParser'
@@ -715,13 +715,16 @@ export default function MessageContent({
     () => resolveDisplayMacros(regexAppliedContent, { charName, userName }),
     [regexAppliedContent, charName, userName],
   )
-
-  const blocks = useMemo(() => parseOOC(resolvedContent), [resolvedContent])
+  const deferredResolvedContent = useDeferredValue(resolvedContent)
+  const renderContent = isStreaming ? deferredResolvedContent : resolvedContent
+  const blocks = useMemo(() => parseOOC(renderContent), [renderContent])
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const containerRef = useRef<HTMLDivElement>(null)
   const prevTextLenRef = useRef(0)
+  const maxStreamingHeightRef = useRef(0)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [streamingMinHeight, setStreamingMinHeight] = useState<number | null>(null)
 
   const handleLightboxClose = useCallback(() => setLightboxSrc(null), [])
 
@@ -765,6 +768,33 @@ export default function MessageContent({
     container.addEventListener('click', handleClick)
     return () => container.removeEventListener('click', handleClick)
   }, [])
+
+  useLayoutEffect(() => {
+    if (!isStreaming) {
+      maxStreamingHeightRef.current = 0
+      setStreamingMinHeight(null)
+      return
+    }
+
+    const container = containerRef.current
+    if (!container) return
+
+    const updateMinHeight = () => {
+      const nextHeight = Math.ceil(container.getBoundingClientRect().height)
+      if (nextHeight <= maxStreamingHeightRef.current) return
+      maxStreamingHeightRef.current = nextHeight
+      setStreamingMinHeight(nextHeight)
+    }
+
+    updateMinHeight()
+
+    const observer = new ResizeObserver(() => {
+      updateMinHeight()
+    })
+
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [isStreaming])
 
   const renderedBlocks = useMemo(() => {
     const elements: React.ReactNode[] = []
@@ -894,6 +924,7 @@ export default function MessageContent({
         data-component="MessageContent"
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}
+        style={streamingMinHeight ? { minHeight: `${streamingMinHeight}px` } : undefined}
       >
         {renderedBlocks}
       </div>
