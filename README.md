@@ -48,6 +48,130 @@ bun run dev
 bun run start
 ```
 
+### Hugging Face Spaces (free hosting)
+
+You can run Lumiverse for free on [Hugging Face Spaces](https://huggingface.co/spaces) using a Docker Space.
+
+> **Free-tier limits:** Spaces on the free tier run on 2 vCPU / 16 GB RAM with no GPU. The container sleeps after a period of inactivity and cold-starts on the next visit (typically 30–60 s). Persistent storage requires a paid storage bucket ($0.05/GB-month), but you can omit it for a stateless demo. For always-on, full-speed inference consider a paid Space or a dedicated server.
+
+#### 1. Create a new Space
+
+1. Go to [huggingface.co/new-space](https://huggingface.co/new-space).
+2. Give it a name, set **Space SDK** to **Docker**, and set **Visibility** to *Public* or *Private*.
+3. Click **Create Space**.
+
+#### 2. Add persistent storage
+
+In your Space's **Settings → Persistent storage**, attach a storage bucket and mount it at `/app/data`. This keeps your chats, characters, and credentials across container restarts.
+
+#### 3. Add the Dockerfile
+
+In the **Files** tab of your Space, create a file named `Dockerfile` with the following contents:
+
+```dockerfile
+FROM oven/bun:1-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  git ca-certificates curl sqlite3 rsync python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ARG LUMIVERSE_REPO=https://github.com/prolix-oc/Lumiverse.git
+ARG LUMIVERSE_REF=staging
+RUN git clone --depth 1 --branch "${LUMIVERSE_REF}" "${LUMIVERSE_REPO}" .
+
+RUN cat > /tmp/patch-auth-rewrite.mjs <<'PATCH'
+import { readFileSync, writeFileSync } from "fs";
+
+const path = "src/app.ts";
+const src = readFileSync(path, "utf8");
+
+const before = `app.on(["POST", "GET"], "/api/auth/*", (c) => {
+  const host = c.req.header("host");
+  if (host) {
+    const url = new URL(c.req.url);
+    const rewritten = new URL(url.pathname + url.search, \`http://\${host}\`);
+    return auth.handler(new Request(rewritten.toString(), c.req.raw));
+  }
+  return auth.handler(c.req.raw);
+});`;
+
+const after = `app.on(["POST", "GET"], "/api/auth/*", (c) => {
+  const host = c.req.header("x-forwarded-host") || c.req.header("host");
+  const proto = c.req.header("x-forwarded-proto") || "http";
+
+  if (host) {
+    const url = new URL(c.req.url);
+    const rewritten = new URL(url.pathname + url.search, \`\${proto}://\${host}\`);
+    return auth.handler(new Request(rewritten.toString(), c.req.raw));
+  }
+  return auth.handler(c.req.raw);
+});`;
+
+if (!src.includes(before)) {
+  console.error("[patch] Expected auth rewrite block not found in src/app.ts");
+  process.exit(1);
+}
+
+writeFileSync(path, src.replace(before, after), "utf8");
+console.log("[patch] Patched src/app.ts for x-forwarded-proto/host");
+PATCH
+
+RUN bun /tmp/patch-auth-rewrite.mjs \
+  && grep -n "x-forwarded-proto" src/app.ts >/dev/null
+
+RUN rm -f package-lock.json && bun install --production
+
+WORKDIR /app/frontend
+RUN rm -f package-lock.json && bun install && bun run build
+RUN printf "self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));\n" > /app/frontend/dist/sw.js
+RUN test -f /app/frontend/dist/index.html
+
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=7860
+ENV DATA_DIR=/app/data
+ENV FRONTEND_DIR=/app/frontend/dist
+ENV TRUST_ANY_ORIGIN=true
+ENV OWNER_PASSWORD=admin123
+
+RUN cat > /app/start.sh <<'SH'
+#!/usr/bin/env sh
+set -eu
+export DATA_DIR="${DATA_DIR:-/app/data}"
+exec bun run scripts/runner.ts
+SH
+
+RUN chmod +x /app/start.sh
+
+USER root
+RUN mkdir -p /app/data && chown -R bun:bun /app/data
+
+EXPOSE 7860
+VOLUME /app/data
+
+USER bun
+CMD ["/app/start.sh"]
+```
+
+#### 4. Set your admin password
+
+Before the Space builds, go to **Settings → Variables and secrets** and add a secret:
+
+| Name | Value |
+|------|-------|
+| `OWNER_PASSWORD` | *your chosen password* |
+
+This overrides the `admin123` default baked into the Dockerfile. **Do not skip this step on a public Space.**
+
+#### 5. Open the Space
+
+Once the build finishes (~3–5 min on the free tier), click **Open in new tab** (or visit `https://<your-username>-<space-name>.hf.space`). Log in with username `admin` and the password you set.
+
+> **Why the patch?** Hugging Face's reverse proxy injects `x-forwarded-proto` and `x-forwarded-host` headers. Without the patch, BetterAuth constructs `http://` callback URLs instead of `https://`, causing auth redirects to fail.
+
 ## First-Run Setup
 
 On first launch, the setup wizard walks you through:
