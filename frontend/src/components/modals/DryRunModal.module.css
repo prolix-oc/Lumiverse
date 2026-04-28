@@ -47,16 +47,20 @@
  */
 .messagesCollapsibleBody {
   padding: 8px 12px 12px;
-  height: clamp(240px, calc(50vh / var(--lumiverse-ui-scale, 1)), 600px);
-  display: flex;
-  flex-direction: column;
+  height: clamp(360px, calc(62vh / var(--lumiverse-ui-scale, 1)), 720px);
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 12px;
 }
 
 .messagesScroll {
-  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  min-height: 0;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
+  background: var(--lumiverse-fill-subtle);
+  padding: 8px;
 }
 
 .messagesScroll::-webkit-scrollbar {
@@ -68,19 +72,35 @@
   border-radius: 4px;
 }
 
-.messageCard {
-  border-radius: 10px;
+.messageRow {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
   border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
-  background: var(--lumiverse-fill-subtle);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
-.messageHeader {
+.messageRow:hover {
+  background: var(--lumiverse-fill);
+}
+
+.messageRowActive {
+  border-color: var(--lumiverse-primary, #9370db);
+  background: var(--lumiverse-primary-010);
+  box-shadow: inset 0 0 0 1px var(--lumiverse-primary-015);
+}
+
+.messageRowHeader {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--lumiverse-fill-subtle);
-  border-bottom: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.04));
 }
 
 .roleBadge {
@@ -89,26 +109,13 @@
   font-weight: 600;
 }
 
-/*
- * Each message renders its full content inline (no nested scroll container —
- * 600 nested scrollers used to crash mobile WebKit). Long messages get a
- * webkit-line-clamp preview with a Show full toggle.
- */
-.messageContent {
-  padding: 10px 12px;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  line-height: 1.6;
-  color: var(--lumiverse-text, rgba(230, 230, 240, 0.85));
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.messageContentClamped {
-  display: -webkit-box;
-  -webkit-line-clamp: 8;
-  -webkit-box-orient: vertical;
+.messagePreview {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.58));
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .messageIndex {
@@ -116,24 +123,70 @@
   color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
 }
 
-.expandButton {
+.messageMeta {
   margin-left: auto;
-  padding: 2px 8px;
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-radius: 4px;
-  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
-  background: transparent;
-  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6));
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.4));
+  white-space: nowrap;
 }
 
-.expandButton:hover {
-  background: var(--lumiverse-fill);
-  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+.messageInspector {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
+  background: var(--lumiverse-fill-subtle);
+  overflow: hidden;
+}
+
+.messageInspectorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
+}
+
+.messageInspectorTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobileBackButton {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.72));
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.messageInspectorMeta {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
+  white-space: nowrap;
+}
+
+.messageInspectorContent {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.6;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.85));
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .inlineExpandButton {
@@ -361,5 +414,61 @@
 
   .header {
     padding: 16px;
+  }
+
+  .messagesCollapsibleBody {
+    display: block;
+    height: clamp(420px, calc(72vh / var(--lumiverse-ui-scale, 1)), 760px);
+  }
+
+  .messagesScroll,
+  .messageInspector {
+    height: 100%;
+  }
+
+  .messageInspector {
+    display: none;
+  }
+
+  .messagesMobileInspectorVisible .messagesScroll {
+    display: none;
+  }
+
+  .messagesMobileInspectorVisible .messageInspector {
+    display: flex;
+  }
+
+  .messageInspectorHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .messageInspectorMeta {
+    margin-left: 0;
+    white-space: normal;
+  }
+
+  .messageRowHeader {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .messageMeta {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .mobileBackButton {
+    display: inline-flex;
+  }
+
+  .footer {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 16px;
+  }
+
+  .footerSpacer {
+    display: none;
   }
 }

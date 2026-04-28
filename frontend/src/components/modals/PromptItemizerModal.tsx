@@ -13,6 +13,10 @@ import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/l
 import styles from './PromptItemizerModal.module.css'
 import clsx from 'clsx'
 
+function getEntryKey(groupLabel: string, index: number): string {
+  return `${groupLabel}:${index}`
+}
+
 const ROLE_CLASS: Record<string, string> = {
   system: styles.roleSystem,
   user: styles.roleUser,
@@ -39,7 +43,10 @@ export default function PromptItemizerModal() {
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<BreakdownCacheEntry | null>(null)
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(['lumiverse', 'chatHistory', 'longTermMemory']))
+  const [openGroups, setOpenGroups] = useState<Set<string>>(
+    new Set(['Lumiverse Prompts', 'Chat History', 'Long-Term Memory']),
+  )
+  const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null)
   const [rawView, setRawView] = useState<'off' | RawPromptView>('off')
   const [copied, setCopied] = useState(false)
   const [rawLoading, setRawLoading] = useState(false)
@@ -134,9 +141,31 @@ export default function PromptItemizerModal() {
 
   const rawButtonLabel = rawView === 'off' ? 'Raw' : rawView === 'text' ? 'JSON' : 'Visual'
 
-  const groups = data ? groupBreakdownEntries(data.entries) : []
+  const groups = useMemo(() => (data ? groupBreakdownEntries(data.entries) : []), [data])
   const sidecarGroup = groups.find((g) => g.label === 'Sidecar (Lumi Pipeline)')
   const mainGroups = groups.filter((g) => g.label !== 'Sidecar (Lumi Pipeline)')
+  const flatEntries = useMemo(
+    () => groups.flatMap((group) => group.entries.map((entry, index) => ({
+      key: getEntryKey(group.label, index),
+      groupLabel: group.label,
+      entry,
+    }))),
+    [groups],
+  )
+
+  useEffect(() => {
+    if (flatEntries.length === 0) {
+      setSelectedEntryKey(null)
+      return
+    }
+
+    setSelectedEntryKey((prev) => {
+      if (prev && flatEntries.some((item) => item.key === prev)) return prev
+      return (flatEntries.find((item) => item.entry.content) ?? flatEntries[0]).key
+    })
+  }, [flatEntries])
+
+  const selectedEntry = flatEntries.find((item) => item.key === selectedEntryKey) ?? null
 
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)))" zIndex={10001} className={styles.modal}>
@@ -167,6 +196,8 @@ export default function PromptItemizerModal() {
                     total={data.totalTokens}
                     open={openGroups.has(group.label)}
                     onToggle={() => toggleGroup(group.label)}
+                    selectedEntryKey={selectedEntryKey}
+                    onSelectEntry={setSelectedEntryKey}
                   />
                 ))}
                 {sidecarGroup && sidecarGroup.tokens > 0 && (
@@ -179,8 +210,36 @@ export default function PromptItemizerModal() {
                       total={sidecarGroup.tokens}
                       open={openGroups.has(sidecarGroup.label)}
                       onToggle={() => toggleGroup(sidecarGroup.label)}
+                      selectedEntryKey={selectedEntryKey}
+                      onSelectEntry={setSelectedEntryKey}
                     />
                   </>
+                )}
+                {selectedEntry && (
+                  <div className={styles.entryInspector}>
+                    <div className={styles.entryInspectorHeader}>
+                      <div className={styles.entryInspectorTitleWrap}>
+                        <span className={styles.entryInspectorEyebrow}>{selectedEntry.groupLabel}</span>
+                        <div className={styles.entryInspectorTitleRow}>
+                          <span className={styles.entryInspectorTitle}>{selectedEntry.entry.name}</span>
+                          <span className={styles.headerBadge}>{selectedEntry.entry.tokens.toLocaleString()} tokens</span>
+                          <span className={styles.headerBadge}>{selectedEntry.entry.type}</span>
+                          {selectedEntry.entry.role && (
+                            <span className={clsx(styles.tokenRole, ROLE_CLASS[selectedEntry.entry.role])}>
+                              {selectedEntry.entry.role}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    {selectedEntry.entry.content ? (
+                      <pre className={styles.entryInspectorContent}>{selectedEntry.entry.content}</pre>
+                    ) : (
+                      <div className={styles.entryInspectorEmpty}>
+                        This stored breakdown only has token counts for this block. Newly generated messages now preserve the block text for inspection here.
+                      </div>
+                    )}
+                  </div>
                 )}
               </>
             )}
@@ -194,7 +253,7 @@ export default function PromptItemizerModal() {
                 {rawLoading && <div className={styles.loading}>Reassembling prompt…</div>}
                 {!rawLoading && rawError && <div className={styles.empty}>{rawError}</div>}
                 {!rawLoading && !rawError && rawData && (
-                  <div className={styles.rawView}>{rawText}</div>
+                  <pre className={styles.rawView}>{rawText}</pre>
                 )}
               </>
             )}
@@ -272,11 +331,13 @@ function Legend({ groups }: { groups: BreakdownGroup[] }) {
   )
 }
 
-function GroupAccordion({ group, total, open, onToggle }: {
+function GroupAccordion({ group, total, open, onToggle, selectedEntryKey, onSelectEntry }: {
   group: BreakdownGroup
   total: number
   open: boolean
   onToggle: () => void
+  selectedEntryKey?: string | null
+  onSelectEntry?: (key: string) => void
 }) {
   return (
     <div className={styles.accordion}>
@@ -291,33 +352,41 @@ function GroupAccordion({ group, total, open, onToggle }: {
       </button>
       {open && (
         <div className={styles.accordionBody}>
-          <table className={styles.tokenTable}>
-            <tbody>
-              {group.entries.map((entry, i) => {
-                const pct = total > 0 ? ((entry.tokens / total) * 100).toFixed(1) : '0.0'
-                return (
-                  <tr key={i}>
-                    <td>
-                      <div className={styles.tokenName}>
-                        <div className={styles.tokenColor} style={{ background: getBlockDisplayColor(i) }} />
-                        <span>{entry.name}</span>
-                        {entry.extensionName && (
-                          <span className={styles.tokenRole}>{entry.extensionName}</span>
-                        )}
-                        {entry.role && (
-                          <span className={clsx(styles.tokenRole, ROLE_CLASS[entry.role])}>
-                            {entry.role}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className={styles.tokenCount}>{entry.tokens.toLocaleString()}</td>
-                    <td className={styles.tokenPct}>{pct}%</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <div className={styles.entryList}>
+            {group.entries.map((entry, i) => {
+              const pct = total > 0 ? ((entry.tokens / total) * 100).toFixed(1) : '0.0'
+              const entryKey = getEntryKey(group.label, i)
+
+              return (
+                <button
+                  key={entryKey}
+                  type="button"
+                  className={clsx(
+                    styles.entryRow,
+                    selectedEntryKey === entryKey && styles.entryRowActive,
+                  )}
+                  onClick={() => onSelectEntry?.(entryKey)}
+                >
+                  <div className={styles.tokenName}>
+                    <div className={styles.tokenColor} style={{ background: getBlockDisplayColor(i) }} />
+                    <span>{entry.name}</span>
+                    {entry.extensionName && (
+                      <span className={styles.tokenRole}>{entry.extensionName}</span>
+                    )}
+                    {entry.role && (
+                      <span className={clsx(styles.tokenRole, ROLE_CLASS[entry.role])}>
+                        {entry.role}
+                      </span>
+                    )}
+                  </div>
+                  <div className={styles.entryMetrics}>
+                    <span className={styles.tokenCount}>{entry.tokens.toLocaleString()}</span>
+                    <span className={styles.tokenPct}>{pct}%</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>

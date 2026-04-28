@@ -163,6 +163,7 @@ export interface BreakdownResponse {
     type: string
     tokens: number
     role?: string
+    content?: string
     blockId?: string
     extensionId?: string
     extensionName?: string

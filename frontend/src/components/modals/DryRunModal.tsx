@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChevronRight, Check, Code, Copy } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check, Code, Copy } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Badge } from '@/components/shared/Badge'
 import { Button } from '@/components/shared/FormComponents'
@@ -20,42 +20,54 @@ const ROLE_COLOR: Record<string, 'warning' | 'info' | 'primary'> = {
 
 // Auto-collapse the messages section above this count to keep the modal snappy on open.
 const MESSAGES_AUTO_COLLAPSE_THRESHOLD = 50
-// Per-message expand button appears when content exceeds this length.
-const MESSAGE_EXPAND_THRESHOLD = 400
+// Fixed-height rows keep the list stable even when prompt content is huge.
+const MESSAGE_ROW_HEIGHT = 68
+const MESSAGE_PREVIEW_CAP = 220
 // Memory chunk previews are clipped to this many characters by default.
 const CHUNK_PREVIEW_CAP = 500
 
-interface MessageCardProps {
-  msg: DryRunMessage
-  index: number
-  expanded: boolean
-  onToggle: () => void
+function summarizeMessage(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '(empty message)'
+  return normalized.length > MESSAGE_PREVIEW_CAP
+    ? `${normalized.slice(0, MESSAGE_PREVIEW_CAP - 1)}…`
+    : normalized
 }
 
-function MessageCard({ msg, index, expanded, onToggle }: MessageCardProps) {
-  const needsToggle = msg.content.length > MESSAGE_EXPAND_THRESHOLD
+function countLines(content: string): number {
+  if (!content) return 0
+  return content.split(/\r\n|\r|\n/).length
+}
+
+interface MessageListItemProps {
+  msg: DryRunMessage
+  index: number
+  selected: boolean
+  onSelect: () => void
+}
+
+function MessageListItem({ msg, index, selected, onSelect }: MessageListItemProps) {
+  const preview = summarizeMessage(msg.content)
+  const lineCount = countLines(msg.content)
+
   return (
-    <div className={styles.messageCard}>
-      <div className={styles.messageHeader}>
+    <button
+      type="button"
+      className={clsx(styles.messageRow, selected && styles.messageRowActive)}
+      onClick={onSelect}
+    >
+      <div className={styles.messageRowHeader}>
         <Badge color={ROLE_COLOR[msg.role] ?? 'neutral'} size="sm" className={styles.roleBadge}>
           {msg.role}
         </Badge>
         <span className={styles.messageIndex}>#{index + 1}</span>
-        {needsToggle && (
-          <button type="button" className={styles.expandButton} onClick={onToggle}>
-            {expanded ? 'Show less' : 'Show full'}
-          </button>
-        )}
+        <span className={styles.messageMeta}>
+          {msg.content.length.toLocaleString()} chars
+          {lineCount > 0 && ` • ${lineCount.toLocaleString()} lines`}
+        </span>
       </div>
-      <div
-        className={clsx(
-          styles.messageContent,
-          needsToggle && !expanded && styles.messageContentClamped,
-        )}
-      >
-        {msg.content}
-      </div>
-    </div>
+      <div className={styles.messagePreview}>{preview}</div>
+    </button>
   )
 }
 
@@ -85,30 +97,19 @@ function ChunkPreview({ text }: ChunkPreviewProps) {
 
 interface VirtualizedMessagesProps {
   messages: DryRunMessage[]
+  selectedIndex: number
+  onSelect: (index: number) => void
 }
 
-function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
+function VirtualizedMessages({ messages, selectedIndex, onSelect }: VirtualizedMessagesProps) {
   const parentRef = useRef<HTMLDivElement>(null)
-  const [expandedSet, setExpandedSet] = useState<Set<number>>(() => new Set())
 
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 140,
-    overscan: 6,
+    estimateSize: () => MESSAGE_ROW_HEIGHT,
+    overscan: 10,
   })
-
-  const toggle = (idx: number) => {
-    setExpandedSet((prev) => {
-      const next = new Set(prev)
-      if (next.has(idx)) next.delete(idx)
-      else next.add(idx)
-      return next
-    })
-    // Expanded/collapsed cards have very different heights — kick the
-    // virtualizer to remeasure on the next frame after the DOM updates.
-    requestAnimationFrame(() => virtualizer.measure())
-  }
 
   return (
     <div ref={parentRef} className={styles.messagesScroll}>
@@ -124,8 +125,6 @@ function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
           return (
             <div
               key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={virtualizer.measureElement}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -135,11 +134,11 @@ function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
                 paddingBottom: 8,
               }}
             >
-              <MessageCard
+              <MessageListItem
                 msg={msg}
                 index={virtualRow.index}
-                expanded={expandedSet.has(virtualRow.index)}
-                onToggle={() => toggle(virtualRow.index)}
+                selected={selectedIndex === virtualRow.index}
+                onSelect={() => onSelect(virtualRow.index)}
               />
             </div>
           )
@@ -170,6 +169,19 @@ export default function DryRunModal() {
   )
   const [rawView, setRawView] = useState<'off' | RawPromptView>('off')
   const [copied, setCopied] = useState(false)
+  const [selectedMessageIndex, setSelectedMessageIndex] = useState(0)
+  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
+
+  useEffect(() => {
+    setSelectedMessageIndex((prev) => {
+      if (messages.length === 0) return 0
+      return Math.min(prev, messages.length - 1)
+    })
+  }, [messages.length])
+
+  useEffect(() => {
+    if (!messagesOpen) setMobileInspectorOpen(false)
+  }, [messagesOpen])
 
   const rawInput = useMemo(() => dryRunToRawPromptInput(modalProps), [modalProps])
   const rawText = useMemo(
@@ -213,6 +225,14 @@ export default function DryRunModal() {
     }
   }, [databankStats?.retrievalState])
 
+  const selectedMessage = messages[selectedMessageIndex] ?? null
+  const selectedMessageLineCount = selectedMessage ? countLines(selectedMessage.content) : 0
+
+  const handleSelectMessage = (index: number) => {
+    setSelectedMessageIndex(index)
+    setMobileInspectorOpen(true)
+  }
+
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(1100px, var(--lumiverse-content-max-width, 1100px)))" className={styles.modal}>
           {/* Header */}
@@ -250,8 +270,44 @@ export default function DryRunModal() {
                 )
               </button>
               {messagesOpen && messages.length > 0 && (
-                <div className={styles.messagesCollapsibleBody}>
-                  <VirtualizedMessages messages={messages} />
+                <div
+                  className={clsx(
+                    styles.messagesCollapsibleBody,
+                    mobileInspectorOpen && styles.messagesMobileInspectorVisible,
+                  )}
+                >
+                  <VirtualizedMessages
+                    messages={messages}
+                    selectedIndex={selectedMessageIndex}
+                    onSelect={handleSelectMessage}
+                  />
+                  <div className={styles.messageInspector}>
+                    {selectedMessage && (
+                      <>
+                        <div className={styles.messageInspectorHeader}>
+                          <div className={styles.messageInspectorTitleRow}>
+                            <button
+                              type="button"
+                              className={styles.mobileBackButton}
+                              onClick={() => setMobileInspectorOpen(false)}
+                            >
+                              <ChevronLeft size={14} />
+                              Messages
+                            </button>
+                            <Badge color={ROLE_COLOR[selectedMessage.role] ?? 'neutral'} size="sm" className={styles.roleBadge}>
+                              {selectedMessage.role}
+                            </Badge>
+                            <span className={styles.messageIndex}>#{selectedMessageIndex + 1}</span>
+                          </div>
+                          <span className={styles.messageInspectorMeta}>
+                            {selectedMessage.content.length.toLocaleString()} chars
+                            {selectedMessageLineCount > 0 && ` • ${selectedMessageLineCount.toLocaleString()} lines`}
+                          </span>
+                        </div>
+                        <pre className={styles.messageInspectorContent}>{selectedMessage.content}</pre>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

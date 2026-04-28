@@ -2752,7 +2752,10 @@ async function runGeneration(
               lifecycle.chatHistoryMessages,
             );
             const breakdownPayload = {
-              entries: tokenResult.breakdown,
+              entries: tokenResult.breakdown.map((entry, index) => ({
+                ...entry,
+                content: lifecycle.breakdown?.[index]?.content,
+              })),
               totalTokens: tokenResult.total_tokens,
               maxContext: lifecycle.maxContext || 0,
               model: lifecycle.model,
