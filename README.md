@@ -52,7 +52,7 @@ bun run start
 
 You can run Lumiverse for free on [Hugging Face Spaces](https://huggingface.co/spaces) using a Docker Space.
 
-> **Free-tier limits:** Spaces on the free tier run on 2 vCPU / 16 GB RAM with no GPU. The container sleeps after a period of inactivity and cold-starts on the next visit (typically 30–60 s). Persistent storage requires a paid storage bucket ($0.05/GB-month), but you can omit it for a stateless demo. For always-on, full-speed inference consider a paid Space or a dedicated server.
+> **Free-tier limits:** Spaces on the free tier run on 2 vCPU / 16 GB RAM with no GPU. The container sleeps after **48 hours of inactivity** and cold-starts on the next visit (typically 30–60 s). Persistent storage buckets are **free** and keep your data across restarts — attach one in **Settings → Persistent storage**. For always-on, full-speed inference consider a paid Space or a dedicated server.
 
 #### 1. Create a new Space
 
@@ -62,7 +62,7 @@ You can run Lumiverse for free on [Hugging Face Spaces](https://huggingface.co/s
 
 #### 2. Add persistent storage
 
-In your Space's **Settings → Persistent storage**, attach a storage bucket and mount it at `/app/data`. This keeps your chats, characters, and credentials across container restarts.
+In your Space's **Settings → Persistent storage**, attach a storage bucket and mount it at `/app/data`.
 
 #### 3. Add the Dockerfile
 
