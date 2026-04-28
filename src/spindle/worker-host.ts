@@ -68,9 +68,11 @@ import * as promptAssemblySvc from "../services/prompt-assembly.service";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as tokenizerSvc from "../services/tokenizer.service";
 import * as imageGenConnSvc from "../services/image-gen-connections.service";
+import { spawnAsync } from "./spawn-async";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import "../image-gen/index";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
+import { createRuntimeTransport, type RuntimeTransport } from "./runtime-transport";
 import { getTextContent, type LlmMessage } from "../llm/types";
 import { getDb } from "../db/connection";
 import {
@@ -413,7 +415,7 @@ export class WorkerHost {
     "--lumiverse-transition",
     "--lumiverse-transition-fast",
   ]);
-  private worker: Worker | null = null;
+  private runtime: RuntimeTransport | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
     string,
@@ -440,6 +442,8 @@ export class WorkerHost {
   private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
   private onWorkerReady: (() => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
+  private runtimeStopping = false;
+  private runtimeStatsInterval: ReturnType<typeof setInterval> | null = null;
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
 
@@ -481,6 +485,79 @@ export class WorkerHost {
     return managerSvc.getStoragePath(identifier);
   }
 
+  private getRuntimeSampleIntervalMs(): number {
+    if (!this.isRuntimeStatsEnabled()) return 0;
+    const raw = process.env.LUMIVERSE_SPINDLE_RUNTIME_SAMPLE_INTERVAL_MS?.trim();
+    if (!raw) return 30_000;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  private isRuntimeStatsEnabled(): boolean {
+    const raw = process.env.LUMIVERSE_SPINDLE_RUNTIME_STATS?.trim().toLowerCase();
+    return raw === "1" || raw === "true" || raw === "yes";
+  }
+
+  private async sampleRuntimeRssKb(): Promise<number | null> {
+    const pid = this.runtime?.pid;
+    if (!pid || pid <= 0) return null;
+
+    const sampled = await spawnAsync(["ps", "-o", "rss=", "-p", String(pid)], {
+      timeoutMs: 1_500,
+      ignoreStdout: false,
+    });
+    if (sampled.exitCode !== 0) return null;
+
+    const rssKb = parseInt(sampled.stdout.trim(), 10);
+    return Number.isFinite(rssKb) && rssKb > 0 ? rssKb : null;
+  }
+
+  private async emitRuntimeStats(phase: "startup" | "sample" | "shutdown", startupMs?: number): Promise<void> {
+    if (!this.isRuntimeStatsEnabled()) return;
+
+    const runtimeMode = this.runtime?.mode ?? "worker";
+    const pid = this.runtime?.pid ?? null;
+    const rssKb = runtimeMode === "worker" ? null : await this.sampleRuntimeRssKb();
+    const payload = {
+      extensionId: this.extensionId,
+      identifier: this.manifest.identifier,
+      name: this.manifest.name,
+      runtimeMode,
+      phase,
+      pid,
+      rssKb,
+      ...(typeof startupMs === "number" ? { startupMs } : {}),
+    };
+
+    eventBus.emit(EventType.SPINDLE_RUNTIME_STATS, payload);
+
+    const parts = [
+      `mode=${runtimeMode}`,
+      `phase=${phase}`,
+      ...(pid ? [`pid=${pid}`] : []),
+      ...(typeof startupMs === "number" ? [`startupMs=${startupMs.toFixed(2)}`] : []),
+      ...(typeof rssKb === "number" ? [`rssKb=${rssKb}`] : []),
+    ];
+    console.info(`[Spindle:${this.manifest.identifier}] Runtime stats ${parts.join(" ")}`);
+  }
+
+  private startRuntimeStatsSampling(): void {
+    if (!this.runtime || this.runtime.mode === "worker") return;
+    const intervalMs = this.getRuntimeSampleIntervalMs();
+    if (intervalMs <= 0) return;
+
+    this.stopRuntimeStatsSampling();
+    this.runtimeStatsInterval = setInterval(() => {
+      void this.emitRuntimeStats("sample");
+    }, intervalMs);
+  }
+
+  private stopRuntimeStatsSampling(): void {
+    if (!this.runtimeStatsInterval) return;
+    clearInterval(this.runtimeStatsInterval);
+    this.runtimeStatsInterval = null;
+  }
+
   async start(): Promise<void> {
     const entryPath = await managerSvc.getBackendEntryPath(this.manifest.identifier);
     if (!entryPath) {
@@ -491,9 +568,50 @@ export class WorkerHost {
     }
 
     const runtimePath = join(import.meta.dir, "worker-runtime.ts");
+    const storagePath = this.getStorageRootPath(this.manifest.identifier);
+    const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
+    this.runtimeStopping = false;
+    const startTime = performance.now();
 
-    this.worker = new Worker(runtimePath, {
-      type: "module",
+    this.runtime = createRuntimeTransport({
+      runtimePath,
+      extensionIdentifier: this.manifest.identifier,
+      repoPath,
+      storagePath,
+      onMessage: (message) => {
+        this.handleMessage(message as RuntimeWorkerToHost);
+      },
+      onError: (message) => {
+        console.error(
+          `[Spindle:${this.manifest.identifier}] Worker error:`,
+          message
+        );
+        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+          extensionId: this.extensionId,
+          identifier: this.manifest.identifier,
+          error: message,
+        });
+
+        try {
+          this.runtime?.postMessage({ type: "ping" } as any);
+        } catch {
+          console.warn(
+            `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
+          );
+          this.cleanup();
+        }
+      },
+      onExit: (exitCode, signalCode, error) => {
+        if (this.runtimeStopping) return;
+        const details = error?.message || `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
+        console.error(`[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`, details);
+        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+          extensionId: this.extensionId,
+          identifier: this.manifest.identifier,
+          error: details,
+        });
+        this.cleanup();
+      },
     });
 
     // Wait for the worker to finish loading the extension and registering
@@ -513,36 +631,7 @@ export class WorkerHost {
       };
     });
 
-    this.worker.onmessage = (event) => {
-      this.handleMessage(event.data as RuntimeWorkerToHost);
-    };
-
-    this.worker.onerror = (event) => {
-      console.error(
-        `[Spindle:${this.manifest.identifier}] Worker error:`,
-        event.message
-      );
-      eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-        extensionId: this.extensionId,
-        identifier: this.manifest.identifier,
-        error: event.message,
-      });
-
-      // Detect fatal worker crash: try a no-op postMessage to see if the
-      // worker is still alive. If it throws, the worker is dead — clean up
-      // registered macros/interceptors so they don't silently fail forever.
-      try {
-        this.worker?.postMessage({ type: "ping" } as any);
-      } catch {
-        console.warn(
-          `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
-        );
-        this.cleanup();
-      }
-    };
-
     // Send init message with the extension's backend entry path
-    const storagePath = this.getStorageRootPath(this.manifest.identifier);
     this.postToWorker({
       type: "init",
       manifest: { ...this.manifest, entry_backend: entryPath },
@@ -550,10 +639,14 @@ export class WorkerHost {
     });
 
     await readyPromise;
+    await this.emitRuntimeStats("startup", performance.now() - startTime);
+    this.startRuntimeStatsSampling();
   }
 
   async stop(): Promise<void> {
-    if (!this.worker) return;
+    if (!this.runtime) return;
+    this.runtimeStopping = true;
+    this.stopRuntimeStatsSampling();
 
     // Wait for the worker to acknowledge shutdown (posted right before
     // process.exit(0) in worker-runtime.ts) — or fall back to terminate()
@@ -575,7 +668,7 @@ export class WorkerHost {
       const timer = setTimeout(() => {
         // Fallback: worker never acknowledged. Force-terminate.
         try {
-          this.worker?.terminate();
+          this.runtime?.terminate();
         } catch {
           // ignore — terminate is best-effort
         }
@@ -592,10 +685,13 @@ export class WorkerHost {
       }
     });
 
+    await this.emitRuntimeStats("shutdown");
+
     this.cleanup();
   }
 
   private cleanup(): void {
+    this.stopRuntimeStatsSampling();
     // Unsubscribe from all events
     for (const unsub of this.eventUnsubscribers.values()) {
       unsub();
@@ -656,11 +752,25 @@ export class WorkerHost {
     }
     this.generationAbortControllers.clear();
 
-    this.worker = null;
+    this.runtime = null;
+    this.runtimeStopping = false;
+  }
+
+  private handleRuntimeTransportFailure(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[Spindle:${this.manifest.identifier}] Runtime transport failed, cleaning up: ${message}`
+    );
+    this.cleanup();
   }
 
   private postToWorker(msg: RuntimeHostToWorker): void {
-    this.worker?.postMessage(msg);
+    if (!this.runtime) return;
+    try {
+      this.runtime.postMessage(msg);
+    } catch (error) {
+      this.handleRuntimeTransportFailure(error);
+    }
   }
 
   sendFrontendMessage(payload: unknown, userId: string): void {
@@ -1517,7 +1627,7 @@ export class WorkerHost {
       handler: async (ctx) => {
         // Bail immediately if the worker is not running — avoids a 5s timeout
         // that would stall prompt assembly for every extension macro.
-        if (!this.worker) {
+        if (!this.runtime) {
           console.debug("[Spindle:%s] Macro '%s' skipped: worker not running", this.manifest.identifier, macroName);
           return "";
         }
@@ -1614,7 +1724,7 @@ export class WorkerHost {
             console.warn("[Spindle:%s] Macro '%s' postToWorker failed: %s", this.manifest.identifier, macroName, err);
             // postMessage failure means the worker is dead — clean up to
             // prevent all subsequent extension macros from timing out (5s each).
-            if (this.worker) {
+            if (this.runtime) {
               console.warn("[Spindle:%s] Worker appears dead, cleaning up registrations", this.manifest.identifier);
               this.cleanup();
             }
@@ -5783,7 +5893,7 @@ export class WorkerHost {
 
   /** Called by the WS handler when the frontend invokes a command. */
   invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string): void {
-    if (!this.worker) return;
+    if (!this.runtime) return;
     if (!this.registeredCommands.some((c) => c.id === commandId)) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Command "${commandId}" not registered`,

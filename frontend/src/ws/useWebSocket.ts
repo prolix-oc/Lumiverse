@@ -710,7 +710,8 @@ export function useWebSocket() {
           syncExtensions(true)
           const ext = useStore.getState().extensions.find((e) => e.id === payload.extensionId)
           if (ext?.enabled && ext?.has_frontend) {
-            spindleApi.getManifest(payload.extensionId)
+            spindleApi.clearManifestCache(payload.extensionId)
+            spindleApi.getManifest(payload.extensionId, { force: true })
               .then((manifest) => loadFrontendExtension(payload.extensionId!, manifest, true))
               .catch((err) => console.error('[Spindle] Failed to reload frontend after update:', err))
           }
@@ -725,6 +726,19 @@ export function useWebSocket() {
           currentExtensionId: payload.currentExtensionId,
           currentName: payload.currentName,
         })
+      }),
+
+      wsClient.on(EventType.SPINDLE_RUNTIME_STATS, (payload: {
+        extensionId: string
+        identifier: string
+        name: string
+        runtimeMode: 'worker' | 'process' | 'sandbox'
+        phase: 'startup' | 'sample' | 'shutdown'
+        pid: number | null
+        rssKb: number | null
+        startupMs?: number
+      }) => {
+        console.info('[Spindle] Runtime stats:', payload)
       }),
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {

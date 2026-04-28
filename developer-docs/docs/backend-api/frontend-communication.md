@@ -1,6 +1,6 @@
 # Backend-to-Frontend Communication
 
-Send arbitrary messages between your backend worker and frontend module.
+Send arbitrary messages between your backend runtime and frontend module.
 
 ## Sending to Frontend
 

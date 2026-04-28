@@ -19,6 +19,7 @@ nav = [
     { "Quick Start" = "getting-started/quick-start.md" },
     { "Manifest" = "getting-started/manifest.md" },
     { "Permissions" = "getting-started/permissions.md" },
+    { "Runtime Modes" = "getting-started/runtime.md" },
     { "TypeScript Setup" = "getting-started/typescript-setup.md" },
   ] },
   { "Backend API" = [

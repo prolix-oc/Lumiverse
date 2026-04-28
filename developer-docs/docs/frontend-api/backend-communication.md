@@ -2,7 +2,7 @@
 
 ## `ctx.sendToBackend(payload)`
 
-Send a message to your backend worker.
+Send a message to your backend runtime.
 
 ```ts
 ctx.sendToBackend({ type: 'fetch_data', query: 'hello' })
@@ -10,7 +10,7 @@ ctx.sendToBackend({ type: 'fetch_data', query: 'hello' })
 
 ## `ctx.onBackendMessage(handler)`
 
-Receive messages from your backend worker.
+Receive messages from your backend runtime.
 
 ```ts
 const unsub = ctx.onBackendMessage((payload) => {
@@ -19,3 +19,5 @@ const unsub = ctx.onBackendMessage((payload) => {
 ```
 
 Messages are JSON-serializable objects. A common pattern is to use a `type` field for routing on both sides.
+
+The transport is runtime-mode independent: `process`, `sandbox`, and `worker` all use the same extension messaging API.

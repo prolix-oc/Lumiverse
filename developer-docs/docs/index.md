@@ -1,14 +1,17 @@
 # Spindle Extension Developer Guide
 
-Build extensions for Lumiverse using Spindle — an isolated extension system with backend workers, safe DOM injection, and a tiered permission model.
+Build extensions for Lumiverse using Spindle — an isolated extension system with backend runtimes, safe DOM injection, and a tiered permission model.
 
 ---
 
+!!! note "Runtime rollout update"
+    Backend extensions now default to `process` mode instead of the legacy `worker` mode. The extension API is unchanged, but backend execution now runs in a separate Bun subprocess by default. See [Runtime Modes](getting-started/runtime.md) for details, platform behavior, and opt-in runtime instrumentation.
+
 ## What is Spindle?
 
-Spindle is Lumiverse's extension framework. It lets you add custom functionality to Lumiverse through isolated modules that run in backend workers and/or in the browser.
+Spindle is Lumiverse's extension framework. It lets you add custom functionality to Lumiverse through isolated modules that run in backend runtimes and/or in the browser.
 
-**Backend modules** run in isolated Bun worker threads with access to the `spindle` global API — events, storage, LLM generation, macros, and more.
+**Backend modules** run in isolated runtimes with access to the `spindle` global API — events, storage, LLM generation, macros, and more. Depending on server configuration, that runtime may be a Bun subprocess, a sandboxed subprocess, or a legacy worker thread.
 
 **Frontend modules** run in the browser with a sandboxed context for DOM injection, event handling, and backend communication. All HTML is sanitized through DOMPurify.
 
@@ -30,6 +33,7 @@ Spindle is Lumiverse's extension framework. It lets you add custom functionality
 - [Quick Start](getting-started/quick-start.md) — get your first extension running
 - [Manifest Reference](getting-started/manifest.md) — configure `spindle.json`
 - [Permissions](getting-started/permissions.md) — understand the permission model
+- [Runtime Modes](getting-started/runtime.md) — understand `process`, `sandbox`, and `worker`
 - [Backend API](backend-api/index.md) — the `spindle` global reference
 - [Frontend API](frontend-api/index.md) — the `ctx` context reference
 - [Examples](examples/index.md) — complete working extensions

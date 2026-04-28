@@ -27,6 +27,63 @@ function isManagedPermission(permission: string): permission is ManagedSpindlePe
   return permission === "databanks" || isValidPermission(permission);
 }
 
+type BackendSafetyCheck = {
+  label: string;
+  regex: RegExp;
+};
+
+const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
+  {
+    label: "filesystem module access",
+    regex: /(?:from\s*["'`](?:node:)?fs(?:\/promises)?["'`]|require\s*\(\s*["'`](?:node:)?fs(?:\/promises)?["'`]\s*\)|import\s*\(\s*["'`](?:node:)?fs(?:\/promises)?["'`]\s*\))/,
+  },
+  {
+    label: "subprocess module access",
+    regex: /(?:from\s*["'`](?:node:)?child_process["'`]|require\s*\(\s*["'`](?:node:)?child_process["'`]\s*\)|import\s*\(\s*["'`](?:node:)?child_process["'`]\s*\))/,
+  },
+  {
+    label: "direct socket module access",
+    regex: /(?:from\s*["'`](?:node:)?(?:net|tls|dgram|http|https)["'`]|require\s*\(\s*["'`](?:node:)?(?:net|tls|dgram|http|https)["'`]\s*\)|import\s*\(\s*["'`](?:node:)?(?:net|tls|dgram|http|https)["'`]\s*\))/,
+  },
+  {
+    label: "worker or cluster module access",
+    regex: /(?:from\s*["'`](?:node:)?(?:worker_threads|cluster)["'`]|require\s*\(\s*["'`](?:node:)?(?:worker_threads|cluster)["'`]\s*\)|import\s*\(\s*["'`](?:node:)?(?:worker_threads|cluster)["'`]\s*\))/,
+  },
+  {
+    label: "direct SQLite module access",
+    regex: /(?:from\s*["'`](?:bun:sqlite|node:sqlite)["'`]|require\s*\(\s*["'`](?:bun:sqlite|node:sqlite)["'`]\s*\)|import\s*\(\s*["'`](?:bun:sqlite|node:sqlite)["'`]\s*\))/,
+  },
+  {
+    label: "dangerous Bun system API usage",
+    regex: /\bBun\.(?:file|write|spawn|spawnSync|serve|connect|listen)\b/,
+  },
+  {
+    label: "dangerous process API usage",
+    regex: /\bprocess\.(?:env|exit|kill|chdir|dlopen)\b/,
+  },
+];
+
+export function detectDangerousBackendCapabilities(content: string): string[] {
+  const hits = new Set<string>();
+  for (const check of DANGEROUS_BACKEND_CHECKS) {
+    if (check.regex.test(content)) {
+      hits.add(check.label);
+    }
+  }
+  return [...hits];
+}
+
+async function assertSafeBackendBundle(identifier: string, backendPath: string): Promise<void> {
+  if (!(await Bun.file(backendPath).exists())) return;
+
+  const blocked = detectDangerousBackendCapabilities(await Bun.file(backendPath).text());
+  if (blocked.length === 0) return;
+
+  throw new Error(
+    `Extension "${identifier}" uses blocked backend capabilities: ${blocked.join(", ")}`
+  );
+}
+
 /**
  * Parse a stored JSON array column safely. A corrupted `permissions` row used
  * to crash extension load/sync; treat the row as having no permissions instead
@@ -405,7 +462,7 @@ function applyStorageSeeds(identifier: string, manifest: SpindleManifest): void 
  * Build a command array for running `bun <args>`.
  * Mirrors start.sh's `_bun()` wrapper.
  */
-function bunCmd(...args: string[]): string[] {
+export function bunCmd(...args: string[]): string[] {
   const method = process.env.LUMIVERSE_BUN_METHOD;
   const bunPath = process.env.LUMIVERSE_BUN_PATH;
 
@@ -474,6 +531,8 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   const backendEntry = manifest.entry_backend || "dist/backend.js";
   const frontendEntry = manifest.entry_frontend || "dist/frontend.js";
+  const backendOut = resolveWithin(repo, backendEntry, "entry_backend");
+  const frontendOut = resolveWithin(repo, frontendEntry, "entry_frontend");
 
   // Always install dependencies first if package.json exists
   const pkgJson = join(repo, "package.json");
@@ -489,6 +548,7 @@ export async function buildExtension(identifier: string): Promise<void> {
   if (existsSync(distDir)) {
     const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
     if (lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0) {
+      await assertSafeBackendBundle(identifier, backendOut);
       return;
     }
   }
@@ -498,8 +558,6 @@ export async function buildExtension(identifier: string): Promise<void> {
   if (!existsSync(srcDir)) return;
 
   const buildDistDir = join(repo, "dist");
-  const backendOut = resolveWithin(repo, backendEntry, "entry_backend");
-  const frontendOut = resolveWithin(repo, frontendEntry, "entry_frontend");
 
   mkdirSync(buildDistDir, { recursive: true });
 
@@ -530,6 +588,8 @@ export async function buildExtension(identifier: string): Promise<void> {
       throw new Error(`Frontend build failed: ${proc.stderr}`);
     }
   }
+
+  await assertSafeBackendBundle(identifier, backendOut);
 }
 
 // ─── Install ─────────────────────────────────────────────────────────────
@@ -953,13 +1013,19 @@ export async function getBackendEntryPath(identifier: string): Promise<string | 
   const entry = manifest.entry_backend || "dist/backend.js";
   const repo = repoDir(identifier);
   const entryPath = resolveWithin(repo, entry, "entry_backend");
-  return (await Bun.file(entryPath).exists()) ? entryPath : null;
+  if (!(await Bun.file(entryPath).exists())) return null;
+  await assertSafeBackendBundle(identifier, entryPath);
+  return entryPath;
 }
 
 export function getStoragePath(identifier: string): string {
   const dir = storageDir(identifier);
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+export function getRepoPath(identifier: string): string {
+  return repoDir(identifier);
 }
 
 export function getStoragePathForExtension(extension: ExtensionInfo): string {

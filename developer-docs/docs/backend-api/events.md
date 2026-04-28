@@ -160,6 +160,7 @@ No `action` discriminator is provided — if you need add/update/delete/navigate
 | `SPINDLE_EXTENSION_LOADED` | `{ extensionId }` |
 | `SPINDLE_EXTENSION_UNLOADED` | `{ extensionId }` |
 | `SPINDLE_EXTENSION_ERROR` | `{ extensionId, error }` |
+| `SPINDLE_RUNTIME_STATS` | `{ extensionId, identifier, name, runtimeMode, phase, pid, rssKb, startupMs? }` — emitted only when `LUMIVERSE_SPINDLE_RUNTIME_STATS` is enabled |
 
 ### Permissions
 

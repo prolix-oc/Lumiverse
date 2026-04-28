@@ -58,11 +58,15 @@ async function doLoadFrontendExtension(
   const bundleUrl = `/api/v1/spindle/${extensionId}/frontend`
 
   try {
-    const response = await fetch(bundleUrl)
+    const responsePromise = fetch(bundleUrl)
+    const permissionsPromise = spindleApi.getPermissions(extensionId)
+      .then((permRes) => permRes.granted)
+      .catch(() => [] as string[])
+
+    const response = await responsePromise
     if (!response.ok) return // No frontend bundle
 
-    const code = await response.text()
-    const blob = new Blob([code], { type: 'application/javascript' })
+    const blob = await response.blob()
     const blobUrl = URL.createObjectURL(blob)
 
     const mod: SpindleFrontendModule = await import(/* @vite-ignore */ blobUrl)
@@ -85,13 +89,7 @@ async function doLoadFrontendExtension(
     const mountRoots = new Map<string, Element>()
 
     // Cache granted permissions for synchronous permission checks in ui methods
-    let cachedGrantedPermissions: string[] = []
-    try {
-      const permRes = await spindleApi.getPermissions(extensionId)
-      cachedGrantedPermissions = permRes.granted
-    } catch {
-      // If we can't fetch permissions, default to empty (most restrictive)
-    }
+    let cachedGrantedPermissions: string[] = await permissionsPromise
     const mountedPoints = new Set<string>()
     let openModalCount = 0
 

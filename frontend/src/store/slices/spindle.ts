@@ -43,16 +43,18 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       const { extensions, isPrivileged } = await spindleApi.list()
       set({ extensions, spindlePrivileged: isPrivileged })
 
-      await Promise.all(
-        extensions.map(async (ext) => {
-          if (ext.enabled && ext.has_frontend) {
-            const manifest = await spindleApi.getManifest(ext.id)
-            await loadFrontendExtension(ext.id, manifest)
-          } else {
-            await unloadFrontendExtension(ext.id)
-          }
-        })
-      )
+      queueMicrotask(() => {
+        void Promise.allSettled(
+          extensions.map(async (ext) => {
+            if (ext.enabled && ext.has_frontend) {
+              const manifest = await spindleApi.getManifest(ext.id)
+              await loadFrontendExtension(ext.id, manifest)
+            } else {
+              await unloadFrontendExtension(ext.id)
+            }
+          })
+        )
+      })
     } catch (err) {
       console.error('[Spindle] Failed to load extensions:', err)
     }
@@ -65,28 +67,31 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
 
   updateExtension: async (id: string) => {
     const updated = await spindleApi.update(id)
+    spindleApi.clearManifestCache(id)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))
     if (updated.enabled && updated.has_frontend) {
-      const manifest = await spindleApi.getManifest(id)
+      const manifest = await spindleApi.getManifest(id, { force: true })
       await loadFrontendExtension(id, manifest, true)
     }
   },
 
   switchBranch: async (id: string, branch: string) => {
     const updated = await spindleApi.switchBranch(id, branch)
+    spindleApi.clearManifestCache(id)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))
     if (updated.enabled && updated.has_frontend) {
-      const manifest = await spindleApi.getManifest(id)
+      const manifest = await spindleApi.getManifest(id, { force: true })
       await loadFrontendExtension(id, manifest, true)
     }
   },
 
   removeExtension: async (id: string) => {
     await spindleApi.remove(id)
+    spindleApi.clearManifestCache(id)
     await unloadFrontendExtension(id)
     set((state) => {
       const { [id]: _o, ...overridesRest } = state.extensionThemeOverrides
@@ -102,14 +107,20 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
 
   enableExtension: async (id: string) => {
     await spindleApi.enable(id)
-
-    const manifest = await spindleApi.getManifest(id)
-    await loadFrontendExtension(id, manifest)
     set((state) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, enabled: true, status: 'running' as const } : e
       ),
     }))
+
+    const ext = get().extensions.find((e) => e.id === id)
+    if (ext?.has_frontend) {
+      queueMicrotask(() => {
+        void spindleApi.getManifest(id)
+          .then((manifest) => loadFrontendExtension(id, manifest))
+          .catch((err) => console.error('[Spindle] Failed to load frontend after enable:', err))
+      })
+    }
   },
 
   disableExtension: async (id: string) => {
@@ -125,7 +136,8 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   restartExtension: async (id: string) => {
     await unloadFrontendExtension(id)
     await spindleApi.restart(id)
-    const manifest = await spindleApi.getManifest(id)
+    spindleApi.clearManifestCache(id)
+    const manifest = await spindleApi.getManifest(id, { force: true })
     await loadFrontendExtension(id, manifest)
   },
 

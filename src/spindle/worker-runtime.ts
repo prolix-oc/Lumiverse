@@ -256,6 +256,10 @@ const macroInvocationStack: MacroInvocationState[] = [];
 // ─── Messaging ───────────────────────────────────────────────────────────
 
 function post(msg: RuntimeWorkerToHost): void {
+  if (typeof process.send === "function") {
+    process.send(msg);
+    return;
+  }
   self.postMessage(msg);
 }
 
@@ -1997,8 +2001,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
 // ─── Message handler (host → worker) ─────────────────────────────────────
 
-self.onmessage = async (event: MessageEvent<RuntimeHostToWorker>) => {
-  const msg = event.data;
+async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
   switch (msg.type) {
     case "init": {
@@ -2409,4 +2412,14 @@ self.onmessage = async (event: MessageEvent<RuntimeHostToWorker>) => {
       break;
     }
   }
-};
+}
+
+if (typeof process.send === "function") {
+  process.on("message", (message) => {
+    void handleHostMessage(message as RuntimeHostToWorker);
+  });
+} else {
+  self.onmessage = (event: MessageEvent<RuntimeHostToWorker>) => {
+    void handleHostMessage(event.data);
+  };
+}
