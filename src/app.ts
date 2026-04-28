@@ -248,12 +248,15 @@ app.use("*", async (c, next) => {
 // BetterAuth handler — BEFORE auth middleware
 // Rewrite the request URL to use the actual Host header so BetterAuth
 // constructs the correct redirect URLs and cookie domains when accessed via
-// a LAN IP instead of localhost
+// a LAN IP instead of localhost. Respect X-Forwarded-Proto/Host from reverse
+// proxies (Cloudflare, nginx, HuggingFace Spaces) so BetterAuth generates
+// https:// callback URLs when served behind TLS termination.
 app.on(["POST", "GET"], "/api/auth/*", (c) => {
-  const host = c.req.header("host");
+  const host = c.req.header("x-forwarded-host") || c.req.header("host");
+  const proto = c.req.header("x-forwarded-proto") || "http";
   if (host) {
     const url = new URL(c.req.url);
-    const rewritten = new URL(url.pathname + url.search, `http://${host}`);
+    const rewritten = new URL(url.pathname + url.search, `${proto}://${host}`);
     return auth.handler(new Request(rewritten.toString(), c.req.raw));
   }
   return auth.handler(c.req.raw);
