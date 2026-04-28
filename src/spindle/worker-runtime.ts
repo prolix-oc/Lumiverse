@@ -26,6 +26,12 @@ import type {
   WorldBookEntryDTO,
   WorldBookEntryCreateDTO,
   WorldBookEntryUpdateDTO,
+  DatabankDTO,
+  DatabankCreateDTO,
+  DatabankUpdateDTO,
+  DatabankDocumentDTO,
+  DatabankDocumentCreateDTO,
+  DatabankDocumentUpdateDTO,
   PersonaDTO,
   PersonaCreateDTO,
   PersonaUpdateDTO,
@@ -87,6 +93,45 @@ type RuntimeWorkerToHost =
       modelSource?: TokenModelSource;
       userId?: string;
     }
+  | {
+      type: "databanks_list";
+      requestId: string;
+      limit?: number;
+      offset?: number;
+      scope?: "global" | "character" | "chat";
+      scopeId?: string | null;
+      userId?: string;
+    }
+  | { type: "databanks_get"; requestId: string; databankId: string; userId?: string }
+  | { type: "databanks_create"; requestId: string; input: DatabankCreateDTO; userId?: string }
+  | { type: "databanks_update"; requestId: string; databankId: string; input: DatabankUpdateDTO; userId?: string }
+  | { type: "databanks_delete"; requestId: string; databankId: string; userId?: string }
+  | {
+      type: "databank_documents_list";
+      requestId: string;
+      databankId: string;
+      limit?: number;
+      offset?: number;
+      userId?: string;
+    }
+  | { type: "databank_documents_get"; requestId: string; documentId: string; userId?: string }
+  | {
+      type: "databank_documents_create";
+      requestId: string;
+      databankId: string;
+      input: DatabankDocumentCreateDTO;
+      userId?: string;
+    }
+  | {
+      type: "databank_documents_update";
+      requestId: string;
+      documentId: string;
+      input: DatabankDocumentUpdateDTO;
+      userId?: string;
+    }
+  | { type: "databank_documents_delete"; requestId: string; documentId: string; userId?: string }
+  | { type: "databank_documents_get_content"; requestId: string; documentId: string; userId?: string }
+  | { type: "databank_documents_reprocess"; requestId: string; documentId: string; userId?: string }
   | { type: "register_message_content_processor"; priority?: number }
   | {
       type: "message_content_processor_result";
@@ -1458,6 +1503,99 @@ const spindleApi: RuntimeSpindleAPI = {
         userId,
       });
       return result as import("lumiverse-spindle-types").ActivatedWorldInfoEntryDTO[];
+    },
+  },
+
+  databanks: {
+    async list(options?: {
+      limit?: number;
+      offset?: number;
+      scope?: "global" | "character" | "chat";
+      scopeId?: string | null;
+      userId?: string;
+    }): Promise<{ data: DatabankDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "databanks_list",
+        requestId,
+        limit: options?.limit,
+        offset: options?.offset,
+        scope: options?.scope,
+        scopeId: options?.scopeId,
+        userId: options?.userId,
+      });
+      return result as { data: DatabankDTO[]; total: number };
+    },
+    async get(databankId: string, userId?: string): Promise<DatabankDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "databanks_get", requestId, databankId, userId });
+      return result as DatabankDTO | null;
+    },
+    async create(input: DatabankCreateDTO, userId?: string): Promise<DatabankDTO> {
+      assertMutationAllowed("spindle.databanks.create()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "databanks_create", requestId, input, userId });
+      return result as DatabankDTO;
+    },
+    async update(databankId: string, input: DatabankUpdateDTO, userId?: string): Promise<DatabankDTO> {
+      assertMutationAllowed("spindle.databanks.update()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "databanks_update", requestId, databankId, input, userId });
+      return result as DatabankDTO;
+    },
+    async delete(databankId: string, userId?: string): Promise<boolean> {
+      assertMutationAllowed("spindle.databanks.delete()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "databanks_delete", requestId, databankId, userId });
+      return result as boolean;
+    },
+    documents: {
+      async list(databankId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: DatabankDocumentDTO[]; total: number }> {
+        const requestId = crypto.randomUUID();
+        const result = await request({
+          type: "databank_documents_list",
+          requestId,
+          databankId,
+          limit: options?.limit,
+          offset: options?.offset,
+          userId: options?.userId,
+        });
+        return result as { data: DatabankDocumentDTO[]; total: number };
+      },
+      async get(documentId: string, userId?: string): Promise<DatabankDocumentDTO | null> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "databank_documents_get", requestId, documentId, userId });
+        return result as DatabankDocumentDTO | null;
+      },
+      async create(databankId: string, input: DatabankDocumentCreateDTO, userId?: string): Promise<DatabankDocumentDTO> {
+        assertMutationAllowed("spindle.databanks.documents.create()");
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "databank_documents_create", requestId, databankId, input, userId });
+        return result as DatabankDocumentDTO;
+      },
+      async update(documentId: string, input: DatabankDocumentUpdateDTO, userId?: string): Promise<DatabankDocumentDTO> {
+        assertMutationAllowed("spindle.databanks.documents.update()");
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "databank_documents_update", requestId, documentId, input, userId });
+        return result as DatabankDocumentDTO;
+      },
+      async delete(documentId: string, userId?: string): Promise<boolean> {
+        assertMutationAllowed("spindle.databanks.documents.delete()");
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "databank_documents_delete", requestId, documentId, userId });
+        return result as boolean;
+      },
+      async getContent(documentId: string, userId?: string): Promise<{ content: string } | null> {
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "databank_documents_get_content", requestId, documentId, userId });
+        return result as { content: string } | null;
+      },
+      async reprocess(documentId: string, userId?: string): Promise<{ success: true; status: "processing" }> {
+        assertMutationAllowed("spindle.databanks.documents.reprocess()");
+        const requestId = crypto.randomUUID();
+        const result = await request({ type: "databank_documents_reprocess", requestId, documentId, userId });
+        return result as { success: true; status: "processing" };
+      },
     },
   },
 

@@ -21,6 +21,11 @@ import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync } from "./spawn-async";
 
 export type InstallScope = "operator" | "user";
+type ManagedSpindlePermission = SpindlePermission | "databanks";
+
+function isManagedPermission(permission: string): permission is ManagedSpindlePermission {
+  return permission === "databanks" || isValidPermission(permission);
+}
 
 /**
  * Parse a stored JSON array column safely. A corrupted `permissions` row used
@@ -212,6 +217,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "characters",
   "chats",
   "world_books",
+  "databanks",
   "personas",
   "push_notification",
   "image_gen",
@@ -794,7 +800,7 @@ export function grantPermission(
   identifier: string,
   permission: string
 ): void {
-  if (!isValidPermission(permission)) {
+  if (!isManagedPermission(permission)) {
     throw new Error(`Invalid permission: ${permission}`);
   }
 
@@ -826,7 +832,7 @@ export function revokePermission(
   );
 }
 
-export function getGrantedPermissions(identifier: string): SpindlePermission[] {
+export function getGrantedPermissions(identifier: string): ManagedSpindlePermission[] {
   const db = getDb();
   const ext = db
     .query("SELECT id FROM extensions WHERE identifier = ?")
@@ -837,12 +843,12 @@ export function getGrantedPermissions(identifier: string): SpindlePermission[] {
     .query("SELECT permission FROM extension_grants WHERE extension_id = ?")
     .all(ext.id) as { permission: string }[];
 
-  return rows.map((r) => r.permission as SpindlePermission);
+  return rows.map((r) => r.permission as ManagedSpindlePermission);
 }
 
 export function hasPermission(
   identifier: string,
-  permission: SpindlePermission
+  permission: ManagedSpindlePermission
 ): boolean {
   return getGrantedPermissions(identifier).includes(permission);
 }
@@ -1226,7 +1232,7 @@ export async function switchBranch(
 
 async function rowToExtensionInfo(row: any): Promise<ExtensionInfo> {
   const identifier = row.identifier;
-  const permissions: SpindlePermission[] = parsePermissionsSafe<SpindlePermission>(row.permissions);
+  const permissions: ManagedSpindlePermission[] = parsePermissionsSafe<ManagedSpindlePermission>(row.permissions);
   const granted = getGrantedPermissions(identifier);
 
   let hasFrontend = false;

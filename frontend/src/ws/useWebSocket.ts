@@ -8,6 +8,7 @@ import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
+import { operatorApi } from '@/api/operator'
 import { toast } from '@/lib/toast'
 import { invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
@@ -45,8 +46,57 @@ function fetchLatestMessages(chatId: string) {
 export function useWebSocket() {
   const store = useStore
   const isAuthenticated = useStore((s) => s.isAuthenticated)
+  const userRole = useStore((s) => s.user?.role)
   const activeChatId = useStore((s) => s.activeChatId)
   const lastExtensionSyncAtRef = useRef(0)
+  const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      lastOperatorUpdateToastKeyRef.current = null
+      return
+    }
+
+    if (userRole !== 'owner' && userRole !== 'admin') {
+      lastOperatorUpdateToastKeyRef.current = null
+      return
+    }
+
+    let cancelled = false
+
+    const syncOperatorStatus = async () => {
+      try {
+        const status = await operatorApi.getStatus()
+        if (cancelled) return
+
+        store.getState().setOperatorStatus(status)
+
+        if (!status.updateAvailable) {
+          lastOperatorUpdateToastKeyRef.current = null
+          return
+        }
+
+        const toastKey = `${status.commitsBehind}:${status.latestUpdateMessage}`
+        if (lastOperatorUpdateToastKeyRef.current === toastKey) return
+
+        lastOperatorUpdateToastKeyRef.current = toastKey
+        toast.info(
+          `${status.commitsBehind} update${status.commitsBehind === 1 ? '' : 's'} available${status.latestUpdateMessage ? ` - ${status.latestUpdateMessage}` : ''}`,
+          { title: 'Update Available', duration: 7000 },
+        )
+      } catch {
+        // Ignore transient operator status errors outside the Operator panel.
+      }
+    }
+
+    syncOperatorStatus()
+    const interval = window.setInterval(syncOperatorStatus, 30_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [isAuthenticated, store, userRole])
 
   useEffect(() => {
     if (!isAuthenticated) return

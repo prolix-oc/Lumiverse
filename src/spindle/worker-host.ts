@@ -12,6 +12,9 @@ import type {
   ChatDTO,
   WorldBookDTO,
   WorldBookEntryDTO,
+  DatabankDTO,
+  DatabankDocumentDTO,
+  DatabankDocumentCreateDTO,
   PersonaDTO,
   ActivatedWorldInfoEntryDTO,
   DryRunResultDTO,
@@ -50,6 +53,8 @@ import {
   setCharacterWorldBookIds,
 } from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
+import * as databanksSvc from "../services/databank";
+import * as filesSvc from "../services/files.service";
 import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
 import * as councilSettingsSvc from "../services/council/council-settings.service";
@@ -95,6 +100,7 @@ import {
 } from "fs";
 import http from "node:http";
 import https from "node:https";
+import { createHash } from "crypto";
 import { join, resolve, relative, sep } from "path";
 
 const EPHEMERAL_MAX_FILES = 250;
@@ -147,6 +153,45 @@ type RuntimeWorkerToHost =
       modelSource?: TokenModelSource;
       userId?: string;
     }
+  | {
+      type: "databanks_list";
+      requestId: string;
+      limit?: number;
+      offset?: number;
+      scope?: "global" | "character" | "chat";
+      scopeId?: string | null;
+      userId?: string;
+    }
+  | { type: "databanks_get"; requestId: string; databankId: string; userId?: string }
+  | { type: "databanks_create"; requestId: string; input: import("lumiverse-spindle-types").DatabankCreateDTO; userId?: string }
+  | { type: "databanks_update"; requestId: string; databankId: string; input: import("lumiverse-spindle-types").DatabankUpdateDTO; userId?: string }
+  | { type: "databanks_delete"; requestId: string; databankId: string; userId?: string }
+  | {
+      type: "databank_documents_list";
+      requestId: string;
+      databankId: string;
+      limit?: number;
+      offset?: number;
+      userId?: string;
+    }
+  | { type: "databank_documents_get"; requestId: string; documentId: string; userId?: string }
+  | {
+      type: "databank_documents_create";
+      requestId: string;
+      databankId: string;
+      input: DatabankDocumentCreateDTO;
+      userId?: string;
+    }
+  | {
+      type: "databank_documents_update";
+      requestId: string;
+      documentId: string;
+      input: import("lumiverse-spindle-types").DatabankDocumentUpdateDTO;
+      userId?: string;
+    }
+  | { type: "databank_documents_delete"; requestId: string; documentId: string; userId?: string }
+  | { type: "databank_documents_get_content"; requestId: string; documentId: string; userId?: string }
+  | { type: "databank_documents_reprocess"; requestId: string; documentId: string; userId?: string }
   | { type: "register_message_content_processor"; priority?: number }
   | {
       type: "message_content_processor_result";
@@ -1173,6 +1218,44 @@ export class WorkerHost {
       // ─── Activated World Info (gated: "world_books") ─────────────────
       case "world_books_get_activated":
         this.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
+        break;
+      // ─── Databanks (gated: "databanks") ─────────────────────────────
+      case "databanks_list":
+        this.handleDatabanksList(msg.requestId, msg.limit, msg.offset, msg.scope, msg.scopeId, msg.userId);
+        break;
+      case "databanks_get":
+        this.handleDatabanksGet(msg.requestId, msg.databankId, msg.userId);
+        break;
+      case "databanks_create":
+        this.handleDatabanksCreate(msg.requestId, msg.input, msg.userId);
+        break;
+      case "databanks_update":
+        this.handleDatabanksUpdate(msg.requestId, msg.databankId, msg.input, msg.userId);
+        break;
+      case "databanks_delete":
+        this.handleDatabanksDelete(msg.requestId, msg.databankId, msg.userId);
+        break;
+      // ─── Databank Documents (gated: "databanks") ───────────────────
+      case "databank_documents_list":
+        this.handleDatabankDocumentsList(msg.requestId, msg.databankId, msg.limit, msg.offset, msg.userId);
+        break;
+      case "databank_documents_get":
+        this.handleDatabankDocumentsGet(msg.requestId, msg.documentId, msg.userId);
+        break;
+      case "databank_documents_create":
+        this.handleDatabankDocumentsCreate(msg.requestId, msg.databankId, msg.input, msg.userId);
+        break;
+      case "databank_documents_update":
+        this.handleDatabankDocumentsUpdate(msg.requestId, msg.documentId, msg.input, msg.userId);
+        break;
+      case "databank_documents_delete":
+        this.handleDatabankDocumentsDelete(msg.requestId, msg.documentId, msg.userId);
+        break;
+      case "databank_documents_get_content":
+        this.handleDatabankDocumentsGetContent(msg.requestId, msg.documentId, msg.userId);
+        break;
+      case "databank_documents_reprocess":
+        this.handleDatabankDocumentsReprocess(msg.requestId, msg.documentId, msg.userId);
         break;
       // ─── Personas (gated: "personas") ──────────────────────────────────
       case "personas_list":
@@ -4833,6 +4916,375 @@ export class WorkerHost {
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
+  }
+
+  // ─── Databanks CRUD (gated: "databanks") ─────────────────────────────
+
+  private toDatabankDTO(bank: any): DatabankDTO {
+    return {
+      id: bank.id,
+      name: bank.name || "",
+      description: bank.description || "",
+      scope: bank.scope,
+      scope_id: bank.scopeId ?? null,
+      enabled: !!bank.enabled,
+      metadata: (typeof bank.metadata === "object" && bank.metadata) ? bank.metadata : {},
+      document_count: typeof bank.documentCount === "number" ? bank.documentCount : undefined,
+      created_at: bank.createdAt,
+      updated_at: bank.updatedAt,
+    };
+  }
+
+  private toDatabankDocumentDTO(doc: any): DatabankDocumentDTO {
+    return {
+      id: doc.id,
+      databank_id: doc.databankId,
+      name: doc.name || "",
+      slug: doc.slug || "",
+      mime_type: doc.mimeType || "",
+      file_size: doc.fileSize ?? 0,
+      content_hash: doc.contentHash || "",
+      total_chunks: doc.totalChunks ?? 0,
+      status: doc.status,
+      error_message: doc.errorMessage ?? null,
+      metadata: (typeof doc.metadata === "object" && doc.metadata) ? doc.metadata : {},
+      created_at: doc.createdAt,
+      updated_at: doc.updatedAt,
+    };
+  }
+
+  private handleDatabanksList(
+    requestId: string,
+    limit?: number,
+    offset?: number,
+    scope?: string,
+    scopeId?: string | null,
+    userId?: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const normalizedScope =
+        scope === undefined
+          ? undefined
+          : scope === "global" || scope === "character" || scope === "chat"
+            ? scope
+            : null;
+      if (normalizedScope === null) throw new Error("Databank scope must be 'global', 'character', or 'chat'");
+
+      const result = databanksSvc.listDatabanks(
+        resolvedUserId,
+        {
+          limit: Math.min(limit || 50, 200),
+          offset: offset || 0,
+        },
+        {
+          scope: normalizedScope,
+          scopeId: typeof scopeId === "string" ? scopeId : undefined,
+        },
+      );
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((bank) => this.toDatabankDTO(bank)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabanksGet(requestId: string, databankId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const bank = databanksSvc.getDatabank(resolvedUserId, databankId);
+      this.postToWorker({ type: "response", requestId, result: bank ? this.toDatabankDTO(bank) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabanksCreate(requestId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
+        throw new Error("Databank name is required");
+      }
+      if (input.scope !== "global" && input.scope !== "character" && input.scope !== "chat") {
+        throw new Error("Databank scope must be 'global', 'character', or 'chat'");
+      }
+      if (input.scope !== "global" && (!input.scope_id || typeof input.scope_id !== "string")) {
+        throw new Error("scope_id is required for character and chat databanks");
+      }
+
+      const bank = databanksSvc.createDatabank(resolvedUserId, {
+        name: input.name.trim(),
+        description: typeof input.description === "string" ? input.description : undefined,
+        scope: input.scope,
+        scopeId: input.scope_id ?? null,
+      });
+      this.postToWorker({ type: "response", requestId, result: this.toDatabankDTO(bank) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabanksUpdate(requestId: string, databankId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const bank = databanksSvc.updateDatabank(resolvedUserId, databankId, {
+        name: typeof input?.name === "string" ? input.name : undefined,
+        description: typeof input?.description === "string" ? input.description : undefined,
+        enabled: typeof input?.enabled === "boolean" ? input.enabled : undefined,
+      });
+      if (!bank) throw new Error("Databank not found");
+
+      this.postToWorker({ type: "response", requestId, result: this.toDatabankDTO(bank) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabanksDelete(requestId: string, databankId: string, userId?: string): void {
+    (async () => {
+      try {
+        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+        }
+        const resolvedUserId = this.resolveEffectiveUserId(userId);
+        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+        this.enforceScopedUser(resolvedUserId);
+
+        await databanksSvc.deleteDatabankVectors(resolvedUserId, databankId);
+        const deleted = await databanksSvc.deleteDatabank(resolvedUserId, databankId);
+        this.postToWorker({ type: "response", requestId, result: deleted });
+      } catch (err: any) {
+        this.postToWorker({ type: "response", requestId, error: err.message });
+      }
+    })();
+  }
+
+  // ─── Databank Documents CRUD (gated: "databanks") ────────────────────
+
+  private handleDatabankDocumentsList(
+    requestId: string,
+    databankId: string,
+    limit?: number,
+    offset?: number,
+    userId?: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = databanksSvc.listDocuments(resolvedUserId, databankId, {
+        limit: Math.min(limit || 50, 200),
+        offset: offset || 0,
+      });
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((doc) => this.toDatabankDocumentDTO(doc)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabankDocumentsGet(requestId: string, documentId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const doc = databanksSvc.getDocument(resolvedUserId, documentId);
+      this.postToWorker({ type: "response", requestId, result: doc ? this.toDatabankDocumentDTO(doc) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabankDocumentsCreate(
+    requestId: string,
+    databankId: string,
+    input: DatabankDocumentCreateDTO,
+    userId?: string,
+  ): void {
+    (async () => {
+      try {
+        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+        }
+        const resolvedUserId = this.resolveEffectiveUserId(userId);
+        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+        this.enforceScopedUser(resolvedUserId);
+
+        const bank = databanksSvc.getDatabank(resolvedUserId, databankId);
+        if (!bank) throw new Error("Databank not found");
+        if (!(input?.data instanceof Uint8Array) || input.data.byteLength === 0) {
+          throw new Error("Document data must be a non-empty Uint8Array");
+        }
+        if (!input.filename || typeof input.filename !== "string" || !input.filename.trim()) {
+          throw new Error("Document filename is required");
+        }
+        const filename = input.filename.trim();
+        if (!databanksSvc.isSupportedFormat(filename)) {
+          throw new Error(`Unsupported file format. Supported: ${databanksSvc.getSupportedExtensions().join(", ")}`);
+        }
+        if (input.data.byteLength > 10 * 1024 * 1024) {
+          throw new Error("File too large. Maximum 10MB.");
+        }
+
+        const bytes = Uint8Array.from(input.data);
+        const mimeType = typeof input.mime_type === "string" ? input.mime_type.trim() : "";
+        const file = new File([bytes], filename, { type: mimeType || "application/octet-stream" });
+        const storedFilename = await filesSvc.saveUpload(file, resolvedUserId, "databank");
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        const displayName = typeof input.name === "string" && input.name.trim()
+          ? input.name.trim()
+          : filename.replace(/\.[^.]+$/, "");
+
+        const doc = databanksSvc.createDocument(
+          resolvedUserId,
+          databankId,
+          displayName,
+          storedFilename,
+          mimeType,
+          bytes.byteLength,
+          hash,
+        );
+
+        databanksSvc.processDocument(resolvedUserId, doc.id).catch((err) => {
+          console.error(`[databank] Background processing failed for ${doc.id}:`, err);
+        });
+
+        this.postToWorker({ type: "response", requestId, result: this.toDatabankDocumentDTO(doc) });
+      } catch (err: any) {
+        this.postToWorker({ type: "response", requestId, error: err.message });
+      }
+    })();
+  }
+
+  private handleDatabankDocumentsUpdate(requestId: string, documentId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
+        throw new Error("Document name is required");
+      }
+
+      const doc = databanksSvc.renameDocument(resolvedUserId, documentId, input.name.trim());
+      if (!doc) throw new Error("Document not found");
+
+      this.postToWorker({ type: "response", requestId, result: this.toDatabankDocumentDTO(doc) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabankDocumentsDelete(requestId: string, documentId: string, userId?: string): void {
+    (async () => {
+      try {
+        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+        }
+        const resolvedUserId = this.resolveEffectiveUserId(userId);
+        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+        this.enforceScopedUser(resolvedUserId);
+
+        await databanksSvc.deleteDocumentVectors(resolvedUserId, documentId);
+        const deleted = await databanksSvc.deleteDocument(resolvedUserId, documentId);
+        this.postToWorker({ type: "response", requestId, result: deleted });
+      } catch (err: any) {
+        this.postToWorker({ type: "response", requestId, error: err.message });
+      }
+    })();
+  }
+
+  private handleDatabankDocumentsGetContent(requestId: string, documentId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const content = databanksSvc.getDocumentContent(resolvedUserId, documentId);
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: content === null ? null : { content },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleDatabankDocumentsReprocess(requestId: string, documentId: string, userId?: string): void {
+    (async () => {
+      try {
+        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
+        }
+        const resolvedUserId = this.resolveEffectiveUserId(userId);
+        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+        this.enforceScopedUser(resolvedUserId);
+
+        const doc = databanksSvc.getDocument(resolvedUserId, documentId);
+        if (!doc) throw new Error("Document not found");
+
+        await databanksSvc.deleteDocumentVectors(resolvedUserId, documentId);
+        databanksSvc.updateDocumentStatus(documentId, "pending");
+        databanksSvc.processDocument(resolvedUserId, documentId).catch((err) => {
+          console.error(`[databank] Reprocessing failed for ${documentId}:`, err);
+        });
+
+        this.postToWorker({ type: "response", requestId, result: { success: true, status: "processing" } });
+      } catch (err: any) {
+        this.postToWorker({ type: "response", requestId, error: err.message });
+      }
+    })();
   }
 
   // ─── Personas CRUD (gated: "personas") ────────────────────────────────
