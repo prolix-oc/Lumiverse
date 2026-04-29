@@ -10,6 +10,7 @@ export const createPacksSlice: StateCreator<PacksSlice> = (set) => ({
   packFilterTab: 'all',
   packSortField: 'updated',
   selectedDefinition: null,
+  selectedChimeraDefinitions: [],
   selectedBehaviors: [],
   selectedPersonalities: [],
   selectedLoomStyles: [],
@@ -35,6 +36,10 @@ export const createPacksSlice: StateCreator<PacksSlice> = (set) => ({
   setSelectedDefinition: (def: LumiaItem | null) => {
     set({ selectedDefinition: def })
     settingsApi.put('selectedDefinition', def).catch(() => {})
+  },
+  setSelectedChimeraDefinitions: (definitions: LumiaItem[]) => {
+    set({ selectedChimeraDefinitions: definitions })
+    settingsApi.put('selectedChimeraDefinitions', definitions).catch(() => {})
   },
   setSelectedBehaviors: (behaviors: LumiaItem[]) => {
     set({ selectedBehaviors: behaviors })

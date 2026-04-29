@@ -14,6 +14,22 @@ export type BaseColorKey =
 
 export type BaseColors = Partial<Record<BaseColorKey, string>>
 
+export interface CharacterThemeOverlay {
+  accent: { h: number; s: number; l: number }
+  baseColors: {
+    primary?: string
+    secondary?: string
+    background?: string
+    text?: string
+  }
+  baseColorsLight: {
+    primary?: string
+    secondary?: string
+    background?: string
+    text?: string
+  }
+}
+
 export interface ThemeConfig {
   id: string
   name: string

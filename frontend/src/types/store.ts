@@ -370,6 +370,7 @@ export interface SettingsSlice {
   modalMaxWidth: number
   portraitPanelSide: 'left' | 'right' | 'none'
   theme: ThemeConfig | null
+  characterThemeOverlay: CharacterThemeOverlay | null
   drawerSettings: DrawerSettings
   toastPosition: ToastPosition
   oocEnabled: boolean
@@ -407,6 +408,7 @@ export interface SettingsSlice {
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K]) => void
   setTheme: (theme: ThemeConfig | null) => void
+  setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
   setCustomCSS: (css: string) => void
   ensureThemeBundleId: () => string
   toggleCustomCSS: (enabled: boolean) => void
@@ -420,6 +422,8 @@ export interface SettingsSlice {
 
 import type { ThemeConfig } from './theme'
 export type { ThemeConfig } from './theme'
+import type { CharacterThemeOverlay } from './theme'
+export type { CharacterThemeOverlay } from './theme'
 
 export interface DrawerSettings {
   side: 'left' | 'right'
@@ -484,6 +488,7 @@ export interface PacksSlice {
   packFilterTab: PackFilterTab
   packSortField: PackSortField
   selectedDefinition: LumiaItem | null
+  selectedChimeraDefinitions: LumiaItem[]
   selectedBehaviors: LumiaItem[]
   selectedPersonalities: LumiaItem[]
   selectedLoomStyles: LoomItem[]
@@ -500,6 +505,7 @@ export interface PacksSlice {
   setPackFilterTab: (tab: PackFilterTab) => void
   setPackSortField: (field: PackSortField) => void
   setSelectedDefinition: (def: LumiaItem | null) => void
+  setSelectedChimeraDefinitions: (definitions: LumiaItem[]) => void
   setSelectedBehaviors: (behaviors: LumiaItem[]) => void
   setSelectedPersonalities: (personalities: LumiaItem[]) => void
   setSelectedLoomStyles: (items: LoomItem[]) => void

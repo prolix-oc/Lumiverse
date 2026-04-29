@@ -4,8 +4,9 @@
  * All macros read from ctx.env.extra which is populated by prompt-assembly.service.ts
  * before the assembly loop. The data shape is:
  *
- *   env.extra.lumia   – selectedDefinition, selectedBehaviors, selectedPersonalities,
- *                        chimeraMode, quirks, quirksEnabled, allItems
+ *   env.extra.lumia   – selectedDefinition, selectedChimeraDefinitions,
+ *                        selectedBehaviors, selectedPersonalities, chimeraMode,
+ *                        quirks, quirksEnabled, allItems
  *   env.extra.council – councilMode, members, toolsSettings, memberItems,
  *                        toolResults, namedResults
  *   env.extra.ooc     – enabled, interval, style
@@ -97,6 +98,7 @@ function shuffle<T>(arr: T[]): T[] {
 function getLumia(ctx: MacroExecContext) {
   const lumia = (ctx.env.extra.lumia ?? {}) as {
     selectedDefinition: LumiaItemData | null;
+    selectedChimeraDefinitions: LumiaItemData[];
     selectedBehaviors: LumiaItemData[];
     selectedPersonalities: LumiaItemData[];
     chimeraMode: boolean;
@@ -109,11 +111,23 @@ function getLumia(ctx: MacroExecContext) {
   return {
     ...lumia,
     selectedDefinition: normalizeLumiaItem(lumia.selectedDefinition),
+    selectedChimeraDefinitions: normalizeLumiaItems((lumia as any).selectedChimeraDefinitions),
     selectedBehaviors: normalizeLumiaItems(lumia.selectedBehaviors),
     selectedPersonalities: normalizeLumiaItems(lumia.selectedPersonalities),
     allItems: normalizeLumiaItems(lumia.allItems),
     randomLumia: normalizeLumiaItem(lumia.randomLumia) ?? undefined,
   };
+}
+
+function getSelectedChimeraDefinitions(lumia: ReturnType<typeof getLumia>): LumiaItemData[] {
+  const selected = lumia.selectedChimeraDefinitions ?? [];
+  if (selected.length > 0) {
+    if (!lumia.selectedDefinition || selected.some((item) => item.id === lumia.selectedDefinition?.id)) {
+      return selected;
+    }
+    return [lumia.selectedDefinition, ...selected];
+  }
+  return lumia.selectedDefinition ? [lumia.selectedDefinition] : [];
 }
 
 function getCouncil(ctx: MacroExecContext) {
@@ -268,17 +282,12 @@ function buildCouncilPersonalityContent(ctx: MacroExecContext): string {
 
 function buildChimeraContent(ctx: MacroExecContext): string {
   const lumia = getLumia(ctx);
-  // In chimera mode, selectedBehaviors or selectedPersonalities contain the fused items.
-  // The definition is the primary selected definition.
-  const def = lumia.selectedDefinition;
+  const items = getSelectedChimeraDefinitions(lumia);
+  const def = items[0];
   if (!def) return "";
+  if (items.length === 1) return def.definition || "";
 
-  // For chimera, we treat all selected behaviors as component definitions
-  // (mirrors the extension's getChimeraContent)
-  const items = lumia.selectedBehaviors ?? [];
-  if (items.length === 0) return def.definition || "";
-
-  const names = [def.name, ...items.map((i) => i.name)].filter(Boolean);
+  const names = [def.name, ...items.slice(1).map((i) => i.name)].filter(Boolean);
   const lines: string[] = [`# CHIMERA FORM: ${names.join(" + ")}\n`];
   lines.push("You are a **fusion** of multiple Lumia identities, blended into one cohesive persona.\n");
 
@@ -286,7 +295,7 @@ function buildChimeraContent(ctx: MacroExecContext): string {
   if (def.definition) lines.push(def.definition);
   lines.push("");
 
-  for (const item of items) {
+  for (const item of items.slice(1)) {
     lines.push(`---\n## Component: ${item.name}`);
     if (item.definition) lines.push(item.definition);
     lines.push("");
@@ -661,7 +670,7 @@ export function registerLumiaMacros(): void {
 
       if (ctx.args[0] === "len") {
         if (council.councilMode) return String(council.members?.length ?? 0);
-        if (lumia.chimeraMode) return String(lumia.selectedBehaviors?.length ? lumia.selectedBehaviors.length + 1 : lumia.selectedDefinition ? 1 : 0);
+        if (lumia.chimeraMode) return String(getSelectedChimeraDefinitions(lumia).length);
         return lumia.selectedDefinition ? "1" : "0";
       }
 

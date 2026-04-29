@@ -66,6 +66,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'packSortField',
   // Active Lumia selections
   'selectedDefinition',
+  'selectedChimeraDefinitions',
   'selectedBehaviors',
   'selectedPersonalities',
   // Active Loom selections
@@ -260,6 +261,7 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   modalMaxWidth: 900,
   portraitPanelSide: 'right',
   theme: null,
+  characterThemeOverlay: null,
   drawerSettings: {
     side: 'right',
     verticalPosition: 15,
@@ -383,6 +385,10 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   setTheme: (theme) => {
     set({ theme })
     persistKey('theme', theme)
+  },
+
+  setCharacterThemeOverlay: (characterThemeOverlay) => {
+    set({ characterThemeOverlay })
   },
 
   setCustomCSS: (css) =>

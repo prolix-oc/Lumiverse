@@ -37,7 +37,7 @@ const ALL_SETTINGS_KEYS = [
   "expressionDetection",
   // The original batch keys from assemblePrompt line 422-434
   "reasoningSettings",
-  "selectedDefinition", "selectedBehaviors", "selectedPersonalities",
+  "selectedDefinition", "selectedChimeraDefinitions", "selectedBehaviors", "selectedPersonalities",
   "chimeraMode", "lumiaQuirks", "lumiaQuirksEnabled",
   "oocEnabled", "lumiaOOCInterval", "lumiaOOCStyle",
   "sovereignHand",

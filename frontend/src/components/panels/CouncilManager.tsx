@@ -125,6 +125,7 @@ export default function CouncilManager() {
   const lumiaQuirks = useStore((s) => s.lumiaQuirks)
   const lumiaQuirksEnabled = useStore((s) => s.lumiaQuirksEnabled)
   const selectedDefinition = useStore((s) => s.selectedDefinition)
+  const selectedChimeraDefinitions = useStore((s) => s.selectedChimeraDefinitions)
   const selectedBehaviors = useStore((s) => s.selectedBehaviors)
   const selectedPersonalities = useStore((s) => s.selectedPersonalities)
   const saveCouncilSettings = useStore((s) => s.saveCouncilSettings)
@@ -275,7 +276,9 @@ export default function CouncilManager() {
     [setSetting]
   )
 
-  const definitionCount = selectedDefinition ? 1 : 0
+  const definitionCount = chimeraMode
+    ? (selectedChimeraDefinitions.length || (selectedDefinition ? 1 : 0))
+    : (selectedDefinition ? 1 : 0)
   const behaviorCount = selectedBehaviors.length
   const personalityCount = selectedPersonalities.length
   const councilMembersCount = councilSettings.members.length

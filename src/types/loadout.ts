@@ -1,6 +1,7 @@
 export interface LoadoutSnapshot {
   // Lumia
   selectedDefinition: any | null;
+  selectedChimeraDefinitions: any[];
   selectedBehaviors: any[];
   selectedPersonalities: any[];
   chimeraMode: boolean;

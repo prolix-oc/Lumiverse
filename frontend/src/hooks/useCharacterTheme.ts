@@ -29,6 +29,7 @@ const NAME_VAR_KEYS = ['--char-name-dark', '--char-name-light']
 
 export function useCharacterTheme() {
   const characterAware = useStore((s) => (s.theme as ThemeConfig | null)?.characterAware === true)
+  const setCharacterThemeOverlay = useStore((s) => s.setCharacterThemeOverlay)
   const hasExtensionOverrides = useStore((s) =>
     Object.keys(s.extensionThemeOverrides).some((id) => !s.mutedExtensionThemes[id])
   )
@@ -96,11 +97,16 @@ export function useCharacterTheme() {
   // control of the palette, so character-derived accent/baseColors must yield.
   useEffect(() => {
     if (!characterAware || hasExtensionOverrides) {
+      setCharacterThemeOverlay(null)
       appliedAvatarKeyRef.current = null
       return
     }
 
-    if (!activeCharacterId || !avatarUrl || !avatarCacheKey) return
+    if (!activeCharacterId || !avatarUrl || !avatarCacheKey) {
+      setCharacterThemeOverlay(null)
+      appliedAvatarKeyRef.current = null
+      return
+    }
     if (appliedAvatarKeyRef.current === avatarCacheKey) return
 
     let cancelled = false
@@ -121,26 +127,17 @@ export function useCharacterTheme() {
         if (!current?.characterAware) return
 
         appliedAvatarKeyRef.current = avatarCacheKey
-
-        // Write mode-appropriate overlay colors: dark-tuned baseColors for
-        // dark mode, light-tuned baseColorsLight for light mode.
-        const existingByMode = current.baseColorsByMode ?? {}
-        useStore.getState().setTheme({
-          ...current,
-          accent: overlay.accent,
-          baseColorsByMode: {
-            dark: { ...existingByMode.dark, ...overlay.baseColors },
-            light: { ...existingByMode.light, ...overlay.baseColorsLight },
-          },
-        })
+        setCharacterThemeOverlay(overlay)
       } catch (err) {
+        setCharacterThemeOverlay(null)
+        appliedAvatarKeyRef.current = null
         console.warn('[useCharacterTheme] Theme overlay failed:', err)
       }
     }
 
     apply()
     return () => { cancelled = true }
-  }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey])
+  }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey, setCharacterThemeOverlay])
 
   // ── 3. React to CHARACTER_AVATAR_CHANGED — force resample ──
   useEffect(() => {
@@ -155,9 +152,10 @@ export function useCharacterTheme() {
       // Reset applied refs to force both effects to re-run
       nameAppliedAvatarKeyRef.current = null
       appliedAvatarKeyRef.current = null
+      setCharacterThemeOverlay(null)
 
       // Trigger store update so the avatar URL deps change and effects re-fire
       useStore.getState().setActiveChatAvatarId(payload.imageId)
     })
-  }, [activeCharacterId, activeCharacter?.image_id])
+  }, [activeCharacterId, activeCharacter?.image_id, setCharacterThemeOverlay])
 }

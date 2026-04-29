@@ -2594,6 +2594,7 @@ export function populateLumiaLoomContext(
 
   // ---- Lumia selections (persisted by frontend as full LumiaItem objects) ----
   const selectedDef = s("selectedDefinition");
+  const selectedChimeraDefinitions = s("selectedChimeraDefinitions", []);
   const selectedBehaviors = s("selectedBehaviors", []);
   const selectedPersonalities = s("selectedPersonalities", []);
   const chimeraMode = s("chimeraMode", false);
@@ -2647,6 +2648,7 @@ export function populateLumiaLoomContext(
   // ---- Inject into env.extra ----
   macroEnv.extra.lumia = {
     selectedDefinition: selectedDef,
+    selectedChimeraDefinitions,
     selectedBehaviors,
     selectedPersonalities,
     chimeraMode,

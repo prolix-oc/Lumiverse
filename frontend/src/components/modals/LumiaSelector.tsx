@@ -51,9 +51,11 @@ export default function LumiaSelector({ mode, onClose }: LumiaSelectorProps) {
   const chimeraMode = useStore((s) => s.chimeraMode)
 
   const selectedDefinition = useStore((s) => s.selectedDefinition)
+  const selectedChimeraDefinitions = useStore((s) => s.selectedChimeraDefinitions)
   const selectedBehaviors = useStore((s) => s.selectedBehaviors)
   const selectedPersonalities = useStore((s) => s.selectedPersonalities)
   const setSelectedDefinition = useStore((s) => s.setSelectedDefinition)
+  const setSelectedChimeraDefinitions = useStore((s) => s.setSelectedChimeraDefinitions)
   const setSelectedBehaviors = useStore((s) => s.setSelectedBehaviors)
   const setSelectedPersonalities = useStore((s) => s.setSelectedPersonalities)
 
@@ -62,11 +64,25 @@ export default function LumiaSelector({ mode, onClose }: LumiaSelectorProps) {
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set())
 
   const config = MODE_CONFIG[mode]
-  const isMultiSelect = mode !== 'definition' || chimeraMode
+  const isMultiSelect = mode === 'definition' ? chimeraMode : !chimeraMode
   const titleOverride = mode === 'definition' && chimeraMode ? 'Select Chimera Forms' : config.title
-  const subtitleOverride = mode === 'definition' && chimeraMode
-    ? 'Choose multiple physical forms to fuse into a Chimera'
-    : config.subtitle
+  const subtitleOverride = useMemo(() => {
+    if (mode === 'definition' && chimeraMode) {
+      return 'Choose multiple physical forms to fuse into a Chimera'
+    }
+    if (mode === 'behavior' && chimeraMode) {
+      return 'Choose one behavioral trait for the Chimera'
+    }
+    if (mode === 'personality' && chimeraMode) {
+      return 'Choose one personality trait for the Chimera'
+    }
+    return config.subtitle
+  }, [config.subtitle, mode, chimeraMode])
+
+  const effectiveChimeraDefinitions = useMemo(() => {
+    if (selectedChimeraDefinitions.length > 0) return selectedChimeraDefinitions
+    return selectedDefinition ? [selectedDefinition] : []
+  }, [selectedChimeraDefinitions, selectedDefinition])
 
   // Load all packs' items
   useEffect(() => {
@@ -109,71 +125,82 @@ export default function LumiaSelector({ mode, onClose }: LumiaSelectorProps) {
   const selectedIds = useMemo(() => {
     const set = new Set<string>()
     if (mode === 'definition') {
-      if (selectedDefinition) set.add(selectedDefinition.id)
+      const definitions = chimeraMode ? effectiveChimeraDefinitions : (selectedDefinition ? [selectedDefinition] : [])
+      definitions.forEach((item) => set.add(item.id))
     } else if (mode === 'behavior') {
       selectedBehaviors.forEach((b) => set.add(b.id))
     } else {
       selectedPersonalities.forEach((p) => set.add(p.id))
     }
     return set
-  }, [mode, selectedDefinition, selectedBehaviors, selectedPersonalities])
+  }, [mode, chimeraMode, effectiveChimeraDefinitions, selectedDefinition, selectedBehaviors, selectedPersonalities])
 
   const selectedCount = selectedIds.size
 
   const handleToggleItem = useCallback((item: LumiaItem) => {
     if (mode === 'definition') {
-      if (isMultiSelect) {
-        // Chimera mode: toggle in the behaviors array (chimera uses behaviors for fused defs)
-        const isSelected = selectedIds.has(item.id)
-        if (isSelected) {
-          if (selectedDefinition?.id === item.id) {
-            setSelectedDefinition(null)
-          }
-        } else {
-          if (!selectedDefinition) {
-            setSelectedDefinition(item)
-          }
-        }
-        // For chimera, we actually still use selectedDefinition for primary
-        // But the backend chimera reads behaviors for the fused items
-        // Let's keep it simple: single select toggles the definition
-        const current = selectedDefinition
-        if (current?.id === item.id) {
-          setSelectedDefinition(null)
-        } else {
-          setSelectedDefinition(item)
-        }
+      if (chimeraMode) {
+        const isSelected = effectiveChimeraDefinitions.some((definition) => definition.id === item.id)
+        const nextDefinitions = isSelected
+          ? effectiveChimeraDefinitions.filter((definition) => definition.id !== item.id)
+          : [...effectiveChimeraDefinitions, item]
+
+        setSelectedChimeraDefinitions(nextDefinitions)
+        setSelectedDefinition(nextDefinitions[0] ?? null)
       } else {
-        // Single select
-        if (selectedDefinition?.id === item.id) {
-          setSelectedDefinition(null)
-        } else {
-          setSelectedDefinition(item)
-        }
+        const nextDefinition = selectedDefinition?.id === item.id ? null : item
+        setSelectedDefinition(nextDefinition)
+        setSelectedChimeraDefinitions(nextDefinition ? [nextDefinition] : [])
       }
     } else if (mode === 'behavior') {
-      const isSelected = selectedBehaviors.some((b) => b.id === item.id)
-      if (isSelected) {
-        setSelectedBehaviors(selectedBehaviors.filter((b) => b.id !== item.id))
+      const isSelected = selectedBehaviors.some((behavior) => behavior.id === item.id)
+      if (isMultiSelect) {
+        if (isSelected) {
+          setSelectedBehaviors(selectedBehaviors.filter((behavior) => behavior.id !== item.id))
+        } else {
+          setSelectedBehaviors([...selectedBehaviors, item])
+        }
+      } else if (isSelected) {
+        setSelectedBehaviors([])
       } else {
-        setSelectedBehaviors([...selectedBehaviors, item])
+        setSelectedBehaviors([item])
       }
     } else {
-      const isSelected = selectedPersonalities.some((p) => p.id === item.id)
-      if (isSelected) {
-        setSelectedPersonalities(selectedPersonalities.filter((p) => p.id !== item.id))
+      const isSelected = selectedPersonalities.some((personality) => personality.id === item.id)
+      if (isMultiSelect) {
+        if (isSelected) {
+          setSelectedPersonalities(selectedPersonalities.filter((personality) => personality.id !== item.id))
+        } else {
+          setSelectedPersonalities([...selectedPersonalities, item])
+        }
+      } else if (isSelected) {
+        setSelectedPersonalities([])
       } else {
-        setSelectedPersonalities([...selectedPersonalities, item])
+        setSelectedPersonalities([item])
       }
     }
-  }, [mode, isMultiSelect, selectedDefinition, selectedBehaviors, selectedPersonalities,
-      setSelectedDefinition, setSelectedBehaviors, setSelectedPersonalities, selectedIds])
+  }, [
+    mode,
+    chimeraMode,
+    isMultiSelect,
+    selectedDefinition,
+    effectiveChimeraDefinitions,
+    selectedBehaviors,
+    selectedPersonalities,
+    setSelectedDefinition,
+    setSelectedChimeraDefinitions,
+    setSelectedBehaviors,
+    setSelectedPersonalities,
+  ])
 
   const handleClearAll = useCallback(() => {
-    if (mode === 'definition') setSelectedDefinition(null)
+    if (mode === 'definition') {
+      setSelectedDefinition(null)
+      setSelectedChimeraDefinitions([])
+    }
     else if (mode === 'behavior') setSelectedBehaviors([])
     else setSelectedPersonalities([])
-  }, [mode, setSelectedDefinition, setSelectedBehaviors, setSelectedPersonalities])
+  }, [mode, setSelectedDefinition, setSelectedChimeraDefinitions, setSelectedBehaviors, setSelectedPersonalities])
 
   const togglePack = useCallback((packId: string) => {
     setCollapsedPacks((prev) => {

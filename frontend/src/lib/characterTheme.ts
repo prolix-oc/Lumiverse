@@ -14,6 +14,7 @@ import {
   hslToRgb,
   constrainLuminance,
 } from './colorExtraction'
+import type { CharacterThemeOverlay } from '@/types/theme'
 
 /** Reference dark theme background (approximate) for contrast checks. */
 const REF_DARK_BG: RGB = { r: 10, g: 10, b: 15 }
@@ -32,23 +33,6 @@ const DARK_MODE_MAX_LUM = 215
  * luminance (0–255) so they do not feel like harsh smudges on a light background.
  */
 const LIGHT_MODE_MIN_LUM = 50
-
-export interface CharacterThemeOverlay {
-  accent: { h: number; s: number; l: number }
-  baseColors: {
-    primary?: string
-    secondary?: string
-    background?: string
-    text?: string
-  }
-  /** Mode-aware base colors for light mode (different lightness targets). */
-  baseColorsLight: {
-    primary?: string
-    secondary?: string
-    background?: string
-    text?: string
-  }
-}
 
 function rgbToCss(color: RGB): string {
   return `rgb(${color.r} ${color.g} ${color.b})`

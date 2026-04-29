@@ -2,6 +2,7 @@ import { get, post, put, del } from './client'
 
 export interface LoadoutSnapshot {
   selectedDefinition: any | null
+  selectedChimeraDefinitions: any[]
   selectedBehaviors: any[]
   selectedPersonalities: any[]
   chimeraMode: boolean

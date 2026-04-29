@@ -1273,6 +1273,46 @@ describe("Lumia and council macros", () => {
     expect(await ev("{{lumiaPersonality}}", env)).toBe("Patient, curious, and slightly cruel when she smells weakness.");
   });
 
+  test("Chimera definition macro uses dedicated chimera selections", async () => {
+    const env = makeEnv();
+    env.extra.lumia = {
+      selectedDefinition: {
+        id: "lumia-1",
+        name: "Astra",
+        definition: "A halo-crowned archivist woven from starlight.",
+      },
+      selectedChimeraDefinitions: [
+        {
+          id: "lumia-1",
+          name: "Astra",
+          definition: "A halo-crowned archivist woven from starlight.",
+        },
+        {
+          id: "lumia-2",
+          name: "Vel",
+          definition: "A silver-fanged huntress with mirrored bones.",
+        },
+      ],
+      selectedBehaviors: [
+        {
+          id: "lumia-3",
+          name: "Morrow",
+          behavior: "She circles tense scenes before committing to a single sharp move.",
+        },
+      ],
+      selectedPersonalities: [],
+      chimeraMode: true,
+      quirks: "",
+      quirksEnabled: true,
+      allItems: [],
+    };
+
+    expect(await ev("{{lumiaDef::len}}", env)).toBe("2");
+    expect(await ev("{{lumiaDef}}", env)).toContain("# CHIMERA FORM: Astra + Vel");
+    expect(await ev("{{lumiaDef}}", env)).toContain("A silver-fanged huntress with mirrored bones.");
+    expect(await ev("{{lumiaDef}}", env)).not.toContain("She circles tense scenes before committing to a single sharp move.");
+  });
+
   test("Loom selection macros resolve legacy camelCase item payloads", async () => {
     const env = makeEnv();
     env.extra.loom = {

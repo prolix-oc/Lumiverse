@@ -695,7 +695,10 @@ export function useWebSocket() {
         useStore.getState().loadAvailableTools()
       }),
 
-      wsClient.on(EventType.SPINDLE_EXTENSION_UNLOADED, () => {
+      wsClient.on(EventType.SPINDLE_EXTENSION_UNLOADED, (payload: { extensionId?: string }) => {
+        if (payload.extensionId) {
+          store.getState().clearExtensionThemeOverride(payload.extensionId)
+        }
         syncExtensions()
         // Extension tools may have been removed — refresh council tool list
         useStore.getState().loadAvailableTools()

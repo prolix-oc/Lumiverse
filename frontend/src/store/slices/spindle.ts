@@ -130,10 +130,14 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, enabled: false, status: 'stopped' as const } : e
       ),
+      extensionThemeOverrides: Object.fromEntries(
+        Object.entries(state.extensionThemeOverrides).filter(([extensionId]) => extensionId !== id)
+      ),
     }))
   },
 
   restartExtension: async (id: string) => {
+    get().clearExtensionThemeOverride(id)
     await unloadFrontendExtension(id)
     await spindleApi.restart(id)
     spindleApi.clearManifestCache(id)
