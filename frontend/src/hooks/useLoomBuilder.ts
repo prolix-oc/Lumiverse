@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '@/store'
 import { presetsApi } from '@/api/presets'
 import { connectionsApi } from '@/api/connections'
-import { ApiError } from '@/api/client'
+import { ApiError, BASE_URL } from '@/api/client'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import { getMacroCatalog } from '@/api/macros'
@@ -30,6 +30,49 @@ import {
   looksLikeLegacyPresetData,
 } from '@/lib/loom/service'
 
+const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
+
+function readPendingLoomPresets(): Record<string, LoomPreset> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(PENDING_LOOM_PRESETS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writePendingLoomPresets(presets: Record<string, LoomPreset>) {
+  if (typeof window === 'undefined') return
+  try {
+    if (Object.keys(presets).length === 0) {
+      localStorage.removeItem(PENDING_LOOM_PRESETS_KEY)
+      return
+    }
+    localStorage.setItem(PENDING_LOOM_PRESETS_KEY, JSON.stringify(presets))
+  } catch {}
+}
+
+function getPendingLoomPreset(id: string): LoomPreset | null {
+  const pending = readPendingLoomPresets()[id]
+  return pending && typeof pending === 'object' ? pending : null
+}
+
+function setPendingLoomPreset(preset: LoomPreset) {
+  const pending = readPendingLoomPresets()
+  pending[preset.id] = preset
+  writePendingLoomPresets(pending)
+}
+
+function clearPendingLoomPreset(id: string) {
+  const pending = readPendingLoomPresets()
+  if (!(id in pending)) return
+  delete pending[id]
+  writePendingLoomPresets(pending)
+}
+
 export function useLoomBuilder() {
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
   const loomRegistry = useStore((s) => s.loomRegistry)
@@ -56,7 +99,18 @@ export function useLoomBuilder() {
     setIsLoading(true)
     presetsApi.get(activeLoomPresetId).then((preset) => {
       if (!cancelled) {
-        setActivePreset(unmarshalPreset(preset))
+        const loadedPreset = unmarshalPreset(preset)
+        const pendingPreset = getPendingLoomPreset(activeLoomPresetId)
+
+        if (pendingPreset && JSON.stringify(marshalUpdate(pendingPreset)) !== JSON.stringify(marshalUpdate(loadedPreset))) {
+          setActivePreset(pendingPreset)
+          void presetsApi.update(pendingPreset.id, marshalUpdate(pendingPreset))
+            .then(() => clearPendingLoomPreset(pendingPreset.id))
+            .catch(() => {})
+        } else {
+          if (pendingPreset) clearPendingLoomPreset(activeLoomPresetId)
+          setActivePreset(loadedPreset)
+        }
         setIsLoading(false)
       }
     }).catch((err) => {
@@ -140,29 +194,74 @@ export function useLoomBuilder() {
   const pendingSaveRef = useRef<LoomPreset | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const persistPreset = useCallback(async (preset: LoomPreset) => {
+    await presetsApi.update(preset.id, marshalUpdate(preset))
+    clearPendingLoomPreset(preset.id)
+  }, [])
+
+  const persistPresetKeepalive = useCallback((preset: LoomPreset) => {
+    setPendingLoomPreset(preset)
+    fetch(`${BASE_URL}/presets/${encodeURIComponent(preset.id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify(marshalUpdate(preset)),
+      keepalive: true,
+    }).catch(() => {})
+  }, [])
+
   const debouncedSavePreset = useCallback((preset: LoomPreset) => {
     pendingSaveRef.current = preset
+    setPendingLoomPreset(preset)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(async () => {
       const toSave = pendingSaveRef.current
       if (toSave) {
         pendingSaveRef.current = null
         try {
-          await presetsApi.update(toSave.id, marshalUpdate(toSave))
+          await persistPreset(toSave)
         } catch (err) {
           console.warn('[LoomBuilder] Debounced save failed:', err)
         }
       }
     }, 400)
-  }, [])
+  }, [persistPreset])
+
+  const flushPendingPreset = useCallback((mode: 'default' | 'keepalive' = 'default') => {
+    const pending = pendingSaveRef.current
+    if (!pending) return
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    pendingSaveRef.current = null
+    if (mode === 'keepalive') {
+      persistPresetKeepalive(pending)
+      return
+    }
+    void persistPreset(pending).catch(() => {})
+  }, [persistPreset, persistPresetKeepalive])
 
   // Flush pending save on unmount
   useEffect(() => () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    if (pendingSaveRef.current) {
-      presetsApi.update(pendingSaveRef.current.id, marshalUpdate(pendingSaveRef.current)).catch(() => {})
+    flushPendingPreset()
+  }, [flushPendingPreset])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handlePageExit = () => flushPendingPreset('keepalive')
+    window.addEventListener('beforeunload', handlePageExit)
+    window.addEventListener('pagehide', handlePageExit)
+
+    return () => {
+      window.removeEventListener('beforeunload', handlePageExit)
+      window.removeEventListener('pagehide', handlePageExit)
     }
-  }, [])
+  }, [flushPendingPreset])
 
   const takePendingPreset = useCallback((presetId: string): LoomPreset | null => {
     if (saveTimerRef.current) {
@@ -185,6 +284,15 @@ export function useLoomBuilder() {
   const activePresetRef = useRef(activePreset)
   activePresetRef.current = activePreset
 
+  const updateActivePreset = useCallback((updater: (current: LoomPreset) => LoomPreset) => {
+    const current = activePresetRef.current
+    if (!current) return
+    const updated = updater(current)
+    activePresetRef.current = updated
+    setActivePreset(updated)
+    debouncedSavePreset(updated)
+  }, [debouncedSavePreset])
+
   const saveStructure = useCallback(async (
     blocks: PromptBlock[],
   ) => {
@@ -196,6 +304,7 @@ export function useLoomBuilder() {
       blocks: normalizedBlocks,
       updatedAt: Date.now(),
     }
+    activePresetRef.current = updated
     setActivePreset(updated)
     try {
       await presetsApi.update(updated.id, marshalUpdate(updated))
@@ -311,51 +420,44 @@ export function useLoomBuilder() {
 
   // Save sampler overrides — immediate state update, debounced API save
   const saveSamplerOverrides = useCallback((overrides: any) => {
-    if (!activePreset) return
-    const updated = { ...activePreset, samplerOverrides: { ...overrides }, updatedAt: Date.now() }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    updateActivePreset((current) => ({
+      ...current,
+      samplerOverrides: { ...overrides },
+      updatedAt: Date.now(),
+    }))
+  }, [updateActivePreset])
 
   const saveCustomBody = useCallback((customBody: any) => {
-    if (!activePreset) return
-    const updated = { ...activePreset, customBody: { ...customBody }, updatedAt: Date.now() }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    updateActivePreset((current) => ({
+      ...current,
+      customBody: { ...customBody },
+      updatedAt: Date.now(),
+    }))
+  }, [updateActivePreset])
 
   const savePromptBehavior = useCallback((updates: Record<string, any>) => {
-    if (!activePreset) return
-    const updated = {
-      ...activePreset,
-      promptBehavior: { ...(activePreset.promptBehavior || DEFAULT_PROMPT_BEHAVIOR), ...updates },
+    updateActivePreset((current) => ({
+      ...current,
+      promptBehavior: { ...(current.promptBehavior || DEFAULT_PROMPT_BEHAVIOR), ...updates },
       updatedAt: Date.now(),
-    }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    }))
+  }, [updateActivePreset])
 
   const saveCompletionSettings = useCallback((updates: Record<string, any>) => {
-    if (!activePreset) return
-    const updated = {
-      ...activePreset,
-      completionSettings: { ...(activePreset.completionSettings || DEFAULT_COMPLETION_SETTINGS), ...updates },
+    updateActivePreset((current) => ({
+      ...current,
+      completionSettings: { ...(current.completionSettings || DEFAULT_COMPLETION_SETTINGS), ...updates },
       updatedAt: Date.now(),
-    }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    }))
+  }, [updateActivePreset])
 
   const saveAdvancedSettings = useCallback((updates: Record<string, any>) => {
-    if (!activePreset) return
-    const updated = {
-      ...activePreset,
-      advancedSettings: { ...(activePreset.advancedSettings || DEFAULT_ADVANCED_SETTINGS), ...updates },
+    updateActivePreset((current) => ({
+      ...current,
+      advancedSettings: { ...(current.advancedSettings || DEFAULT_ADVANCED_SETTINGS), ...updates },
       updatedAt: Date.now(),
-    }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    }))
+  }, [updateActivePreset])
 
   // Persist the full promptVariables map in one shot. Used by the end-user
   // "Configure Prompt Variables" modal — saves are infrequent and user-driven
@@ -365,14 +467,15 @@ export function useLoomBuilder() {
     if (!activePreset) return
     const base = takePendingPreset(activePreset.id) ?? activePreset
     const updated = { ...base, promptVariables: values, updatedAt: Date.now() }
+    activePresetRef.current = updated
     setActivePreset(updated)
     try {
-      await presetsApi.update(updated.id, marshalUpdate(updated))
+      await persistPreset(updated)
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save prompt variable values:', err)
       throw err
     }
-  }, [activePreset, takePendingPreset])
+  }, [activePreset, persistPreset, takePendingPreset])
 
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     setIsLoading(true)
