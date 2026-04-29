@@ -4,7 +4,7 @@ import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
-import { generateApi, type DryRunResponse } from '@/api/generate'
+import { generateApi, type DryRunMessage, type DryRunResponse } from '@/api/generate'
 import type { BreakdownCacheEntry } from '@/types/store'
 import { groupBreakdownEntries, getBlockDisplayColor } from '@/lib/prompt-breakdown'
 import type { BreakdownGroup } from '@/lib/prompt-breakdown'
@@ -21,6 +21,17 @@ const ROLE_CLASS: Record<string, string> = {
   system: styles.roleSystem,
   user: styles.roleUser,
   assistant: styles.roleAssistant,
+}
+
+function summarizeMessage(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '(empty message)'
+  return normalized
+}
+
+function countLines(content: string): number {
+  if (!content) return 0
+  return content.split(/\r\n|\r|\n/).length
 }
 
 export default function PromptItemizerModal() {
@@ -67,6 +78,7 @@ export default function PromptItemizerModal() {
       .then((res) => {
         const entry: BreakdownCacheEntry = {
           entries: res.entries,
+          messages: res.messages,
           totalTokens: res.totalTokens,
           maxContext: res.maxContext,
           model: res.model,
@@ -166,6 +178,37 @@ export default function PromptItemizerModal() {
   }, [flatEntries])
 
   const selectedEntry = flatEntries.find((item) => item.key === selectedEntryKey) ?? null
+  const selectedChatHistoryMessages = useMemo(() => {
+    if (!selectedEntry || selectedEntry.entry.type !== 'chat_history') return null
+
+    const firstMessageIndex = selectedEntry.entry.firstMessageIndex
+    const messageCount = selectedEntry.entry.messageCount
+    if (firstMessageIndex == null || messageCount == null || messageCount <= 0) return null
+
+    const sourceMessages = data?.messages ?? rawData?.messages
+    if (!sourceMessages) return null
+
+    return sourceMessages.slice(firstMessageIndex, firstMessageIndex + messageCount)
+  }, [selectedEntry, data?.messages, rawData?.messages])
+
+  const selectedChatHistoryUsesReassembledMessages = Boolean(
+    selectedEntry?.entry.type === 'chat_history' && !data?.messages && selectedChatHistoryMessages,
+  )
+
+  useEffect(() => {
+    if (
+      rawView !== 'off' ||
+      !selectedEntry ||
+      selectedEntry.entry.type !== 'chat_history' ||
+      data?.messages ||
+      selectedChatHistoryMessages ||
+      rawLoading ||
+      rawError
+    ) {
+      return
+    }
+    void ensureRawData()
+  }, [data?.messages, ensureRawData, rawError, rawLoading, rawView, selectedChatHistoryMessages, selectedEntry])
 
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)))" zIndex={10001} className={styles.modal}>
@@ -232,7 +275,25 @@ export default function PromptItemizerModal() {
                         </div>
                       </div>
                     </div>
-                    {selectedEntry.entry.content ? (
+                    {selectedChatHistoryMessages && selectedChatHistoryMessages.length > 0 ? (
+                      <div className={styles.messageInspectorList}>
+                        {selectedChatHistoryUsesReassembledMessages && (
+                          <div className={styles.messageInspectorNotice}>
+                            Message boundaries are reconstructed from the current chat state because
+                            this older breakdown snapshot did not store the original outbound messages.
+                          </div>
+                        )}
+                        {selectedChatHistoryMessages.map((message, index) => (
+                          <ChatHistoryMessageCard
+                            key={`${selectedEntry.key}:${selectedEntry.entry.firstMessageIndex ?? 0}:${index}`}
+                            message={message}
+                            index={(selectedEntry.entry.firstMessageIndex ?? 0) + index}
+                          />
+                        ))}
+                      </div>
+                    ) : selectedEntry.entry.type === 'chat_history' && rawLoading ? (
+                      <div className={styles.entryInspectorEmpty}>Loading assembled messages...</div>
+                    ) : selectedEntry.entry.content != null ? (
                       <pre className={styles.entryInspectorContent}>{selectedEntry.entry.content}</pre>
                     ) : (
                       <div className={styles.entryInspectorEmpty}>
@@ -294,6 +355,25 @@ export default function PromptItemizerModal() {
             </div>
           )}
     </ModalShell>
+  )
+}
+
+function ChatHistoryMessageCard({ message, index }: { message: DryRunMessage; index: number }) {
+  const lineCount = countLines(message.content)
+
+  return (
+    <div className={styles.messageCard}>
+      <div className={styles.messageCardHeader}>
+        <span className={clsx(styles.tokenRole, ROLE_CLASS[message.role])}>{message.role}</span>
+        <span className={styles.messageCardIndex}>#{index + 1}</span>
+        <span className={styles.messageCardMeta}>
+          {message.content.length.toLocaleString()} chars
+          {lineCount > 0 && ` • ${lineCount.toLocaleString()} lines`}
+        </span>
+      </div>
+      <div className={styles.messageCardPreview}>{summarizeMessage(message.content)}</div>
+      <pre className={styles.messageCardContent}>{message.content || '(empty message)'}</pre>
+    </div>
   )
 }
 

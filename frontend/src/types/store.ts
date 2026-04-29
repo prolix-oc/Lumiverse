@@ -932,7 +932,10 @@ export interface BreakdownCacheEntry {
     blockId?: string
     extensionId?: string
     extensionName?: string
+    messageCount?: number
+    firstMessageIndex?: number
   }[]
+  messages?: import('@/api/generate').DryRunMessage[]
   totalTokens: number
   maxContext: number
   model: string

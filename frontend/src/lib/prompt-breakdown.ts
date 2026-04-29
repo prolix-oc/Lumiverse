@@ -22,6 +22,8 @@ export interface BreakdownEntry {
   blockId?: string
   extensionId?: string
   extensionName?: string
+  messageCount?: number
+  firstMessageIndex?: number
 }
 
 export interface BreakdownGroup {

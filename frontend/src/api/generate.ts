@@ -82,6 +82,8 @@ export interface AssemblyBreakdownEntry {
   blockId?: string
   extensionId?: string
   extensionName?: string
+  messageCount?: number
+  firstMessageIndex?: number
 }
 
 export interface DryRunResponse {
@@ -167,7 +169,10 @@ export interface BreakdownResponse {
     blockId?: string
     extensionId?: string
     extensionName?: string
+    messageCount?: number
+    firstMessageIndex?: number
   }[]
+  messages?: DryRunMessage[]
   totalTokens: number
   maxContext: number
   model: string

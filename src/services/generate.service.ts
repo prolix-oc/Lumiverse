@@ -154,6 +154,8 @@ interface GenerationLifecycle {
   targetCharacterId?: string;
   /** Chat history messages snapshot (used for accurate tokenization in breakdown) */
   chatHistoryMessages?: LlmMessage[];
+  /** Full assembled outbound message list for prompt breakdown inspection. */
+  messages?: LlmMessage[];
   /** Model + provider + preset info for breakdown storage */
   model?: string;
   providerName?: string;
@@ -1822,6 +1824,7 @@ export async function startGeneration(
         // Attach assembly metadata to lifecycle
         lifecycle.breakdown = breakdown;
         lifecycle.chatHistoryMessages = pipeline.chatHistoryMessages;
+        lifecycle.messages = messages;
         lifecycle.model = connection.model;
         lifecycle.providerName = provider.name;
         lifecycle.maxContext = mergedParams.max_context_length as
@@ -2755,6 +2758,15 @@ async function runGeneration(
               entries: tokenResult.breakdown.map((entry, index) => ({
                 ...entry,
                 content: lifecycle.breakdown?.[index]?.content,
+              })),
+              messages: (lifecycle.messages || []).map((message) => ({
+                role: message.role,
+                content:
+                  typeof message.content === "string"
+                    ? message.content
+                    : message.content
+                        .map((part) => (part.type === "text" ? part.text : ""))
+                        .join(""),
               })),
               totalTokens: tokenResult.total_tokens,
               maxContext: lifecycle.maxContext || 0,
