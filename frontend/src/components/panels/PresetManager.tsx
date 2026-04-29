@@ -42,6 +42,7 @@ export default function PresetManager() {
     : null
 
   const isToggleOnly = activeProvider ? TOGGLE_ONLY_PROVIDERS.has(activeProvider) : false
+  const isApiReasoningDisabled = !reasoningSettings.apiReasoning
   const effortOptions = getEffortOptions(activeProvider, activeModel)
   const isAnthropic = activeProvider === 'anthropic'
   const activeBindingMatchesPanel = normalizedActiveBinding
@@ -145,16 +146,17 @@ export default function PresetManager() {
         </div>
 
         {/* Reasoning effort */}
-        <div className={styles.fieldGroup}>
+        <div className={clsx(styles.fieldGroup, (isToggleOnly || isApiReasoningDisabled) && styles.fieldGroupDisabled)}>
           <span className={styles.label}>
             Reasoning Effort
             {isToggleOnly && <span className={styles.toggleOnlyHint}> (toggle-only for {activeProvider})</span>}
+            {!isToggleOnly && isApiReasoningDisabled && <span className={styles.toggleOnlyHint}> (disabled while API reasoning is off)</span>}
           </span>
           <select
-            className={clsx(styles.select, isToggleOnly && styles.selectDisabled)}
+            className={clsx(styles.select, (isToggleOnly || isApiReasoningDisabled) && styles.selectDisabled)}
             value={reasoningSettings.reasoningEffort}
             onChange={(e) => updateReasoning({ reasoningEffort: e.target.value as ReasoningEffort })}
-            disabled={isToggleOnly}
+            disabled={isToggleOnly || isApiReasoningDisabled}
           >
             {!currentEffortValid && (
               <option value={reasoningSettings.reasoningEffort}>
@@ -169,19 +171,22 @@ export default function PresetManager() {
 
         {/* Anthropic-only: thinking.display field on the Messages API */}
         {isAnthropic && (
-          <div className={styles.fieldGroup}>
+          <div className={clsx(styles.fieldGroup, isApiReasoningDisabled && styles.fieldGroupDisabled)}>
             <span className={styles.label}>Thinking Display</span>
             <select
-              className={styles.select}
+              className={clsx(styles.select, isApiReasoningDisabled && styles.selectDisabled)}
               value={reasoningSettings.thinkingDisplay ?? 'auto'}
               onChange={(e) => updateReasoning({ thinkingDisplay: e.target.value as ThinkingDisplay })}
+              disabled={isApiReasoningDisabled}
             >
               <option value="auto">Auto (model default)</option>
               <option value="summarized">Summarized</option>
               <option value="omitted">Omitted</option>
             </select>
             <span className={styles.toggleDesc}>
-              Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.
+              {isApiReasoningDisabled
+                ? 'Only sent when API reasoning is enabled.'
+                : 'Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.'}
             </span>
           </div>
         )}

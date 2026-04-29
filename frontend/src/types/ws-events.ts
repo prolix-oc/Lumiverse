@@ -204,12 +204,14 @@ export interface ContextClipStats {
   safetyMargin: number
   inputBudget: number
   fixedTokens: number
+  remainingHistoryBudget: number
   chatHistoryTokensBefore: number
   chatHistoryTokensAfter: number
   messagesDropped: number
   tokensDropped: number
   tokenizerUsed: string
   budgetInvalid?: boolean
+  fixedOverBudget?: boolean
 }
 
 export interface GenerationStartedPayload {

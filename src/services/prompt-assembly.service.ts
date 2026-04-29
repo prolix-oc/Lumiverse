@@ -5560,7 +5560,7 @@ const FALLBACK_MAX_RESPONSE_TOKENS = 4096;
  * can emit them on `GENERATION_STARTED` / dry-run so the UI can surface a
  * "N messages hidden" indicator.
  */
-async function clipToContextBudget(
+export async function clipToContextBudget(
   result: LlmMessage[],
   modelId: string | null,
   maxContext: number | null | undefined,
@@ -5582,6 +5582,7 @@ async function clipToContextBudget(
       safetyMargin: 0,
       inputBudget: 0,
       fixedTokens: 0,
+      remainingHistoryBudget: 0,
       chatHistoryTokensBefore: 0,
       chatHistoryTokensAfter: 0,
       messagesDropped: 0,
@@ -5625,6 +5626,8 @@ async function clipToContextBudget(
     }
   }
 
+  const remainingHistoryBudget = inputBudget - fixedTokens;
+
   const makeStats = (
     overrides: Partial<ContextClipStats>,
   ): ContextClipStats => ({
@@ -5634,6 +5637,7 @@ async function clipToContextBudget(
     safetyMargin,
     inputBudget,
     fixedTokens,
+    remainingHistoryBudget,
     chatHistoryTokensBefore,
     chatHistoryTokensAfter: chatHistoryTokensBefore,
     messagesDropped: 0,
@@ -5648,8 +5652,26 @@ async function clipToContextBudget(
     return makeStats({ budgetInvalid: true });
   }
 
+  if (remainingHistoryBudget <= 0) {
+    let write = 0;
+    for (let read = 0; read < n; read++) {
+      const msg = result[read];
+      if (isChatHistoryMessage(msg)) continue;
+      if (write !== read) result[write] = msg;
+      write++;
+    }
+    result.length = write;
+
+    return makeStats({
+      chatHistoryTokensAfter: 0,
+      messagesDropped: historyIndices.length,
+      tokensDropped: chatHistoryTokensBefore,
+      fixedOverBudget: remainingHistoryBudget < 0,
+    });
+  }
+
   // Walk history newest→oldest; remember the oldest index we can keep.
-  const remainingBudget = inputBudget - fixedTokens;
+  const remainingBudget = remainingHistoryBudget;
   let accHistoryTokens = 0;
   let oldestKeptHistoryIdx = -1;
   if (remainingBudget > 0) {

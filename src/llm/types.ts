@@ -251,6 +251,8 @@ export interface ContextClipStats {
   inputBudget: number;
   /** Tokens consumed by non-chat-history messages (system blocks, WI, prefill, …). */
   fixedTokens: number;
+  /** `inputBudget - fixedTokens`. Can be negative when fixed overhead already exceeds budget. */
+  remainingHistoryBudget: number;
   /** Chat-history tokens before clipping. */
   chatHistoryTokensBefore: number;
   /** Chat-history tokens after clipping. */
@@ -263,6 +265,8 @@ export interface ContextClipStats {
   tokenizerUsed: string;
   /** True when the budget computed to <= 0 (misconfigured preset) — no clipping attempted. */
   budgetInvalid?: boolean;
+  /** True when fixed prompt overhead alone is larger than the available input budget. */
+  fixedOverBudget?: boolean;
 }
 
 export interface AssemblyResult {

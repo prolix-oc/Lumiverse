@@ -243,9 +243,17 @@ export function useWebSocket() {
             toast.error(
               `Context size (${clip.maxContext.toLocaleString()}) is smaller than reserved response tokens — no history can fit. Raise Context Size or lower Max Tokens.`,
             )
+          } else if (clip?.enabled && clip.fixedOverBudget) {
+            toast.error(
+              `Fixed prompt overhead (${clip.fixedTokens.toLocaleString()} tokens) already exceeds the input budget by ${Math.abs(clip.remainingHistoryBudget).toLocaleString()} tokens. Chat history is the only clip-eligible section, so reduce system/WI/preset content, raise Context Size, or lower Max Tokens.`,
+            )
+          } else if (clip?.enabled && clip.remainingHistoryBudget <= 0 && clip.messagesDropped > 0) {
+            toast.warning(
+              `Fixed prompt overhead leaves no room for chat history. System prompt and other fixed blocks are not clipped; raise Context Size, lower Max Tokens, or shorten fixed prompt content.`,
+            )
           } else if (clip?.enabled && clip.messagesDropped > 0) {
             toast.warning(
-              `Clipped ${clip.messagesDropped} message${clip.messagesDropped === 1 ? '' : 's'} to fit context budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
+              `Clipped ${clip.messagesDropped} chat history message${clip.messagesDropped === 1 ? '' : 's'} to fit the remaining history budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
             )
           }
         }
@@ -938,9 +946,9 @@ export function useWebSocket() {
       wsClient.on(EventType.OPERATOR_PROGRESS, (payload: any) => {
         if (payload) {
           const status = payload.status
-          store.getState().setOperatorBusy(
-            status === 'complete' || status === 'error' ? null : payload.operation
-          )
+          const inProgress = status !== 'complete' && status !== 'error'
+          store.getState().setOperatorBusy(inProgress ? payload.operation : null)
+          store.getState().setOperatorProgressMessage(inProgress ? (payload.message ?? null) : null)
         }
       }),
 

@@ -290,6 +290,7 @@ export default function OperatorPanel() {
   const [trustedHostsError, setTrustedHostsError] = useState<string | null>(null)
   const [hostDraft, setHostDraft] = useState('')
   const storeBusy = useStore((s) => s.operatorBusy)
+  const storeProgressMessage = useStore((s) => s.operatorProgressMessage)
   const addToast = useStore((s) => s.addToast)
 
   // Track the operation that triggered a server restart so we can
@@ -299,6 +300,9 @@ export default function OperatorPanel() {
 
   const normalizedStoreBusy = normalizeOperatorOperation(storeBusy)
   const effectiveBusy = reconnecting ? 'reconnecting' : (normalizedStoreBusy || normalizeOperatorOperation(busy))
+  const effectiveBusyMessage = !reconnecting && normalizedStoreBusy && storeProgressMessage
+    ? storeProgressMessage
+    : null
   const ipcAvailable = status?.ipcAvailable ?? false
   const ipcHint = status ? IPC_REASON_COPY[status.ipcReason] : null
 
@@ -492,6 +496,7 @@ export default function OperatorPanel() {
       setReconnecting(false)
       setBusy(null)
       useStore.getState().setOperatorBusy(null)
+      useStore.getState().setOperatorProgressMessage(null)
 
       // Re-fetch status (new PID, uptime reset, possibly new branch/version)
       refreshStatus()
@@ -911,7 +916,7 @@ export default function OperatorPanel() {
       {effectiveBusy && effectiveBusy !== 'reconnecting' && (
         <div className={styles.busyOverlay}>
           <Loader2 size={16} className={spinClass} />
-          {effectiveBusy === 'checking' ? 'Checking for updates...' :
+          {effectiveBusyMessage ?? (effectiveBusy === 'checking' ? 'Checking for updates...' :
            effectiveBusy === 'updating' ? 'Applying update... Server will restart.' :
            effectiveBusy === 'switching branch' ? 'Switching branch... Server will restart.' :
            effectiveBusy === 'restarting' ? 'Restarting server...' :
@@ -925,8 +930,8 @@ export default function OperatorPanel() {
            effectiveBusy === 'refreshing database stats' ? 'Refreshing database stats...' :
             effectiveBusy === 'database maintenance' ? 'Running database maintenance...' :
            effectiveBusy === 'database vacuum' ? 'Running SQLite VACUUM...' :
-            effectiveBusy === 'rebuilding frontend' ? 'Rebuilding frontend... Server will restart.' :
-            `${effectiveBusy}...`}
+             effectiveBusy === 'rebuilding frontend' ? 'Rebuilding frontend... Server will restart.' :
+             `${effectiveBusy}...`)}
         </div>
       )}
 

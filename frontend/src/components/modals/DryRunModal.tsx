@@ -623,9 +623,9 @@ export default function DryRunModal() {
                 </button>
                 {budgetOpen && (
                   <div className={styles.collapsibleBody}>
-                    {contextClipStats.enabled && contextClipStats.budgetInvalid && (
-                      <div
-                        className={styles.breakdownEntry}
+                  {contextClipStats.enabled && contextClipStats.budgetInvalid && (
+                    <div
+                      className={styles.breakdownEntry}
                         style={{
                           marginBottom: 8,
                           background: 'rgba(255, 84, 112, 0.08)',
@@ -644,6 +644,35 @@ export default function DryRunModal() {
                           {' − '}safety ({contextClipStats.safetyMargin.toLocaleString()}) ={' '}
                           {contextClipStats.inputBudget.toLocaleString()}. Raise Context Size or
                           lower Max Tokens.
+                        </span>
+                      </div>
+                    )}
+                    {contextClipStats.enabled && !contextClipStats.budgetInvalid && contextClipStats.remainingHistoryBudget <= 0 && (
+                      <div
+                        className={styles.breakdownEntry}
+                        style={{
+                          marginBottom: 8,
+                          background: contextClipStats.fixedOverBudget ? 'rgba(255, 84, 112, 0.08)' : 'rgba(255, 171, 0, 0.08)',
+                          borderLeft: `3px solid ${contextClipStats.fixedOverBudget ? '#ff5470' : '#ffab00'}`,
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
+                          gap: 4,
+                        }}
+                      >
+                        <span
+                          className={styles.breakdownLabel}
+                          style={{ color: contextClipStats.fixedOverBudget ? '#ff5470' : '#ffab00' }}
+                        >
+                          {contextClipStats.fixedOverBudget
+                            ? 'Fixed prompt overhead already exceeds the budget'
+                            : 'Fixed prompt overhead leaves no room for chat history'}
+                        </span>
+                        <span className={styles.breakdownSource}>
+                          Chat history is the only clip-eligible section. System prompt, WI, persona, and other fixed blocks stay in the prompt, leaving{' '}
+                          {Math.max(0, contextClipStats.remainingHistoryBudget).toLocaleString()} tokens for history.
+                          {contextClipStats.fixedOverBudget && (
+                            <> Fixed overhead is over budget by {Math.abs(contextClipStats.remainingHistoryBudget).toLocaleString()} tokens.</>
+                          )}
                         </span>
                       </div>
                     )}
@@ -669,7 +698,7 @@ export default function DryRunModal() {
                         </span>
                       </div>
                       <div className={styles.breakdownEntry}>
-                        <span className={styles.breakdownLabel}>Input budget (history allowance)</span>
+                        <span className={styles.breakdownLabel}>Input budget before fixed overhead</span>
                         <span
                           className={styles.breakdownTokens}
                           style={contextClipStats.budgetInvalid ? { color: '#ff5470' } : undefined}
@@ -681,6 +710,18 @@ export default function DryRunModal() {
                         <span className={styles.breakdownLabel}>Fixed overhead (system / WI / persona / etc.)</span>
                         <span className={styles.breakdownTokens}>
                           {contextClipStats.fixedTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Remaining room for chat history</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.remainingHistoryBudget < 0 ? { color: '#ff5470' } : contextClipStats.remainingHistoryBudget === 0 ? { color: '#ffab00' } : undefined}
+                        >
+                          {Math.max(0, contextClipStats.remainingHistoryBudget).toLocaleString()} tokens
+                          {contextClipStats.remainingHistoryBudget < 0
+                            ? ` (${Math.abs(contextClipStats.remainingHistoryBudget).toLocaleString()} over)`
+                            : ''}
                         </span>
                       </div>
                       <div className={styles.breakdownEntry}>

@@ -9,6 +9,7 @@ export const createOperatorSlice: StateCreator<AppStore, [], [], OperatorSlice> 
   operatorLogs: [],
   operatorStatus: null,
   operatorBusy: null,
+  operatorProgressMessage: null,
 
   appendOperatorLogs: (entries: OperatorLogEntry[]) =>
     set((state) => {
@@ -28,6 +29,9 @@ export const createOperatorSlice: StateCreator<AppStore, [], [], OperatorSlice> 
 
   setOperatorBusy: (operation: string | null) =>
     set({ operatorBusy: operation }),
+
+  setOperatorProgressMessage: (message: string | null) =>
+    set({ operatorProgressMessage: message }),
 
   clearOperatorLogs: () =>
     set({ operatorLogs: [] }),

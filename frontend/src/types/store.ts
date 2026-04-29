@@ -1089,9 +1089,11 @@ export interface OperatorSlice {
   operatorLogs: OperatorLogEntry[]
   operatorStatus: OperatorStatusPayload | null
   operatorBusy: string | null
+  operatorProgressMessage: string | null
   appendOperatorLogs: (entries: OperatorLogEntry[]) => void
   setOperatorStatus: (status: OperatorStatusPayload) => void
   setOperatorBusy: (operation: string | null) => void
+  setOperatorProgressMessage: (message: string | null) => void
   clearOperatorLogs: () => void
 }
 
