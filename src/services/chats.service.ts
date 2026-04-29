@@ -17,16 +17,24 @@ import { sanitizeForVectorization } from "../utils/content-sanitizer";
 // --- Chat helpers ---
 
 function rowToChat(row: any): Chat {
-  return { ...row, metadata: JSON.parse(row.metadata) };
+  let metadata: Record<string, unknown>;
+  try { metadata = JSON.parse(row.metadata); } catch { metadata = {}; }
+  return { ...row, metadata };
 }
 
 function rowToMessage(row: any): Message {
+  let swipes: string[];
+  let swipe_dates: number[];
+  let extra: Record<string, unknown>;
+  try { swipes = JSON.parse(row.swipes); } catch { swipes = [row.content ?? ""]; }
+  try { swipe_dates = JSON.parse(row.swipe_dates || '[]'); } catch { swipe_dates = []; }
+  try { extra = JSON.parse(row.extra); } catch { extra = {}; }
   return {
     ...row,
     is_user: !!row.is_user,
-    swipes: JSON.parse(row.swipes),
-    swipe_dates: JSON.parse(row.swipe_dates || '[]'),
-    extra: JSON.parse(row.extra),
+    swipes,
+    swipe_dates,
+    extra,
     parent_message_id: row.parent_message_id || null,
     branch_id: row.branch_id || null,
   };

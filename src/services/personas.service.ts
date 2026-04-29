@@ -52,35 +52,36 @@ export function createPersona(userId: string, input: CreatePersonaInput): Person
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  if (input.is_default) {
-    getDb().query("UPDATE personas SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
-  }
-
-  getDb()
-    .query(
-      `INSERT INTO personas (
-         id, user_id, name, title, description,
-         subjective_pronoun, objective_pronoun, possessive_pronoun,
-         folder, is_default, attached_world_book_id, metadata, created_at, updated_at
-       )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id,
-      userId,
-      input.name,
-      input.title || "",
-      input.description || "",
-      input.subjective_pronoun || "",
-      input.objective_pronoun || "",
-      input.possessive_pronoun || "",
-      input.folder || "",
-      input.is_default ? 1 : 0,
-      input.attached_world_book_id || null,
-      JSON.stringify(input.metadata || {}),
-      now,
-      now
-    );
+  getDb().transaction(() => {
+    if (input.is_default) {
+      getDb().query("UPDATE personas SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
+    }
+    getDb()
+      .query(
+        `INSERT INTO personas (
+           id, user_id, name, title, description,
+           subjective_pronoun, objective_pronoun, possessive_pronoun,
+           folder, is_default, attached_world_book_id, metadata, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        userId,
+        input.name,
+        input.title || "",
+        input.description || "",
+        input.subjective_pronoun || "",
+        input.objective_pronoun || "",
+        input.possessive_pronoun || "",
+        input.folder || "",
+        input.is_default ? 1 : 0,
+        input.attached_world_book_id || null,
+        JSON.stringify(input.metadata || {}),
+        now,
+        now
+      );
+  })();
 
   const persona = getPersona(userId, id)!;
   eventBus.emit(EventType.PERSONA_CHANGED, { id, persona }, userId);
@@ -92,10 +93,6 @@ export function updatePersona(userId: string, id: string, input: UpdatePersonaIn
   if (!existing) return null;
 
   const now = Math.floor(Date.now() / 1000);
-
-  if (input.is_default) {
-    getDb().query("UPDATE personas SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
-  }
 
   const fields: string[] = [];
   const values: any[] = [];
@@ -118,7 +115,12 @@ export function updatePersona(userId: string, id: string, input: UpdatePersonaIn
   values.push(id);
   values.push(userId);
 
-  getDb().query(`UPDATE personas SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  getDb().transaction(() => {
+    if (input.is_default) {
+      getDb().query("UPDATE personas SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
+    }
+    getDb().query(`UPDATE personas SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  })();
   const updated = getPersona(userId, id)!;
   eventBus.emit(EventType.PERSONA_CHANGED, { id, persona: updated }, userId);
   return updated;

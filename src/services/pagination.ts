@@ -3,8 +3,14 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { DEFAULT_LIMIT, MAX_LIMIT } from "../types/pagination";
 
 const stmtCache = new Map<string, ReturnType<ReturnType<typeof getDb>["query"]>>();
+let stmtCacheGen = -1;
 
 function cachedQuery(sql: string) {
+  const gen = (require("../db/connection").getDbGeneration as () => number)();
+  if (gen !== stmtCacheGen) {
+    stmtCache.clear();
+    stmtCacheGen = gen;
+  }
   let stmt = stmtCache.get(sql);
   if (!stmt) {
     stmt = getDb().query(sql);

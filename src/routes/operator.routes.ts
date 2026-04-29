@@ -55,7 +55,8 @@ app.post("/database/maintenance", async (c) => {
 // ── Logs ────────────────────────────────────────────────────────────────────
 
 app.get("/logs", (c) => {
-  const limit = Math.min(2000, Math.max(1, parseInt(c.req.query("limit") || "150", 10) || 150));
+  const parsedLimit = parseInt(c.req.query("limit") || "150", 10);
+  const limit = Math.min(2000, Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 150));
   const entries = operatorService.getLogs(limit);
   return c.json({ entries });
 });
