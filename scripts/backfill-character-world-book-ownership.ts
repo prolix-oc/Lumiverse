@@ -199,6 +199,7 @@ const candidates: Candidate[] = [];
 const ambiguous: AmbiguousCase[] = [];
 let alreadyTagged = 0;
 let ignored = 0;
+let characterSourced = 0;
 
 for (const worldBook of worldBooks) {
   const metadata = worldBook.metadata;
@@ -206,6 +207,8 @@ for (const worldBook of worldBooks) {
     ignored += 1;
     continue;
   }
+
+  characterSourced += 1;
 
   if (metadata.auto_managed_by_character === true) {
     alreadyTagged += 1;
@@ -253,7 +256,8 @@ for (const worldBook of worldBooks) {
 console.log(`${APPLY ? "Applying" : "Dry run:"} legacy character lorebook ownership backfill`);
 console.log(`Database: ${DB_PATH}`);
 console.log("");
-console.log(`Character-sourced world books scanned: ${worldBooks.length}`);
+console.log(`Total world books scanned: ${worldBooks.length}`);
+console.log(`Character-sourced world books found: ${characterSourced}`);
 console.log(`Already tagged: ${alreadyTagged}`);
 console.log(`High-confidence backfill candidates: ${candidates.length}`);
 console.log(`Ambiguous legacy cases left untouched: ${ambiguous.length}`);
