@@ -158,7 +158,9 @@ function maybeExtractWorldbook(
   if (!charBook || !charBook.entries || charBook.entries.length === 0) return;
 
   try {
-    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, characterName, charBook);
+    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, characterName, charBook, {
+      autoManagedByCharacter: true,
+    });
     // Associate the worldbook with the character (append to array)
     const currentIds = getCharacterWorldBookIds(character.extensions);
     const nextExtensions = setCharacterWorldBookIds(

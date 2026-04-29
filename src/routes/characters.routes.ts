@@ -99,7 +99,9 @@ function autoImportEmbeddedWorldbook(userId: string, characterId: string): void 
   if (existingIds.length > 0) return;
 
   try {
-    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, character.name, charBook);
+    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, character.name, charBook, {
+      autoManagedByCharacter: true,
+    });
     const nextExtensions = setCharacterWorldBookIds(
       { ...(character.extensions || {}) },
       [...existingIds, worldBook.id],

@@ -255,6 +255,24 @@ export function deleteWorldBook(userId: string, id: string): boolean {
   return getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
 
+export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): number {
+  const rows = getDb().query(
+    `SELECT id
+       FROM world_books
+      WHERE user_id = ?
+        AND json_extract(metadata, '$.source') = 'character'
+        AND json_extract(metadata, '$.auto_managed_by_character') = 1
+        AND json_extract(metadata, '$.source_character_id') = ?`
+  ).all(userId, characterId) as Array<{ id: string }>;
+
+  let deleted = 0;
+  for (const row of rows) {
+    if (deleteWorldBook(userId, row.id)) deleted += 1;
+  }
+
+  return deleted;
+}
+
 export function getWorldBookVectorSummary(userId: string, worldBookId: string): WorldBookVectorSummary | null {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
@@ -1162,7 +1180,8 @@ export function importCharacterBook(
   userId: string,
   characterId: string,
   characterName: string,
-  characterBook: any
+  characterBook: any,
+  options: { autoManagedByCharacter?: boolean } = {}
 ): { worldBook: WorldBook; entryCount: number } {
   const bookName = characterBook.name || `${characterName}'s Lorebook`;
   const importedAt = new Date().toLocaleString();
@@ -1170,7 +1189,11 @@ export function importCharacterBook(
   const worldBook = createWorldBook(userId, {
     name: bookName,
     description,
-    metadata: { source: "character", source_character_id: characterId },
+    metadata: {
+      source: "character",
+      source_character_id: characterId,
+      auto_managed_by_character: options.autoManagedByCharacter === true,
+    },
   });
 
   const entries = characterBook.entries || [];

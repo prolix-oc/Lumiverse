@@ -184,9 +184,21 @@ export default function CharacterEditorPage() {
     fetchRegexScripts()
   }, [fetchRegexScripts])
 
+  const upsertWorldBookOption = useCallback((book: { id: string; name: string }) => {
+    setWorldBooks((prev) => {
+      const existingIndex = prev.findIndex((item) => item.id === book.id)
+      if (existingIndex === -1) return [book, ...prev]
+
+      const next = [...prev]
+      next[existingIndex] = book
+      return next
+    })
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     const loadWorldBooks = async () => {
+      if (!editingCharacterId) return
       try {
         const res = await worldBooksApi.list({ limit: 200 })
         if (!cancelled) setWorldBooks(res.data.map((b) => ({ id: b.id, name: b.name })))
@@ -198,7 +210,7 @@ export default function CharacterEditorPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [editingCharacterId])
 
   const handleGalleryUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1207,6 +1219,7 @@ export default function CharacterEditorPage() {
                                 setLorebookImporting(true)
                                 try {
                                   const res = await worldBooksApi.importCharacterBook(editingCharacterId)
+                                  upsertWorldBookOption({ id: res.world_book.id, name: res.world_book.name })
                                   mutateExtensions((ext) => {
                                     const currentIds = getCharacterWorldBookIds(ext)
                                     return setCharacterWorldBookIds(ext, [...currentIds, res.world_book.id])

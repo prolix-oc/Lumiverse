@@ -7,6 +7,7 @@ import { paginatedQuery } from "./pagination";
 import * as filesSvc from "./files.service";
 import * as imagesSvc from "./images.service";
 import { deleteRegexScriptsByCharacterId } from "./regex-scripts.service";
+import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
@@ -594,8 +595,12 @@ export function setCharacterSourceFilename(userId: string, id: string, sourceFil
 }
 
 export function deleteCharacter(userId: string, id: string): boolean {
+  const existing = getCharacter(userId, id);
+  if (!existing) return false;
+
   const result = getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
   if (result.changes > 0) {
+    deleteAutoManagedCharacterWorldBooks(userId, id);
     deleteRegexScriptsByCharacterId(userId, id);
     eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
   }
