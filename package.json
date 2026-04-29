@@ -44,6 +44,7 @@
     "build:frontend": "cd frontend && bun install && bun run build:checked",
     "build:frontend:fast": "cd frontend && bun install && bun run build",
     "reset-password": "bun run scripts/reset-password.ts",
+    "backfill-character-world-book-ownership": "bun run scripts/backfill-character-world-book-ownership.ts",
     "migrate:st": "bun run scripts/migrate-sillytavern.ts",
     "release": "bash scripts/release.sh",
     "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts"
