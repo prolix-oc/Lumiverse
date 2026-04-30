@@ -12,6 +12,7 @@ export interface SpindleMessageWidgetRenderOptions {
 interface MessageWidgetRecord extends SpindleMessageWidgetRenderOptions {
   extensionId: string
   onMessage?: (payload: unknown) => void
+  corsProxy?: (url: string, options?: any) => Promise<any>
 }
 
 const widgetsByMessage = new Map<string, MessageWidgetRecord[]>()
@@ -31,9 +32,10 @@ export function upsertMessageWidget(
   extensionId: string,
   options: SpindleMessageWidgetRenderOptions,
   onMessage?: (payload: unknown) => void,
+  corsProxy?: (url: string, options?: any) => Promise<any>,
 ): void {
   const list = widgetsByMessage.get(options.messageId) || []
-  const nextRecord: MessageWidgetRecord = { ...options, extensionId, onMessage }
+  const nextRecord: MessageWidgetRecord = { ...options, extensionId, onMessage, corsProxy }
   const idx = list.findIndex((w) => w.extensionId === extensionId && w.widgetId === options.widgetId)
   if (idx === -1) list.push(nextRecord)
   else list[idx] = nextRecord
@@ -88,7 +90,7 @@ function MessageWidgetFrame({ widget }: { widget: MessageWidgetRecord }): ReactE
       autoResize: true,
       minHeight: widget.minHeight ?? 40,
       maxHeight: widget.maxHeight ?? 4000,
-    })
+    }, widget.corsProxy)
     frame.element.setAttribute('data-spindle-message-widget', widget.widgetId)
     frame.element.setAttribute('data-spindle-extension-id', widget.extensionId)
     frame.element.style.margin = '12px 0'

@@ -7,6 +7,7 @@ interface SandboxFrameRecord {
   minHeight: number
   maxHeight: number
   destroyed: boolean
+  corsProxy?: (url: string, options?: any) => Promise<any>
 }
 
 const SANDBOX_MESSAGE_KEY = '__lumiverseSpindleSandbox'
@@ -29,6 +30,10 @@ function handleSandboxMessage(event: MessageEvent): void {
     token?: unknown
     payload?: unknown
     height?: unknown
+    kind?: unknown
+    requestId?: unknown
+    url?: unknown
+    options?: unknown
   }
   if (wire.__lumiverseSpindleSandbox !== SANDBOX_MESSAGE_KEY) return
   if (typeof wire.token !== 'string' || !wire.token) return
@@ -46,6 +51,41 @@ function handleSandboxMessage(event: MessageEvent): void {
     return
   }
 
+  if (wire.kind === 'cors-proxy-request' && record.corsProxy) {
+    const requestId = String(wire.requestId ?? '')
+    const url = String(wire.url ?? '')
+    const options = wire.options
+    Promise.resolve(record.corsProxy(url, options)).then(
+      (result) => {
+        if (record.destroyed) return
+        record.iframe.contentWindow?.postMessage(
+          {
+            [SANDBOX_MESSAGE_KEY]: SANDBOX_MESSAGE_KEY,
+            token: wire.token,
+            kind: 'cors-proxy-response',
+            requestId,
+            result,
+          },
+          '*'
+        )
+      },
+      (error) => {
+        if (record.destroyed) return
+        record.iframe.contentWindow?.postMessage(
+          {
+            [SANDBOX_MESSAGE_KEY]: SANDBOX_MESSAGE_KEY,
+            token: wire.token,
+            kind: 'cors-proxy-response',
+            requestId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          '*'
+        )
+      }
+    )
+    return
+  }
+
   for (const handler of record.handlers) {
     try {
       handler(wire.payload)
@@ -57,7 +97,8 @@ function handleSandboxMessage(event: MessageEvent): void {
 
 export function createSandboxFrame(
   extensionId: string,
-  options: SpindleSandboxFrameOptions
+  options: SpindleSandboxFrameOptions,
+  corsProxy?: (url: string, options?: any) => Promise<any>
 ): SpindleSandboxFrameHandle {
   ensureBridgeInstalled()
 
@@ -91,6 +132,7 @@ export function createSandboxFrame(
     minHeight,
     maxHeight,
     destroyed: false,
+    corsProxy,
   }
   sandboxFrames.set(token, record)
 
@@ -112,6 +154,7 @@ export function createSandboxFrame(
         autoResize: options.autoResize !== false,
         minHeight,
         maxHeight,
+        corsProxy: !!record.corsProxy,
       })
     },
     postMessage(payload: unknown) {
@@ -145,6 +188,7 @@ function buildSandboxDocument(options: {
   autoResize: boolean
   minHeight: number
   maxHeight: number
+  corsProxy?: boolean
 }): string {
   const injection = buildHeadInjection(options)
   const html = options.html || ''
@@ -162,11 +206,24 @@ function buildHeadInjection(options: {
   autoResize: boolean
   minHeight: number
   maxHeight: number
+  corsProxy?: boolean
 }): string {
   const tokenLit = JSON.stringify(options.token)
   const autoResizeLit = options.autoResize ? 'true' : 'false'
   const minHeightLit = String(options.minHeight)
   const maxHeightLit = String(options.maxHeight)
+
+  const sandboxApiParts = [
+    'postMessage:function(payload){postWire({payload:payload});}',
+    'onMessage:function(handler){if(typeof handler!=="function")return function(){};hostMessageHandlers.push(handler);return function(){var idx=hostMessageHandlers.indexOf(handler);if(idx!==-1)hostMessageHandlers.splice(idx,1);};}',
+    'requestResize:function(height){requestResize(typeof height==="number"?height:Number(height));}',
+  ]
+
+  if (options.corsProxy) {
+    sandboxApiParts.push(
+      'corsProxy:function(url,options){return new Promise(function(resolve,reject){var requestId=Math.random().toString(36).slice(2)+Date.now().toString(36);function onResponse(event){var data=event.data;if(!data||typeof data!=="object")return;if(data.__lumiverseSpindleSandbox!==KEY||data.token!==TOKEN||data.kind!=="cors-proxy-response")return;if(data.requestId!==requestId)return;window.removeEventListener("message",onResponse);if(data.error){reject(new Error(data.error));}else{resolve(data.result);}}window.addEventListener("message",onResponse);postWire({kind:"cors-proxy-request",requestId:requestId,url:url,options:options});});}'
+    )
+  }
 
   return [
     '<meta charset="utf-8">',
@@ -191,7 +248,7 @@ function buildHeadInjection(options: {
     'function onHostMessage(event){var data=event.data;if(!data||typeof data!=="object")return;if(data.__lumiverseSpindleSandbox!==KEY||data.token!==TOKEN||data.kind!=="host-message")return;for(var i=0;i<hostMessageHandlers.length;i++){try{hostMessageHandlers[i](data.payload);}catch{}}}',
     'function observeSize(){if(!AUTO_RESIZE||!document.body)return;requestResize();window.addEventListener("load",requestResize);window.addEventListener("resize",requestResize);if(typeof ResizeObserver!=="undefined"){try{resizeObserver=new ResizeObserver(function(){requestResize();});resizeObserver.observe(document.documentElement);resizeObserver.observe(document.body);}catch{}}if(typeof MutationObserver!=="undefined"){try{mutationObserver=new MutationObserver(function(){requestResize();});mutationObserver.observe(document.documentElement,{attributes:true,childList:true,characterData:true,subtree:true});}catch{}}}',
     'window.addEventListener("message",onHostMessage);',
-    'window.spindleSandbox=Object.freeze({postMessage:function(payload){postWire({payload:payload});},onMessage:function(handler){if(typeof handler!=="function")return function(){};hostMessageHandlers.push(handler);return function(){var idx=hostMessageHandlers.indexOf(handler);if(idx!==-1)hostMessageHandlers.splice(idx,1);};},requestResize:function(height){requestResize(typeof height==="number"?height:Number(height));}});',
+    `window.spindleSandbox=Object.freeze({${sandboxApiParts.join(',')}});`,
     'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",observeSize,{once:true});else observeSize();',
     '})();</script>',
   ].join('')

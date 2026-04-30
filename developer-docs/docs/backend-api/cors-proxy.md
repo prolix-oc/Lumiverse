@@ -32,3 +32,19 @@ const response = await spindle.cors('https://api.example.com/data', {
   body: string          // Response body as text
 }
 ```
+
+## Sandboxed Widgets
+
+Extensions that render sandboxed widgets (via `ctx.dom.createSandboxFrame()` or `ctx.messages.renderWidget()`) can also use the CORS proxy directly from inside the iframe. Sandboxed widgets run with `connect-src 'none'` in their CSP, so they cannot make direct `fetch()` calls. Instead, they can call:
+
+```ts
+const response = await window.spindleSandbox.corsProxy('https://api.example.com/image.png')
+// response: { status, statusText, headers, body }
+```
+
+The `corsProxy` method is only available when:
+
+1. The extension has the `cors_proxy` permission granted.
+2. The widget is rendered inside a host-managed sandbox frame.
+
+Requests from sandboxed widgets flow through the same host-side CORS proxy pipeline (`spindle.cors()`), so the same URL validation, SSRF protection, timeout, and body-size limits apply.

@@ -2752,18 +2752,44 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "frontend_message": {
+      // Built-in CORS proxy bridge for sandboxed widgets
+      if (
+        typeof msg.payload === "object" &&
+        msg.payload !== null &&
+        (msg.payload as any).type === "__cors_proxy_request"
+      ) {
+        const p = msg.payload as { requestId: string; url: string; options?: any }
+        spindleApi.cors(p.url, p.options).then(
+          (result) => {
+            spindleApi.sendToFrontend({
+              type: "__cors_proxy_response",
+              requestId: p.requestId,
+              result,
+            }, msg.userId)
+          },
+          (err: any) => {
+            spindleApi.sendToFrontend({
+              type: "__cors_proxy_response",
+              requestId: p.requestId,
+              error: err?.message || "CORS proxy request failed",
+            }, msg.userId)
+          }
+        )
+        break
+      }
+
       for (const handler of frontendMessageHandlers) {
         try {
-          handler(msg.payload, msg.userId);
+          handler(msg.payload, msg.userId)
         } catch (err: any) {
           post({
             type: "log",
             level: "error",
             message: `Frontend message handler error: ${err.message}`,
-          });
+          })
         }
       }
-      break;
+      break
     }
 
     case "frontend_process_lifecycle": {

@@ -406,7 +406,7 @@ const CLEANUP_GRACE_PERIOD_MS = 2 * 60_000;
 //   - The queue is capped at MAX_WRITE_LOCK_QUEUE to reject new work instead
 //     of piling up indefinitely behind a slow lock holder.
 // ---------------------------------------------------------------------------
-const WRITE_LOCK_WAIT_TIMEOUT_MS = 30_000; // 30s max wait to acquire the lock
+const WRITE_LOCK_WAIT_TIMEOUT_MS = 120_000; // 120s max wait to acquire the lock
 const MAX_WRITE_LOCK_QUEUE = 50;           // reject if more than 50 waiters queued
 const _writeLockQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 let _writeLockHeld = false;
@@ -2365,9 +2365,7 @@ export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: st
 
 async function deleteWorldBookEntryRowsFromTable(table: Table, userId: string, entryIds: string[]): Promise<void> {
   if (entryIds.length === 0) return;
-  const sourceFilter = entryIds
-    .map((entryId) => `source_id = ${sqlValue(entryId)}`)
-    .join(" OR ");
+  const sourceFilter = `source_id IN (${entryIds.map((id) => sqlValue(id)).join(", ")})`;
   await table.delete(
     `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND (${sourceFilter})`
   );
@@ -2583,7 +2581,7 @@ export async function reindexWorldBookEntries(
 
   for (const group of emptiedEntries) {
     await deleteWorldBookEntryEmbeddings(userId, group.entry.id);
-    updateWorldBookEntryVectorState(group.entry.id, "not_enabled", null, null);
+    updateWorldBookEntryVectorState(group.entry.id, "indexed", Math.floor(Date.now() / 1000), null);
     progress.removed += 1;
     progress.current += 1;
     emitProgress();
@@ -3608,11 +3606,11 @@ export async function deleteDatabankChunksByIds(userId: string, chunkIds: string
     const table = await getTableIfExists(true);
     if (!table) return;
     // Delete in batches to avoid overly long filter expressions
-    const BATCH = 100;
+    const BATCH = 500;
     for (let i = 0; i < chunkIds.length; i += BATCH) {
       const batch = chunkIds.slice(i, i + BATCH);
       const ids = batch.map((id) => rowId(userId, "databank", id, 0));
-      const filter = ids.map((id) => `id = ${sqlValue(id)}`).join(" OR ");
+      const filter = `id IN (${ids.map((id) => sqlValue(id)).join(", ")})`;
       await table.delete(filter);
     }
   });
@@ -3637,7 +3635,7 @@ export async function searchDatabankChunks(
   const table = await getTableIfExists();
   if (!table) return [];
 
-  const ownerFilter = databankIds.map((id) => `owner_id = ${sqlValue(id)}`).join(" OR ");
+  const ownerFilter = `owner_id IN (${databankIds.map((id) => sqlValue(id)).join(", ")})`;
   const filter = `user_id = ${sqlValue(userId)} AND source_type = 'databank' AND (${ownerFilter})`;
   const fetchLimit = Math.max(1, Math.min(limit + 20, 100));
 

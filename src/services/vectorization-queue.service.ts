@@ -4,13 +4,11 @@ import { scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
 import type { WorldBookEntry, WorldBookVectorIndexStatus } from "../types/world-book";
 
 interface VectorizationJob {
-  type: "chunk" | "query" | "world_book_entry";
+  type: "chunk" | "world_book_entry";
   priority: number;
   userId: string;
   chatId: string;
   chunkId?: string;
-  queryText?: string;
-  queryHash?: string;
   worldBookEntryId?: string;
   queuedAt: number;
 }
@@ -83,7 +81,6 @@ class VectorizationQueue {
         j.userId === job.userId &&
         j.chatId === job.chatId &&
         j.chunkId === job.chunkId &&
-        j.queryHash === job.queryHash &&
         j.worldBookEntryId === job.worldBookEntryId
     );
 
@@ -115,8 +112,6 @@ class VectorizationQueue {
 
         if (batch[0].type === "chunk") {
           await this.processChunkBatch(batch);
-        } else if (batch[0].type === "query") {
-          await this.processQueryBatch(batch);
         } else {
           await this.processWorldBookEntryBatch(batch);
         }
@@ -207,40 +202,6 @@ class VectorizationQueue {
     }
   }
 
-  private async processQueryBatch(jobs: VectorizationJob[]) {
-    const db = getDb();
-
-    for (const job of jobs) {
-      try {
-        const [vector] = await embeddingsSvc.embedTexts(job.userId, [job.queryText!]);
-        const now = Math.floor(Date.now() / 1000);
-        const expiresAt = now + 300;
-
-        db.query(
-          `INSERT INTO query_vector_cache (id, chat_id, query_hash, query_text, vector_json, hit_count, created_at, last_used_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
-           ON CONFLICT(chat_id, query_hash) DO UPDATE SET
-             vector_json = excluded.vector_json,
-             last_used_at = excluded.last_used_at,
-             expires_at = excluded.expires_at`
-        ).run(
-          crypto.randomUUID(),
-          job.chatId,
-          job.queryHash!,
-          job.queryText!,
-          JSON.stringify(vector),
-          now,
-          now,
-          expiresAt
-        );
-
-        console.info(`[vectorization] Cached query vector for chat ${job.chatId}`);
-      } catch (err) {
-        console.warn("[vectorization] Query vectorization failed", err);
-      }
-    }
-  }
-
   private async processWorldBookEntryBatch(jobs: VectorizationJob[]) {
     const entryIds = Array.from(new Set(jobs.map((job) => job.worldBookEntryId).filter((id): id is string => !!id)));
     if (entryIds.length === 0) return;
@@ -267,10 +228,11 @@ class VectorizationQueue {
       });
       console.info(`[vectorization] Processed ${entries.length} world book entr${entries.length === 1 ? "y" : "ies"}`);
     } catch (err) {
-      console.warn("[vectorization] World book batch failed, requeueing with lower priority", err);
+      const errorMsg = String(err instanceof Error ? err.message : err);
+      console.warn("[vectorization] World book batch failed, marked as error:", errorMsg);
       for (const job of jobs) {
-        if (job.priority > 0) {
-          this.add({ ...job, priority: job.priority - 1 });
+        if (job.worldBookEntryId) {
+          getDb().query("UPDATE world_book_entries SET vector_index_status = 'error', vector_index_error = ? WHERE id = ?").run(errorMsg, job.worldBookEntryId);
         }
       }
     }
@@ -281,7 +243,6 @@ class VectorizationQueue {
       queueLength: this.queue.length,
       processing: this.processing,
       chunkJobs: this.queue.filter((j) => j.type === "chunk").length,
-      queryJobs: this.queue.filter((j) => j.type === "query").length,
       worldBookJobs: this.queue.filter((j) => j.type === "world_book_entry").length,
     };
   }
@@ -296,24 +257,6 @@ export function queueChunkVectorization(userId: string, chatId: string, chunkId:
     userId,
     chatId,
     chunkId,
-    queuedAt: Date.now(),
-  });
-}
-
-export function queueQueryVectorization(
-  userId: string,
-  chatId: string,
-  queryText: string,
-  queryHash: string,
-  priority = 10
-) {
-  queue.add({
-    type: "query",
-    priority,
-    userId,
-    chatId,
-    queryText,
-    queryHash,
     queuedAt: Date.now(),
   });
 }

@@ -5,7 +5,10 @@ import { createSandboxFrame } from './sandbox-frame'
 const DATA_ATTR = 'data-spindle-ext'
 const FORBIDDEN_CREATE_TAGS = new Set(['iframe', 'frame', 'object', 'embed'])
 
-export function createDOMHelper(extensionId: string): SpindleDOMHelper {
+export function createDOMHelper(
+  extensionId: string,
+  corsProxy?: (url: string, options?: any) => Promise<any>
+): SpindleDOMHelper {
   const trackedElements = new Set<Element>()
   const trackedStyles: (() => void)[] = []
   const trackedDisposers: (() => void)[] = []
@@ -71,7 +74,7 @@ export function createDOMHelper(extensionId: string): SpindleDOMHelper {
     },
 
     createSandboxFrame(options) {
-      const handle = createSandboxFrame(extensionId, options)
+      const handle = createSandboxFrame(extensionId, options, corsProxy)
       trackedElements.add(handle.element)
       const originalDestroy = handle.destroy.bind(handle)
 

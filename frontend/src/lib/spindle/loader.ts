@@ -161,12 +161,57 @@ async function doLoadFrontendExtension(
       return
     }
 
-    const dom = createDOMHelper(extensionId)
     const eventUnsubs: (() => void)[] = []
     const backendHandlers = new Set<(payload: unknown) => void>()
     const processHandlers = new Map<string, FrontendProcessHandler>()
     const activeProcesses = new Map<string, ActiveFrontendProcess>()
     const mountRoots = new Map<string, Element>()
+
+    const corsProxy = (url: string, options?: any): Promise<any> => {
+      return new Promise((resolve, reject) => {
+        const requestId = generateUUID()
+        let settled = false
+
+        const timeout = setTimeout(() => {
+          if (settled) return
+          settled = true
+          backendHandlers.delete(handler)
+          reject(new Error('CORS proxy request timed out'))
+        }, 30_000)
+
+        const handler = (payload: unknown) => {
+          if (typeof payload !== 'object' || payload === null) return
+          const p = payload as any
+          if (p.type !== '__cors_proxy_response' || p.requestId !== requestId) return
+
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          backendHandlers.delete(handler)
+
+          if (p.error) {
+            reject(new Error(p.error))
+          } else {
+            resolve(p.result)
+          }
+        }
+
+        backendHandlers.add(handler)
+
+        wsClient.send({
+          type: 'SPINDLE_BACKEND_MSG',
+          extensionId,
+          payload: {
+            type: '__cors_proxy_request',
+            requestId,
+            url,
+            options,
+          },
+        })
+      })
+    }
+
+    const dom = createDOMHelper(extensionId, corsProxy)
 
     // Cache granted permissions for synchronous permission checks in ui methods
     let cachedGrantedPermissions: string[] = await permissionsPromise
@@ -533,7 +578,7 @@ async function doLoadFrontendExtension(
           minHeight?: number
           maxHeight?: number
         }, handler?: (payload: unknown) => void) {
-          upsertMessageWidget(extensionId, options, handler)
+          upsertMessageWidget(extensionId, options, handler, corsProxy)
           return () => removeMessageWidget(extensionId, options.messageId, options.widgetId)
         },
         removeWidget(messageId: string, widgetId: string) {

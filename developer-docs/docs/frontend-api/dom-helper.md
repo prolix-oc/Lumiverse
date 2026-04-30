@@ -83,6 +83,27 @@ someRoot.appendChild(frame.element)
 
 Use this when the child content needs its own document, inline scripts, or stricter isolation than the normal host DOM path.
 
+### `window.spindleSandbox` API
+
+Inside a sandbox frame, the host injects a minimal API on `window.spindleSandbox`:
+
+| Method | Description |
+|---|---|
+| `postMessage(payload)` | Send a message to the host extension |
+| `onMessage(handler)` | Listen for messages from the host extension |
+| `requestResize(height?)` | Ask the host to resize the iframe |
+| `corsProxy(url, options?)` | Fetch a URL through the extension's CORS proxy (requires `cors_proxy` permission) |
+
+```ts
+// Inside the sandboxed iframe HTML
+const response = await window.spindleSandbox.corsProxy('https://api.example.com/data', {
+  method: 'GET',
+})
+// response: { status, statusText, headers, body }
+```
+
+`corsProxy` is only available if the extension has the `cors_proxy` permission. It routes requests through the backend worker's existing `spindle.cors()` path, so the same SSRF validation, timeouts, and response-size limits apply.
+
 ## `ctx.dom.query(selector)` / `ctx.dom.queryAll(selector)`
 
 Query inside the extension-owned host DOM.
@@ -134,6 +155,7 @@ Message widgets use the isolated iframe path. They are host-created iframes with
 - strict child CSP, including `connect-src 'none'`
 - host-managed auto-resize
 - a per-frame `window.spindleSandbox` message bridge
+- optional `window.spindleSandbox.corsProxy()` when the `cors_proxy` permission is granted
 
 ## Lumiverse CSS Variables
 
