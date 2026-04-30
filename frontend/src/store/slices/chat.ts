@@ -71,6 +71,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     streamingGenerationType: null,
     lastPooledSeq: null,
     totalChatLength: 0,
+    impersonateDraftContent: null,
 
     setActiveChat: (chatId, characterId = null) => {
       endedGenerationIds.clear()
@@ -293,6 +294,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         if (first) endedGenerationIds.delete(first)
       }
     },
+
+    setImpersonateDraftContent: (content) => set({ impersonateDraftContent: content }),
 
     // Message selection mode for bulk operations
     messageSelectMode: false,

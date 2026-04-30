@@ -118,6 +118,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const setMentionQueue = useStore((s) => s.setMentionQueue)
   const expressionDisplay = useStore((s) => s.expressionDisplay)
   const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
+  const impersonateDraftContent = useStore((s) => s.impersonateDraftContent)
+  const setImpersonateDraftContent = useStore((s) => s.setImpersonateDraftContent)
+  const streamingContent = useStore((s) => s.streamingContent)
+  const streamingGenerationType = useStore((s) => s.streamingGenerationType)
 
   // Track whether the active character has expressions configured
   const [hasExpressions, setHasExpressions] = useState(false)
@@ -298,6 +302,24 @@ export default function InputArea({ chatId }: InputAreaProps) {
     ta.setSelectionRange(pendingSelection.start, pendingSelection.end, pendingSelection.direction)
     syncTextareaMirrorScroll()
   }, [text, resizeTextarea, syncTextareaMirrorScroll])
+
+  // ── Impersonate draft streaming into textarea ────────────────────────
+  // Stream impersonate draft tokens into the textarea live
+  useEffect(() => {
+    if (streamingGenerationType === 'impersonate_draft' && streamingContent) {
+      setText(streamingContent)
+      requestAnimationFrame(() => resizeTextarea(textareaRef.current))
+    }
+  }, [streamingContent, streamingGenerationType, resizeTextarea])
+
+  // When an impersonate draft completes, ensure final content is in the textarea
+  useEffect(() => {
+    if (impersonateDraftContent) {
+      setText(impersonateDraftContent)
+      setImpersonateDraftContent(null)
+      requestAnimationFrame(() => resizeTextarea(textareaRef.current))
+    }
+  }, [impersonateDraftContent, setImpersonateDraftContent, resizeTextarea])
 
   // ── Draft input persistence ──────────────────────────────────────────
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -885,7 +907,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (isStreaming) return
     const nonce = ++generationNonceRef.current
     const impersonateInput = text.trim()
-    beginStreaming(undefined, 'impersonate')
+    beginStreaming(undefined, 'impersonate_draft')
     // Stash the input so the user can restore it after the run, and clear the box.
     if (impersonateInput) {
       setLastImpersonateInput(impersonateInput)
@@ -904,6 +926,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
+        impersonate_draft: true,
       })
       if (generationNonceRef.current !== nonce) return
       startStreaming(res.generationId)

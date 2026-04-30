@@ -118,6 +118,8 @@ interface GenerateInput {
   impersonate_mode?: ImpersonateMode;
   /** For impersonate: free-form text from the user's input box, appended to the impersonation prompt. */
   impersonate_input?: string;
+  /** For impersonate: stream tokens to the frontend but do NOT create a message. The user edits and sends manually. */
+  impersonate_draft?: boolean;
   target_character_id?: string;
   regen_feedback?: string;
   regen_feedback_position?: "system" | "user";
@@ -153,6 +155,8 @@ interface GenerationLifecycle {
   personaName?: string;
   /** Active persona id (for impersonate message metadata) */
   personaId?: string;
+  /** For impersonate draft: stream tokens but do not create a message */
+  impersonateDraft?: boolean;
   /** Target character id (for group chat message attribution) */
   targetCharacterId?: string;
   /** Chat history messages snapshot (used for accurate tokenization in breakdown) */
@@ -1268,6 +1272,7 @@ export async function startGeneration(
       personaId: resolvedPersona?.id,
       personaName: resolvedPersona?.name || "User",
       targetCharacterId: targetCharId,
+      impersonateDraft: genType === "impersonate" && !!input.impersonate_draft,
     };
 
     let excludeMessageId: string | undefined;
@@ -2428,6 +2433,9 @@ async function runGeneration(
         ...(continueExtra ? { extra: continueExtra } : {}),
       });
       messageId = lifecycle.continueMessageId;
+    } else if (lifecycle.impersonateDraft) {
+      // Impersonate draft: do not persist the partial content as a message.
+      // The streamed text is already in the frontend's input box.
     } else if (closedContent) {
       const isImpersonate = lifecycle.generationType === "impersonate";
       const extra: Record<string, any> = {};
@@ -2744,6 +2752,10 @@ async function runGeneration(
           ...(stagedExtra ? { extra: stagedExtra } : {}),
         });
         messageId = lifecycle.stagedMessageId;
+      } else if (lifecycle.impersonateDraft) {
+        // Impersonate draft: tokens were streamed to the frontend but we do NOT
+        // create a message. The user will edit the text in the input box and
+        // send it manually. messageId stays undefined.
       } else {
         // Normal / swipe: create assistant message, impersonate: create user message
         const isImpersonate = lifecycle.generationType === "impersonate";
@@ -2804,6 +2816,7 @@ async function runGeneration(
           content: fullContent,
           usage: streamUsage,
           generationType: lifecycle.generationType,
+          impersonateDraft: lifecycle.impersonateDraft || undefined,
         },
         userId,
       );

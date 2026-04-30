@@ -376,6 +376,15 @@ export function useWebSocket() {
               triggerTTSAutoPlay(payload.messageId, payload.content)
             }
 
+            // Impersonate draft: stash the streamed content for the input box
+            // instead of reconciling messages (no message was created on the backend).
+            if ((payload as any).impersonateDraft) {
+              const draftContent = state.streamingContent
+              state.endStreaming()
+              state.setImpersonateDraftContent(draftContent)
+              return
+            }
+
             // End streaming immediately, then reconcile the full message list
             // from backend source-of-truth to avoid id/index race conditions.
             // Image gen is deferred until AFTER reconciliation completes so its

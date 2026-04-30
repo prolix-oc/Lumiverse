@@ -19,6 +19,8 @@ export interface ChatSlice {
   streamingGenerationType: string | null
   lastPooledSeq: number | null
   totalChatLength: number
+  /** Content from an impersonate-draft generation, ready to populate the input box */
+  impersonateDraftContent: string | null
   setActiveChat: (chatId: string | null, characterId?: string | null) => void
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
   setActiveChatAvatarId: (imageId: string | null) => void
@@ -42,6 +44,8 @@ export interface ChatSlice {
   setRegeneratingMessageId: (messageId: string | null) => void
   /** Mark a generation ID as ended (prevents zombie resurrection from late HTTP responses) */
   markGenerationEnded: (generationId: string) => void
+  /** Set impersonate draft content (from completed impersonate-draft generation) */
+  setImpersonateDraftContent: (content: string | null) => void
 
   // Message selection mode for bulk operations
   messageSelectMode: boolean

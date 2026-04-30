@@ -138,6 +138,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const isImpersonateStream = streamingGenerationType === 'impersonate'
+  const isImpersonateDraft = streamingGenerationType === 'impersonate_draft'
   const impersonateUserLeft = isImpersonateStream && bubbleUserAlign === 'left'
 
   // The store's appendStreamToken state machine already separates reasoning
@@ -648,7 +649,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       {isGroupChat && isNudgeLoopActive && <GroupChatProgressBar />}
 
       {/* Streaming message bubble — shows tokens as they arrive (only for new messages, not regeneration or continue) */}
-      {isStreaming && !regeneratingMessageId && streamingGenerationType !== 'continue' && (streamDisplay || !streamingError) && (() => {
+      {isStreaming && !regeneratingMessageId && streamingGenerationType !== 'continue' && !isImpersonateDraft && (streamDisplay || !streamingError) && (() => {
         const bubbleName = isImpersonateStream ? userName : streamDisplayName
         const bubbleStyleClass = isImpersonateStream ? bubbleStyles.user : bubbleStyles.character
         const nameStyleClass = isImpersonateStream ? bubbleStyles.nameUser : bubbleStyles.nameChar
