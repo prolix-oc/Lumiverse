@@ -1523,15 +1523,18 @@ function EmbeddingsSettings() {
   }
 
   const update = (patch: Partial<EmbeddingConfig>) => {
-    if (!cfg) return
-    // When provider changes, auto-fill URL with provider default
-    if (patch.provider && patch.provider !== cfg.provider) {
-      const defaults = PROVIDER_DEFAULTS[patch.provider]
-      if (defaults) {
-        patch = { ...patch, api_url: defaults.api_url }
+    setCfg((current) => {
+      if (!current) return current
+      let nextPatch = patch
+      // When provider changes, auto-fill URL with provider default.
+      if (nextPatch.provider && nextPatch.provider !== current.provider) {
+        const defaults = PROVIDER_DEFAULTS[nextPatch.provider]
+        if (defaults) {
+          nextPatch = { ...nextPatch, api_url: defaults.api_url }
+        }
       }
-    }
-    setCfg({ ...cfg, ...patch })
+      return { ...current, ...nextPatch }
+    })
   }
 
   const updateWorldBookSettings = (patch: Partial<WorldBookVectorSettings>) => {
@@ -1585,7 +1588,14 @@ function EmbeddingsSettings() {
     setSuccess(null)
     try {
       const result = await embeddingsApi.testConfig('Lumiverse vector test')
-      setCfg(result.config)
+      setCfg((current) => current
+        ? {
+            ...current,
+            dimensions: result.applied_dimensions,
+            has_api_key: result.config.has_api_key,
+            inherited: result.config.inherited,
+          }
+        : result.config)
       setSuccess(`Embedding test passed. Dimensions set to ${result.applied_dimensions}.`)
     } catch (err: any) {
       setError(err?.body?.error || err?.message || 'Embedding test failed')
