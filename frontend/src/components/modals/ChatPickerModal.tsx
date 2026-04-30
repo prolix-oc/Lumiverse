@@ -307,12 +307,23 @@ export default function ChatPickerModal({
             const isMenuOpen = activeMenuId === item.id
 
             return (
-              <motion.button
+              <motion.div
                 key={item.id}
                 className={clsx(styles.card, isActive && styles.cardActive)}
                 style={{ animationDelay: `${Math.min(i * 40, 200)}ms`, zIndex: isMenuOpen ? 10 : undefined }}
+                role="button"
+                tabIndex={isRenaming ? -1 : 0}
+                aria-disabled={isRenaming || isMenuOpen}
                 onClick={() => {
                   if (!isRenaming && !isMenuOpen) onSelect(item.id)
+                }}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return
+                  if (isRenaming || isMenuOpen) return
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(item.id)
+                  }
                 }}
                 exit={{ opacity: 0, x: -16, transition: { duration: 0.18 } }}
                 whileHover={{ scale: isMenuOpen ? 1 : 1.01 }}
@@ -373,7 +384,7 @@ export default function ChatPickerModal({
                     </span>
                   </div>
                 </div>
-              </motion.button>
+              </motion.div>
             )
           })}
           </AnimatePresence>

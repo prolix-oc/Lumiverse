@@ -103,6 +103,11 @@
   transform: translateX(2px);
 }
 
+.card:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050);
+  outline-offset: 2px;
+}
+
 .card:hover::before {
   background: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
 }
@@ -294,15 +299,23 @@
 }
 
 .card:hover .menuBtn,
+.card:focus-within .menuBtn,
 .cardActive .menuBtn {
   opacity: 1;
 }
 
 .menuBtn:hover,
+.menuBtn:focus-visible,
 .menuBtnActive {
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text);
   opacity: 1 !important;
+}
+
+@media (hover: none) {
+  .menuBtn {
+    opacity: 1;
+  }
 }
 
 .dropdown {

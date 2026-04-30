@@ -4,9 +4,9 @@ Self-contained styled HTML in chat messages is auto-extracted into a Shadow DOM 
 
 ## Detection
 
-A block-level element (`<div>`, `<section>`, `<article>`, `<aside>`, `<nav>`, `<main>`, `<header>`, `<footer>`, `<form>`, `<fieldset>`, `<figure>`, `<details>`) becomes an island when its content contains either a `<style>` tag or three or more `style="..."` attributes.
+A block-level element (`<div>`, `<section>`, `<article>`, `<aside>`, `<nav>`, `<main>`, `<header>`, `<footer>`, `<form>`, `<fieldset>`, `<figure>`, `<details>`) or a full HTML wrapper (`<html>`, `<body>`) becomes an island when its content contains either a `<style>` tag or three or more `style="..."` attributes.
 
-Standalone `<style>` blocks not inside a wrapper element are extracted together with any subsequent sibling HTML.
+Standalone `<style>` blocks not inside a wrapper element are extracted together with any subsequent sibling HTML, including complete document-shaped markup.
 
 ## Opting out with `data-no-island`
 

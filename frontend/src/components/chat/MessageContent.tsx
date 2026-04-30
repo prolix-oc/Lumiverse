@@ -294,7 +294,7 @@ marked.setOptions({
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
-const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details)\b/i
+const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|html|body)\b/i
 const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
 const NO_ISLAND_ATTR_RE = /\bdata-no-island\b/i
 
@@ -365,8 +365,9 @@ function extractHtmlIslands(
       continue
     }
 
-    // Strategy 1: Block-level element that might wrap a <style> block or
-    // contain significant inline styling (e.g. phone screens, UI mockups).
+    // Strategy 1: Block-level element or full HTML document that might wrap a
+    // <style> block or contain significant inline styling (e.g. phone screens,
+    // UI mockups).
     // Collect the entire balanced tag tree, then check for isolation criteria.
     const blockMatch = trimmed.match(BLOCK_ELEMENT_RE)
     if (blockMatch) {
@@ -443,8 +444,8 @@ function extractHtmlIslands(
         }
         blanks = 0
 
-        const oCount = (t.match(/<(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl)\b/gi) || []).length
-        const cCount = (t.match(/<\/(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl)\b/gi) || []).length
+        const oCount = (t.match(/<(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl|html|head|body)\b/gi) || []).length
+        const cCount = (t.match(/<\/(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl|html|head|body)\b/gi) || []).length
         depth += oCount - cCount
 
         if (/^<[a-zA-Z\/!]/.test(t) || depth > 0) {
@@ -453,7 +454,7 @@ function extractHtmlIslands(
           if (depth <= 0) {
             let p = i
             while (p < lines.length && !lines[p].trim()) p++
-            if (p >= lines.length || !/^[a-zA-Z\/]/.test(lines[p].trim())) break
+            if (p >= lines.length || !/^<[a-zA-Z\/!]/.test(lines[p].trim())) break
           }
         } else {
           break

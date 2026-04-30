@@ -4,6 +4,33 @@ import { isSafeBrowserNavigationTarget } from '@/lib/navigationSafety'
 const BASE_FORBID_TAGS = ['script', 'iframe', 'frame', 'object', 'embed', 'meta', 'base', 'link', 'svg', 'math']
 const BASE_FORBID_ATTR = ['srcdoc', 'formaction']
 const SAFE_DATA_IMAGE_RE = /^data:image\/(?:png|apng|jpeg|jpg|gif|webp|avif|bmp);/i
+const DOCUMENT_HTML_RE = /<(?:!doctype\b|html\b|head\b|body\b)/i
+
+function isAllowedCustomAttributeName(attrName: string): boolean {
+  const normalized = attrName.toLowerCase()
+  return normalized.includes('-')
+    && !normalized.startsWith('data-')
+    && !normalized.startsWith('aria-')
+    && !normalized.includes(':')
+}
+
+function normalizeDocumentHtml(html: string, allowStyleTag: boolean): string {
+  if (!DOCUMENT_HTML_RE.test(html)) return html
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const parts: string[] = []
+
+  if (allowStyleTag) {
+    for (const style of doc.head.querySelectorAll('style')) {
+      parts.push(style.outerHTML)
+    }
+  }
+
+  const bodyHtml = doc.body.innerHTML.trim()
+  if (bodyHtml) parts.push(bodyHtml)
+
+  return parts.length > 0 ? parts.join('\n') : html
+}
 
 function isBareRelativeImageSrc(src: string): boolean {
   // Preserve Risu/local asset compatibility for filenames like `foo.webp` and
@@ -55,8 +82,10 @@ function sanitizeNavigableElements(root: ParentNode): void {
 }
 
 function sanitizeHtml(html: string, allowStyleTag: boolean): string {
-  const sanitized = DOMPurify.sanitize(html, {
+  const normalizedHtml = normalizeDocumentHtml(html, allowStyleTag)
+  const sanitized = DOMPurify.sanitize(normalizedHtml, {
     ADD_TAGS: allowStyleTag ? ['style'] : [],
+    ADD_ATTR: (attrName) => isAllowedCustomAttributeName(attrName),
     ALLOW_DATA_ATTR: true,
     ALLOW_ARIA_ATTR: true,
     FORBID_TAGS: allowStyleTag
