@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '@/store'
 import { councilApi, type CouncilProfileBinding, type CouncilSidecarConfig, type ResolvedCouncilProfile } from '@/api/council'
 import { settingsApi } from '@/api/settings'
@@ -17,6 +17,8 @@ type CharSlot = { for: string | null; binding: CouncilProfileBinding | null }
 
 const EMPTY_CHAT_SLOT: ChatSlot = { for: null, binding: null }
 const EMPTY_CHAR_SLOT: CharSlot = { for: null, binding: null }
+
+const SIDECAR_SAVE_DEBOUNCE_MS = 500
 
 export function councilSourceToTarget(
   source: ResolvedCouncilProfile['source'],
@@ -80,6 +82,9 @@ export function useCouncilProfiles() {
   const [sidecarConfig, setSidecarConfig] = useState<CouncilSidecarConfig>(SIDECAR_DEFAULTS)
   const [activeSource, setActiveSource] = useState<ResolvedCouncilProfile['source']>('none')
   const [isLoading, setIsLoading] = useState(false)
+
+  const sidecarSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSidecarRef = useRef<CouncilSidecarConfig | null>(null)
 
   const characterBindingEnabled = !isGroupChat
 
@@ -182,12 +187,41 @@ export function useCouncilProfiles() {
   const saveSidecar = useCallback((partial: Partial<CouncilSidecarConfig>) => {
     setSidecarConfig((prev) => {
       const next = { ...prev, ...partial }
-      void persistSidecar(next).catch(() => {
-        addToast({ type: 'error', message: 'Failed to save sidecar settings' })
-      })
+      pendingSidecarRef.current = next
+
+      if (sidecarSaveTimerRef.current) {
+        clearTimeout(sidecarSaveTimerRef.current)
+      }
+
+      sidecarSaveTimerRef.current = setTimeout(() => {
+        sidecarSaveTimerRef.current = null
+        const toSave = pendingSidecarRef.current
+        pendingSidecarRef.current = null
+        if (toSave) {
+          void persistSidecar(toSave).catch(() => {
+            addToast({ type: 'error', message: 'Failed to save sidecar settings' })
+          })
+        }
+      }, SIDECAR_SAVE_DEBOUNCE_MS)
+
       return next
     })
   }, [addToast, persistSidecar])
+
+  // Flush any pending sidecar save when the hook unmounts or persistence target changes
+  useEffect(() => {
+    return () => {
+      if (sidecarSaveTimerRef.current) {
+        clearTimeout(sidecarSaveTimerRef.current)
+        sidecarSaveTimerRef.current = null
+      }
+      const toSave = pendingSidecarRef.current
+      pendingSidecarRef.current = null
+      if (toSave) {
+        void persistSidecar(toSave).catch(() => {})
+      }
+    }
+  }, [persistSidecar])
 
   const captureDefaults = useCallback(async () => {
     setIsLoading(true)

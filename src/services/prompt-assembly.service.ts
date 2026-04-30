@@ -2887,7 +2887,7 @@ export interface MergedWorldInfoEntriesResult {
   deduplicationDetails: import("./world-info-dedup.service").DedupRemovalRecord[];
 }
 
-async function resolveWorldInfoOutlets(
+export async function resolveWorldInfoOutlets(
   entries: WorldBookEntryModel[],
   macroEnv: MacroEnv,
   signal?: AbortSignal,
@@ -2900,11 +2900,13 @@ async function resolveWorldInfoOutlets(
     if (typeof entry.content !== "string" || entry.content.trim().length === 0)
       continue;
     if (templates.has(outletName)) {
-      console.warn(
-        `[prompt-assembly] Duplicate world-info outlet "${outletName}" detected; later entry overrides earlier entry.`,
+      templates.set(
+        outletName,
+        templates.get(outletName) + "\n\n" + entry.content,
       );
+    } else {
+      templates.set(outletName, entry.content);
     }
-    templates.set(outletName, entry.content);
   }
 
   if (templates.size === 0) {

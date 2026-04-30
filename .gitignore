@@ -58,6 +58,7 @@ frontend/src/lib/generatedComponentCss.ts
 
 !LICENSE.md
 !README.md
+!SECURITY.md
 scripts/release.sh
 scripts/release-main.sh
 scripts/release-rc.sh
