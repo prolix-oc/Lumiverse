@@ -192,7 +192,17 @@ async function doLoadFrontendExtension(
           if (p.error) {
             reject(new Error(p.error))
           } else {
-            resolve(p.result)
+            const result = p.result
+            if (result?.encoding === 'base64' && typeof result.body === 'string') {
+              const binaryString = atob(result.body)
+              const bytes = new Uint8Array(binaryString.length)
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i)
+              }
+              resolve({ ...result, body: bytes })
+            } else {
+              resolve(result)
+            }
           }
         }
 

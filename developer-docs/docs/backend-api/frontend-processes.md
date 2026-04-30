@@ -128,6 +128,17 @@ if (info?.state === 'running') {
 }
 ```
 
+### `spindle.frontendProcesses.send(processId, payload, userId?)`
+
+Send a process-scoped message directly to a running frontend process.
+
+```ts
+spindle.frontendProcesses.send(processId, {
+  type: 'config_update',
+  config: { mode: 'fast' }
+});
+```
+
 ### `spindle.frontendProcesses.stop(processId, options?)`
 
 Request graceful termination for a process.

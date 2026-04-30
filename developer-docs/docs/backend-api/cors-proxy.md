@@ -48,3 +48,28 @@ The `corsProxy` method is only available when:
 2. The widget is rendered inside a host-managed sandbox frame.
 
 Requests from sandboxed widgets flow through the same host-side CORS proxy pipeline (`spindle.cors()`), so the same URL validation, SSRF protection, timeout, and body-size limits apply.
+
+### Binary (image) responses
+
+When `corsProxy()` is used from inside a sandbox frame, the host automatically sets `responseType: "arraybuffer"`. The backend then:
+
+1. Validates that the remote server's `Content-Type` starts with `image/`.
+2. For raster formats, validates the file magic bytes (PNG, JPEG, GIF, WebP, BMP).
+3. For SVG, validates the XML preamble.
+4. Returns the body as a **base64-encoded string** (`encoding: "base64"`) so it can safely cross the WebSocket boundary.
+
+The frontend decodes the base64 payload back into a `Uint8Array` before delivering it to the sandbox:
+
+```ts
+const bytes = await window.spindleSandbox.corsProxy('https://example.com/photo.png')
+// bytes is a Uint8Array
+const blob = new Blob([bytes], { type: 'image/png' })
+const url = URL.createObjectURL(blob)
+img.src = url
+```
+
+If the fetched resource is **not** an image, the promise rejects with an error such as:
+
+```
+CORS proxy transparent proxy only serves image data (received Content-Type: application/json)
+```

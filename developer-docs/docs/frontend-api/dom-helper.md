@@ -96,13 +96,16 @@ Inside a sandbox frame, the host injects a minimal API on `window.spindleSandbox
 
 ```ts
 // Inside the sandboxed iframe HTML
-const response = await window.spindleSandbox.corsProxy('https://api.example.com/data', {
-  method: 'GET',
-})
-// response: { status, statusText, headers, body }
+const bytes = await window.spindleSandbox.corsProxy('https://example.com/avatar.png')
+// bytes is a Uint8Array containing the raw image data
+const blob = new Blob([bytes], { type: 'image/png' })
+const url = URL.createObjectURL(blob)
+document.getElementById('avatar').src = url
 ```
 
 `corsProxy` is only available if the extension has the `cors_proxy` permission. It routes requests through the backend worker's existing `spindle.cors()` path, so the same SSRF validation, timeouts, and response-size limits apply.
+
+**Important:** the transparent proxy only serves **image** content. The backend validates both the `Content-Type` header (`image/*`) and the file magic bytes before returning data. Non-image requests are rejected.
 
 ## `ctx.dom.query(selector)` / `ctx.dom.queryAll(selector)`
 

@@ -399,6 +399,7 @@ type RuntimeSpindleAPI = SpindleAPI & {
     }>;
     list(filter?: { userId?: string; kind?: string; key?: string; state?: FrontendProcessState }): Promise<FrontendProcessInfo[]>;
     get(processId: string): Promise<FrontendProcessInfo | null>;
+    send(processId: string, payload: unknown, userId?: string): void;
     stop(processId: string, options?: { userId?: string; reason?: string }): Promise<void>;
     onLifecycle(handler: (event: FrontendProcessLifecycleEvent) => void): () => void;
     onMessage(handler: (event: { processId: string; payload: unknown; userId: string }) => void): () => void;
@@ -426,6 +427,7 @@ type RuntimeSpindleAPI = SpindleAPI & {
     }>;
     list(filter?: { userId?: string; kind?: string; key?: string; state?: BackendProcessState }): Promise<BackendProcessInfo[]>;
     get(processId: string): Promise<BackendProcessInfo | null>;
+    send(processId: string, payload: unknown, userId?: string): void;
     stop(processId: string, options?: { userId?: string; reason?: string }): Promise<void>;
     onLifecycle(handler: (event: BackendProcessLifecycleEvent) => void): () => void;
     onMessage(handler: (event: { processId: string; payload: unknown; userId: string }) => void): () => void;
@@ -2176,6 +2178,9 @@ const spindleApi: RuntimeSpindleAPI = {
       const result = await request({ type: "frontend_process_get", requestId, processId });
       return result as FrontendProcessInfo | null;
     },
+    send(processId: string, payload: unknown, userId?: string) {
+      post({ type: "frontend_process_send", processId, payload, userId });
+    },
     async stop(processId: string, options?: { userId?: string; reason?: string }) {
       const requestId = crypto.randomUUID();
       await request({
@@ -2232,6 +2237,9 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "backend_process_get", requestId, processId });
       return result as BackendProcessInfo | null;
+    },
+    send(processId: string, payload: unknown, userId?: string) {
+      post({ type: "backend_process_send", processId, payload, userId });
     },
     async stop(processId: string, options?: { userId?: string; reason?: string }) {
       const requestId = crypto.randomUUID();
@@ -2759,7 +2767,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         (msg.payload as any).type === "__cors_proxy_request"
       ) {
         const p = msg.payload as { requestId: string; url: string; options?: any }
-        spindleApi.cors(p.url, p.options).then(
+        spindleApi.cors(p.url, { ...(p.options || {}), responseType: "arraybuffer" }).then(
           (result) => {
             spindleApi.sendToFrontend({
               type: "__cors_proxy_response",

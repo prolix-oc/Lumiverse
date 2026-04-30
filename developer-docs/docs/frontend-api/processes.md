@@ -117,7 +117,7 @@ The backend receives it via `spindle.frontendProcesses.onMessage(...)`.
 
 ### `process.onMessage(handler)`
 
-Receive process-scoped messages from the backend.
+Receive process-scoped messages from the backend. The backend uses `spindle.frontendProcesses.send(processId, payload)` to target specific process instances.
 
 ```ts
 const unsub = process.onMessage((payload) => {

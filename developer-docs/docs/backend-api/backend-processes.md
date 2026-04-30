@@ -183,6 +183,17 @@ if (info?.state === 'running') {
 }
 ```
 
+### `spindle.backendProcesses.send(processId, payload, userId?)`
+
+Send a process-scoped message directly to a running backend subprocess.
+
+```ts
+spindle.backendProcesses.send(processId, {
+  type: 'config_update',
+  config: { mode: 'fast' }
+});
+```
+
 ### `spindle.backendProcesses.stop(processId, options?)`
 
 Request graceful termination for a process.

@@ -527,6 +527,63 @@ async function readResponseBodyCapped(response: Response, maxBytes: number): Pro
   return new TextDecoder("utf-8", { fatal: false }).decode(concatChunks(chunks, total));
 }
 
+/**
+ * Same as `readResponseBodyCapped` but returns raw bytes instead of decoding
+ * as UTF-8. Used when the CORS proxy must serve binary assets (e.g. images).
+ */
+async function readResponseBodyBinaryCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      throw new Error(
+        `CORS proxy response exceeded ${maxBytes} bytes`,
+      );
+    }
+    chunks.push(value);
+  }
+  return concatChunks(chunks, total);
+}
+
+/**
+ * Validate that raw bytes begin with a known image format signature.
+ * SVG is validated separately by inspecting the text preamble.
+ */
+function validateImageMagicBytes(data: Uint8Array, contentType: string): boolean {
+  if (data.length < 2) return false;
+
+  // SVG is text-based; validate by Content-Type and XML preamble
+  if (contentType.includes("svg")) {
+    const header = new TextDecoder("utf-8", { fatal: false }).decode(data.slice(0, 256));
+    const trimmed = header.trimStart();
+    return trimmed.startsWith("<svg") || trimmed.startsWith("<?xml");
+  }
+
+  if (data.length < 4) return false;
+
+  // PNG: 89 50 4E 47
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) return true;
+  // JPEG: FF D8 FF
+  if (data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) return true;
+  // GIF: 47 49 46 38
+  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) return true;
+  // BMP: 42 4D
+  if (data[0] === 0x42 && data[1] === 0x4D) return true;
+  // WebP: 52 49 46 46 ... 57 45 42 50
+  if (data.length >= 12 && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46) {
+    if (data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return true;
+  }
+
+  return false;
+}
+
 function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
   const out = new Uint8Array(total);
   let offset = 0;
@@ -4809,6 +4866,8 @@ export class WorkerHost {
       return;
     }
 
+    const isBinary = options?.responseType === "arraybuffer";
+
     try {
       // Validate URL against SSRF before making the request
       const parsed = new URL(url);
@@ -4839,18 +4898,49 @@ export class WorkerHost {
             `CORS proxy response too large (declared ${declared} bytes, max ${CORS_PROXY_MAX_BODY_BYTES})`,
           );
         }
-        const text = await readResponseBodyCapped(response, CORS_PROXY_MAX_BODY_BYTES);
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: {
-            status: response.status,
-            statusText: response.statusText,
-            headers: Object.fromEntries(response.headers.entries()),
-            body: text,
-          },
-        });
+
+        if (isBinary) {
+          // Transparent proxy for sandboxed widgets: only serve image data
+          const contentType = (response.headers.get("content-type") || "").toLowerCase();
+          if (!contentType.startsWith("image/")) {
+            throw new Error(
+              `CORS proxy transparent proxy only serves image data (received Content-Type: ${contentType || "unknown"})`
+            );
+          }
+
+          const binary = await readResponseBodyBinaryCapped(response, CORS_PROXY_MAX_BODY_BYTES);
+          if (!contentType.includes("svg") && !validateImageMagicBytes(binary, contentType)) {
+            throw new Error("CORS proxy transparent proxy rejected: downloaded content does not match a known image format");
+          }
+
+          this.postToWorker({
+            type: "response",
+            requestId,
+            result: {
+              status: response.status,
+              statusText: response.statusText,
+              headers: Object.fromEntries(response.headers.entries()),
+              body: Buffer.from(binary).toString("base64"),
+              encoding: "base64",
+            },
+          });
+        } else {
+          const text = await readResponseBodyCapped(response, CORS_PROXY_MAX_BODY_BYTES);
+          this.postToWorker({
+            type: "response",
+            requestId,
+            result: {
+              status: response.status,
+              statusText: response.statusText,
+              headers: Object.fromEntries(response.headers.entries()),
+              body: text,
+            },
+          });
+        }
       } catch (fetchErr: any) {
+        if (isBinary) {
+          throw fetchErr;
+        }
         if (/^\d+\.\d+\.\d+\.\d+$/.test(parsed.hostname)) {
           throw fetchErr;
         }
