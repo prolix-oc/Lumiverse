@@ -11,10 +11,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
-    <!-- Explicitly block all frame embedding (iframes, frames, objects, embeds) for security.
-         Spindle extensions run in the main document context and are prohibited from using
-         frame-based isolation. This CSP is enforced by the browser for every execution path. -->
-    <meta http-equiv="Content-Security-Policy" content="frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'self';" />
+    <!-- Frames are allowed only so Lumiverse can create opaque-origin sandbox
+         frames for Spindle extension isolation. Extension code is still
+         prohibited from creating raw iframes by the Spindle DOM APIs. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob:; child-src 'self' blob:; object-src 'none'; worker-src 'self';" />
   </head>
   <body>
     <div id="root"></div>

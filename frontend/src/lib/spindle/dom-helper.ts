@@ -1,11 +1,10 @@
 import DOMPurify from 'dompurify'
-import type { SpindleDOMHelper } from 'lumiverse-spindle-types'
 import { createSandboxFrame } from './sandbox-frame'
 
 const DATA_ATTR = 'data-spindle-ext'
 const FORBIDDEN_CREATE_TAGS = new Set(['iframe', 'frame', 'object', 'embed'])
 
-export function createDOMHelper(extensionId: string): SpindleDOMHelper {
+export function createDOMHelper(extensionId: string) {
   const trackedElements = new Set<Element>()
   const trackedStyles: (() => void)[] = []
   const trackedDisposers: (() => void)[] = []

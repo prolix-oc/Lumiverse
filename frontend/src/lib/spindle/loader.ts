@@ -1,6 +1,7 @@
-import type { SpindleManifest, SpindleFrontendContext, SpindleFrontendModule, PermissionRequestOptions } from 'lumiverse-spindle-types'
+import type { SpindleManifest, SpindleFrontendContext, PermissionRequestOptions } from 'lumiverse-spindle-types'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
+import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidget } from './message-widgets'
 import {
   createDrawerTabHandle,
   createFloatWidgetHandle,
@@ -11,16 +12,19 @@ import {
 } from './placement-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
+import { SandboxedFrontendRuntime } from './sandboxed-frontend-runtime'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
+import { charactersApi } from '@/api/characters'
+import { messagesApi } from '@/api/chats'
 import { useStore } from '@/store'
 
 interface LoadedExtension {
   id: string
   identifier: string
   manifestSignature: string
-  module: SpindleFrontendModule
   context: SpindleFrontendContext
+  runtime: SandboxedFrontendRuntime
   teardown?: () => void
   eventUnsubs: (() => void)[]
   backendHandlers: Set<(payload: unknown) => void>
@@ -60,6 +64,25 @@ interface ActiveFrontendProcess {
   cleanup?: () => void | Promise<void>
   messageHandlers: Set<(payload: unknown) => void>
   stopHandlers: Set<(detail: { reason?: string }) => void>
+}
+
+type FrontendRuntimeContext = SpindleFrontendContext & {
+  processes: {
+    register(kind: string, handler: FrontendProcessHandler): () => void
+  }
+  messages: SpindleFrontendContext['messages'] & {
+    renderWidget(
+      options: { messageId: string; widgetId: string; html: string; minHeight?: number; maxHeight?: number },
+      handler?: (payload: unknown) => void,
+    ): () => void
+    removeWidget(messageId: string, widgetId: string): void
+  }
+  characters: {
+    get(characterId: string): Promise<unknown>
+  }
+  chats: {
+    updateMessage(chatId: string, messageId: string, input: { content?: string }): Promise<unknown>
+  }
 }
 
 type FrontendProcessWirePayload =
@@ -124,22 +147,12 @@ async function doLoadFrontendExtension(
     const response = await responsePromise
     if (!response.ok) return // No frontend bundle
 
-    const blob = await response.blob()
-    const blobUrl = URL.createObjectURL(blob)
+    const frontendCode = await response.text()
 
-    const mod: SpindleFrontendModule = await import(/* @vite-ignore */ blobUrl)
-    URL.revokeObjectURL(blobUrl)
-
-    // SECURITY: Spindle extensions execute in the main document context.
-    // IFrames, frames, objects, and embeds are EXPLICITLY prohibited and
-    // blocked by the document CSP (frame-src 'none'). Extension views must
-    // use the provided placement APIs (mount, drawer, dock, float) which
-    // inject content directly into the React-managed DOM — never via frames.
-
-    if (typeof mod.setup !== 'function') {
-      console.warn(`[Spindle:${manifest.identifier}] Frontend module missing setup()`)
-      return
-    }
+    // SECURITY: frontend extension modules execute in an opaque-origin sandbox
+    // iframe, not in the Lumiverse document. Host capabilities are exposed only
+    // through the RPC bridge below; extension-owned visible UI is rendered into
+    // host-created nested sandbox frames.
 
     const dom = createDOMHelper(extensionId)
     const eventUnsubs: (() => void)[] = []
@@ -181,11 +194,7 @@ async function doLoadFrontendExtension(
       mountRoots.clear()
       mountedPoints.clear()
     }
-    const context: SpindleFrontendContext & {
-      processes: {
-        register(kind: string, handler: FrontendProcessHandler): () => void
-      }
-    } = {
+    const context: FrontendRuntimeContext = {
       dom,
       events: {
         on(event: string, handler: (payload: unknown) => void): () => void {
@@ -471,7 +480,7 @@ async function doLoadFrontendExtension(
           })
         },
       },
-      getActiveChat() {
+      async getActiveChat() {
         const state = useStore.getState()
         return {
           chatId: state.activeChatId ?? null,
@@ -510,14 +519,40 @@ async function doLoadFrontendExtension(
         registerTagInterceptor(options, handler) {
           return registerTagInterceptor(extensionId, manifest.name || manifest.identifier || 'Extension', options, handler)
         },
+        renderWidget(options: {
+          messageId: string
+          widgetId: string
+          html: string
+          minHeight?: number
+          maxHeight?: number
+        }, handler?: (payload: unknown) => void) {
+          upsertMessageWidget(extensionId, options, handler)
+          return () => removeMessageWidget(extensionId, options.messageId, options.widgetId)
+        },
+        removeWidget(messageId: string, widgetId: string) {
+          removeMessageWidget(extensionId, messageId, widgetId)
+        },
+      },
+      characters: {
+        get(characterId: string) {
+          return charactersApi.get(characterId)
+        },
+      },
+      chats: {
+        async updateMessage(chatId: string, messageId: string, input: { content?: string }) {
+          const updated = await messagesApi.update(chatId, messageId, input)
+          useStore.getState().updateMessage(updated.id, updated)
+          return updated
+        },
       },
       manifest,
     }
 
-    let teardownFn: void | (() => void)
+    const runtime = new SandboxedFrontendRuntime(extensionId, manifest, frontendCode, context)
     try {
-      teardownFn = mod.setup(context)
+      await runtime.start()
     } catch (err) {
+      runtime.destroy()
       dom.cleanup()
       cleanupMountInfra()
       throw err
@@ -525,8 +560,7 @@ async function doLoadFrontendExtension(
 
     if (!currentGeneration()) {
       try {
-        if (typeof teardownFn === 'function') teardownFn()
-        else mod.teardown?.()
+        runtime.destroy()
       } catch {
         // no-op
       }
@@ -539,9 +573,9 @@ async function doLoadFrontendExtension(
       id: extensionId,
       identifier: manifest.identifier,
       manifestSignature,
-      module: mod,
       context,
-      teardown: typeof teardownFn === 'function' ? teardownFn : mod.teardown,
+      runtime,
+      teardown: () => runtime.destroy(),
       eventUnsubs,
       backendHandlers,
       processHandlers,
@@ -642,6 +676,7 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
   loaded.backendHandlers.clear()
   loaded.processHandlers.clear()
   unregisterTagInterceptorsByExtension(extensionId)
+  removeMessageWidgetsByExtension(extensionId)
   destroyAllPlacementsForExtension(extensionId)
   loadedExtensions.delete(extensionId)
 

@@ -14,6 +14,7 @@ import {
   subscribeTagInterceptorRegistry,
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
+import { SpindleMessageWidgets } from '@/lib/spindle/message-widgets'
 import { useStore } from '@/store'
 import { useDisplayRegex } from '@/hooks/useDisplayRegex'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
@@ -981,6 +982,7 @@ export default function MessageContent({
         style={streamingMinHeight ? { minHeight: `${streamingMinHeight}px` } : undefined}
       >
         {renderedBlocks}
+        <SpindleMessageWidgets messageId={messageId} />
       </div>
       <ImageLightbox src={lightboxSrc} onClose={handleLightboxClose} />
     </>
