@@ -339,6 +339,14 @@ function extractHtmlIslands(
   const hasStyleTag = /<style[\s>]/i.test(raw)
   if (!hasStyleTag && !/\bstyle\s*=/i.test(raw)) return { content: raw, islands: [] }
 
+  const trimmedRaw = raw.trim()
+  if (
+    /^(?:<!doctype\b|<html\b|<head\b)/i.test(trimmedRaw)
+    && /<\/(?:html|body|head)>$/i.test(trimmedRaw)
+  ) {
+    return { content: `<!--${HTML_ISLAND_TOKEN}_0-->`, islands: [raw] }
+  }
+
   const islands: string[] = []
   const lines = raw.split('\n')
   const output: string[] = []
