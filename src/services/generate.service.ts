@@ -1353,6 +1353,7 @@ export async function startGeneration(
         targetMessageId: lifecycle.targetMessageId,
         characterId: targetCharId,
         characterName,
+        generationType: lifecycle.generationType,
       },
       input.userId,
     );
@@ -2047,6 +2048,7 @@ export async function startGeneration(
             generationId,
             chatId: input.chat_id,
             error: msg,
+            generationType: lifecycle.generationType,
           },
           input.userId,
         );
@@ -2774,6 +2776,7 @@ async function runGeneration(
           messageId,
           content: fullContent,
           usage: streamUsage,
+          generationType: lifecycle.generationType,
         },
         userId,
       );
@@ -2969,6 +2972,7 @@ async function runGeneration(
           messageId: savedMessageId,
           content: savedContent,
           error: msg,
+          generationType: lifecycle.generationType,
         },
         userId,
       );
