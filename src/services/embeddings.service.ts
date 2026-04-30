@@ -2518,9 +2518,13 @@ export async function reindexWorldBookEntries(
   const toIndex: WorldBookEntry[] = [];
   const notEnabled: WorldBookEntry[] = [];
   const disabledOrEmpty: WorldBookEntry[] = [];
+  const alreadyIndexed: WorldBookEntry[] = [];
 
   for (const entry of entries) {
-    if (!entry.vectorized) {
+    if (entry.vector_index_status === "indexed") {
+      alreadyIndexed.push(entry);
+      progress.skipped_not_enabled += 1;
+    } else if (!entry.vectorized) {
       notEnabled.push(entry);
       progress.skipped_not_enabled += 1;
     } else if (!isEligibleWorldBookEntry(entry)) {
@@ -2544,6 +2548,11 @@ export async function reindexWorldBookEntries(
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
     updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
     progress.removed += 1;
+    progress.current += 1;
+    emitProgress();
+  }
+
+  for (const entry of alreadyIndexed) {
     progress.current += 1;
     emitProgress();
   }

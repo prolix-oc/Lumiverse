@@ -154,10 +154,10 @@ class VectorizationQueue {
 
     for (const job of jobs) {
       const chunk = db
-        .query("SELECT id, content, chat_id FROM chat_chunks WHERE id = ?")
+        .query("SELECT id, content, chat_id, vectorized_at FROM chat_chunks WHERE id = ?")
         .get(job.chunkId!) as any;
 
-      if (chunk) {
+      if (chunk && chunk.vectorized_at == null) {
         chunks.push({
           id: chunk.id,
           content: chunk.content,
@@ -253,6 +253,7 @@ class VectorizationQueue {
         JOIN world_books wb ON wb.id = e.world_book_id
         WHERE wb.user_id = ?
           AND e.id IN (${placeholders})
+          AND (e.vector_index_status != 'indexed' OR e.vector_index_status IS NULL)
       `)
       .all(jobs[0].userId, ...entryIds) as any[];
 
