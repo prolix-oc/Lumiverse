@@ -330,6 +330,27 @@ export function applyCortexPreset(
 }
 
 /**
+ * True when any Cortex feature is configured to call the sidecar LLM.
+ * A saved connection profile alone is not enough: users can keep the profile
+ * selected while switching individual Cortex features back to heuristics.
+ */
+export function shouldUseCortexSidecar(config: MemoryCortexConfig): boolean {
+  return !!config.sidecar.connectionProfileId && (
+    config.entityExtractionMode === "sidecar" ||
+    config.salienceScoringMode === "sidecar" ||
+    (config.consolidation.enabled && config.consolidation.useSidecar)
+  );
+}
+
+/** True when per-chunk analysis should call the sidecar extractor. */
+export function shouldUseCortexSidecarForChunkAnalysis(config: MemoryCortexConfig): boolean {
+  return !!config.sidecar.connectionProfileId && (
+    config.entityExtractionMode === "sidecar" ||
+    config.salienceScoringMode === "sidecar"
+  );
+}
+
+/**
  * Normalize a partial config into a full config by merging with defaults.
  */
 export function normalizeCortexConfig(

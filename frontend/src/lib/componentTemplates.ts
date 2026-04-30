@@ -2,7 +2,7 @@
  * Starter templates and props documentation for overridable components.
  *
  * Tier 1 components get a curated template with the flattened props contract.
- * Tier 2 components get a generic template with their raw props.
+ * Tier 2 components get a static safe template until explicit props contracts exist.
  */
 
 export interface PropDoc {
@@ -22,9 +22,9 @@ export interface ComponentTemplate {
 // ── Tier 1: Curated props contracts ─────────────────────────────────
 
 const BUBBLE_MESSAGE: ComponentTemplate = {
-  template: `export default function BubbleMessage({ message, content, reasoning, swipes, attachments, editing, actions, styles, _raw }) {
+  template: `export default function BubbleMessage({ message, content, reasoning, swipes, attachments, editing, actions, styles }) {
   return (
-    <div style={{ padding: 12 }}>
+    <div className={styles.message || ''} style={{ padding: 12 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         {message.avatarUrl && (
@@ -45,7 +45,23 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       )}
 
       {/* Content */}
-      <div dangerouslySetInnerHTML={{ __html: content.html || content.raw }} />
+      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{content.raw}</div>
+
+      {/* Attachments */}
+      {attachments.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {attachments.map(attachment => (
+            <img
+              key={attachment.imageId}
+              src={\`/api/v1/images/\${attachment.imageId}?size=sm\`}
+              alt={attachment.filename}
+              width={96}
+              height={96}
+              style={{ objectFit: 'cover', borderRadius: 8 }}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Swipes */}
       {swipes.total > 1 && (
@@ -103,10 +119,8 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'active', type: 'boolean', description: 'Currently in edit mode' },
       { name: 'content', type: 'string', description: 'Current edit buffer' },
       { name: 'reasoning', type: 'string', description: 'Current reasoning edit buffer' },
-      { name: 'setContent', type: '(s: string) => void', description: 'Update edit content' },
-      { name: 'setReasoning', type: '(s: string) => void', description: 'Update edit reasoning' },
-      { name: 'save', type: '() => void', description: 'Save edits' },
-      { name: 'cancel', type: '() => void', description: 'Cancel editing' },
+      { name: 'save', type: 'action binding', description: 'Use as onClick={editing.save}' },
+      { name: 'cancel', type: 'action binding', description: 'Use as onClick={editing.cancel}' },
     ]},
     { name: 'actions', type: 'object', description: 'Action callbacks', children: [
       { name: 'copy', type: '() => void', description: 'Copy message to clipboard' },
@@ -119,7 +133,6 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'swipeRight', type: '() => void', description: 'Navigate to next swipe' },
     ]},
     { name: 'styles', type: 'Record<string, string>', description: 'Original CSS module class names' },
-    { name: '_raw', type: 'Message', description: 'Raw Message object (escape hatch for power users)' },
   ],
 }
 
@@ -128,17 +141,13 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
 function genericTemplate(name: string, propsNote: string): ComponentTemplate {
   return {
     template: `export default function ${name}(props) {
-  // Tier 2 override — receives the component's original props as-is.
-  // Available props:
+  // Tier 2 AST overrides are limited to static presentational markup until
+  // this component has an explicit safe props contract.
 ${propsNote}
-  //
-  // Tip: console.log(props) to inspect all available data.
 
   return (
-    <div>
-      <pre style={{ fontSize: 10, opacity: 0.5 }}>
-        {JSON.stringify(Object.keys(props), null, 2)}
-      </pre>
+    <div style={{ padding: 12, opacity: 0.7 }}>
+      Custom ${name} override placeholder
     </div>
   )
 }`,
@@ -187,7 +196,7 @@ export function getComponentTemplate(componentName: string): ComponentTemplate {
 
   // Fallback to generated props if available
   const generatedProps = (GENERATED_PROPS as Record<string, PropDoc[]>)[componentName]
-  let propsNote = '  // No documented props contract for this component yet.\n  // Use console.log(props) to inspect available data.'
+  let propsNote = '  // No documented safe props contract for this component yet.'
   
   if (generatedProps && generatedProps.length > 0) {
     propsNote = '  // Available props:\n' + generatedProps.map(p => `  //   ${p.name}: ${p.type.replace(/\n/g, ' ')}`).join('\n')
@@ -198,10 +207,8 @@ export function getComponentTemplate(componentName: string): ComponentTemplate {
 ${propsNote}
 
   return (
-    <div>
-      <pre style={{ fontSize: 10, opacity: 0.5 }}>
-        {JSON.stringify(Object.keys(props), null, 2)}
-      </pre>
+    <div style={{ padding: 12, opacity: 0.7 }}>
+      Custom ${componentName} override placeholder
     </div>
   )
 }`,

@@ -98,6 +98,68 @@ async function resolveCortexParticipants(userId: string, chat: ReturnType<typeof
   };
 }
 
+type CortexGenerateRawFn = (opts: {
+  connectionId: string;
+  messages: Array<{ role: string; content: string }>;
+  parameters: Record<string, any>;
+  tools?: any[];
+  signal?: AbortSignal;
+}) => Promise<{ content: string; tool_calls?: any[] }>;
+
+function resolveCortexSidecarAdapter(
+  userId: string,
+  cortexConfig: memoryCortex.MemoryCortexConfig,
+): {
+  generateRawFn?: CortexGenerateRawFn;
+  sidecarConnectionId?: string;
+  unavailableReason?: string;
+} {
+  if (!memoryCortex.shouldUseCortexSidecar(cortexConfig)) return {};
+
+  const sidecarConnectionId = cortexConfig.sidecar?.connectionProfileId || undefined;
+  if (!sidecarConnectionId) return { unavailableReason: "sidecar_not_configured" };
+
+  const sidecarConn = connectionsSvc.getConnection(userId, sidecarConnectionId);
+  if (!sidecarConn) return { unavailableReason: "sidecar_connection_missing" };
+
+  const provider = getProvider(sidecarConn.provider);
+  if (!provider) return { unavailableReason: "sidecar_provider_missing" };
+
+  const apiKeyRequired = provider.capabilities.apiKeyRequired ?? true;
+  if (apiKeyRequired && !sidecarConn.has_api_key) {
+    return { unavailableReason: "sidecar_api_key_missing" };
+  }
+
+  const sidecarProvider = sidecarConn.provider;
+  const generateRawFn: CortexGenerateRawFn = async (opts) => {
+    const { quietGenerate } = await import("../services/generate.service");
+    const toolChoiceParams = (opts.tools?.length)
+      ? memoryCortex.getToolChoiceParams(sidecarProvider)
+      : {};
+    const sidecarParams: Record<string, any> = {
+      temperature: cortexConfig.sidecar?.temperature ?? 0.1,
+      top_p: cortexConfig.sidecar?.topP ?? 1.0,
+      max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
+      ...toolChoiceParams,
+      ...opts.parameters,
+    };
+    if (cortexConfig.sidecar?.model) sidecarParams.model = cortexConfig.sidecar.model;
+    const result = await quietGenerate(userId, {
+      connection_id: opts.connectionId,
+      messages: opts.messages as any,
+      parameters: sidecarParams,
+      tools: opts.tools,
+      signal: opts.signal,
+    });
+    return {
+      content: typeof result.content === "string" ? result.content : "",
+      tool_calls: result.tool_calls,
+    };
+  };
+
+  return { generateRawFn, sidecarConnectionId };
+}
+
 // ─── Configuration ─────────────────────────────────────────────
 
 /** GET /config — Get the current cortex configuration */
@@ -924,51 +986,20 @@ app.post("/chats/:chatId/rebuild", async (c) => {
   const chat = getChat(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
-  const { characterNames, descriptionAliases } = await resolveCortexParticipants(userId, chat);
-
-  // Build sidecar adapter if Tier 2 is configured
   const cortexConfig = memoryCortex.getCortexConfig(userId);
-  const sidecarConnectionId = cortexConfig.sidecar?.connectionProfileId || undefined;
+  if (!cortexConfig.enabled) {
+    return c.json({ status: "skipped", reason: "cortex_disabled", chatId });
+  }
 
-  let generateRawFn: ((opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any> }) => Promise<{ content: string }>) | undefined;
-
-  if (sidecarConnectionId) {
-    // Resolve provider for structured output injection
-    const { getConnection } = require("../services/connections.service");
-    const sidecarConn = getConnection(userId, sidecarConnectionId);
-    const sidecarProvider = sidecarConn?.provider ?? null;
-
-    generateRawFn = async (opts: any) => {
-      const { quietGenerate } = await import("../services/generate.service");
-      // Only inject tool_choice when the call provides tools — consolidation
-      // and arc summarization don't use tools, so tool_choice would cause a 400.
-      const toolChoiceParams = (sidecarProvider && opts.tools?.length)
-        ? memoryCortex.getToolChoiceParams(sidecarProvider)
-        : {};
-      const sidecarParams: Record<string, any> = {
-        temperature: cortexConfig.sidecar?.temperature ?? 0.1,
-        top_p: cortexConfig.sidecar?.topP ?? 1.0,
-        max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
-        ...toolChoiceParams,
-        ...opts.parameters,
-      };
-      if (cortexConfig.sidecar?.model) sidecarParams.model = cortexConfig.sidecar.model;
-      const result = await quietGenerate(userId, {
-        connection_id: opts.connectionId,
-        messages: opts.messages as any,
-        parameters: sidecarParams,
-        tools: opts.tools,
-      });
-      return {
-        content: typeof result.content === "string" ? result.content : "",
-        tool_calls: result.tool_calls,
-      };
-    };
+  const { characterNames, descriptionAliases } = await resolveCortexParticipants(userId, chat);
+  const sidecar = resolveCortexSidecarAdapter(userId, cortexConfig);
+  if (sidecar.unavailableReason) {
+    return c.json({ status: "skipped", reason: sidecar.unavailableReason, chatId });
   }
 
   // Run rebuild in the background — return immediately so Bun doesn't timeout
   memoryCortex.rebuildCortex(
-    userId, chatId, characterNames, generateRawFn, sidecarConnectionId,
+    userId, chatId, characterNames, sidecar.generateRawFn, sidecar.sidecarConnectionId,
     // Progress callback: streams WS events to the client
     // (onProgress is the next arg, descriptionAliases is after)
     (current, total) => {
@@ -1010,6 +1041,16 @@ app.post("/chats/:chatId/warm", async (c) => {
     return c.json({ status: "skipped", reason: "cortex_disabled", chatId });
   }
 
+  const embeddings = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
+    return c.json({ status: "skipped", reason: "chat_vectorization_disabled", chatId });
+  }
+
+  const sidecar = resolveCortexSidecarAdapter(userId, config);
+  if (sidecar.unavailableReason) {
+    return c.json({ status: "skipped", reason: sidecar.unavailableReason, chatId });
+  }
+
   const stats = memoryCortex.getCortexUsageStats(chatId);
   const rebuild = memoryCortex.getRebuildStatus(chatId);
   const ingestion = memoryCortex.getIngestionStatus(chatId);
@@ -1038,8 +1079,8 @@ app.post("/chats/:chatId/warm", async (c) => {
     userId,
     chatId,
     characterNames,
-    undefined,
-    undefined,
+    sidecar.generateRawFn,
+    sidecar.sidecarConnectionId,
     (current, total) => {
       eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
         chatId,

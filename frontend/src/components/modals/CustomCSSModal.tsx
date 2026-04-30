@@ -584,7 +584,7 @@ export default function CustomCSSModal() {
               <div className={styles.tsxNotice}>
                 <ShieldAlert size={14} className={styles.tsxNoticeIcon} />
                 <span>
-                  Editing <span className={styles.tsxComponentLabel}>{selected}</span> — network, storage, and navigation are blocked.
+                  Editing <span className={styles.tsxComponentLabel}>{selected}</span> — interpreted safe TSX subset; arbitrary JavaScript is not executed.
                 </span>
               </div>
             )}

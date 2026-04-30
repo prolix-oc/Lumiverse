@@ -62,13 +62,7 @@ export default function ChatPickerModal({
   const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const menuPopoverRef = useRef<HTMLDivElement>(null)
 
-  const updateActiveMenuPosition = useCallback((chatId: string) => {
-    const trigger = menuButtonRefs.current[chatId]
-    if (!trigger) {
-      setActiveMenuPos(null)
-      return
-    }
-
+  const computeMenuPosition = useCallback((trigger: HTMLElement) => {
     const rect = trigger.getBoundingClientRect()
     const viewportPadding = 8
     const dropdownWidth = menuPopoverRef.current?.offsetWidth ?? 140
@@ -83,11 +77,33 @@ export default function ChatPickerModal({
       ? Math.max(viewportPadding, rect.top - dropdownHeight - 6)
       : Math.min(window.innerHeight - dropdownHeight - viewportPadding, rect.bottom + 6)
 
-    setActiveMenuPos((prev) => {
-      if (prev?.top === top && prev?.left === left) return prev
-      return { top, left }
-    })
+    return { top, left }
   }, [])
+
+  const updateActiveMenuPosition = useCallback((chatId: string) => {
+    const trigger = menuButtonRefs.current[chatId]
+    if (!trigger) {
+      setActiveMenuPos(null)
+      return
+    }
+
+    const next = computeMenuPosition(trigger)
+
+    setActiveMenuPos((prev) => {
+      if (prev?.top === next.top && prev?.left === next.left) return prev
+      return next
+    })
+  }, [computeMenuPosition])
+
+  const closeActiveMenu = useCallback(() => {
+    setActiveMenuId(null)
+    setActiveMenuPos(null)
+  }, [])
+
+  const openActiveMenu = useCallback((chatId: string, trigger: HTMLElement) => {
+    setActiveMenuId(chatId)
+    setActiveMenuPos(computeMenuPosition(trigger))
+  }, [computeMenuPosition])
 
   useEffect(() => {
     let mounted = true
@@ -114,10 +130,6 @@ export default function ChatPickerModal({
   }, [renamingId])
 
   useEffect(() => {
-    if (!activeMenuId) setActiveMenuPos(null)
-  }, [activeMenuId])
-
-  useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (renamingId) {
@@ -125,7 +137,7 @@ export default function ChatPickerModal({
           return
         }
         if (activeMenuId) {
-          setActiveMenuId(null)
+          closeActiveMenu()
           return
         }
         if (deleteTarget) {
@@ -139,7 +151,7 @@ export default function ChatPickerModal({
     return () => {
       document.removeEventListener('keydown', handleEscape)
     }
-  }, [onDismiss, renamingId, activeMenuId, deleteTarget])
+  }, [onDismiss, renamingId, activeMenuId, deleteTarget, closeActiveMenu])
 
   useEffect(() => {
     if (!activeMenuId) return
@@ -158,12 +170,12 @@ export default function ChatPickerModal({
       const inTrigger = !!trigger && (trigger.contains(target) || path.includes(trigger))
       const inPopover = !!popover && (popover.contains(target) || path.includes(popover))
 
-      if (!inTrigger && !inPopover) setActiveMenuId(null)
+      if (!inTrigger && !inPopover) closeActiveMenu()
     }
 
     document.addEventListener('pointerdown', handlePointerDown)
     return () => document.removeEventListener('pointerdown', handlePointerDown)
-  }, [activeMenuId])
+  }, [activeMenuId, closeActiveMenu])
 
   useLayoutEffect(() => {
     if (!activeMenuId) return
@@ -363,9 +375,14 @@ export default function ChatPickerModal({
                     }}
                     type="button"
                     className={clsx(styles.menuBtn, isMenuOpen && styles.menuBtnActive)}
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation()
-                      setActiveMenuId(isMenuOpen ? null : item.id)
+                      if (isMenuOpen) {
+                        closeActiveMenu()
+                        return
+                      }
+                      openActiveMenu(item.id, e.currentTarget)
                     }}
                     title="More options"
                   >
@@ -401,6 +418,7 @@ export default function ChatPickerModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -5 }}
             transition={{ duration: 0.15 }}
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -412,7 +430,7 @@ export default function ChatPickerModal({
                 if (!item) return
                 setRenamingId(item.id)
                 setRenameValue(item.name || '')
-                setActiveMenuId(null)
+                closeActiveMenu()
               }}
             >
               <Pencil size={14} />
@@ -426,7 +444,7 @@ export default function ChatPickerModal({
                 const item = items.find((chat) => chat.id === activeMenuId)
                 if (!item) return
                 handleExport(item.id, formatChatName(item))
-                setActiveMenuId(null)
+                closeActiveMenu()
               }}
             >
               <Download size={14} />
@@ -440,7 +458,7 @@ export default function ChatPickerModal({
                 const item = items.find((chat) => chat.id === activeMenuId)
                 if (!item) return
                 setDeleteTarget(item)
-                setActiveMenuId(null)
+                closeActiveMenu()
               }}
             >
               <Trash2 size={14} />

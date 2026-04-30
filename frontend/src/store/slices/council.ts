@@ -6,7 +6,21 @@ import { councilApi } from '@/api/council'
 import { spindleApi } from '@/api/spindle'
 import { generateUUID } from '@/lib/uuid'
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function targetKey(target: CouncilPersistenceTarget): string {
+  switch (target.type) {
+    case 'chat':
+      return `chat:${target.chatId ?? ''}`
+    case 'character':
+      return `character:${target.characterId ?? ''}`
+    case 'defaults':
+      return 'defaults'
+    case 'global':
+    default:
+      return 'global'
+  }
+}
 
 async function persistCouncilSettings(settings: CouncilSettings, target: CouncilPersistenceTarget) {
   switch (target.type) {
@@ -62,12 +76,16 @@ function mergeCouncilAndSpindleTools(
 }
 
 function debouncedSave(settings: CouncilSettings, target: CouncilPersistenceTarget) {
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
+  const key = targetKey(target)
+  const existingTimer = saveTimers.get(key)
+  if (existingTimer) clearTimeout(existingTimer)
+  const timer = setTimeout(() => {
+    saveTimers.delete(key)
     persistCouncilSettings(settings, target).catch((err) => {
       console.error('[council] Failed to save settings:', err)
     })
   }, 500)
+  saveTimers.set(key, timer)
 }
 
 export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({

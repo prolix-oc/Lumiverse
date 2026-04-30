@@ -13,6 +13,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.2",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-css": "^6.3.1",
@@ -41,7 +42,6 @@
     "react-dom": "^19.0.0",
     "react-easy-crop": "^5.1.0",
     "react-router": "^7.1.1",
-    "sucrase": "^3.35.1",
     "zustand": "^5.0.3"
   },
   "devDependencies": {

@@ -1579,6 +1579,9 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
   try {
     const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
     if (chunk) {
+      const cortexConfig = memoryCortex.getCortexConfig(userId);
+      if (!cortexConfig.enabled) return;
+
       const chat = getChat(userId, chatId);
       const characterNames: string[] = [];
       const aliasMaps: Map<string, string>[] = [];
@@ -1621,15 +1624,21 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       const descriptionAliases = memoryCortex.mergeDescriptionAliases(...aliasMaps);
 
       // Resolve sidecar connection for Tier 2 features (LLM-assisted extraction).
-      const cortexConfig = memoryCortex.getCortexConfig(userId);
-      const sidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
+      let sidecarConnectionId: string | undefined;
 
       // Resolve the provider from the connection profile for structured output injection
       let sidecarProvider: string | null = null;
-      if (sidecarConnectionId) {
+      if (memoryCortex.shouldUseCortexSidecar(cortexConfig)) {
         const { getConnection } = require("./connections.service");
-        const conn = getConnection(userId, sidecarConnectionId);
-        sidecarProvider = conn?.provider ?? null;
+        const { getProvider } = require("../llm/registry");
+        const requestedSidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
+        const conn = requestedSidecarConnectionId ? getConnection(userId, requestedSidecarConnectionId) : null;
+        const provider = conn ? getProvider(conn.provider) : null;
+        const apiKeyRequired = provider?.capabilities.apiKeyRequired ?? true;
+        if (conn && provider && (!apiKeyRequired || conn.has_api_key)) {
+          sidecarConnectionId = requestedSidecarConnectionId;
+          sidecarProvider = conn.provider;
+        }
       }
 
       // Build a generateRaw adapter. Injects structured output params (response_format /

@@ -16,7 +16,13 @@
  */
 
 import { getDb } from "../../db/connection";
-import { getCortexConfig, putCortexConfig, type MemoryCortexConfig } from "./config";
+import {
+  getCortexConfig,
+  putCortexConfig,
+  shouldUseCortexSidecar,
+  shouldUseCortexSidecarForChunkAnalysis,
+  type MemoryCortexConfig,
+} from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
 import { extractWithSidecar, extractBatchWithSidecar, getToolChoiceParams, getExtractionStructuredParams } from "./salience-sidecar";
 import { extractEntitiesHeuristic, extractMentionExcerpt, detectNicknameIntroductions } from "./entity-extractor";
@@ -51,7 +57,7 @@ import type {
 } from "./types";
 
 // Re-export public types and config
-export { getCortexConfig, putCortexConfig, applyCortexPreset } from "./config";
+export { getCortexConfig, putCortexConfig, applyCortexPreset, shouldUseCortexSidecar, shouldUseCortexSidecarForChunkAnalysis } from "./config";
 export type { MemoryCortexConfig, CortexPresetMode } from "./config";
 export { formatShadowPrompt, formatLinkedCortexSection } from "./shadow-formatter";
 export type { FormatterMode, ShadowPromptResult, LinkedFormatResult } from "./shadow-formatter";
@@ -688,6 +694,7 @@ export async function processChunk(
 ): Promise<void> {
   const config = getCortexConfig(data.userId);
   if (!config.enabled) return;
+  const sidecarActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
 
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
@@ -745,8 +752,7 @@ export async function processChunk(
     const shouldRunHeuristicWorker =
       (config.entityTracking && config.entityExtractionMode !== "off") ||
       !config.salienceScoring ||
-      !generateRawFn ||
-      !sidecarConnectionId;
+      !sidecarActive;
 
     const heuristicPromise = shouldRunHeuristicWorker
       ? runHeuristicAnalysisInWorker({
@@ -772,7 +778,7 @@ export async function processChunk(
     let heuristicResult = null as Awaited<typeof heuristicPromise>;
 
     let extraction: Awaited<ReturnType<typeof extractWithSidecar>> | null = null;
-    if (config.salienceScoring && generateRawFn && sidecarConnectionId) {
+    if (sidecarActive) {
       updateIngestionStatus(data.userId, data.chatId, { phase: "sidecar", chunkId: data.chunkId });
       const sidecarStart = performance.now();
       const sidecarTimeout = config.sidecarTimeoutMs ?? 30000;
@@ -781,15 +787,17 @@ export async function processChunk(
         console.warn("[memory-cortex] Sidecar extraction timed out, aborting LLM call");
         ac.abort();
       }, sidecarTimeout) : null;
-      const boundGenFn: typeof generateRawFn = ac
-        ? (opts) => generateRawFn({ ...opts, signal: ac.signal })
-        : generateRawFn;
+      const activeGenerateRawFn = generateRawFn!;
+      const activeSidecarConnectionId = sidecarConnectionId!;
+      const boundGenFn: typeof activeGenerateRawFn = ac
+        ? (opts) => activeGenerateRawFn({ ...opts, signal: ac.signal })
+        : activeGenerateRawFn;
 
       try {
         extraction = await extractWithSidecar(
           rawChunkContent,
           boundGenFn,
-          sidecarConnectionId,
+          activeSidecarConnectionId,
           { characterNames, knownEntities: entityContext },
         );
       } catch (err: any) {
@@ -1046,7 +1054,7 @@ export async function processChunk(
     // ── NP Chunker — Phase 1 entity discovery (IMP 4) ──
     // Only runs server-side during sidecar mode (amortized cost acceptable).
     // Does NOT run in heuristic-only mode to protect mobile latency.
-    if (generateRawFn && sidecarConnectionId) {
+    if (sidecarActive) {
       // Deeper sanitization for NP chunking — strip loom tag content and details
       // blocks that font-stripping alone doesn't handle, preventing meta-content
       // (summaries, structured data inside loom tags) from producing garbage NPs.
@@ -1130,7 +1138,7 @@ export async function processChunk(
 
     // ── BUG 4: Fact extraction gating ──
     // Check for high-salience entities that lack facts
-    if (generateRawFn && sidecarConnectionId && salienceResult.score >= 0.5) {
+    if (sidecarActive && salienceResult.score >= 0.5) {
       const needsFacts = entityGraph.getEntitiesNeedingFactExtraction(data.chatId, 0.45, 3);
       for (const entity of needsFacts) {
         // Mark as attempted — actual extraction happens via sidecar on next rebuild
@@ -1232,9 +1240,14 @@ export async function rebuildCortex(
   descriptionAliases?: Map<string, string>,
 ): Promise<{ chunksProcessed: number; entitiesFound: number; relationsFound: number }> {
   const config = getCortexConfig(userId);
+  if (!config.enabled) {
+    return { chunksProcessed: 0, entitiesFound: 0, relationsFound: 0 };
+  }
+  const sidecarAvailable = shouldUseCortexSidecar(config) && !!generateRawFn && !!sidecarConnectionId;
+  const sidecarAnalysisActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
   const db = getDb();
 
-  console.info(`[memory-cortex] Rebuilding cortex for chat ${chatId} (sidecar: ${sidecarConnectionId ? "yes" : "heuristic only"})`);
+  console.info(`[memory-cortex] Rebuilding cortex for chat ${chatId} (sidecar: ${sidecarAvailable ? "yes" : "heuristic only"})`);
 
   // Invalidate cached retrieval results — they'll be stale after rebuild
   invalidateCortexCache(chatId);
@@ -1266,10 +1279,18 @@ export async function rebuildCortex(
   try {
     const concurrency = config.sidecar?.rebuildConcurrency ?? 3;
 
-    if (!generateRawFn || !sidecarConnectionId) {
+    if (!sidecarAnalysisActive) {
       // Heuristic-only: sequential, ~1-2ms per chunk — no concurrency needed
       for (let i = 0; i < chunks.length; i++) {
-        await processChunkFromRaw(chunks[i], chatId, userId, characterNames, undefined, undefined, descriptionAliases);
+        await processChunkFromRaw(
+          chunks[i],
+          chatId,
+          userId,
+          characterNames,
+          sidecarAvailable ? generateRawFn : undefined,
+          sidecarAvailable ? sidecarConnectionId : undefined,
+          descriptionAliases,
+        );
         state.current = i + 1;
         state.percent = Math.round(((i + 1) / chunks.length) * 100);
         if (onProgress) onProgress(i + 1, chunks.length);
@@ -1285,6 +1306,8 @@ export async function rebuildCortex(
 
       let nextChunkIdx = 0;
       let completed = 0;
+      const activeGenerateRawFn = generateRawFn!;
+      const activeSidecarConnectionId = sidecarConnectionId!;
 
       async function processNextChunk(): Promise<void> {
         while (nextChunkIdx < chunks.length) {
@@ -1296,8 +1319,8 @@ export async function rebuildCortex(
             // Single request per chunk — sends tools, waits for ALL tool_calls to resolve
             const sidecarResult = await extractWithSidecar(
               rawChunkContent,
-              generateRawFn!,
-              sidecarConnectionId!,
+              activeGenerateRawFn,
+              activeSidecarConnectionId,
               { characterNames },
             );
 
