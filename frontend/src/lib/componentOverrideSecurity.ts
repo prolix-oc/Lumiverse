@@ -6,11 +6,14 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
   { pattern: /\b(?:window|globalThis|document|ownerDocument|defaultView)\b/, message: 'Global DOM access is not allowed in component overrides.' },
   { pattern: /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|navigator|sendBeacon)\b/, message: 'Network APIs are not allowed in component overrides.' },
   { pattern: /\b(?:localStorage|sessionStorage|indexedDB|caches|cookie)\b/, message: 'Storage and cookie access are not allowed in component overrides.' },
-  { pattern: /\b(?:Function|eval|importScripts|Worker|SharedWorker|ServiceWorker)\b/, message: 'Dynamic code execution APIs are not allowed in component overrides.' },
+  { pattern: /\b(?:Function|eval|importScripts|Worker|SharedWorker|ServiceWorker|WebAssembly)\b/, message: 'Dynamic code execution APIs are not allowed in component overrides.' },
   { pattern: /\b(?:postMessage|setTimeout|setInterval|requestAnimationFrame|location|history)\b/, message: 'Navigation and global async APIs are not allowed in component overrides.' },
   { pattern: /\b__proto__\b/, message: 'Prototype escape hatches are not allowed in component overrides.' },
   { pattern: /\.\s*(?:constructor|prototype)\b/, message: 'Constructor and prototype access are not allowed in component overrides.' },
   { pattern: /\[\s*["'](?:constructor|prototype|__proto__)["']\s*\]/, message: 'Constructor and prototype access are not allowed in component overrides.' },
+  { pattern: /\b(?:cloneElement|createPortal|findDOMNode)\b/, message: 'DOM manipulation helpers are not allowed in component overrides.' },
+  { pattern: /javascript:/i, message: 'javascript: URLs are not allowed in component overrides.' },
+  { pattern: /<(?:script|iframe|object|embed)\b/i, message: 'Dangerous HTML tags are not allowed in component overrides.' },
 ]
 
 export function validateComponentOverrideSource(source: string): { valid: boolean; error?: string } {

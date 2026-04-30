@@ -40,6 +40,7 @@ import type {
   LumiaItemDTO,
   StreamChunkDTO,
 } from "lumiverse-spindle-types";
+import { initializeSandbox } from "./worker-runtime-sandbox";
 
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
@@ -2420,6 +2421,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       } catch {
         // Non-fatal — cache starts empty, host still enforces
       }
+
+      // Initialize runtime sandbox before loading untrusted extension code.
+      // This patches import(), eval, Function, and sensitive Bun/process APIs
+      // so that static-analysis bypasses (dynamic imports, indirect access)
+      // are caught at runtime.
+      initializeSandbox();
 
       // Dynamically import the extension's backend entry
       try {

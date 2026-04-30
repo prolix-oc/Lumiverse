@@ -116,6 +116,34 @@ function createWorkerTransport(opts: CreateRuntimeTransportOptions): RuntimeTran
   };
 }
 
+function buildRestrictedEnv(): Record<string, string | undefined> {
+  const restricted: Record<string, string | undefined> = {};
+  const strip = [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_LAUNCHER",
+    "LUMIVERSE_OWNER_PASSWORD",
+    "LUMIVERSE_AUTH_SECRET",
+    "LUMIVERSE_ENCRYPTION_KEY",
+    "OWNER_PASSWORD",
+    "AUTH_SECRET",
+    "ENCRYPTION_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+  ];
+  for (const key of Object.keys(process.env)) {
+    if (strip.includes(key)) {
+      restricted[key] = undefined;
+    } else {
+      restricted[key] = process.env[key];
+    }
+  }
+  return restricted;
+}
+
 function createSubprocessTransport(
   opts: CreateRuntimeTransportOptions,
   mode: Extract<RuntimeTransportMode, "process" | "sandbox">
@@ -137,6 +165,7 @@ function createSubprocessTransport(
 
   const proc = Bun.spawn({
     cmd,
+    env: buildRestrictedEnv(),
     stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
