@@ -1,11 +1,14 @@
 import DOMPurify from 'dompurify'
 import type { SpindleDOMHelper } from 'lumiverse-spindle-types'
+import { createSandboxFrame } from './sandbox-frame'
 
 const DATA_ATTR = 'data-spindle-ext'
+const FORBIDDEN_CREATE_TAGS = new Set(['iframe', 'frame', 'object', 'embed'])
 
 export function createDOMHelper(extensionId: string): SpindleDOMHelper {
   const trackedElements = new Set<Element>()
   const trackedStyles: (() => void)[] = []
+  const trackedDisposers: (() => void)[] = []
 
   return {
     inject(target: string | Element, html: string, position?: InsertPosition): Element {
@@ -53,6 +56,9 @@ export function createDOMHelper(extensionId: string): SpindleDOMHelper {
       tag: K,
       attrs?: Record<string, string>
     ): HTMLElementTagNameMap[K] {
+      if (FORBIDDEN_CREATE_TAGS.has(String(tag).toLowerCase())) {
+        throw new Error(`Forbidden element tag: ${tag}. Use ctx.dom.createSandboxFrame() for isolated scriptable widgets.`)
+      }
       const el = document.createElement(tag)
       el.setAttribute(DATA_ATTR, extensionId)
       if (attrs) {
@@ -62,6 +68,31 @@ export function createDOMHelper(extensionId: string): SpindleDOMHelper {
       }
       trackedElements.add(el)
       return el
+    },
+
+    createSandboxFrame(options) {
+      const handle = createSandboxFrame(extensionId, options)
+      trackedElements.add(handle.element)
+      const originalDestroy = handle.destroy.bind(handle)
+
+      const dispose = () => {
+        originalDestroy()
+        trackedElements.delete(handle.element)
+        const idx = trackedDisposers.indexOf(dispose)
+        if (idx !== -1) trackedDisposers.splice(idx, 1)
+      }
+
+      trackedDisposers.push(dispose)
+
+      handle.destroy = () => {
+        if (!trackedElements.has(handle.element)) {
+          originalDestroy()
+          return
+        }
+        dispose()
+      }
+
+      return handle
     },
 
     query(selector: string): Element | null {
@@ -84,6 +115,11 @@ export function createDOMHelper(extensionId: string): SpindleDOMHelper {
         remove()
       }
       trackedStyles.length = 0
+
+      for (const dispose of [...trackedDisposers]) {
+        dispose()
+      }
+      trackedDisposers.length = 0
     },
   }
 }

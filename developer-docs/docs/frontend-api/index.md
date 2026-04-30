@@ -31,7 +31,7 @@ export function teardown() {
 
 | Category | Permission | Description |
 |----------|-----------|-------------|
-| [DOM Helper](dom-helper.md) | Free | Inject sanitized HTML and CSS |
+| [DOM Helper](dom-helper.md) | Free | Inject sanitized HTML/CSS and create host-managed sandbox frames |
 | [HTML Islands](html-islands.md) | Free | Auto-isolation of styled HTML in messages, and how to opt out |
 | [Events](events.md) | Free | Subscribe to WebSocket events, emit custom events |
 | [UI Placement](ui-placement.md) | Varies | Drawer tabs, float widgets, dock panels, modals, context menus, input bar actions |

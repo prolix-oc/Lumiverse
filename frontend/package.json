@@ -1,7 +1,7 @@
 {
   "name": "lumiverse-frontend",
   "private": true,
-  "version": "0.9.5",
+  "version": "0.9.6",
   "type": "module",
   "scripts": {
     "dev": "bun run extract-props && bun run extract-css-vars && vite",
@@ -35,7 +35,7 @@
     "fuse.js": "^7.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.468.0",
-    "lumiverse-spindle-types": "0.4.47",
+    "lumiverse-spindle-types": "0.4.48",
     "marked": "^15.0.4",
     "motion": "^12.0.0",
     "react": "^19.0.0",

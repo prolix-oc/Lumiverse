@@ -26,7 +26,7 @@ my-extension/
 Extensions can have a **backend module**, a **frontend module**, or both.
 
 - **Backend** (`dist/backend.js`) — runs in an isolated Bun worker thread. Has access to the `spindle` global API. Cannot access the DOM or Lumiverse internals directly.
-- **Frontend** (`dist/frontend.js`) — loaded in the browser via dynamic import. Receives a sandboxed context object with a DOM helper and event system. All HTML is sanitized through DOMPurify.
+- **Frontend** (`dist/frontend.js`) — loaded in the browser via dynamic import. Receives a sandboxed context object with a DOM helper and event system. All HTML is sanitized through DOMPurify, and scriptable widgets must use the host-managed `ctx.dom.createSandboxFrame()` API instead of creating raw iframes.
 
 If your `dist/` folder doesn't exist but `src/backend.ts` and/or `src/frontend.ts` do, Lumiverse will auto-build them with `bun build` on install.
 
