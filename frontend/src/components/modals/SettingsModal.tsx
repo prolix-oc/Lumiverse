@@ -1509,13 +1509,13 @@ function EmbeddingsSettings() {
     setModelLabels({})
   }, [cfg?.provider, cfg?.api_url])
 
-  const PROVIDER_DEFAULTS: Record<string, { api_url: string; model: string }> = {
-    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
-    openai: { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
-    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings', model: 'text-embedding-3-small' },
-    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings', model: 'text-embedding-3-small' },
-    bananabread: { api_url: 'http://localhost:8008/v1/embeddings', model: 'mixedbread-ai/mxbai-embed-large-v1' },
-    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings', model: 'text-embedding-3-small' },
+  const PROVIDER_DEFAULTS: Record<string, { api_url: string }> = {
+    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings' },
+    openai: { api_url: 'https://api.openai.com/v1/embeddings' },
+    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings' },
+    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings' },
+    bananabread: { api_url: 'http://localhost:8008/v1/embeddings' },
+    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings' },
   }
 
   const providerAllowsCustomApiUrl = (provider: EmbeddingConfig['provider']) => {
@@ -1524,11 +1524,11 @@ function EmbeddingsSettings() {
 
   const update = (patch: Partial<EmbeddingConfig>) => {
     if (!cfg) return
-    // When provider changes, auto-fill URL and model with provider defaults
+    // When provider changes, auto-fill URL with provider default
     if (patch.provider && patch.provider !== cfg.provider) {
       const defaults = PROVIDER_DEFAULTS[patch.provider]
       if (defaults) {
-        patch = { ...patch, api_url: defaults.api_url, model: defaults.model }
+        patch = { ...patch, api_url: defaults.api_url }
       }
     }
     setCfg({ ...cfg, ...patch })
@@ -1764,7 +1764,7 @@ function EmbeddingsSettings() {
                 onRefresh={fetchModels}
                 autoRefreshOnFocus
                 refreshKey={`${cfg.provider}:${cfg.api_url}`}
-                placeholder={PROVIDER_DEFAULTS[cfg.provider]?.model || 'text-embedding-3-small'}
+                placeholder='Search or enter a model'
                 emptyMessage="No models returned for this provider. Enter one manually."
                 browseHint="Click into the field to browse embedding-capable models for this provider, or type one manually."
                 disabled={inherited}
