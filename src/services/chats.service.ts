@@ -54,6 +54,157 @@ function rowToChat(row: any): Chat {
   return { ...row, metadata };
 }
 
+function normalizeReasoningEntries(
+  value: unknown,
+  swipeCount: number,
+): (string | null)[] {
+  const normalized = Array.isArray(value)
+    ? value.slice(0, swipeCount).map((entry) =>
+        typeof entry === "string" && entry.length > 0 ? entry : null,
+      )
+    : [];
+  while (normalized.length < swipeCount) normalized.push(null);
+  return normalized;
+}
+
+function normalizeReasoningDurationEntries(
+  value: unknown,
+  swipeCount: number,
+): (number | null)[] {
+  const normalized = Array.isArray(value)
+    ? value.slice(0, swipeCount).map((entry) =>
+        typeof entry === "number" && Number.isFinite(entry) && entry > 0
+          ? entry
+          : null,
+      )
+    : [];
+  while (normalized.length < swipeCount) normalized.push(null);
+  return normalized;
+}
+
+function normalizeStoredMessageExtra(
+  extra: Record<string, unknown> | null | undefined,
+  swipeCount: number,
+  legacySwipeId: number,
+): Record<string, unknown> {
+  const safeSwipeCount = Math.max(1, swipeCount);
+  const safeLegacySwipeId =
+    Number.isInteger(legacySwipeId) &&
+    legacySwipeId >= 0 &&
+    legacySwipeId < safeSwipeCount
+      ? legacySwipeId
+      : 0;
+  const normalized: Record<string, unknown> = { ...(extra || {}) };
+  const reasoningBySwipe = normalizeReasoningEntries(
+    normalized.reasoningBySwipe,
+    safeSwipeCount,
+  );
+  const reasoningDurationBySwipe = normalizeReasoningDurationEntries(
+    normalized.reasoningDurationBySwipe,
+    safeSwipeCount,
+  );
+
+  if (normalized.reasoning === null) {
+    reasoningBySwipe[safeLegacySwipeId] = null;
+  } else if (typeof normalized.reasoning === "string") {
+    reasoningBySwipe[safeLegacySwipeId] =
+      normalized.reasoning.length > 0 ? normalized.reasoning : null;
+  }
+
+  if (normalized.reasoningDuration === null) {
+    reasoningDurationBySwipe[safeLegacySwipeId] = null;
+  } else if (
+    typeof normalized.reasoningDuration === "number" &&
+    Number.isFinite(normalized.reasoningDuration) &&
+    normalized.reasoningDuration > 0
+  ) {
+    reasoningDurationBySwipe[safeLegacySwipeId] = normalized.reasoningDuration;
+  }
+
+  delete normalized.reasoning;
+  delete normalized.reasoningDuration;
+
+  if (reasoningBySwipe.some((entry) => entry !== null)) {
+    normalized.reasoningBySwipe = reasoningBySwipe;
+  } else {
+    delete normalized.reasoningBySwipe;
+  }
+
+  if (reasoningDurationBySwipe.some((entry) => entry !== null)) {
+    normalized.reasoningDurationBySwipe = reasoningDurationBySwipe;
+  } else {
+    delete normalized.reasoningDurationBySwipe;
+  }
+
+  return normalized;
+}
+
+function projectActiveSwipeExtra(
+  extra: Record<string, unknown>,
+  swipeId: number,
+): Record<string, unknown> {
+  const projected: Record<string, unknown> = { ...extra };
+  const activeReasoning = Array.isArray(extra.reasoningBySwipe)
+    ? extra.reasoningBySwipe[swipeId]
+    : null;
+  const activeReasoningDuration = Array.isArray(extra.reasoningDurationBySwipe)
+    ? extra.reasoningDurationBySwipe[swipeId]
+    : null;
+
+  if (typeof activeReasoning === "string" && activeReasoning.length > 0) {
+    projected.reasoning = activeReasoning;
+  } else {
+    delete projected.reasoning;
+  }
+
+  if (
+    typeof activeReasoningDuration === "number" &&
+    Number.isFinite(activeReasoningDuration) &&
+    activeReasoningDuration > 0
+  ) {
+    projected.reasoningDuration = activeReasoningDuration;
+  } else {
+    delete projected.reasoningDuration;
+  }
+
+  return projected;
+}
+
+function removeSwipeScopedExtraEntry(
+  extra: Record<string, unknown> | null | undefined,
+  swipeCount: number,
+  legacySwipeId: number,
+  removedSwipeId: number,
+): Record<string, unknown> {
+  const normalized = normalizeStoredMessageExtra(extra, swipeCount, legacySwipeId);
+
+  if (Array.isArray(normalized.reasoningBySwipe)) {
+    const reasoningBySwipe = [
+      ...(normalized.reasoningBySwipe as (string | null)[]),
+    ];
+    reasoningBySwipe.splice(removedSwipeId, 1);
+    if (reasoningBySwipe.some((entry) => entry !== null)) {
+      normalized.reasoningBySwipe = reasoningBySwipe;
+    } else {
+      delete normalized.reasoningBySwipe;
+    }
+  }
+
+  if (Array.isArray(normalized.reasoningDurationBySwipe)) {
+    const reasoningDurationBySwipe = [
+      ...(normalized.reasoningDurationBySwipe as (number | null)[]),
+    ];
+    reasoningDurationBySwipe.splice(removedSwipeId, 1);
+    if (reasoningDurationBySwipe.some((entry) => entry !== null)) {
+      normalized.reasoningDurationBySwipe = reasoningDurationBySwipe;
+    } else {
+      delete normalized.reasoningDurationBySwipe;
+    }
+  }
+
+  return normalized;
+}
+
 function rowToMessage(row: any): Message {
   let swipes: string[];
   let swipe_dates: number[];
@@ -61,12 +212,13 @@ function rowToMessage(row: any): Message {
   try { swipes = JSON.parse(row.swipes); } catch { swipes = [row.content ?? ""]; }
   try { swipe_dates = JSON.parse(row.swipe_dates || '[]'); } catch { swipe_dates = []; }
   try { extra = JSON.parse(row.extra); } catch { extra = {}; }
+  const storedExtra = normalizeStoredMessageExtra(extra, swipes.length, row.swipe_id);
   return {
     ...row,
     is_user: !!row.is_user,
     swipes,
     swipe_dates,
-    extra,
+    extra: projectActiveSwipeExtra(storedExtra, row.swipe_id),
     parent_message_id: row.parent_message_id || null,
     branch_id: row.branch_id || null,
   };
@@ -704,7 +856,8 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
     )
     .run(
       id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
-      now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates), JSON.stringify(input.extra || {}),
+      now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
+      JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
       input.parent_message_id || null, input.branch_id || null, now
     );
 
@@ -732,7 +885,14 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
 export function patchMessageExtra(userId: string, id: string, extra: Record<string, any>): void {
   const existing = getMessage(userId, id);
   if (!existing) return;
-  getDb().query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?").run(JSON.stringify(extra), id, existing.chat_id);
+  const normalizedExtra = normalizeStoredMessageExtra(
+    extra,
+    existing.swipes.length,
+    existing.swipe_id,
+  );
+  getDb()
+    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
 }
 
 export function updateMessage(userId: string, id: string, input: UpdateMessageInput): Message | null {
@@ -783,6 +943,14 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     : swipeShapeTouched
       ? newSwipes[newSwipeId]
       : undefined;
+  const normalizedExtra =
+    input.extra !== undefined || swipeShapeTouched
+      ? normalizeStoredMessageExtra(
+          input.extra ?? existing.extra,
+          newSwipes.length,
+          input.extra !== undefined ? newSwipeId : existing.swipe_id,
+        )
+      : undefined;
 
   const fields: string[] = [];
   const values: any[] = [];
@@ -800,7 +968,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     values.push(newSwipeId);
   }
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.extra !== undefined) { fields.push("extra = ?"); values.push(JSON.stringify(input.extra)); }
+  if (normalizedExtra !== undefined) { fields.push("extra = ?"); values.push(JSON.stringify(normalizedExtra)); }
 
   if (fields.length === 0) return existing;
   values.push(id);
@@ -972,10 +1140,23 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   const swipes = [...msg.swipes, content];
   const swipeDates = [...msg.swipe_dates, now];
   const newSwipeId = swipes.length - 1;
+  const normalizedExtra = normalizeStoredMessageExtra(
+    msg.extra,
+    swipes.length,
+    msg.swipe_id,
+  );
 
   getDb()
-    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ? WHERE id = ? AND chat_id = ?")
-    .run(JSON.stringify(swipes), JSON.stringify(swipeDates), newSwipeId, content, messageId, msg.chat_id);
+    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
+    .run(
+      JSON.stringify(swipes),
+      JSON.stringify(swipeDates),
+      newSwipeId,
+      content,
+      JSON.stringify(normalizedExtra),
+      messageId,
+      msg.chat_id,
+    );
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -997,13 +1178,18 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
 
   const swipes = [...msg.swipes];
   swipes[swipeIdx] = content;
+  const normalizedExtra = normalizeStoredMessageExtra(
+    msg.extra,
+    swipes.length,
+    msg.swipe_id,
+  );
 
   const updates = swipeIdx === msg.swipe_id
-    ? "swipes = ?, content = ?"
-    : "swipes = ?";
+    ? "swipes = ?, content = ?, extra = ?"
+    : "swipes = ?, extra = ?";
   const values = swipeIdx === msg.swipe_id
-    ? [JSON.stringify(swipes), content, messageId, msg.chat_id]
-    : [JSON.stringify(swipes), messageId, msg.chat_id];
+    ? [JSON.stringify(swipes), content, JSON.stringify(normalizedExtra), messageId, msg.chat_id]
+    : [JSON.stringify(swipes), JSON.stringify(normalizedExtra), messageId, msg.chat_id];
 
   getDb().query(`UPDATE messages SET ${updates} WHERE id = ? AND chat_id = ?`).run(...values);
   const updated = getMessage(userId, messageId)!;
@@ -1043,10 +1229,24 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
   }
 
   const newContent = swipes[newSwipeId] ?? swipes[0];
+  const normalizedExtra = removeSwipeScopedExtraEntry(
+    msg.extra,
+    msg.swipes.length,
+    previousSwipeId,
+    swipeIdx,
+  );
 
   getDb()
-    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ? WHERE id = ? AND chat_id = ?")
-    .run(JSON.stringify(swipes), JSON.stringify(swipeDates), newSwipeId, newContent, messageId, msg.chat_id);
+    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
+    .run(
+      JSON.stringify(swipes),
+      JSON.stringify(swipeDates),
+      newSwipeId,
+      newContent,
+      JSON.stringify(normalizedExtra),
+      messageId,
+      msg.chat_id,
+    );
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -1072,10 +1272,15 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
 
   const previousSwipeId = msg.swipe_id;
   const nextContent = msg.swipes[nextIdx] ?? msg.content;
+  const normalizedExtra = normalizeStoredMessageExtra(
+    msg.extra,
+    msg.swipes.length,
+    previousSwipeId,
+  );
 
   getDb()
-    .query("UPDATE messages SET swipe_id = ?, content = ? WHERE id = ? AND chat_id = ?")
-    .run(nextIdx, nextContent, messageId, msg.chat_id);
+    .query("UPDATE messages SET swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
+    .run(nextIdx, nextContent, JSON.stringify(normalizedExtra), messageId, msg.chat_id);
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(

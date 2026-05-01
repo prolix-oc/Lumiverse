@@ -1173,26 +1173,23 @@ export default function MessageContent({
 
   const interceptorCleanedContent = interceptedMessageTags.content
 
-  // Resolve Risu asset tags before regex/macro processing:
-  // 1. <img="AssetName"> (Risu custom syntax) → markdown image
-  // 2. <img src="AssetName"> (standard HTML with relative asset ref) → resolved src URL
-  // 3. ![alt](AssetName.ext) (markdown image with relative asset ref) → resolved src URL
+  const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
+  const regexAppliedContent = useDisplayRegex(interceptorCleanedContent, isUser, depth, macroCtx)
+
   const risuResolvedContent = useMemo(
     () => {
-      if (!risuAssetMap) return interceptorCleanedContent
-      let resolved = resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap)
+      if (!risuAssetMap) return regexAppliedContent
+      let resolved = resolveRisuAssetTags(regexAppliedContent, risuAssetMap)
       resolved = resolveImgSrcAssetTags(resolved, risuAssetMap)
       resolved = resolveMarkdownImgTags(resolved, risuAssetMap)
       return resolved
     },
-    [interceptorCleanedContent, risuAssetMap],
+    [regexAppliedContent, risuAssetMap],
   )
 
-  const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
-  const regexAppliedContent = useDisplayRegex(risuResolvedContent, isUser, depth, macroCtx)
   const resolvedContent = useMemo(
-    () => resolveDisplayMacros(regexAppliedContent, { charName, userName }),
-    [regexAppliedContent, charName, userName],
+    () => resolveDisplayMacros(risuResolvedContent, { charName, userName }),
+    [risuResolvedContent, charName, userName],
   )
   const deferredResolvedContent = useDeferredValue(resolvedContent)
   const renderContent = isStreaming ? deferredResolvedContent : resolvedContent

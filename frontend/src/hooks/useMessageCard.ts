@@ -214,7 +214,11 @@ export function useMessageCard(message: Message, chatId: string) {
       if (!message.is_user && hadReasoningRef.current) {
         // Let the WS MESSAGE_EDITED payload reconcile the final stored message so
         // extension-postprocessed content is not overwritten by a late local merge.
-        const extra = { ...(message.extra || {}), reasoning: trimmedReasoning || undefined }
+        const extra = {
+          ...(message.extra || {}),
+          reasoning: trimmedReasoning || null,
+          ...(trimmedReasoning ? {} : { reasoningDuration: null }),
+        }
         updated = await messagesApi.update(chatId, message.id, { content: cleanContent, extra })
       } else {
         updated = await messagesApi.update(chatId, message.id, { content: cleanContent })
