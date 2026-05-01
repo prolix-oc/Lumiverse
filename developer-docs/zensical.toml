@@ -31,6 +31,7 @@ nav = [
     { "LLM Tools" = "backend-api/llm-tools.md" },
     { "Generation" = "backend-api/generation.md" },
     { "Image Generation" = "backend-api/image-generation.md" },
+    { "Images" = "backend-api/images.md" },
     { "Theme" = "backend-api/theme.md" },
     { "Storage" = "backend-api/storage.md" },
     { "Ephemeral Storage" = "backend-api/ephemeral-storage.md" },

@@ -281,7 +281,7 @@ async function fetchJannyCharacter(uuid: string, userId: string) {
   const buf = await pngRes.arrayBuffer();
   const file = new File([buf], `${uuid}.png`, { type: "image/png" });
 
-  const cardInput = await cardSvc.extractCardFromPng(file);
+  const cardInput = cardSvc.normalizeJannyCharacterInput(await cardSvc.extractCardFromPng(file));
   const character = svc.createCharacter(userId, cardInput);
 
   // Use the PNG as avatar

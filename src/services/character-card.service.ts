@@ -376,6 +376,26 @@ function mapCardToInput(data: Record<string, any>): CreateCharacterInput {
   return input;
 }
 
+function hasNonEmptyText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * JannyAI's download payload uses the standard card keys, but in practice the
+ * "personality" field contains creator notes while the site's visible
+ * "Personality" section behaves like a description field. Normalize that quirk
+ * only for JannyAI URL imports so regular card imports keep their original
+ * mapping.
+ */
+export function normalizeJannyCharacterInput(input: CreateCharacterInput): CreateCharacterInput {
+  return {
+    ...input,
+    description: hasNonEmptyText(input.description) ? input.description : (hasNonEmptyText(input.personality) ? input.personality : input.description),
+    personality: "",
+    creator_notes: hasNonEmptyText(input.creator_notes) ? input.creator_notes : (hasNonEmptyText(input.personality) ? input.personality : input.creator_notes),
+  };
+}
+
 /**
  * Extracts character card JSON from a PNG file's tEXt/zTXt/iTXt chunk.
  * Checks for "chara" (V1/V2 standard) and "ccv3" (V3 standard) keywords.
