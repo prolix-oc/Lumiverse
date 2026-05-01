@@ -50,4 +50,16 @@ describe("normalizeWorldBookVectorSettings", () => {
     expect(settings.retrievalTopK).toBe(5);
     expect(settings.chunkTargetTokens).toBe(DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.chunkTargetTokens);
   });
+
+  it("uses the provided retrieval fallback in preset mode", () => {
+    const settings = normalizeWorldBookVectorSettings({
+      presetMode: "balanced",
+    }, {
+      retrievalTopK: 5,
+    });
+
+    expect(settings.presetMode).toBe("balanced");
+    expect(settings.retrievalTopK).toBe(5);
+    expect(settings.chunkTargetTokens).toBe(420);
+  });
 });

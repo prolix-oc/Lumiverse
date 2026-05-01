@@ -1374,31 +1374,29 @@ function ExtensionPoolSettings() {
 }
 
 function EmbeddingsSettings() {
-  const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, 'custom'>, Omit<WorldBookVectorSettings, 'presetMode'>> = {
+  const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, 'custom'>, Omit<WorldBookVectorSettings, 'presetMode' | 'retrievalTopK'>> = {
     lean: {
       chunkTargetTokens: 220,
       chunkMaxTokens: 360,
       chunkOverlapTokens: 40,
-      retrievalTopK: 4,
       maxChunksPerEntry: 4,
     },
     balanced: {
       chunkTargetTokens: 420,
       chunkMaxTokens: 700,
       chunkOverlapTokens: 80,
-      retrievalTopK: 6,
       maxChunksPerEntry: 8,
     },
     deep: {
       chunkTargetTokens: 720,
       chunkMaxTokens: 1200,
       chunkOverlapTokens: 120,
-      retrievalTopK: 8,
       maxChunksPerEntry: 12,
     },
   }
   const DEFAULT_WORLD_BOOK_VECTOR_SETTINGS: WorldBookVectorSettings = {
     presetMode: 'balanced',
+    retrievalTopK: 4,
     ...WORLD_BOOK_VECTOR_PRESETS.balanced,
   }
 
@@ -1422,7 +1420,7 @@ function EmbeddingsSettings() {
       chunkTargetTokens: target,
       chunkMaxTokens: max,
       chunkOverlapTokens: Math.min(500, Math.max(0, Math.floor((preset?.chunkOverlapTokens ?? raw.chunkOverlapTokens ?? base.chunkOverlapTokens)))),
-      retrievalTopK: Math.min(20, Math.max(1, Math.floor((preset?.retrievalTopK ?? raw.retrievalTopK ?? base.retrievalTopK)))),
+      retrievalTopK: Math.min(20, Math.max(1, Math.floor((presetMode === 'custom' ? raw.retrievalTopK : undefined) ?? base.retrievalTopK))),
       maxChunksPerEntry: Math.min(24, Math.max(1, Math.floor((preset?.maxChunksPerEntry ?? raw.maxChunksPerEntry ?? base.maxChunksPerEntry)))),
     }
   }

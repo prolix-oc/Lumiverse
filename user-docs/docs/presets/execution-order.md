@@ -139,6 +139,7 @@ A snapshot of all data is taken and stored in the macro environment. This is the
 - `{{persona}}` — Persona description with enabled add-ons appended
 - `{{lastMessage}}`, `{{messageCount}}` — Chat state at this moment
 - `{{model}}`, `{{maxContext}}` — Connection/model info
+- Prompt Variables — End-user configured inputs are seeded into the local variable scope
 - Variables — Local and global variable maps are loaded
 
 !!! info "Snapshot semantics"
@@ -252,16 +253,16 @@ Comparison operators work inside conditions:
 
 ### Branch Evaluation
 
-**Both branches are resolved before the condition is checked.** The `{{if}}` handler then picks which one to return. This means macros in the discarded branch still run — including any side effects like `{{setvar}}`.
-
-If you need to avoid side effects in a branch, restructure your logic:
+**Only the selected branch is resolved.** The `{{if}}` macro delays evaluation of its body, checks the condition, and then resolves only the matching branch. This means side-effect macros (like `{{setvar}}`) in the discarded branch **do not run**.
 
 ```
-— Don't do this (both setvar calls execute):
-{{if::condition}}{{setvar::x::1}}{{else}}{{setvar::x::2}}{{/if}}
+{{if::{{isGroupChat}}}}
+{{.greeting = Welcome everyone!}}
+{{else}}
+{{.greeting = Hello {{char}}!}}
+{{/if}}
 
-— Do this instead (only one setvar based on condition result):
-{{setvar::x::{{if::condition}}1{{else}}2{{/if}}}}
+{{.greeting}} // Safely outputs the correct greeting without side-effect collisions
 ```
 
 ---

@@ -23,6 +23,7 @@ Think of a preset as a recipe for how to talk to the AI. Different recipes produ
 | [Understanding Presets](understanding-presets.md) | The big picture of how presets work |
 | [Prompt Blocks](prompt-blocks.md) | Adding, ordering, and configuring blocks |
 | [Sampler Settings](sampler-settings.md) | Temperature, top-p, penalties, and more |
+| [Prompt Variables](prompt-variables.md) | Create custom user-facing settings in your presets |
 | [Preset Profiles](preset-profiles.md) | Per-character and per-chat block state snapshots |
 | [Macros Reference](macros-reference.md) | Complete list of the built-in macros |
 | [Execution Order](execution-order.md) | When and how macros are evaluated — critical for ST migrants |

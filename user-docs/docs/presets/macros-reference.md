@@ -582,7 +582,7 @@ Prompt variables are preset-defined inputs that are seeded into local scope befo
 | Macro | Aliases | Description | Args |
 |-------|---------|-------------|------|
 | `{{var::name}}` | `{{promptVar}}`, `{{presetVar}}` | Read the runtime prompt-variable value, then the user override, then the creator default | Variable name |
-| `{{hasPromptVar::name}}` | `{{hasPresetVar}}`, `{{hasVar}}` | Check whether a prompt variable is resolvable | Variable name |
+| `{{hasVar::name}}` | `{{hasPromptVar}}`, `{{hasPresetVar}}` | Check whether a prompt variable is resolvable | Variable name |
 | `{{varDefault::name}}` | `{{promptVarDefault}}`, `{{presetVarDefault}}` | Read the creator-declared default only | Variable name |
 
 **Examples:**

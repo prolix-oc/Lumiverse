@@ -13,32 +13,30 @@ export interface WorldBookVectorSettings {
 
 export const WORLD_BOOK_VECTOR_SETTINGS_KEY = "worldBookVectorSettings";
 
-export const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, "custom">, Omit<WorldBookVectorSettings, "presetMode">> = {
+export const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, "custom">, Omit<WorldBookVectorSettings, "presetMode" | "retrievalTopK">> = {
   lean: {
     chunkTargetTokens: 220,
     chunkMaxTokens: 360,
     chunkOverlapTokens: 40,
-    retrievalTopK: 4,
     maxChunksPerEntry: 4,
   },
   balanced: {
     chunkTargetTokens: 420,
     chunkMaxTokens: 700,
     chunkOverlapTokens: 80,
-    retrievalTopK: 6,
     maxChunksPerEntry: 8,
   },
   deep: {
     chunkTargetTokens: 720,
     chunkMaxTokens: 1200,
     chunkOverlapTokens: 120,
-    retrievalTopK: 8,
     maxChunksPerEntry: 12,
   },
 };
 
 export const DEFAULT_WORLD_BOOK_VECTOR_SETTINGS: WorldBookVectorSettings = {
   presetMode: "balanced",
+  retrievalTopK: 4,
   ...WORLD_BOOK_VECTOR_PRESETS.balanced,
 };
 
@@ -76,7 +74,12 @@ export function normalizeWorldBookVectorSettings(
     chunkTargetTokens,
     chunkMaxTokens,
     chunkOverlapTokens: clampInt(presetValues.chunkOverlapTokens, 0, 500, base.chunkOverlapTokens),
-    retrievalTopK: clampInt(presetValues.retrievalTopK, 1, 20, base.retrievalTopK),
+    retrievalTopK: clampInt(
+      presetMode === "custom" ? input?.retrievalTopK : undefined,
+      1,
+      20,
+      base.retrievalTopK,
+    ),
     maxChunksPerEntry: clampInt(presetValues.maxChunksPerEntry, 1, 24, base.maxChunksPerEntry),
   };
 }
