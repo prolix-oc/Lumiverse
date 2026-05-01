@@ -6377,6 +6377,7 @@ export class WorkerHost {
         if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
         this.enforceScopedUser(resolvedUserId);
 
+        databanksSvc.abortDatabankProcessing(databankId);
         await databanksSvc.deleteDatabankVectors(resolvedUserId, databankId);
         const deleted = await databanksSvc.deleteDatabank(resolvedUserId, databankId);
         this.postToWorker({ type: "response", requestId, result: deleted });
@@ -6529,6 +6530,7 @@ export class WorkerHost {
         if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
         this.enforceScopedUser(resolvedUserId);
 
+        databanksSvc.abortDocumentProcessing(documentId);
         await databanksSvc.deleteDocumentVectors(resolvedUserId, documentId);
         const deleted = await databanksSvc.deleteDocument(resolvedUserId, documentId);
         this.postToWorker({ type: "response", requestId, result: deleted });

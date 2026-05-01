@@ -77,6 +77,8 @@ app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
 
+  databank.abortDatabankProcessing(id);
+
   // Delete vectors from LanceDB
   await databank.deleteDatabankVectors(userId, id);
 
@@ -241,6 +243,8 @@ app.get("/:id/documents/:docId/content", (c) => {
 app.delete("/:id/documents/:docId", async (c) => {
   const userId = c.get("userId");
   const docId = c.req.param("docId");
+
+  databank.abortDocumentProcessing(docId);
 
   // Delete vectors from LanceDB
   await databank.deleteDocumentVectors(userId, docId);

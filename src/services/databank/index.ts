@@ -30,7 +30,13 @@ export {
 // Document processing
 export { parseDocument, isSupportedFormat, getSupportedExtensions } from "./document-parser.service";
 export { chunkDocument } from "./document-chunker.service";
-export { processDocument, deleteDocumentVectors, deleteDatabankVectors } from "./vectorization.service";
+export {
+  processDocument,
+  abortDocumentProcessing,
+  abortDatabankProcessing,
+  deleteDocumentVectors,
+  deleteDatabankVectors,
+} from "./vectorization.service";
 export {
   DATABANK_SETTINGS_KEY,
   DEFAULT_DATABANK_SETTINGS,

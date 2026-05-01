@@ -15,6 +15,41 @@ import type { DatabankDocument } from "./types";
 
 const BATCH_SIZE = 50;
 
+class DocumentProcessingAbortedError extends Error {
+  constructor(docId: string) {
+    super(`Document ${docId} processing aborted`);
+    this.name = "DocumentProcessingAbortedError";
+  }
+}
+
+interface ActiveDocumentProcessing {
+  databankId: string;
+  controller: AbortController;
+}
+
+const activeDocuments = new Map<string, Set<ActiveDocumentProcessing>>();
+
+export function abortDocumentProcessing(docId: string): void {
+  const activeRuns = activeDocuments.get(docId);
+  if (!activeRuns) return;
+
+  for (const active of activeRuns) {
+    if (!active.controller.signal.aborted) {
+      active.controller.abort(new DocumentProcessingAbortedError(docId));
+    }
+  }
+}
+
+export function abortDatabankProcessing(databankId: string): void {
+  for (const [docId, activeRuns] of activeDocuments.entries()) {
+    for (const active of activeRuns) {
+      if (active.databankId === databankId && !active.controller.signal.aborted) {
+        active.controller.abort(new DocumentProcessingAbortedError(docId));
+      }
+    }
+  }
+}
+
 /**
  * Process a document: parse file, chunk text, embed, upsert to LanceDB.
  * Updates document status via events throughout the lifecycle.
@@ -26,6 +61,10 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     return;
   }
 
+  const controller = new AbortController();
+  const activeRun = { databankId: doc.databankId, controller };
+  trackActiveDocument(docId, activeRun);
+
   try {
     // Mark as processing
     crud.updateDocumentStatus(docId, "processing");
@@ -33,6 +72,8 @@ export async function processDocument(userId: string, docId: string): Promise<vo
 
     // 1. Parse the file
     const parsed = await parseDocument(userId, doc.filePath);
+    if (isProcessingAborted(docId, controller.signal)) return;
+
     if (!parsed.text.trim()) {
       crud.updateDocumentStatus(docId, "error", { errorMessage: "Document is empty after parsing" });
       emitStatus(userId, doc, "error", "Document is empty after parsing");
@@ -46,6 +87,8 @@ export async function processDocument(userId: string, docId: string): Promise<vo
       maxTokens: databankSettings.chunkMaxTokens,
       overlapTokens: databankSettings.chunkOverlapTokens,
     });
+    if (isProcessingAborted(docId, controller.signal)) return;
+
     if (chunkResults.length === 0) {
       crud.updateDocumentStatus(docId, "error", { errorMessage: "No chunks produced from document" });
       emitStatus(userId, doc, "error", "No chunks produced from document");
@@ -66,11 +109,23 @@ export async function processDocument(userId: string, docId: string): Promise<vo
       tokenCount: c.tokenCount,
       metadata: c.metadata,
     }));
-    crud.insertChunks(chunkRows);
+    try {
+      crud.insertChunks(chunkRows);
+    } catch (err) {
+      if (isForeignKeyConstraintError(err)) {
+        console.info(`[databank] Document ${docId} deleted during processing; aborting cleanly`);
+        return;
+      }
+      throw err;
+    }
+    if (isProcessingAborted(docId, controller.signal)) return;
+
     crud.updateDocumentStatus(docId, "processing", { totalChunks: chunkRows.length });
 
     // 5. Vectorize chunks
     const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+    if (isProcessingAborted(docId, controller.signal)) return;
+
     if (!cfg.enabled) {
       // Embeddings not configured — mark as ready without vectors
       crud.updateDocumentStatus(docId, "ready", { totalChunks: chunkRows.length });
@@ -78,7 +133,8 @@ export async function processDocument(userId: string, docId: string): Promise<vo
       return;
     }
 
-    await vectorizeChunks(userId, doc, chunkRows, cfg);
+    await vectorizeChunks(userId, doc, chunkRows, cfg, controller.signal);
+    if (isProcessingAborted(docId, controller.signal)) return;
 
     // 6. Mark as ready
     crud.updateDocumentStatus(docId, "ready", { totalChunks: chunkRows.length });
@@ -86,6 +142,11 @@ export async function processDocument(userId: string, docId: string): Promise<vo
 
     console.info(`[databank] Processed document "${doc.name}" — ${chunkRows.length} chunks vectorized`);
   } catch (err: any) {
+    if (isProcessingAbortError(err)) {
+      console.info(`[databank] Document ${docId} deleted during processing; aborting cleanly`);
+      return;
+    }
+
     console.error(`[databank] Failed to process document ${docId}:`, err);
     // Don't surface raw err.message to the client — it can include filesystem
     // paths, API URLs, or upstream provider details that would otherwise leak
@@ -93,7 +154,48 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     const safeMessage = redactProcessingError(err);
     crud.updateDocumentStatus(docId, "error", { errorMessage: safeMessage });
     emitStatus(userId, doc, "error", safeMessage);
+  } finally {
+    untrackActiveDocument(docId, activeRun);
   }
+}
+
+function trackActiveDocument(docId: string, activeRun: ActiveDocumentProcessing): void {
+  const activeRuns = activeDocuments.get(docId);
+  if (activeRuns) {
+    activeRuns.add(activeRun);
+  } else {
+    activeDocuments.set(docId, new Set([activeRun]));
+  }
+}
+
+function untrackActiveDocument(docId: string, activeRun: ActiveDocumentProcessing): void {
+  const activeRuns = activeDocuments.get(docId);
+  if (!activeRuns) return;
+
+  activeRuns.delete(activeRun);
+  if (activeRuns.size === 0) {
+    activeDocuments.delete(docId);
+  }
+}
+
+function isProcessingAborted(docId: string, signal: AbortSignal): boolean {
+  if (signal.aborted) {
+    console.info(`[databank] Document ${docId} deleted during processing; aborting cleanly`);
+    return true;
+  }
+  return false;
+}
+
+function isProcessingAbortError(err: unknown): boolean {
+  return err instanceof DocumentProcessingAbortedError
+    || (err instanceof Error && err.name === "AbortError");
+}
+
+function isForeignKeyConstraintError(err: unknown): boolean {
+  return typeof err === "object"
+    && err !== null
+    && "code" in err
+    && (err as { code?: unknown }).code === "SQLITE_CONSTRAINT_FOREIGNKEY";
 }
 
 /**
@@ -115,6 +217,7 @@ async function vectorizeChunks(
   doc: DatabankDocument,
   chunks: Array<{ id: string; content: string; chunkIndex: number }>,
   cfg: { model: string },
+  signal: AbortSignal,
 ): Promise<void> {
   const failures: Error[] = [];
   await embeddingsSvc.embedWithAdaptiveBatching(
@@ -123,6 +226,10 @@ async function vectorizeChunks(
     BATCH_SIZE,
     (c) => c.content,
     async (batch, _texts, vectors) => {
+      if (signal.aborted || !crud.getDocument(userId, doc.id)) {
+        throw signal.reason instanceof Error ? signal.reason : new DocumentProcessingAbortedError(doc.id);
+      }
+
       const lanceRows = batch.map((c, j) => ({
         chatId: doc.databankId,
         chunkId: c.id,
@@ -143,7 +250,7 @@ async function vectorizeChunks(
     (_batch, err) => {
       failures.push(err);
     },
-    { label: `databank:${doc.id.slice(0, 8)}` },
+    { label: `databank:${doc.id.slice(0, 8)}`, signal },
   );
 
   if (failures.length > 0) {
