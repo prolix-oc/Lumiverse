@@ -5,10 +5,13 @@ import type {
   DreamWeaverMessage,
   DreamWeaverMessageKind,
   ToolCardStatus,
-  DraftV2,
+  DreamWeaverSource,
+  DreamWeaverWorkspace,
+  DreamWeaverWorkspaceKind,
   ToolCardPayload,
+  DW_DRAFT_V1,
 } from "../../types/dream-weaver";
-import { EMPTY_DRAFT_V2 } from "../../types/dream-weaver";
+import { EMPTY_DREAM_WEAVER_WORKSPACE } from "../../types/dream-weaver";
 import { getTool } from "./tools/registry";
 
 function rowToMessage(row: any): DreamWeaverMessage {
@@ -203,41 +206,145 @@ export function rejectToolCard(userId: string, messageId: string): DreamWeaverMe
   return updateToolCard(userId, messageId, { status: "rejected" });
 }
 
-const draftCache = new Map<string, { fingerprint: number; draft: DraftV2 }>();
+const workspaceCache = new Map<string, { fingerprint: string; workspace: DreamWeaverWorkspace }>();
 
-export function deriveDraft(userId: string, sessionId: string): DraftV2 {
+function getWorkspaceKind(sessionId: string): DreamWeaverWorkspaceKind {
+  const row = getDb()
+    .prepare(`SELECT workspace_kind FROM dream_weaver_sessions WHERE id = ?`)
+    .get(sessionId) as { workspace_kind?: string } | undefined;
+  return row?.workspace_kind === "scenario" ? "scenario" : "character";
+}
+
+function hasSessionColumn(columnName: string): boolean {
+  const row = getDb()
+    .prepare(`SELECT 1 FROM pragma_table_info('dream_weaver_sessions') WHERE name = ?`)
+    .get(columnName);
+  return Boolean(row);
+}
+
+function legacyDraftToWorkspace(draft: DW_DRAFT_V1): DreamWeaverWorkspace {
+  return {
+    kind: draft.kind === "scenario" ? "scenario" : "character",
+    ...EMPTY_DREAM_WEAVER_WORKSPACE,
+    sources: [],
+    name: draft.card?.name || draft.meta?.title || null,
+    appearance: draft.card?.appearance || draft.card?.description || null,
+    appearance_data: draft.card?.appearance_data ?? null,
+    personality: draft.card?.personality || null,
+    scenario: draft.card?.scenario || null,
+    first_mes: draft.card?.first_mes || null,
+    greeting: draft.greetings?.[0]?.content || null,
+    voice_guidance: draft.voice_guidance ?? null,
+    lorebooks: Array.isArray(draft.lorebooks) ? draft.lorebooks : [],
+    npcs: Array.isArray(draft.npc_definitions) ? draft.npc_definitions : [],
+  };
+}
+
+function readLegacyWorkspace(sessionId: string): DreamWeaverWorkspace | null {
+  if (!hasSessionColumn("draft")) return null;
+  const row = getDb()
+    .prepare(`SELECT draft FROM dream_weaver_sessions WHERE id = ?`)
+    .get(sessionId) as { draft?: string | null } | undefined;
+  if (!row?.draft) return null;
+  try {
+    const parsed = JSON.parse(row.draft) as DW_DRAFT_V1;
+    if (!parsed || parsed.format !== "DW_DRAFT_V1") return null;
+    return legacyDraftToWorkspace(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSource(payload: Record<string, unknown>): DreamWeaverSource | null {
+  const type = payload.type === "dream" || payload.type === "note" || payload.type === "import_character" || payload.type === "import_worldbook"
+    ? payload.type
+    : null;
+  const content = typeof payload.content === "string" ? payload.content.trim() : "";
+  if (!type || !content) return null;
+  return {
+    id: typeof payload.id === "string" && payload.id.trim() ? payload.id : crypto.randomUUID(),
+    type,
+    title: typeof payload.title === "string" && payload.title.trim() ? payload.title.trim() : type,
+    content,
+    tone: typeof payload.tone === "string" && payload.tone.trim() ? payload.tone.trim() : null,
+    constraints: typeof payload.constraints === "string" && payload.constraints.trim() ? payload.constraints.trim() : null,
+    dislikes: typeof payload.dislikes === "string" && payload.dislikes.trim() ? payload.dislikes.trim() : null,
+  };
+}
+
+export function deriveWorkspace(userId: string, sessionId: string): DreamWeaverWorkspace {
   const fpRow = getDb()
     .prepare(`
-      SELECT COALESCE(MAX(seq), 0) AS fp
+      SELECT COALESCE(MAX(seq), 0) AS max_seq,
+             COUNT(*) AS count,
+             COALESCE(SUM(seq), 0) AS seq_sum
       FROM dream_weaver_messages
       WHERE session_id = ? AND status = 'accepted'
     `)
-    .get(sessionId) as { fp: number };
+    .get(sessionId) as { max_seq: number; count: number; seq_sum: number };
+  const fingerprint = `${fpRow.max_seq}:${fpRow.count}:${fpRow.seq_sum}`;
 
-  const cached = draftCache.get(sessionId);
-  if (cached && cached.fingerprint === fpRow.fp) return cached.draft;
+  const cached = workspaceCache.get(sessionId);
+  if (cached && cached.fingerprint === fingerprint) return cached.workspace;
 
   const accepted = getDb()
     .prepare(`
       SELECT * FROM dream_weaver_messages
-      WHERE session_id = ? AND user_id = ? AND kind = 'tool_card' AND status = 'accepted'
+      WHERE session_id = ? AND user_id = ?
+        AND (
+          (status = 'accepted' AND kind IN ('tool_card', 'source_card'))
+          OR kind = 'dream_summary'
+        )
       ORDER BY seq ASC
     `)
     .all(sessionId, userId) as any[];
 
-  let draft: DraftV2 = { ...EMPTY_DRAFT_V2, lorebooks: [], npcs: [] };
+  if (accepted.length === 0) {
+    const legacyWorkspace = readLegacyWorkspace(sessionId);
+    if (legacyWorkspace) {
+      workspaceCache.set(sessionId, { fingerprint, workspace: legacyWorkspace });
+      return legacyWorkspace;
+    }
+  }
+
+  let workspace: DreamWeaverWorkspace = {
+    kind: getWorkspaceKind(sessionId),
+    ...EMPTY_DREAM_WEAVER_WORKSPACE,
+    sources: [],
+    lorebooks: [],
+    npcs: [],
+  };
+
   for (const row of accepted) {
+    if (row.kind === "source_card") {
+      const source = normalizeSource(JSON.parse(row.payload));
+      if (source) workspace = { ...workspace, sources: [...workspace.sources, source] };
+      continue;
+    }
+    if (row.kind === "dream_summary") {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      const source = normalizeSource({
+        id: row.id,
+        type: "dream",
+        title: "Dream",
+        content: payload.dream_text,
+        tone: payload.tone,
+        dislikes: payload.dislikes,
+      });
+      if (source) workspace = { ...workspace, sources: [...workspace.sources, source] };
+      continue;
+    }
     const tool = getTool(row.tool_name);
     if (!tool) continue;
     const payload = JSON.parse(row.payload) as ToolCardPayload;
     if (!payload.output) continue;
-    draft = tool.apply(draft, payload.output);
+    workspace = tool.apply(workspace, payload.output);
   }
 
-  draftCache.set(sessionId, { fingerprint: fpRow.fp, draft });
-  return draft;
+  workspaceCache.set(sessionId, { fingerprint, workspace });
+  return workspace;
 }
 
 export function invalidateDraftCache(sessionId: string): void {
-  draftCache.delete(sessionId);
+  workspaceCache.delete(sessionId);
 }

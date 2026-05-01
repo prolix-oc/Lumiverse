@@ -1,4 +1,4 @@
-import type { DraftV2 } from "../../../types/dream-weaver";
+import type { DreamWeaverWorkspace } from "../../../types/dream-weaver";
 import type { PromptFragmentId } from "../prompts/index";
 
 export type ValidateResult<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -14,8 +14,8 @@ export interface DreamWeaverTool<TOutput = unknown> {
   validate: (input: unknown) => ValidateResult<TOutput>;
   conflictMode: "overwrite" | "append";
   requiresFragments: PromptFragmentId[];
-  contextSlice: (draft: DraftV2) => Partial<DraftV2>;
-  apply: (draft: DraftV2, output: TOutput) => DraftV2;
+  contextSlice: (workspace: DreamWeaverWorkspace) => Partial<DreamWeaverWorkspace>;
+  apply: (workspace: DreamWeaverWorkspace, output: TOutput) => DreamWeaverWorkspace;
 }
 
 export type AnyDreamWeaverTool = DreamWeaverTool<any>;

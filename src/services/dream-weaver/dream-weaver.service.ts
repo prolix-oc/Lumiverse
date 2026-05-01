@@ -1,11 +1,12 @@
-import { getDb, onDbReset } from "../../db/connection";
+import { getDb } from "../../db/connection";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
 import type {
   DreamWeaverSession,
+  DreamWeaverWorkspace,
+  DreamWeaverWorkspaceKind,
   CreateSessionInput,
   UpdateSessionInput,
-  DraftV2,
   LorebookEntry,
   NpcEntry,
 } from "../../types/dream-weaver";
@@ -13,129 +14,10 @@ import * as charactersSvc from "../characters.service";
 import * as chatsSvc from "../chats.service";
 import * as worldBooksSvc from "../world-books.service";
 import { setCharacterWorldBookIds } from "../../utils/character-world-books";
-import { deriveDraft } from "./messages.service";
+import { deriveWorkspace } from "./messages.service";
 import * as messagesSvc from "./messages.service";
-import { listSoulTools, getTool } from "./tools/registry";
+import { getTool } from "./tools/registry";
 import { executeTool } from "./tools/executor";
-
-const DREAM_WEAVER_REQUIRED_COLUMNS: Array<[name: string, definition: string]> = [
-  ["dream_text", "TEXT NOT NULL DEFAULT ''"],
-  ["tone", "TEXT"],
-  ["constraints", "TEXT"],
-  ["dislikes", "TEXT"],
-  ["persona_id", "TEXT"],
-  ["connection_id", "TEXT"],
-  ["model", "TEXT"],
-  ["character_id", "TEXT"],
-  ["launch_chat_id", "TEXT"],
-];
-
-let dreamWeaverSchemaEnsured = false;
-
-onDbReset(() => {
-  dreamWeaverSchemaEnsured = false;
-});
-
-function createDreamWeaverTable(): void {
-  const db = getDb();
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS dream_weaver_sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      dream_text TEXT NOT NULL,
-      tone TEXT,
-      constraints TEXT,
-      dislikes TEXT,
-      persona_id TEXT,
-      connection_id TEXT,
-      model TEXT,
-      draft TEXT,
-      status TEXT NOT NULL DEFAULT 'draft',
-      soul_state TEXT NOT NULL DEFAULT 'empty',
-      world_state TEXT NOT NULL DEFAULT 'empty',
-      soul_revision INTEGER NOT NULL DEFAULT 0,
-      world_source_revision INTEGER,
-      character_id TEXT,
-      launch_chat_id TEXT,
-      FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE,
-      FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE SET NULL,
-      FOREIGN KEY (connection_id) REFERENCES connection_profiles(id) ON DELETE SET NULL,
-      FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE SET NULL
-    )
-  `);
-
-  db.run(`
-    CREATE INDEX IF NOT EXISTS idx_dw_sessions_user
-      ON dream_weaver_sessions(user_id, created_at DESC)
-  `);
-  db.run(`
-    CREATE INDEX IF NOT EXISTS idx_dw_sessions_status
-      ON dream_weaver_sessions(user_id, status)
-  `);
-}
-
-function ensureDreamWeaverSchema(): void {
-  if (dreamWeaverSchemaEnsured) return;
-
-  const db = getDb();
-  const existingTable = db
-    .query(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = 'dream_weaver_sessions'
-    `)
-    .get() as { name: string } | null;
-
-  if (!existingTable) {
-    createDreamWeaverTable();
-    dreamWeaverSchemaEnsured = true;
-    return;
-  }
-
-  const columns = db.query("PRAGMA table_info(dream_weaver_sessions)").all() as Array<{ name: string }>;
-  const columnNames = new Set(columns.map((column) => column.name));
-  const hasLegacyDreamDescription = columnNames.has("dream_description");
-  const hasLegacyDraftData = columnNames.has("draft_data");
-
-  for (const [columnName, definition] of DREAM_WEAVER_REQUIRED_COLUMNS) {
-    if (!columnNames.has(columnName)) {
-      db.run(`ALTER TABLE dream_weaver_sessions ADD COLUMN ${columnName} ${definition}`);
-    }
-  }
-
-  if (hasLegacyDreamDescription) {
-    db.run(`
-      UPDATE dream_weaver_sessions
-      SET dream_text = COALESCE(NULLIF(dream_text, ''), NULLIF(dream_description, ''))
-      WHERE COALESCE(dream_text, '') = ''
-    `);
-  }
-
-  if (hasLegacyDraftData) {
-    db.run(`
-      UPDATE dream_weaver_sessions
-      SET draft = CASE
-        WHEN draft IS NULL OR draft = '' THEN NULLIF(draft_data, '{}')
-        ELSE draft
-      END
-      WHERE draft IS NULL OR draft = ''
-    `);
-  }
-
-  db.run(`
-    CREATE INDEX IF NOT EXISTS idx_dw_sessions_user
-      ON dream_weaver_sessions(user_id, created_at DESC)
-  `);
-  db.run(`
-    CREATE INDEX IF NOT EXISTS idx_dw_sessions_status
-      ON dream_weaver_sessions(user_id, status)
-  `);
-
-  dreamWeaverSchemaEnsured = true;
-}
 
 function rowToSession(row: any): DreamWeaverSession {
   return {
@@ -150,15 +32,15 @@ function rowToSession(row: any): DreamWeaverSession {
     persona_id: row.persona_id ?? null,
     connection_id: row.connection_id ?? null,
     model: row.model ?? null,
-    draft: null,
+    workspace_kind: row.workspace_kind === "scenario" ? "scenario" : "character",
     status: row.status,
-    soul_state: "empty" as const,
-    world_state: "empty" as const,
-    soul_revision: 0,
-    world_source_revision: null,
     character_id: row.character_id ?? null,
     launch_chat_id: row.launch_chat_id ?? null,
   };
+}
+
+function normalizeWorkspaceKind(value: unknown): DreamWeaverWorkspaceKind {
+  return value === "scenario" ? "scenario" : "character";
 }
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
@@ -168,22 +50,16 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
 }
 
 export function createSession(userId: string, input: CreateSessionInput): DreamWeaverSession {
-  ensureDreamWeaverSchema();
-
   const db = getDb();
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-  const dreamText = input.dream_text.trim();
-
-  if (!dreamText) {
-    throw new Error("Dream text is required");
-  }
+  const dreamText = input.dream_text?.trim() ?? "";
 
   db.prepare(`
     INSERT INTO dream_weaver_sessions (
       id, user_id, created_at, updated_at,
-      dream_text, tone, constraints, dislikes, persona_id, connection_id, model
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      dream_text, tone, constraints, dislikes, persona_id, connection_id, model, workspace_kind
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     userId,
@@ -196,14 +72,13 @@ export function createSession(userId: string, input: CreateSessionInput): DreamW
     input.persona_id || null,
     input.connection_id || null,
     normalizeOptionalText(input.model),
+    normalizeWorkspaceKind(input.workspace_kind),
   );
 
   return getSession(userId, id)!;
 }
 
 export function getSession(userId: string, sessionId: string): DreamWeaverSession | null {
-  ensureDreamWeaverSchema();
-
   const row = getDb().prepare(`
     SELECT *
     FROM dream_weaver_sessions
@@ -214,8 +89,6 @@ export function getSession(userId: string, sessionId: string): DreamWeaverSessio
 }
 
 export function listSessions(userId: string): DreamWeaverSession[] {
-  ensureDreamWeaverSchema();
-
   const rows = getDb().prepare(`
     SELECT *
     FROM dream_weaver_sessions
@@ -231,8 +104,6 @@ export async function updateSession(
   sessionId: string,
   input: UpdateSessionInput,
 ): Promise<DreamWeaverSession> {
-  ensureDreamWeaverSchema();
-
   const existing = getSession(userId, sessionId);
   if (!existing) throw new Error("Session not found");
 
@@ -240,7 +111,6 @@ export async function updateSession(
   const params: any[] = [];
   if ("dream_text" in input) {
     const dreamText = input.dream_text?.trim() ?? "";
-    if (!dreamText) throw new Error("Dream text is required");
     updates.push("dream_text = ?");
     params.push(dreamText);
   }
@@ -275,6 +145,11 @@ export async function updateSession(
     params.push(normalizeOptionalText(input.model));
   }
 
+  if ("workspace_kind" in input) {
+    updates.push("workspace_kind = ?");
+    params.push(normalizeWorkspaceKind(input.workspace_kind));
+  }
+
   if (updates.length === 0) {
     return existing;
   }
@@ -293,15 +168,15 @@ export async function updateSession(
 }
 
 
-function createWorldBooksFromDraft(userId: string, draft: DraftV2): string[] {
+function createWorldBooksFromWorkspace(userId: string, workspace: DreamWeaverWorkspace): string[] {
   const ids: string[] = [];
-  if (draft.lorebooks.length > 0) {
+  if (workspace.lorebooks.length > 0) {
     const book = worldBooksSvc.createWorldBook(userId, {
-      name: `${draft.name ?? "Dream"} Lorebook`,
+      name: `${workspace.name ?? "Dream"} Lorebook`,
       description: "Generated by Dream Weaver",
     });
-    for (let i = 0; i < draft.lorebooks.length; i++) {
-      const e: LorebookEntry = draft.lorebooks[i];
+    for (let i = 0; i < workspace.lorebooks.length; i++) {
+      const e: LorebookEntry = workspace.lorebooks[i];
       worldBooksSvc.createEntry(userId, book.id, {
         comment: e.comment,
         key: e.key,
@@ -310,17 +185,17 @@ function createWorldBooksFromDraft(userId: string, draft: DraftV2): string[] {
     }
     ids.push(book.id);
   }
-  if (draft.npcs.length > 0) {
+  if (workspace.npcs.length > 0) {
     const npcBook = worldBooksSvc.createWorldBook(userId, {
-      name: `${draft.name ?? "Dream"} NPCs`,
+      name: `${workspace.name ?? "Dream"} NPCs`,
       description: "Generated NPCs by Dream Weaver",
     });
-    for (let i = 0; i < draft.npcs.length; i++) {
-      const n: NpcEntry = draft.npcs[i];
+    for (let i = 0; i < workspace.npcs.length; i++) {
+      const n: NpcEntry = workspace.npcs[i];
       worldBooksSvc.createEntry(userId, npcBook.id, {
         comment: n.name,
         key: [n.name],
-        content: formatNpcEntryContent(n, draft.name ?? ""),
+        content: formatNpcEntryContent(n, workspace.name ?? ""),
       });
     }
     ids.push(npcBook.id);
@@ -339,16 +214,15 @@ export async function finalize(
   userId: string,
   sessionId: string,
 ): Promise<DreamWeaverSession> {
-  ensureDreamWeaverSchema();
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
 
-  const draft = deriveDraft(userId, sessionId);
-  if (!draft.name || !draft.personality || !draft.first_mes) {
-    throw new Error("Draft incomplete: name, personality, and first_mes are required");
+  const workspace = deriveWorkspace(userId, sessionId);
+  if (!workspace.name || !workspace.personality || !workspace.first_mes) {
+    throw new Error("Workspace incomplete: name/title, behavior, and opening message are required");
   }
 
-  const worldBookIds = createWorldBooksFromDraft(userId, draft);
+  const worldBookIds = createWorldBooksFromWorkspace(userId, workspace);
 
   let characterId = session.character_id ?? null;
 
@@ -356,14 +230,22 @@ export async function finalize(
     const character = charactersSvc.getCharacter(userId, characterId);
     if (character) {
       const existingExtensions = (character.extensions ?? {}) as Record<string, any>;
+      const dreamWeaverMeta = {
+        ...existingExtensions.dream_weaver,
+        kind: workspace.kind,
+        appearance: workspace.appearance ?? "",
+        appearance_data: workspace.appearance_data ?? {},
+        voice_guidance: workspace.voice_guidance ?? undefined,
+        sources: workspace.sources,
+      };
       const nextExtensions = setCharacterWorldBookIds(existingExtensions, worldBookIds);
       charactersSvc.updateCharacter(userId, characterId, {
-        name: draft.name,
-        description: draft.appearance ?? character.description ?? "",
-        personality: draft.personality,
-        scenario: draft.scenario ?? "",
-        first_mes: draft.first_mes,
-        extensions: nextExtensions,
+        name: workspace.name,
+        description: workspace.appearance ?? character.description ?? "",
+        personality: workspace.personality,
+        scenario: workspace.scenario ?? "",
+        first_mes: workspace.first_mes,
+        extensions: { ...nextExtensions, dream_weaver: dreamWeaverMeta },
       });
     } else {
       characterId = null;
@@ -373,12 +255,19 @@ export async function finalize(
   if (!characterId) {
     let extensions: Record<string, any> = {};
     extensions = setCharacterWorldBookIds(extensions, worldBookIds);
+    extensions.dream_weaver = {
+      kind: workspace.kind,
+      appearance: workspace.appearance ?? "",
+      appearance_data: workspace.appearance_data ?? {},
+      voice_guidance: workspace.voice_guidance ?? undefined,
+      sources: workspace.sources,
+    };
     const created = charactersSvc.createCharacter(userId, {
-      name: draft.name,
-      description: draft.appearance ?? "",
-      personality: draft.personality,
-      scenario: draft.scenario ?? "",
-      first_mes: draft.first_mes,
+      name: workspace.name,
+      description: workspace.appearance ?? "",
+      personality: workspace.personality,
+      scenario: workspace.scenario ?? "",
+      first_mes: workspace.first_mes,
       extensions,
     });
     characterId = created.id;
@@ -386,7 +275,7 @@ export async function finalize(
 
   const launchChat = chatsSvc.createChat(userId, {
     character_id: characterId!,
-    name: draft.name,
+    name: workspace.name,
   });
 
   getDb()
@@ -406,8 +295,6 @@ export async function finalize(
 }
 
 export function deleteSession(userId: string, sessionId: string): void {
-  ensureDreamWeaverSchema();
-
   getDb().prepare(`
     DELETE FROM dream_weaver_sessions
     WHERE id = ? AND user_id = ?
@@ -418,36 +305,30 @@ export function dreamFanOut(userId: string, sessionId: string): void {
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
 
-  messagesSvc.appendMessage({
+  appendDreamSource(userId, sessionId);
+}
+
+export function appendDreamSource(userId: string, sessionId: string) {
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+  const content = session.dream_text.trim();
+  if (!content) throw new Error("Dream text is empty");
+
+  return messagesSvc.appendMessage({
     sessionId,
     userId,
-    kind: "dream_summary",
+    kind: "source_card",
     payload: {
-      dream_text: session.dream_text,
+      id: crypto.randomUUID(),
+      type: "dream",
+      title: "Dream",
+      content,
       tone: session.tone,
+      constraints: session.constraints,
       dislikes: session.dislikes,
     },
+    status: "accepted",
   });
-
-  for (const tool of listSoulTools()) {
-    const card = messagesSvc.appendMessage({
-      sessionId,
-      userId,
-      kind: "tool_card",
-      payload: {
-        tool: tool.name,
-        args: {},
-        output: null,
-        error: null,
-        nudge_text: null,
-        duration_ms: null,
-        token_usage: null,
-      },
-      toolName: tool.name,
-      status: "running",
-    });
-    void runToolCard(userId, card.id);
-  }
 }
 
 const inflightAborts = new Map<string, AbortController>();
@@ -471,7 +352,7 @@ export async function runToolCard(userId: string, messageId: string): Promise<vo
   inflightAborts.set(messageId, ac);
 
   try {
-    const draft = messagesSvc.deriveDraft(userId, message.session_id);
+    const draft = messagesSvc.deriveWorkspace(userId, message.session_id);
     const payload = message.payload as any;
     const result = await executeTool({
       userId,

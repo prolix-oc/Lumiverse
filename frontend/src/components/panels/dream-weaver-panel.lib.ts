@@ -1,4 +1,4 @@
-import type { DreamWeaverDraft, DreamWeaverSession } from '@/api/dream-weaver'
+import type { DreamWeaverSession } from '@/api/dream-weaver'
 
 export const DEFAULT_VISIBLE_SESSIONS = 5
 
@@ -13,23 +13,14 @@ export interface DreamWeaverSelectablePersona {
   is_default?: boolean | null
 }
 
-export function parseDreamWeaverDraft(rawDraft: string | null): DreamWeaverDraft | null {
-  if (!rawDraft) return null
-  try {
-    return JSON.parse(rawDraft) as DreamWeaverDraft
-  } catch {
-    return null
-  }
-}
-
 export function getDreamWeaverSessionTitle(session: DreamWeaverSession): string {
-  const draft = parseDreamWeaverDraft(session.draft)
-  return draft?.card?.name || draft?.meta?.title || 'Untitled weave'
+  const source = session.dream_text.trim()
+  if (source) return source.length > 48 ? `${source.slice(0, 48).trimEnd()}…` : source
+  return session.workspace_kind === 'scenario' ? 'Untitled scenario studio' : 'Untitled character studio'
 }
 
 export function getDreamWeaverSessionPreview(session: DreamWeaverSession): string {
-  const draft = parseDreamWeaverDraft(session.draft)
-  return draft?.meta?.summary || session.dream_text
+  return session.dream_text || (session.workspace_kind === 'scenario' ? 'Blank scenario studio' : 'Blank character studio')
 }
 
 export function formatDreamWeaverSessionTimestamp(updatedAt: number, now = new Date()): string {
@@ -120,12 +111,9 @@ export function resolveSelectedDreamWeaverPersonaId(
 }
 
 function buildSearchableText(session: DreamWeaverSession): string {
-  const draft = parseDreamWeaverDraft(session.draft)
   return [
-    draft?.card?.name,
-    draft?.meta?.title,
-    draft?.meta?.summary,
     session.dream_text,
+    session.workspace_kind,
     session.tone,
   ]
     .filter(Boolean)

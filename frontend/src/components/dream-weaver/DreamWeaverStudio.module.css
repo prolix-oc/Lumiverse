@@ -77,6 +77,42 @@
   gap: 10px;
 }
 
+.kindToggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.kindButton {
+  min-width: 76px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kindButton:hover:not(:disabled) {
+  color: var(--lumiverse-text);
+}
+
+.kindButton[data-active] {
+  background: color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
+  color: var(--lumiverse-primary-text);
+}
+
+.kindButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .badges {
   display: flex;
   gap: 6px;
@@ -184,8 +220,11 @@
 
 .canvas {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   position: relative;
-  overflow-y: auto;
+  overflow: hidden;
   overflow-x: hidden;
   padding: 0 20px;
 }

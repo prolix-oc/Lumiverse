@@ -5,12 +5,12 @@ import * as tokenizerSvc from "../../tokenizer.service";
 import { getDWGenParams, applyDWGenParams } from "../dw-gen-params";
 import { getFragment } from "../prompts/index";
 import type { AnyDreamWeaverTool } from "./types";
-import type { DraftV2, DreamWeaverSession } from "../../../types/dream-weaver";
+import type { DreamWeaverSession, DreamWeaverWorkspace } from "../../../types/dream-weaver";
 
 export interface AssemblePromptInput {
   tool: AnyDreamWeaverTool;
   session: DreamWeaverSession;
-  draft: DraftV2;
+  draft: DreamWeaverWorkspace;
   args: Record<string, unknown>;
   nudgeText: string | null;
 }
@@ -20,11 +20,17 @@ export function assemblePrompt(input: AssemblePromptInput): string {
 
   const parts: string[] = [];
   parts.push(getFragment("base-system"));
+  parts.push(getWorkspaceFrame(draft));
   parts.push(tool.prompt);
   for (const id of tool.requiresFragments) parts.push(getFragment(id));
 
-  parts.push(`## Dream\n${session.dream_text}`);
+  if (draft.sources.length > 0) {
+    parts.push(`## Accepted Sources\n${formatSources(draft.sources)}`);
+  } else if (session.dream_text.trim()) {
+    parts.push(`## Accepted Sources\nDream:\n${session.dream_text}`);
+  }
   if (session.tone) parts.push(`## Tone\n${session.tone}`);
+  if (session.constraints) parts.push(`## Constraints\n${session.constraints}`);
   if (session.dislikes) parts.push(`## Avoid\n${session.dislikes}`);
 
   const slice = tool.contextSlice(draft);
@@ -43,7 +49,7 @@ export interface ExecuteToolInput {
   userId: string;
   tool: AnyDreamWeaverTool;
   session: DreamWeaverSession;
-  draft: DraftV2;
+  draft: DreamWeaverWorkspace;
   args: Record<string, unknown>;
   nudgeText: string | null;
   signal?: AbortSignal;
@@ -127,6 +133,42 @@ export async function executeTool(input: ExecuteToolInput): Promise<ExecuteToolR
 function stripCodeFence(s: string): string {
   const m = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   return m ? m[1] : s;
+}
+
+function getWorkspaceFrame(workspace: DreamWeaverWorkspace): string {
+  if (workspace.kind === "scenario") {
+    return [
+      "## Workspace Kind: Scenario Card",
+      "Build a scenario/narrator card, not a protagonist card.",
+      "Do not invent a main character unless the accepted sources explicitly ask for one.",
+      "Interpret name as the scenario title.",
+      "Interpret appearance as the setting and sensory presentation.",
+      "Interpret personality as narrator/world behavior and interaction rules.",
+      "Interpret scenario as the current situation, tension, and premise.",
+      "Interpret first_mes as opening narration or an opening scene prompt.",
+    ].join("\n");
+  }
+  return [
+    "## Workspace Kind: Character Card",
+    "Build a character card. Interpret name, appearance, personality, scenario, voice, and first message as character-card fields.",
+  ].join("\n");
+}
+
+function formatSources(sources: DreamWeaverWorkspace["sources"]): string {
+  return sources
+    .map((source, index) => {
+      const meta = [
+        source.tone ? `Tone: ${source.tone}` : "",
+        source.constraints ? `Constraints: ${source.constraints}` : "",
+        source.dislikes ? `Avoid: ${source.dislikes}` : "",
+      ].filter(Boolean);
+      return [
+        `Source ${index + 1}: ${source.title} (${source.type})`,
+        source.content,
+        meta.length ? meta.join("\n") : "",
+      ].filter(Boolean).join("\n");
+    })
+    .join("\n\n");
 }
 
 function truncate(s: string, n: number): string {

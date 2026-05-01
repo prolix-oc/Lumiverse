@@ -5,9 +5,12 @@ import { ChatLog } from "../components/chat/ChatLog";
 import { Composer } from "../components/chat/Composer";
 import styles from "./StudioTab.module.css";
 
-interface Props { sessionId: string; }
+interface Props {
+  sessionId: string;
+  onWorkspaceChanged?: () => void | Promise<void>;
+}
 
-export function StudioTab({ sessionId }: Props) {
+export function StudioTab({ sessionId, onWorkspaceChanged }: Props) {
   const [catalog, setCatalog] = useState<ToolCatalogEntry[]>([]);
   const { messages, invoke, accept, reject, cancel } = useDreamWeaverMessages(sessionId);
 
@@ -19,6 +22,8 @@ export function StudioTab({ sessionId }: Props) {
       args: {},
       nudge_text: rawArgs.trim() || null,
       raw,
+    }).then(() => {
+      if (toolName === "dream_source") void onWorkspaceChanged?.();
     });
   };
 
@@ -31,9 +36,19 @@ export function StudioTab({ sessionId }: Props) {
     });
   };
 
+  const acceptAndRefresh = async (id: string) => {
+    await accept(id);
+    await onWorkspaceChanged?.();
+  };
+
+  const rejectAndRefresh = async (id: string) => {
+    await reject(id);
+    await onWorkspaceChanged?.();
+  };
+
   return (
     <div className={styles.region}>
-      <ChatLog messages={messages} onAccept={accept} onReject={reject} onCancel={cancel} onRetry={onRetry} />
+      <ChatLog messages={messages} onAccept={acceptAndRefresh} onReject={rejectAndRefresh} onCancel={cancel} onRetry={onRetry} />
       <Composer catalog={catalog} onSubmit={onSubmit} />
     </div>
   );

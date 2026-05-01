@@ -21,6 +21,36 @@
   color: var(--lumiverse-text-muted);
 }
 
+.kindToggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.kindButton {
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kindButton:hover {
+  color: var(--lumiverse-text);
+}
+
+.kindButton[data-active] {
+  background: color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
+  color: var(--lumiverse-primary-text);
+}
+
 /* ── Selector row ── */
 
 .selectorsGrid {

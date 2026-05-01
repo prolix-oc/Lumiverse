@@ -1,6 +1,49 @@
 .log {
-  flex: 1; min-height: 0; overflow: auto;
-  padding: 16px 20px;
-  display: flex; flex-direction: column; gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   background: color-mix(in srgb, var(--lumiverse-primary) 3%, var(--lumiverse-bg-deep));
+}
+
+.emptyState {
+  width: min(620px, 100%);
+  margin: auto;
+  padding: 24px 26px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lumiverse-fill) 74%, transparent);
+  color: var(--lumiverse-text-muted);
+  text-align: center;
+}
+
+.emptyKicker {
+  color: var(--lumiverse-primary-text);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.emptyState h3 {
+  margin: 8px 0 0;
+  color: var(--lumiverse-text);
+  font-size: calc(17px * var(--lumiverse-font-scale, 1));
+  line-height: 1.25;
+}
+
+.emptyState p {
+  max-width: 58ch;
+  margin: 8px auto 0;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.55;
+}
+
+.emptyState code {
+  color: var(--lumiverse-primary-text);
+  font-family: var(--lumiverse-font-mono);
+  font-size: 0.92em;
 }

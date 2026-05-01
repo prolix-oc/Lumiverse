@@ -1,5 +1,5 @@
 import type { AnyDreamWeaverTool, DreamWeaverTool, ValidateResult } from "./types";
-import type { DraftV2, LorebookEntry, NpcEntry, VoiceGuidance } from "../../../types/dream-weaver";
+import type { LorebookEntry, NpcEntry, VoiceGuidance } from "../../../types/dream-weaver";
 
 type V<T> = { ok: true; data: T } | { ok: false; error: string };
 

@@ -9,13 +9,23 @@ export function useDreamWeaverMessages(sessionId: string | null) {
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
 
-  useEffect(() => {
-    if (!sessionId) { setMessages([]); return; }
+  const loadMessages = useCallback(async () => {
+    if (!sessionId) {
+      setMessages([]);
+      return;
+    }
     setLoading(true);
-    dreamWeaverToolingApi.listMessages(sessionId).then((m) => {
+    try {
+      const m = await dreamWeaverToolingApi.listMessages(sessionId);
       if (sessionRef.current === sessionId) setMessages(m);
-    }).finally(() => setLoading(false));
+    } finally {
+      if (sessionRef.current === sessionId) setLoading(false);
+    }
   }, [sessionId]);
+
+  useEffect(() => {
+    void loadMessages();
+  }, [loadMessages]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -76,25 +86,30 @@ export function useDreamWeaverMessages(sessionId: string | null) {
     async (input: { tool: string; args?: Record<string, unknown>; nudge_text?: string | null; supersedes_id?: string | null; raw?: string | null }) => {
       if (!sessionId) return;
       await dreamWeaverToolingApi.invoke(sessionId, input);
+      await loadMessages();
     },
-    [sessionId],
+    [loadMessages, sessionId],
   );
   const accept = useCallback(async (messageId: string) => {
     if (!sessionId) return;
     await dreamWeaverToolingApi.accept(sessionId, messageId);
-  }, [sessionId]);
+    await loadMessages();
+  }, [loadMessages, sessionId]);
   const reject = useCallback(async (messageId: string) => {
     if (!sessionId) return;
     await dreamWeaverToolingApi.reject(sessionId, messageId);
-  }, [sessionId]);
+    await loadMessages();
+  }, [loadMessages, sessionId]);
   const cancel = useCallback(async (messageId: string) => {
     if (!sessionId) return;
     await dreamWeaverToolingApi.cancel(sessionId, messageId);
-  }, [sessionId]);
+    await loadMessages();
+  }, [loadMessages, sessionId]);
   const dream = useCallback(async () => {
     if (!sessionId) return;
     await dreamWeaverToolingApi.dream(sessionId);
-  }, [sessionId]);
+    await loadMessages();
+  }, [loadMessages, sessionId]);
 
   return { messages, loading, invoke, accept, reject, cancel, dream };
 }

@@ -39,8 +39,18 @@ const HELP_TOOL = {
   conflictMode: "append" as const,
 };
 
+const DREAM_SOURCE_TOOL = {
+  name: "dream_source",
+  displayName: "Add Dream Source",
+  category: "lifecycle" as const,
+  userInvocable: true,
+  slashCommand: "/dream",
+  description: "Add dream/source material to the studio without running generation.",
+  conflictMode: "append" as const,
+};
+
 function buildToolHelpText(): string {
-  const tools = [HELP_TOOL, ...listTools().filter((tool) => tool.userInvocable)];
+  const tools = [HELP_TOOL, DREAM_SOURCE_TOOL, ...listTools().filter((tool) => tool.userInvocable)];
   const lines = [
     "Available Dream Weaver tools",
     "",
@@ -107,7 +117,7 @@ app.delete("/sessions/:id", (c) => {
 });
 
 app.get("/tools", (c) => {
-  const tools = [HELP_TOOL, ...listTools()].map((t) => ({
+  const tools = [HELP_TOOL, DREAM_SOURCE_TOOL, ...listTools()].map((t) => ({
     name: t.name,
     displayName: t.displayName,
     category: t.category,
@@ -133,7 +143,7 @@ app.get("/sessions/:id/draft", (c) => {
   const sessionId = c.req.param("id");
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
-  const draft = messagesSvc.deriveDraft(userId, sessionId);
+  const draft = messagesSvc.deriveWorkspace(userId, sessionId);
   return c.json({ draft });
 });
 
@@ -142,7 +152,12 @@ app.post("/sessions/:id/dream", (c) => {
   const sessionId = c.req.param("id");
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
-  dreamWeaverSvc.dreamFanOut(userId, sessionId);
+  try {
+    dreamWeaverSvc.appendDreamSource(userId, sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not add dream source";
+    return c.json({ error: message }, 422);
+  }
   return c.json({ ok: true });
 });
 
@@ -180,6 +195,36 @@ app.post("/sessions/:id/invoke", async (c) => {
       },
     });
     return c.json({ userCommandId: userCommand.id, cardId: note.id });
+  }
+
+  if (body.tool === "dream_source") {
+    const content = (body.nudge_text ?? body.raw ?? "").replace(/^\/dream\b/i, "").trim();
+    if (!content) return c.json({ error: "Dream source text is required" }, 400);
+    const userCommand = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "user_command",
+      payload: {
+        raw: body.raw?.trim() || `/dream ${content}`,
+        parsed: { tool: "dream_source", args: {} },
+      },
+    });
+    const source = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "source_card",
+      payload: {
+        id: crypto.randomUUID(),
+        type: "dream",
+        title: "Dream",
+        content,
+        tone: session.tone,
+        constraints: session.constraints,
+        dislikes: session.dislikes,
+      },
+      status: "accepted",
+    });
+    return c.json({ userCommandId: userCommand.id, cardId: source.id });
   }
 
   const tool = getTool(body.tool);
@@ -379,36 +424,36 @@ app.post("/visual/tag-suggestions", async (c) => {
   if (!session) return c.json({ error: "Session not found" }, 404);
 
   // TODO: suggestVisualTags still expects DW_DRAFT_V1.
-  const derivedDraftV2 = messagesSvc.deriveDraft(userId, sessionId);
+  const workspace = messagesSvc.deriveWorkspace(userId, sessionId);
   const draft: DW_DRAFT_V1 = providedDraft ?? {
     format: "DW_DRAFT_V1",
     version: 1,
-    kind: "character",
-    meta: { title: derivedDraftV2.name ?? "", summary: "", tags: [], content_rating: "sfw" },
+    kind: workspace.kind,
+    meta: { title: workspace.name ?? "", summary: "", tags: [], content_rating: "sfw" },
     card: {
-      name: derivedDraftV2.name ?? "",
-      appearance: derivedDraftV2.appearance ?? "",
-      appearance_data: (derivedDraftV2.appearance_data as Record<string, string> | undefined) ?? {},
-      description: derivedDraftV2.appearance ?? "",
-      personality: derivedDraftV2.personality ?? "",
-      scenario: derivedDraftV2.scenario ?? "",
-      first_mes: derivedDraftV2.first_mes ?? "",
+      name: workspace.name ?? "",
+      appearance: workspace.appearance ?? "",
+      appearance_data: (workspace.appearance_data as Record<string, string> | undefined) ?? {},
+      description: workspace.appearance ?? "",
+      personality: workspace.personality ?? "",
+      scenario: workspace.scenario ?? "",
+      first_mes: workspace.first_mes ?? "",
       system_prompt: "",
       post_history_instructions: "",
     },
-    voice_guidance: derivedDraftV2.voice_guidance
-      ? { compiled: derivedDraftV2.voice_guidance.compiled, rules: derivedDraftV2.voice_guidance.rules }
+    voice_guidance: workspace.voice_guidance
+      ? { compiled: workspace.voice_guidance.compiled, rules: workspace.voice_guidance.rules }
       : { compiled: "", rules: { baseline: [], rhythm: [], diction: [], quirks: [], hard_nos: [] } },
     alternate_fields: { description: [], personality: [], scenario: [] },
-    greetings: derivedDraftV2.greeting
-      ? [{ id: "greeting-0", label: "Greeting", content: derivedDraftV2.greeting }]
+    greetings: workspace.greeting
+      ? [{ id: "greeting-0", label: "Greeting", content: workspace.greeting }]
       : [],
     lorebooks: [],
     npc_definitions: [],
     regex_scripts: [],
   };
-  if (!providedDraft && !derivedDraftV2.name && !derivedDraftV2.personality) {
-    return c.json({ error: "Generate a Soul draft first." }, 400);
+  if (!providedDraft && !workspace.name && !workspace.personality) {
+    return c.json({ error: "Generate or accept card fields first." }, 400);
   }
 
   const dwParams = getDWGenParams(userId);

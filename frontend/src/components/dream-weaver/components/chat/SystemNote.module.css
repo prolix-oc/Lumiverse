@@ -10,8 +10,10 @@
 .panel {
   width: min(760px, 100%);
   align-self: flex-start;
-  padding: 12px 0 2px 14px;
-  border-left: 2px solid var(--lumiverse-primary-020);
+  padding: 12px 14px;
+  border: 1px solid var(--lumiverse-primary-020);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 5%, transparent);
   color: var(--lumiverse-text-muted);
 }
 
