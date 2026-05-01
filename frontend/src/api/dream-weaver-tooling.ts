@@ -16,11 +16,34 @@ export interface DreamWeaverMessage {
   user_id: string;
   created_at: number;
   seq: number;
-  kind: "user_command" | "tool_card" | "system_note" | "dream_summary";
+  kind: "user_command" | "tool_card" | "system_note" | "dream_summary" | "source_card";
   payload: Record<string, unknown>;
   tool_name: string | null;
   status: "running" | "pending" | "accepted" | "rejected" | "superseded" | null;
   supersedes_id: string | null;
+}
+
+export interface DreamWeaverWorkspace {
+  kind: "character" | "scenario";
+  sources: Array<{
+    id: string;
+    type: "dream" | "note" | "import_character" | "import_worldbook";
+    title: string;
+    content: string;
+    tone?: string | null;
+    constraints?: string | null;
+    dislikes?: string | null;
+  }>;
+  name: string | null;
+  appearance: string | null;
+  appearance_data: Record<string, unknown> | null;
+  personality: string | null;
+  scenario: string | null;
+  first_mes: string | null;
+  greeting: string | null;
+  voice_guidance: any;
+  lorebooks: Array<{ key: string[]; comment: string; content: string }>;
+  npcs: Array<{ name: string; description: string; voice_notes?: string }>;
 }
 
 export interface DreamWeaverToolTokenUsage {
@@ -42,8 +65,8 @@ export const dreamWeaverToolingApi = {
     );
     return res.messages;
   },
-  async getDraft(sessionId: string): Promise<Record<string, unknown>> {
-    const res = await apiClient.get<{ draft: Record<string, unknown> }>(
+  async getDraft(sessionId: string): Promise<DreamWeaverWorkspace> {
+    const res = await apiClient.get<{ draft: DreamWeaverWorkspace }>(
       `/dream-weaver/sessions/${sessionId}/draft`,
     );
     return res.draft;

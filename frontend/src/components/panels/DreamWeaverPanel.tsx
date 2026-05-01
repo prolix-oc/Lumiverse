@@ -6,7 +6,6 @@ import {
   Clock3,
   FolderOpen,
   History,
-  Loader2,
   Sparkles,
   Trash2,
 } from 'lucide-react'
@@ -58,6 +57,7 @@ interface DWGenParams {
 
 export default function DreamWeaverPanel() {
   const [dreamText, setDreamText] = useState('')
+  const [workspaceKind, setWorkspaceKind] = useState<'character' | 'scenario'>('character')
   const [tone, setTone] = useState('')
   const [constraints, setConstraints] = useState('')
   const [dislikes, setDislikes] = useState('')
@@ -209,27 +209,29 @@ export default function DreamWeaverPanel() {
   }, [])
 
   const handleDream = async () => {
-    if (!dreamText.trim()) return
     setIsCreating(true)
     setErrorMessage(null)
     try {
       const session = await dreamWeaverApi.createSession({
-        dream_text: dreamText,
+        dream_text: dreamText.trim() || undefined,
         tone: tone.trim() || undefined,
         constraints: constraints.trim() || undefined,
         dislikes: dislikes.trim() || undefined,
         persona_id: resolvedPersonaId || undefined,
         connection_id: resolvedConnectionId || undefined,
         model: selectedModel.trim() || undefined,
+        workspace_kind: workspaceKind,
       })
-      try {
-        await dreamWeaverToolingApi.dream(session.id)
-      } catch (error: any) {
-        const message = error?.body?.error || error?.message || 'Dream weaving failed'
-        const recoveryMessage = `${message}. The session was saved in Previous Weaves so you can reopen it later.`
-        setErrorMessage(recoveryMessage)
-        toast.error(recoveryMessage, { title: 'Dream Weaver' })
-        return
+      if (dreamText.trim()) {
+        try {
+          await dreamWeaverToolingApi.dream(session.id)
+        } catch (error: any) {
+          const message = error?.body?.error || error?.message || 'Dream source could not be saved'
+          const recoveryMessage = `${message}. The studio was created, so you can reopen it later.`
+          setErrorMessage(recoveryMessage)
+          toast.error(recoveryMessage, { title: 'Dream Weaver' })
+          return
+        }
       }
       setDreamText('')
       openModal('dreamWeaverStudio', { sessionId: session.id })
@@ -291,11 +293,34 @@ export default function DreamWeaverPanel() {
 
         {/* Dream textarea */}
         <div className={styles.field}>
+          <span className={styles.fieldLabel}>Card Type</span>
+          <div className={styles.kindToggle} aria-label="Dream Weaver card type">
+            <button
+              type="button"
+              className={styles.kindButton}
+              data-active={workspaceKind === 'character' || undefined}
+              onClick={() => setWorkspaceKind('character')}
+            >
+              Character
+            </button>
+            <button
+              type="button"
+              className={styles.kindButton}
+              data-active={workspaceKind === 'scenario' || undefined}
+              onClick={() => setWorkspaceKind('scenario')}
+            >
+              Scenario
+            </button>
+          </div>
+        </div>
+
+        {/* Dream textarea */}
+        <div className={styles.field}>
           <span className={styles.fieldLabel}>Dream</span>
           <TextArea
             value={dreamText}
             onChange={setDreamText}
-            placeholder="Describe the tension, dynamic, history, and angle worth preserving."
+            placeholder="Optional source material. Describe the tension, dynamic, history, and angle worth preserving."
             rows={6}
           />
         </div>
@@ -490,11 +515,11 @@ export default function DreamWeaverPanel() {
           variant="primary"
           icon={<Sparkles size={14} />}
           loading={isCreating}
-          disabled={!dreamText.trim() || isCreating}
+          disabled={isCreating}
           onClick={() => void handleDream()}
           className={styles.dreamBtn}
         >
-          {isCreating ? 'Dreaming...' : 'Dream'}
+          {isCreating ? 'Opening...' : dreamText.trim() ? 'Add Dream & Open Studio' : 'Open Blank Studio'}
         </Button>
 
         {/* Error */}
@@ -541,10 +566,7 @@ export default function DreamWeaverPanel() {
                             >
                               <div className={styles.sessionHeading}>
                                 <span className={styles.sessionTitle}>{getDreamWeaverSessionTitle(session)}</span>
-                                <span className={styles.sessionStatus} data-generating={session.soul_state === 'generating' || undefined}>
-                                  {session.soul_state === 'generating' && (
-                                    <Loader2 size={10} className={styles.sessionStatusSpin} />
-                                  )}
+                                <span className={styles.sessionStatus}>
                                   {getSessionStatusLabel(session)}
                                 </span>
                               </div>

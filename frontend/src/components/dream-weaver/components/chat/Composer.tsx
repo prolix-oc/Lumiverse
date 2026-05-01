@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUpRight, Send, Wrench } from "lucide-react";
 import { parseSlash } from "../../lib/slash-parser";
 import type { ToolCatalogEntry } from "@/api/dream-weaver-tooling";
@@ -14,7 +14,7 @@ export function Composer({ catalog, onSubmit }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const userTools = useMemo(() => catalog.filter((t) => t.userInvocable), [catalog]);
   const suggestions = useMemo(() => {
@@ -42,7 +42,22 @@ export function Composer({ catalog, onSubmit }: Props) {
     }).slice(0, 8);
   }, [userTools, value]);
 
-  const showSuggestions = focused && suggestions.length > 0;
+  const hasCommandArgs = useMemo(() => {
+    const trimmed = value.trimStart();
+    if (!trimmed.startsWith("/")) return false;
+    const commandEnd = trimmed.search(/\s/);
+    if (commandEnd === -1) return false;
+    return trimmed.slice(commandEnd).trim().length > 0;
+  }, [value]);
+
+  const showSuggestions = focused && !hasCommandArgs && suggestions.length > 0;
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(el.scrollHeight, 156)}px`;
+  }, [value]);
 
   const commitTool = (tool: ToolCatalogEntry) => {
     const command = tool.slashCommand ?? `/${tool.name}`;
@@ -65,7 +80,7 @@ export function Composer({ catalog, onSubmit }: Props) {
     setActiveIndex(0);
   };
 
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "ArrowDown" && showSuggestions) {
       e.preventDefault();
       setActiveIndex((idx) => Math.min(idx + 1, suggestions.length - 1));
@@ -81,14 +96,14 @@ export function Composer({ catalog, onSubmit }: Props) {
       commitTool(suggestions[activeIndex]);
       return;
     }
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
       if (showSuggestions && !value.includes(" ") && suggestions[activeIndex]) {
         const parsed = parseSlash(value.trim(), catalog);
         if (parsed.ok) {
           submit();
           return;
         }
-        e.preventDefault();
         commitTool(suggestions[activeIndex]);
         return;
       }
@@ -103,6 +118,10 @@ export function Composer({ catalog, onSubmit }: Props) {
     <div className={styles.composer}>
       {showSuggestions && (
         <div className={styles.suggestions}>
+          <div className={styles.suggestionHeader}>
+            <span>Tools</span>
+            <span>Tab to complete, Enter to run</span>
+          </div>
           {suggestions.map((tool, index) => {
             const command = tool.slashCommand ?? `/${tool.name}`;
             return (
@@ -131,25 +150,28 @@ export function Composer({ catalog, onSubmit }: Props) {
         </div>
       )}
 
-      <div className={styles.inputWrap} data-error={error || undefined}>
-        <input
-          ref={inputRef}
-          value={value}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          onChange={(e) => {
-            setValue(e.target.value);
-            setError(null);
-            setActiveIndex(0);
-          }}
-          onKeyDown={onKey}
-          placeholder="/"
-          className={styles.input}
-        />
+      <div className={styles.inputRow}>
+        <div className={styles.inputWrap} data-error={error || undefined}>
+          <textarea
+            ref={inputRef}
+            value={value}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setError(null);
+              setActiveIndex(0);
+            }}
+            onKeyDown={onKey}
+            placeholder="/dream describe the setup, or run /name. Shift+Enter for a new line."
+            className={styles.input}
+            rows={1}
+          />
+        </div>
+        <button className={styles.send} onMouseDown={(event) => event.preventDefault()} onClick={submit} title="Run command">
+          <Send size={14} />
+        </button>
       </div>
-      <button className={styles.send} onMouseDown={(event) => event.preventDefault()} onClick={submit} title="Run command">
-        <Send size={14} />
-      </button>
       {error && <div className={styles.errorBanner}>{error}</div>}
     </div>
   );

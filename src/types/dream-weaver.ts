@@ -1,5 +1,7 @@
 // Dream Weaver Types
 
+export type DreamWeaverWorkspaceKind = "character" | "scenario";
+
 export interface DreamWeaverSession {
   id: string;
   user_id: string;
@@ -12,34 +14,21 @@ export interface DreamWeaverSession {
   persona_id: string | null;
   connection_id: string | null;
   model: string | null;
-  draft: string | null;
-  status: "draft" | "generating" | "complete" | "error";
-  soul_state: "empty" | "generating" | "ready" | "error";
-  world_state: "empty" | "ready" | "stale";
-  soul_revision: number;
-  world_source_revision: number | null;
+  workspace_kind: DreamWeaverWorkspaceKind;
+  status: "draft" | "generating" | "complete" | "finalized" | "legacy_closed" | "error";
   character_id: string | null;
   launch_chat_id: string | null;
 }
 
 export interface CreateSessionInput {
-  dream_text: string;
+  dream_text?: string;
   tone?: string;
   constraints?: string;
   dislikes?: string;
   persona_id?: string;
   connection_id?: string;
   model?: string;
-}
-
-export interface GenerateDraftInput {
-  sessionId: string;
-}
-
-export interface RewriteSectionInput {
-  section: "description" | "personality" | "scenario" | "first_mes" | "voice" | "greeting";
-  feedback: string;
-  targetId?: string;
+  workspace_kind?: DreamWeaverWorkspaceKind;
 }
 
 export interface DW_DRAFT_V1 {
@@ -142,7 +131,7 @@ export interface UpdateSessionInput {
   persona_id?: string | null;
   connection_id?: string | null;
   model?: string | null;
-  draft?: DW_DRAFT_V1 | null;
+  workspace_kind?: DreamWeaverWorkspaceKind;
 }
 
 export interface NpcEntry {
@@ -168,7 +157,19 @@ export interface VoiceGuidance {
   };
 }
 
-export interface DraftV2 {
+export interface DreamWeaverSource {
+  id: string;
+  type: "dream" | "note" | "import_character" | "import_worldbook";
+  title: string;
+  content: string;
+  tone?: string | null;
+  constraints?: string | null;
+  dislikes?: string | null;
+}
+
+export interface DreamWeaverWorkspace {
+  kind: DreamWeaverWorkspaceKind;
+  sources: DreamWeaverSource[];
   name: string | null;
   appearance: string | null;
   appearance_data: Record<string, unknown> | null;
@@ -181,7 +182,8 @@ export interface DraftV2 {
   npcs: NpcEntry[];
 }
 
-export const EMPTY_DRAFT_V2: DraftV2 = {
+export const EMPTY_DREAM_WEAVER_WORKSPACE: Omit<DreamWeaverWorkspace, "kind"> = {
+  sources: [],
   name: null,
   appearance: null,
   appearance_data: null,
@@ -198,7 +200,8 @@ export type DreamWeaverMessageKind =
   | "user_command"
   | "tool_card"
   | "system_note"
-  | "dream_summary";
+  | "dream_summary"
+  | "source_card";
 
 export type ToolCardStatus =
   | "running"
@@ -220,11 +223,7 @@ export interface DreamWeaverMessage {
   supersedes_id: string | null;
 }
 
-export interface DreamSummaryPayload {
-  dream_text: string;
-  tone: string | null;
-  dislikes: string | null;
-}
+export interface SourceCardPayload extends DreamWeaverSource {}
 
 export interface UserCommandPayload {
   raw: string;

@@ -27,14 +27,32 @@ export function ChatLog({ messages, onAccept, onReject, onCancel, onRetry }: Pro
 
   return (
     <div className={styles.log} ref={ref}>
-      {messages.length === 0 && <SystemNote text="Session ready · enter a dream and click Dream to begin" />}
+      {messages.length === 0 && (
+        <div className={styles.emptyState}>
+          <div className={styles.emptyKicker}>Studio Ready</div>
+          <h3>Start with a source, or run a tool directly.</h3>
+          <p>
+            Use <code>/dream</code> to add source material, then run focused tools like <code>/name</code>, <code>/scenario</code>, or <code>/first_message</code>.
+          </p>
+        </div>
+      )}
       {messages.map((m) => {
-        if (m.kind === "dream_summary") {
+        if (m.kind === "dream_summary" || m.kind === "source_card") {
           const p = m.payload as any;
-          return <DreamSummary key={m.id} dreamText={p.dream_text} tone={p.tone} dislikes={p.dislikes} />;
+          return (
+            <DreamSummary
+              key={m.id}
+              title={p.title || "Dream"}
+              dreamText={p.content || p.dream_text}
+              tone={p.tone}
+              dislikes={p.dislikes}
+            />
+          );
         }
         if (m.kind === "user_command") {
-          return <UserCommandBubble key={m.id} raw={(m.payload as any).raw} />;
+          const p = m.payload as any;
+          if (p.parsed?.tool === "dream_source") return null;
+          return <UserCommandBubble key={m.id} raw={p.raw} />;
         }
         if (m.kind === "system_note") {
           return <SystemNote key={m.id} text={(m.payload as any).text} />;

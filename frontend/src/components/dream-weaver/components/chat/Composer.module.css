@@ -1,23 +1,29 @@
 .composer {
-  position: relative;
   flex-shrink: 0;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px 16px 12px;
   border-top: 1px solid var(--lumiverse-border);
   background: color-mix(in srgb, var(--lumiverse-primary) 4%, var(--lumiverse-bg-deep));
+}
+
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
 }
 
 .inputWrap {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill);
   border-radius: var(--lumiverse-radius);
-  padding: 8px 10px;
+  padding: 8px 10px 7px;
   transition:
     border-color var(--lumiverse-transition-fast),
     background var(--lumiverse-transition-fast);
@@ -42,6 +48,12 @@
   font: inherit;
   font-family: var(--lumiverse-font-mono);
   font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+  min-height: 18px;
+  max-height: 156px;
+  resize: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
 }
 
 .input::placeholder {
@@ -72,20 +84,27 @@
 }
 
 .suggestions {
-  position: absolute;
-  left: 16px;
-  right: 58px;
-  bottom: calc(100% + 8px);
-  z-index: 2;
   display: grid;
-  gap: 2px;
-  max-height: min(330px, 45vh);
+  gap: 3px;
+  max-height: min(260px, 34vh);
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--lumiverse-border);
   border-radius: var(--lumiverse-radius-md);
-  background: color-mix(in srgb, var(--lumiverse-bg-deep) 94%, var(--lumiverse-primary));
-  box-shadow: var(--lumiverse-shadow-md);
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 88%, var(--lumiverse-primary));
+}
+
+.suggestionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 4px 6px;
+  color: var(--lumiverse-text-hint);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .suggestion {
@@ -154,11 +173,6 @@
 }
 
 .errorBanner {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 16px;
-  right: 58px;
-  z-index: 3;
   padding: 7px 10px;
   border-radius: var(--lumiverse-radius);
   border: 1px solid color-mix(in srgb, var(--lumiverse-danger) 20%, transparent);
@@ -168,13 +182,14 @@
 }
 
 @media (max-width: 640px) {
-  .suggestions,
-  .errorBanner {
-    right: 16px;
-  }
-
   .suggestion {
     grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .suggestionHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .suggestionCategory {

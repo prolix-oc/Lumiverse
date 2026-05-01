@@ -45,7 +45,7 @@ export function resolveSelectedConnectionId(
 export function canFinalize(session: DreamWeaverSession | null, draft: DreamWeaverDraft | null): boolean {
   if (!session || !draft) return false
 
-  return session.soul_state === 'ready' && !session.character_id && Boolean(
+  return !session.character_id && Boolean(
     draft.card.name.trim() &&
     draft.card.description.trim() &&
     draft.card.personality.trim() &&
@@ -60,17 +60,14 @@ export function shouldOfferOpenChat(session: DreamWeaverSession | null): boolean
 
 export function getSessionStatusLabel(session: DreamWeaverSession): string {
   if (session.character_id) return 'Finalized'
-  if (session.soul_state === 'ready' && session.world_state === 'stale') {
-    return 'Soul ready (world check recommended)'
-  }
-  if (session.soul_state === 'ready') return 'Soul ready'
-  if (session.soul_state === 'generating') return 'Weaving'
-  if (session.soul_state === 'error') return 'Needs attention'
-  return 'Saved'
+  if (session.status === 'generating') return 'Weaving'
+  if (session.status === 'complete') return 'Saved weave'
+  if (session.status === 'error') return 'Needs attention'
+  return session.workspace_kind === 'scenario' ? 'Scenario studio' : 'Character studio'
 }
 
 export function isWorldStale(session: DreamWeaverSession | null): boolean {
-  return session?.world_state === 'stale'
+  return false
 }
 
 export const WEAVING_OPERATIONS = {

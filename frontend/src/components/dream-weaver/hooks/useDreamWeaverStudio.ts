@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { dreamWeaverApi } from "@/api/dream-weaver";
 import type { DreamWeaverSession } from "@/api/dream-weaver";
-import { dreamWeaverToolingApi } from "@/api/dream-weaver-tooling";
+import { dreamWeaverToolingApi, type DreamWeaverWorkspace } from "@/api/dream-weaver-tooling";
 
 export type TabId = "studio" | "visuals";
 export const MAIN_TABS: TabId[] = ["studio", "visuals"];
@@ -12,7 +12,7 @@ export function useDreamWeaverStudio(sessionId: string) {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
-  const [draft, setDraft] = useState<any>(null);
+  const [draft, setDraft] = useState<DreamWeaverWorkspace | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -48,6 +48,16 @@ export function useDreamWeaverStudio(sessionId: string) {
 
   const dismissError = useCallback(() => setErrorMessage(null), []);
 
+  const updateWorkspaceKind = useCallback(async (kind: "character" | "scenario") => {
+    try {
+      const updated = await dreamWeaverApi.updateSession(sessionId, { workspace_kind: kind });
+      setSession(updated);
+      await refreshDraft();
+    } catch (e: any) {
+      setErrorMessage(e?.message ?? "Failed to update studio type");
+    }
+  }, [refreshDraft, sessionId]);
+
   return {
     session,
     draft,
@@ -59,5 +69,6 @@ export function useDreamWeaverStudio(sessionId: string) {
     finalizing,
     finalize,
     refreshDraft,
+    updateWorkspaceKind,
   };
 }

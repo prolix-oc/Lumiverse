@@ -17,12 +17,12 @@ const EMPTY_VOICE_GUIDANCE = {
   rules: { baseline: [], rhythm: [], diction: [], quirks: [], hard_nos: [] },
 }
 
-function draftV2ToV1(draft: any): DreamWeaverDraft | null {
+function workspaceToV1(draft: any): DreamWeaverDraft | null {
   if (!draft) return null
   return {
     format: 'DW_DRAFT_V1',
     version: 1,
-    kind: 'character',
+    kind: draft.kind === 'scenario' ? 'scenario' : 'character',
     meta: { title: draft.name ?? '', summary: '', tags: [], content_rating: 'sfw' },
     card: {
       name: draft.name ?? '',
@@ -60,7 +60,7 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
   const closeModal = useStore((s) => s.closeModal)
 
   const studio = useDreamWeaverStudio(sessionId)
-  const draftV1 = useMemo(() => draftV2ToV1(studio.draft), [studio.draft])
+  const draftV1 = useMemo(() => workspaceToV1(studio.draft), [studio.draft])
   const visuals = useVisualStudio(sessionId, draftV1, () => {})
 
   const handleClose = useCallback(() => {
@@ -97,6 +97,20 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                   </h2>
                 </div>
                 <div className={styles.headerRight}>
+                  <div className={styles.kindToggle} aria-label="Card type">
+                    {(['character', 'scenario'] as const).map((kind) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        className={styles.kindButton}
+                        data-active={studio.session?.workspace_kind === kind || undefined}
+                        onClick={() => void studio.updateWorkspaceKind(kind)}
+                        disabled={Boolean(studio.session?.character_id)}
+                      >
+                        {kind === 'character' ? 'Character' : 'Scenario'}
+                      </button>
+                    ))}
+                  </div>
                   <div className={styles.badges}>
                     <span className={styles.badge}>
                       {studio.session?.character_id ? 'Finalized' : 'Draft'}
@@ -122,9 +136,11 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                   </nav>
 
                   <div className={styles.canvas}>
-                    {studio.activeTab === 'studio' && <StudioTab sessionId={sessionId} />}
+                    {studio.activeTab === 'studio' && (
+                      <StudioTab sessionId={sessionId} onWorkspaceChanged={studio.refreshDraft} />
+                    )}
                     {studio.activeTab === 'visuals' && (
-                      <VisualsTab draft={studio.draft} worldStale={false} visuals={visuals} />
+                      <VisualsTab draft={draftV1} worldStale={false} visuals={visuals} />
                     )}
                   </div>
                 </div>
