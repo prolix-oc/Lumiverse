@@ -297,7 +297,7 @@ marked.setOptions({
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
 const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
-const NO_ISLAND_ATTR_RE = /\bdata-no-island\b/i
+const NO_ISLAND_ATTR_RE = /\bdata-no-island(?=[\s=>"'/]|$)/i
 const ROOT_HTML_TAG_RE = /^<([a-z][\w:-]*)\b[^>]*>/i
 const VOID_HTML_TAGS = new Set([
   'area',
@@ -1004,7 +1004,14 @@ function IsolatedHtml({ html }: { html: string }) {
     const el = ref.current
     if (!el) return
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
-    shadow.innerHTML = `<style>${ISLAND_BASE_CSS}</style>${html}`
+    shadow.innerHTML = `<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`
+    if (
+      el.classList.contains('not-prose')
+      || el.classList.contains('not-island-prose')
+      || shadow.querySelector('.not-prose, .not-island-prose')
+    ) {
+      shadow.querySelector('style[data-lumi-island-base]')?.remove()
+    }
     return attachCodeCopyHandler(shadow)
   }, [html])
 
