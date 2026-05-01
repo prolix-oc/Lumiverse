@@ -17,7 +17,7 @@
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.16",
     "jsdom": "^29.0.1",
-    "lumiverse-spindle-types": "0.4.55",
+    "lumiverse-spindle-types": "0.4.56",
     "mute-stream": "^3.0.0",
     "sharp": "^0.34.5",
     "ssh2-sftp-client": "^12.1.1"

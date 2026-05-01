@@ -46,6 +46,10 @@ import type {
   ImageUploadFromDataUrlOptionsDTO,
 } from "lumiverse-spindle-types";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import {
+  assertValidSharedRpcEndpoint,
+  normalizeOwnedSharedRpcEndpoint,
+} from "./shared-rpc";
 
 const nativeProcessExit = process.exit.bind(process);
 
@@ -159,6 +163,16 @@ type MacroInvocationState = {
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "rpc_pool_sync"; endpoint: string; value: unknown }
+  | { type: "rpc_pool_register_handler"; endpoint: string }
+  | { type: "rpc_pool_unregister"; endpoint: string }
+  | { type: "rpc_pool_read"; requestId: string; endpoint: string }
+  | {
+      type: "rpc_pool_handler_result";
+      requestId: string;
+      result?: unknown;
+      error?: string;
+    }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | {
@@ -319,6 +333,12 @@ type RuntimeWorkerToHost =
 type RuntimeHostToWorker =
   | HostToWorker
   | {
+      type: "rpc_pool_request";
+      requestId: string;
+      endpoint: string;
+      requesterExtensionId: string;
+    }
+  | {
       type: "message_content_processor_request";
       requestId: string;
       ctx: unknown;
@@ -442,6 +462,15 @@ type RuntimeSpindleAPI = SpindleAPI & {
     onLifecycle(handler: (event: BackendProcessLifecycleEvent) => void): () => void;
     onMessage(handler: (event: { processId: string; payload: unknown; userId: string }) => void): () => void;
   };
+  rpcPool: {
+    sync(endpoint: string, value: unknown): string;
+    handle(
+      endpoint: string,
+      handler: (ctx: { endpoint: string; requesterExtensionId: string }) => unknown | Promise<unknown>
+    ): string;
+    read<T = unknown>(endpoint: string): Promise<T>;
+    unregister(endpoint: string): void;
+  };
 };
 
 // ─── State ───────────────────────────────────────────────────────────────
@@ -482,6 +511,10 @@ const frontendProcessLifecycleHandlers = new Set<(event: FrontendProcessLifecycl
 const frontendProcessMessageHandlers = new Set<(event: { processId: string; payload: unknown; userId: string }) => void>();
 const backendProcessLifecycleHandlers = new Set<(event: BackendProcessLifecycleEvent) => void>();
 const backendProcessMessageHandlers = new Set<(event: { processId: string; payload: unknown; userId: string }) => void>();
+const sharedRpcHandlers = new Map<
+  string,
+  (ctx: { endpoint: string; requesterExtensionId: string }) => unknown | Promise<unknown>
+>();
 const grantedPermissions = new Set<string>();
 const extensionMacroHandlers = new Map<string, (ctx: unknown) => unknown | Promise<unknown>>();
 const macroInvocationStack: MacroInvocationState[] = [];
@@ -501,6 +534,10 @@ function request(msg: RuntimeWorkerToHost & { requestId: string }): Promise<unkn
     pendingResponses.set(msg.requestId, { resolve, reject });
     post(msg);
   });
+}
+
+function normalizeOwnedRpcPoolEndpoint(endpoint: string): string {
+  return normalizeOwnedSharedRpcEndpoint(manifest.identifier, endpoint);
 }
 
 function createFrontendProcessHandle(info: FrontendProcessInfo): {
@@ -2079,6 +2116,37 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  rpcPool: {
+    sync(endpoint: string, value: unknown): string {
+      assertMutationAllowed("spindle.rpcPool.sync()");
+      const normalized = normalizeOwnedRpcPoolEndpoint(endpoint);
+      post({ type: "rpc_pool_sync", endpoint: normalized, value });
+      return normalized;
+    },
+    handle(
+      endpoint: string,
+      handler: (ctx: { endpoint: string; requesterExtensionId: string }) => unknown | Promise<unknown>
+    ): string {
+      assertMutationAllowed("spindle.rpcPool.handle()");
+      const normalized = normalizeOwnedRpcPoolEndpoint(endpoint);
+      sharedRpcHandlers.set(normalized, handler);
+      post({ type: "rpc_pool_register_handler", endpoint: normalized });
+      return normalized;
+    },
+    async read<T = unknown>(endpoint: string): Promise<T> {
+      const normalized = assertValidSharedRpcEndpoint(endpoint);
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "rpc_pool_read", requestId, endpoint: normalized });
+      return result as T;
+    },
+    unregister(endpoint: string): void {
+      assertMutationAllowed("spindle.rpcPool.unregister()");
+      const normalized = normalizeOwnedRpcPoolEndpoint(endpoint);
+      sharedRpcHandlers.delete(normalized);
+      post({ type: "rpc_pool_unregister", endpoint: normalized });
+    },
+  },
+
   push: {
     async send(
       input: { title: string; body: string; tag?: string; url?: string; icon?: string; rawTitle?: boolean; image?: string },
@@ -2837,6 +2905,32 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           }
         }
       }
+      break;
+    }
+
+    case "rpc_pool_request": {
+      const handler = sharedRpcHandlers.get(msg.endpoint);
+      if (!handler) {
+        post({
+          type: "rpc_pool_handler_result",
+          requestId: msg.requestId,
+          error: `Shared RPC endpoint \"${msg.endpoint}\" is not registered for on-request reads`,
+        });
+        break;
+      }
+
+      Promise.resolve(handler({ endpoint: msg.endpoint, requesterExtensionId: msg.requesterExtensionId })).then(
+        (result) => {
+          post({ type: "rpc_pool_handler_result", requestId: msg.requestId, result });
+        },
+        (err: any) => {
+          post({
+            type: "rpc_pool_handler_result",
+            requestId: msg.requestId,
+            error: err?.message || String(err),
+          });
+        }
+      );
       break;
     }
 

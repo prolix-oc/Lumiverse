@@ -8,6 +8,7 @@ These are always available:
 
 - **Events** — subscribe to any Lumiverse event
 - **Storage** — read/write to your extension's scoped storage directory
+- **Shared RPC Pool** — publish and read cross-extension latest-state endpoints
 - **User Storage** — per-user isolated storage, even for operator-scoped (globally installed) extensions
 - **Secure Enclave** — encrypted at-rest secret storage (AES-256-GCM), per-user isolated
 - **Macros** — register custom `{{macros}}` for use in prompts

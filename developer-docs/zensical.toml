@@ -34,6 +34,7 @@ nav = [
     { "Images" = "backend-api/images.md" },
     { "Theme" = "backend-api/theme.md" },
     { "Storage" = "backend-api/storage.md" },
+    { "Shared RPC Pool" = "backend-api/shared-rpc-pool.md" },
     { "Ephemeral Storage" = "backend-api/ephemeral-storage.md" },
     { "Variables" = "backend-api/variables.md" },
     { "Tokens" = "backend-api/tokens.md" },

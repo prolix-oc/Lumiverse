@@ -24,6 +24,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Images](images.md) | `images` | Read, upload, filter, and delete stored images |
 | [Theme](theme.md) | `app_manipulation` | Apply CSS variable overrides on top of the user's theme |
 | [Storage](storage.md) | Free | Scoped file storage (extension + per-user) |
+| [Shared RPC Pool](shared-rpc-pool.md) | Free | Cross-extension latest-state and on-demand reads across the worker isolation boundary |
 | [Ephemeral Storage](ephemeral-storage.md) | `ephemeral_storage` | Temporary storage with TTL and quotas |
 | [Variables](variables.md) | Free | Local (chat-scoped) and global variable access |
 | [Tokens](tokens.md) | Free | Count text, message arrays, or stored chats against an explicit model or the main/sidecar model |

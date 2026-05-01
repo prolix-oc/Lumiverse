@@ -76,6 +76,13 @@ import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import "../image-gen/index";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
 import { createRuntimeTransport, type RuntimeTransport } from "./runtime-transport";
+import {
+  readSharedRpcEndpoint,
+  registerSharedRpcRequestEndpoint,
+  syncSharedRpcEndpoint,
+  unregisterSharedRpcEndpoint,
+  unregisterSharedRpcEndpointsByOwner,
+} from "./shared-rpc-pool.service";
 import { getTextContent, type LlmMessage } from "../llm/types";
 import { getDb } from "../db/connection";
 import { normalizeSpindleAppNavigationPath } from "./url-safety";
@@ -261,6 +268,16 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "rpc_pool_sync"; endpoint: string; value: unknown }
+  | { type: "rpc_pool_register_handler"; endpoint: string }
+  | { type: "rpc_pool_unregister"; endpoint: string }
+  | { type: "rpc_pool_read"; requestId: string; endpoint: string }
+  | {
+      type: "rpc_pool_handler_result";
+      requestId: string;
+      result?: unknown;
+      error?: string;
+    }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | {
@@ -447,6 +464,12 @@ type RuntimeWorkerToHost =
 
 type RuntimeHostToWorker =
   | HostToWorker
+  | {
+      type: "rpc_pool_request";
+      requestId: string;
+      endpoint: string;
+      requesterExtensionId: string;
+    }
   | {
       type: "message_content_processor_request";
       requestId: string;
@@ -739,6 +762,7 @@ export class WorkerHost {
   private registeredCommands: SpindleCommandDTO[] = [];
   private static readonly MAX_COMMANDS_PER_EXTENSION = 20;
   private static readonly MAX_BACKEND_PROCESSES = 16;
+  private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
   private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
   private onWorkerReady: (() => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
@@ -1535,6 +1559,7 @@ export class WorkerHost {
     contextHandlerChain.unregisterByExtension(this.extensionId);
     messageContentProcessorChain.unregisterByExtension(this.extensionId);
     macroInterceptorChain.unregisterByExtension(this.extensionId);
+    unregisterSharedRpcEndpointsByOwner(this.manifest.identifier);
 
     // Reject pending requests
     for (const [, pending] of this.pendingRequests) {
@@ -1778,6 +1803,63 @@ export class WorkerHost {
     });
   }
 
+  private requestSharedRpcValue(
+    endpoint: string,
+    requesterExtensionId: string,
+  ): Promise<unknown> {
+    const requestId = crypto.randomUUID();
+
+    this.postToWorker({
+      type: "rpc_pool_request",
+      requestId,
+      endpoint,
+      requesterExtensionId,
+    });
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error(`Shared RPC endpoint "${endpoint}" timed out`));
+      }, WorkerHost.SHARED_RPC_REQUEST_TIMEOUT_MS);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject: (reason) => {
+          clearTimeout(timeout);
+          reject(reason);
+        },
+      });
+    });
+  }
+
+  private handleRpcPoolSync(endpoint: string, value: unknown): void {
+    syncSharedRpcEndpoint(this.manifest.identifier, endpoint, value);
+  }
+
+  private handleRpcPoolRegisterHandler(endpoint: string): void {
+    registerSharedRpcRequestEndpoint(
+      this.manifest.identifier,
+      endpoint,
+      async (requesterExtensionId) => await this.requestSharedRpcValue(endpoint, requesterExtensionId),
+    );
+  }
+
+  private handleRpcPoolUnregister(endpoint: string): void {
+    unregisterSharedRpcEndpoint(this.manifest.identifier, endpoint);
+  }
+
+  private async handleRpcPoolRead(requestId: string, endpoint: string): Promise<void> {
+    try {
+      const result = await readSharedRpcEndpoint(endpoint, this.manifest.identifier);
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
+    }
+  }
+
   private handleCreateOAuthState(requestId: string): void {
     if (!managerSvc.hasPermission(this.manifest.identifier, "oauth")) {
       this.postToWorker({
@@ -1940,6 +2022,25 @@ export class WorkerHost {
         break;
       case "permissions_get_granted":
         this.handlePermissionsGetGranted(msg.requestId);
+        break;
+      case "rpc_pool_sync":
+        this.handleRpcPoolSync(msg.endpoint, msg.value);
+        break;
+      case "rpc_pool_register_handler":
+        this.handleRpcPoolRegisterHandler(msg.endpoint);
+        break;
+      case "rpc_pool_unregister":
+        this.handleRpcPoolUnregister(msg.endpoint);
+        break;
+      case "rpc_pool_read":
+        void this.handleRpcPoolRead(msg.requestId, msg.endpoint);
+        break;
+      case "rpc_pool_handler_result":
+        if (msg.error) {
+          this.rejectRequest(msg.requestId, new Error(msg.error));
+        } else {
+          this.resolveRequest(msg.requestId, msg.result);
+        }
         break;
       case "connections_list":
         this.handleConnectionsList(msg.requestId, msg.userId);
