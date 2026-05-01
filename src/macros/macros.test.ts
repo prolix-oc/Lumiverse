@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
+import { parse } from "./MacroParser";
 import { registry } from "./MacroRegistry";
 import { initMacros } from "./index";
 import type { MacroEnv } from "./types";
@@ -103,6 +104,30 @@ async function ev(template: string, env?: MacroEnv): Promise<string> {
 
 beforeAll(() => {
   initMacros();
+});
+
+describe("Chat transcript examples", () => {
+  test("parser and evaluator handle setvar/getvar across chat-style lines", async () => {
+    const transcript = [
+      "User: {{setvar::scene::lantern-lit alley}}",
+      "Assistant: Stored.",
+      "User: Recall it: {{getvar::scene}}",
+      "Assistant: I remember {{getvar::scene}}.",
+    ].join("\n");
+
+    const ast = parse(transcript);
+    const macroNames = ast.flatMap((node) =>
+      node.type === "macro" ? [node.name] : [],
+    );
+
+    expect(macroNames).toEqual(["setvar", "getvar", "getvar"]);
+    expect(await ev(transcript, makeEnv())).toBe([
+      "User: ",
+      "Assistant: Stored.",
+      "User: Recall it: lantern-lit alley",
+      "Assistant: I remember lantern-lit alley.",
+    ].join("\n"));
+  });
 });
 
 // ===========================================================================

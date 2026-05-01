@@ -1895,37 +1895,11 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       // responseMimeType + responseSchema) based on the provider so the LLM returns
       // valid JSON natively instead of relying on prompt engineering.
       const generateRawFn = sidecarConnectionId
-        ? async (opts: { connectionId: string; messages: Array<{ role: string; content: string }>; parameters: Record<string, any>; tools?: any[]; signal?: AbortSignal }) => {
-            const { quietGenerate } = await import("./generate.service");
-            // Only inject tool_choice when the call actually provides tools.
-            // Consolidation and arc summarization don't use tools — injecting
-            // tool_choice without tools causes providers to reject the request
-            // with "tool_choice is required, but no tools were provided".
-            const toolChoiceParams = (sidecarProvider && opts.tools?.length)
-              ? memoryCortex.getToolChoiceParams(sidecarProvider)
-              : {};
-            const sidecarParams: Record<string, any> = {
-              temperature: cortexConfig.sidecar.temperature,
-              top_p: cortexConfig.sidecar.topP,
-              max_tokens: cortexConfig.sidecar.maxTokens,
-              ...toolChoiceParams,
-              ...opts.parameters,
-            };
-            if (cortexConfig.sidecar.model) {
-              sidecarParams.model = cortexConfig.sidecar.model;
-            }
-            const result = await quietGenerate(userId, {
-              connection_id: opts.connectionId,
-              messages: opts.messages as any,
-              parameters: sidecarParams,
-              tools: opts.tools,
-              signal: opts.signal,
-            });
-            return {
-              content: typeof result.content === "string" ? result.content : "",
-              tool_calls: result.tool_calls,
-            };
-          }
+        ? memoryCortex.createCortexSidecarGenerateRawAdapter({
+            userId,
+            sidecarProvider: sidecarProvider!,
+            cortexConfig,
+          })
         : undefined;
 
       const chunkPayload = {

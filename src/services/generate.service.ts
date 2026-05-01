@@ -103,7 +103,12 @@ import {
   separateDelimitedReasoning,
   wrapDelimitedReasoningStream,
 } from "../utils/reasoning-strip";
-import { reconcileChatMessageMacros } from "./chat-macro-render.service";
+import {
+  persistMacroVariableState,
+  reconcileChatMessageMacros,
+  resolveRenderedMessageContent,
+} from "./chat-macro-render.service";
+import { cloneEnv } from "../macros";
 
 interface GenerateInput {
   userId: string;
@@ -2807,20 +2812,31 @@ async function runGeneration(
         messageId = message.id;
       }
 
-      if (messageId) {
-        const reconciled = await reconcileChatMessageMacros({
+      if ((lifecycle.sourceUserMessageIds?.length ?? 0) > 0) {
+        await reconcileChatMessageMacros({
           userId,
           chatId,
-          messageIds: [
-            ...(lifecycle.sourceUserMessageIds ?? []),
-            messageId,
-          ],
+          messageIds: lifecycle.sourceUserMessageIds ?? [],
           macroEnvSeed,
+          persistVariables: false,
         });
-        const resolvedMessage = reconciled.get(messageId);
-        if (resolvedMessage !== undefined) {
-          fullContent = resolvedMessage;
+      }
+
+      if (messageId) {
+        const savedMessage = chatsSvc.getMessage(userId, messageId);
+        let resolvedMessage = savedMessage?.content ?? fullContent;
+        if (macroEnv || macroEnvSeed) {
+          const assistantEnv = cloneEnv(macroEnv ?? macroEnvSeed!);
+          resolvedMessage = await resolveRenderedMessageContent(
+            savedMessage?.content ?? fullContent,
+            assistantEnv,
+          );
+          persistMacroVariableState(userId, chatId, assistantEnv);
         }
+        if (savedMessage && savedMessage.content !== resolvedMessage) {
+          chatsSvc.updateMessage(userId, messageId, { content: resolvedMessage });
+        }
+        fullContent = resolvedMessage;
       }
 
       // Compute reasoning duration if content tokens never arrived (reasoning-only response)

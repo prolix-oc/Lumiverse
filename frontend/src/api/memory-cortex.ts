@@ -22,6 +22,7 @@ export interface CortexConfig {
     maxTokens: number;
     chunkBatchSize: number;
     rebuildConcurrency: number;
+    requestsPerMinute: number;
   };
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
   contextTokenBudget: number;

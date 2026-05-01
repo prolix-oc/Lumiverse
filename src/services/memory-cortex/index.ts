@@ -25,6 +25,7 @@ import {
 } from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
 import { extractWithSidecar, extractBatchWithSidecar, getToolChoiceParams, getExtractionStructuredParams } from "./salience-sidecar";
+import { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
 import { extractEntitiesHeuristic, extractMentionExcerpt, detectNicknameIntroductions } from "./entity-extractor";
 import { refineHeuristicDetections } from "./detection-refiner";
 import { filterEntitiesByExtractionFilters } from "./entity-extraction-filters";
@@ -59,6 +60,7 @@ import type {
 // Re-export public types and config
 export { getCortexConfig, putCortexConfig, applyCortexPreset, shouldUseCortexSidecar, shouldUseCortexSidecarForChunkAnalysis } from "./config";
 export type { MemoryCortexConfig, CortexPresetMode } from "./config";
+export { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
 export { formatShadowPrompt, formatLinkedCortexSection } from "./shadow-formatter";
 export type { FormatterMode, ShadowPromptResult, LinkedFormatResult } from "./shadow-formatter";
 export { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";

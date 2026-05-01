@@ -329,6 +329,44 @@ async function applyPromptRegexScriptsBeforeClipping(
   }
 }
 
+export async function resolvePromptMacrosAfterRegexPass(
+  result: LlmMessage[],
+  macroEnv: MacroEnv,
+): Promise<void> {
+  for (let i = 0; i < result.length; i++) {
+    const msg = result[i];
+    if (typeof msg.content === "string") {
+      if (!msg.content.includes("{{") && !msg.content.includes("<")) continue;
+      const resolved = healFormattingArtifacts(
+        (await evaluate(msg.content, macroEnv, registry)).text,
+      );
+      if (resolved !== msg.content) {
+        result[i] = { ...msg, content: resolved };
+        if (isChatHistoryMessage(msg)) markAsChatHistory(result[i]);
+      }
+      continue;
+    }
+
+    if (!Array.isArray(msg.content)) continue;
+    let changed = false;
+    const parts = await Promise.all(
+      msg.content.map(async (part: any) => {
+        if (part.type !== "text") return part;
+        if (!part.text.includes("{{") && !part.text.includes("<")) return part;
+        const text = healFormattingArtifacts(
+          (await evaluate(part.text, macroEnv, registry)).text,
+        );
+        if (text !== part.text) changed = true;
+        return text !== part.text ? { ...part, text } : part;
+      }),
+    );
+    if (changed) {
+      result[i] = { ...msg, content: parts };
+      if (isChatHistoryMessage(msg)) markAsChatHistory(result[i]);
+    }
+  }
+}
+
 function isDecorativeNewChatSeparator(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed === "[Start a new Chat]") return true;
@@ -2434,6 +2472,7 @@ export async function assemblePrompt(
     characterId,
     macroEnv,
   );
+  await resolvePromptMacrosAfterRegexPass(result, macroEnv);
   stripEmptyTextParts(result);
 
   // ---- Context budget clipping ----

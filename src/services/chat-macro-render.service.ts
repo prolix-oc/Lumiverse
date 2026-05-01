@@ -10,6 +10,7 @@ interface ReconcileChatMessageMacrosInput {
   chatId: string;
   messageIds: string[];
   macroEnvSeed?: MacroEnv;
+  persistVariables?: boolean;
 }
 
 interface ResolveRenderedChatMessagesInput {
@@ -22,6 +23,8 @@ export async function resolveRenderedChatMessages(
   input: ResolveRenderedChatMessagesInput,
 ): Promise<{
   resolvedById: Map<string, string>;
+  localVariables?: Record<string, string>;
+  globalVariables?: Record<string, string>;
   chatVariables?: Record<string, string>;
 }> {
   const targetIds = [...new Set(input.messageIds.filter(Boolean))];
@@ -54,10 +57,37 @@ export async function resolveRenderedChatMessages(
 
   return {
     resolvedById,
-    ...(env._chatVarsDirty
-      ? { chatVariables: Object.fromEntries(env.variables.chat) }
-      : {}),
+    localVariables: Object.fromEntries(env.variables.local),
+    globalVariables: Object.fromEntries(env.variables.global),
+    chatVariables: Object.fromEntries(env.variables.chat),
   };
+}
+
+export async function resolveRenderedMessageContent(
+  content: string,
+  env: MacroEnv,
+): Promise<string> {
+  if (!HAS_MACRO_RE.test(content)) return content;
+  initMacros();
+  return healFormattingArtifacts((await evaluate(content, env, registry)).text);
+}
+
+export function persistMacroVariableState(
+  userId: string,
+  chatId: string,
+  env: MacroEnv,
+): void {
+  const chat = chatsSvc.getChat(userId, chatId);
+  if (!chat) return;
+  const macroVariables = {
+    ...((chat.metadata?.macro_variables as Record<string, unknown>) || {}),
+    local: Object.fromEntries(env.variables.local),
+    global: Object.fromEntries(env.variables.global),
+  };
+  chatsSvc.mergeChatMetadata(userId, chatId, {
+    macro_variables: macroVariables,
+    chat_variables: Object.fromEntries(env.variables.chat),
+  });
 }
 
 export async function reconcileChatMessageMacros(
@@ -66,7 +96,12 @@ export async function reconcileChatMessageMacros(
   const messages = chatsSvc.getMessages(input.userId, input.chatId);
   if (messages.length === 0) return new Map<string, string>();
 
-  const { resolvedById, chatVariables } = await resolveRenderedChatMessages({
+  const {
+    resolvedById,
+    localVariables,
+    globalVariables,
+    chatVariables,
+  } = await resolveRenderedChatMessages({
     messages,
     messageIds: input.messageIds,
     macroEnvSeed: input.macroEnvSeed,
@@ -78,8 +113,15 @@ export async function reconcileChatMessageMacros(
     chatsSvc.updateMessage(input.userId, messageId, { content: resolved });
   }
 
-  if (chatVariables) {
+  if (input.persistVariables !== false && localVariables && globalVariables && chatVariables) {
+    const chat = chatsSvc.getChat(input.userId, input.chatId);
+    const macroVariables = {
+      ...((chat?.metadata?.macro_variables as Record<string, unknown>) || {}),
+      local: localVariables,
+      global: globalVariables,
+    };
     chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
+      macro_variables: macroVariables,
       chat_variables: chatVariables,
     });
   }

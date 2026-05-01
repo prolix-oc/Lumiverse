@@ -329,31 +329,11 @@ function resolveCortexSidecarAdapter(
   }
 
   const sidecarProvider = sidecarConn.provider;
-  const generateRawFn: CortexGenerateRawFn = async (opts) => {
-    const { quietGenerate } = await import("../services/generate.service");
-    const toolChoiceParams = (opts.tools?.length)
-      ? memoryCortex.getToolChoiceParams(sidecarProvider)
-      : {};
-    const sidecarParams: Record<string, any> = {
-      temperature: cortexConfig.sidecar?.temperature ?? 0.1,
-      top_p: cortexConfig.sidecar?.topP ?? 1.0,
-      max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
-      ...toolChoiceParams,
-      ...opts.parameters,
-    };
-    if (cortexConfig.sidecar?.model) sidecarParams.model = cortexConfig.sidecar.model;
-    const result = await quietGenerate(userId, {
-      connection_id: opts.connectionId,
-      messages: opts.messages as any,
-      parameters: sidecarParams,
-      tools: opts.tools,
-      signal: opts.signal,
-    });
-    return {
-      content: typeof result.content === "string" ? result.content : "",
-      tool_calls: result.tool_calls,
-    };
-  };
+  const generateRawFn: CortexGenerateRawFn = memoryCortex.createCortexSidecarGenerateRawAdapter({
+    userId,
+    sidecarProvider,
+    cortexConfig,
+  });
 
   return { generateRawFn, sidecarConnectionId };
 }

@@ -522,6 +522,10 @@ export default function MemoryCortexSettings() {
                   <NumericInput className={styles.numberInput} value={config.sidecar.rebuildConcurrency ?? 3} min={1} max={10} step={1} integer onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, rebuildConcurrency: value ?? 3 } })} />
                 </div>
                 <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>RPM limit</span>
+                  <NumericInput className={styles.numberInput} value={config.sidecar.requestsPerMinute ?? 0} min={0} max={600} step={1} integer onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, requestsPerMinute: value ?? 0 } })} />
+                </div>
+                <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Sidecar timeout (seconds)</span>
                   <NumericInput className={styles.numberInput} value={Math.round((config.sidecarTimeoutMs ?? 60000) / 1000)} min={0} max={300} step={5} integer onChange={(value) => updateConfig({ sidecarTimeoutMs: (value ?? 60) * 1000 })} />
                 </div>
@@ -532,6 +536,7 @@ export default function MemoryCortexSettings() {
                 <div className={styles.hintText}>
                   Chunks per request: how many memory chunks to analyze in a single LLM call. Higher = fewer API calls but larger prompts.
                   Parallel requests: how many LLM calls to run simultaneously during rebuild.
+                  RPM limit: cap Cortex sidecar requests per minute for this provider. 0 disables throttling.
                   Sidecar timeout: max wait per sidecar call. Increase for thinking/reasoning models that need more processing time. 0 = no limit.
                   Retrieval timeout: max wait for cortex retrieval during generation. If exceeded, falls back to plain vector search. 0 = no limit.
                 </div>

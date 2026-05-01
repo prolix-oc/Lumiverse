@@ -98,6 +98,8 @@ export interface MemoryCortexConfig {
     chunkBatchSize: number;
     /** Max parallel LLM requests during rebuild */
     rebuildConcurrency: number;
+    /** Max sidecar requests started per minute for the selected provider. 0 disables gating. */
+    requestsPerMinute: number;
   };
 
   /** How cortex data is formatted for LLM injection */
@@ -195,6 +197,7 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     maxTokens: 4096,
     chunkBatchSize: 5,
     rebuildConcurrency: 3,
+    requestsPerMinute: 0,
   },
   formatterMode: "shadow",
   contextTokenBudget: 600,
@@ -382,6 +385,10 @@ export function normalizeCortexConfig(
       maxTokens: input.sidecar?.maxTokens ?? defaults.sidecar.maxTokens,
       chunkBatchSize: input.sidecar?.chunkBatchSize ?? defaults.sidecar.chunkBatchSize,
       rebuildConcurrency: input.sidecar?.rebuildConcurrency ?? defaults.sidecar.rebuildConcurrency,
+      requestsPerMinute: normalizeRequestsPerMinute(
+        input.sidecar?.requestsPerMinute,
+        defaults.sidecar.requestsPerMinute,
+      ),
     },
     formatterMode: input.formatterMode ?? defaults.formatterMode,
     contextTokenBudget: input.contextTokenBudget ?? defaults.contextTokenBudget,
@@ -419,4 +426,9 @@ export function normalizeCortexConfig(
     entityWhitelist: input.entityWhitelist ?? defaults.entityWhitelist,
     entityExtractionFilters: normalizeEntityExtractionFilters(input.entityExtractionFilters),
   };
+}
+
+function normalizeRequestsPerMinute(value: number | null | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
 }

@@ -108,8 +108,8 @@ describe("resolveRenderedChatMessages", () => {
 
   test("strips setter macros while preserving chat-scoped side effects", async () => {
     const messages = [
-      makeMessage("user-1", "{{setchatvar::mood::calm}}", true),
-      makeMessage("assistant-1", "Mood: {{getchatvar::mood}}", false),
+      makeMessage("user-1", "{{setvar::stance::guard}}{{setgvar::theme::noir}}{{setchatvar::mood::calm}}", true),
+      makeMessage("assistant-1", "Mood: {{getchatvar::mood}}, stance: {{getvar::stance}}, theme: {{getgvar::theme}}", false),
     ];
 
     const result = await resolveRenderedChatMessages({
@@ -119,7 +119,9 @@ describe("resolveRenderedChatMessages", () => {
     });
 
     expect(result.resolvedById.get("user-1")).toBe("");
-    expect(result.resolvedById.get("assistant-1")).toBe("Mood: calm");
+    expect(result.resolvedById.get("assistant-1")).toBe("Mood: calm, stance: guard, theme: noir");
+    expect(result.localVariables).toEqual({ stance: "guard" });
+    expect(result.globalVariables).toEqual({ theme: "noir" });
     expect(result.chatVariables).toEqual({ mood: "calm" });
   });
 });
