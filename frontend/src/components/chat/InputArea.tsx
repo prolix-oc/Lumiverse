@@ -1006,6 +1006,36 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [activeCharacterId, isGroupChat, groupCharacterIds, navigate, openModal])
 
+  const handleConvertToGroup = useCallback(async () => {
+    if (!chatId || !activeCharacterId || isGroupChat) return
+
+    let conversionToastId: string | null = null
+    try {
+      conversionToastId = toast.info('Creating a new group chat from this conversation…', {
+        title: 'Converting Chat',
+        duration: 60_000,
+        dismissible: false,
+      })
+      const converted = await chatsApi.convertToGroup(chatId)
+      toast.dismiss(conversionToastId)
+      conversionToastId = null
+
+      useStore.getState().setGroupChat(true, [activeCharacterId], [])
+      navigate(`/chat/${converted.id}`)
+      openModal('addGroupMember', {
+        chatId: converted.id,
+        existingCharacterIds: [activeCharacterId],
+      })
+      toast.success('Converted to group chat')
+    } catch (err: any) {
+      if (conversionToastId) toast.dismiss(conversionToastId)
+      console.error('[InputArea] Failed to convert chat to group:', err)
+      toast.error(err?.body?.error || err?.message || 'Failed to convert chat', {
+        title: 'Conversion Failed',
+      })
+    }
+  }, [chatId, activeCharacterId, isGroupChat, navigate, openModal])
+
   const handleDryRun = useCallback(async () => {
     if (dryRunning || isStreaming) return
     const presetId = getActivePresetForGeneration()
@@ -1586,7 +1616,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   className={styles.popRowBtn}
                   onClick={() => {
                     setOpenPopover(null)
-                    openModal('groupChatCreator', { initialCharacterIds: [activeCharacterId] })
+                    void handleConvertToGroup()
                   }}
                 >
                   <span className={styles.personaMain}>

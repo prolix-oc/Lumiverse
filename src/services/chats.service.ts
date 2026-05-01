@@ -478,6 +478,40 @@ export function createGroupChat(userId: string, input: CreateGroupChatInput): Ch
   return chat;
 }
 
+export function convertSoloChatToGroup(userId: string, chatId: string): Chat | null {
+  const source = getChat(userId, chatId);
+  if (!source) return null;
+  if (source.metadata?.group) throw new Error("Chat is already a group chat");
+
+  const converted = createChatRaw(userId, {
+    character_id: source.character_id,
+    name: source.name,
+    metadata: {
+      ...(source.metadata || {}),
+      group: true,
+      character_ids: [source.character_id],
+    },
+  });
+
+  const messages = getMessages(userId, chatId).map((message) => ({
+    is_user: message.is_user,
+    name: message.name,
+    content: message.content,
+    send_date: message.send_date,
+    swipes: message.swipes,
+    swipe_dates: message.swipe_dates,
+    swipe_id: message.swipe_id,
+    extra: message.extra,
+  }));
+
+  bulkInsertMessages(converted.id, messages, userId);
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, converted.id, userId);
+
+  return getChat(userId, converted.id)!;
+}
+
 export function deleteChat(userId: string, id: string): boolean {
   const result = getDb().query("DELETE FROM chats WHERE id = ? AND user_id = ?").run(id, userId);
   if (result.changes > 0) {
@@ -788,9 +822,18 @@ let _stmtMsgAll: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgCount: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgTail: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtMsgById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtMsgGen = -1;
 
 function getMsgStmts() {
+  const gen = require("../db/connection").getDbGeneration() as number;
   const db = getDb();
+  if (_stmtMsgGen !== gen) {
+    _stmtMsgAll = null;
+    _stmtMsgCount = null;
+    _stmtMsgTail = null;
+    _stmtMsgById = null;
+    _stmtMsgGen = gen;
+  }
   if (!_stmtMsgAll) _stmtMsgAll = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC");
   if (!_stmtMsgCount) _stmtMsgCount = db.query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?");
   if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?");

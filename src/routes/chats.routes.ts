@@ -101,6 +101,17 @@ app.post("/group", async (c) => {
   return c.json(chat, 201);
 });
 
+app.post("/:id/convert-to-group", (c) => {
+  const userId = c.get("userId");
+  try {
+    const chat = svc.convertSoloChatToGroup(userId, c.req.param("id"));
+    if (!chat) return c.json({ error: "Not found" }, 404);
+    return c.json(chat, 201);
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Failed to convert chat" }, 400);
+  }
+});
+
 // Group chat muting
 app.post("/:id/mute/:characterId", (c) => {
   const userId = c.get("userId");

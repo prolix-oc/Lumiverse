@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
   addSwipe,
+  convertSoloChatToGroup,
+  getChat,
   cycleSwipe,
   getMessage,
+  getMessages,
   listRecentChats,
   listRecentChatsGrouped,
   patchMessageExtra,
@@ -65,7 +68,12 @@ function seedMessage(
   chatId: string,
   content: string,
   extra: Record<string, unknown>,
+  options?: { index?: number; isUser?: boolean; name?: string; sendDate?: number },
 ): void {
+  const index = options?.index ?? 0;
+  const isUser = options?.isUser ?? false;
+  const name = options?.name ?? (isUser ? "User" : "Assistant");
+  const sendDate = options?.sendDate ?? 100;
   getDb()
     .query(
       `INSERT INTO messages (
@@ -76,18 +84,18 @@ function seedMessage(
     .run(
       id,
       chatId,
-      0,
-      0,
-      "Assistant",
+      index,
+      isUser ? 1 : 0,
+      name,
       content,
-      100,
+      sendDate,
       0,
       JSON.stringify([content]),
-      JSON.stringify([100]),
+      JSON.stringify([sendDate]),
       JSON.stringify(extra),
       null,
       null,
-      100,
+      sendDate,
     );
 }
 
@@ -160,5 +168,48 @@ describe("recent chats", () => {
     expect(restoredSecondSwipe.swipe_id).toBe(1);
     expect(restoredSecondSwipe.extra.reasoning).toBe("second swipe reasoning");
     expect(restoredSecondSwipe.extra.reasoningDuration).toBe(456);
+  });
+
+  test("converts a solo chat into a new group chat with copied messages", () => {
+    seedChat("solo", "c1", "Alpha chat", JSON.stringify({ author_note: "keep me" }), 200);
+    seedMessage("msg-1", "solo", "Hello there", { greeting: true }, { index: 0, sendDate: 100 });
+    seedMessage("msg-2", "solo", "Hi back", { persona_id: "p1" }, { index: 1, isUser: true, name: "User", sendDate: 150 });
+
+    const converted = convertSoloChatToGroup("u1", "solo")!;
+    const copiedMessages = getMessages("u1", converted.id);
+    const original = getChat("u1", "solo")!;
+
+    expect(converted.id).not.toBe("solo");
+    expect(converted.character_id).toBe("c1");
+    expect(converted.name).toBe("Alpha chat");
+    expect(converted.metadata).toEqual({
+      author_note: "keep me",
+      group: true,
+      character_ids: ["c1"],
+    });
+    expect(copiedMessages).toHaveLength(2);
+    expect(copiedMessages.map((message) => ({
+      is_user: message.is_user,
+      name: message.name,
+      content: message.content,
+      send_date: message.send_date,
+      extra: message.extra,
+    }))).toEqual([
+      {
+        is_user: false,
+        name: "Assistant",
+        content: "Hello there",
+        send_date: 100,
+        extra: { greeting: true },
+      },
+      {
+        is_user: true,
+        name: "User",
+        content: "Hi back",
+        send_date: 150,
+        extra: { persona_id: "p1" },
+      },
+    ]);
+    expect(original.metadata).toEqual({ author_note: "keep me" });
   });
 });

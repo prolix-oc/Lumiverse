@@ -58,6 +58,10 @@ export const chatsApi = {
     return post<Chat>('/chats/group', input)
   },
 
+  convertToGroup(id: string) {
+    return post<Chat>(`/chats/${id}/convert-to-group`, {})
+  },
+
   muteCharacter(chatId: string, characterId: string) {
     return post<Chat>(`/chats/${chatId}/mute/${characterId}`, {})
   },

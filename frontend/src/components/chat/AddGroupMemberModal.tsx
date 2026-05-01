@@ -22,6 +22,18 @@ export default function AddGroupMemberModal() {
   const setGroupCharacterIds = useStore((s) => s.setGroupCharacterIds)
 
   const chatId = modalProps.chatId as string
+  const seededCharacterIds = useMemo(
+    () => Array.isArray(modalProps.existingCharacterIds)
+      ? modalProps.existingCharacterIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      : [],
+    [modalProps.existingCharacterIds]
+  )
+  const memberIds = useMemo(
+    () => (seededCharacterIds.length > 0
+      ? Array.from(new Set([...seededCharacterIds, ...groupCharacterIds]))
+      : groupCharacterIds),
+    [seededCharacterIds, groupCharacterIds]
+  )
   const [search, setSearch] = useState('')
   const [addingId, setAddingId] = useState<string | null>(null)
   const [page, setPage] = useState(1)
@@ -56,13 +68,13 @@ export default function AddGroupMemberModal() {
 
   // Filter out current group members, then apply search
   const available = useMemo(() => {
-    const nonMembers = allSummaries.filter((c) => !groupCharacterIds.includes(c.id))
+    const nonMembers = allSummaries.filter((c) => !memberIds.includes(c.id))
     if (!search.trim()) return nonMembers
     const q = search.toLowerCase()
     return nonMembers.filter(
       (c) => c.name.toLowerCase().includes(q) || c.tags?.some((t) => t.toLowerCase().includes(q))
     )
-  }, [allSummaries, groupCharacterIds, search])
+  }, [allSummaries, memberIds, search])
 
   useEffect(() => { setPage(1) }, [search])
 
@@ -80,7 +92,7 @@ export default function AddGroupMemberModal() {
       setAddingId(charId)
       try {
         await chatsApi.addMember(chatId, charId)
-        setGroupCharacterIds([...groupCharacterIds, charId])
+        setGroupCharacterIds([...memberIds, charId])
         toast.success(`${char?.name || 'Character'} added to group`)
       } catch (err: any) {
         console.error('[AddGroupMember] Failed:', err)
@@ -89,7 +101,7 @@ export default function AddGroupMemberModal() {
         setAddingId(null)
       }
     },
-    [chatId, allSummaries, groupCharacterIds, setGroupCharacterIds, addingId]
+    [chatId, allSummaries, memberIds, setGroupCharacterIds, addingId]
   )
 
   useEffect(() => {
@@ -113,7 +125,7 @@ export default function AddGroupMemberModal() {
     [closeModal]
   )
 
-  const nonMemberCount = allSummaries.filter((c) => !groupCharacterIds.includes(c.id)).length
+  const nonMemberCount = allSummaries.filter((c) => !memberIds.includes(c.id)).length
 
   return createPortal(
     <AnimatePresence>
