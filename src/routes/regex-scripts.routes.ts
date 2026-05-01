@@ -32,11 +32,29 @@ app.get("/active", (c) => {
   return c.json(svc.getActiveScripts(userId, { characterId: characterId || undefined, chatId: chatId || undefined, target }));
 });
 
+// POST /preset-activation — activate preset-bound regex state for a preset
+app.post("/preset-activation", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  return c.json(svc.activatePresetBoundRegexScripts(userId, body?.preset_id ?? null));
+});
+
+// POST /preset-switch — snapshot outgoing preset state and activate the next preset
+app.post("/preset-switch", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  return c.json(svc.switchPresetBoundRegexScripts(userId, {
+    previousPresetId: body?.previous_preset_id ?? null,
+    presetId: body?.preset_id ?? null,
+  }));
+});
+
 // POST / — create
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const result = svc.createRegexScript(userId, body);
+  const { active_preset_id, ...input } = body ?? {};
+  const result = svc.createRegexScript(userId, input, { activePresetId: active_preset_id ?? null });
   if (typeof result === "string") return c.json({ error: result }, 400);
   return c.json(result, 201);
 });
@@ -60,7 +78,7 @@ app.post("/export", async (c) => {
 app.post("/import", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  return c.json(svc.importRegexScripts(userId, body), 201);
+  return c.json(svc.importRegexScripts(userId, body, { activePresetId: body?.active_preset_id ?? null }), 201);
 });
 
 // PUT /reorder — bulk reorder
@@ -94,7 +112,8 @@ app.get("/:id", (c) => {
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const result = svc.updateRegexScript(userId, c.req.param("id"), body);
+  const { active_preset_id, ...input } = body ?? {};
+  const result = svc.updateRegexScript(userId, c.req.param("id"), input, { activePresetId: active_preset_id ?? null });
   if (result === null) return c.json({ error: "Not found" }, 404);
   if (typeof result === "string") return c.json({ error: result }, 400);
   return c.json(result);
@@ -118,8 +137,8 @@ app.post("/:id/duplicate", (c) => {
 // PUT /:id/toggle — quick enable/disable
 app.put("/:id/toggle", async (c) => {
   const userId = c.get("userId");
-  const { disabled } = await c.req.json();
-  const script = svc.toggleRegexScript(userId, c.req.param("id"), !!disabled);
+  const { disabled, active_preset_id } = await c.req.json();
+  const script = svc.toggleRegexScript(userId, c.req.param("id"), !!disabled, { activePresetId: active_preset_id ?? null });
   if (!script) return c.json({ error: "Not found" }, 404);
   return c.json(script);
 });

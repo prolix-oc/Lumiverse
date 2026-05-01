@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand'
 import type { RegexSlice } from '@/types/store'
 import { regexApi } from '@/api/regex'
 import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from '@/types/regex'
+import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 
 export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   regexScripts: [],
@@ -16,13 +17,21 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   setRegexScripts: (scripts: RegexScript[]) => set({ regexScripts: scripts }),
 
   addRegexScript: async (input: CreateRegexScriptInput) => {
-    const script = await regexApi.create(input)
+    const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const script = await regexApi.create({
+      ...input,
+      active_preset_id: activePresetId,
+    })
     set((s) => ({ regexScripts: [...s.regexScripts, script] }))
     return script
   },
 
   updateRegexScript: async (id: string, updates: UpdateRegexScriptInput) => {
-    const updated = await regexApi.update(id, updates)
+    const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const updated = await regexApi.update(id, {
+      ...updates,
+      active_preset_id: activePresetId,
+    })
     set((s) => ({
       regexScripts: s.regexScripts.map((r) => (r.id === id ? updated : r)),
     }))
@@ -56,7 +65,8 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   },
 
   toggleRegexScript: async (id: string, disabled: boolean) => {
-    const updated = await regexApi.toggle(id, disabled)
+    const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const updated = await enqueuePresetRegexOperation(() => regexApi.toggle(id, disabled, activePresetId))
     set((s) => ({
       regexScripts: s.regexScripts.map((r) => (r.id === id ? updated : r)),
     }))

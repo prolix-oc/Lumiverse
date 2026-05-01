@@ -162,6 +162,9 @@ export interface WorldBookSearchCandidate {
 // ---------------------------------------------------------------------------
 
 export interface ChatMemorySettings {
+  /** Automatically warm chat chunks when a chat is opened */
+  autoWarmup: boolean;
+
   // --- Chunking ---
   chunkTargetTokens: number;      // Default 800. Range: 200–2000
   chunkMaxTokens: number;         // Default 1600. Range: chunkTargetTokens–4000
@@ -200,6 +203,7 @@ export interface PerChatMemoryOverrides {
 }
 
 export const DEFAULT_CHAT_MEMORY_SETTINGS: ChatMemorySettings = {
+  autoWarmup: false,
   chunkTargetTokens: 800,
   chunkMaxTokens: 1600,
   chunkOverlapTokens: 120,
@@ -226,6 +230,7 @@ const CHAT_MEMORY_SETTINGS_KEY = "chatMemorySettings";
 export function normalizeChatMemorySettings(input: any): ChatMemorySettings {
   const d = DEFAULT_CHAT_MEMORY_SETTINGS;
   return {
+    autoWarmup: input?.autoWarmup !== undefined ? !!input.autoWarmup : d.autoWarmup,
     chunkTargetTokens: clampInt(input?.chunkTargetTokens, 200, 2000, d.chunkTargetTokens),
     chunkMaxTokens: clampInt(input?.chunkMaxTokens, 400, 4000, d.chunkMaxTokens),
     chunkOverlapTokens: clampInt(input?.chunkOverlapTokens, 0, 500, d.chunkOverlapTokens),

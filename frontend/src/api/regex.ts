@@ -17,11 +17,22 @@ export const regexApi = {
     return get<RegexScript>(`/regex-scripts/${id}`)
   },
 
-  create(input: CreateRegexScriptInput) {
+  create(input: CreateRegexScriptInput & { active_preset_id?: string | null }) {
     return post<RegexScript>('/regex-scripts', input)
   },
 
-  update(id: string, input: UpdateRegexScriptInput) {
+  activatePresetBound(presetId: string | null) {
+    return post<{ changedIds: string[]; restoredIds: string[] }>('/regex-scripts/preset-activation', { preset_id: presetId })
+  },
+
+  switchPresetBound(previousPresetId: string | null, presetId: string | null) {
+    return post<{ changedIds: string[]; restoredIds: string[] }>('/regex-scripts/preset-switch', {
+      previous_preset_id: previousPresetId,
+      preset_id: presetId,
+    })
+  },
+
+  update(id: string, input: UpdateRegexScriptInput & { active_preset_id?: string | null }) {
     return put<RegexScript>(`/regex-scripts/${id}`, input)
   },
 
@@ -37,8 +48,8 @@ export const regexApi = {
     return post<RegexScript>(`/regex-scripts/${id}/duplicate`)
   },
 
-  toggle(id: string, disabled: boolean) {
-    return put<RegexScript>(`/regex-scripts/${id}/toggle`, { disabled })
+  toggle(id: string, disabled: boolean, activePresetId?: string | null) {
+    return put<RegexScript>(`/regex-scripts/${id}/toggle`, { disabled, active_preset_id: activePresetId ?? null })
   },
 
   reorder(ids: string[]) {
@@ -53,7 +64,7 @@ export const regexApi = {
     return post<RegexScriptExport>('/regex-scripts/export', { ids })
   },
 
-  importScripts(payload: any) {
+  importScripts(payload: any & { active_preset_id?: string | null }) {
     return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', payload)
   },
 

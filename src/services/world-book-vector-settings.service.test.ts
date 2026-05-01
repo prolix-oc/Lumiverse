@@ -8,8 +8,6 @@ describe("normalizeWorldBookVectorSettings", () => {
   it("applies preset values when preset mode is selected", () => {
     const settings = normalizeWorldBookVectorSettings({
       presetMode: "lean",
-      chunkTargetTokens: 999,
-      retrievalTopK: 20,
     });
 
     expect(settings.presetMode).toBe("lean");
@@ -51,15 +49,21 @@ describe("normalizeWorldBookVectorSettings", () => {
     expect(settings.chunkTargetTokens).toBe(DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.chunkTargetTokens);
   });
 
-  it("uses the provided retrieval fallback in preset mode", () => {
+  it("preserves saved overrides in preset mode", () => {
     const settings = normalizeWorldBookVectorSettings({
       presetMode: "balanced",
-    }, {
-      retrievalTopK: 5,
+      retrievalTopK: 9,
+      chunkTargetTokens: 512,
+      chunkMaxTokens: 900,
+      chunkOverlapTokens: 96,
+      maxChunksPerEntry: 10,
     });
 
     expect(settings.presetMode).toBe("balanced");
-    expect(settings.retrievalTopK).toBe(5);
-    expect(settings.chunkTargetTokens).toBe(420);
+    expect(settings.retrievalTopK).toBe(9);
+    expect(settings.chunkTargetTokens).toBe(512);
+    expect(settings.chunkMaxTokens).toBe(900);
+    expect(settings.chunkOverlapTokens).toBe(96);
+    expect(settings.maxChunksPerEntry).toBe(10);
   });
 });

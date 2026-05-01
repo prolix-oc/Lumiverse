@@ -261,6 +261,21 @@ export function queueChunkVectorization(userId: string, chatId: string, chunkId:
   });
 }
 
+export function queuePendingChatChunkVectorization(userId: string, chatId: string, priority = 4): number {
+  const rows = getDb().query(
+    `SELECT id
+     FROM chat_chunks
+     WHERE chat_id = ? AND vectorized_at IS NULL
+     ORDER BY updated_at ASC, created_at ASC`,
+  ).all(chatId) as Array<{ id: string }>;
+
+  for (const row of rows) {
+    queueChunkVectorization(userId, chatId, row.id, priority);
+  }
+
+  return rows.length;
+}
+
 export function queueWorldBookEntryVectorization(userId: string, entryId: string, priority = 4) {
   queue.add({
     type: "world_book_entry",

@@ -5,6 +5,7 @@ import { connectionsApi } from '@/api/connections'
 import { ApiError, BASE_URL } from '@/api/client'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
+import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -495,7 +496,12 @@ export function useLoomBuilder() {
         : null
       if (Array.isArray(embeddedRegex) && embeddedRegex.length > 0) {
         try {
-          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: loom.name, preset_id: created.id })
+          const regexResult = await enqueuePresetRegexOperation(() => regexApi.importScripts({
+            scripts: embeddedRegex,
+            folder: loom.name,
+            preset_id: created.id,
+            active_preset_id: useStore.getState().activeLoomPresetId,
+          }))
           if (regexResult.imported > 0) {
             const { loadRegexScripts } = useStore.getState() as any
             if (loadRegexScripts) await loadRegexScripts()

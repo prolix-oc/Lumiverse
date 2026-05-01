@@ -18,6 +18,7 @@ import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { useAutoSummarization } from '@/hooks/useAutoSummarization'
+import { usePresetRegexActivation } from '@/hooks/usePresetRegexActivation'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import { installNotificationAudioPrimer } from '@/lib/notificationAudio'
 import styles from './App.module.css'
@@ -31,6 +32,7 @@ export default function App() {
   useBadging()
   useTTSAutoPlay()
   useAutoSummarization()
+  usePresetRegexActivation()
 
   useEffect(() => installNotificationAudioPrimer(), [])
 

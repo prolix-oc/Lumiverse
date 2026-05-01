@@ -4,6 +4,7 @@ import { get, put, post, del, patch } from "./client";
 
 export interface CortexConfig {
   enabled: boolean;
+  autoWarmup: boolean;
   presetMode: "simple" | "standard" | "advanced" | null;
   entityTracking: boolean;
   entityExtractionMode: "heuristic" | "sidecar" | "off";
@@ -191,6 +192,20 @@ export interface CortexProbeStatus {
   durationMs?: number | null;
   timedOut?: boolean;
   error?: string | null;
+}
+
+export interface CortexWarmupResponse {
+  status: "started" | "complete" | "skipped";
+  reason: string;
+  chatId: string;
+  chatMemory: {
+    status: "started" | "complete" | "skipped";
+    reason: string;
+  };
+  cortex: {
+    status: "started" | "complete" | "skipped";
+    reason: string;
+  };
 }
 
 export interface CortexHealthReport {
@@ -395,8 +410,8 @@ export const memoryCortexApi = {
     get<{ status: string; current?: number; total?: number; percent?: number; result?: any; error?: string }>(`${BASE}/chats/${chatId}/rebuild-status`),
   getIngestionStatus: (chatId: string) =>
     get<CortexIngestionStatus>(`${BASE}/chats/${chatId}/ingestion-status`),
-  warm: (chatId: string) =>
-    post<{ status: string; reason?: string; chatId: string }>(`${BASE}/chats/${chatId}/warm`),
+  warm: (chatId: string, options?: { force?: boolean }) =>
+    post<CortexWarmupResponse>(`${BASE}/chats/${chatId}/warm`, options?.force ? { force: true } : {}),
 
   // Vaults
   createVault: (chatId: string, name: string, description?: string) =>

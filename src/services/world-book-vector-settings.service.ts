@@ -13,30 +13,32 @@ export interface WorldBookVectorSettings {
 
 export const WORLD_BOOK_VECTOR_SETTINGS_KEY = "worldBookVectorSettings";
 
-export const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, "custom">, Omit<WorldBookVectorSettings, "presetMode" | "retrievalTopK">> = {
+export const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, "custom">, Omit<WorldBookVectorSettings, "presetMode">> = {
   lean: {
     chunkTargetTokens: 220,
     chunkMaxTokens: 360,
     chunkOverlapTokens: 40,
+    retrievalTopK: 4,
     maxChunksPerEntry: 4,
   },
   balanced: {
     chunkTargetTokens: 420,
     chunkMaxTokens: 700,
     chunkOverlapTokens: 80,
+    retrievalTopK: 6,
     maxChunksPerEntry: 8,
   },
   deep: {
     chunkTargetTokens: 720,
     chunkMaxTokens: 1200,
     chunkOverlapTokens: 120,
+    retrievalTopK: 8,
     maxChunksPerEntry: 12,
   },
 };
 
 export const DEFAULT_WORLD_BOOK_VECTOR_SETTINGS: WorldBookVectorSettings = {
   presetMode: "balanced",
-  retrievalTopK: 4,
   ...WORLD_BOOK_VECTOR_PRESETS.balanced,
 };
 
@@ -63,24 +65,19 @@ export function normalizeWorldBookVectorSettings(
       }
     : WORLD_BOOK_VECTOR_PRESETS[presetMode];
 
-  const chunkTargetTokens = presetValues.chunkTargetTokens;
+  const chunkTargetTokens = clampInt(input?.chunkTargetTokens, 120, 2000, presetValues.chunkTargetTokens);
   const chunkMaxTokens = Math.max(
     chunkTargetTokens,
-    clampInt(presetValues.chunkMaxTokens, chunkTargetTokens, 4000, Math.max(base.chunkMaxTokens, chunkTargetTokens)),
+    clampInt(input?.chunkMaxTokens, chunkTargetTokens, 4000, Math.max(presetValues.chunkMaxTokens, chunkTargetTokens)),
   );
 
   return {
     presetMode,
     chunkTargetTokens,
     chunkMaxTokens,
-    chunkOverlapTokens: clampInt(presetValues.chunkOverlapTokens, 0, 500, base.chunkOverlapTokens),
-    retrievalTopK: clampInt(
-      presetMode === "custom" ? input?.retrievalTopK : undefined,
-      1,
-      20,
-      base.retrievalTopK,
-    ),
-    maxChunksPerEntry: clampInt(presetValues.maxChunksPerEntry, 1, 24, base.maxChunksPerEntry),
+    chunkOverlapTokens: clampInt(input?.chunkOverlapTokens, 0, 500, presetValues.chunkOverlapTokens),
+    retrievalTopK: clampInt(input?.retrievalTopK, 1, 20, presetValues.retrievalTopK),
+    maxChunksPerEntry: clampInt(input?.maxChunksPerEntry, 1, 24, presetValues.maxChunksPerEntry),
   };
 }
 

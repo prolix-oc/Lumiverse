@@ -315,6 +315,14 @@ export default function MemoryCortexSettings() {
             hint   ='Adds entity tracking, importance scoring, and emotional recall on top of existing long-term memory. Your existing memory system continues working independently.'
           />
         </div>
+        <div className={styles.toggleRow}>
+          <Toggle.Checkbox
+            checked={config.autoWarmup}
+            onChange={(v) => updateConfig({ autoWarmup: v })}
+            label="Warm Memory Cortex when opening a chat"
+            hint="Opt-in automatic warmup. Manual rebuilds from the chat input bar still work even when this is off."
+          />
+        </div>
       </div>
 
       {!config.enabled ? (

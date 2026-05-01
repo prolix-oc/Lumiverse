@@ -1792,7 +1792,9 @@ function appendToChunk(chunkId: string, message: Message, reasoningStrip?: Sanit
         message_count = ?,
         updated_at = ?,
         vectorized_at = NULL,
-        vector_model = NULL
+        vector_model = NULL,
+        cortex_warmup_signature = NULL,
+        cortex_warmup_completed_at = NULL
       WHERE id = ?`
     )
     .run(message.id, JSON.stringify(messageIds), newContent, newTokenCount, messageIds.length, now, chunkId);

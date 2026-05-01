@@ -60,6 +60,9 @@ export interface MemoryCortexConfig {
   /** Master switch — disabling preserves all data but skips cortex retrieval */
   enabled: boolean;
 
+  /** Automatically warm cortex state when a chat is opened */
+  autoWarmup: boolean;
+
   /** Active preset mode (controls which settings are visible in UI) */
   presetMode: CortexPresetMode;
 
@@ -174,6 +177,7 @@ export const DEFAULT_CONSOLIDATION_CONFIG: ConsolidationConfig = {
 
 export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
   enabled: false,
+  autoWarmup: false,
   presetMode: "simple",
   entityTracking: true,
   entityExtractionMode: "heuristic",
@@ -360,6 +364,7 @@ export function normalizeCortexConfig(
 
   return {
     enabled: input.enabled ?? defaults.enabled,
+    autoWarmup: input.autoWarmup ?? defaults.autoWarmup,
     presetMode: input.presetMode ?? defaults.presetMode,
     entityTracking: input.entityTracking ?? defaults.entityTracking,
     entityExtractionMode: input.entityExtractionMode ?? defaults.entityExtractionMode,

@@ -911,6 +911,7 @@ export interface EmbeddingConfig {
 }
 
 export interface ChatMemorySettings {
+  autoWarmup: boolean
   chunkTargetTokens: number
   chunkMaxTokens: number
   chunkOverlapTokens: number

@@ -17,6 +17,7 @@ import * as chatsSvc from "../services/chats.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as memoryCortex from "../services/memory-cortex";
+import * as vectorizationQueue from "../services/vectorization-queue.service";
 import { ChatLinkError } from "../services/memory-cortex/vault";
 import { getCharacter } from "../services/characters.service";
 import { getChat } from "../services/chats.service";
@@ -117,6 +118,19 @@ interface StoredCortexFreshnessSnapshot extends CortexFreshnessSnapshot {
   completedAt: number;
 }
 
+interface WarmupComponentResult {
+  status: "started" | "complete" | "skipped";
+  reason: string;
+}
+
+interface WarmupResponse {
+  status: "started" | "complete" | "skipped";
+  reason: string;
+  chatId: string;
+  chatMemory: WarmupComponentResult;
+  cortex: WarmupComponentResult;
+}
+
 function getChunkFreshnessSnapshot(chatId: string): Pick<CortexFreshnessSnapshot, "sourceChunkCount" | "sourceChunkUpdatedAt"> {
   const row = getDb()
     .query("SELECT COUNT(*) as chunkCount, MAX(updated_at) as maxUpdatedAt FROM chat_chunks WHERE chat_id = ?")
@@ -126,31 +140,6 @@ function getChunkFreshnessSnapshot(chatId: string): Pick<CortexFreshnessSnapshot
     sourceChunkCount: row?.chunkCount ?? 0,
     sourceChunkUpdatedAt: row?.maxUpdatedAt ?? 0,
   };
-}
-
-function buildCortexRebuildSignature(config: memoryCortex.MemoryCortexConfig): string {
-  return JSON.stringify({
-    enabled: config.enabled,
-    entityTracking: config.entityTracking,
-    entityExtractionMode: config.entityExtractionMode,
-    thoughtMarkers: config.thoughtMarkers,
-    salienceScoring: config.salienceScoring,
-    salienceScoringMode: config.salienceScoringMode,
-    consolidation: config.consolidation,
-    sidecar: {
-      connectionProfileId: config.sidecar?.connectionProfileId ?? null,
-      model: config.sidecar?.model ?? null,
-      temperature: config.sidecar?.temperature ?? 0.1,
-      topP: config.sidecar?.topP ?? 1.0,
-      maxTokens: config.sidecar?.maxTokens ?? 4096,
-      chunkBatchSize: config.sidecar?.chunkBatchSize ?? 5,
-      rebuildConcurrency: config.sidecar?.rebuildConcurrency ?? 3,
-    },
-    sidecarTimeoutMs: config.sidecarTimeoutMs,
-    entityPruning: config.entityPruning,
-    entityWhitelist: config.entityWhitelist,
-    entityExtractionFilters: config.entityExtractionFilters,
-  });
 }
 
 function parseStoredCortexFreshness(chat: ReturnType<typeof getChat>): StoredCortexFreshnessSnapshot | null {
@@ -169,6 +158,11 @@ function parseStoredCortexFreshness(chat: ReturnType<typeof getChat>): StoredCor
   };
 }
 
+function getStoredChatMemoryHash(chat: ReturnType<typeof getChat>): string | null {
+  const hash = chat?.metadata?.ltcm_config_hash;
+  return typeof hash === "string" && hash.trim().length > 0 ? hash : null;
+}
+
 async function buildCortexFreshnessSnapshot(
   userId: string,
   chatId: string,
@@ -176,7 +170,7 @@ async function buildCortexFreshnessSnapshot(
 ): Promise<CortexFreshnessSnapshot> {
   return {
     ltcmConfigHash: await chatsSvc.getCurrentChatMemoryHash(userId),
-    rebuildSignature: buildCortexRebuildSignature(cortexConfig),
+    rebuildSignature: memoryCortex.getCortexWarmupSignature(cortexConfig),
     ...getChunkFreshnessSnapshot(chatId),
   };
 }
@@ -246,6 +240,7 @@ function startTrackedCortexRebuild(options: {
       }, userId);
     },
     descriptionAliases,
+    { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature },
   ).then((result) => {
     try {
       stampCortexFreshnessSnapshot(userId, chatId, snapshot);
@@ -268,6 +263,45 @@ function startTrackedCortexRebuild(options: {
       error: err?.message || (source === "warmup" ? "Warmup failed" : "Rebuild failed"),
     }, userId);
   });
+}
+
+async function warmLongTermChatMemory(options: {
+  userId: string;
+  chatId: string;
+  force: boolean;
+  embeddings: Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>;
+}): Promise<WarmupComponentResult> {
+  const { userId, chatId, force, embeddings } = options;
+
+  if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
+    return { status: "skipped", reason: "chat_vectorization_disabled" };
+  }
+
+  const chatMemorySettings = embeddingsSvc.loadChatMemorySettings(userId) ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+  if (!force && !chatMemorySettings.autoWarmup) {
+    return { status: "skipped", reason: "chat_memory_auto_warmup_disabled" };
+  }
+
+  if (chatsSvc.isChatChunkRebuildInProgress(chatId)) {
+    return { status: "skipped", reason: "chunk_rebuild_in_progress" };
+  }
+
+  if (force) {
+    await chatsSvc.rebuildChatChunks(userId, chatId);
+    return { status: "complete", reason: "chat_memory_rebuilt" };
+  }
+
+  const rebuilt = await chatsSvc.ensureChatMemoryFresh(userId, chatId);
+  if (rebuilt) {
+    return { status: "complete", reason: "chat_memory_warmed" };
+  }
+
+  const resumedChunks = vectorizationQueue.queuePendingChatChunkVectorization(userId, chatId, 4);
+  if (resumedChunks > 0) {
+    return { status: "complete", reason: "chat_memory_warmup_resumed" };
+  }
+
+  return { status: "skipped", reason: "chat_memory_already_fresh" };
 }
 
 function resolveCortexSidecarAdapter(
@@ -1180,67 +1214,103 @@ app.post("/chats/:chatId/rebuild", async (c) => {
 app.post("/chats/:chatId/warm", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
+  const body = await c.req.json().catch(() => ({})) as { force?: boolean };
+  const force = body.force === true;
   const chat = getChat(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
-  const config = memoryCortex.getCortexConfig(userId);
-  if (!config.enabled) {
-    return c.json({ status: "skipped", reason: "cortex_disabled", chatId });
-  }
-
   const embeddings = await embeddingsSvc.getEmbeddingConfig(userId);
-  if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
-    return c.json({ status: "skipped", reason: "chat_vectorization_disabled", chatId });
-  }
+  const config = memoryCortex.getCortexConfig(userId);
 
-  const sidecar = resolveCortexSidecarAdapter(userId, config);
-  if (sidecar.unavailableReason) {
-    return c.json({ status: "skipped", reason: sidecar.unavailableReason, chatId });
-  }
-
-  await chatsSvc.ensureChatMemoryFresh(userId, chatId);
+  const chatMemory = await warmLongTermChatMemory({
+    userId,
+    chatId,
+    force,
+    embeddings,
+  });
 
   const freshChat = getChat(userId, chatId);
   if (!freshChat) return c.json({ error: "Chat not found" }, 404);
 
-  const stats = memoryCortex.getCortexUsageStats(chatId);
-  const rebuild = memoryCortex.getRebuildStatus(chatId);
-  const ingestion = memoryCortex.getIngestionStatus(chatId);
+  const currentChatMemoryHash = await chatsSvc.getCurrentChatMemoryHash(userId);
+  const storedChatMemoryHash = getStoredChatMemoryHash(freshChat);
+  const chatMemoryFresh = !!currentChatMemoryHash && storedChatMemoryHash === currentChatMemoryHash;
 
-  if (rebuild?.status === "processing") {
-    return c.json({ status: "skipped", reason: "rebuild_in_progress", chatId });
-  }
-  if (chatsSvc.isChatChunkRebuildInProgress(chatId)) {
-    return c.json({ status: "skipped", reason: "chunk_rebuild_in_progress", chatId });
-  }
-  if (ingestion?.status === "processing") {
-    return c.json({ status: "skipped", reason: "ingestion_in_progress", chatId });
-  }
-  if (stats.chunkCount === 0) {
-    return c.json({ status: "skipped", reason: "no_chunks", chatId });
-  }
-  if (stats.chunkCount <= 2 && Math.floor(Date.now() / 1000) - freshChat.updated_at < 20) {
-    return c.json({ status: "skipped", reason: "recent_chat", chatId });
+  let cortex: WarmupComponentResult;
+  if (!config.enabled) {
+    cortex = { status: "skipped", reason: "cortex_disabled" };
+  } else if (!force && !config.autoWarmup) {
+    cortex = { status: "skipped", reason: "cortex_auto_warmup_disabled" };
+  } else if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
+    cortex = { status: "skipped", reason: "chat_vectorization_disabled" };
+  } else if (chatsSvc.isChatChunkRebuildInProgress(chatId)) {
+    cortex = { status: "skipped", reason: "chunk_rebuild_in_progress" };
+  } else if (!force && !chatMemoryFresh) {
+    cortex = { status: "skipped", reason: "chat_memory_stale" };
+  } else {
+    const sidecar = resolveCortexSidecarAdapter(userId, config);
+    if (sidecar.unavailableReason) {
+      cortex = { status: "skipped", reason: sidecar.unavailableReason };
+    } else {
+      const stats = memoryCortex.getCortexUsageStats(chatId);
+      const rebuild = memoryCortex.getRebuildStatus(chatId);
+      const ingestion = memoryCortex.getIngestionStatus(chatId);
+
+      if (rebuild?.status === "processing") {
+        cortex = { status: "skipped", reason: "rebuild_in_progress" };
+      } else if (ingestion?.status === "processing") {
+        cortex = { status: "skipped", reason: "ingestion_in_progress" };
+      } else if (stats.chunkCount === 0) {
+        cortex = { status: "skipped", reason: "no_chunks" };
+      } else if (!force && stats.chunkCount <= 2 && Math.floor(Date.now() / 1000) - freshChat.updated_at < 20) {
+        cortex = { status: "skipped", reason: "recent_chat" };
+      } else {
+        const snapshot = await buildCortexFreshnessSnapshot(userId, chatId, config);
+        if (!force && isCortexFresh(freshChat, snapshot)) {
+          cortex = { status: "skipped", reason: "already_ready" };
+        } else {
+          const coverage = memoryCortex.getCortexWarmupCoverage(chatId, snapshot.rebuildSignature);
+          if (!force && coverage.pendingChunks === 0 && !coverage.requiresFullRebuild) {
+            stampCortexFreshnessSnapshot(userId, chatId, snapshot);
+            cortex = { status: "skipped", reason: "already_ready" };
+          } else {
+            const { characterNames, descriptionAliases } = await resolveCortexParticipants(userId, freshChat);
+            startTrackedCortexRebuild({
+              userId,
+              chatId,
+              characterNames,
+              descriptionAliases,
+              generateRawFn: sidecar.generateRawFn,
+              sidecarConnectionId: sidecar.sidecarConnectionId,
+              snapshot,
+              ...(force ? {} : { source: "warmup" as const }),
+            });
+            cortex = { status: "started", reason: force ? "rebuild_started" : "warmup_started" };
+          }
+        }
+      }
+    }
   }
 
-  const snapshot = await buildCortexFreshnessSnapshot(userId, chatId, config);
-  if (isCortexFresh(freshChat, snapshot)) {
-    return c.json({ status: "skipped", reason: "already_ready", chatId });
-  }
-
-  const { characterNames, descriptionAliases } = await resolveCortexParticipants(userId, freshChat);
-  startTrackedCortexRebuild({
-    userId,
+  const response: WarmupResponse = {
+    status: cortex.status === "started"
+      ? "started"
+      : chatMemory.status === "complete"
+        ? "complete"
+        : "skipped",
+    reason: cortex.status === "started"
+      ? cortex.reason
+      : chatMemory.status === "complete"
+        ? chatMemory.reason
+        : cortex.reason !== "cortex_disabled" || chatMemory.reason === "chat_vectorization_disabled"
+          ? cortex.reason
+          : chatMemory.reason,
     chatId,
-    characterNames,
-    descriptionAliases,
-    generateRawFn: sidecar.generateRawFn,
-    sidecarConnectionId: sidecar.sidecarConnectionId,
-    snapshot,
-    source: "warmup",
-  });
+    chatMemory,
+    cortex,
+  };
 
-  return c.json({ status: "started", reason: "warmup_started", chatId });
+  return c.json(response);
 });
 
 // ─── Heuristics Engine Migration ──────────────────────────────

@@ -6,7 +6,7 @@ import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
-import { embeddingsApi } from '@/api/embeddings'
+import { memoryCortexApi } from '@/api/memory-cortex'
 import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
@@ -1658,8 +1658,16 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   setOpenPopover(null)
                   try {
                     toast.info('Recompiling chat memories...')
-                    const res = await embeddingsApi.recompileChatMemory(chatId)
-                    toast.success(`Recompiled: ${res.totalChunks} chunk${res.totalChunks !== 1 ? 's' : ''}, ${res.pendingChunks} pending vectorization`)
+                    const res = await memoryCortexApi.warm(chatId, { force: true })
+                    if (res.cortex.status === 'started') {
+                      toast.success('Memory rebuild started. Cortex progress will continue in the background.')
+                    } else if (res.chatMemory.status === 'complete') {
+                      toast.success('Long-term chat memory rebuilt.')
+                    } else if (res.reason === 'chat_vectorization_disabled') {
+                      toast.error('Long-term chat memory vectorization is not enabled')
+                    } else {
+                      toast.info('No memory rebuild was needed for this chat.')
+                    }
                   } catch (err: any) {
                     toast.error(err?.message || 'Failed to recompile memories')
                   }

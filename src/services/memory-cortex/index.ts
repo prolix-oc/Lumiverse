@@ -108,6 +108,18 @@ export { queryVaultCortex } from "./retrieval";
 export type { Vault, VaultEntity, VaultRelation, VaultChunk, ChatLink } from "./vault";
 export type { LinkedCortexResult, VaultCortexData, InterlinkCortexData } from "./types";
 
+export interface CortexWarmupCoverage {
+  totalChunks: number;
+  completedChunks: number;
+  pendingChunks: number;
+  requiresFullRebuild: boolean;
+}
+
+export interface CortexRebuildOptions {
+  resumable?: boolean;
+  warmupSignature?: string;
+}
+
 export interface CortexIngestionTimings {
   mode: "heuristic" | "sidecar" | "mixed";
   fontMs: number;
@@ -195,6 +207,70 @@ function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined)
 
 async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+export function getCortexWarmupSignature(config: MemoryCortexConfig): string {
+  return JSON.stringify({
+    enabled: config.enabled,
+    entityTracking: config.entityTracking,
+    entityExtractionMode: config.entityExtractionMode,
+    thoughtMarkers: config.thoughtMarkers,
+    salienceScoring: config.salienceScoring,
+    salienceScoringMode: config.salienceScoringMode,
+    consolidation: config.consolidation,
+    sidecar: {
+      connectionProfileId: config.sidecar?.connectionProfileId ?? null,
+      model: config.sidecar?.model ?? null,
+      temperature: config.sidecar?.temperature ?? 0.1,
+      topP: config.sidecar?.topP ?? 1.0,
+      maxTokens: config.sidecar?.maxTokens ?? 4096,
+      chunkBatchSize: config.sidecar?.chunkBatchSize ?? 5,
+      rebuildConcurrency: config.sidecar?.rebuildConcurrency ?? 3,
+    },
+    sidecarTimeoutMs: config.sidecarTimeoutMs,
+    entityPruning: config.entityPruning,
+    entityWhitelist: config.entityWhitelist,
+    entityExtractionFilters: config.entityExtractionFilters,
+  });
+}
+
+function clearDerivedCortexData(chatId: string): void {
+  const db = getDb();
+  invalidateCortexCache(chatId);
+  entityGraph.deleteEntitiesForChat(chatId);
+  entityGraph.deleteMentionsForChat(chatId);
+  entityGraph.deleteRelationsForChat(chatId);
+  consolidation.deleteConsolidationsForChat(chatId);
+  deleteColorMapForChat(chatId);
+  db.query("DELETE FROM memory_salience WHERE chat_id = ?").run(chatId);
+  db.query(
+    "UPDATE chat_chunks SET salience_score = NULL, emotional_tags = NULL, entity_ids = NULL, consolidation_id = NULL, cortex_warmup_signature = NULL, cortex_warmup_completed_at = NULL WHERE chat_id = ?",
+  ).run(chatId);
+}
+
+export function getCortexWarmupCoverage(chatId: string, warmupSignature: string): CortexWarmupCoverage {
+  const db = getDb();
+  const totalRow = db.query("SELECT COUNT(*) as c FROM chat_chunks WHERE chat_id = ?").get(chatId) as { c?: number } | null;
+  const completedRow = db
+    .query("SELECT COUNT(*) as c FROM chat_chunks WHERE chat_id = ? AND cortex_warmup_signature = ?")
+    .get(chatId, warmupSignature) as { c?: number } | null;
+
+  const totalChunks = totalRow?.c ?? 0;
+  const completedChunks = completedRow?.c ?? 0;
+  const stats = getCortexUsageStats(chatId);
+  const requiresFullRebuild = completedChunks === 0 && (
+    stats.entityCount > 0 ||
+    stats.relationCount > 0 ||
+    stats.salienceRecordCount > 0 ||
+    stats.consolidationCount > 0
+  );
+
+  return {
+    totalChunks,
+    completedChunks: requiresFullRebuild ? 0 : completedChunks,
+    pendingChunks: requiresFullRebuild ? totalChunks : Math.max(0, totalChunks - completedChunks),
+    requiresFullRebuild,
+  };
 }
 
 function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): string {
@@ -695,6 +771,7 @@ export async function processChunk(
   const config = getCortexConfig(data.userId);
   if (!config.enabled) return;
   const sidecarActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
+  const warmupSignature = getCortexWarmupSignature(config);
 
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
@@ -880,219 +957,225 @@ export async function processChunk(
     }
 
     updateIngestionStatus(data.userId, data.chatId, { phase: "persisting", chunkId: data.chunkId });
-
-    if (config.salienceScoring) {
-      const dbStart = performance.now();
-      db.query(
-        `INSERT INTO memory_salience
-          (id, chunk_id, chat_id, score, score_source, emotional_tags, status_changes,
-           narrative_flags, has_dialogue, has_action, has_internal_thought, word_count,
-           scored_at, scored_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(chunk_id) DO UPDATE SET
-           score = excluded.score,
-           score_source = excluded.score_source,
-           emotional_tags = excluded.emotional_tags,
-           status_changes = excluded.status_changes,
-           narrative_flags = excluded.narrative_flags,
-           scored_at = excluded.scored_at`,
-      ).run(
-        crypto.randomUUID(), data.chunkId, data.chatId,
-        salienceResult.score, salienceResult.source,
-        JSON.stringify(salienceResult.emotionalTags),
-        JSON.stringify(salienceResult.statusChanges),
-        JSON.stringify(salienceResult.narrativeFlags),
-        salienceResult.hasDialogue ? 1 : 0,
-        salienceResult.hasAction ? 1 : 0,
-        salienceResult.hasInternalThought ? 1 : 0,
-        salienceResult.wordCount,
-        now, salienceResult.source === "sidecar" ? "sidecar" : null, now,
-      );
-      db.query("UPDATE chat_chunks SET salience_score = ?, emotional_tags = ? WHERE id = ?").run(
-        salienceResult.score,
-        JSON.stringify(salienceResult.emotionalTags),
-        data.chunkId,
-      );
-      timings.dbMs += performance.now() - dbStart;
-    }
-
-    if (config.entityTracking && config.entityExtractionMode !== "off") {
-      const heuristicEntities = heuristicResult?.entities ?? extractEntitiesHeuristic(
-        cleanContent,
-        knownEntities,
-        characterNames,
-        config.entityWhitelist,
-        config.entityPruning.minConfidence,
-        config.entityExtractionFilters,
-      );
-
-      const refinedFallback = heuristicResult ? null : refineHeuristicDetections({
-        content: cleanContent,
-        knownEntities,
-        characterNames,
-        entities: heuristicEntities,
-        relationships: [],
-        aliases: detectNicknameIntroductions(cleanContent, knownEntities, characterNames).map((alias) => ({
-          ...alias,
-          evidence: "nickname introduction",
-        })),
-        descriptionAliases: descriptionAliases
-          ? [...descriptionAliases.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }))
-          : undefined,
-      });
-
-      const refinedEntities = refinedFallback?.entities ?? heuristicEntities;
-
-      const mergedEntities = filterEntitiesByExtractionFilters(
-        mergeExtractedEntities(refinedEntities, sidecarEntities),
-        cleanContent,
-        config.entityExtractionFilters,
-      );
-
-      const heuristicRelationships = heuristicResult?.relationships ?? refinedFallback?.relationships ?? extractRelationshipsHeuristic(
-        cleanContent,
-        mergedEntities.map((e) => e.name),
-        salienceResult.emotionalTags,
-      );
-
-      const allowedEntityNames = new Set(mergedEntities.map((entity) => entity.name.toLowerCase()));
-      const allRelationships = mergeRelationships(heuristicRelationships, sidecarRelationships).filter(
-        (rel) => allowedEntityNames.has(rel.source.toLowerCase()) && allowedEntityNames.has(rel.target.toLowerCase()),
-      );
-
-      const heuristicAliases = heuristicResult?.aliases ?? refinedFallback?.aliases ?? detectNicknameIntroductions(cleanContent, knownEntities, characterNames);
-      const allDiscoveredAliases = [...sidecarDiscoveredAliases, ...heuristicAliases];
-
-      const graphStart = performance.now();
-      const entityIds = entityGraph.ingestChunkEntities(
-        data.chatId,
-        data.chunkId,
-        data.createdAt,
-        mergedEntities,
-        allRelationships as any[],
-        salienceResult.score,
-        salienceResult.emotionalTags,
-        cleanContent,
-        undefined,
-        allDiscoveredAliases,
-      );
-      timings.graphMs += performance.now() - graphStart;
-
-      const dbStart = performance.now();
-      db.query("UPDATE chat_chunks SET entity_ids = ? WHERE id = ?").run(JSON.stringify(entityIds), data.chunkId);
-      for (const attr of fontResult.attributions) {
-        if (!attr.entityName) continue;
-        const entity = entityGraph.findEntityByName(data.chatId, attr.entityName);
-        if (!entity) continue;
-        recordColorAttribution(data.chatId, attr.hexColor, entity.id, attr.usageType, null);
-      }
-      for (const fc of sidecarFontColors) {
-        const entity = entityGraph.findEntityByName(data.chatId, fc.characterName);
-        if (!entity) continue;
-        recordColorAttribution(data.chatId, fc.hexColor, entity.id, fc.usageType, null);
-      }
-      timings.dbMs += performance.now() - dbStart;
-
-      const postGraphStart = performance.now();
-      for (const ext of mergedEntities) {
-        const entity = entityGraph.findEntityByName(data.chatId, ext.name);
-        if (entity && !entity.description) {
-          const excerpt = extractMentionExcerpt(ext.name, cleanContent);
-          if (excerpt) entityGraph.populateEntityDescription(entity.id, excerpt);
-        }
+    const persistStartedAt = performance.now();
+    db.transaction(() => {
+      if (config.salienceScoring) {
+        const dbStart = performance.now();
+        db.query(
+          `INSERT INTO memory_salience
+            (id, chunk_id, chat_id, score, score_source, emotional_tags, status_changes,
+             narrative_flags, has_dialogue, has_action, has_internal_thought, word_count,
+             scored_at, scored_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(chunk_id) DO UPDATE SET
+             score = excluded.score,
+             score_source = excluded.score_source,
+             emotional_tags = excluded.emotional_tags,
+             status_changes = excluded.status_changes,
+             narrative_flags = excluded.narrative_flags,
+             scored_at = excluded.scored_at`,
+        ).run(
+          crypto.randomUUID(), data.chunkId, data.chatId,
+          salienceResult.score, salienceResult.source,
+          JSON.stringify(salienceResult.emotionalTags),
+          JSON.stringify(salienceResult.statusChanges),
+          JSON.stringify(salienceResult.narrativeFlags),
+          salienceResult.hasDialogue ? 1 : 0,
+          salienceResult.hasAction ? 1 : 0,
+          salienceResult.hasInternalThought ? 1 : 0,
+          salienceResult.wordCount,
+          now, salienceResult.source === "sidecar" ? "sidecar" : null, now,
+        );
+        db.query("UPDATE chat_chunks SET salience_score = ?, emotional_tags = ? WHERE id = ?").run(
+          salienceResult.score,
+          JSON.stringify(salienceResult.emotionalTags),
+          data.chunkId,
+        );
+        timings.dbMs += performance.now() - dbStart;
       }
 
-      if (config.entityPruning.enabled) {
-        const chunkCount = db.query("SELECT COUNT(*) as c FROM chat_chunks WHERE chat_id = ?").get(data.chatId) as any;
-        if (chunkCount?.c && chunkCount.c % 50 === 0) {
-          entityGraph.pruneStaleEntities(data.chatId, config.entityPruning.staleAfterMessages);
-        }
-      }
+      if (config.entityTracking && config.entityExtractionMode !== "off") {
+        const heuristicEntities = heuristicResult?.entities ?? extractEntitiesHeuristic(
+          cleanContent,
+          knownEntities,
+          characterNames,
+          config.entityWhitelist,
+          config.entityPruning.minConfidence,
+          config.entityExtractionFilters,
+        );
 
-      if (sidecarFacts.length > 0 && sidecarEntities.length > 0) {
-        const subjectEntity = sidecarEntities.find((e) => e.role === "subject") ?? sidecarEntities[0];
-        const entity = entityGraph.findEntityByName(data.chatId, subjectEntity.name);
-        if (entity) entityGraph.addEntityFacts(entity.id, sidecarFacts);
-      }
+        const refinedFallback = heuristicResult ? null : refineHeuristicDetections({
+          content: cleanContent,
+          knownEntities,
+          characterNames,
+          entities: heuristicEntities,
+          relationships: [],
+          aliases: detectNicknameIntroductions(cleanContent, knownEntities, characterNames).map((alias) => ({
+            ...alias,
+            evidence: "nickname introduction",
+          })),
+          descriptionAliases: descriptionAliases
+            ? [...descriptionAliases.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }))
+            : undefined,
+        });
 
-      if (salienceResult.statusChanges.length > 0) {
-        for (const change of salienceResult.statusChanges) {
-          const entity = entityGraph.findEntityByName(data.chatId, change.entity);
+        const refinedEntities = refinedFallback?.entities ?? heuristicEntities;
+
+        const mergedEntities = filterEntitiesByExtractionFilters(
+          mergeExtractedEntities(refinedEntities, sidecarEntities),
+          cleanContent,
+          config.entityExtractionFilters,
+        );
+
+        const heuristicRelationships = heuristicResult?.relationships ?? refinedFallback?.relationships ?? extractRelationshipsHeuristic(
+          cleanContent,
+          mergedEntities.map((e) => e.name),
+          salienceResult.emotionalTags,
+        );
+
+        const allowedEntityNames = new Set(mergedEntities.map((entity) => entity.name.toLowerCase()));
+        const allRelationships = mergeRelationships(heuristicRelationships, sidecarRelationships).filter(
+          (rel) => allowedEntityNames.has(rel.source.toLowerCase()) && allowedEntityNames.has(rel.target.toLowerCase()),
+        );
+
+        const heuristicAliases = heuristicResult?.aliases ?? refinedFallback?.aliases ?? detectNicknameIntroductions(cleanContent, knownEntities, characterNames);
+        const allDiscoveredAliases = [...sidecarDiscoveredAliases, ...heuristicAliases];
+
+        const graphStart = performance.now();
+        const entityIds = entityGraph.ingestChunkEntities(
+          data.chatId,
+          data.chunkId,
+          data.createdAt,
+          mergedEntities,
+          allRelationships as any[],
+          salienceResult.score,
+          salienceResult.emotionalTags,
+          cleanContent,
+          undefined,
+          allDiscoveredAliases,
+        );
+        timings.graphMs += performance.now() - graphStart;
+
+        const dbStart = performance.now();
+        db.query("UPDATE chat_chunks SET entity_ids = ? WHERE id = ?").run(JSON.stringify(entityIds), data.chunkId);
+        for (const attr of fontResult.attributions) {
+          if (!attr.entityName) continue;
+          const entity = entityGraph.findEntityByName(data.chatId, attr.entityName);
           if (!entity) continue;
-          const statusMap: Record<string, string> = {
-            died: "deceased",
-            destroyed: "destroyed",
-            departed: "inactive",
-            transformed: "active",
-          };
-          const newStatus = statusMap[change.change];
-          if (newStatus) entityGraph.updateEntityStatus(entity.id, newStatus as any);
-          entityGraph.addEntityFacts(entity.id, [`${change.change}: ${change.detail}`]);
+          recordColorAttribution(data.chatId, attr.hexColor, entity.id, attr.usageType, null);
         }
-      }
-
-      for (const discovered of allDiscoveredAliases) {
-        const canonicalEntity = entityGraph.findEntityByName(data.chatId, discovered.canonicalName);
-        if (!canonicalEntity) continue;
-        entityGraph.upsertEntity(data.chatId, {
-          name: canonicalEntity.name,
-          type: canonicalEntity.entityType,
-          aliases: [discovered.alias],
-          confidence: Number(canonicalEntity.confidence) || 0.9,
-        }, data.chunkId, data.createdAt);
-
-        const evidence = "evidence" in discovered ? (discovered as any).evidence : undefined;
-        entityGraph.addEntityFacts(canonicalEntity.id, [
-          evidence
-            ? `Also known as "${discovered.alias}" (${evidence})`
-            : `Also known as "${discovered.alias}"`,
-        ]);
-      }
-      timings.graphMs += performance.now() - postGraphStart;
-    }
-
-    // ── NP Chunker — Phase 1 entity discovery (IMP 4) ──
-    // Only runs server-side during sidecar mode (amortized cost acceptable).
-    // Does NOT run in heuristic-only mode to protect mobile latency.
-    if (sidecarActive) {
-      // Deeper sanitization for NP chunking — strip loom tag content and details
-      // blocks that font-stripping alone doesn't handle, preventing meta-content
-      // (summaries, structured data inside loom tags) from producing garbage NPs.
-      let npContent = stripLoomTags(cleanContent);
-      npContent = stripDetailsBlocks(npContent);
-      const npCandidates = extractNPsFromChunk(npContent);
-      for (const np of npCandidates) {
-        // Check if this NP resolves to a known entity
-        const resolved = entityGraph.resolveCanonicalId(np.text, data.chatId);
-        if (resolved) {
-          // Known entity — update mention count
-          entityGraph.updateEntityMentionTimestamp(resolved, data.createdAt);
-          continue;
+        for (const fc of sidecarFontColors) {
+          const entity = entityGraph.findEntityByName(data.chatId, fc.characterName);
+          if (!entity) continue;
+          recordColorAttribution(data.chatId, fc.hexColor, entity.id, fc.usageType, null);
         }
+        timings.dbMs += performance.now() - dbStart;
 
-        // Check morphological variants — prevents different tense forms of the
-        // same word from being registered as separate entities.
-        const variants = getInflectionalVariants(np.text);
-        let variantResolved = false;
-        for (const variant of variants) {
-          const existing = entityGraph.resolveCanonicalId(variant, data.chatId);
-          if (existing) {
-            entityGraph.updateEntityMentionTimestamp(existing, data.createdAt);
-            variantResolved = true;
-            break;
+        const postGraphStart = performance.now();
+        for (const ext of mergedEntities) {
+          const entity = entityGraph.findEntityByName(data.chatId, ext.name);
+          if (entity && !entity.description) {
+            const excerpt = extractMentionExcerpt(ext.name, cleanContent);
+            if (excerpt) entityGraph.populateEntityDescription(entity.id, excerpt);
           }
         }
-        if (variantResolved) continue;
 
-        // Check description-derived aliases — maps nicknames from character/persona
-        // descriptions to their canonical entity.
-        if (descriptionAliases) {
-          const aliasCanonical = descriptionAliases.get(np.text.toLowerCase());
-          if (aliasCanonical) {
-            const entity = entityGraph.findEntityByName(data.chatId, aliasCanonical);
+        if (config.entityPruning.enabled) {
+          const chunkCount = db.query("SELECT COUNT(*) as c FROM chat_chunks WHERE chat_id = ?").get(data.chatId) as any;
+          if (chunkCount?.c && chunkCount.c % 50 === 0) {
+            entityGraph.pruneStaleEntities(data.chatId, config.entityPruning.staleAfterMessages);
+          }
+        }
+
+        if (sidecarFacts.length > 0 && sidecarEntities.length > 0) {
+          const subjectEntity = sidecarEntities.find((e) => e.role === "subject") ?? sidecarEntities[0];
+          const entity = entityGraph.findEntityByName(data.chatId, subjectEntity.name);
+          if (entity) entityGraph.addEntityFacts(entity.id, sidecarFacts);
+        }
+
+        if (salienceResult.statusChanges.length > 0) {
+          for (const change of salienceResult.statusChanges) {
+            const entity = entityGraph.findEntityByName(data.chatId, change.entity);
+            if (!entity) continue;
+            const statusMap: Record<string, string> = {
+              died: "deceased",
+              destroyed: "destroyed",
+              departed: "inactive",
+              transformed: "active",
+            };
+            const newStatus = statusMap[change.change];
+            if (newStatus) entityGraph.updateEntityStatus(entity.id, newStatus as any);
+            entityGraph.addEntityFacts(entity.id, [`${change.change}: ${change.detail}`]);
+          }
+        }
+
+        for (const discovered of allDiscoveredAliases) {
+          const canonicalEntity = entityGraph.findEntityByName(data.chatId, discovered.canonicalName);
+          if (!canonicalEntity) continue;
+          entityGraph.upsertEntity(data.chatId, {
+            name: canonicalEntity.name,
+            type: canonicalEntity.entityType,
+            aliases: [discovered.alias],
+            confidence: Number(canonicalEntity.confidence) || 0.9,
+          }, data.chunkId, data.createdAt);
+
+          const evidence = "evidence" in discovered ? (discovered as any).evidence : undefined;
+          entityGraph.addEntityFacts(canonicalEntity.id, [
+            evidence
+              ? `Also known as "${discovered.alias}" (${evidence})`
+              : `Also known as "${discovered.alias}"`,
+          ]);
+        }
+        timings.graphMs += performance.now() - postGraphStart;
+      }
+
+      // Only runs server-side during sidecar mode (amortized cost acceptable).
+      // Does NOT run in heuristic-only mode to protect mobile latency.
+      if (sidecarActive) {
+        let npContent = stripLoomTags(cleanContent);
+        npContent = stripDetailsBlocks(npContent);
+        const npCandidates = extractNPsFromChunk(npContent);
+        for (const np of npCandidates) {
+          const resolved = entityGraph.resolveCanonicalId(np.text, data.chatId);
+          if (resolved) {
+            entityGraph.updateEntityMentionTimestamp(resolved, data.createdAt);
+            continue;
+          }
+
+          const variants = getInflectionalVariants(np.text);
+          let variantResolved = false;
+          for (const variant of variants) {
+            const existing = entityGraph.resolveCanonicalId(variant, data.chatId);
+            if (existing) {
+              entityGraph.updateEntityMentionTimestamp(existing, data.createdAt);
+              variantResolved = true;
+              break;
+            }
+          }
+          if (variantResolved) continue;
+
+          if (descriptionAliases) {
+            const aliasCanonical = descriptionAliases.get(np.text.toLowerCase());
+            if (aliasCanonical) {
+              const entity = entityGraph.findEntityByName(data.chatId, aliasCanonical);
+              if (entity) {
+                entityGraph.updateEntityMentionTimestamp(entity.id, data.createdAt);
+                entityGraph.upsertEntity(data.chatId, {
+                  name: entity.name,
+                  type: entity.entityType,
+                  aliases: [np.text],
+                  confidence: Number(entity.confidence) || 0.9,
+                }, data.chunkId, data.createdAt);
+                continue;
+              }
+            }
+          }
+
+          const prefixMatch = findPrefixMatch(np.text, characterNames);
+          if (prefixMatch) {
+            const entity = entityGraph.findEntityByName(data.chatId, prefixMatch);
             if (entity) {
               entityGraph.updateEntityMentionTimestamp(entity.id, data.createdAt);
-              // Register as alias so future chunks resolve automatically
               entityGraph.upsertEntity(data.chatId, {
                 name: entity.name,
                 type: entity.entityType,
@@ -1102,53 +1185,35 @@ export async function processChunk(
               continue;
             }
           }
-        }
 
-        // Check prefix match — handles abbreviations where the NP is an
-        // unambiguous prefix of exactly one character name.
-        const prefixMatch = findPrefixMatch(np.text, characterNames);
-        if (prefixMatch) {
-          const entity = entityGraph.findEntityByName(data.chatId, prefixMatch);
-          if (entity) {
-            entityGraph.updateEntityMentionTimestamp(entity.id, data.createdAt);
+          if (np.text.length >= 2 && np.text.length <= 50) {
             entityGraph.upsertEntity(data.chatId, {
-              name: entity.name,
-              type: entity.entityType,
-              aliases: [np.text],
-              confidence: Number(entity.confidence) || 0.9,
+              name: np.text,
+              type: "concept",
+              aliases: [],
+              confidence: 0.5,
+              provisional: true,
             }, data.chunkId, data.createdAt);
-            continue;
           }
         }
+        entityGraph.processProvisionalEntities(data.chatId);
+      }
 
-        // Unknown entity — create as provisional
-        if (np.text.length >= 2 && np.text.length <= 50) {
-          entityGraph.upsertEntity(data.chatId, {
-            name: np.text,
-            type: "concept",
-            aliases: [],
-            confidence: 0.5,
-            provisional: true,
-          }, data.chunkId, data.createdAt);
+      if (sidecarActive && salienceResult.score >= 0.5) {
+        const needsFacts = entityGraph.getEntitiesNeedingFactExtraction(data.chatId, 0.45, 3);
+        for (const entity of needsFacts) {
+          const existingEntity = entityGraph.findEntityByName(data.chatId, entity.name);
+          if (existingEntity && sidecarFacts.length === 0) {
+            entityGraph.updateFactExtractionStatus(existingEntity.id, "attempted_empty");
+          }
         }
       }
-      // Promote/decay provisional entities periodically
-      entityGraph.processProvisionalEntities(data.chatId);
-    }
 
-    // ── BUG 4: Fact extraction gating ──
-    // Check for high-salience entities that lack facts
-    if (sidecarActive && salienceResult.score >= 0.5) {
-      const needsFacts = entityGraph.getEntitiesNeedingFactExtraction(data.chatId, 0.45, 3);
-      for (const entity of needsFacts) {
-        // Mark as attempted — actual extraction happens via sidecar on next rebuild
-        // or when the entity appears in a chunk with sidecar enabled
-        const existingEntity = entityGraph.findEntityByName(data.chatId, entity.name);
-        if (existingEntity && sidecarFacts.length === 0) {
-          entityGraph.updateFactExtractionStatus(existingEntity.id, "attempted_empty");
-        }
-      }
-    }
+      db.query(
+        "UPDATE chat_chunks SET cortex_warmup_signature = ?, cortex_warmup_completed_at = ? WHERE id = ?",
+      ).run(warmupSignature, now, data.chunkId);
+    })();
+    timings.dbMs += performance.now() - persistStartedAt;
 
     const mode: CortexIngestionTimings["mode"] = extraction
       ? (heuristicResult ? "mixed" : "sidecar")
@@ -1238,40 +1303,58 @@ export async function rebuildCortex(
   sidecarConnectionId?: string,
   onProgress?: (current: number, total: number) => void,
   descriptionAliases?: Map<string, string>,
+  options: CortexRebuildOptions = {},
 ): Promise<{ chunksProcessed: number; entitiesFound: number; relationsFound: number }> {
   const config = getCortexConfig(userId);
   if (!config.enabled) {
     return { chunksProcessed: 0, entitiesFound: 0, relationsFound: 0 };
   }
+  const resumable = options.resumable === true;
+  const warmupSignature = options.warmupSignature || getCortexWarmupSignature(config);
   const sidecarAvailable = shouldUseCortexSidecar(config) && !!generateRawFn && !!sidecarConnectionId;
   const sidecarAnalysisActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
   const db = getDb();
 
-  console.info(`[memory-cortex] Rebuilding cortex for chat ${chatId} (sidecar: ${sidecarAvailable ? "yes" : "heuristic only"})`);
+  console.info(
+    `[memory-cortex] ${resumable ? "Warming" : "Rebuilding"} cortex for chat ${chatId} (sidecar: ${sidecarAvailable ? "yes" : "heuristic only"})`,
+  );
 
-  // Invalidate cached retrieval results — they'll be stale after rebuild
-  invalidateCortexCache(chatId);
+  let completedBeforeStart = 0;
+  let totalChunks = 0;
+  let chunks: any[] = [];
 
-  // Clear all derived data
-  entityGraph.deleteEntitiesForChat(chatId);
-  entityGraph.deleteMentionsForChat(chatId);
-  entityGraph.deleteRelationsForChat(chatId);
-  consolidation.deleteConsolidationsForChat(chatId);
-  deleteColorMapForChat(chatId);
-  db.query("DELETE FROM memory_salience WHERE chat_id = ?").run(chatId);
-  db.query("UPDATE chat_chunks SET salience_score = NULL, emotional_tags = NULL, entity_ids = NULL, consolidation_id = NULL WHERE chat_id = ?").run(chatId);
+  if (!resumable) {
+    clearDerivedCortexData(chatId);
+    chunks = db
+      .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at ASC")
+      .all(chatId) as any[];
+    totalChunks = chunks.length;
+  } else {
+    const coverage = getCortexWarmupCoverage(chatId, warmupSignature);
+    totalChunks = coverage.totalChunks;
 
-  const chunks = db
-    .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at ASC")
-    .all(chatId) as any[];
+    if (coverage.requiresFullRebuild) {
+      clearDerivedCortexData(chatId);
+      chunks = db
+        .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at ASC")
+        .all(chatId) as any[];
+    } else {
+      completedBeforeStart = coverage.completedChunks;
+      chunks = db
+        .query(
+          "SELECT * FROM chat_chunks WHERE chat_id = ? AND (cortex_warmup_signature IS NULL OR cortex_warmup_signature != ?) ORDER BY created_at ASC",
+        )
+        .all(chatId, warmupSignature) as any[];
+    }
+  }
 
   // Track state so the frontend can reconnect and see progress
   const state: RebuildState = {
     chatId,
     status: "processing",
-    current: 0,
-    total: chunks.length,
-    percent: 0,
+    current: completedBeforeStart,
+    total: totalChunks,
+    percent: totalChunks > 0 ? Math.round((completedBeforeStart / totalChunks) * 100) : 100,
     startedAt: Date.now(),
   };
   activeRebuilds.set(chatId, state);
@@ -1291,9 +1374,10 @@ export async function rebuildCortex(
           sidecarAvailable ? sidecarConnectionId : undefined,
           descriptionAliases,
         );
-        state.current = i + 1;
-        state.percent = Math.round(((i + 1) / chunks.length) * 100);
-        if (onProgress) onProgress(i + 1, chunks.length);
+        const current = completedBeforeStart + i + 1;
+        state.current = current;
+        state.percent = totalChunks > 0 ? Math.round((current / totalChunks) * 100) : 100;
+        if (onProgress) onProgress(current, totalChunks);
         await yieldToEventLoop();
       }
     } else {
@@ -1305,7 +1389,7 @@ export async function rebuildCortex(
       // This avoids spamming the provider — behaves like N sequential pipelines.
 
       let nextChunkIdx = 0;
-      let completed = 0;
+      let completed = completedBeforeStart;
       const activeGenerateRawFn = generateRawFn!;
       const activeSidecarConnectionId = sidecarConnectionId!;
 
@@ -1336,8 +1420,8 @@ export async function rebuildCortex(
 
           completed++;
           state.current = completed;
-          state.percent = Math.round((completed / chunks.length) * 100);
-          if (onProgress) onProgress(completed, chunks.length);
+          state.percent = totalChunks > 0 ? Math.round((completed / totalChunks) * 100) : 100;
+          if (onProgress) onProgress(completed, totalChunks);
         }
       }
 
@@ -1350,7 +1434,7 @@ export async function rebuildCortex(
     const relations = entityGraph.getRelations(chatId);
 
     const result = {
-      chunksProcessed: chunks.length,
+      chunksProcessed: totalChunks,
       entitiesFound: entities.length,
       relationsFound: relations.length,
     };
@@ -1361,7 +1445,7 @@ export async function rebuildCortex(
     setTimeout(() => activeRebuilds.delete(chatId), 5 * 60 * 1000);
 
     console.info(
-      `[memory-cortex] Rebuild complete: ${chunks.length} chunks, ${entities.length} entities, ${relations.length} relations`,
+      `[memory-cortex] ${resumable ? "Warmup" : "Rebuild"} complete: ${totalChunks} chunks, ${entities.length} entities, ${relations.length} relations`,
     );
 
     return result;

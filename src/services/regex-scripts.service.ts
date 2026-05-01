@@ -33,6 +33,143 @@ const VALID_TARGETS = new Set(["prompt", "response", "display"]);
 const VALID_FLAGS = new Set(["g", "i", "m", "s", "u"]);
 const VALID_MACRO_MODES = new Set(["none", "raw", "escaped"]);
 const MAX_PATTERN_LENGTH = 10_000;
+const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
+
+interface RegexMutationContext {
+  activePresetId?: string | null;
+}
+
+function normalizeOptionalId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getPresetRegexSettingKey(presetId: string): string {
+  return `${PRESET_REGEX_ENABLED_SETTING_PREFIX}${presetId}`;
+}
+
+function normalizeStoredPresetRegexIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
+function readStoredPresetRegexIdsRecord(userId: string, presetId: string): { exists: boolean; ids: string[] } {
+  const row = getDb()
+    .query("SELECT value FROM settings WHERE key = ? AND user_id = ?")
+    .get(getPresetRegexSettingKey(presetId), userId) as { value?: string } | undefined;
+  if (!row) return { exists: false, ids: [] };
+
+  try {
+    return { exists: true, ids: normalizeStoredPresetRegexIds(JSON.parse(row.value ?? "[]")) };
+  } catch {
+    return { exists: true, ids: [] };
+  }
+}
+
+function writeStoredPresetRegexIdsWithDb(db: ReturnType<typeof getDb>, userId: string, presetId: string, ids: string[]): void {
+  const now = Math.floor(Date.now() / 1000);
+  db
+    .query(
+      `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    )
+    .run(getPresetRegexSettingKey(presetId), JSON.stringify(normalizeStoredPresetRegexIds(ids)), userId, now);
+}
+
+function updateStoredPresetRegexIds(
+  userId: string,
+  presetId: string,
+  updater: (ids: string[]) => string[],
+): void {
+  const db = getDb();
+  const current = readStoredPresetRegexIdsRecord(userId, presetId).ids;
+  writeStoredPresetRegexIdsWithDb(db, userId, presetId, updater(current));
+}
+
+function deleteStoredPresetRegexIds(userId: string, presetId: string): void {
+  getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(getPresetRegexSettingKey(presetId), userId);
+}
+
+function setPresetBoundScriptEnabledInRestoreList(
+  userId: string,
+  presetId: string,
+  scriptId: string,
+  enabled: boolean,
+): void {
+  updateStoredPresetRegexIds(userId, presetId, (current) => {
+    const next = new Set(current);
+    if (enabled) next.add(scriptId);
+    else next.delete(scriptId);
+    return [...next];
+  });
+}
+
+function emitRegexChanged(userId: string, id: string): void {
+  const script = getRegexScript(userId, id);
+  if (!script) return;
+  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
+}
+
+function resolveCreateDisabledState(input: CreateRegexScriptInput, activePresetId: string | null): boolean {
+  const requestedDisabled = !!input.disabled;
+  const presetId = normalizeOptionalId(input.preset_id);
+  if (!presetId) return requestedDisabled;
+  if (presetId !== activePresetId) return true;
+  return requestedDisabled;
+}
+
+type PresetBoundRowState = {
+  id: string;
+  preset_id: string;
+  disabled: number;
+};
+
+function applyPresetBoundActivationWithDb(
+  db: ReturnType<typeof getDb>,
+  userId: string,
+  targetPresetId: string | null,
+): { changedIds: string[]; restoredIds: string[] } {
+  const rows = db
+    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND preset_id IS NOT NULL ORDER BY sort_order ASC, created_at ASC")
+    .all(userId) as PresetBoundRowState[];
+  if (rows.length === 0) return { changedIds: [], restoredIds: [] };
+
+  let restoreIds = new Set<string>();
+  if (targetPresetId) {
+    const stored = readStoredPresetRegexIdsRecord(userId, targetPresetId);
+    if (stored.exists) {
+      restoreIds = new Set(stored.ids);
+    } else {
+      restoreIds = new Set(
+        rows
+          .filter((row) => row.preset_id === targetPresetId && !row.disabled)
+          .map((row) => row.id),
+      );
+    }
+  }
+
+  const changedIds: string[] = [];
+  const restoredIds: string[] = [];
+  const updateDisabled = db.query("UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+  const now = Math.floor(Date.now() / 1000);
+
+  for (const row of rows) {
+    const shouldEnable = !!targetPresetId && row.preset_id === targetPresetId && restoreIds.has(row.id);
+    const nextDisabled = shouldEnable ? 0 : 1;
+    if (row.disabled !== nextDisabled) {
+      updateDisabled.run(nextDisabled, now, row.id, userId);
+      changedIds.push(row.id);
+    }
+    if (shouldEnable) restoredIds.push(row.id);
+  }
+
+  return { changedIds, restoredIds };
+}
 
 export function rowToRegexScript(row: any): RegexScript {
   return {
@@ -184,7 +321,11 @@ export function getRegexScript(userId: string, id: string): RegexScript | null {
   return row ? rowToRegexScript(row) : null;
 }
 
-export function createRegexScript(userId: string, input: CreateRegexScriptInput): RegexScript | string {
+export function createRegexScript(
+  userId: string,
+  input: CreateRegexScriptInput,
+  context?: RegexMutationContext,
+): RegexScript | string {
   const err = validateInput(input, true);
   if (err) return err;
 
@@ -193,6 +334,8 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
 
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const disabled = resolveCreateDisabledState(input, activePresetId);
 
   getDb()
     .query(
@@ -215,9 +358,9 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
       input.max_depth ?? null,
       JSON.stringify(input.trim_strings ?? []),
       input.run_on_edit ? 1 : 0,
-      input.substitute_macros ?? "none",
-      input.disabled ? 1 : 0,
-      input.sort_order ?? 0,
+       input.substitute_macros ?? "none",
+       disabled ? 1 : 0,
+       input.sort_order ?? 0,
       input.description ?? "",
       input.folder ?? "",
       input.pack_id ?? null,
@@ -229,48 +372,65 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
     );
 
   const script = getRegexScript(userId, id)!;
+  if (script.preset_id && script.preset_id === activePresetId) {
+    setPresetBoundScriptEnabledInRestoreList(userId, script.preset_id, script.id, !script.disabled);
+  }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
   return script;
 }
 
-export function updateRegexScript(userId: string, id: string, input: UpdateRegexScriptInput): RegexScript | string | null {
+export function updateRegexScript(
+  userId: string,
+  id: string,
+  input: UpdateRegexScriptInput,
+  context?: RegexMutationContext,
+): RegexScript | string | null {
   const existing = getRegexScript(userId, id);
   if (!existing) return null;
 
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const isPresetBound = !!existing.preset_id;
+  const mayPersistPresetEnablement = !!existing.preset_id && existing.preset_id === activePresetId;
+  const nextInput: UpdateRegexScriptInput = { ...input };
+
+  if (isPresetBound && nextInput.disabled !== undefined && !mayPersistPresetEnablement) {
+    delete nextInput.disabled;
+  }
+
   // If updating regex or flags, validate together
-  if (input.find_regex !== undefined || input.flags !== undefined || input.substitute_macros !== undefined) {
-    const pattern = input.find_regex ?? existing.find_regex;
-    const flags = input.flags ?? existing.flags;
-    const substituteMacros = input.substitute_macros ?? existing.substitute_macros;
+  if (nextInput.find_regex !== undefined || nextInput.flags !== undefined || nextInput.substitute_macros !== undefined) {
+    const pattern = nextInput.find_regex ?? existing.find_regex;
+    const flags = nextInput.flags ?? existing.flags;
+    const substituteMacros = nextInput.substitute_macros ?? existing.substitute_macros;
     const regexErr = validateRegex(pattern, flags, substituteMacros);
     if (regexErr) return regexErr;
   }
 
-  const err = validateInput(input, false);
+  const err = validateInput(nextInput, false);
   if (err) return err;
 
   const fields: string[] = [];
   const values: any[] = [];
 
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name.trim()); }
-  if (input.script_id !== undefined) { fields.push("script_id = ?"); values.push(input.script_id); }
-  if (input.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(input.find_regex); }
-  if (input.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(input.replace_string); }
-  if (input.flags !== undefined) { fields.push("flags = ?"); values.push(input.flags); }
-  if (input.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(input.placement)); }
-  if (input.scope !== undefined) { fields.push("scope = ?"); values.push(input.scope); }
-  if (input.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(input.scope_id); }
-  if (input.target !== undefined) { fields.push("target = ?"); values.push(input.target); }
-  if (input.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(input.min_depth); }
-  if (input.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(input.max_depth); }
-  if (input.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(input.trim_strings)); }
-  if (input.run_on_edit !== undefined) { fields.push("run_on_edit = ?"); values.push(input.run_on_edit ? 1 : 0); }
-  if (input.substitute_macros !== undefined) { fields.push("substitute_macros = ?"); values.push(input.substitute_macros); }
-  if (input.disabled !== undefined) { fields.push("disabled = ?"); values.push(input.disabled ? 1 : 0); }
-  if (input.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(input.sort_order); }
-  if (input.description !== undefined) { fields.push("description = ?"); values.push(input.description); }
-  if (input.folder !== undefined) { fields.push("folder = ?"); values.push(input.folder); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
+  if (nextInput.name !== undefined) { fields.push("name = ?"); values.push(nextInput.name.trim()); }
+  if (nextInput.script_id !== undefined) { fields.push("script_id = ?"); values.push(nextInput.script_id); }
+  if (nextInput.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(nextInput.find_regex); }
+  if (nextInput.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(nextInput.replace_string); }
+  if (nextInput.flags !== undefined) { fields.push("flags = ?"); values.push(nextInput.flags); }
+  if (nextInput.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(nextInput.placement)); }
+  if (nextInput.scope !== undefined) { fields.push("scope = ?"); values.push(nextInput.scope); }
+  if (nextInput.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(nextInput.scope_id); }
+  if (nextInput.target !== undefined) { fields.push("target = ?"); values.push(nextInput.target); }
+  if (nextInput.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(nextInput.min_depth); }
+  if (nextInput.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(nextInput.max_depth); }
+  if (nextInput.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(nextInput.trim_strings)); }
+  if (nextInput.run_on_edit !== undefined) { fields.push("run_on_edit = ?"); values.push(nextInput.run_on_edit ? 1 : 0); }
+  if (nextInput.substitute_macros !== undefined) { fields.push("substitute_macros = ?"); values.push(nextInput.substitute_macros); }
+  if (nextInput.disabled !== undefined) { fields.push("disabled = ?"); values.push(nextInput.disabled ? 1 : 0); }
+  if (nextInput.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(nextInput.sort_order); }
+  if (nextInput.description !== undefined) { fields.push("description = ?"); values.push(nextInput.description); }
+  if (nextInput.folder !== undefined) { fields.push("folder = ?"); values.push(nextInput.folder); }
+  if (nextInput.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(nextInput.metadata)); }
 
   if (fields.length === 0) return existing;
 
@@ -282,15 +442,22 @@ export function updateRegexScript(userId: string, id: string, input: UpdateRegex
   getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
 
   const updated = getRegexScript(userId, id)!;
+  if (updated.preset_id && mayPersistPresetEnablement && nextInput.disabled !== undefined) {
+    setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
+  }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
   return updated;
 }
 
 export function deleteRegexScript(userId: string, id: string): boolean {
+  const existing = getRegexScript(userId, id);
   const result = getDb()
     .query("DELETE FROM regex_scripts WHERE id = ? AND user_id = ?")
     .run(id, userId);
   if (result.changes > 0) {
+    if (existing?.preset_id) {
+      setPresetBoundScriptEnabledInRestoreList(userId, existing.preset_id, existing.id, false);
+    }
     eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
     return true;
   }
@@ -308,8 +475,8 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
   const db = getDb();
   const placeholders = ids.map(() => "?").join(", ");
   const existingRows = db
-    .query(`SELECT id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
-    .all(userId, ...ids) as Array<{ id: string }>;
+    .query(`SELECT id, preset_id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...ids) as Array<{ id: string; preset_id?: string | null }>;
   if (existingRows.length === 0) return [];
 
   const existingIds = existingRows.map((r) => r.id);
@@ -320,6 +487,12 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
       .query(`DELETE FROM regex_scripts WHERE user_id = ? AND id IN (${existingPlaceholders})`)
       .run(userId, ...existingIds);
   })();
+
+  for (const row of existingRows) {
+    if (row.preset_id) {
+      setPresetBoundScriptEnabledInRestoreList(userId, row.preset_id, row.id, false);
+    }
+  }
 
   for (const id of existingIds) {
     eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
@@ -383,15 +556,28 @@ export function reorderRegexScripts(userId: string, orderedIds: string[]): boole
   return true;
 }
 
-export function toggleRegexScript(userId: string, id: string, disabled: boolean): RegexScript | null {
+export function toggleRegexScript(
+  userId: string,
+  id: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): RegexScript | null {
   const existing = getRegexScript(userId, id);
   if (!existing) return null;
+
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  if (existing.preset_id && existing.preset_id !== activePresetId) {
+    return existing;
+  }
 
   getDb()
     .query("UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id = ? AND user_id = ?")
     .run(disabled ? 1 : 0, Math.floor(Date.now() / 1000), id, userId);
 
   const updated = getRegexScript(userId, id)!;
+  if (updated.preset_id) {
+    setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
+  }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
   return updated;
 }
@@ -753,6 +939,46 @@ export function getRegexScriptsByPresetId(userId: string, presetId: string): Reg
   return rows.map(rowToRegexScript);
 }
 
+export function activatePresetBoundRegexScripts(userId: string, presetId?: string | null): { changedIds: string[]; restoredIds: string[] } {
+  const targetPresetId = normalizeOptionalId(presetId);
+  const db = getDb();
+  const result = db.transaction(() => applyPresetBoundActivationWithDb(db, userId, targetPresetId))();
+
+  for (const id of result.changedIds) {
+    emitRegexChanged(userId, id);
+  }
+
+  return result;
+}
+
+export function switchPresetBoundRegexScripts(
+  userId: string,
+  opts: { previousPresetId?: string | null; presetId?: string | null },
+): { changedIds: string[]; restoredIds: string[] } {
+  const previousPresetId = normalizeOptionalId(opts.previousPresetId);
+  const targetPresetId = normalizeOptionalId(opts.presetId);
+  const db = getDb();
+
+  const result = db.transaction(() => {
+    if (previousPresetId) {
+      const enabledRows = db
+        .query(
+          "SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ? AND disabled = 0 ORDER BY sort_order ASC, created_at ASC",
+        )
+        .all(userId, previousPresetId) as Array<{ id: string }>;
+      writeStoredPresetRegexIdsWithDb(db, userId, previousPresetId, enabledRows.map((row) => row.id));
+    }
+
+    return applyPresetBoundActivationWithDb(db, userId, targetPresetId);
+  })();
+
+  for (const id of result.changedIds) {
+    emitRegexChanged(userId, id);
+  }
+
+  return result;
+}
+
 export function getRegexScriptsByCharacterId(userId: string, characterId: string): RegexScript[] {
   const rows = getDb()
     .query("SELECT * FROM regex_scripts WHERE user_id = ? AND character_id = ? ORDER BY sort_order ASC, created_at ASC")
@@ -769,7 +995,10 @@ export function deleteRegexScriptsByPresetId(userId: string, presetId: string): 
   const rows = db
     .query("SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
     .all(userId, presetId) as Array<{ id: string }>;
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) {
+    deleteStoredPresetRegexIds(userId, presetId);
+    return 0;
+  }
 
   const result = db
     .query("DELETE FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
@@ -779,6 +1008,8 @@ export function deleteRegexScriptsByPresetId(userId: string, presetId: string): 
   for (const { id } of rows) {
     eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
   }
+
+  deleteStoredPresetRegexIds(userId, presetId);
 
   return changes;
 }
@@ -858,7 +1089,8 @@ function convertStTarget(item: any): RegexTarget {
 
 export function importRegexScripts(
   userId: string,
-  payload: any
+  payload: any,
+  context?: RegexMutationContext,
 ): { imported: number; skipped: number; errors: string[] } {
   const errors: string[] = [];
   let imported = 0;
@@ -960,7 +1192,7 @@ export function importRegexScripts(
       item.character_id = characterIdOverride;
     }
 
-    const result = createRegexScript(userId, item);
+    const result = createRegexScript(userId, item, context);
     if (typeof result === "string") {
       errors.push(`Script "${item.name}": ${result}`);
       skipped++;

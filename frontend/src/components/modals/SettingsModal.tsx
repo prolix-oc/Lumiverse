@@ -1374,29 +1374,31 @@ function ExtensionPoolSettings() {
 }
 
 function EmbeddingsSettings() {
-  const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, 'custom'>, Omit<WorldBookVectorSettings, 'presetMode' | 'retrievalTopK'>> = {
+  const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, 'custom'>, Omit<WorldBookVectorSettings, 'presetMode'>> = {
     lean: {
       chunkTargetTokens: 220,
       chunkMaxTokens: 360,
       chunkOverlapTokens: 40,
+      retrievalTopK: 4,
       maxChunksPerEntry: 4,
     },
     balanced: {
       chunkTargetTokens: 420,
       chunkMaxTokens: 700,
       chunkOverlapTokens: 80,
+      retrievalTopK: 6,
       maxChunksPerEntry: 8,
     },
     deep: {
       chunkTargetTokens: 720,
       chunkMaxTokens: 1200,
       chunkOverlapTokens: 120,
+      retrievalTopK: 8,
       maxChunksPerEntry: 12,
     },
   }
   const DEFAULT_WORLD_BOOK_VECTOR_SETTINGS: WorldBookVectorSettings = {
     presetMode: 'balanced',
-    retrievalTopK: 4,
     ...WORLD_BOOK_VECTOR_PRESETS.balanced,
   }
 
@@ -1413,15 +1415,15 @@ function EmbeddingsSettings() {
       ? raw.presetMode
       : base.presetMode
     const preset = presetMode === 'custom' ? null : WORLD_BOOK_VECTOR_PRESETS[presetMode]
-    const target = Math.min(2000, Math.max(120, Math.floor((preset?.chunkTargetTokens ?? raw.chunkTargetTokens ?? base.chunkTargetTokens))))
-    const max = Math.min(4000, Math.max(target, Math.floor((preset?.chunkMaxTokens ?? raw.chunkMaxTokens ?? base.chunkMaxTokens))))
+    const target = Math.min(2000, Math.max(120, Math.floor((raw.chunkTargetTokens ?? preset?.chunkTargetTokens ?? base.chunkTargetTokens))))
+    const max = Math.min(4000, Math.max(target, Math.floor((raw.chunkMaxTokens ?? preset?.chunkMaxTokens ?? base.chunkMaxTokens))))
     return {
       presetMode,
       chunkTargetTokens: target,
       chunkMaxTokens: max,
-      chunkOverlapTokens: Math.min(500, Math.max(0, Math.floor((preset?.chunkOverlapTokens ?? raw.chunkOverlapTokens ?? base.chunkOverlapTokens)))),
-      retrievalTopK: Math.min(20, Math.max(1, Math.floor((presetMode === 'custom' ? raw.retrievalTopK : undefined) ?? base.retrievalTopK))),
-      maxChunksPerEntry: Math.min(24, Math.max(1, Math.floor((preset?.maxChunksPerEntry ?? raw.maxChunksPerEntry ?? base.maxChunksPerEntry)))),
+      chunkOverlapTokens: Math.min(500, Math.max(0, Math.floor((raw.chunkOverlapTokens ?? preset?.chunkOverlapTokens ?? base.chunkOverlapTokens)))),
+      retrievalTopK: Math.min(20, Math.max(1, Math.floor((raw.retrievalTopK ?? preset?.retrievalTopK ?? base.retrievalTopK)))),
+      maxChunksPerEntry: Math.min(24, Math.max(1, Math.floor((raw.maxChunksPerEntry ?? preset?.maxChunksPerEntry ?? base.maxChunksPerEntry)))),
     }
   }
 
@@ -1537,12 +1539,21 @@ function EmbeddingsSettings() {
 
   const updateWorldBookSettings = (patch: Partial<WorldBookVectorSettings>) => {
     worldBookSettingsDirtyRef.current = true
-    setWorldBookSettings((current) => normalizeWorldBookVectorSettings({ ...current, ...patch }, cfg?.retrieval_top_k ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.retrievalTopK))
+    setWorldBookSettings((current) => normalizeWorldBookVectorSettings({
+      ...current,
+      ...(patch.presetMode ? {} : { presetMode: 'custom' as const }),
+      ...patch,
+    }, cfg?.retrieval_top_k ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.retrievalTopK))
   }
 
   const applyWorldBookPreset = (presetMode: WorldBookVectorPresetMode) => {
     worldBookSettingsDirtyRef.current = true
-    setWorldBookSettings((current) => normalizeWorldBookVectorSettings({ ...current, presetMode }, cfg?.retrieval_top_k ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.retrievalTopK))
+    setWorldBookSettings((current) => normalizeWorldBookVectorSettings(
+      presetMode === 'custom'
+        ? { ...current, presetMode }
+        : { ...current, ...WORLD_BOOK_VECTOR_PRESETS[presetMode], presetMode },
+      cfg?.retrieval_top_k ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.retrievalTopK,
+    ))
   }
 
   const save = async () => {
@@ -1866,7 +1877,10 @@ function EmbeddingsSettings() {
               </button>
             ))}
           </div>
-          <span className={styles.helperText}>{worldBookPresetDescriptions[worldBookSettings.presetMode]}</span>
+          <span className={styles.helperText}>
+            {worldBookPresetDescriptions[worldBookSettings.presetMode]}
+            {worldBookSettings.presetMode !== 'custom' ? ' Editing any value below switches to Custom.' : ''}
+          </span>
 
           <div className={styles.settingsGridCompact}>
             <div className={styles.field}>
@@ -1876,7 +1890,7 @@ function EmbeddingsSettings() {
                 min={1}
                 max={20}
                 value={worldBookSettings.retrievalTopK}
-                disabled={worldBookSettingsLoading || worldBookSettings.presetMode !== 'custom'}
+                disabled={worldBookSettingsLoading}
                 integer
                 onChange={(value) => updateWorldBookSettings({ retrievalTopK: value ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.retrievalTopK })}
               />
@@ -1888,7 +1902,7 @@ function EmbeddingsSettings() {
                 min={120}
                 max={2000}
                 value={worldBookSettings.chunkTargetTokens}
-                disabled={worldBookSettingsLoading || worldBookSettings.presetMode !== 'custom'}
+                disabled={worldBookSettingsLoading}
                 integer
                 onChange={(value) => updateWorldBookSettings({ chunkTargetTokens: value ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.chunkTargetTokens })}
               />
@@ -1900,7 +1914,7 @@ function EmbeddingsSettings() {
                 min={120}
                 max={4000}
                 value={worldBookSettings.chunkMaxTokens}
-                disabled={worldBookSettingsLoading || worldBookSettings.presetMode !== 'custom'}
+                disabled={worldBookSettingsLoading}
                 integer
                 onChange={(value) => updateWorldBookSettings({ chunkMaxTokens: value ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.chunkMaxTokens })}
               />
@@ -1912,7 +1926,7 @@ function EmbeddingsSettings() {
                 min={0}
                 max={500}
                 value={worldBookSettings.chunkOverlapTokens}
-                disabled={worldBookSettingsLoading || worldBookSettings.presetMode !== 'custom'}
+                disabled={worldBookSettingsLoading}
                 integer
                 onChange={(value) => updateWorldBookSettings({ chunkOverlapTokens: value ?? 0 })}
               />
@@ -1924,7 +1938,7 @@ function EmbeddingsSettings() {
                 min={1}
                 max={24}
                 value={worldBookSettings.maxChunksPerEntry}
-                disabled={worldBookSettingsLoading || worldBookSettings.presetMode !== 'custom'}
+                disabled={worldBookSettingsLoading}
                 integer
                 onChange={(value) => updateWorldBookSettings({ maxChunksPerEntry: value ?? DEFAULT_WORLD_BOOK_VECTOR_SETTINGS.maxChunksPerEntry })}
               />
@@ -2503,6 +2517,13 @@ function AdvancedSettings() {
           <>
             {error && <p className={styles.errorText}>{error}</p>}
             {success && <p className={styles.successText}>{success}</p>}
+
+            <Toggle.Checkbox
+              checked={cfg.autoWarmup}
+              onChange={(checked) => update({ autoWarmup: checked })}
+              label="Warm Long-Term Chat Memory when opening a chat"
+              hint="Opt-in automatic warmup. Manual rebuilds from the chat input bar still work even when this is off."
+            />
 
             {/* Quick Mode / Manual toggle */}
             <div className={styles.field}>
