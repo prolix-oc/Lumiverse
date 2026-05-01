@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import * as svc from "../services/regex-scripts.service";
 import { parsePagination } from "../services/pagination";
-import type { RegexScope, RegexTarget } from "../types/regex-script";
+import type { RegexScope, RegexTarget, RegexScript } from "../types/regex-script";
+import { applyDisplayRegex } from "../services/display-regex.service";
 
 const app = new Hono();
 
@@ -57,6 +58,47 @@ app.post("/", async (c) => {
   const result = svc.createRegexScript(userId, input, { activePresetId: active_preset_id ?? null });
   if (typeof result === "string") return c.json({ error: result }, 400);
   return c.json(result, 201);
+});
+
+// POST /apply — bulk-apply display-regex pipeline.
+app.post("/apply", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{
+    content: string;
+    scripts: RegexScript[];
+    context: {
+      chat_id?: string;
+      character_id?: string;
+      persona_id?: string;
+      is_user: boolean;
+      depth: number;
+    };
+  }>();
+
+  if (typeof body.content !== "string") {
+    return c.json({ error: "content is required" }, 400);
+  }
+  if (!Array.isArray(body.scripts)) {
+    return c.json({ error: "scripts must be an array" }, 400);
+  }
+  if (!body.context || typeof body.context !== "object") {
+    return c.json({ error: "context is required" }, 400);
+  }
+
+  const result = await applyDisplayRegex({
+    content: body.content,
+    scripts: body.scripts,
+    context: {
+      chat_id: body.context.chat_id,
+      character_id: body.context.character_id,
+      persona_id: body.context.persona_id,
+      is_user: !!body.context.is_user,
+      depth: typeof body.context.depth === "number" ? body.context.depth : 0,
+    },
+    userId,
+  });
+
+  return c.json({ result });
 });
 
 // POST /test — test regex

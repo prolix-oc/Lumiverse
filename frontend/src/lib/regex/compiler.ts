@@ -212,89 +212,77 @@ export function applyDisplayRegex(
   return result
 }
 
+export interface ApplyDisplayRegexAsyncContext {
+  isUser: boolean
+  depth: number
+  chatId?: string
+  characterId?: string
+  personaId?: string
+  macroCtx?: DisplayMacroContext
+}
+
+function anyScriptNeedsBackend(scripts: RegexScript[]): boolean {
+  for (const s of scripts) {
+    if (s.substitute_macros !== 'none' && (hasMacroSyntax(s.find_regex) || hasMacroSyntax(s.replace_string))) {
+      return true
+    }
+  }
+  return false
+}
+
 export async function applyDisplayRegexAsync(
   content: string,
   scripts: RegexScript[],
-  context: ApplyDisplayRegexContext,
-  resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
+  context: ApplyDisplayRegexAsyncContext,
 ): Promise<string> {
-  let result = content
+  if (scripts.length === 0) return content
 
-  for (const script of scripts) {
-    const placement: RegexPlacement = context.isUser ? 'user_input' : 'ai_output'
-    if (!script.placement.includes(placement)) continue
-
-    if (script.min_depth !== null && context.depth < script.min_depth) continue
-    if (script.max_depth !== null && context.depth > script.max_depth) continue
-
-    let findRegex = script.find_regex
-    if (script.substitute_macros !== 'none') {
-      const preResolvedFind = context.resolvedFindPatterns?.get(script.id)
-      if (preResolvedFind !== undefined) {
-        findRegex = preResolvedFind
-      } else if (context.macroCtx) {
-        findRegex = resolveRegexStringMacros(findRegex, context.macroCtx)
-      }
-    }
-
-    const regex = compileRegex(findRegex, script.flags)
-    if (!regex) continue
-
-    try {
-      if (script.substitute_macros === 'raw') {
-        const matches = collectRegexMatches(result, regex)
-        if (matches.length > 0) {
-          const templates: Record<string, string> = {}
-          const fallbackReplacements = matches.map((match, index) => {
-            const withCaptures = substituteRegexCaptures(
-              script.replace_string,
-              match.fullMatch,
-              match.groups,
-              match.offset,
-              result,
-              match.namedGroups,
-            )
-            if (hasMacroSyntax(withCaptures)) {
-              templates[`${script.id}:${index}`] = withCaptures
-            }
-            return withCaptures
-          })
-
-          const resolvedTemplates = Object.keys(templates).length > 0
-            ? await resolveRawTemplates(templates)
-            : {}
-
-          result = rebuildFromMatches(
-            result,
-            matches,
-            fallbackReplacements.map((value, index) => resolvedTemplates[`${script.id}:${index}`] ?? value),
-          )
-        }
-      } else {
-        let replaceString = script.replace_string
-        if (script.substitute_macros !== 'none') {
-          const preResolved = context.resolvedReplacements?.get(script.id)
-          if (preResolved !== undefined) {
-            replaceString = script.substitute_macros === 'escaped'
-              ? preResolved.replace(/\$/g, '$$$$')
-              : preResolved
-          } else if (context.macroCtx) {
-            replaceString = resolveReplacementMacros(replaceString, script.substitute_macros, context.macroCtx)
-          }
-        }
-
-        result = result.replace(regex, replaceString)
-      }
-
-      for (const trim of script.trim_strings) {
-        while (result.includes(trim)) {
-          result = result.replaceAll(trim, '')
-        }
-      }
-    } catch {
-      // Skip invalid regex silently
-    }
+  if (!anyScriptNeedsBackend(scripts)) {
+    return applyDisplayRegex(content, scripts, {
+      isUser: context.isUser,
+      depth: context.depth,
+      macroCtx: context.macroCtx,
+    })
   }
 
-  return result
+  try {
+    const res = await fetch('/api/v1/regex-scripts/apply', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content,
+        scripts,
+        context: {
+          chat_id: context.chatId,
+          character_id: context.characterId,
+          persona_id: context.personaId,
+          is_user: context.isUser,
+          depth: context.depth,
+        },
+      }),
+    })
+    if (!res.ok) {
+      return applyDisplayRegex(content, scripts, {
+        isUser: context.isUser,
+        depth: context.depth,
+        macroCtx: context.macroCtx,
+      })
+    }
+    const body = await res.json() as { result?: string }
+    if (typeof body.result !== 'string') {
+      return applyDisplayRegex(content, scripts, {
+        isUser: context.isUser,
+        depth: context.depth,
+        macroCtx: context.macroCtx,
+      })
+    }
+    return body.result
+  } catch {
+    return applyDisplayRegex(content, scripts, {
+      isUser: context.isUser,
+      depth: context.depth,
+      macroCtx: context.macroCtx,
+    })
+  }
 }
