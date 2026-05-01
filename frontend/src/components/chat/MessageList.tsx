@@ -699,6 +699,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
                     isUser={isImpersonateStream}
                     userName={userName}
                     isStreaming
+                    lockStreamingHeight={false}
                     chatId={chatId}
                   />
                 ) : (

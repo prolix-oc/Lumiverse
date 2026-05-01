@@ -28,6 +28,7 @@ interface MessageContentProps {
   isUser: boolean
   userName: string
   isStreaming?: boolean
+  lockStreamingHeight?: boolean
   messageId?: string
   chatId?: string
   depth?: number
@@ -1125,6 +1126,7 @@ export default function MessageContent({
   isUser,
   userName,
   isStreaming = false,
+  lockStreamingHeight = true,
   messageId,
   chatId,
   depth = 0,
@@ -1225,7 +1227,7 @@ export default function MessageContent({
   }, [])
 
   useLayoutEffect(() => {
-    if (!isStreaming) {
+    if (!isStreaming || !lockStreamingHeight) {
       maxStreamingHeightRef.current = 0
       setStreamingMinHeight(null)
       return
@@ -1249,7 +1251,7 @@ export default function MessageContent({
 
     observer.observe(container)
     return () => observer.disconnect()
-  }, [isStreaming])
+  }, [isStreaming, lockStreamingHeight])
 
   const renderedBlocks = useMemo(() => {
     const elements: React.ReactNode[] = []
