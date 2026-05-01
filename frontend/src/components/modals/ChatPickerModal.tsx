@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2, Sparkles } from 'lucide-react'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { CloseButton } from '@/components/shared/CloseButton'
+import ContextMenu, { type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { Spinner } from '@/components/shared/Spinner'
 import { get } from '@/api/client'
@@ -53,47 +53,12 @@ export default function ChatPickerModal({
   const [items, setItems] = useState<ChatSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
-  const [activeMenuPos, setActiveMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const [activeMenuPos, setActiveMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatSummary | null>(null)
 
   const renameInputRef = useRef<HTMLInputElement>(null)
-  const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
-  const menuPopoverRef = useRef<HTMLDivElement>(null)
-
-  const computeMenuPosition = useCallback((trigger: HTMLElement) => {
-    const rect = trigger.getBoundingClientRect()
-    const viewportPadding = 8
-    const dropdownWidth = menuPopoverRef.current?.offsetWidth ?? 140
-    const dropdownHeight = menuPopoverRef.current?.offsetHeight ?? 116
-    const spaceBelow = window.innerHeight - rect.bottom
-    const openUp = spaceBelow < dropdownHeight + viewportPadding && rect.top > spaceBelow
-    const left = Math.min(
-      Math.max(viewportPadding, rect.right - dropdownWidth),
-      window.innerWidth - dropdownWidth - viewportPadding,
-    )
-    const top = openUp
-      ? Math.max(viewportPadding, rect.top - dropdownHeight - 6)
-      : Math.min(window.innerHeight - dropdownHeight - viewportPadding, rect.bottom + 6)
-
-    return { top, left }
-  }, [])
-
-  const updateActiveMenuPosition = useCallback((chatId: string) => {
-    const trigger = menuButtonRefs.current[chatId]
-    if (!trigger) {
-      setActiveMenuPos(null)
-      return
-    }
-
-    const next = computeMenuPosition(trigger)
-
-    setActiveMenuPos((prev) => {
-      if (prev?.top === next.top && prev?.left === next.left) return prev
-      return next
-    })
-  }, [computeMenuPosition])
 
   const closeActiveMenu = useCallback(() => {
     setActiveMenuId(null)
@@ -101,9 +66,15 @@ export default function ChatPickerModal({
   }, [])
 
   const openActiveMenu = useCallback((chatId: string, trigger: HTMLElement) => {
+    const rect = trigger.getBoundingClientRect()
+    const viewportPadding = 8
+    const estimatedMenuWidth = 180
     setActiveMenuId(chatId)
-    setActiveMenuPos(computeMenuPosition(trigger))
-  }, [computeMenuPosition])
+    setActiveMenuPos({
+      x: Math.max(viewportPadding, rect.right - estimatedMenuWidth),
+      y: Math.max(viewportPadding, rect.bottom + 6),
+    })
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -152,53 +123,6 @@ export default function ChatPickerModal({
       document.removeEventListener('keydown', handleEscape)
     }
   }, [onDismiss, renamingId, activeMenuId, deleteTarget, closeActiveMenu])
-
-  useEffect(() => {
-    if (!activeMenuId) return
-
-    const openedAt = performance.now()
-    const handlePointerDown = (e: PointerEvent) => {
-      if (!e.isTrusted) return
-      if (performance.now() - openedAt < 100) return
-
-      const target = e.target as Node | null
-      if (!target) return
-
-      const path = typeof e.composedPath === 'function' ? e.composedPath() : []
-      const trigger = menuButtonRefs.current[activeMenuId]
-      const popover = menuPopoverRef.current
-      const inTrigger = !!trigger && (trigger.contains(target) || path.includes(trigger))
-      const inPopover = !!popover && (popover.contains(target) || path.includes(popover))
-
-      if (!inTrigger && !inPopover) closeActiveMenu()
-    }
-
-    document.addEventListener('pointerdown', handlePointerDown)
-    return () => document.removeEventListener('pointerdown', handlePointerDown)
-  }, [activeMenuId, closeActiveMenu])
-
-  useLayoutEffect(() => {
-    if (!activeMenuId) return
-    updateActiveMenuPosition(activeMenuId)
-  }, [activeMenuId, updateActiveMenuPosition])
-
-  useLayoutEffect(() => {
-    if (!activeMenuId || !activeMenuPos || !menuPopoverRef.current) return
-    updateActiveMenuPosition(activeMenuId)
-  }, [activeMenuId, activeMenuPos, updateActiveMenuPosition])
-
-  useEffect(() => {
-    if (!activeMenuId) return
-
-    const handleReposition = () => updateActiveMenuPosition(activeMenuId)
-    window.addEventListener('resize', handleReposition)
-    window.addEventListener('scroll', handleReposition, true)
-
-    return () => {
-      window.removeEventListener('resize', handleReposition)
-      window.removeEventListener('scroll', handleReposition, true)
-    }
-  }, [activeMenuId, updateActiveMenuPosition])
 
   const handleConfirmRename = async (chatId: string) => {
     const trimmed = renameValue.trim()
@@ -259,6 +183,44 @@ export default function ChatPickerModal({
       setLoading(false)
     }
   }
+
+  const activeMenuItems: ContextMenuEntry[] = activeMenuId ? [
+    {
+      key: 'rename',
+      label: 'Rename',
+      icon: <Pencil size={14} />,
+      onClick: () => {
+        const item = items.find((chat) => chat.id === activeMenuId)
+        if (!item) return
+        setRenamingId(item.id)
+        setRenameValue(item.name || '')
+        closeActiveMenu()
+      },
+    },
+    {
+      key: 'export',
+      label: 'Export',
+      icon: <Download size={14} />,
+      onClick: () => {
+        const item = items.find((chat) => chat.id === activeMenuId)
+        if (!item) return
+        handleExport(item.id, formatChatName(item))
+        closeActiveMenu()
+      },
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      icon: <Trash2 size={14} />,
+      danger: true,
+      onClick: () => {
+        const item = items.find((chat) => chat.id === activeMenuId)
+        if (!item) return
+        setDeleteTarget(item)
+        closeActiveMenu()
+      },
+    },
+  ] : []
 
   return (
     <>
@@ -370,9 +332,6 @@ export default function ChatPickerModal({
                   )}
 
                   <button
-                    ref={(node) => {
-                      menuButtonRefs.current[item.id] = node
-                    }}
                     type="button"
                     className={clsx(styles.menuBtn, isMenuOpen && styles.menuBtnActive)}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -408,66 +367,7 @@ export default function ChatPickerModal({
         </div>
       </ModalShell>
 
-      <AnimatePresence>
-        {activeMenuId && activeMenuPos && createPortal(
-          <motion.div
-            ref={menuPopoverRef}
-            className={clsx(styles.dropdown, styles.dropdownPortal)}
-            style={{ top: activeMenuPos.top, left: activeMenuPos.left }}
-            initial={{ opacity: 0, scale: 0.95, y: -5 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: -5 }}
-            transition={{ duration: 0.15 }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              type="button"
-              className={styles.dropdownItem}
-              onClick={(e) => {
-                e.stopPropagation()
-                const item = items.find((chat) => chat.id === activeMenuId)
-                if (!item) return
-                setRenamingId(item.id)
-                setRenameValue(item.name || '')
-                closeActiveMenu()
-              }}
-            >
-              <Pencil size={14} />
-              Rename
-            </button>
-            <button
-              type="button"
-              className={styles.dropdownItem}
-              onClick={(e) => {
-                e.stopPropagation()
-                const item = items.find((chat) => chat.id === activeMenuId)
-                if (!item) return
-                handleExport(item.id, formatChatName(item))
-                closeActiveMenu()
-              }}
-            >
-              <Download size={14} />
-              Export
-            </button>
-            <button
-              type="button"
-              className={clsx(styles.dropdownItem, styles.dropdownItemDanger)}
-              onClick={(e) => {
-                e.stopPropagation()
-                const item = items.find((chat) => chat.id === activeMenuId)
-                if (!item) return
-                setDeleteTarget(item)
-                closeActiveMenu()
-              }}
-            >
-              <Trash2 size={14} />
-              Delete
-            </button>
-          </motion.div>,
-          document.body,
-        )}
-      </AnimatePresence>
+      <ContextMenu position={activeMenuPos} items={activeMenuItems} onClose={closeActiveMenu} />
 
       <ConfirmationModal
         isOpen={deleteTarget !== null}

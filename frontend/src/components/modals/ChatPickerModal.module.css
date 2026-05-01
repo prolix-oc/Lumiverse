@@ -318,54 +318,6 @@
   }
 }
 
-.dropdown {
-  position: absolute;
-  top: 36px;
-  right: 12px;
-  z-index: 50;
-  width: 140px;
-  background: var(--lumiverse-bg-elevated);
-  border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius-sm);
-  padding: 4px;
-  box-shadow: var(--lumiverse-shadow-md);
-  animation: greetingEnter 150ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.dropdownPortal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: auto;
-  z-index: 10003;
-}
-
-.dropdownItem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--lumiverse-text-muted);
-  font-size: calc(13px * var(--lumiverse-font-scale, 1));
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 150ms ease;
-  text-align: left;
-}
-
-.dropdownItem:hover {
-  background: var(--lumiverse-fill-hover);
-  color: var(--lumiverse-text);
-}
-
-.dropdownItemDanger:hover {
-  background: var(--lumiverse-danger-015);
-  color: var(--lumiverse-danger);
-}
-
 .editInput {
   flex: 1;
   background: var(--lumiverse-fill-subtle);
