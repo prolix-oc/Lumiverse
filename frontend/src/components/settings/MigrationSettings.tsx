@@ -298,7 +298,7 @@ export default function MigrationSettings() {
         })
       })
       .catch((err: any) => {
-        const message = err?.message || 'Failed to import TagLibrary backup'
+        const message = err?.body?.error || err?.message || 'Failed to import TagLibrary backup'
         setTagLibraryError(message)
         toast.error(message, { title: 'TagLibrary import failed' })
       })

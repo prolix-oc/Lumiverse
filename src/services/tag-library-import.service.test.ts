@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildTagLibraryImportPlan,
+  parseTagLibraryBackupText,
   normalizeLooseCharacterKey,
   normalizeTagLibraryFilename,
   parseTagLibraryBackupJson,
@@ -23,6 +24,16 @@ describe("TagLibrary backup parsing", () => {
     expect(parsed.characterMappings).toBe(1);
     expect(parsed.assignmentsByFilename.get("alpha.png")).toEqual(["Tag One", "Tag Two"]);
     expect(parsed.assignmentsByFilename.has("beta.png")).toBe(false);
+  });
+
+  test("accepts tagMap alias and BOM-prefixed JSON payloads", async () => {
+    const result = parseTagLibraryBackupText(`\uFEFF${JSON.stringify({
+      tags: [{ id: "one", name: "Tag One" }],
+      tagMap: { "Alpha.png": ["one"] },
+    })}`);
+
+    expect(result.tagDefinitions).toBe(1);
+    expect(result.characterMappings).toBe(1);
   });
 });
 

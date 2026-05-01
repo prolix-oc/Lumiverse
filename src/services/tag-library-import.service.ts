@@ -45,6 +45,10 @@ export interface TagLibraryImportResult {
   unmatchedFilenames: string[];
 }
 
+function stripUtf8Bom(value: string): string {
+  return value.charCodeAt(0) === 0xfeff ? value.slice(1) : value;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -101,7 +105,7 @@ export function parseTagLibraryBackupJson(raw: unknown): ParsedTagLibraryBackup 
   }
 
   const tags = raw.tags;
-  const tagMap = raw.tag_map;
+  const tagMap = isRecord(raw.tag_map) ? raw.tag_map : isRecord(raw.tagMap) ? raw.tagMap : null;
   if (!Array.isArray(tags) || !isRecord(tagMap)) {
     throw new Error("TagLibrary backup must contain 'tags' and 'tag_map'");
   }
@@ -137,6 +141,16 @@ export function parseTagLibraryBackupJson(raw: unknown): ParsedTagLibraryBackup 
     characterMappings: assignmentsByFilename.size,
     assignmentsByFilename,
   };
+}
+
+export function parseTagLibraryBackupText(text: string): ParsedTagLibraryBackup {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stripUtf8Bom(text));
+  } catch {
+    throw new Error("TagLibrary backup is not valid JSON");
+  }
+  return parseTagLibraryBackupJson(raw);
 }
 
 function buildFilenameIndex(
@@ -271,8 +285,7 @@ export async function importTagLibraryBackup(userId: string, file: File): Promis
     throw new Error("TagLibrary backup file is required");
   }
 
-  const raw = JSON.parse(await file.text()) as unknown;
-  const backup = parseTagLibraryBackupJson(raw);
+  const backup = parseTagLibraryBackupText(await file.text());
   const characters = listCharacterTagImportCandidates(userId);
   const { plans, matchedBy, unmatchedFilenames } = buildTagLibraryImportPlan(characters, backup);
 

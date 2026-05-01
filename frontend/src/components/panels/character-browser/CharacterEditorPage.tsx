@@ -282,7 +282,7 @@ export default function CharacterEditorPage() {
         duration: 7000,
       })
     } catch (err: any) {
-      toast.error(err?.message || 'Failed to import TagLibrary backup')
+      toast.error(err?.body?.error || err?.message || 'Failed to import TagLibrary backup')
     } finally {
       setTagLibraryImporting(false)
     }
