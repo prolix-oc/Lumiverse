@@ -1748,16 +1748,23 @@ export function getVectorizationStatus(userId: string, chatId: string): {
  */
 async function stampChatMemoryHash(userId: string, chatId: string): Promise<void> {
   try {
-    const cfg = embeddingsSvc.loadChatMemorySettings(userId);
-    const embCfg = await embeddingsSvc.getEmbeddingConfig(userId);
-    const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cfg, embCfg);
-    const hash = embeddingsSvc.computeChatMemoryHash(effective, embCfg.model);
+    const hash = await getCurrentChatMemoryHash(userId);
+    if (!hash) return;
 
     const chat = getChat(userId, chatId);
     if (!chat) return;
     const metadata = { ...chat.metadata, ltcm_config_hash: hash };
     getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(metadata), chatId, userId);
   } catch { /* non-fatal */ }
+}
+
+export async function getCurrentChatMemoryHash(userId: string): Promise<string | null> {
+  const cfg = embeddingsSvc.loadChatMemorySettings(userId);
+  const embCfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  if (!embCfg.enabled || !embCfg.vectorize_chat_messages) return null;
+
+  const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cfg, embCfg);
+  return embeddingsSvc.computeChatMemoryHash(effective, embCfg.model);
 }
 
 /**
@@ -1773,12 +1780,8 @@ export async function ensureChatMemoryFresh(userId: string, chatId: string): Pro
 
     const storedHash = (chat.metadata as any)?.ltcm_config_hash;
 
-    const cfg = embeddingsSvc.loadChatMemorySettings(userId);
-    const embCfg = await embeddingsSvc.getEmbeddingConfig(userId);
-    if (!embCfg.enabled || !embCfg.vectorize_chat_messages) return false;
-
-    const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cfg, embCfg);
-    const currentHash = embeddingsSvc.computeChatMemoryHash(effective, embCfg.model);
+    const currentHash = await getCurrentChatMemoryHash(userId);
+    if (!currentHash) return false;
 
     if (storedHash === currentHash) return false;
 

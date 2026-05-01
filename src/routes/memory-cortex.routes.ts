@@ -106,6 +106,170 @@ type CortexGenerateRawFn = (opts: {
   signal?: AbortSignal;
 }) => Promise<{ content: string; tool_calls?: any[] }>;
 
+interface CortexFreshnessSnapshot {
+  ltcmConfigHash: string | null;
+  rebuildSignature: string;
+  sourceChunkCount: number;
+  sourceChunkUpdatedAt: number;
+}
+
+interface StoredCortexFreshnessSnapshot extends CortexFreshnessSnapshot {
+  completedAt: number;
+}
+
+function getChunkFreshnessSnapshot(chatId: string): Pick<CortexFreshnessSnapshot, "sourceChunkCount" | "sourceChunkUpdatedAt"> {
+  const row = getDb()
+    .query("SELECT COUNT(*) as chunkCount, MAX(updated_at) as maxUpdatedAt FROM chat_chunks WHERE chat_id = ?")
+    .get(chatId) as { chunkCount?: number; maxUpdatedAt?: number | null } | null;
+
+  return {
+    sourceChunkCount: row?.chunkCount ?? 0,
+    sourceChunkUpdatedAt: row?.maxUpdatedAt ?? 0,
+  };
+}
+
+function buildCortexRebuildSignature(config: memoryCortex.MemoryCortexConfig): string {
+  return JSON.stringify({
+    enabled: config.enabled,
+    entityTracking: config.entityTracking,
+    entityExtractionMode: config.entityExtractionMode,
+    thoughtMarkers: config.thoughtMarkers,
+    salienceScoring: config.salienceScoring,
+    salienceScoringMode: config.salienceScoringMode,
+    consolidation: config.consolidation,
+    sidecar: {
+      connectionProfileId: config.sidecar?.connectionProfileId ?? null,
+      model: config.sidecar?.model ?? null,
+      temperature: config.sidecar?.temperature ?? 0.1,
+      topP: config.sidecar?.topP ?? 1.0,
+      maxTokens: config.sidecar?.maxTokens ?? 4096,
+      chunkBatchSize: config.sidecar?.chunkBatchSize ?? 5,
+      rebuildConcurrency: config.sidecar?.rebuildConcurrency ?? 3,
+    },
+    sidecarTimeoutMs: config.sidecarTimeoutMs,
+    entityPruning: config.entityPruning,
+    entityWhitelist: config.entityWhitelist,
+    entityExtractionFilters: config.entityExtractionFilters,
+  });
+}
+
+function parseStoredCortexFreshness(chat: ReturnType<typeof getChat>): StoredCortexFreshnessSnapshot | null {
+  const raw = chat?.metadata?.cortex_rebuild_state;
+  if (!isRecord(raw)) return null;
+
+  const rebuildSignature = optionalTrimmedString(raw.rebuildSignature);
+  if (!rebuildSignature) return null;
+
+  return {
+    ltcmConfigHash: typeof raw.ltcmConfigHash === "string" ? raw.ltcmConfigHash : null,
+    rebuildSignature,
+    sourceChunkCount: typeof raw.sourceChunkCount === "number" ? raw.sourceChunkCount : -1,
+    sourceChunkUpdatedAt: typeof raw.sourceChunkUpdatedAt === "number" ? raw.sourceChunkUpdatedAt : -1,
+    completedAt: typeof raw.completedAt === "number" ? raw.completedAt : 0,
+  };
+}
+
+async function buildCortexFreshnessSnapshot(
+  userId: string,
+  chatId: string,
+  cortexConfig: memoryCortex.MemoryCortexConfig,
+): Promise<CortexFreshnessSnapshot> {
+  return {
+    ltcmConfigHash: await chatsSvc.getCurrentChatMemoryHash(userId),
+    rebuildSignature: buildCortexRebuildSignature(cortexConfig),
+    ...getChunkFreshnessSnapshot(chatId),
+  };
+}
+
+function isCortexFresh(
+  chat: ReturnType<typeof getChat>,
+  snapshot: CortexFreshnessSnapshot,
+): boolean {
+  const stored = parseStoredCortexFreshness(chat);
+  if (!stored) return false;
+
+  return stored.ltcmConfigHash === snapshot.ltcmConfigHash
+    && stored.rebuildSignature === snapshot.rebuildSignature
+    && stored.sourceChunkCount === snapshot.sourceChunkCount
+    && stored.sourceChunkUpdatedAt === snapshot.sourceChunkUpdatedAt;
+}
+
+function stampCortexFreshnessSnapshot(
+  userId: string,
+  chatId: string,
+  snapshot: CortexFreshnessSnapshot,
+): void {
+  const chat = getChat(userId, chatId);
+  if (!chat) return;
+
+  const metadata = {
+    ...chat.metadata,
+    cortex_rebuild_state: {
+      ...snapshot,
+      completedAt: Math.floor(Date.now() / 1000),
+    },
+  };
+
+  getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(
+    JSON.stringify(metadata),
+    chatId,
+    userId,
+  );
+}
+
+function startTrackedCortexRebuild(options: {
+  userId: string;
+  chatId: string;
+  characterNames: string[];
+  descriptionAliases?: Map<string, string>;
+  generateRawFn?: CortexGenerateRawFn;
+  sidecarConnectionId?: string;
+  snapshot: CortexFreshnessSnapshot;
+  source?: "warmup";
+}): void {
+  const { userId, chatId, characterNames, descriptionAliases, generateRawFn, sidecarConnectionId, snapshot, source } = options;
+
+  memoryCortex.rebuildCortex(
+    userId,
+    chatId,
+    characterNames,
+    generateRawFn,
+    sidecarConnectionId,
+    (current, total) => {
+      eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+        chatId,
+        status: "processing",
+        current,
+        total,
+        percent: Math.round((current / total) * 100),
+        ...(source ? { source } : {}),
+      }, userId);
+    },
+    descriptionAliases,
+  ).then((result) => {
+    try {
+      stampCortexFreshnessSnapshot(userId, chatId, snapshot);
+    } catch (err) {
+      console.warn("[memory-cortex] Failed to stamp rebuild freshness state:", err);
+    }
+
+    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+      chatId,
+      status: "complete",
+      ...(source ? { source } : {}),
+      ...result,
+    }, userId);
+  }).catch((err) => {
+    console.error(source === "warmup" ? "[memory-cortex] Warmup rebuild failed:" : "[memory-cortex] Rebuild failed:", err);
+    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+      chatId,
+      status: "error",
+      ...(source ? { source } : {}),
+      error: err?.message || (source === "warmup" ? "Warmup failed" : "Rebuild failed"),
+    }, userId);
+  });
+}
+
 function resolveCortexSidecarAdapter(
   userId: string,
   cortexConfig: memoryCortex.MemoryCortexConfig,
@@ -997,34 +1161,17 @@ app.post("/chats/:chatId/rebuild", async (c) => {
     return c.json({ status: "skipped", reason: sidecar.unavailableReason, chatId });
   }
 
+  const snapshot = await buildCortexFreshnessSnapshot(userId, chatId, cortexConfig);
+
   // Run rebuild in the background — return immediately so Bun doesn't timeout
-  memoryCortex.rebuildCortex(
-    userId, chatId, characterNames, sidecar.generateRawFn, sidecar.sidecarConnectionId,
-    // Progress callback: streams WS events to the client
-    // (onProgress is the next arg, descriptionAliases is after)
-    (current, total) => {
-      eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-        chatId,
-        status: "processing",
-        current,
-        total,
-        percent: Math.round((current / total) * 100),
-      }, userId);
-    },
+  startTrackedCortexRebuild({
+    userId,
+    chatId,
+    characterNames,
     descriptionAliases,
-  ).then((result) => {
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "complete",
-      ...result,
-    }, userId);
-  }).catch((err) => {
-    console.error("[memory-cortex] Rebuild failed:", err);
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "error",
-      error: err?.message || "Rebuild failed",
-    }, userId);
+    generateRawFn: sidecar.generateRawFn,
+    sidecarConnectionId: sidecar.sidecarConnectionId,
+    snapshot,
   });
 
   return c.json({ status: "started", chatId });
@@ -1051,6 +1198,11 @@ app.post("/chats/:chatId/warm", async (c) => {
     return c.json({ status: "skipped", reason: sidecar.unavailableReason, chatId });
   }
 
+  await chatsSvc.ensureChatMemoryFresh(userId, chatId);
+
+  const freshChat = getChat(userId, chatId);
+  if (!freshChat) return c.json({ error: "Chat not found" }, 404);
+
   const stats = memoryCortex.getCortexUsageStats(chatId);
   const rebuild = memoryCortex.getRebuildStatus(chatId);
   const ingestion = memoryCortex.getIngestionStatus(chatId);
@@ -1067,46 +1219,25 @@ app.post("/chats/:chatId/warm", async (c) => {
   if (stats.chunkCount === 0) {
     return c.json({ status: "skipped", reason: "no_chunks", chatId });
   }
-  if (stats.chunkCount <= 2 && Math.floor(Date.now() / 1000) - chat.updated_at < 20) {
+  if (stats.chunkCount <= 2 && Math.floor(Date.now() / 1000) - freshChat.updated_at < 20) {
     return c.json({ status: "skipped", reason: "recent_chat", chatId });
   }
-  if (stats.salienceRecordCount >= stats.chunkCount && stats.entityCount > 0) {
+
+  const snapshot = await buildCortexFreshnessSnapshot(userId, chatId, config);
+  if (isCortexFresh(freshChat, snapshot)) {
     return c.json({ status: "skipped", reason: "already_ready", chatId });
   }
 
-  const { characterNames, descriptionAliases } = await resolveCortexParticipants(userId, chat);
-  memoryCortex.rebuildCortex(
+  const { characterNames, descriptionAliases } = await resolveCortexParticipants(userId, freshChat);
+  startTrackedCortexRebuild({
     userId,
     chatId,
     characterNames,
-    sidecar.generateRawFn,
-    sidecar.sidecarConnectionId,
-    (current, total) => {
-      eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-        chatId,
-        status: "processing",
-        current,
-        total,
-        percent: Math.round((current / total) * 100),
-        source: "warmup",
-      }, userId);
-    },
     descriptionAliases,
-  ).then((result) => {
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "complete",
-      source: "warmup",
-      ...result,
-    }, userId);
-  }).catch((err) => {
-    console.error("[memory-cortex] Warmup rebuild failed:", err);
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "error",
-      source: "warmup",
-      error: err?.message || "Warmup failed",
-    }, userId);
+    generateRawFn: sidecar.generateRawFn,
+    sidecarConnectionId: sidecar.sidecarConnectionId,
+    snapshot,
+    source: "warmup",
   });
 
   return c.json({ status: "started", reason: "warmup_started", chatId });
