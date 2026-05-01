@@ -40,7 +40,10 @@ import type {
   LumiaItemDTO,
   StreamChunkDTO,
   ImageDTO,
+  ImageGetOptionsDTO,
+  ImageListOptionsDTO,
   ImageUploadDTO,
+  ImageUploadFromDataUrlOptionsDTO,
 } from "lumiverse-spindle-types";
 import { initializeSandbox } from "./worker-runtime-sandbox";
 
@@ -1552,20 +1555,36 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   images: {
-    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: ImageDTO[]; total: number }> {
+    async list(options?: ImageListOptionsDTO): Promise<{ data: ImageDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "images_list",
         requestId,
         limit: options?.limit,
         offset: options?.offset,
+        specificity: options?.specificity,
+        onlyOwned: options?.onlyOwned,
+        characterId: options?.characterId,
+        chatId: options?.chatId,
         userId: options?.userId,
       });
       return result as { data: ImageDTO[]; total: number };
     },
-    async get(imageId: string, userId?: string): Promise<ImageDTO | null> {
+    async get(imageId: string, optionsOrUserId?: string | ImageGetOptionsDTO): Promise<ImageDTO | null> {
+      const options = typeof optionsOrUserId === "string"
+        ? { userId: optionsOrUserId }
+        : optionsOrUserId;
       const requestId = crypto.randomUUID();
-      const result = await request({ type: "images_get", requestId, imageId, userId });
+      const result = await request({
+        type: "images_get",
+        requestId,
+        imageId,
+        specificity: options?.specificity,
+        onlyOwned: options?.onlyOwned,
+        characterId: options?.characterId,
+        chatId: options?.chatId,
+        userId: options?.userId,
+      });
       return result as ImageDTO | null;
     },
     async upload(input: ImageUploadDTO, userId?: string): Promise<ImageDTO> {
@@ -1574,10 +1593,28 @@ const spindleApi: RuntimeSpindleAPI = {
       const result = await request({ type: "images_upload", requestId, input, userId });
       return result as ImageDTO;
     },
-    async uploadFromDataUrl(dataUrl: string, originalFilename?: string, userId?: string): Promise<ImageDTO> {
+    async uploadFromDataUrl(
+      dataUrl: string,
+      originalFilenameOrOptions?: string | ImageUploadFromDataUrlOptionsDTO,
+      userId?: string,
+    ): Promise<ImageDTO> {
       assertMutationAllowed("spindle.images.uploadFromDataUrl()");
+      const options = typeof originalFilenameOrOptions === "string" || typeof originalFilenameOrOptions === "undefined"
+        ? {
+            originalFilename: originalFilenameOrOptions,
+            userId,
+          }
+        : originalFilenameOrOptions;
       const requestId = crypto.randomUUID();
-      const result = await request({ type: "images_upload_from_data_url", requestId, dataUrl, originalFilename, userId });
+      const result = await request({
+        type: "images_upload_from_data_url",
+        requestId,
+        dataUrl,
+        originalFilename: options?.originalFilename,
+        owner_character_id: options?.owner_character_id,
+        owner_chat_id: options?.owner_chat_id,
+        userId: options?.userId,
+      });
       return result as ImageDTO;
     },
     async delete(imageId: string, userId?: string): Promise<boolean> {

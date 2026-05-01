@@ -335,10 +335,37 @@ type RuntimeWorkerToHost =
   | { type: "databank_documents_delete"; requestId: string; documentId: string; userId?: string }
   | { type: "databank_documents_get_content"; requestId: string; documentId: string; userId?: string }
   | { type: "databank_documents_reprocess"; requestId: string; documentId: string; userId?: string }
-  | { type: "images_list"; requestId: string; limit?: number; offset?: number; userId?: string }
-  | { type: "images_get"; requestId: string; imageId: string; userId?: string }
+  | {
+      type: "images_list";
+      requestId: string;
+      limit?: number;
+      offset?: number;
+      specificity?: imagesSvc.ImageSpecificity;
+      onlyOwned?: boolean;
+      characterId?: string;
+      chatId?: string;
+      userId?: string;
+    }
+  | {
+      type: "images_get";
+      requestId: string;
+      imageId: string;
+      specificity?: imagesSvc.ImageSpecificity;
+      onlyOwned?: boolean;
+      characterId?: string;
+      chatId?: string;
+      userId?: string;
+    }
   | { type: "images_upload"; requestId: string; input: ImageUploadDTO; userId?: string }
-  | { type: "images_upload_from_data_url"; requestId: string; dataUrl: string; originalFilename?: string; userId?: string }
+  | {
+      type: "images_upload_from_data_url";
+      requestId: string;
+      dataUrl: string;
+      originalFilename?: string;
+      owner_character_id?: string;
+      owner_chat_id?: string;
+      userId?: string;
+    }
   | { type: "images_delete"; requestId: string; imageId: string; userId?: string }
   | { type: "register_message_content_processor"; priority?: number }
   | {
@@ -2232,16 +2259,40 @@ export class WorkerHost {
         break;
       // ─── Images (gated: "images") ──────────────────────────────────────
       case "images_list":
-        this.handleImagesList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        this.handleImagesList(
+          msg.requestId,
+          msg.limit,
+          msg.offset,
+          msg.specificity,
+          msg.onlyOwned,
+          msg.characterId,
+          msg.chatId,
+          msg.userId,
+        );
         break;
       case "images_get":
-        this.handleImagesGet(msg.requestId, msg.imageId, msg.userId);
+        this.handleImagesGet(
+          msg.requestId,
+          msg.imageId,
+          msg.specificity,
+          msg.onlyOwned,
+          msg.characterId,
+          msg.chatId,
+          msg.userId,
+        );
         break;
       case "images_upload":
         this.handleImagesUpload(msg.requestId, msg.input, msg.userId);
         break;
       case "images_upload_from_data_url":
-        this.handleImagesUploadFromDataUrl(msg.requestId, msg.dataUrl, msg.originalFilename, msg.userId);
+        this.handleImagesUploadFromDataUrl(
+          msg.requestId,
+          msg.dataUrl,
+          msg.originalFilename,
+          msg.owner_character_id,
+          msg.owner_chat_id,
+          msg.userId,
+        );
         break;
       case "images_delete":
         this.handleImagesDelete(msg.requestId, msg.imageId, msg.userId);
@@ -3047,7 +3098,16 @@ export class WorkerHost {
           const image = await saveImageFromDataUrl(
             resolvedUserId,
             response.imageDataUrl,
-            `image-gen-${connection.provider}-${Date.now()}.png`
+            `image-gen-${connection.provider}-${Date.now()}.png`,
+            {
+              owner_extension_identifier: this.manifest.identifier,
+              owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
+                ? input.owner_character_id.trim()
+                : undefined,
+              owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
+                ? input.owner_chat_id.trim()
+                : undefined,
+            }
           );
           imageId = image.id;
           imageUrl = `/api/v1/image-gen/results/${image.id}`;
@@ -5611,11 +5671,25 @@ export class WorkerHost {
       width: img.width ?? null,
       height: img.height ?? null,
       has_thumbnail: !!img.has_thumbnail,
+      url: img.url,
+      specificity: img.specificity || "full",
+      owner_extension_identifier: img.owner_extension_identifier ?? null,
+      owner_character_id: img.owner_character_id ?? null,
+      owner_chat_id: img.owner_chat_id ?? null,
       created_at: img.created_at,
     };
   }
 
-  private handleImagesList(requestId: string, limit?: number, offset?: number, userId?: string): void {
+  private handleImagesList(
+    requestId: string,
+    limit?: number,
+    offset?: number,
+    specificity?: imagesSvc.ImageSpecificity,
+    onlyOwned?: boolean,
+    characterId?: string,
+    chatId?: string,
+    userId?: string,
+  ): void {
     try {
       if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
@@ -5627,6 +5701,10 @@ export class WorkerHost {
       const result = imagesSvc.listImages(resolvedUserId, {
         limit: Math.min(limit || 50, 200),
         offset: offset || 0,
+        specificity: specificity || "full",
+        owner_extension_identifier: onlyOwned ? this.manifest.identifier : undefined,
+        owner_character_id: characterId,
+        owner_chat_id: chatId,
       });
       this.postToWorker({
         type: "response",
@@ -5641,7 +5719,15 @@ export class WorkerHost {
     }
   }
 
-  private handleImagesGet(requestId: string, imageId: string, userId?: string): void {
+  private handleImagesGet(
+    requestId: string,
+    imageId: string,
+    specificity?: imagesSvc.ImageSpecificity,
+    onlyOwned?: boolean,
+    characterId?: string,
+    chatId?: string,
+    userId?: string,
+  ): void {
     try {
       if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
@@ -5650,7 +5736,12 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const img = imagesSvc.getImage(resolvedUserId, imageId);
+      const img = imagesSvc.getImage(resolvedUserId, imageId, {
+        specificity: specificity || "full",
+        owner_extension_identifier: onlyOwned ? this.manifest.identifier : undefined,
+        owner_character_id: characterId,
+        owner_chat_id: chatId,
+      });
       this.postToWorker({
         type: "response",
         requestId,
@@ -5684,7 +5775,15 @@ export class WorkerHost {
 
         const imageBytes = Uint8Array.from(input.data);
         const file = new File([imageBytes.buffer], filename, { type: mimeType });
-        const img = await imagesSvc.uploadImage(resolvedUserId, file);
+        const img = await imagesSvc.uploadImage(resolvedUserId, file, {
+          owner_extension_identifier: this.manifest.identifier,
+          owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
+            ? input.owner_character_id.trim()
+            : undefined,
+          owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
+            ? input.owner_chat_id.trim()
+            : undefined,
+        });
 
         this.postToWorker({ type: "response", requestId, result: this.toImageDTO(img) });
       } catch (err: any) {
@@ -5697,7 +5796,9 @@ export class WorkerHost {
     requestId: string,
     dataUrl: string,
     originalFilename?: string,
-    userId?: string
+    ownerCharacterId?: string,
+    ownerChatId?: string,
+    userId?: string,
   ): void {
     (async () => {
       try {
@@ -5712,7 +5813,15 @@ export class WorkerHost {
           throw new Error("dataUrl is required");
         }
 
-        const img = await imagesSvc.saveImageFromDataUrl(resolvedUserId, dataUrl, originalFilename);
+        const img = await imagesSvc.saveImageFromDataUrl(resolvedUserId, dataUrl, originalFilename, {
+          owner_extension_identifier: this.manifest.identifier,
+          owner_character_id: typeof ownerCharacterId === "string" && ownerCharacterId.trim()
+            ? ownerCharacterId.trim()
+            : undefined,
+          owner_chat_id: typeof ownerChatId === "string" && ownerChatId.trim()
+            ? ownerChatId.trim()
+            : undefined,
+        });
         this.postToWorker({ type: "response", requestId, result: this.toImageDTO(img) });
       } catch (err: any) {
         this.postToWorker({ type: "response", requestId, error: err.message });

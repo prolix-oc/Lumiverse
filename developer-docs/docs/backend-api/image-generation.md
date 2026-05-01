@@ -56,6 +56,8 @@ const result = await spindle.imageGen.generate({
 | `model` | `string` | Optional. Override the connection profile's model. |
 | `negativePrompt` | `string` | Optional. Negative prompt (provider-dependent). |
 | `parameters` | `Record<string, unknown>` | Optional. Provider-specific parameters, merged with the connection's `default_parameters`. |
+| `owner_character_id` | `string` | Optional. Tag the persisted generated image to a specific character. |
+| `owner_chat_id` | `string` | Optional. Tag the persisted generated image to a specific chat. |
 | `userId` | `string` | **Required for operator-scoped extensions.** |
 
 ### ImageGenResultDTO
@@ -70,7 +72,23 @@ const result = await spindle.imageGen.generate({
 
 ### Image Persistence
 
-Generated images are automatically saved to the images table with full thumbnail support. The `imageId` can be used to reference the image in other APIs (gallery, backgrounds, etc.), and `imageUrl` provides unauthenticated public access.
+Generated images are automatically saved to the images table with full thumbnail support. The persisted row is automatically tagged to the current extension, and you can additionally pass `owner_character_id` and/or `owner_chat_id` to make later retrieval via `spindle.images.list()` and `spindle.images.get()` much cheaper and more targeted.
+
+The `imageId` can be used to reference the image in other APIs (gallery, backgrounds, etc.), and `imageUrl` provides unauthenticated public access.
+
+```ts
+const result = await spindle.imageGen.generate({
+  prompt: 'Character portrait for the current scene',
+  owner_character_id: 'char-id',
+  owner_chat_id: 'chat-id',
+})
+
+const relatedImages = await spindle.images.list({
+  onlyOwned: true,
+  characterId: 'char-id',
+  specificity: 'sm',
+})
+```
 
 ### Push Notification Integration
 

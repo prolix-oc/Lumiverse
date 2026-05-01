@@ -18,10 +18,58 @@ type ThumbnailSource = Buffer | string;
 const inflightThumbnailGenerations = new Map<string, Promise<boolean>>();
 
 export type ThumbTier = "sm" | "lg";
+export type ImageSpecificity = "full" | ThumbTier;
+
+export interface ImageOwnershipOptions {
+  owner_extension_identifier?: string;
+  owner_character_id?: string;
+  owner_chat_id?: string;
+}
+
+export interface ImageQueryOptions extends ImageOwnershipOptions {
+  specificity?: ImageSpecificity;
+}
 
 export interface ThumbnailSettings {
   smallSize: number;
   largeSize: number;
+}
+
+function buildImageUrl(id: string, specificity: ImageSpecificity = "full"): string {
+  return specificity === "full"
+    ? `/api/v1/images/${id}`
+    : `/api/v1/images/${id}?size=${specificity}`;
+}
+
+function normalizeOwnershipValue(value?: string): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function buildImageFilterClause(userId: string, options?: ImageOwnershipOptions): { clause: string; params: string[] } {
+  const clauses = ["user_id = ?"];
+  const params = [userId];
+
+  const extensionIdentifier = normalizeOwnershipValue(options?.owner_extension_identifier);
+  if (extensionIdentifier) {
+    clauses.push("owner_extension_identifier = ?");
+    params.push(extensionIdentifier);
+  }
+
+  const characterId = normalizeOwnershipValue(options?.owner_character_id);
+  if (characterId) {
+    clauses.push("owner_character_id = ?");
+    params.push(characterId);
+  }
+
+  const chatId = normalizeOwnershipValue(options?.owner_chat_id);
+  if (chatId) {
+    clauses.push("owner_chat_id = ?");
+    params.push(chatId);
+  }
+
+  return { clause: clauses.join(" AND "), params };
 }
 
 function ensureDir(dir: string): void {
@@ -34,12 +82,17 @@ function getImagesDir(): string {
   return dir;
 }
 
-function rowToImage(row: any): Image {
+function rowToImage(row: any, specificity: ImageSpecificity = "full"): Image {
   return {
     ...row,
     has_thumbnail: !!row.has_thumbnail,
     width: row.width ?? null,
     height: row.height ?? null,
+    url: buildImageUrl(row.id, specificity),
+    specificity,
+    owner_extension_identifier: row.owner_extension_identifier ?? null,
+    owner_character_id: row.owner_character_id ?? null,
+    owner_chat_id: row.owner_chat_id ?? null,
   };
 }
 
@@ -96,7 +149,7 @@ async function ensureThumbnail(
   return job;
 }
 
-export async function uploadImage(userId: string, file: File): Promise<Image> {
+export async function uploadImage(userId: string, file: File, options?: ImageOwnershipOptions): Promise<Image> {
   const id = crypto.randomUUID();
   const ext = extname(file.name) || ".bin";
   const filename = `${id}${ext}`;
@@ -126,12 +179,40 @@ export async function uploadImage(userId: string, file: File): Promise<Image> {
   }
 
   const now = Math.floor(Date.now() / 1000);
+  const ownerExtensionIdentifier = normalizeOwnershipValue(options?.owner_extension_identifier);
+  const ownerCharacterId = normalizeOwnershipValue(options?.owner_character_id);
+  const ownerChatId = normalizeOwnershipValue(options?.owner_chat_id);
   getDb()
     .query(
-      `INSERT INTO images (id, user_id, filename, original_filename, mime_type, width, height, has_thumbnail, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO images (
+         id,
+         user_id,
+         filename,
+         original_filename,
+         mime_type,
+         width,
+         height,
+         has_thumbnail,
+         owner_extension_identifier,
+         owner_character_id,
+         owner_chat_id,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, userId, filename, file.name, file.type || "", width, height, hasThumbnail ? 1 : 0, now);
+    .run(
+      id,
+      userId,
+      filename,
+      file.name,
+      file.type || "",
+      width,
+      height,
+      hasThumbnail ? 1 : 0,
+      ownerExtensionIdentifier,
+      ownerCharacterId,
+      ownerChatId,
+      now,
+    );
 
   const image = getImage(userId, id)!;
   eventBus.emit(EventType.IMAGE_UPLOADED, { image }, userId);
@@ -145,7 +226,8 @@ export async function uploadImage(userId: string, file: File): Promise<Image> {
 export async function saveImageFromDataUrl(
   userId: string,
   dataUrl: string,
-  originalFilename?: string
+  originalFilename?: string,
+  options?: ImageOwnershipOptions,
 ): Promise<Image> {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) throw new Error("Invalid data URL format");
@@ -182,12 +264,40 @@ export async function saveImageFromDataUrl(
   }
 
   const now = Math.floor(Date.now() / 1000);
+  const ownerExtensionIdentifier = normalizeOwnershipValue(options?.owner_extension_identifier);
+  const ownerCharacterId = normalizeOwnershipValue(options?.owner_character_id);
+  const ownerChatId = normalizeOwnershipValue(options?.owner_chat_id);
   getDb()
     .query(
-      `INSERT INTO images (id, user_id, filename, original_filename, mime_type, width, height, has_thumbnail, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO images (
+         id,
+         user_id,
+         filename,
+         original_filename,
+         mime_type,
+         width,
+         height,
+         has_thumbnail,
+         owner_extension_identifier,
+         owner_character_id,
+         owner_chat_id,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, userId, filename, originalFilename || `image-gen-${id}${ext}`, mimeType, width, height, hasThumbnail ? 1 : 0, now);
+    .run(
+      id,
+      userId,
+      filename,
+      originalFilename || `image-gen-${id}${ext}`,
+      mimeType,
+      width,
+      height,
+      hasThumbnail ? 1 : 0,
+      ownerExtensionIdentifier,
+      ownerCharacterId,
+      ownerChatId,
+      now,
+    );
 
   const image = getImage(userId, id)!;
   eventBus.emit(EventType.IMAGE_UPLOADED, { image }, userId);
@@ -227,28 +337,30 @@ export async function getImageFilePathPublic(id: string, tier?: ThumbTier): Prom
   return existsSync(filepath) ? filepath : null;
 }
 
-export function getImage(userId: string, id: string): Image | null {
-  const row = getDb().query("SELECT * FROM images WHERE id = ? AND user_id = ?").get(id, userId) as any;
-  return row ? rowToImage(row) : null;
+export function getImage(userId: string, id: string, options?: ImageQueryOptions): Image | null {
+  const { clause, params } = buildImageFilterClause(userId, options);
+  const row = getDb().query(`SELECT * FROM images WHERE id = ? AND ${clause}`).get(id, ...params) as any;
+  return row ? rowToImage(row, options?.specificity) : null;
 }
 
 export function listImages(
   userId: string,
-  options?: { limit?: number; offset?: number }
+  options?: { limit?: number; offset?: number } & ImageQueryOptions
 ): { data: Image[]; total: number } {
   const limit = Math.min(options?.limit || 50, 200);
   const offset = options?.offset || 0;
+  const { clause, params } = buildImageFilterClause(userId, options);
 
   const rows = getDb()
-    .query("SELECT * FROM images WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
-    .all(userId, limit, offset) as any[];
+    .query(`SELECT * FROM images WHERE ${clause} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as any[];
 
   const countRow = getDb()
-    .query("SELECT COUNT(*) as total FROM images WHERE user_id = ?")
-    .get(userId) as { total: number };
+    .query(`SELECT COUNT(*) as total FROM images WHERE ${clause}`)
+    .get(...params) as { total: number };
 
   return {
-    data: rows.map(rowToImage),
+    data: rows.map((row) => rowToImage(row, options?.specificity)),
     total: countRow.total,
   };
 }
