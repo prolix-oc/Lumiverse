@@ -33,9 +33,11 @@ interface CharacterToolbarProps {
   batchMode: boolean
   onBatchModeChange: (enabled: boolean) => void
   onImportFile: (files: File[]) => void
+  onImportTagLibrary: (file: File) => void
   onImportUrl: () => void
   onCreateNew: () => void
   importLoading: boolean
+  tagLibraryImporting?: boolean
   onGroupChat?: () => void
 }
 
@@ -60,9 +62,11 @@ export default function CharacterToolbar({
   batchMode,
   onBatchModeChange,
   onImportFile,
+  onImportTagLibrary,
   onImportUrl,
   onCreateNew,
   importLoading,
+  tagLibraryImporting = false,
   onGroupChat,
 }: CharacterToolbarProps) {
   const [sortOpen, setSortOpen] = useState(false)
@@ -98,9 +102,11 @@ export default function CharacterToolbar({
         )}
         <ImportMenu
           onImportFile={onImportFile}
+          onImportTagLibrary={onImportTagLibrary}
           onImportUrl={onImportUrl}
           onCreateNew={onCreateNew}
           importLoading={importLoading}
+          tagLibraryImporting={tagLibraryImporting}
         />
       </div>
 

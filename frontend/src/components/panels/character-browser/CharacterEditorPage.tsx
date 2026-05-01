@@ -23,7 +23,6 @@ import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { Character, CharacterGalleryItem } from '@/types/api'
 import type { RegexScript } from '@/types/regex'
 import { toast } from '@/lib/toast'
-import { formatTagLibraryImportToastMessage } from '@/lib/tagLibraryImportToast'
 import { Button } from '@/components/shared/FormComponents'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPrompt'
@@ -97,13 +96,11 @@ export default function CharacterEditorPage() {
   const [allRegexScripts, setAllRegexScripts] = useState<RegexScript[]>([])
   const [galleryUploading, setGalleryUploading] = useState(false)
   const [extracting, setExtracting] = useState(false)
-  const [tagLibraryImporting, setTagLibraryImporting] = useState(false)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const galleryFileRef = useRef<HTMLInputElement>(null)
-  const tagLibraryFileRef = useRef<HTMLInputElement>(null)
   const savingTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const lastSyncedId = useRef<string | null>(null)
 
@@ -262,31 +259,6 @@ export default function CharacterEditorPage() {
       setExtracting(false)
     }
   }, [editingCharacterId])
-
-  const handleTagLibraryImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null
-    e.target.value = ''
-    if (!file) return
-
-    setTagLibraryImporting(true)
-    try {
-      const result = await charactersApi.importTagLibrary(file)
-      await browser.reloadAllCharacters()
-      if (editingCharacterId) {
-        const refreshed = await charactersApi.get(editingCharacterId)
-        updateCharInStore(editingCharacterId, refreshed)
-        setTags(refreshed.tags || [])
-      }
-      toast.success(formatTagLibraryImportToastMessage(result), {
-        title: 'TagLibrary import complete',
-        duration: 7000,
-      })
-    } catch (err: any) {
-      toast.error(err?.body?.error || err?.message || 'Failed to import TagLibrary backup')
-    } finally {
-      setTagLibraryImporting(false)
-    }
-  }, [browser, editingCharacterId, updateCharInStore])
 
   const embeddedImageCount = useMemo(() => {
     if (!character) return 0
@@ -1188,31 +1160,6 @@ export default function CharacterEditorPage() {
                           </button>
                         </div>
                       )}
-
-                      <div className={styles.galleryExtract}>
-                        <Upload size={14} />
-                        <div className={styles.galleryExtractInfo}>
-                          <span className={styles.fieldLabel}>TagLibrary Backup</span>
-                          <span className={styles.fieldHelper}>
-                            Import a SillyTavern TagLibrary JSON backup and append those tags across your whole character library.
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          className={styles.addBtn}
-                          disabled={tagLibraryImporting}
-                          onClick={() => tagLibraryFileRef.current?.click()}
-                        >
-                          {tagLibraryImporting ? 'Importing...' : 'Import JSON'}
-                        </button>
-                        <input
-                          ref={tagLibraryFileRef}
-                          type="file"
-                          accept="application/json,.json"
-                          className={styles.hiddenInput}
-                          onChange={handleTagLibraryImport}
-                        />
-                      </div>
                     </div>
                   )}
 

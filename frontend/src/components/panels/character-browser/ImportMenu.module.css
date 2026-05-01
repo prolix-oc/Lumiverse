@@ -43,6 +43,7 @@
 .item {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
   padding: 8px 10px;
@@ -52,6 +53,7 @@
   color: var(--lumiverse-text);
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
+  text-align: left;
   transition: background var(--lumiverse-transition-fast);
 }
 
