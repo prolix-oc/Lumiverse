@@ -103,6 +103,7 @@ import {
   separateDelimitedReasoning,
   wrapDelimitedReasoningStream,
 } from "../utils/reasoning-strip";
+import { reconcileChatMessageMacros } from "./chat-macro-render.service";
 
 interface GenerateInput {
   userId: string;
@@ -133,6 +134,8 @@ interface GenerateInput {
 
 /** Lifecycle context passed from startGeneration → runGeneration */
 interface GenerationLifecycle {
+  /** User-authored messages that immediately preceded this generation. */
+  sourceUserMessageIds?: string[];
   /** For regenerate: update swipe on this message instead of creating new */
   targetMessageId?: string;
   /** For regenerate: index of the blank swipe to fill with generated content */
@@ -173,6 +176,19 @@ interface GenerationLifecycle {
   councilNamedResults?: Record<string, string>;
   /** Context-budget clipping stats (for GENERATION_IN_PROGRESS payload + breakdown). */
   contextClipStats?: import("../llm/types").ContextClipStats;
+}
+
+function collectTrailingUserMessageIds(userId: string, chatId: string): string[] {
+  const messages = chatsSvc.getMessages(userId, chatId);
+  const trailing: string[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.extra?.hidden === true) continue;
+    if (!message.is_user) break;
+    trailing.push(message.id);
+  }
+  trailing.reverse();
+  return trailing;
 }
 
 export interface RawGenerateInput {
@@ -309,6 +325,8 @@ interface PromptPipelineResult {
   deliberationHandledByMacro?: boolean;
   /** The macro environment built during assembly — used for regex script macro substitution. */
   macroEnv?: import("../macros/types").MacroEnv;
+  /** Snapshot of the macro environment before chat-history evaluation mutates it. */
+  macroEnvSeed?: import("../macros/types").MacroEnv;
 }
 
 interface InlineCouncilToolResult {
@@ -1274,6 +1292,12 @@ export async function startGeneration(
       targetCharacterId: targetCharId,
       impersonateDraft: genType === "impersonate" && !!input.impersonate_draft,
     };
+    if (genType === "normal") {
+      lifecycle.sourceUserMessageIds = collectTrailingUserMessageIds(
+        input.userId,
+        input.chat_id,
+      );
+    }
 
     let excludeMessageId: string | undefined;
 
@@ -2023,6 +2047,7 @@ export async function startGeneration(
           councilSettings.toolsSettings.timeoutMs,
           pipeline.assistantPrefill,
           pipeline.macroEnv,
+          pipeline.macroEnvSeed,
         );
       } catch (err: any) {
         // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted.
@@ -2212,6 +2237,7 @@ async function runGeneration(
   inlineToolTimeoutMs?: number,
   assistantPrefill?: string,
   macroEnv?: import("../macros/types").MacroEnv,
+  macroEnvSeed?: import("../macros/types").MacroEnv,
 ): Promise<void> {
   // GENERATION_STARTED was already emitted when the pool entry was created
   // (before assembly). Once the provider stream is live, emit a lighter
@@ -2779,6 +2805,22 @@ async function runGeneration(
           userId,
         );
         messageId = message.id;
+      }
+
+      if (messageId) {
+        const reconciled = await reconcileChatMessageMacros({
+          userId,
+          chatId,
+          messageIds: [
+            ...(lifecycle.sourceUserMessageIds ?? []),
+            messageId,
+          ],
+          macroEnvSeed,
+        });
+        const resolvedMessage = reconciled.get(messageId);
+        if (resolvedMessage !== undefined) {
+          fullContent = resolvedMessage;
+        }
       }
 
       // Compute reasoning duration if content tokens never arrived (reasoning-only response)

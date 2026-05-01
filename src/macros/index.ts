@@ -1,5 +1,5 @@
 export { evaluate } from "./MacroEvaluator";
-export { buildEnv, resolveGroupCharacterNames, type BuildEnvContext } from "./MacroEnv";
+export { buildEnv, cloneEnv, resolveGroupCharacterNames, type BuildEnvContext } from "./MacroEnv";
 export { registry } from "./MacroRegistry";
 export type {
   MacroEnv,

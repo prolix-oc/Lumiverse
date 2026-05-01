@@ -321,6 +321,8 @@ export interface AssemblyResult {
   deliberationHandledByMacro?: boolean;
   /** The macro environment built during assembly — used downstream for regex script macro substitution. */
   macroEnv?: MacroEnv;
+  /** Snapshot of the macro environment before chat-history evaluation mutates it. */
+  macroEnvSeed?: MacroEnv;
 }
 
 export interface AssemblyBreakdownEntry {

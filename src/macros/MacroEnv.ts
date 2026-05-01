@@ -117,6 +117,28 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   };
 }
 
+export function cloneEnv(env: MacroEnv): MacroEnv {
+  return {
+    commit: env.commit !== false,
+    names: { ...env.names },
+    character: { ...env.character },
+    chat: { ...env.chat },
+    system: { ...env.system },
+    variables: {
+      local: new Map(env.variables.local),
+      global: new Map(env.variables.global),
+      chat: new Map(env.variables.chat),
+    },
+    ...(env._chatVarsDirty ? { _chatVarsDirty: true } : {}),
+    dynamicMacros: { ...env.dynamicMacros },
+    _dynamicMacrosLower: env._dynamicMacrosLower
+      ? new Map(env._dynamicMacrosLower)
+      : undefined,
+    signal: env.signal,
+    extra: { ...env.extra },
+  };
+}
+
 function resolveChatGreeting(character: Character, chat: Chat, messages: Message[]): string {
   const metadataOverride = chat.metadata?.greeting_override;
   if (typeof metadataOverride === "string") return metadataOverride;

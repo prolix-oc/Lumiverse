@@ -35,6 +35,7 @@ import type { ConnectionProfile } from "../types/connection-profile";
 import {
   evaluate,
   buildEnv,
+  cloneEnv,
   resolveGroupCharacterNames,
   registry,
   initMacros,
@@ -1230,6 +1231,7 @@ export async function assemblePrompt(
 
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
+  const macroEnvSeed = cloneEnv(macroEnv);
 
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (
@@ -2543,6 +2545,7 @@ export async function assemblePrompt(
     deliberationHandledByMacro: !!(macroEnv.extra as any)
       ._deliberationMacroUsed,
     macroEnv,
+    macroEnvSeed,
   };
 }
 
@@ -6546,5 +6549,6 @@ async function legacyAssembly(
     breakdown,
     parameters,
     macroEnv: macroEnv ?? undefined,
+    macroEnvSeed: macroEnv ? cloneEnv(macroEnv) : undefined,
   };
 }
