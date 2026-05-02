@@ -28,7 +28,6 @@ export function ToolCard({ message, isLatestInChain, onAccept, onReject, onCance
 
   return (
     <div className={styles.run} data-status={status}>
-      <div className={styles.marker} aria-hidden="true" />
       <div className={styles.content}>
         <div className={styles.head}>
           <div className={styles.identity}>
@@ -41,12 +40,12 @@ export function ToolCard({ message, isLatestInChain, onAccept, onReject, onCance
             </div>
           </div>
           <div className={styles.metaGroup}>
+            <span className={styles.status} data-s={status}>{formatStatus(status)}</span>
             <TokenUsage usage={payload.token_usage} />
             <span className={styles.metaItem} title="Run time">
               <Clock3 size={12} />
               {payload.duration_ms ? `${(payload.duration_ms / 1000).toFixed(1)}s` : "…"}
             </span>
-            <span className={styles.status} data-s={status}>{status}</span>
           </div>
         </div>
 
@@ -62,7 +61,7 @@ export function ToolCard({ message, isLatestInChain, onAccept, onReject, onCance
             <p>{payload.error.message || "Tool execution failed"}</p>
           </div>
         ) : (
-          <ToolOutput output={payload.output} tool={payload.tool} />
+          <ToolOutput output={payload.output} />
         )}
 
         {isLatestInChain && status === "pending" && (
@@ -84,6 +83,15 @@ export function ToolCard({ message, isLatestInChain, onAccept, onReject, onCance
             onCancel={() => setNudgeOpen(false)}
             onSubmit={(text) => { setNudgeOpen(false); onRetry(message, text); }}
           />
+        )}
+        {!running && !payload.error && (
+          <details className={styles.runDetails}>
+            <summary>
+              <ChevronDown size={13} />
+              Run details
+            </summary>
+            <pre className={styles.rawOutput}>{JSON.stringify(payload.output, null, 2)}</pre>
+          </details>
         )}
       </div>
     </div>
@@ -109,6 +117,17 @@ function getToolIntent(tool: string): string {
   }
 }
 
+function formatStatus(status: string): string {
+  switch (status) {
+    case "accepted": return "Applied";
+    case "pending": return "Ready to Review";
+    case "running": return "Running";
+    case "rejected": return "Discarded";
+    case "superseded": return "Replaced";
+    default: return status;
+  }
+}
+
 function TokenUsage({ usage }: { usage?: DreamWeaverToolTokenUsage | null }) {
   if (!usage) return null;
   return (
@@ -127,7 +146,7 @@ function formatCount(value: number): string {
   return String(value);
 }
 
-function ToolOutput({ output, tool }: { output: any; tool: string }) {
+function ToolOutput({ output }: { output: any }) {
   const entries = buildOutputEntries(output);
   return (
     <div className={styles.outputPanel}>
@@ -136,13 +155,6 @@ function ToolOutput({ output, tool }: { output: any; tool: string }) {
       ))}
       {renderAppearanceData(output?.appearance_data)}
       {renderVoiceRules(output?.voice_guidance)}
-      <details className={styles.rawDetails}>
-        <summary>
-          <ChevronDown size={13} />
-          Raw {formatToolName(tool)} output
-        </summary>
-        <pre className={styles.rawOutput}>{JSON.stringify(output, null, 2)}</pre>
-      </details>
     </div>
   );
 }

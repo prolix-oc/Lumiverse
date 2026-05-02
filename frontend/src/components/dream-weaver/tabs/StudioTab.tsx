@@ -7,10 +7,11 @@ import styles from "./StudioTab.module.css";
 
 interface Props {
   sessionId: string;
+  hasSource: boolean;
   onWorkspaceChanged?: () => void | Promise<void>;
 }
 
-export function StudioTab({ sessionId, onWorkspaceChanged }: Props) {
+export function StudioTab({ sessionId, hasSource, onWorkspaceChanged }: Props) {
   const [catalog, setCatalog] = useState<ToolCatalogEntry[]>([]);
   const { messages, invoke, accept, reject, cancel } = useDreamWeaverMessages(sessionId);
 
@@ -49,7 +50,7 @@ export function StudioTab({ sessionId, onWorkspaceChanged }: Props) {
   return (
     <div className={styles.region}>
       <ChatLog messages={messages} onAccept={acceptAndRefresh} onReject={rejectAndRefresh} onCancel={cancel} onRetry={onRetry} />
-      <Composer catalog={catalog} onSubmit={onSubmit} />
+      <Composer catalog={catalog} hasSource={hasSource} onSubmit={onSubmit} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { dreamWeaverApi } from "@/api/dream-weaver";
-import type { DreamWeaverSession } from "@/api/dream-weaver";
+import type { DreamWeaverFinalizeInput, DreamWeaverSession } from "@/api/dream-weaver";
 import { dreamWeaverToolingApi, type DreamWeaverWorkspace } from "@/api/dream-weaver-tooling";
 
 export type TabId = "studio" | "visuals";
@@ -33,10 +33,10 @@ export function useDreamWeaverStudio(sessionId: string) {
 
   useEffect(() => { void refreshDraft(); }, [refreshDraft]);
 
-  const finalize = useCallback(async () => {
+  const finalize = useCallback(async (input: DreamWeaverFinalizeInput = {}) => {
     setFinalizing(true);
     try {
-      await dreamWeaverApi.finalize(sessionId);
+      await dreamWeaverApi.finalize(sessionId, input);
       const updated = await dreamWeaverApi.getSession(sessionId);
       setSession(updated);
     } catch (e: any) {

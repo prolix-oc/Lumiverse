@@ -190,11 +190,8 @@ export interface DreamWeaverSession {
   launch_chat_id: string | null
 }
 
-export interface DreamWeaverFinalizeResult {
-  session: DreamWeaverSession
-  characterId: string
-  chatId: string | null
-  alreadyFinalized: boolean
+export interface DreamWeaverFinalizeInput {
+  accepted_portrait_image_id?: string | null
 }
 
 export interface CreateSessionInput {
@@ -555,8 +552,13 @@ export const dreamWeaverApi = {
   updateSession: (id: string, input: UpdateSessionInput) =>
     apiClient.put<DreamWeaverSession>(`/dream-weaver/sessions/${id}`, input),
 
-  finalize: (id: string) =>
-    apiClient.post<DreamWeaverFinalizeResult>(`/dream-weaver/sessions/${id}/finalize`, {}),
+  updateVisualAssets: (id: string, visualAssets: DreamWeaverVisualAsset[]) =>
+    apiClient.put<{ draft: unknown }>(`/dream-weaver/sessions/${id}/visual-assets`, {
+      visual_assets: visualAssets,
+    }),
+
+  finalize: (id: string, input: DreamWeaverFinalizeInput = {}) =>
+    apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/finalize`, input),
 
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),
@@ -588,7 +590,6 @@ export const dreamWeaverApi = {
 
   suggestVisualTags: (
     sessionId: string,
-    draft?: DreamWeaverDraft | null,
     options?: { timeoutMs?: number | null },
   ) => {
     // Mirror the user's Dream Weaver timeout setting onto the HTTP client so
@@ -603,7 +604,7 @@ export const dreamWeaverApi = {
     }
     return apiClient.post<DreamWeaverVisualTagSuggestion>(
       '/dream-weaver/visual/tag-suggestions',
-      { sessionId, draft },
+      { sessionId },
       requestOptions,
     )
   },

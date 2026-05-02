@@ -25,9 +25,19 @@ import {
 } from "../services/dream-weaver/visual-studio/service";
 import { suggestVisualTags } from "../services/dream-weaver/visual-studio/tag-suggester";
 import { getDWGenParams, createDWTimeout } from "../services/dream-weaver/dw-gen-params";
-import type { DreamWeaverVisualAsset, DW_DRAFT_V1 } from "../types/dream-weaver";
+import type { DreamWeaverVisualAsset } from "../types/dream-weaver";
 
 const app = new Hono();
+
+function getSessionMessage(userId: string, sessionId: string, messageId: string) {
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return { error: "Session not found" as const, status: 404 as const };
+  const message = messagesSvc.getMessage(userId, messageId);
+  if (!message || message.session_id !== sessionId) {
+    return { error: "Message not found" as const, status: 404 as const };
+  }
+  return { session, message };
+}
 
 const HELP_TOOL = {
   name: "help",
@@ -104,8 +114,26 @@ app.put("/sessions/:id", async (c) => {
 app.post("/sessions/:id/finalize", async (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("id");
-  const result = await dreamWeaverSvc.finalize(userId, sessionId);
-  return c.json(result);
+  let body: { accepted_portrait_image_id?: string | null } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+  try {
+    const result = await dreamWeaverSvc.finalize(userId, sessionId, body);
+    return c.json(result);
+  } catch (error: any) {
+    const message = error?.message || "Finalize failed";
+    if (
+      message.includes("Workspace incomplete")
+      || message.includes("Session not found")
+      || message.includes("Portrait image not found")
+    ) {
+      return c.json({ error: message }, message.includes("Session not found") ? 404 : 400);
+    }
+    throw error;
+  }
 });
 
 // Delete session
@@ -145,6 +173,20 @@ app.get("/sessions/:id/draft", (c) => {
   if (!session) return c.json({ error: "Session not found" }, 404);
   const draft = messagesSvc.deriveWorkspace(userId, sessionId);
   return c.json({ draft });
+});
+
+app.put("/sessions/:id/visual-assets", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const body = await c.req.json() as { visual_assets?: unknown };
+  try {
+    const draft = dreamWeaverSvc.updateVisualAssets(userId, sessionId, body.visual_assets);
+    return c.json({ draft });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not update visual assets";
+    const status = message === "Session not found" ? 404 : 400;
+    return c.json({ error: message }, status);
+  }
 });
 
 app.post("/sessions/:id/dream", (c) => {
@@ -235,7 +277,14 @@ app.post("/sessions/:id/invoke", async (c) => {
     return c.json({ error: `Tool ${body.tool} is not user-invocable` }, 403);
   }
 
+  const workspace = messagesSvc.deriveWorkspace(userId, sessionId);
+  if (workspace.sources.length === 0) {
+    return c.json({ error: "Add source material with /dream before running generation tools." }, 400);
+  }
+
   if (body.supersedes_id) {
+    const checked = getSessionMessage(userId, sessionId, body.supersedes_id);
+    if ("error" in checked) return c.json({ error: checked.error }, checked.status);
     messagesSvc.markSuperseded(userId, body.supersedes_id);
   }
 
@@ -278,19 +327,28 @@ app.post("/sessions/:id/invoke", async (c) => {
 
 app.post("/sessions/:sid/messages/:mid/accept", (c) => {
   const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const checked = getSessionMessage(userId, sessionId, c.req.param("mid"));
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
   const updated = messagesSvc.acceptToolCard(userId, c.req.param("mid"));
   return c.json(updated);
 });
 
 app.post("/sessions/:sid/messages/:mid/reject", (c) => {
   const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const checked = getSessionMessage(userId, sessionId, c.req.param("mid"));
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
   const updated = messagesSvc.rejectToolCard(userId, c.req.param("mid"));
   return c.json(updated);
 });
 
 app.post("/sessions/:sid/messages/:mid/cancel", (c) => {
   const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
   const messageId = c.req.param("mid");
+  const checked = getSessionMessage(userId, sessionId, messageId);
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
   dreamWeaverSvc.cancelToolCard(userId, messageId);
   return c.json({ ok: true });
 });
@@ -412,9 +470,8 @@ app.post("/visual/tag-suggestions", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
 
-  const { sessionId, draft: providedDraft } = body as {
+  const { sessionId } = body as {
     sessionId: string;
-    draft?: DW_DRAFT_V1 | null;
   };
   if (!sessionId) {
     return c.json({ error: "sessionId is required" }, 400);
@@ -423,36 +480,9 @@ app.post("/visual/tag-suggestions", async (c) => {
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
 
-  // TODO: suggestVisualTags still expects DW_DRAFT_V1.
   const workspace = messagesSvc.deriveWorkspace(userId, sessionId);
-  const draft: DW_DRAFT_V1 = providedDraft ?? {
-    format: "DW_DRAFT_V1",
-    version: 1,
-    kind: workspace.kind,
-    meta: { title: workspace.name ?? "", summary: "", tags: [], content_rating: "sfw" },
-    card: {
-      name: workspace.name ?? "",
-      appearance: workspace.appearance ?? "",
-      appearance_data: (workspace.appearance_data as Record<string, string> | undefined) ?? {},
-      description: workspace.appearance ?? "",
-      personality: workspace.personality ?? "",
-      scenario: workspace.scenario ?? "",
-      first_mes: workspace.first_mes ?? "",
-      system_prompt: "",
-      post_history_instructions: "",
-    },
-    voice_guidance: workspace.voice_guidance
-      ? { compiled: workspace.voice_guidance.compiled, rules: workspace.voice_guidance.rules }
-      : { compiled: "", rules: { baseline: [], rhythm: [], diction: [], quirks: [], hard_nos: [] } },
-    alternate_fields: { description: [], personality: [], scenario: [] },
-    greetings: workspace.greeting
-      ? [{ id: "greeting-0", label: "Greeting", content: workspace.greeting }]
-      : [],
-    lorebooks: [],
-    npc_definitions: [],
-    regex_scripts: [],
-  };
-  if (!providedDraft && !workspace.name && !workspace.personality) {
+  const draft = dreamWeaverSvc.getLegacyDraftSnapshot(userId, sessionId);
+  if (!workspace.name && !workspace.personality) {
     return c.json({ error: "Generate or accept card fields first." }, 400);
   }
 
@@ -499,6 +529,10 @@ app.post("/visual/jobs", async (c) => {
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
+  if (asset.asset_type !== "card_portrait") {
+    return c.json({ error: "Only card portrait assets can be generated from Dream Weaver" }, 400);
+  }
+  const draft = dreamWeaverSvc.getLegacyDraftSnapshot(userId, sessionId);
 
   const apiKey = await secretsSvc.getSecret(userId, imageGenConnectionSecretKey(connectionId)) ?? "";
 
@@ -512,7 +546,7 @@ app.post("/visual/jobs", async (c) => {
   const job = startDreamWeaverVisualJob({
     userId,
     sessionId,
-    draft: null,
+    draft,
     asset,
     connection,
     apiKey,

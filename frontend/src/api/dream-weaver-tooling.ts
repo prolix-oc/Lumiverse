@@ -1,4 +1,5 @@
 import * as apiClient from "./client";
+import type { DreamWeaverVisualAsset } from "./dream-weaver";
 
 export interface ToolCatalogEntry {
   name: string;
@@ -44,6 +45,7 @@ export interface DreamWeaverWorkspace {
   voice_guidance: any;
   lorebooks: Array<{ key: string[]; comment: string; content: string }>;
   npcs: Array<{ name: string; description: string; voice_notes?: string }>;
+  visual_assets?: DreamWeaverVisualAsset[];
 }
 
 export interface DreamWeaverToolTokenUsage {

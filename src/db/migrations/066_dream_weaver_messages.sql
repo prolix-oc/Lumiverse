@@ -18,6 +18,3 @@ CREATE INDEX IF NOT EXISTS idx_dwm_session_seq
 CREATE INDEX IF NOT EXISTS idx_dwm_session_status
   ON dream_weaver_messages(session_id, status)
   WHERE kind = 'tool_card';
-
-ALTER TABLE dream_weaver_sessions ADD COLUMN workspace_kind TEXT NOT NULL DEFAULT 'character';
-ALTER TABLE dream_weaver_sessions ADD COLUMN launch_chat_id TEXT;

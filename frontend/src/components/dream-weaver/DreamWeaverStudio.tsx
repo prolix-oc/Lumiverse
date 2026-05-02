@@ -5,9 +5,10 @@ import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { Spinner } from '@/components/shared/Spinner'
 import { useStore } from '@/store'
-import type { DreamWeaverDraft } from '@/api/dream-weaver'
+import { dreamWeaverApi, type DreamWeaverDraft } from '@/api/dream-weaver'
 import { useDreamWeaverStudio, type TabId } from './hooks/useDreamWeaverStudio'
 import { useVisualStudio } from './hooks/useVisualStudio'
+import { toast } from '@/lib/toast'
 import { StudioTab } from './tabs/StudioTab'
 import { VisualsTab } from './tabs/VisualsTab'
 import styles from './DreamWeaverStudio.module.css'
@@ -43,6 +44,7 @@ function workspaceToV1(draft: any): DreamWeaverDraft | null {
     lorebooks: draft.lorebooks ?? [],
     npc_definitions: draft.npcs ?? [],
     regex_scripts: [],
+    visual_assets: draft.visual_assets,
   }
 }
 
@@ -61,7 +63,27 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
 
   const studio = useDreamWeaverStudio(sessionId)
   const draftV1 = useMemo(() => workspaceToV1(studio.draft), [studio.draft])
-  const visuals = useVisualStudio(sessionId, draftV1, () => {})
+  const workspaceKind = studio.session?.workspace_kind === 'scenario' ? 'scenario' : 'character'
+  const isFinalized = Boolean(studio.session?.character_id)
+  const hasSource = Boolean(
+    studio.session?.dream_text?.trim()
+      || studio.draft?.sources?.some((source) => source.content.trim()),
+  )
+  const missingFinalizeFields = getMissingFinalizeFields(studio.draft, workspaceKind)
+  const finalizeLabel = isFinalized
+    ? `Update ${workspaceKind === 'scenario' ? 'Scenario' : 'Character'}`
+    : `Finalize ${workspaceKind === 'scenario' ? 'Scenario' : 'Character'}`
+  const statusLabel = isFinalized ? 'Linked' : 'Draft'
+  const footerStatus = isFinalized
+    ? 'Updates the existing generated card.'
+    : 'Creates a new card when finalized.'
+  const handleVisualDraftUpdate = useCallback((patch: Partial<DreamWeaverDraft>) => {
+    if (!patch.visual_assets) return
+    void dreamWeaverApi.updateVisualAssets(sessionId, patch.visual_assets).catch((error) => {
+      console.error('Failed to persist Dream Weaver visual assets', error)
+    })
+  }, [sessionId])
+  const visuals = useVisualStudio(sessionId, draftV1, handleVisualDraftUpdate)
 
   const handleClose = useCallback(() => {
     closeModal()
@@ -70,6 +92,17 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
   const handleTabChange = useCallback((tab: TabId) => {
     studio.setActiveTab(tab)
   }, [studio])
+
+  const handleFinalize = useCallback(() => {
+    if (missingFinalizeFields.length > 0) {
+      toast.warning(`Add ${formatMissingFields(missingFinalizeFields)} before finalizing.`, { title: 'Dream Weaver' })
+      return
+    }
+
+    void studio.finalize({
+      accepted_portrait_image_id: visuals.selectedAsset?.references[0]?.image_id ?? null,
+    })
+  }, [missingFinalizeFields, studio, visuals.selectedAsset?.references])
 
   return createPortal(
     <>
@@ -112,8 +145,8 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                     ))}
                   </div>
                   <div className={styles.badges}>
-                    <span className={styles.badge}>
-                      {studio.session?.character_id ? 'Finalized' : 'Draft'}
+                    <span className={styles.badge} data-state={isFinalized ? 'linked' : undefined}>
+                      {statusLabel}
                     </span>
                   </div>
                   <CloseButton onClick={handleClose} />
@@ -137,7 +170,7 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
 
                   <div className={styles.canvas}>
                     {studio.activeTab === 'studio' && (
-                      <StudioTab sessionId={sessionId} onWorkspaceChanged={studio.refreshDraft} />
+                      <StudioTab sessionId={sessionId} hasSource={hasSource} onWorkspaceChanged={studio.refreshDraft} />
                     )}
                     {studio.activeTab === 'visuals' && (
                       <VisualsTab draft={draftV1} worldStale={false} visuals={visuals} />
@@ -150,6 +183,9 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                 <div className={styles.footerLeft}>
                   <span className={styles.sessionName}>
                     {studio.draft?.name || studio.session?.dream_text?.slice(0, 40) || 'Untitled'}
+                  </span>
+                  <span className={styles.saveStatus} data-dirty={!isFinalized || undefined}>
+                    {footerStatus}
                   </span>
                 </div>
                 <div className={styles.footerRight}>
@@ -164,11 +200,12 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={studio.finalize}
+                    onClick={handleFinalize}
                     loading={studio.finalizing}
                     disabled={studio.finalizing}
+                    title={missingFinalizeFields.length > 0 ? `Needs ${formatMissingFields(missingFinalizeFields)}` : undefined}
                   >
-                    Finalize
+                    {finalizeLabel}
                   </Button>
                 </div>
               </footer>
@@ -186,4 +223,23 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
     </>,
     document.body,
   )
+}
+
+function getMissingFinalizeFields(
+  draft: ReturnType<typeof useDreamWeaverStudio>['draft'],
+  workspaceKind: 'character' | 'scenario',
+): string[] {
+  if (!draft) return ['a name/title', 'personality', 'first message']
+
+  const missing: string[] = []
+  if (!draft.name?.trim()) missing.push(workspaceKind === 'scenario' ? 'a title' : 'a name')
+  if (!draft.personality?.trim()) missing.push('personality')
+  if (!draft.first_mes?.trim()) missing.push('first message')
+  return missing
+}
+
+function formatMissingFields(fields: string[]): string {
+  if (fields.length <= 1) return fields[0] ?? 'required fields'
+  if (fields.length === 2) return `${fields[0]} and ${fields[1]}`
+  return `${fields.slice(0, -1).join(', ')}, and ${fields[fields.length - 1]}`
 }

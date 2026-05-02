@@ -6,18 +6,23 @@ import type {
   DreamWeaverWorkspace,
   DreamWeaverWorkspaceKind,
   CreateSessionInput,
+  FinalizeSessionInput,
   UpdateSessionInput,
   LorebookEntry,
   NpcEntry,
+  DW_DRAFT_V1,
+  DreamWeaverVisualAsset,
 } from "../../types/dream-weaver";
 import * as charactersSvc from "../characters.service";
 import * as chatsSvc from "../chats.service";
+import * as imagesSvc from "../images.service";
 import * as worldBooksSvc from "../world-books.service";
-import { setCharacterWorldBookIds } from "../../utils/character-world-books";
+import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../../utils/character-world-books";
 import { deriveWorkspace } from "./messages.service";
 import * as messagesSvc from "./messages.service";
 import { getTool } from "./tools/registry";
 import { executeTool } from "./tools/executor";
+import { getAcceptedPortraitReference } from "./portrait-reference";
 
 function rowToSession(row: any): DreamWeaverSession {
   return {
@@ -47,6 +52,94 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
   if (value == null) return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+const EMPTY_VOICE_GUIDANCE = {
+  compiled: "",
+  rules: { baseline: [], rhythm: [], diction: [], quirks: [], hard_nos: [] },
+};
+
+function cloneRecord(value: unknown): Record<string, any> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeVisualAssets(value: unknown): DreamWeaverVisualAsset[] {
+  if (!Array.isArray(value)) throw new Error("visual_assets must be an array");
+  return value.map((raw, index) => {
+    const asset = cloneRecord(raw);
+    const id = typeof asset.id === "string" && asset.id.trim() ? asset.id.trim() : `asset-${index + 1}`;
+    const references = Array.isArray(asset.references)
+      ? asset.references
+        .filter((ref: unknown) => ref && typeof ref === "object" && !Array.isArray(ref))
+        .map((ref: any, refIndex: number) => ({
+          id: typeof ref.id === "string" && ref.id.trim() ? ref.id.trim() : `${id}-ref-${refIndex + 1}`,
+          image_id: typeof ref.image_id === "string" && ref.image_id.trim() ? ref.image_id.trim() : null,
+          image_url: typeof ref.image_url === "string" && ref.image_url.trim() ? ref.image_url.trim() : null,
+          weight: typeof ref.weight === "number" ? ref.weight : undefined,
+          label: typeof ref.label === "string" && ref.label.trim() ? ref.label.trim() : undefined,
+        }))
+      : [];
+
+    return {
+      id,
+      asset_type: "card_portrait",
+      label: typeof asset.label === "string" && asset.label.trim() ? asset.label.trim() : "Main Portrait",
+      prompt: typeof asset.prompt === "string" ? asset.prompt : "",
+      negative_prompt: typeof asset.negative_prompt === "string" ? asset.negative_prompt : "",
+      macro_tokens: Array.isArray(asset.macro_tokens)
+        ? asset.macro_tokens.filter((item: unknown) => typeof item === "string")
+        : [],
+      width: typeof asset.width === "number" && Number.isFinite(asset.width) ? asset.width : 832,
+      height: typeof asset.height === "number" && Number.isFinite(asset.height) ? asset.height : 1216,
+      aspect_ratio: typeof asset.aspect_ratio === "string" && asset.aspect_ratio.trim() ? asset.aspect_ratio.trim() : "2:3",
+      seed: typeof asset.seed === "number" && Number.isFinite(asset.seed) ? asset.seed : null,
+      references,
+      provider: typeof asset.provider === "string" ? asset.provider as DreamWeaverVisualAsset["provider"] : null,
+      preset_id: typeof asset.preset_id === "string" && asset.preset_id.trim() ? asset.preset_id.trim() : null,
+      provider_state: cloneRecord(asset.provider_state),
+    };
+  });
+}
+
+function workspaceToLegacyDraft(workspace: DreamWeaverWorkspace): DW_DRAFT_V1 {
+  const visualAssets = workspace.visual_assets ?? [];
+  return {
+    format: "DW_DRAFT_V1",
+    version: 1,
+    kind: workspace.kind,
+    meta: { title: workspace.name ?? "", summary: "", tags: [], content_rating: "sfw" },
+    card: {
+      name: workspace.name ?? "",
+      appearance: workspace.appearance ?? "",
+      appearance_data: (workspace.appearance_data ?? {}) as Record<string, string>,
+      description: workspace.appearance ?? "",
+      personality: workspace.personality ?? "",
+      scenario: workspace.scenario ?? "",
+      first_mes: workspace.first_mes ?? "",
+      system_prompt: "",
+      post_history_instructions: "",
+    },
+    voice_guidance: workspace.voice_guidance ?? EMPTY_VOICE_GUIDANCE,
+    alternate_fields: { description: [], personality: [], scenario: [] },
+    greetings: workspace.greeting
+      ? [{ id: "greeting-0", label: "Greeting", content: workspace.greeting }]
+      : [],
+    lorebooks: workspace.lorebooks,
+    npc_definitions: workspace.npcs,
+    regex_scripts: [],
+    visual_assets: visualAssets,
+    image_assets: visualAssets.map((asset) => ({
+      id: asset.id,
+      type: "portrait",
+      label: asset.label,
+      prompt: asset.prompt,
+      negative: asset.negative_prompt,
+      imageId: asset.references[0]?.image_id ?? null,
+      imageUrl: asset.references[0]?.image_url ?? null,
+      locked: false,
+    })),
+  };
 }
 
 export function createSession(userId: string, input: CreateSessionInput): DreamWeaverSession {
@@ -167,13 +260,52 @@ export async function updateSession(
   return getSession(userId, sessionId)!;
 }
 
+export function updateVisualAssets(
+  userId: string,
+  sessionId: string,
+  visualAssetsInput: unknown,
+): DreamWeaverWorkspace {
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
 
-function createWorldBooksFromWorkspace(userId: string, workspace: DreamWeaverWorkspace): string[] {
+  const visualAssets = normalizeVisualAssets(visualAssetsInput);
+  messagesSvc.invalidateDraftCache(sessionId);
+  const workspace = {
+    ...deriveWorkspace(userId, sessionId),
+    visual_assets: visualAssets,
+  };
+  const draft = workspaceToLegacyDraft(workspace);
+
+  getDb()
+    .prepare(`
+      UPDATE dream_weaver_sessions
+         SET draft = ?,
+             updated_at = unixepoch()
+       WHERE id = ? AND user_id = ?
+    `)
+    .run(JSON.stringify(draft), sessionId, userId);
+
+  messagesSvc.invalidateDraftCache(sessionId);
+  return deriveWorkspace(userId, sessionId);
+}
+
+export function getLegacyDraftSnapshot(userId: string, sessionId: string): DW_DRAFT_V1 {
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+  return workspaceToLegacyDraft(deriveWorkspace(userId, sessionId));
+}
+
+function createWorldBooksFromWorkspace(
+  userId: string,
+  sessionId: string,
+  workspace: DreamWeaverWorkspace,
+): string[] {
   const ids: string[] = [];
   if (workspace.lorebooks.length > 0) {
     const book = worldBooksSvc.createWorldBook(userId, {
       name: `${workspace.name ?? "Dream"} Lorebook`,
       description: "Generated by Dream Weaver",
+      metadata: { dream_weaver: { session_id: sessionId, kind: "lorebook" } },
     });
     for (let i = 0; i < workspace.lorebooks.length; i++) {
       const e: LorebookEntry = workspace.lorebooks[i];
@@ -189,6 +321,7 @@ function createWorldBooksFromWorkspace(userId: string, workspace: DreamWeaverWor
     const npcBook = worldBooksSvc.createWorldBook(userId, {
       name: `${workspace.name ?? "Dream"} NPCs`,
       description: "Generated NPCs by Dream Weaver",
+      metadata: { dream_weaver: { session_id: sessionId, kind: "npcs" } },
     });
     for (let i = 0; i < workspace.npcs.length; i++) {
       const n: NpcEntry = workspace.npcs[i];
@@ -213,6 +346,7 @@ function formatNpcEntryContent(npc: NpcEntry, characterName: string): string {
 export async function finalize(
   userId: string,
   sessionId: string,
+  input: FinalizeSessionInput = {},
 ): Promise<DreamWeaverSession> {
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
@@ -222,14 +356,27 @@ export async function finalize(
     throw new Error("Workspace incomplete: name/title, behavior, and opening message are required");
   }
 
-  const worldBookIds = createWorldBooksFromWorkspace(userId, workspace);
+  const persistedDraft = workspaceToLegacyDraft(workspace);
+  const persistedPortrait = getAcceptedPortraitReference(persistedDraft)?.reference.image_id ?? null;
+  const acceptedPortraitImageId = normalizeOptionalText(input.accepted_portrait_image_id) ?? persistedPortrait;
+  if (acceptedPortraitImageId && !imagesSvc.getImage(userId, acceptedPortraitImageId)) {
+    throw new Error("Portrait image not found");
+  }
 
   let characterId = session.character_id ?? null;
+  let launchChatId = session.launch_chat_id ?? null;
+  const worldBookIds = createWorldBooksFromWorkspace(userId, sessionId, workspace);
+  let previousGeneratedWorldBookIds: string[] = [];
 
   if (characterId) {
     const character = charactersSvc.getCharacter(userId, characterId);
     if (character) {
       const existingExtensions = (character.extensions ?? {}) as Record<string, any>;
+      previousGeneratedWorldBookIds = Array.isArray(existingExtensions.dream_weaver?.generated_world_book_ids)
+        ? existingExtensions.dream_weaver.generated_world_book_ids.filter((id: unknown) => typeof id === "string" && id)
+        : [];
+      const existingWorldBookIds = getCharacterWorldBookIds(existingExtensions);
+      const preservedWorldBookIds = existingWorldBookIds.filter((id) => !previousGeneratedWorldBookIds.includes(id));
       const dreamWeaverMeta = {
         ...existingExtensions.dream_weaver,
         kind: workspace.kind,
@@ -237,8 +384,9 @@ export async function finalize(
         appearance_data: workspace.appearance_data ?? {},
         voice_guidance: workspace.voice_guidance ?? undefined,
         sources: workspace.sources,
+        generated_world_book_ids: worldBookIds,
       };
-      const nextExtensions = setCharacterWorldBookIds(existingExtensions, worldBookIds);
+      const nextExtensions = setCharacterWorldBookIds(existingExtensions, [...preservedWorldBookIds, ...worldBookIds]);
       charactersSvc.updateCharacter(userId, characterId, {
         name: workspace.name,
         description: workspace.appearance ?? character.description ?? "",
@@ -247,8 +395,15 @@ export async function finalize(
         first_mes: workspace.first_mes,
         extensions: { ...nextExtensions, dream_weaver: dreamWeaverMeta },
       });
+      if (acceptedPortraitImageId) {
+        charactersSvc.setCharacterImage(userId, characterId, acceptedPortraitImageId);
+      }
+      for (const oldId of previousGeneratedWorldBookIds) {
+        if (!worldBookIds.includes(oldId)) worldBooksSvc.deleteWorldBook(userId, oldId);
+      }
     } else {
       characterId = null;
+      launchChatId = null;
     }
   }
 
@@ -261,6 +416,7 @@ export async function finalize(
       appearance_data: workspace.appearance_data ?? {},
       voice_guidance: workspace.voice_guidance ?? undefined,
       sources: workspace.sources,
+      generated_world_book_ids: worldBookIds,
     };
     const created = charactersSvc.createCharacter(userId, {
       name: workspace.name,
@@ -271,12 +427,18 @@ export async function finalize(
       extensions,
     });
     characterId = created.id;
+    if (acceptedPortraitImageId) {
+      charactersSvc.setCharacterImage(userId, characterId, acceptedPortraitImageId);
+    }
   }
 
-  const launchChat = chatsSvc.createChat(userId, {
-    character_id: characterId!,
-    name: workspace.name,
-  });
+  if (!launchChatId) {
+    const launchChat = chatsSvc.createChat(userId, {
+      character_id: characterId!,
+      name: workspace.name,
+    });
+    launchChatId = launchChat.id;
+  }
 
   getDb()
     .prepare(`
@@ -287,9 +449,9 @@ export async function finalize(
              updated_at = unixepoch()
        WHERE id = ? AND user_id = ?
     `)
-    .run(characterId, launchChat.id, sessionId, userId);
+    .run(characterId, launchChatId, sessionId, userId);
 
-  eventBus.emit(EventType.DREAM_WEAVER_FINALIZED, { sessionId, characterId, chatId: launchChat.id }, userId);
+  eventBus.emit(EventType.DREAM_WEAVER_FINALIZED, { sessionId, characterId, chatId: launchChatId }, userId);
 
   return getSession(userId, sessionId)!;
 }

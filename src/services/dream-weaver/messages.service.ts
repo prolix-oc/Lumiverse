@@ -10,6 +10,7 @@ import type {
   DreamWeaverWorkspaceKind,
   ToolCardPayload,
   DW_DRAFT_V1,
+  DreamWeaverVisualAsset,
 } from "../../types/dream-weaver";
 import { EMPTY_DREAM_WEAVER_WORKSPACE } from "../../types/dream-weaver";
 import { getTool } from "./tools/registry";
@@ -237,7 +238,23 @@ function legacyDraftToWorkspace(draft: DW_DRAFT_V1): DreamWeaverWorkspace {
     voice_guidance: draft.voice_guidance ?? null,
     lorebooks: Array.isArray(draft.lorebooks) ? draft.lorebooks : [],
     npcs: Array.isArray(draft.npc_definitions) ? draft.npc_definitions : [],
+    visual_assets: Array.isArray(draft.visual_assets) ? draft.visual_assets as DreamWeaverVisualAsset[] : undefined,
   };
+}
+
+function readPersistedVisualAssets(sessionId: string): DreamWeaverVisualAsset[] | undefined {
+  if (!hasSessionColumn("draft")) return undefined;
+  const row = getDb()
+    .prepare(`SELECT draft FROM dream_weaver_sessions WHERE id = ?`)
+    .get(sessionId) as { draft?: string | null } | undefined;
+  if (!row?.draft) return undefined;
+  try {
+    const parsed = JSON.parse(row.draft) as DW_DRAFT_V1;
+    if (!parsed || parsed.format !== "DW_DRAFT_V1") return undefined;
+    return Array.isArray(parsed.visual_assets) ? parsed.visual_assets as DreamWeaverVisualAsset[] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readLegacyWorkspace(sessionId: string): DreamWeaverWorkspace | null {
@@ -339,6 +356,11 @@ export function deriveWorkspace(userId: string, sessionId: string): DreamWeaverW
     const payload = JSON.parse(row.payload) as ToolCardPayload;
     if (!payload.output) continue;
     workspace = tool.apply(workspace, payload.output);
+  }
+
+  const visualAssets = readPersistedVisualAssets(sessionId);
+  if (visualAssets && visualAssets.length > 0) {
+    workspace = { ...workspace, visual_assets: visualAssets };
   }
 
   workspaceCache.set(sessionId, { fingerprint, workspace });

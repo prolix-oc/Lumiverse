@@ -6,8 +6,10 @@ import {
   Clock3,
   FolderOpen,
   History,
+  Search,
   Sparkles,
   Trash2,
+  X,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { connectionsApi } from '@/api/connections'
@@ -46,6 +48,7 @@ import {
 import styles from './DreamWeaverPanel.module.css'
 
 type ArchiveKey = SessionArchiveGroup['key']
+type ArchiveFilter = 'all' | 'drafts' | 'finalized'
 
 interface DWGenParams {
   temperature?: number | null
@@ -66,6 +69,8 @@ export default function DreamWeaverPanel() {
   const [genParams, setGenParams] = useState<DWGenParams>({})
   const genParamsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [sessions, setSessions] = useState<DreamWeaverSession[]>([])
+  const [archiveQuery, setArchiveQuery] = useState('')
+  const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('all')
   const [personas, setPersonas] = useState<Persona[]>([])
   const [connections, setConnections] = useState<ConnectionProfile[]>([])
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null)
@@ -96,10 +101,22 @@ export default function DreamWeaverPanel() {
     [activeProfileId, connections, selectedConnectionId],
   )
 
+  const filteredSessions = useMemo(() => {
+    if (archiveFilter === 'drafts') return sessions.filter((session) => !session.character_id)
+    if (archiveFilter === 'finalized') return sessions.filter((session) => Boolean(session.character_id))
+    return sessions
+  }, [archiveFilter, sessions])
+
   const archiveGroups = useMemo(
-    () => buildDreamWeaverSessionArchive(sessions, ''),
-    [sessions],
+    () => buildDreamWeaverSessionArchive(filteredSessions, archiveQuery),
+    [archiveQuery, filteredSessions],
   )
+
+  const archiveCounts = useMemo(() => ({
+    all: sessions.length,
+    drafts: sessions.filter((session) => !session.character_id).length,
+    finalized: sessions.filter((session) => Boolean(session.character_id)).length,
+  }), [sessions])
 
   useEffect(() => { setPersonas(storedPersonas) }, [storedPersonas])
   useEffect(() => { setConnections(storedProfiles) }, [storedProfiles])
@@ -290,237 +307,243 @@ export default function DreamWeaverPanel() {
   return (
     <>
       <div className={styles.panel}>
-
-        {/* Dream textarea */}
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>Card Type</span>
-          <div className={styles.kindToggle} aria-label="Dream Weaver card type">
-            <button
-              type="button"
-              className={styles.kindButton}
-              data-active={workspaceKind === 'character' || undefined}
-              onClick={() => setWorkspaceKind('character')}
-            >
-              Character
-            </button>
-            <button
-              type="button"
-              className={styles.kindButton}
-              data-active={workspaceKind === 'scenario' || undefined}
-              onClick={() => setWorkspaceKind('scenario')}
-            >
-              Scenario
-            </button>
-          </div>
-        </div>
-
-        {/* Dream textarea */}
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>Dream</span>
-          <TextArea
-            value={dreamText}
-            onChange={setDreamText}
-            placeholder="Optional source material. Describe the tension, dynamic, history, and angle worth preserving."
-            rows={6}
-          />
-        </div>
-
-        {/* Persona / Connection / Model */}
-        <div className={styles.selectorsGrid}>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Persona</span>
-            <SearchableSelect
-              value={resolvedPersonaId ?? ''}
-              onChange={(v) => setSelectedPersonaId(v || null)}
-              options={personaOptions}
-              placeholder="Select a persona…"
-              searchPlaceholder="Search personas…"
-              emptyMessage="No personas available"
-              disabled={personas.length === 0}
-              ariaLabel="Persona"
-              portal
-            />
-          </div>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Connection</span>
-            <SearchableSelect
-              value={resolvedConnectionId ?? ''}
-              onChange={(v) => {
-                setSelectedConnectionId(v || null)
-                setSelectedModel('')
-              }}
-              options={connectionOptions}
-              placeholder="Select a connection…"
-              searchPlaceholder="Search connections…"
-              emptyMessage="No connections available"
-              disabled={connections.length === 0}
-              ariaLabel="Connection"
-              portal
-            />
-          </div>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Model</span>
-            <ModelCombobox
-              value={selectedModel}
-              onChange={setSelectedModel}
-              models={connectionModels}
-              modelLabels={connectionModelLabels}
-              loading={connectionModelsLoading}
-              onRefresh={fetchConnectionModels}
-              autoRefreshOnFocus
-              refreshKey={resolvedConnectionId ?? ''}
-              placeholder="Leave empty to use connection default"
-              emptyMessage={resolvedConnectionId ? 'No models returned for this connection. Enter one manually or leave it blank to use the connection default.' : 'No connection available.'}
-              disabled={!resolvedConnectionId}
-            />
-          </div>
-        </div>
-
-        {/* Refine — collapsed by default */}
-        <div>
-          <button
-            type="button"
-            className={styles.refineToggle}
-            onClick={() => setRefineExpanded((v) => !v)}
-          >
-            <span className={styles.refineLine} />
-            <span className={styles.refineLabel}>
-              Refine
-              <ChevronRight
-                size={12}
-                className={clsx(styles.refineChevron, refineExpanded && styles.refineChevronOpen)}
-              />
-            </span>
-            <span className={styles.refineLine} />
-          </button>
-
-          {refineExpanded && (
-            <div className={styles.refineBody}>
-              <div className={styles.field}>
-                <span className={styles.fieldLabel}>Tone</span>
-                <TextInput
-                  value={tone}
-                  onChange={setTone}
-                  placeholder="Uneasy, intimate, grounded, sharp…"
-                />
-              </div>
-              <div className={styles.field}>
-                <span className={styles.fieldLabel}>Constraints</span>
-                <TextInput
-                  value={constraints}
-                  onChange={setConstraints}
-                  placeholder="Keep the prior history explicit."
-                />
-              </div>
-              <div className={styles.field}>
-                <span className={styles.fieldLabel}>Avoid</span>
-                <TextInput
-                  value={dislikes}
-                  onChange={setDislikes}
-                  placeholder="No flattening, no clichés."
-                />
+        <section className={styles.createSurface} aria-label="Create a Dream Weaver session">
+          <div className={styles.createHeader}>
+            <div className={styles.createTitleBlock}>
+              <span className={styles.createKicker}>New Weave</span>
+              <h3 className={styles.createTitle}>Start anywhere, shape it freely.</h3>
+            </div>
+            <div className={styles.kindField}>
+              <span className={styles.fieldLabel}>Card Type</span>
+              <div className={styles.kindToggle} aria-label="Dream Weaver card type">
+                <button
+                  type="button"
+                  className={styles.kindButton}
+                  data-active={workspaceKind === 'character' || undefined}
+                  onClick={() => setWorkspaceKind('character')}
+                >
+                  Character
+                </button>
+                <button
+                  type="button"
+                  className={styles.kindButton}
+                  data-active={workspaceKind === 'scenario' || undefined}
+                  onClick={() => setWorkspaceKind('scenario')}
+                >
+                  Scenario
+                </button>
               </div>
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* Tune — LLM sampling params, collapsed by default */}
-        <div>
-          <button
-            type="button"
-            className={styles.refineToggle}
-            onClick={() => setTuneExpanded((v) => !v)}
-          >
-            <span className={styles.refineLine} />
-            <span className={styles.refineLabel}>
-              Tune
-              <ChevronRight
-                size={12}
-                className={clsx(styles.refineChevron, tuneExpanded && styles.refineChevronOpen)}
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Source Material</span>
+            <TextArea
+              value={dreamText}
+              onChange={setDreamText}
+              placeholder="Optional. Paste a premise, scene, imported card notes, worldbook ideas, or anything worth preserving."
+              rows={6}
+            />
+          </div>
+
+          {/* Persona / Connection / Model */}
+          <div className={styles.selectorsGrid}>
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Persona</span>
+              <SearchableSelect
+                value={resolvedPersonaId ?? ''}
+                onChange={(v) => setSelectedPersonaId(v || null)}
+                options={personaOptions}
+                placeholder="Use active or default persona"
+                searchPlaceholder="Search personas…"
+                emptyMessage="No personas available"
+                disabled={personas.length === 0}
+                ariaLabel="Persona"
+                portal
               />
-            </span>
-            <span className={styles.refineLine} />
-          </button>
+            </div>
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Connection</span>
+              <SearchableSelect
+                value={resolvedConnectionId ?? ''}
+                onChange={(v) => {
+                  setSelectedConnectionId(v || null)
+                  setSelectedModel('')
+                }}
+                options={connectionOptions}
+                placeholder="Use active connection"
+                searchPlaceholder="Search connections…"
+                emptyMessage="No connections available"
+                disabled={connections.length === 0}
+                ariaLabel="Connection"
+                portal
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Model</span>
+              <ModelCombobox
+                value={selectedModel}
+                onChange={setSelectedModel}
+                models={connectionModels}
+                modelLabels={connectionModelLabels}
+                loading={connectionModelsLoading}
+                onRefresh={fetchConnectionModels}
+                autoRefreshOnFocus
+                refreshKey={resolvedConnectionId ?? ''}
+                placeholder="Connection default"
+                emptyMessage={resolvedConnectionId ? 'No models returned. Enter one manually or use the connection default.' : 'No connection available.'}
+                disabled={!resolvedConnectionId}
+              />
+            </div>
+          </div>
 
-          {tuneExpanded && (
-            <div className={styles.refineBody}>
-              <p className={styles.tuneHint}>
-                Applies to every Dream Weaver generation step. Leave blank to use per-step defaults.
-              </p>
-              <div className={styles.tuneGrid}>
+          {/* Refine — collapsed by default */}
+          <div>
+            <button
+              type="button"
+              className={styles.refineToggle}
+              onClick={() => setRefineExpanded((v) => !v)}
+              aria-expanded={refineExpanded}
+            >
+              <span className={styles.refineLine} />
+              <span className={styles.refineLabel}>
+                Refine Direction
+                <ChevronRight
+                  size={12}
+                  className={clsx(styles.refineChevron, refineExpanded && styles.refineChevronOpen)}
+                />
+              </span>
+              <span className={styles.refineLine} />
+            </button>
+
+            {refineExpanded && (
+              <div className={styles.refineBody}>
                 <div className={styles.field}>
-                  <span className={styles.fieldLabel}>Temperature</span>
+                  <span className={styles.fieldLabel}>Tone</span>
                   <TextInput
-                    value={genParams.temperature != null ? String(genParams.temperature) : ''}
-                    onChange={(v) => updateGenParam('temperature', v !== '' ? parseFloat(v) : null)}
-                    type="number"
-                    placeholder="Default"
-                    min={0}
-                    max={2}
-                    step={0.05}
+                    value={tone}
+                    onChange={setTone}
+                    placeholder="Uneasy, intimate, grounded, sharp…"
                   />
                 </div>
                 <div className={styles.field}>
-                  <span className={styles.fieldLabel}>Top P</span>
+                  <span className={styles.fieldLabel}>Keep</span>
                   <TextInput
-                    value={genParams.topP != null ? String(genParams.topP) : ''}
-                    onChange={(v) => updateGenParam('topP', v !== '' ? parseFloat(v) : null)}
-                    type="number"
-                    placeholder="Default"
-                    min={0}
-                    max={1}
-                    step={0.01}
+                    value={constraints}
+                    onChange={setConstraints}
+                    placeholder="Specific history, rules, relationships, or constraints."
                   />
                 </div>
                 <div className={styles.field}>
-                  <span className={styles.fieldLabel}>Max Tokens</span>
+                  <span className={styles.fieldLabel}>Avoid</span>
                   <TextInput
-                    value={genParams.maxTokens != null ? String(genParams.maxTokens) : ''}
-                    onChange={(v) => updateGenParam('maxTokens', v !== '' ? parseInt(v, 10) : null)}
-                    type="number"
-                    placeholder="Default"
-                    min={256}
-                    step={256}
-                  />
-                </div>
-                <div className={styles.field}>
-                  <span className={styles.fieldLabel}>Top K</span>
-                  <TextInput
-                    value={genParams.topK != null ? String(genParams.topK) : ''}
-                    onChange={(v) => updateGenParam('topK', v !== '' ? parseInt(v, 10) : null)}
-                    type="number"
-                    placeholder="Default"
-                    min={1}
-                    step={1}
-                  />
-                </div>
-                <div className={styles.field}>
-                  <span className={styles.fieldLabel}>Timeout (s)</span>
-                  <TextInput
-                    value={genParams.timeoutMs != null ? String(Math.round(genParams.timeoutMs / 1000)) : ''}
-                    onChange={(v) => updateGenParam('timeoutMs', v !== '' ? parseInt(v, 10) * 1000 : null)}
-                    type="number"
-                    placeholder="None"
-                    min={10}
-                    step={10}
+                    value={dislikes}
+                    onChange={setDislikes}
+                    placeholder="Clichés, tone drift, unwanted tropes, or exclusions."
                   />
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Dream button */}
-        <Button
-          variant="primary"
-          icon={<Sparkles size={14} />}
-          loading={isCreating}
-          disabled={isCreating}
-          onClick={() => void handleDream()}
-          className={styles.dreamBtn}
-        >
-          {isCreating ? 'Opening...' : dreamText.trim() ? 'Add Dream & Open Studio' : 'Open Blank Studio'}
-        </Button>
+          {/* Tune — LLM sampling params, collapsed by default */}
+          <div>
+            <button
+              type="button"
+              className={styles.refineToggle}
+              onClick={() => setTuneExpanded((v) => !v)}
+              aria-expanded={tuneExpanded}
+            >
+              <span className={styles.refineLine} />
+              <span className={styles.refineLabel}>
+                Advanced Generation
+                <ChevronRight
+                  size={12}
+                  className={clsx(styles.refineChevron, tuneExpanded && styles.refineChevronOpen)}
+                />
+              </span>
+              <span className={styles.refineLine} />
+            </button>
+
+            {tuneExpanded && (
+              <div className={styles.refineBody}>
+                <p className={styles.tuneHint}>
+                  Applies to every Dream Weaver generation step. Leave blank for tool defaults.
+                </p>
+                <div className={styles.tuneGrid}>
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>Temperature</span>
+                    <TextInput
+                      value={genParams.temperature != null ? String(genParams.temperature) : ''}
+                      onChange={(v) => updateGenParam('temperature', v !== '' ? parseFloat(v) : null)}
+                      type="number"
+                      placeholder="Default"
+                      min={0}
+                      max={2}
+                      step={0.05}
+                    />
+                  </div>
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>Top P</span>
+                    <TextInput
+                      value={genParams.topP != null ? String(genParams.topP) : ''}
+                      onChange={(v) => updateGenParam('topP', v !== '' ? parseFloat(v) : null)}
+                      type="number"
+                      placeholder="Default"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                    />
+                  </div>
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>Max Tokens</span>
+                    <TextInput
+                      value={genParams.maxTokens != null ? String(genParams.maxTokens) : ''}
+                      onChange={(v) => updateGenParam('maxTokens', v !== '' ? parseInt(v, 10) : null)}
+                      type="number"
+                      placeholder="Default"
+                      min={256}
+                      step={256}
+                    />
+                  </div>
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>Top K</span>
+                    <TextInput
+                      value={genParams.topK != null ? String(genParams.topK) : ''}
+                      onChange={(v) => updateGenParam('topK', v !== '' ? parseInt(v, 10) : null)}
+                      type="number"
+                      placeholder="Default"
+                      min={1}
+                      step={1}
+                    />
+                  </div>
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>Timeout (s)</span>
+                    <TextInput
+                      value={genParams.timeoutMs != null ? String(Math.round(genParams.timeoutMs / 1000)) : ''}
+                      onChange={(v) => updateGenParam('timeoutMs', v !== '' ? parseInt(v, 10) * 1000 : null)}
+                      type="number"
+                      placeholder="None"
+                      min={10}
+                      step={10}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <Button
+            variant="primary"
+            icon={<Sparkles size={14} />}
+            loading={isCreating}
+            disabled={isCreating}
+            onClick={() => void handleDream()}
+            className={styles.dreamBtn}
+          >
+            {isCreating ? 'Opening...' : dreamText.trim() ? 'Start Weaving' : 'Open Blank Studio'}
+          </Button>
+        </section>
 
         {/* Error */}
         {errorMessage && (
@@ -532,10 +555,46 @@ export default function DreamWeaverPanel() {
 
         {/* Previous Weaves */}
         <EditorSection title="Previous Weaves" Icon={History} defaultExpanded={true}>
+          <div className={styles.archiveTools}>
+            <div className={styles.archiveFilters} aria-label="Filter previous weaves">
+              {([
+                ['all', 'All', archiveCounts.all],
+                ['drafts', 'Drafts', archiveCounts.drafts],
+                ['finalized', 'Finalized', archiveCounts.finalized],
+              ] as const).map(([key, label, count]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={styles.archiveFilter}
+                  data-active={archiveFilter === key || undefined}
+                  onClick={() => setArchiveFilter(key)}
+                >
+                  <span>{label}</span>
+                  <span className={styles.archiveFilterCount}>{count}</span>
+                </button>
+              ))}
+            </div>
+            <label className={styles.archiveSearch}>
+              <Search size={13} aria-hidden />
+              <input
+                value={archiveQuery}
+                onChange={(event) => setArchiveQuery(event.target.value)}
+                placeholder="Search weaves..."
+                aria-label="Search previous weaves"
+              />
+              {archiveQuery.trim() && (
+                <button type="button" onClick={() => setArchiveQuery('')} aria-label="Clear weave search">
+                  <X size={12} />
+                </button>
+              )}
+            </label>
+          </div>
           {isLoadingSessions ? (
             <div className={styles.sessionsEmpty}>Loading saved weaves...</div>
           ) : archiveGroups.length === 0 ? (
-            <div className={styles.sessionsEmpty}>No saved weaves yet.</div>
+            <div className={styles.sessionsEmpty}>
+              {sessions.length === 0 ? 'No saved weaves yet.' : 'No weaves match this view.'}
+            </div>
           ) : (
             <div className={styles.archiveList}>
               {archiveGroups.map((group) => {
@@ -558,7 +617,11 @@ export default function DreamWeaverPanel() {
                     {expanded && (
                       <div className={styles.archiveRows}>
                         {group.sessions.map((session) => (
-                          <div key={session.id} className={styles.sessionRow}>
+                          <div
+                            key={session.id}
+                            className={styles.sessionRow}
+                            data-finalized={session.character_id ? true : undefined}
+                          >
                             <button
                               type="button"
                               className={styles.sessionMain}
@@ -566,7 +629,13 @@ export default function DreamWeaverPanel() {
                             >
                               <div className={styles.sessionHeading}>
                                 <span className={styles.sessionTitle}>{getDreamWeaverSessionTitle(session)}</span>
-                                <span className={styles.sessionStatus}>
+                                <span className={styles.sessionKind}>
+                                  {session.workspace_kind === 'scenario' ? 'Scenario' : 'Character'}
+                                </span>
+                                <span
+                                  className={styles.sessionStatus}
+                                  data-status={session.character_id ? 'finalized' : session.status}
+                                >
                                   {getSessionStatusLabel(session)}
                                 </span>
                               </div>

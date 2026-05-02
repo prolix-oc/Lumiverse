@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUpRight, Send, Wrench } from "lucide-react";
 import { parseSlash } from "../../lib/slash-parser";
 import type { ToolCatalogEntry } from "@/api/dream-weaver-tooling";
@@ -6,15 +6,17 @@ import styles from "./Composer.module.css";
 
 interface Props {
   catalog: ToolCatalogEntry[];
+  hasSource: boolean;
   onSubmit: (tool: string, rawArgs: string, raw: string) => void;
 }
 
-export function Composer({ catalog, onSubmit }: Props) {
+export function Composer({ catalog, hasSource, onSubmit }: Props) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const suggestionsId = useId();
 
   const userTools = useMemo(() => catalog.filter((t) => t.userInvocable), [catalog]);
   const suggestions = useMemo(() => {
@@ -39,7 +41,7 @@ export function Composer({ catalog, onSubmit }: Props) {
       if (b.name === "help") return 1;
       return getCategoryRank(a.category) - getCategoryRank(b.category)
         || a.displayName.localeCompare(b.displayName);
-    }).slice(0, 8);
+    }).slice(0, 6);
   }, [userTools, value]);
 
   const hasCommandArgs = useMemo(() => {
@@ -72,6 +74,10 @@ export function Composer({ catalog, onSubmit }: Props) {
     const result = parseSlash(raw, catalog);
     if (result.ok === false) {
       setError(result.error);
+      return;
+    }
+    if (!hasSource && requiresSource(result.tool)) {
+      setError("Add source material with /dream before running generation tools.");
       return;
     }
     setError(null);
@@ -117,7 +123,7 @@ export function Composer({ catalog, onSubmit }: Props) {
   return (
     <div className={styles.composer}>
       {showSuggestions && (
-        <div className={styles.suggestions}>
+        <div className={styles.suggestions} id={suggestionsId} role="listbox">
           <div className={styles.suggestionHeader}>
             <span>Tools</span>
             <span>Tab to complete, Enter to run</span>
@@ -130,6 +136,8 @@ export function Composer({ catalog, onSubmit }: Props) {
                 type="button"
                 className={styles.suggestion}
                 data-active={index === activeIndex || undefined}
+                role="option"
+                aria-selected={index === activeIndex}
                 onMouseDown={(event) => {
                   event.preventDefault();
                   commitTool(tool);
@@ -166,9 +174,18 @@ export function Composer({ catalog, onSubmit }: Props) {
             placeholder="/dream describe the setup, or run /name. Shift+Enter for a new line."
             className={styles.input}
             rows={1}
+            aria-controls={showSuggestions ? suggestionsId : undefined}
+            aria-expanded={showSuggestions}
+            aria-autocomplete="list"
           />
         </div>
-        <button className={styles.send} onMouseDown={(event) => event.preventDefault()} onClick={submit} title="Run command">
+        <button
+          className={styles.send}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={submit}
+          title="Run command"
+          aria-label="Run Dream Weaver command"
+        >
           <Send size={14} />
         </button>
       </div>
@@ -182,4 +199,8 @@ function getCategoryRank(category: ToolCatalogEntry["category"]): number {
   if (category === "soul") return 1;
   if (category === "world") return 2;
   return 3;
+}
+
+function requiresSource(tool: ToolCatalogEntry): boolean {
+  return tool.name !== "help" && tool.name !== "dream_source";
 }

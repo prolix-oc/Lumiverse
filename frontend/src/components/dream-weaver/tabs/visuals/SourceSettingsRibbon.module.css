@@ -52,7 +52,7 @@
 
 .pill {
   padding: 0.2rem 0.5rem;
-  border-radius: 999px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   color: var(--lumiverse-text);
@@ -70,7 +70,7 @@
 .sourceValue {
   width: 100%;
   padding: 0.65rem 0.8rem;
-  border-radius: 12px;
+  border-radius: var(--lumiverse-radius-md);
   border: 1px solid color-mix(in srgb, var(--lumiverse-border) 94%, transparent);
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 58%, transparent);
   color: var(--lumiverse-text);
@@ -107,7 +107,7 @@
 .workflowButton {
   align-self: flex-start;
   padding: 0.62rem 0.86rem;
-  border-radius: 12px;
+  border-radius: var(--lumiverse-radius-md);
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
   color: var(--lumiverse-text);

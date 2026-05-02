@@ -30,9 +30,9 @@ export function ChatLog({ messages, onAccept, onReject, onCancel, onRetry }: Pro
       {messages.length === 0 && (
         <div className={styles.emptyState}>
           <div className={styles.emptyKicker}>Studio Ready</div>
-          <h3>Start with a source, or run a tool directly.</h3>
+          <h3>Add source material first.</h3>
           <p>
-            Use <code>/dream</code> to add source material, then run focused tools like <code>/name</code>, <code>/scenario</code>, or <code>/first_message</code>.
+            Use <code>/dream</code> to add the source, then run focused tools like <code>/name</code>, <code>/personality</code>, or <code>/scenario</code>.
           </p>
         </div>
       )}

@@ -134,6 +134,10 @@ export interface UpdateSessionInput {
   workspace_kind?: DreamWeaverWorkspaceKind;
 }
 
+export interface FinalizeSessionInput {
+  accepted_portrait_image_id?: string | null;
+}
+
 export interface NpcEntry {
   name: string;
   description: string;
@@ -180,6 +184,7 @@ export interface DreamWeaverWorkspace {
   voice_guidance: VoiceGuidance | null;
   lorebooks: LorebookEntry[];
   npcs: NpcEntry[];
+  visual_assets?: DreamWeaverVisualAsset[];
 }
 
 export const EMPTY_DREAM_WEAVER_WORKSPACE: Omit<DreamWeaverWorkspace, "kind"> = {

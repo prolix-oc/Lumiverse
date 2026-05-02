@@ -1,0 +1,36 @@
+.summary {
+  align-self: flex-start;
+  max-width: min(720px, 78%);
+  padding: 10px 14px;
+  border: 1px dashed var(--lumiverse-primary-020);
+  border-radius: var(--lumiverse-radius);
+  background: color-mix(in srgb, var(--lumiverse-primary) 5%, var(--lumiverse-fill-subtle));
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+}
+
+.title {
+  margin-bottom: 4px;
+  color: var(--lumiverse-primary-text);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.body {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.meta {
+  margin-top: 6px;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+@media (max-width: 720px) {
+  .summary {
+    max-width: 94%;
+  }
+}

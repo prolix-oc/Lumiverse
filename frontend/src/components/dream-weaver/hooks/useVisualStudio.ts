@@ -273,7 +273,7 @@ export function useVisualStudio(
         const value = row?.value as { timeoutMs?: number | null } | null | undefined
         timeoutMs = value?.timeoutMs
       } catch {}
-      const result = await dreamWeaverApi.suggestVisualTags(sessionId, draft, { timeoutMs })
+      const result = await dreamWeaverApi.suggestVisualTags(sessionId, { timeoutMs })
       setPendingTagSuggestion(result.suggestedTags)
       setPendingNegativeTagSuggestion(result.suggestedNegativeTags || null)
     } catch (error) {
