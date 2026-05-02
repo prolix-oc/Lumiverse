@@ -12,6 +12,7 @@ import {
 } from './placement-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
+import { createUIEventsHelper, type FrontendUIEventsHelper } from './ui-events-helper'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { charactersApi } from '@/api/characters'
@@ -65,7 +66,10 @@ interface ActiveFrontendProcess {
   stopHandlers: Set<(detail: { reason?: string }) => void>
 }
 
-type FrontendExtensionContext = SpindleFrontendContext & {
+type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> & {
+  ui: SpindleFrontendContext['ui'] & {
+    events: FrontendUIEventsHelper
+  }
   processes: {
     register(kind: string, handler: FrontendProcessHandler): () => void
   }
@@ -222,6 +226,7 @@ async function doLoadFrontendExtension(
     }
 
     const dom = createDOMHelper(extensionId, corsProxy)
+    const uiEvents = createUIEventsHelper(extensionId)
 
     // Cache granted permissions for synchronous permission checks in ui methods
     let cachedGrantedPermissions: string[] = await permissionsPromise
@@ -276,6 +281,7 @@ async function doLoadFrontendExtension(
         },
       },
       ui: {
+        events: uiEvents,
         mount(point) {
           let root = mountRoots.get(point)
           if (!root) {
@@ -354,6 +360,7 @@ async function doLoadFrontendExtension(
 
           const modalId = generateUUID()
           const root = document.createElement('div')
+          root.setAttribute('data-spindle-extension-root', extensionId)
           root.setAttribute('data-spindle-modal', modalId)
           const dismissHandlers = new Set<() => void>()
           let dismissed = false

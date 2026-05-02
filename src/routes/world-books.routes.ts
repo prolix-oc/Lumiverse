@@ -12,6 +12,7 @@ import {
   getWorldInfoVectorQueryPreview,
   mergeActivatedWorldInfoEntries,
   applyVectorPriorityBoost,
+  type BookSource,
 } from "../services/prompt-assembly.service";
 import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
 import { activateWorldInfo, finalizeActivatedWorldInfoEntries, normalizeWorldInfoSettings, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
@@ -183,6 +184,7 @@ function traceDiagnosticVectorHitOutcomes(
   keywordEntries: WorldBookEntry[],
   vectorEntries: VectorHitEntry[],
   settingsInput?: Partial<WorldInfoSettings>,
+  bookSourceMap?: Map<string, BookSource>,
 ): Map<string, DiagnosticVectorHitOutcome> {
   const settings = normalizeWorldInfoSettings(settingsInput);
   const mergedEntries: WorldBookEntry[] = [];
@@ -308,7 +310,7 @@ function traceDiagnosticVectorHitOutcomes(
     }));
   }
 
-  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources);
+  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
   for (const removed of dedupResult.removed) {
     if (!outcomes.has(removed.removedEntryId)) continue;
     outcomes.set(removed.removedEntryId, buildDiagnosticVectorOutcome("deduplicated", {
@@ -493,10 +495,13 @@ app.post("/:id/diagnostics", async (c) => {
     chatWorldBookIds,
   );
   const bookEntries = wiSources.entries.filter((entry) => entry.world_book_id === bookId);
+  const selectedEligibleEntries = bookEntries.filter((entry) =>
+    entry.vectorized && !entry.disabled && (entry.content || "").trim().length > 0
+  );
 
   const wiResult = isAttached
     ? activateWorldInfo({
-        entries: bookEntries,
+        entries: wiSources.entries,
         messages,
         chatTurn: messages.length,
         wiState: JSON.parse(JSON.stringify(wiState)),
@@ -511,7 +516,7 @@ app.post("/:id/diagnostics", async (c) => {
       });
 
   const vectorDetail = isAttached
-    ? await collectVectorActivatedWorldInfoDetailed(userId, chat.id, [bookId], bookEntries, messages)
+    ? await collectVectorActivatedWorldInfoDetailed(userId, chat.id, wiSources.worldBookIds, wiSources.entries, messages)
       : {
         entries: [],
         candidateTrace: [],
@@ -533,13 +538,17 @@ app.post("/:id/diagnostics", async (c) => {
     wiResult.activatedEntries,
     vectorDetail.entries,
     worldInfoSettings,
+    wiSources.bookSourceMap,
   );
   const vectorHitOutcomes = traceDiagnosticVectorHitOutcomes(
     wiResult.activatedEntries,
     vectorDetail.candidateTrace.filter((item) => item.retrievalStage === "shortlisted"),
     worldInfoSettings,
+    wiSources.bookSourceMap,
   );
-  const vectorTrace = vectorDetail.candidateTrace.map((item) => {
+  const selectedCandidateTrace = vectorDetail.candidateTrace.filter((item) => item.entry.world_book_id === bookId);
+  const selectedVectorEntries = vectorDetail.entries.filter((item) => item.entry.world_book_id === bookId);
+  const vectorTrace = selectedCandidateTrace.map((item) => {
     const outcome = resolveDiagnosticVectorTraceOutcome(item, vectorHitOutcomes, {
       topK: vectorDetail.topK,
       rerankCutoff: embeddings.rerank_cutoff,
@@ -564,68 +573,71 @@ app.post("/:id/diagnostics", async (c) => {
     };
   });
 
+  const selectedActivatedWorldInfo = mergedWorldInfo.activatedWorldInfo.filter((entry) => entry.bookId === bookId);
+  const selectedKeywordActivated = selectedActivatedWorldInfo.filter((entry) => entry.source === "keyword").length;
+  const selectedVectorActivated = selectedActivatedWorldInfo.filter((entry) => entry.source === "vector").length;
   const keywordHits = mergedWorldInfo.activatedWorldInfo
-    .filter((entry) => entry.source === "keyword")
+    .filter((entry) => entry.source === "keyword" && entry.bookId === bookId)
     .map((entry) => ({
       entry_id: entry.id,
       comment: entry.comment || "",
     }));
   const keywordHitIds = new Set(keywordHits.map((entry) => entry.entry_id));
-  const vectorKeywordOverlapCount = vectorDetail.entries.reduce(
+  const vectorKeywordOverlapCount = selectedVectorEntries.reduce(
     (count, item) => count + (keywordHitIds.has(item.entry.id) ? 1 : 0),
     0,
   );
-  const displacedFreshVectorHits = vectorDetail.entries.filter((item) => {
+  const displacedFreshVectorHits = selectedVectorEntries.filter((item) => {
     if (keywordHitIds.has(item.entry.id)) return false;
     const outcome = vectorHitOutcomes.get(item.entry.id);
     return outcome?.code !== "injected_vector";
   });
 
-  if (vectorDetail.thresholdRejected > 0 && vectorDetail.entries.length === 0) {
+  if (selectedCandidateTrace.some((item) => item.retrievalStage === "rejected_by_similarity_threshold") && selectedVectorEntries.length === 0) {
     blockerMessages.push("Vector matches were found, but all of them were rejected by the current similarity threshold.");
   }
 
-  if (vectorDetail.rerankRejected > 0 && vectorDetail.entries.length === 0) {
+  if (selectedCandidateTrace.some((item) => item.retrievalStage === "rejected_by_rerank_cutoff") && selectedVectorEntries.length === 0) {
     blockerMessages.push("Vector matches survived raw similarity filtering, but all of them were rejected by the current rerank cutoff.");
   }
 
   if (worldInfoSettings.minPriority && worldInfoSettings.minPriority > 0) {
     const belowMinPriority = bookEntries.some((entry) => !entry.disabled && !entry.constant && entry.priority < worldInfoSettings.minPriority!);
-    if (belowMinPriority && mergedWorldInfo.totalActivated === 0) {
+    if (belowMinPriority && selectedActivatedWorldInfo.length === 0) {
       blockerMessages.push("Entry priority is below the current World Info minimum priority setting.");
     }
   }
 
   if (
     mergedWorldInfo.evictedByBudget > 0 &&
-    mergedWorldInfo.totalActivated === 0 &&
+    selectedActivatedWorldInfo.length === 0 &&
     bookEntries.some((entry) => !entry.disabled && (entry.content || "").trim().length > 0)
   ) {
     blockerMessages.push("World Info budget limits may be crowding this book out of the final prompt.");
   }
 
   if (
-    vectorDetail.entries.length > 0 &&
-    mergedWorldInfo.vectorActivated === 0 &&
+    selectedVectorEntries.length > 0 &&
+    selectedVectorActivated === 0 &&
     mergedWorldInfo.evictedByBudget > 0
   ) {
     blockerMessages.push("Vector matches were found, but the World Info max-activated or token budget limits left no room for them after keyword activation.");
   }
 
   if (
-    vectorDetail.entries.length > 0 &&
-    mergedWorldInfo.vectorActivated === 0 &&
-    mergedWorldInfo.totalActivated === 0
+    selectedVectorEntries.length > 0 &&
+    selectedVectorActivated === 0 &&
+    selectedActivatedWorldInfo.length === 0
   ) {
     blockerMessages.push("Vector candidates were found, but they lost to group, minimum-priority, or budget rules before final injection.");
   }
 
   if (
-    vectorDetail.entries.length > 0 &&
-    mergedWorldInfo.vectorActivated === 0 &&
+    selectedVectorEntries.length > 0 &&
+    selectedVectorActivated === 0 &&
     keywordHits.length > 0 &&
     mergedWorldInfo.evictedByBudget === 0 &&
-    vectorKeywordOverlapCount === vectorDetail.entries.length
+    vectorKeywordOverlapCount === selectedVectorEntries.length
   ) {
     blockerMessages.push("Vector matches were found, but the top vector hits were already activated by keyword, so the final list still counts them as keyword entries.");
   }
@@ -664,14 +676,14 @@ app.post("/:id/diagnostics", async (c) => {
     },
     vector_summary: vectorSummary,
     query_preview: vectorDetail.queryPreview || queryPreview,
-    eligible_entries: vectorDetail.eligibleCount,
+    eligible_entries: isAttached ? selectedEligibleEntries.length : 0,
     retrieval: {
       top_k: vectorDetail.topK,
-      hits_before_threshold: vectorDetail.hitsBeforeThreshold,
-      hits_after_threshold: vectorDetail.hitsAfterThreshold,
-      threshold_rejected: vectorDetail.thresholdRejected,
-      hits_after_rerank_cutoff: vectorDetail.hitsAfterRerankCutoff,
-      rerank_rejected: vectorDetail.rerankRejected,
+      hits_before_threshold: selectedCandidateTrace.length,
+      hits_after_threshold: selectedCandidateTrace.filter((item) => item.retrievalStage !== "rejected_by_similarity_threshold").length,
+      threshold_rejected: selectedCandidateTrace.filter((item) => item.retrievalStage === "rejected_by_similarity_threshold").length,
+      hits_after_rerank_cutoff: selectedCandidateTrace.filter((item) => item.retrievalStage === "shortlisted" || item.retrievalStage === "trimmed_by_top_k").length,
+      rerank_rejected: selectedCandidateTrace.filter((item) => item.retrievalStage === "rejected_by_rerank_cutoff").length,
     },
     keyword_hits: keywordHits,
     vector_hits: vectorTrace.filter((item) =>
@@ -698,9 +710,9 @@ app.post("/:id/diagnostics", async (c) => {
       activatedAfterBudget: mergedWorldInfo.activatedAfterBudget,
       evictedByBudget: mergedWorldInfo.evictedByBudget,
       estimatedTokens: mergedWorldInfo.estimatedTokens,
-      keywordActivated: mergedWorldInfo.keywordActivated,
-      vectorActivated: mergedWorldInfo.vectorActivated,
-      totalActivated: mergedWorldInfo.totalActivated,
+      keywordActivated: selectedKeywordActivated,
+      vectorActivated: selectedVectorActivated,
+      totalActivated: selectedActivatedWorldInfo.length,
       deduplicated: mergedWorldInfo.deduplicated,
       queryPreview: vectorDetail.queryPreview || queryPreview,
     },

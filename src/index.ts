@@ -7,8 +7,8 @@ if (_bunMaj < 1 || (_bunMaj === 1 && (_bunMin < 3 || (_bunMin === 3 && _bunPat <
   process.exit(1);
 }
 
-import { mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { env } from "./env";
 import { getDatabasePath, initDatabase } from "./db/connection";
 import { runMigrations } from "./db/migrate";
@@ -42,6 +42,44 @@ if (isTermuxLikeEnvironment()) {
   process.env.TEMP = tempDir;
   console.log(`[startup] Temp directory: ${tempDir}`);
 }
+
+async function configureLanceDbNativeOverride(): Promise<void> {
+  const explicitOverride = process.env.LUMIVERSE_LANCEDB_NATIVE_PATH?.trim();
+  const workspaceRoot = resolve(import.meta.dir, "..");
+  const outDir = join(workspaceRoot, "vendor", "lancedb-android", "out");
+  const bundledAndroidOverride = join(outDir, "lancedb.android-arm64.node");
+
+  if (explicitOverride && existsSync(resolve(explicitOverride))) {
+    process.env.NAPI_RS_NATIVE_LIBRARY_PATH = resolve(explicitOverride);
+    console.log(`[startup] LanceDB native override: ${process.env.NAPI_RS_NATIVE_LIBRARY_PATH}`);
+    return;
+  }
+
+  if (!isTermuxLikeEnvironment()) return;
+
+  if (!existsSync(bundledAndroidOverride)) {
+    console.log("[startup] Android/Termux detected. Missing native LanceDB engine.");
+    console.log("[startup] Downloading lancedb.android-arm64.node (~236MB)... This may take a minute.");
+    try {
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+      const response = await fetch("https://github.com/prolix-oc/Lumiverse/releases/download/android-binaries/lancedb.android-arm64.node");
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      
+      const buffer = await response.arrayBuffer();
+      await Bun.write(bundledAndroidOverride, buffer);
+      console.log("[startup] Download complete!");
+    } catch (err) {
+      console.error("[startup] Failed to download native LanceDB engine. Features relying on LanceDB will crash.");
+      console.error(err);
+      return;
+    }
+  }
+
+  process.env.NAPI_RS_NATIVE_LIBRARY_PATH = bundledAndroidOverride;
+  console.log(`[startup] LanceDB native override: ${bundledAndroidOverride}`);
+}
+
+await configureLanceDbNativeOverride();
 try {
   const probe = join(env.dataDir, ".write-probe");
   await Bun.write(probe, "ok");

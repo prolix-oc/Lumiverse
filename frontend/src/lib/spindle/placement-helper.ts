@@ -37,6 +37,7 @@ export function createDrawerTabHandle(
 ): SpindleDrawerTabHandle {
   const tabId = nextId(extensionId, `tab:${options.id}`)
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-drawer-tab', tabId)
 
   const activateHandlers = new Set<() => void>()
@@ -98,6 +99,7 @@ export function createFloatWidgetHandle(
 ): SpindleFloatWidgetHandle {
   const widgetId = nextId(extensionId, 'float')
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-float-widget', widgetId)
 
   const width = options?.width ?? 48
@@ -230,6 +232,7 @@ export function createDockPanelHandle(
 ): SpindleDockPanelHandle {
   const panelId = nextId(extensionId, `dock:${options.edge}`)
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-dock-panel', panelId)
 
   const visibilityHandlers = new Set<(visible: boolean) => void>()
@@ -289,6 +292,7 @@ export function createAppMountHandle(
 ): SpindleAppMountHandle {
   const mountId = nextId(extensionId, 'app')
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-app-mount', extensionId)
   root.setAttribute('data-spindle-mount-id', mountId)
   if (options?.className) {

@@ -2,6 +2,9 @@
 node_modules/
 bun.lock
 .claude/
+vendor/lancedb-android/upstream/
+vendor/lancedb-android/build/
+vendor/lancedb-android/out/
 
 # =============================================================================
 # User instance data — NEVER commit these
@@ -64,3 +67,5 @@ scripts/release-main.sh
 scripts/release-rc.sh
 scripts/push-staging.sh
 src/macros/macros.test.ts
+vendor/
+scripts/build-lancedb-android.sh

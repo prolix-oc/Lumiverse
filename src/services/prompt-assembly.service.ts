@@ -4502,6 +4502,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const queryText = buildWorldInfoVectorQueryPreview(
     messages,
     cfg.preferred_context_size || 3,
+    getReasoningStripOptions(userId),
   );
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
 
