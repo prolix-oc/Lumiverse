@@ -705,15 +705,16 @@ function getHtmlRootTag(line: string): { tag: string; isVoid: boolean } | null {
 }
 
 function countTagDepthDelta(line: string, tag: string): number {
-  const matches = line.matchAll(new RegExp(`<\\/?${escapeRegexLiteral(tag)}\\b[^>]*>`, 'gi'))
+  const e = escapeRegexLiteral(tag)
   let delta = 0
-
-  for (const match of matches) {
-    const token = match[0]
-    if (/^<\//.test(token)) delta -= 1
-    else if (!/\/\s*>$/.test(token) && !VOID_HTML_TAGS.has(tag)) delta += 1
+  if (!VOID_HTML_TAGS.has(tag)) {
+    const openRe = new RegExp(`<${e}(?=[\\s>/])`, 'gi')
+    delta += (line.match(openRe) || []).length
+    const selfCloseRe = new RegExp(`<${e}\\b[^>]*\\/\\s*>`, 'gi')
+    delta -= (line.match(selfCloseRe) || []).length
   }
-
+  const closeRe = new RegExp(`</${e}(?=[\\s>])`, 'gi')
+  delta -= (line.match(closeRe) || []).length
   return delta
 }
 
