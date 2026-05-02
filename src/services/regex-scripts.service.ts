@@ -786,6 +786,10 @@ export async function applyRegexScripts(
   placement: RegexPlacement,
   depth?: number,
   macroEnv?: MacroEnv,
+  resolvedTemplates?: {
+    resolvedFindPatterns?: Map<string, string>;
+    resolvedReplacements?: Map<string, string>;
+  },
 ): Promise<string> {
   let result = content;
 
@@ -801,7 +805,10 @@ export async function applyRegexScripts(
 
     try {
       let findRegex = script.find_regex;
-      if (macroEnv && script.substitute_macros !== "none") {
+      const preResolvedFind = resolvedTemplates?.resolvedFindPatterns?.get(script.id);
+      if (preResolvedFind !== undefined) {
+        findRegex = preResolvedFind;
+      } else if (macroEnv && script.substitute_macros !== "none") {
         findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv);
       }
 
@@ -831,7 +838,12 @@ export async function applyRegexScripts(
         // "none" or "escaped" mode: resolve macros first (if applicable), then
         // run the actual replace inside the sandbox.
         let replaceString = script.replace_string;
-        if (macroEnv && script.substitute_macros !== "none") {
+        const preResolvedReplacement = resolvedTemplates?.resolvedReplacements?.get(script.id);
+        if (preResolvedReplacement !== undefined) {
+          replaceString = script.substitute_macros === "escaped"
+            ? preResolvedReplacement.replace(/\$/g, "$$$$")
+            : preResolvedReplacement;
+        } else if (macroEnv && script.substitute_macros !== "none") {
           replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
         }
         result = await regexReplaceSandboxed(

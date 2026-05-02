@@ -132,9 +132,49 @@ function rebuildFromMatches(input: string, matches: DisplayRegexMatch[], replace
 interface ApplyDisplayRegexContext {
   isUser: boolean
   depth: number
+  chatId?: string
+  characterId?: string
+  personaId?: string
   macroCtx?: DisplayMacroContext
   resolvedFindPatterns?: Map<string, string>
   resolvedReplacements?: Map<string, string>
+}
+
+function mapToRecord(map?: Map<string, string>): Record<string, string> | undefined {
+  if (!map || map.size === 0) return undefined
+  return Object.fromEntries(map.entries())
+}
+
+async function applyDisplayRegexOnBackend(
+  content: string,
+  scripts: RegexScript[],
+  context: ApplyDisplayRegexContext,
+): Promise<string | null> {
+  try {
+    const res = await fetch('/api/v1/regex-scripts/apply', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content,
+        scripts,
+        resolved_find_patterns: mapToRecord(context.resolvedFindPatterns),
+        resolved_replacements: mapToRecord(context.resolvedReplacements),
+        context: {
+          chat_id: context.chatId,
+          character_id: context.characterId,
+          persona_id: context.personaId,
+          is_user: context.isUser,
+          depth: context.depth,
+        },
+      }),
+    })
+    if (!res.ok) return null
+    const body = await res.json() as { result?: string }
+    return typeof body.result === 'string' ? body.result : null
+  } catch {
+    return null
+  }
 }
 
 export function applyDisplayRegex(
@@ -218,6 +258,9 @@ export async function applyDisplayRegexAsync(
   context: ApplyDisplayRegexContext,
   resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
 ): Promise<string> {
+  const backendResult = await applyDisplayRegexOnBackend(content, scripts, context)
+  if (backendResult !== null) return backendResult
+
   let result = content
 
   for (const script of scripts) {
