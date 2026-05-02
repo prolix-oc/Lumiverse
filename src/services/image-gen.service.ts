@@ -5,6 +5,7 @@ import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as imagesSvc from "./images.service";
+import * as gallerySvc from "./character-gallery.service";
 import * as secretsSvc from "./secrets.service";
 import * as imageGenConnSvc from "./image-gen-connections.service";
 import { imageGenConnectionSecretKey } from "./image-gen-connections.service";
@@ -213,6 +214,15 @@ export async function generateSceneBackground(
         );
         imageId = image.id;
         imageUrl = `/api/v1/image-gen/results/${image.id}`;
+
+        const chat = chatsSvc.getChat(userId, chatId);
+        if (chat?.character_id) {
+          try {
+            gallerySvc.addToGallery(userId, chat.character_id, image.id, "Generated background");
+          } catch {
+            // Gallery linkage is best-effort; the generated image itself was persisted.
+          }
+        }
       } catch {
         // Persistence failure is non-fatal — the data URL is still returned
       }

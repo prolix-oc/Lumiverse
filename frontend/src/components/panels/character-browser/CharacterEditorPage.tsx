@@ -19,8 +19,11 @@ import useImageCropFlow from '@/hooks/useImageCropFlow'
 import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import ImageCropModal from '@/components/shared/ImageCropModal'
 import LazyImage from '@/components/shared/LazyImage'
+import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { useLongPress } from '@/hooks/useLongPress'
 import type { Character, CharacterGalleryItem } from '@/types/api'
+import type { WallpaperRef } from '@/types/store'
 import type { RegexScript } from '@/types/regex'
 import { toast } from '@/lib/toast'
 import { Button } from '@/components/shared/FormComponents'
@@ -58,6 +61,37 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'advanced', label: 'Advanced' },
 ]
 
+interface GalleryGridItemProps {
+  item: CharacterGalleryItem
+  onRemove: (itemId: string) => void
+  onOpenMenu: (item: CharacterGalleryItem, pos: ContextMenuPos) => void
+}
+
+function GalleryGridItem({ item, onRemove, onOpenMenu }: GalleryGridItemProps) {
+  const longPress = useLongPress({
+    onLongPress: (pos) => onOpenMenu(item, pos),
+  })
+
+  return (
+    <div className={styles.galleryItem} {...longPress}>
+      <LazyImage
+        src={characterGalleryApi.smallUrl(item.image_id)}
+        alt={item.caption || 'Gallery image'}
+        className={styles.galleryThumb}
+        fallback={<div className={styles.galleryThumbPlaceholder} />}
+      />
+      <button
+        type="button"
+        className={styles.galleryRemoveBtn}
+        onClick={() => onRemove(item.id)}
+        title="Remove from gallery"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  )
+}
+
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -70,6 +104,8 @@ export default function CharacterEditorPage() {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const setActiveChatAvatarId = useStore((s) => s.setActiveChatAvatarId)
+  const setActiveChatWallpaper = useStore((s) => s.setActiveChatWallpaper)
+  const setSceneBackground = useStore((s) => s.setSceneBackground)
   const updateCharInStore = useStore((s) => s.updateCharacter)
   const browser = useCharacterBrowser()
 
@@ -96,6 +132,7 @@ export default function CharacterEditorPage() {
   const [allRegexScripts, setAllRegexScripts] = useState<RegexScript[]>([])
   const [galleryUploading, setGalleryUploading] = useState(false)
   const [extracting, setExtracting] = useState(false)
+  const [galleryContextMenu, setGalleryContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -246,6 +283,32 @@ export default function CharacterEditorPage() {
     },
     [editingCharacterId]
   )
+
+  const setGalleryImageAsChatBackground = useCallback(async (item: CharacterGalleryItem) => {
+    if (!activeChatId) {
+      toast.error('Open a chat first to set its background')
+      return
+    }
+    const wallpaper: WallpaperRef = { image_id: item.image_id, type: 'image' }
+    try {
+      await chatsApi.patchMetadata(activeChatId, { wallpaper })
+      setActiveChatWallpaper(wallpaper)
+      setSceneBackground(null)
+      setGalleryContextMenu(null)
+      toast.success('Chat background updated')
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || 'Failed to update chat background')
+    }
+  }, [activeChatId, setActiveChatWallpaper, setSceneBackground])
+
+  const galleryContextMenuItems: ContextMenuEntry[] = galleryContextMenu ? [
+    {
+      key: 'set-chat-background',
+      label: 'Set as Chat Background',
+      disabled: !activeChatId,
+      onClick: () => setGalleryImageAsChatBackground(galleryContextMenu.item),
+    },
+  ] : []
 
   const handleGalleryExtract = useCallback(async () => {
     if (!editingCharacterId) return
@@ -1103,22 +1166,12 @@ export default function CharacterEditorPage() {
 
                       <div className={styles.galleryGrid}>
                         {galleryItems.map((item) => (
-                          <div key={item.id} className={styles.galleryItem}>
-                            <LazyImage
-                              src={characterGalleryApi.smallUrl(item.image_id)}
-                              alt={item.caption || 'Gallery image'}
-                              className={styles.galleryThumb}
-                              fallback={<div className={styles.galleryThumbPlaceholder} />}
-                            />
-                            <button
-                              type="button"
-                              className={styles.galleryRemoveBtn}
-                              onClick={() => handleGalleryRemove(item.id)}
-                              title="Remove from gallery"
-                            >
-                              <X size={12} />
-                            </button>
-                          </div>
+                          <GalleryGridItem
+                            key={item.id}
+                            item={item}
+                            onRemove={handleGalleryRemove}
+                            onOpenMenu={(menuItem, pos) => setGalleryContextMenu({ item: menuItem, pos })}
+                          />
                         ))}
 
                         <button
@@ -1331,6 +1384,11 @@ export default function CharacterEditorPage() {
 
     <ImageCropModal {...cropModalProps} />
     <ImageCropModal {...altAvatarCropProps} />
+    <ContextMenu
+      position={galleryContextMenu?.pos ?? null}
+      items={galleryContextMenuItems}
+      onClose={() => setGalleryContextMenu(null)}
+    />
 
     {showDeleteConfirm && (
       <ConfirmationModal

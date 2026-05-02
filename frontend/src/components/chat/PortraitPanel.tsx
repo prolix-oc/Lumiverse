@@ -4,12 +4,16 @@ import { CloseButton } from '@/components/shared/CloseButton'
 import { useStore } from '@/store'
 import { charactersApi } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
+import { chatsApi } from '@/api/chats'
 import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
 import LazyImage from '@/components/shared/LazyImage'
 import ImageLightbox from '@/components/shared/ImageLightbox'
+import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import { useLongPress } from '@/hooks/useLongPress'
 import AvatarSwitcherPopover from './AvatarSwitcherPopover'
 import type { Character, CharacterGalleryItem } from '@/types/api'
+import type { WallpaperRef } from '@/types/store'
 import styles from './PortraitPanel.module.css'
 import clsx from 'clsx'
 
@@ -17,10 +21,40 @@ interface PortraitPanelProps {
   side?: 'left' | 'right'
 }
 
+interface GalleryMosaicCellProps {
+  item: CharacterGalleryItem
+  className: string
+  onOpen: (item: CharacterGalleryItem, pos: ContextMenuPos) => void
+  onPreview: (src: string) => void
+}
+
+function GalleryMosaicCell({ item, className, onOpen, onPreview }: GalleryMosaicCellProps) {
+  const longPress = useLongPress({
+    onLongPress: (pos) => onOpen(item, pos),
+  })
+
+  return (
+    <div
+      className={className}
+      onClick={() => onPreview(characterGalleryApi.imageUrl(item.image_id))}
+      {...longPress}
+    >
+      <LazyImage
+        src={characterGalleryApi.smallUrl(item.image_id)}
+        alt={item.caption || ''}
+        className={styles.mosaicImg}
+        fallback={<div className={styles.mosaicPlaceholder} />}
+      />
+    </div>
+  )
+}
+
 export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
+  const setActiveChatWallpaper = useStore((s) => s.setActiveChatWallpaper)
+  const setSceneBackground = useStore((s) => s.setSceneBackground)
   const characters = useStore((s) => s.characters)
   const togglePortraitPanel = useStore((s) => s.togglePortraitPanel)
   const storedCharacter = activeCharacterId
@@ -29,6 +63,7 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
   const [character, setCharacter] = useState<Character | null>(null)
   const [gallery, setGallery] = useState<CharacterGalleryItem[]>([])
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
 
   useEffect(() => {
     if (storedCharacter) setCharacter(storedCharacter)
@@ -47,6 +82,28 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
   }, [activeCharacterId])
 
   const closeLightbox = useCallback(() => setLightboxSrc(null), [])
+
+  const setGalleryImageAsChatBackground = useCallback(async (item: CharacterGalleryItem) => {
+    if (!activeChatId) return
+    const wallpaper: WallpaperRef = { image_id: item.image_id, type: 'image' }
+    try {
+      await chatsApi.patchMetadata(activeChatId, { wallpaper })
+      setActiveChatWallpaper(wallpaper)
+      setSceneBackground(null)
+    } catch {
+      // The gallery menu has no inline error surface; keep the existing UI unchanged.
+    }
+    setContextMenu(null)
+  }, [activeChatId, setActiveChatWallpaper, setSceneBackground])
+
+  const contextMenuItems: ContextMenuEntry[] = contextMenu ? [
+    {
+      key: 'set-chat-background',
+      label: 'Set as Chat Background',
+      disabled: !activeChatId,
+      onClick: () => setGalleryImageAsChatBackground(contextMenu.item),
+    },
+  ] : []
 
   // Resolve lightbox URL — use original quality (no size tier) for full aspect ratio
   const getLightboxUrl = useCallback(() => {
@@ -161,18 +218,13 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
               }
 
               return (
-                <div
+                <GalleryMosaicCell
                   key={item.id}
+                  item={item}
                   className={span}
-                  onClick={() => setLightboxSrc(characterGalleryApi.imageUrl(item.image_id))}
-                >
-                  <LazyImage
-                    src={characterGalleryApi.smallUrl(item.image_id)}
-                    alt={item.caption || ''}
-                    className={styles.mosaicImg}
-                    fallback={<div className={styles.mosaicPlaceholder} />}
-                  />
-                </div>
+                  onOpen={(menuItem, pos) => setContextMenu({ item: menuItem, pos })}
+                  onPreview={setLightboxSrc}
+                />
               )
             })}
           </div>
@@ -180,6 +232,11 @@ export default function PortraitPanel({ side = 'right' }: PortraitPanelProps) {
       </div>
 
       <ImageLightbox src={lightboxSrc} onClose={closeLightbox} />
+      <ContextMenu
+        position={contextMenu?.pos ?? null}
+        items={contextMenuItems}
+        onClose={() => setContextMenu(null)}
+      />
     </div>
   )
 }
