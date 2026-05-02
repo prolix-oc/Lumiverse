@@ -1204,7 +1204,7 @@ export default function OperatorPanel() {
               </button>
             </form>
             <span className={styles.fieldHint}>
-              Port defaults to {status?.port ?? '7860'} when omitted. Schemes (<code>http://</code>) are stripped automatically.
+              Port defaults to {status?.port ?? '7860'} when omitted. Full <code>https://*.ts.net</code> origins are preserved for Tailscale Serve.
               {!trustedHostsReady ? ' Load the current snapshot before editing so existing trusted hosts are preserved.' : ''}
             </span>
           </div>

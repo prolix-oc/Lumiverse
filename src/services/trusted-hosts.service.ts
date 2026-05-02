@@ -7,7 +7,7 @@ import { getSetting, putSetting } from "./settings.service";
 export const TRUSTED_HOSTS_SETTING_KEY = "trustedHosts";
 
 export interface TrustedHostEntry {
-  /** `host:port`, lowercase, IPv6 wrapped in brackets. */
+  /** Lowercase host, usually `host:port`; IPv6 is wrapped in brackets. */
   host: string;
   /** How we learned about the host. Used only by the suggestions endpoint. */
   source: "hostname" | "mdns" | "reverse-dns" | "tailscale" | "lan-ip" | "env" | "configured";
@@ -26,6 +26,7 @@ export interface TrustedHostsSuggestions {
 // Matches letters, digits, dots, hyphens, underscores; plus bracketed IPv6. No
 // wildcards, no paths, no schemes. Port is added by normalization below.
 const HOSTNAME_PATTERN = /^(?:\[[0-9a-f:%.]+\]|[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)$/i;
+const TAILSCALE_DNS_SUFFIX = ".ts.net";
 const MAX_CONFIGURED_HOSTS = 32;
 const REVERSE_LOOKUP_TIMEOUT_MS = 1500;
 const TAILSCALE_TIMEOUT_MS = 2000;
@@ -54,18 +55,49 @@ export class InvalidTrustedHostError extends Error {
   constructor(message: string) { super(message); }
 }
 
+interface NormalizedTrustedInput {
+  /** Persisted/display value. Host entries are `host:port`; explicit origins keep their scheme. */
+  value: string;
+  /** Host-header value to allow. */
+  host: string;
+  /** Origin values to allow for this entry. */
+  origins: string[];
+}
+
 // ─── Normalization / validation ─────────────────────────────────────────────
 
-/**
- * Accepts user-entered values like "machine", "machine:7860",
- * "http://machine.tailnet.ts.net", "[::1]:7860". Returns a normalized
- * lowercase `host:port` string suitable for Host-header comparison, or throws
- * InvalidTrustedHostError. Port defaults to env.port when omitted.
- */
-export function normalizeHost(input: string): string {
+function originForExplicitTailscaleUrl(input: string): NormalizedTrustedInput | null {
+  const trimmed = input.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new InvalidTrustedHostError(`Invalid URL: ${input}`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname.endsWith(TAILSCALE_DNS_SUFFIX)) return null;
+
+  const host = parsed.host.toLowerCase();
+  if (!HOSTNAME_PATTERN.test(parsed.hostname) && !HOSTNAME_PATTERN.test(`[${parsed.hostname}]`)) {
+    throw new InvalidTrustedHostError(`Invalid hostname: ${input}`);
+  }
+
+  const origin = parsed.origin.toLowerCase();
+  return { value: origin, host, origins: [origin] };
+}
+
+function normalizeTrustedInput(input: string): NormalizedTrustedInput {
   if (typeof input !== "string") {
     throw new InvalidTrustedHostError("Host must be a string");
   }
+
+  const explicitTailscaleOrigin = originForExplicitTailscaleUrl(input);
+  if (explicitTailscaleOrigin) return explicitTailscaleOrigin;
+
   let value = input.trim();
   if (!value) throw new InvalidTrustedHostError("Host cannot be empty");
 
@@ -117,7 +149,24 @@ export function normalizeHost(input: string): string {
     port = parsed;
   }
 
-  return `${host.toLowerCase()}:${port}`;
+  const normalizedHost = `${host.toLowerCase()}:${port}`;
+  return {
+    value: normalizedHost,
+    host: normalizedHost,
+    origins: [`http://${normalizedHost}`, `https://${normalizedHost}`],
+  };
+}
+
+/**
+ * Accepts user-entered values like "machine", "machine:7860",
+ * "http://machine.tailnet.ts.net", "[::1]:7860". Returns a normalized
+ * lowercase entry suitable for persistence, or throws InvalidTrustedHostError.
+ * Port defaults to env.port when omitted, except explicit `*.ts.net` URL
+ * origins are preserved so Tailscale Serve's default HTTPS origin can be
+ * allowlisted exactly.
+ */
+export function normalizeHost(input: string): string {
+  return normalizeTrustedInput(input).value;
 }
 
 // ─── Baseline (env-derived, always trusted) ─────────────────────────────────
@@ -160,19 +209,24 @@ function baselineEntries(): TrustedHostEntry[] {
 // ─── State ──────────────────────────────────────────────────────────────────
 
 let configuredHosts: string[] = [];
+let configuredTrustedInputs: NormalizedTrustedInput[] = [];
 let allowedHosts = new Set<string>();
 let allowedOrigins = new Set<string>();
 let loaded = false;
 
 function rebuildCaches(): void {
+  const baseline = baselineEntries();
   const hosts = new Set<string>();
-  for (const e of baselineEntries()) hosts.add(e.host);
-  for (const h of configuredHosts) hosts.add(h);
+  for (const e of baseline) hosts.add(e.host);
+  for (const entry of configuredTrustedInputs) hosts.add(entry.host);
 
   const origins = new Set<string>();
-  for (const h of hosts) {
-    origins.add(`http://${h}`);
-    origins.add(`https://${h}`);
+  for (const entry of baseline) {
+    origins.add(`http://${entry.host}`);
+    origins.add(`https://${entry.host}`);
+  }
+  for (const entry of configuredTrustedInputs) {
+    for (const origin of entry.origins) origins.add(origin);
   }
 
   allowedHosts = hosts;
@@ -184,6 +238,7 @@ function rebuildCaches(): void {
 export function load(): void {
   const ownerId = getFirstUserId();
   configuredHosts = [];
+  configuredTrustedInputs = [];
   if (ownerId) {
     try {
       const row = getSetting(ownerId, TRUSTED_HOSTS_SETTING_KEY);
@@ -192,10 +247,11 @@ export function load(): void {
       const seen = new Set<string>();
       for (const entry of list) {
         try {
-          const normalized = normalizeHost(entry);
-          if (seen.has(normalized)) continue;
-          seen.add(normalized);
-          configuredHosts.push(normalized);
+          const normalized = normalizeTrustedInput(entry);
+          if (seen.has(normalized.value)) continue;
+          seen.add(normalized.value);
+          configuredHosts.push(normalized.value);
+          configuredTrustedInputs.push(normalized);
         } catch {
           // Skip malformed persisted entries rather than crashing startup.
         }
@@ -261,16 +317,19 @@ export function setTrustedHosts(hosts: unknown): string[] {
   const baseline = new Set(baselineEntries().map((e) => e.host));
   const seen = new Set<string>();
   const normalized: string[] = [];
+  const trustedInputs: NormalizedTrustedInput[] = [];
   for (const raw of hosts) {
-    const value = normalizeHost(String(raw));
-    if (baseline.has(value)) continue; // baseline is implicit, no need to persist
-    if (seen.has(value)) continue;
-    seen.add(value);
-    normalized.push(value);
+    const entry = normalizeTrustedInput(String(raw));
+    if (baseline.has(entry.host)) continue; // baseline is implicit, no need to persist
+    if (seen.has(entry.value)) continue;
+    seen.add(entry.value);
+    normalized.push(entry.value);
+    trustedInputs.push(entry);
   }
 
   putSetting(ownerId, TRUSTED_HOSTS_SETTING_KEY, normalized);
   configuredHosts = normalized;
+  configuredTrustedInputs = trustedInputs;
   rebuildCaches();
   return [...configuredHosts];
 }
@@ -408,9 +467,26 @@ export async function detectHostnameSuggestions(options?: {
 /** @internal Only intended for unit tests — resets in-memory state. */
 export function _resetForTests(): void {
   configuredHosts = [];
+  configuredTrustedInputs = [];
   allowedHosts = new Set();
   allowedOrigins = new Set();
   loaded = false;
   suggestionsCache = null;
   suggestionsInFlight = null;
+}
+
+/** @internal Only intended for unit tests — bypasses owner-backed persistence. */
+export function _setTrustedHostsForTests(hosts: string[]): void {
+  configuredHosts = [];
+  configuredTrustedInputs = [];
+  const seen = new Set<string>();
+  for (const host of hosts) {
+    const entry = normalizeTrustedInput(host);
+    if (seen.has(entry.value)) continue;
+    seen.add(entry.value);
+    configuredHosts.push(entry.value);
+    configuredTrustedInputs.push(entry);
+  }
+  rebuildCaches();
+  loaded = true;
 }
