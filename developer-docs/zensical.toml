@@ -61,6 +61,7 @@ nav = [
   { "Frontend API" = [
     { "Overview" = "frontend-api/index.md" },
     { "DOM Helper" = "frontend-api/dom-helper.md" },
+    { "UI Event Helpers" = "frontend-api/ui-events-helper.md" },
     { "Events" = "frontend-api/events.md" },
     { "UI Placement" = "frontend-api/ui-placement.md" },
     { "Backend Communication" = "frontend-api/backend-communication.md" },

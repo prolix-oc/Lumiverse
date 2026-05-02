@@ -37,6 +37,7 @@ Frontend UI can follow two supported rendering paths:
 | Category | Permission | Description |
 |----------|-----------|-------------|
 | [DOM Helper](dom-helper.md) | Free | Inject sanitized HTML/CSS in the host DOM and create host-managed sandbox frames |
+| [UI Event Helpers](ui-events-helper.md) | Free | Keyboard/Drawer/Settings state and DOM Action delegation |
 | [HTML Islands](html-islands.md) | Free | Auto-isolation of styled HTML in messages, and how to opt out |
 | [Events](events.md) | Free | Subscribe to WebSocket events, emit custom events |
 | [UI Placement](ui-placement.md) | Varies | Drawer tabs, float widgets, dock panels, modals, context menus, input bar actions |
