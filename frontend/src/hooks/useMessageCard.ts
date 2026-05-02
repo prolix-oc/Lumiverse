@@ -87,7 +87,10 @@ export function useMessageCard(message: Message, chatId: string) {
   const { displayContent, parsedReasoning } = useMemo(() => {
     if (!autoParse || isUser) return { displayContent: rawContent, parsedReasoning: '' }
     const { cleaned, thoughts } = parseThinkingTags(rawContent)
-    return { displayContent: cleaned || rawContent, parsedReasoning: thoughts }
+    // When thoughts were extracted, trust cleaned even if empty — the entire
+    // message may have been inside <think> tags. Falling back to rawContent
+    // here re-displays the thinking content in the message body (duplication).
+    return { displayContent: thoughts ? cleaned : (cleaned || rawContent), parsedReasoning: thoughts }
   }, [rawContent, autoParse, isUser])
 
   // API-level reasoning takes priority; during regeneration use streaming reasoning;
