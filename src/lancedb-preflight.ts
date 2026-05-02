@@ -15,7 +15,7 @@ export async function configureLanceDbNativeOverride(): Promise<void> {
   const explicitOverride = process.env.LUMIVERSE_LANCEDB_NATIVE_PATH?.trim();
   const workspaceRoot = resolve(import.meta.dir, "..");
   const outDir = join(workspaceRoot, "vendor", "lancedb-android", "out");
-  const bundledAndroidOverride = join(outDir, "lancedb.android-arm64.node");
+  const bundledAndroidOverride = join(outDir, "lancedb.termux-arm64.node");
 
   if (explicitOverride && existsSync(resolve(explicitOverride))) {
     process.env.NAPI_RS_NATIVE_LIBRARY_PATH = resolve(explicitOverride);
@@ -27,11 +27,11 @@ export async function configureLanceDbNativeOverride(): Promise<void> {
 
   if (!existsSync(bundledAndroidOverride)) {
     console.log("[startup] Android/Termux detected. Missing native LanceDB engine.");
-    console.log("[startup] Downloading lancedb.android-arm64.node (~159MB)... This may take a minute.");
+    console.log("[startup] Downloading lancedb.termux-arm64.node... This may take a minute.");
     try {
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
       // Fetch the precompiled (and stripped) binary from the rolling release
-      const response = await fetch("https://github.com/prolix-oc/Lumiverse/releases/download/android-binaries/lancedb.android-arm64.node");
+      const response = await fetch("https://github.com/prolix-oc/Lumiverse/releases/download/android-binaries/lancedb.termux-arm64.node");
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
       
       const buffer = await response.arrayBuffer();
