@@ -26,6 +26,11 @@ import type {
   WorldBookEntryDTO,
   WorldBookEntryCreateDTO,
   WorldBookEntryUpdateDTO,
+  RegexScriptDTO,
+  RegexScriptCreateDTO,
+  RegexScriptUpdateDTO,
+  RegexScriptListOptionsDTO,
+  RegexScriptActiveOptionsDTO,
   DatabankDTO,
   DatabankCreateDTO,
   DatabankUpdateDTO,
@@ -1918,6 +1923,58 @@ const spindleApi: RuntimeSpindleAPI = {
         userId,
       });
       return result as import("lumiverse-spindle-types").ActivatedWorldInfoEntryDTO[];
+    },
+  },
+
+  regex_scripts: {
+    async list(options?: RegexScriptListOptionsDTO): Promise<{ data: RegexScriptDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "regex_scripts_list",
+        requestId,
+        scope: options?.scope,
+        scopeId: options?.scopeId,
+        target: options?.target,
+        limit: options?.limit,
+        offset: options?.offset,
+        userId: options?.userId,
+      });
+      return result as { data: RegexScriptDTO[]; total: number };
+    },
+    async get(scriptId: string, userId?: string): Promise<RegexScriptDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_get", requestId, scriptId, userId });
+      return result as RegexScriptDTO | null;
+    },
+    async create(input: RegexScriptCreateDTO, userId?: string): Promise<RegexScriptDTO> {
+      assertMutationAllowed("spindle.regex_scripts.create()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_create", requestId, input, userId });
+      return result as RegexScriptDTO;
+    },
+    async update(scriptId: string, input: RegexScriptUpdateDTO, userId?: string): Promise<RegexScriptDTO> {
+      assertMutationAllowed("spindle.regex_scripts.update()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_update", requestId, scriptId, input, userId });
+      return result as RegexScriptDTO;
+    },
+    async delete(scriptId: string, userId?: string): Promise<boolean> {
+      assertMutationAllowed("spindle.regex_scripts.delete()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_delete", requestId, scriptId, userId });
+      return result as boolean;
+    },
+    async getActive(options: RegexScriptActiveOptionsDTO): Promise<RegexScriptDTO[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "regex_scripts_get_active",
+        requestId,
+        target: options.target,
+        characterId: options.characterId,
+        chatId: options.chatId,
+        userId: options.userId,
+      });
+      return result as RegexScriptDTO[];
     },
   },
 

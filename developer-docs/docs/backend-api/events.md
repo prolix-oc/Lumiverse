@@ -147,6 +147,15 @@ No `action` discriminator is provided — if you need add/update/delete/navigate
 | `IMAGE_UPLOADED` | `{ imageId }` |
 | `IMAGE_DELETED` | `{ imageId }` |
 
+### Regex Scripts
+
+!!! warning "Permission required: `regex_scripts`"
+
+| Event | Payload |
+|-------|---------|
+| `REGEX_SCRIPT_CHANGED` | `{ id, script }` — fires on create, update, duplicate, reorder, and enable/disable. `script` is a `RegexScriptDTO`. |
+| `REGEX_SCRIPT_DELETED` | `{ id }` |
+
 ### Expressions
 
 | Event | Payload |
