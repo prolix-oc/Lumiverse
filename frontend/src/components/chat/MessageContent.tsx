@@ -828,6 +828,15 @@ function getIslandEndAt(raw: string, start: number, isStreaming: boolean): numbe
     return element.end
   }
 
+  let peekStart = skipWhitespace(raw, element.end)
+  while (raw.startsWith('</', peekStart)) {
+    const closeEnd = raw.indexOf('>', peekStart + 2)
+    if (closeEnd < 0) break
+    peekStart = skipWhitespace(raw, closeEnd + 1)
+  }
+  const trailingStyleEnd = findStyleBlockEnd(raw, peekStart)
+  if (trailingStyleEnd != null) return extendThroughAdjacentHtmlSiblings(raw, trailingStyleEnd)
+
   return null
 }
 
