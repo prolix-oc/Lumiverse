@@ -308,8 +308,20 @@ marked.setOptions({
 // phone screens, etc.) and isolating their styles.
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
+const YOUTUBE_EMBED_TOKEN = 'LUMIVERSE_YOUTUBE_EMBED'
 const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
-const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
+const SPECIAL_PIECE_RE = new RegExp(`<!--(${HTML_ISLAND_TOKEN}|${YOUTUBE_EMBED_TOKEN})_(\\d+)-->`, 'g')
+const YOUTUBE_NOCOOKIE_ORIGIN = 'https://www.youtube-nocookie.com'
+const YOUTUBE_EMBED_PATH_RE = /^\/embed\/[A-Za-z0-9_-]{6,}$/
+const YOUTUBE_EMBED_BOOL_QUERY_PARAMS = new Set(['autoplay', 'controls', 'loop', 'mute', 'playsinline', 'rel'])
+const YOUTUBE_EMBED_NUMBER_QUERY_PARAMS = new Set(['end', 'start'])
+const YOUTUBE_EMBED_TOKEN_QUERY_PARAMS = new Set(['si'])
+const YOUTUBE_EMBED_ALLOWED_QUERY_PARAMS = new Set([
+  ...YOUTUBE_EMBED_BOOL_QUERY_PARAMS,
+  ...YOUTUBE_EMBED_NUMBER_QUERY_PARAMS,
+  ...YOUTUBE_EMBED_TOKEN_QUERY_PARAMS,
+])
+const SAFE_YOUTUBE_EMBED_TOKEN_RE = /^[A-Za-z0-9_-]{1,128}$/
 const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
 const NO_ISLAND_ATTR_RE = /\bdata-no-island(?=[\s=>"'/]|$)/i
 const ROOT_HTML_TAG_RE = /^<([a-z][\w:-]*)\b[^>]*>/i
@@ -966,31 +978,103 @@ function processMarkdownInIsland(html: string): string {
   return normalizeLegacyFontTags(result)
 }
 
-interface ContentPiece {
-  type: 'markup' | 'island'
-  content: string
+interface TrustedYouTubeEmbed {
+  src: string
+  title: string
+}
+
+type ContentPiece =
+  | { type: 'markup'; content: string }
+  | { type: 'island'; content: string }
+  | { type: 'youtubeEmbed'; embed: TrustedYouTubeEmbed }
+
+function sanitizeTrustedYouTubeEmbedSrc(rawSrc: string): string | null {
+  if (!rawSrc) return null
+
+  try {
+    const url = new URL(rawSrc, window.location.origin)
+    if (url.origin !== YOUTUBE_NOCOOKIE_ORIGIN) return null
+    if (!YOUTUBE_EMBED_PATH_RE.test(url.pathname)) return null
+    if (url.hash) return null
+
+    const params = new URLSearchParams()
+    for (const [key, value] of url.searchParams) {
+      if (!YOUTUBE_EMBED_ALLOWED_QUERY_PARAMS.has(key)) return null
+
+      if (YOUTUBE_EMBED_BOOL_QUERY_PARAMS.has(key)) {
+        if (value !== '0' && value !== '1') return null
+      } else if (YOUTUBE_EMBED_NUMBER_QUERY_PARAMS.has(key)) {
+        if (!/^\d{1,6}$/.test(value)) return null
+      } else if (YOUTUBE_EMBED_TOKEN_QUERY_PARAMS.has(key)) {
+        if (!SAFE_YOUTUBE_EMBED_TOKEN_RE.test(value)) return null
+      }
+
+      params.append(key, value)
+    }
+
+    const query = params.toString()
+    return `${YOUTUBE_NOCOOKIE_ORIGIN}${url.pathname}${query ? `?${query}` : ''}`
+  } catch {
+    return null
+  }
+}
+
+function extractTrustedYouTubeEmbed(iframeHtml: string): TrustedYouTubeEmbed | null {
+  const doc = new DOMParser().parseFromString(iframeHtml, 'text/html')
+  const iframe = doc.body.firstElementChild
+  if (!iframe || iframe.tagName.toLowerCase() !== 'iframe') return null
+  if (doc.body.childElementCount !== 1) return null
+  if (doc.body.textContent?.trim()) return null
+
+  const src = sanitizeTrustedYouTubeEmbedSrc(iframe.getAttribute('src') || '')
+  if (!src) return null
+
+  const rawTitle = (iframe.getAttribute('title') || '').trim()
+  const title = rawTitle.slice(0, 120) || 'YouTube video'
+  return { src, title }
+}
+
+function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: TrustedYouTubeEmbed[] } {
+  if (!/<iframe\b/i.test(raw)) return { content: raw, embeds: [] }
+
+  const embeds: TrustedYouTubeEmbed[] = []
+  const content = raw.replace(/<iframe\b[\s\S]*?<\/iframe\s*>/gi, (match) => {
+    const embed = extractTrustedYouTubeEmbed(match)
+    if (!embed) return match
+    const idx = embeds.length
+    embeds.push(embed)
+    return `<!--${YOUTUBE_EMBED_TOKEN}_${idx}-->`
+  })
+
+  return { content, embeds }
 }
 
 function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] {
   if (!raw) return []
 
-  const { content, islands } = extractHtmlIslands(raw, isStreaming)
+  const { content: rawWithoutEmbeds, embeds } = extractTrustedYouTubeEmbeds(raw)
+  const { content, islands } = extractHtmlIslands(rawWithoutEmbeds, isStreaming)
 
-  if (islands.length === 0) {
-    return [{ type: 'markup', content: sanitizeRichHtml(formatContent(raw)) }]
+  if (islands.length === 0 && embeds.length === 0) {
+    return [{ type: 'markup', content: sanitizeRichHtml(formatContent(rawWithoutEmbeds)) }]
   }
 
   const html = formatContent(content)
   const pieces: ContentPiece[] = []
   let lastIdx = 0
 
-  for (const m of html.matchAll(ISLAND_RE)) {
+  for (const m of html.matchAll(SPECIAL_PIECE_RE)) {
     const before = html.slice(lastIdx, m.index!)
     if (before.trim()) pieces.push({ type: 'markup', content: sanitizeRichHtml(before) })
-    const idx = parseInt(m[1], 10)
-    if (islands[idx] != null) {
+
+    const idx = parseInt(m[2], 10)
+    if (m[1] === HTML_ISLAND_TOKEN && islands[idx] != null) {
       pieces.push({ type: 'island', content: sanitizeHtmlIsland(processMarkdownInIsland(islands[idx])) })
     }
+    if (m[1] === YOUTUBE_EMBED_TOKEN && embeds[idx] != null) {
+      pieces.push({ type: 'youtubeEmbed', embed: embeds[idx] })
+    }
+
     lastIdx = m.index! + m[0].length
   }
 
@@ -1107,6 +1191,23 @@ function ProseHtml({ html, className }: { html: string; className?: string }) {
   }, [html])
 
   return <div ref={ref} className={className} />
+}
+
+function TrustedYouTubeEmbed({ embed }: { embed: TrustedYouTubeEmbed }) {
+  return (
+    <div className={styles.youtubeEmbedWrap}>
+      <iframe
+        className={styles.youtubeEmbed}
+        src={embed.src}
+        title={embed.title}
+        loading="lazy"
+        referrerPolicy="strict-origin-when-cross-origin"
+        allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
+        sandbox="allow-scripts allow-same-origin allow-presentation"
+        allowFullScreen
+      />
+    </div>
+  )
 }
 
 // Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
@@ -1351,6 +1452,8 @@ export default function MessageContent({
             elements.push(
               piece.type === 'island'
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
+                : piece.type === 'youtubeEmbed'
+                  ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
                 : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
             )
           }
@@ -1372,6 +1475,8 @@ export default function MessageContent({
             elements.push(
               piece.type === 'island'
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
+                : piece.type === 'youtubeEmbed'
+                  ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
                 : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
             )
           }

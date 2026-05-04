@@ -14,7 +14,7 @@
     <!-- Frames are allowed only so Lumiverse can create opaque-origin sandbox
          frames for Spindle extension isolation. Extension code is still
          prohibited from creating raw iframes by the Spindle DOM APIs. -->
-    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob:; child-src 'self' blob:; object-src 'none'; worker-src 'self';" />
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob: https://www.youtube-nocookie.com; child-src 'self' blob: https://www.youtube-nocookie.com; object-src 'none'; worker-src 'self';" />
   </head>
   <body>
     <div id="root"></div>
