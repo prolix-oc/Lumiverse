@@ -138,6 +138,7 @@ interface ApplyDisplayRegexContext {
   macroCtx?: DisplayMacroContext
   resolvedFindPatterns?: Map<string, string>
   resolvedReplacements?: Map<string, string>
+  dynamicMacros?: Record<string, string>
 }
 
 function mapToRecord(map?: Map<string, string>): Record<string, string> | undefined {
@@ -160,6 +161,7 @@ async function applyDisplayRegexOnBackend(
         scripts,
         resolved_find_patterns: mapToRecord(context.resolvedFindPatterns),
         resolved_replacements: mapToRecord(context.resolvedReplacements),
+        dynamic_macros: context.dynamicMacros,
         context: {
           chat_id: context.chatId,
           character_id: context.characterId,

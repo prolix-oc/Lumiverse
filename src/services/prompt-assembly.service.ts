@@ -49,6 +49,7 @@ import {
   type FinalizedWorldInfoEntries,
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
+import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
 import * as chatsSvc from "./chats.service";
 import { stripReasoningTags } from "./chats.service";
 import {
@@ -1072,8 +1073,37 @@ export async function assemblePrompt(
       | Partial<WorldInfoSettings>
       | undefined) ??
     {};
+  const intercepted = await worldInfoInterceptorChain.run(
+    wiEntries,
+    {
+      chatId: ctx.chatId,
+      characterId: character.id,
+      userId: ctx.userId,
+      messages: messages.map((m) => {
+        const extra = (m.extra ?? {}) as { greeting?: unknown; greeting_index?: unknown };
+        const isGreeting = extra.greeting === true;
+        const greetingIndex =
+          isGreeting && typeof extra.greeting_index === "number"
+            ? extra.greeting_index
+            : undefined;
+        return {
+          id: m.id,
+          role: m.is_user ? ("user" as const) : ("assistant" as const),
+          content: m.content,
+          is_user: m.is_user,
+          is_greeting: isGreeting,
+          ...(greetingIndex !== undefined ? { greeting_index: greetingIndex } : {}),
+          swipe_id: m.swipe_id,
+          index_in_chat: m.index_in_chat,
+        };
+      }),
+      chatTurn: messages.length,
+      chatMetadata: chat.metadata ?? {},
+    },
+    ctx.userId
+  );
   const wiResult = activateWorldInfo({
-    entries: wiEntries,
+    entries: intercepted,
     messages,
     chatTurn: messages.length,
     wiState,

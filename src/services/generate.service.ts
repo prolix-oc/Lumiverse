@@ -1521,7 +1521,7 @@ export async function startGeneration(
           councilActive &&
           councilSettings.members.some((m) => m.tools.length > 0);
 
-        if (councilHasTools) {
+        if (councilHasTools && genType !== "impersonate") {
           pool.setPoolStatus(generationId, "council");
           if (councilSettings.toolsSettings.mode === "inline") {
             // Inline mode requires enableFunctionCalling in the preset's completion
@@ -1892,7 +1892,12 @@ export async function startGeneration(
         // Extensions can register tools with `inline_available: true` to make
         // them callable by the primary model via native function calling, even
         // when no Council is configured. Gated by the same preset toggle.
-        const extensionInlineTools = toolRegistry.getInlineAvailableTools();
+        // Skip for impersonate — it generates user messages, not assistant
+        // messages with tool-use capability.
+        const extensionInlineTools =
+          genType !== "impersonate"
+            ? toolRegistry.getInlineAvailableTools()
+            : [];
         if (extensionInlineTools.length > 0) {
           const presetId = input.preset_id || connection.preset_id;
           const preset = presetId

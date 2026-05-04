@@ -17,6 +17,8 @@ export interface ChatSlice {
   activeGenerationId: string | null
   regeneratingMessageId: string | null
   streamingGenerationType: string | null
+  /** The generation type of the last completed generation — survives endStreaming() */
+  lastCompletedGenerationType: string | null
   lastPooledSeq: number | null
   totalChatLength: number
   /** Content from an impersonate-draft generation, ready to populate the input box */

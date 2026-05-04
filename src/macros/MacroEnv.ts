@@ -161,6 +161,17 @@ function resolveChatGreeting(character: Character, chat: Chat, messages: Message
   return character.first_mes || "";
 }
 
+export function mergeDynamicMacros(
+  env: MacroEnv,
+  overrides: Record<string, string>,
+): void {
+  if (!overrides) return;
+  for (const k of Object.keys(overrides)) {
+    env.dynamicMacros[k] = overrides[k];
+  }
+  env._dynamicMacrosLower = buildDynamicLookup(env.dynamicMacros);
+}
+
 /** Build a lowercase-keyed Map from dynamicMacros for O(1) lookup. */
 function buildDynamicLookup(
   macros?: Record<string, string | import("./types").MacroHandler | import("./types").MacroDefinition>,

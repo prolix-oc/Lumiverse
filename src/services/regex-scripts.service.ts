@@ -280,7 +280,7 @@ function normalizeScriptId(raw: string): string {
 export function listRegexScripts(
   userId: string,
   pagination: PaginationParams,
-  filters?: { scope?: RegexScope; target?: RegexTarget; character_id?: string; chat_id?: string }
+  filters?: { scope?: RegexScope; scope_id?: string; target?: RegexTarget; character_id?: string; chat_id?: string }
 ) {
   const conditions = ["user_id = ?"];
   const params: any[] = [userId];
@@ -288,6 +288,10 @@ export function listRegexScripts(
   if (filters?.scope) {
     conditions.push("scope = ?");
     params.push(filters.scope);
+  }
+  if (filters?.scope_id) {
+    conditions.push("scope_id = ?");
+    params.push(filters.scope_id);
   }
   if (filters?.target) {
     conditions.push("target = ?");

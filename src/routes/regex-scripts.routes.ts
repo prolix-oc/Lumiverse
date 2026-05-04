@@ -166,6 +166,10 @@ app.post("/apply", async (c) => {
   const context = body.context;
   if (!isStringRecord(context)) return c.json({ error: "context is required" }, 400);
 
+  const dynamicMacros = isStringRecord(body.dynamic_macros)
+    ? Object.fromEntries(Object.entries(body.dynamic_macros).filter(([, v]) => typeof v === "string")) as Record<string, string>
+    : undefined;
+
   const result = await applyDisplayRegex({
     content,
     scripts: scripts.filter((script) => !script.disabled),
@@ -179,6 +183,7 @@ app.post("/apply", async (c) => {
     userId,
     resolvedFindPatterns: normalizeResolvedMap(body.resolved_find_patterns),
     resolvedReplacements: normalizeResolvedMap(body.resolved_replacements),
+    dynamicMacros,
   });
 
   return c.json({ result });

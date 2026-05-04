@@ -12,6 +12,9 @@ import type {
   ChatDTO,
   WorldBookDTO,
   WorldBookEntryDTO,
+  RegexScriptDTO,
+  RegexScopeDTO,
+  RegexTargetDTO,
   DatabankDTO,
   DatabankDocumentDTO,
   DatabankDocumentCreateDTO,
@@ -44,6 +47,11 @@ import {
   type MacroInterceptorCtx,
   type MacroInterceptorResult,
 } from "./macro-interceptor";
+import {
+  worldInfoInterceptorChain,
+  type WorldInfoInterceptorCtxDTO,
+  type WorldInfoInterceptorResultDTO,
+} from "./world-info-interceptor";
 import { toolRegistry } from "./tool-registry";
 import * as managerSvc from "./manager.service";
 import * as generateSvc from "../services/generate.service";
@@ -55,6 +63,7 @@ import {
   setCharacterWorldBookIds,
 } from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
+import * as regexScriptsSvc from "../services/regex-scripts.service";
 import * as databanksSvc from "../services/databank";
 import * as filesSvc from "../services/files.service";
 import * as personasSvc from "../services/personas.service";
@@ -396,6 +405,12 @@ type RuntimeWorkerToHost =
       requestId: string;
       result: unknown;
     }
+  | { type: "register_world_info_interceptor"; priority?: number }
+  | {
+      type: "world_info_interceptor_result";
+      requestId: string;
+      result: unknown;
+    }
   | {
       type: "frontend_process_spawn";
       requestId: string;
@@ -479,6 +494,11 @@ type RuntimeHostToWorker =
       type: "macro_interceptor_request";
       requestId: string;
       ctx: MacroInterceptorCtx;
+    }
+  | {
+      type: "world_info_interceptor_request";
+      requestId: string;
+      ctx: WorldInfoInterceptorCtxDTO;
     }
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
@@ -754,6 +774,7 @@ export class WorkerHost {
   private contextHandlerUnregister: (() => void) | null = null;
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
+  private worldInfoInterceptorUnregister: (() => void) | null = null;
   private registeredMacroNames = new Set<string>();
   private macroValueCache = new Map<string, string>();
   private toastTimestamps: number[] = [];
@@ -1534,6 +1555,9 @@ export class WorkerHost {
     this.macroInterceptorUnregister?.();
     this.macroInterceptorUnregister = null;
 
+    this.worldInfoInterceptorUnregister?.();
+    this.worldInfoInterceptorUnregister = null;
+
     // Unregister all tools for this extension
     toolRegistry.unregisterByExtension(this.extensionId);
 
@@ -1559,6 +1583,7 @@ export class WorkerHost {
     contextHandlerChain.unregisterByExtension(this.extensionId);
     messageContentProcessorChain.unregisterByExtension(this.extensionId);
     macroInterceptorChain.unregisterByExtension(this.extensionId);
+    worldInfoInterceptorChain.unregisterByExtension(this.extensionId);
     unregisterSharedRpcEndpointsByOwner(this.manifest.identifier);
 
     // Reject pending requests
@@ -2107,6 +2132,12 @@ export class WorkerHost {
       case "macro_interceptor_result":
         this.resolveRequest(msg.requestId, msg.result);
         break;
+      case "register_world_info_interceptor":
+        this.handleRegisterWorldInfoInterceptor(msg.priority);
+        break;
+      case "world_info_interceptor_result":
+        this.resolveRequest(msg.requestId, msg.result);
+        break;
       case "tool_invocation_result":
         if (msg.error) {
           this.rejectRequest(msg.requestId, new Error(msg.error));
@@ -2319,6 +2350,39 @@ export class WorkerHost {
       // ─── Activated World Info (gated: "world_books") ─────────────────
       case "world_books_get_activated":
         this.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
+        break;
+      // ─── Regex Scripts (gated: "regex_scripts") ──────────────────────
+      case "regex_scripts_list":
+        this.handleRegexScriptsList(
+          msg.requestId,
+          msg.scope,
+          msg.scopeId,
+          msg.target,
+          msg.limit,
+          msg.offset,
+          msg.userId,
+        );
+        break;
+      case "regex_scripts_get":
+        this.handleRegexScriptsGet(msg.requestId, msg.scriptId, msg.userId);
+        break;
+      case "regex_scripts_get_active":
+        this.handleRegexScriptsGetActive(
+          msg.requestId,
+          msg.target,
+          msg.characterId,
+          msg.chatId,
+          msg.userId,
+        );
+        break;
+      case "regex_scripts_create":
+        this.handleRegexScriptsCreate(msg.requestId, msg.input, msg.userId);
+        break;
+      case "regex_scripts_update":
+        this.handleRegexScriptsUpdate(msg.requestId, msg.scriptId, msg.input, msg.userId);
+        break;
+      case "regex_scripts_delete":
+        this.handleRegexScriptsDelete(msg.requestId, msg.scriptId, msg.userId);
         break;
       // ─── Databanks (gated: "databanks") ─────────────────────────────
       case "databanks_list":
@@ -5308,6 +5372,58 @@ export class WorkerHost {
     });
   }
 
+  private handleRegisterWorldInfoInterceptor(priority?: number): void {
+    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] generation permission not granted for registerWorldInfoInterceptor`
+      );
+      this.postToWorker({
+        type: "permission_denied",
+        permission: "generation",
+        operation: "registerWorldInfoInterceptor",
+      });
+      return;
+    }
+
+    this.worldInfoInterceptorUnregister?.();
+    this.worldInfoInterceptorUnregister = worldInfoInterceptorChain.register({
+      extensionId: this.extensionId,
+      userId: this.getScopedUserId(),
+      priority: priority ?? 100,
+      handler: async (ctx: WorldInfoInterceptorCtxDTO) => {
+        const requestId = crypto.randomUUID();
+
+        this.postToWorker({
+          type: "world_info_interceptor_request",
+          requestId,
+          ctx,
+        });
+
+        return new Promise<WorldInfoInterceptorResultDTO | void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            this.pendingRequests.delete(requestId);
+            reject(
+              new Error(
+                `World-info interceptor timeout from ${this.manifest.identifier}`
+              )
+            );
+          }, 10_000);
+
+          this.pendingRequests.set(requestId, {
+            resolve: (val) => {
+              clearTimeout(timeout);
+              resolve(val as WorldInfoInterceptorResultDTO | undefined);
+            },
+            reject: (err) => {
+              clearTimeout(timeout);
+              reject(err);
+            },
+          });
+        });
+      },
+    });
+  }
+
   // ─── Variables (free tier — no permission gating) ────────────────────
 
   private getLocalVars(chatId: string): Record<string, string> {
@@ -6919,6 +7035,186 @@ export class WorkerHost {
       }));
 
       this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Regex Scripts (gated: "regex_scripts") ──────────────────────────
+
+  private toRegexScriptDTO(s: any): RegexScriptDTO {
+    return {
+      id: s.id,
+      name: s.name,
+      script_id: s.script_id || "",
+      find_regex: s.find_regex,
+      replace_string: s.replace_string,
+      flags: s.flags,
+      placement: s.placement,
+      scope: s.scope,
+      scope_id: s.scope_id,
+      target: s.target,
+      min_depth: s.min_depth,
+      max_depth: s.max_depth,
+      trim_strings: s.trim_strings,
+      run_on_edit: !!s.run_on_edit,
+      substitute_macros: s.substitute_macros,
+      disabled: !!s.disabled,
+      sort_order: s.sort_order,
+      description: s.description || "",
+      folder: s.folder || "",
+      metadata: s.metadata || {},
+      created_at: s.created_at,
+      updated_at: s.updated_at,
+    };
+  }
+
+  private handleRegexScriptsList(
+    requestId: string,
+    scope?: RegexScopeDTO,
+    scopeId?: string,
+    target?: RegexTargetDTO,
+    limit?: number,
+    offset?: number,
+    userId?: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (scope !== undefined && scope !== "global" && scope !== "character" && scope !== "chat") {
+        throw new Error("scope must be 'global', 'character', or 'chat'");
+      }
+      if (target !== undefined && target !== "prompt" && target !== "response" && target !== "display") {
+        throw new Error("target must be 'prompt', 'response', or 'display'");
+      }
+
+      const filters: { scope?: RegexScopeDTO; scope_id?: string; target?: RegexTargetDTO } = {};
+      if (target) filters.target = target;
+      if (scope) filters.scope = scope;
+      if (scopeId) filters.scope_id = scopeId;
+
+      const result = regexScriptsSvc.listRegexScripts(
+        resolvedUserId,
+        { limit: Math.min(limit || 50, 200), offset: offset || 0 },
+        filters,
+      );
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((s) => this.toRegexScriptDTO(s)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleRegexScriptsGet(requestId: string, scriptId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const s = regexScriptsSvc.getRegexScript(resolvedUserId, scriptId);
+      this.postToWorker({ type: "response", requestId, result: s ? this.toRegexScriptDTO(s) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleRegexScriptsGetActive(
+    requestId: string,
+    target: RegexTargetDTO,
+    characterId?: string,
+    chatId?: string,
+    userId?: string,
+  ): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (target !== "prompt" && target !== "response" && target !== "display") {
+        throw new Error("target must be 'prompt', 'response', or 'display'");
+      }
+
+      const scripts = regexScriptsSvc.getActiveScripts(resolvedUserId, { characterId, chatId, target });
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: scripts.map((s) => this.toRegexScriptDTO(s)),
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleRegexScriptsCreate(requestId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
+        throw new Error("Regex script name is required");
+      }
+      if (typeof input.find_regex !== "string") {
+        throw new Error("find_regex is required");
+      }
+
+      const result = regexScriptsSvc.createRegexScript(resolvedUserId, input);
+      if (typeof result === "string") throw new Error(result);
+      this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleRegexScriptsUpdate(requestId: string, scriptId: string, input: any, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = regexScriptsSvc.updateRegexScript(resolvedUserId, scriptId, input || {});
+      if (result === null) throw new Error("Regex script not found");
+      if (typeof result === "string") throw new Error(result);
+      this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleRegexScriptsDelete(requestId: string, scriptId: string, userId?: string): void {
+    try {
+      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const deleted = regexScriptsSvc.deleteRegexScript(resolvedUserId, scriptId);
+      this.postToWorker({ type: "response", requestId, result: deleted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

@@ -359,8 +359,14 @@ function snapshotEnvForInterceptor(env: MacroEnv): {
     global: Record<string, string>;
     chat: Record<string, string>;
   };
+  dynamicMacros: Record<string, string>;
   extra: Record<string, unknown>;
 } {
+  const dyn: Record<string, string> = {};
+  for (const k of Object.keys(env.dynamicMacros || {})) {
+    const v = env.dynamicMacros[k];
+    if (typeof v === "string") dyn[k] = v;
+  }
   return {
     commit: env.commit !== false,
     names: { ...env.names },
@@ -372,6 +378,7 @@ function snapshotEnvForInterceptor(env: MacroEnv): {
       global: Object.fromEntries(env.variables.global),
       chat: Object.fromEntries(env.variables.chat),
     },
+    dynamicMacros: dyn,
     extra: { ...env.extra },
   };
 }

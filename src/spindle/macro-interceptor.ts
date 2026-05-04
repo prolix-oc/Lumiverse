@@ -17,6 +17,7 @@ export interface MacroInterceptorEnv {
     readonly global: Record<string, string>;
     readonly chat: Record<string, string>;
   };
+  readonly dynamicMacros: Record<string, string>;
   readonly extra: Record<string, unknown>;
 }
 

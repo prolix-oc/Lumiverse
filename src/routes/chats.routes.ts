@@ -592,4 +592,34 @@ app.delete("/:chatId/messages/:id/swipe/:idx", (c) => {
   return c.json(msg);
 });
 
+app.post("/:chatId/display-preprocess", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const body = (await c.req.json().catch(() => null)) as {
+    messageId?: unknown;
+    messageIndex?: unknown;
+    role?: unknown;
+    rawContent?: unknown;
+  } | null;
+  if (!body || typeof body.rawContent !== "string") {
+    return c.json({ error: "rawContent (string) required" }, 400);
+  }
+  if (messageContentProcessorChain.count === 0) {
+    return c.json({ content: body.rawContent });
+  }
+  const role = typeof body.role === "string" ? body.role : undefined;
+  const processed = await messageContentProcessorChain.run({
+    chatId,
+    content: body.rawContent,
+    origin: "render",
+    userId,
+    ...(typeof body.messageId === "string" ? { messageId: body.messageId } : {}),
+    extra: {
+      ...(typeof body.messageIndex === "number" ? { messageIndex: body.messageIndex } : {}),
+      ...(role ? { role, is_user: role === "user" } : {}),
+    },
+  }, userId);
+  return c.json({ content: processed.content ?? body.rawContent });
+});
+
 export { app as chatsRoutes };

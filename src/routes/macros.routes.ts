@@ -192,8 +192,7 @@ function buildEnvFromIds(userId: string, body: {
     }
   }
 
-  // Minimal fallback env
-  const persona = personasSvc.getDefaultPersona(userId);
+  const persona = personasSvc.resolvePersonaOrDefault(userId, body.persona_id);
   const connection = connectionsSvc.getDefaultConnection(userId);
 
   return {

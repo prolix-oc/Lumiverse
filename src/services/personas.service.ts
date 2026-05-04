@@ -4,6 +4,7 @@ import { EventType } from "../ws/events";
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from "../types/persona";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+import { getSetting as getUserSetting } from "./settings.service";
 
 function rowToPersona(row: any): Persona {
   return {
@@ -237,6 +238,13 @@ export function resolvePersonaOrDefault(userId: string, personaId?: string | nul
     const requested = getPersona(userId, personaId);
     if (requested) return requested;
   }
+  try {
+    const active = getUserSetting(userId, "activePersonaId");
+    if (active && typeof active.value === "string" && active.value.length > 0) {
+      const fromSetting = getPersona(userId, active.value);
+      if (fromSetting) return fromSetting;
+    }
+  } catch { /* */ }
   return getDefaultPersona(userId);
 }
 

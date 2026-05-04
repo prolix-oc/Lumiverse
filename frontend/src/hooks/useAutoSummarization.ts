@@ -31,6 +31,7 @@ export function useAutoSummarization() {
   const mode = useStore((s) => s.summarization.mode)
   const autoInterval = useStore((s) => s.summarization.autoInterval)
   const isStreaming = useStore((s) => s.isStreaming)
+  const lastGenerationType = useStore((s) => s.lastCompletedGenerationType)
 
   // Per-chat in-flight tracking so the global `isSummarizing` flag is no longer
   // the sole gate. Multiple chats can be mid-summary across tabs; what matters
@@ -69,6 +70,10 @@ export function useAutoSummarization() {
     if (!activeChatId) return
     if (isStreaming) return
     if (messageCount === 0) return
+    // Don't trigger summarization from impersonate generations — they create
+    // user messages that bump totalChatLength but aren't narrative content
+    // worth summarizing over. The next real generation will trigger if needed.
+    if (lastGenerationType === 'impersonate') return
 
     // Capture the values this effect tick is reasoning about. Everything the
     // kickoff does is keyed off these locals, not the live store.
@@ -149,5 +154,5 @@ export function useAutoSummarization() {
     }
 
     queueMicrotask(kickoff)
-  }, [activeChatId, messageCount, mode, autoInterval, isStreaming])
+  }, [activeChatId, messageCount, mode, autoInterval, isStreaming, lastGenerationType])
 }

@@ -1,4 +1,4 @@
-import { buildEnv, initMacros, resolveGroupCharacterNames } from "../macros";
+import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames } from "../macros";
 import type { MacroEnv } from "../macros";
 import { getEffectiveCharacterName } from "../types/character";
 import type { Chat } from "../types/chat";
@@ -27,6 +27,7 @@ export interface ApplyDisplayRegexInput {
   userId: string;
   resolvedFindPatterns?: Map<string, string>;
   resolvedReplacements?: Map<string, string>;
+  dynamicMacros?: Record<string, string>;
 }
 
 function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv | undefined {
@@ -85,7 +86,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
     }
   }
 
-  const persona = personasSvc.getDefaultPersona(userId);
+  const persona = personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id);
   const connection = connectionsSvc.getDefaultConnection(userId);
   return {
     commit: true,
@@ -149,6 +150,9 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
 export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<string> {
   const placement: RegexPlacement = input.context.is_user ? "user_input" : "ai_output";
   const env = buildEnvFromContext(input.userId, input.context);
+  if (env && input.dynamicMacros) {
+    mergeDynamicMacros(env, input.dynamicMacros);
+  }
   return applyRegexScripts(
     input.content,
     input.scripts,

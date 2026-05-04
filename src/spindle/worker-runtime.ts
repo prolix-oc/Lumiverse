@@ -26,6 +26,11 @@ import type {
   WorldBookEntryDTO,
   WorldBookEntryCreateDTO,
   WorldBookEntryUpdateDTO,
+  RegexScriptDTO,
+  RegexScriptCreateDTO,
+  RegexScriptUpdateDTO,
+  RegexScriptListOptionsDTO,
+  RegexScriptActiveOptionsDTO,
   DatabankDTO,
   DatabankCreateDTO,
   DatabankUpdateDTO,
@@ -264,6 +269,12 @@ type RuntimeWorkerToHost =
       requestId: string;
       result: unknown;
     }
+  | { type: "register_world_info_interceptor"; priority?: number }
+  | {
+      type: "world_info_interceptor_result";
+      requestId: string;
+      result: unknown;
+    }
   | {
       type: "frontend_process_spawn";
       requestId: string;
@@ -348,6 +359,11 @@ type RuntimeHostToWorker =
       requestId: string;
       ctx: unknown;
     }
+  | {
+      type: "world_info_interceptor_request";
+      requestId: string;
+      ctx: unknown;
+    }
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
@@ -360,7 +376,7 @@ type RuntimeSpindleAPI = SpindleAPI & {
       messageId?: string;
       content: string;
       extra?: Record<string, unknown>;
-      origin: "create" | "update" | "swipe_add" | "swipe_update";
+      origin: "create" | "update" | "swipe_add" | "swipe_update" | "render";
       swipeIndex?: number;
     }) => Promise<{ content?: string; extra?: Record<string, unknown> } | void>,
     priority?: number
@@ -386,6 +402,58 @@ type RuntimeSpindleAPI = SpindleAPI & {
       sourceHint?: string;
       userId?: string;
     }) => Promise<string | void>,
+    priority?: number
+  ): void;
+  registerWorldInfoInterceptor(
+    handler: (ctx: {
+      chatId: string;
+      characterId: string;
+      userId?: string;
+      entries: ReadonlyArray<{
+        id: string;
+        world_book_id: string;
+        comment: string;
+        disabled: boolean;
+        constant: boolean;
+        extensions: Readonly<Record<string, unknown>>;
+        key: readonly string[];
+        keysecondary: readonly string[];
+        position: number;
+        depth: number;
+        priority: number;
+        probability: number;
+        use_probability: boolean;
+        content: string;
+        automation_id: string | null;
+        selective: boolean;
+        selective_logic: number;
+        match_whole_words: boolean;
+        case_sensitive: boolean;
+        use_regex: boolean;
+        prevent_recursion: boolean;
+        exclude_recursion: boolean;
+        delay_until_recursion: boolean;
+        scan_depth: number | null;
+        order_value: number;
+      }>;
+      messages: ReadonlyArray<{
+        id: string;
+        role: "system" | "user" | "assistant";
+        content: string;
+        is_user: boolean;
+        is_greeting: boolean;
+        greeting_index?: number;
+        swipe_id: number;
+        index_in_chat: number;
+      }>;
+      chatTurn: number;
+      chatMetadata: Readonly<Record<string, unknown>>;
+    }) => Promise<{
+      disabled?: readonly string[];
+      enabled?: readonly string[];
+      forced?: readonly string[];
+      mutated?: ReadonlyArray<{ id: string; content?: string }>;
+    } | void>,
     priority?: number
   ): void;
   tokens: {
@@ -498,6 +566,9 @@ let messageContentProcessorFn:
   | ((ctx: unknown) => Promise<unknown>)
   | null = null;
 let macroInterceptorFn:
+  | ((ctx: unknown) => Promise<unknown>)
+  | null = null;
+let worldInfoInterceptorFn:
   | ((ctx: unknown) => Promise<unknown>)
   | null = null;
 let oauthCallbackHandler:
@@ -1921,6 +1992,58 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  regex_scripts: {
+    async list(options?: RegexScriptListOptionsDTO): Promise<{ data: RegexScriptDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "regex_scripts_list",
+        requestId,
+        scope: options?.scope,
+        scopeId: options?.scopeId,
+        target: options?.target,
+        limit: options?.limit,
+        offset: options?.offset,
+        userId: options?.userId,
+      });
+      return result as { data: RegexScriptDTO[]; total: number };
+    },
+    async get(scriptId: string, userId?: string): Promise<RegexScriptDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_get", requestId, scriptId, userId });
+      return result as RegexScriptDTO | null;
+    },
+    async create(input: RegexScriptCreateDTO, userId?: string): Promise<RegexScriptDTO> {
+      assertMutationAllowed("spindle.regex_scripts.create()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_create", requestId, input, userId });
+      return result as RegexScriptDTO;
+    },
+    async update(scriptId: string, input: RegexScriptUpdateDTO, userId?: string): Promise<RegexScriptDTO> {
+      assertMutationAllowed("spindle.regex_scripts.update()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_update", requestId, scriptId, input, userId });
+      return result as RegexScriptDTO;
+    },
+    async delete(scriptId: string, userId?: string): Promise<boolean> {
+      assertMutationAllowed("spindle.regex_scripts.delete()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "regex_scripts_delete", requestId, scriptId, userId });
+      return result as boolean;
+    },
+    async getActive(options: RegexScriptActiveOptionsDTO): Promise<RegexScriptDTO[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "regex_scripts_get_active",
+        requestId,
+        target: options.target,
+        characterId: options.characterId,
+        chatId: options.chatId,
+        userId: options.userId,
+      });
+      return result as RegexScriptDTO[];
+    },
+  },
+
   databanks: {
     async list(options?: {
       limit?: number;
@@ -2281,6 +2404,12 @@ const spindleApi: RuntimeSpindleAPI = {
     assertMutationAllowed("spindle.registerMacroInterceptor()");
     macroInterceptorFn = handler as (ctx: unknown) => Promise<unknown>;
     post({ type: "register_macro_interceptor", priority });
+  },
+
+  registerWorldInfoInterceptor(handler, priority?): void {
+    assertMutationAllowed("spindle.registerWorldInfoInterceptor()");
+    worldInfoInterceptorFn = handler as (ctx: unknown) => Promise<unknown>;
+    post({ type: "register_world_info_interceptor", priority });
   },
 
   sendToFrontend(payload: unknown, userId?: string): void {
@@ -2802,6 +2931,31 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           });
           post({
             type: "macro_interceptor_result",
+            requestId: msg.requestId,
+            result: undefined,
+          });
+        }
+      }
+      break;
+    }
+
+    case "world_info_interceptor_request": {
+      if (worldInfoInterceptorFn) {
+        try {
+          const result = await worldInfoInterceptorFn(msg.ctx);
+          post({
+            type: "world_info_interceptor_result",
+            requestId: msg.requestId,
+            result,
+          });
+        } catch (err: any) {
+          post({
+            type: "log",
+            level: "error",
+            message: `World-info interceptor error: ${err.message}`,
+          });
+          post({
+            type: "world_info_interceptor_result",
             requestId: msg.requestId,
             result: undefined,
           });

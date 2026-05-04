@@ -17,6 +17,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Interceptors](interceptors.md) | `interceptor` | Modify the prompt before it reaches the LLM |
 | [Context Handlers](context-handlers.md) | `context_handler` | Enrich the generation context before assembly |
 | [Macro Interceptor](macro-interceptor.md) | `macro_interceptor` | Transform raw templates before macro parsing/dispatch |
+| [World Info Interceptor](world-info-interceptor.md) | `generation` | Disable world info entries or override their content before activation |
 | [Message Content Processor](message-content-processor.md) | `chat_mutation` | Transform message content before it is written to the database |
 | [LLM Tools](llm-tools.md) | `tools` | Register function-calling tools + Council-eligible tools |
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
@@ -31,6 +32,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Characters](characters.md) | `characters` | CRUD on character cards |
 | [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [World Books](world-books.md) | `world_books` | CRUD on world books and entries |
+| [Regex Scripts](regex-scripts.md) | `regex_scripts` | CRUD on regex scripts (find/replace rules) |
 | [Databanks](databanks.md) | `databanks` | CRUD on databanks and their documents |
 | [Personas](personas.md) | `personas` | CRUD on personas + active switching + attached world books |
 | [Council](council.md) | Free | Read the active council members and configuration |

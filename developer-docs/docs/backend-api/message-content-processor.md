@@ -20,8 +20,8 @@ Use this when the transform belongs on the stored message itself, not just on th
 
 | Param | Type | Description |
 | --- | --- | --- |
-| `handler` | `(ctx: MessageContentProcessorCtx) => Promise<MessageContentProcessorResult \| void>` | Receives the about-to-be-committed content; returns a patch, or `void` to pass through |
-| `priority` | `number` | Optional. Lower values run first. Default: `100` |
+| `handler`  | `(ctx: MessageContentProcessorCtx) => Promise<MessageContentProcessorResult \| void>` | Receives the about-to-be-committed content; returns a patch, or `void` to pass through |
+| `priority` | `number` | Optional. Lower values run first. Default:`100` |
 
 ## Context Object
 
@@ -30,8 +30,8 @@ interface MessageContentProcessorCtx {
   chatId: string
   messageId?: string                              // undefined for "create"
   content: string
-  extra?: Record<string, unknown>
-  origin: "create" | "update" | "swipe_add" | "swipe_update"
+  extra?: Record<string, unknown>                 // populated with { role, is_user } for "render"
+  origin: "create" | "update" | "swipe_add" | "swipe_update" | "render"
   swipeIndex?: number                             // set for "swipe_update"
   userId: string                                  // pass to operator-scoped Spindle calls
 }
@@ -46,10 +46,34 @@ interface MessageContentProcessorCtx {
 | `"update"` | `PUT /api/v1/chats/:chatId/messages/:id` | Edits an existing message's content or extra. |
 | `"swipe_add"` | `POST /api/v1/chats/:chatId/messages/:id/swipe` (with `content`) | Appends a new swipe. |
 | `"swipe_update"` | `PUT /api/v1/chats/:chatId/messages/:id/swipe/:idx` | Rewrites the swipe at `swipeIndex`. |
+| `"render"` | `POST /api/v1/chats/:chatId/display-preprocess` | Per-render transform for display only. Output feeds the display-regex pass and final paint. Does not write to the message row. |
 
 Returned `extra` is ignored on swipe origins: swipes share the parent message's `extra`, which `addSwipe` and `updateSwipe` cannot patch. Only `content` is honored.
 
+Returned `extra` is also ignored on `render`. There is no row to mutate, so only `content` is honored.
+
 Cycling through existing swipes (`{direction: "left"|"right"}`) does not fire the hook; no content changes.
+
+### Render origin
+
+`render` is a non-persisting origin. The frontend calls `POST /api/v1/chats/:chatId/display-preprocess` once per visible message, the chain runs in the same priority order as write-time origins, and the returned content feeds into the display-regex pass before the host's `richHtmlSanitizer` paints it.
+
+The transformed content is visible only on the rendered message. It is invisible to:
+
+- `spindle.chat.getMessages()` and any other read of the stored row
+- write-time origins (`create`, `update`, `swipe_add`, `swipe_update`)
+- chat memory embeddings, prompt assembly, and exports
+
+Use `render` for per-render rewrites that depend on transient or per-message context (chat-var values, the message's own position, etc.) and would pollute history if persisted. Use a write-time origin when the transform belongs on the stored message itself.
+
+The render context populates `extra` with hints from the calling frontend:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `extra.role`| `string` | `"user"`, `"assistant"`, or `"system"`. |
+| `extra.is_user` | `boolean` | Mirror of `role === "user"`. |
+
+`messageId` is set on the context when the rendered message has one. The route accepts an optional `messageIndex` body field that lands on `extra.messageIndex` if supplied by the caller.
 
 ## Return Value
 

@@ -55,6 +55,7 @@ Extensions request specific permissions for what they can access:
 | **Characters** | Read/write character data |
 | **Chats** | Read/write chat data |
 | **World Books** | Read/write world book data |
+| **Regex Scripts** | Read/write regex scripts (find/replace rules) |
 | **Personas** | Read/write persona data |
 | **CORS Proxy** | Make HTTP requests through the server |
 | **Interceptor** | Modify prompts before generation |

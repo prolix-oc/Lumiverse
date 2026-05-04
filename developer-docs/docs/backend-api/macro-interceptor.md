@@ -27,7 +27,7 @@ One interceptor per extension; a second registration replaces the first.
 ```ts
 interface MacroInterceptorCtx {
   template: string
-  env: { commit, names, character, chat, system, variables: { local, global, chat }, extra }
+  env: { commit, names, character, chat, system, variables: { local, global, chat }, dynamicMacros, extra }
   commit: boolean
   phase: "prompt" | "display" | "response" | "other"
   sourceHint?: string
@@ -36,6 +36,8 @@ interface MacroInterceptorCtx {
 ```
 
 `env` is a structured-clone snapshot. Persist state via `spindle.variables.*`, not the snapshot.
+
+`env.dynamicMacros` carries per-call macro overrides supplied by the caller (`Record<string, string>`). The display-regex pipeline (`phase: "display"`) sets `chat_index` to the rendered message's index in the chat, which lets handlers compute per-message context that registered macros cannot reach on their own. Other callers may set additional fields.
 
 ## Composition Order
 

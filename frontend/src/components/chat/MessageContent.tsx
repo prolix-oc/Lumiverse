@@ -828,6 +828,15 @@ function getIslandEndAt(raw: string, start: number, isStreaming: boolean): numbe
     return element.end
   }
 
+  let peekStart = skipWhitespace(raw, element.end)
+  while (raw.startsWith('</', peekStart)) {
+    const closeEnd = raw.indexOf('>', peekStart + 2)
+    if (closeEnd < 0) break
+    peekStart = skipWhitespace(raw, closeEnd + 1)
+  }
+  const trailingStyleEnd = findStyleBlockEnd(raw, peekStart)
+  if (trailingStyleEnd != null) return extendThroughAdjacentHtmlSiblings(raw, trailingStyleEnd)
+
   return null
 }
 
@@ -1206,7 +1215,13 @@ export default function MessageContent({
   const interceptorCleanedContent = interceptedMessageTags.content
 
   const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
-  const regexAppliedContent = useDisplayRegex(interceptorCleanedContent, isUser, depth, macroCtx)
+  const preprocessOpts = useMemo(
+    () => (messageId
+      ? { messageId, role: (isUser ? 'user' : 'assistant') as 'user' | 'assistant' }
+      : undefined),
+    [messageId, isUser],
+  )
+  const regexAppliedContent = useDisplayRegex(interceptorCleanedContent, isUser, depth, macroCtx, preprocessOpts)
 
   const risuResolvedContent = useMemo(
     () => {
@@ -1281,6 +1296,7 @@ export default function MessageContent({
     observer.observe(container)
     return () => observer.disconnect()
   }, [isStreaming, lockStreamingHeight])
+
 
   const renderedBlocks = useMemo(() => {
     const elements: React.ReactNode[] = []

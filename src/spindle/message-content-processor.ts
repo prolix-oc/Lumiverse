@@ -2,7 +2,8 @@ export type MessageContentProcessorOrigin =
   | "create"
   | "update"
   | "swipe_add"
-  | "swipe_update";
+  | "swipe_update"
+  | "render";
 
 export interface MessageContentProcessorCtx {
   chatId: string;
