@@ -30,6 +30,16 @@ let firstUserId: string | null = null;
 
 /** Returns the cached first-user ID, or null if not yet resolved. */
 export function getFirstUserId(): string | null {
+  if (!firstUserId) {
+    try {
+      const row = getDb()
+        .query('SELECT id FROM "user" ORDER BY createdAt ASC LIMIT 1')
+        .get() as { id: string } | null;
+      firstUserId = row?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
   return firstUserId;
 }
 

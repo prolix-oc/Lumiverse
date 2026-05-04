@@ -91,6 +91,7 @@ import { getSidecarSettings } from "./sidecar-settings.service";
 import { getChatBackgroundSignal } from "./chat-background.service";
 import { getDreamWeaverRuntimeBlocks } from "./dream-weaver/runtime-prompt";
 import * as regexScriptsSvc from "./regex-scripts.service";
+import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
 
 // ---------------------------------------------------------------------------
 // Chat history identity marker
@@ -740,17 +741,28 @@ interface PendingAppend {
 export async function assemblePrompt(
   ctx: AssemblyContext,
 ): Promise<AssemblyResult> {
+  const profiler = createPromptAssemblyProfiler("assembly", {
+    chatId: ctx.chatId,
+    generationType: ctx.generationType,
+    prefetched: !!ctx.prefetched,
+  });
+
+  try {
   // Macrotask yield + abort check at the entry point so the event loop can
   // process pending HTTP requests (crucially `/generate/stop`) before we
   // enter the long stretch of synchronous block iteration, macro evaluation,
   // and regex script application below. Without this, a stop clicked during
   // the first ~200ms of assembly stayed queued behind our sync work and the
   // user perceived the stop button as unresponsive.
-  await new Promise<void>((r) => setTimeout(r, 0));
+  await profiler.measure(
+    "entry-yield",
+    () => new Promise<void>((r) => setTimeout(r, 0)),
+  );
   if (ctx.signal?.aborted)
     throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
 
   const pf = ctx.prefetched; // shorthand for prefetched data
+  let phaseStartedAt = performance.now();
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
   const chat = pf?.chat ?? chatsSvc.getChat(ctx.userId, ctx.chatId);
@@ -850,6 +862,7 @@ export async function assemblePrompt(
   // Reorder blocks so the position field (pre_history / post_history /
   // in_history) is honoured relative to the chat_history marker.
   reorderBlocksByPosition(blocks);
+  profiler.addPhase("load-core-data", performance.now() - phaseStartedAt);
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {
@@ -1048,6 +1061,7 @@ export async function assemblePrompt(
   }
 
   // ---- World Info activation ----
+  phaseStartedAt = performance.now();
   const globalWorldBooks =
     pf?.allSettings.get("globalWorldBooks") ??
     (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as
@@ -1204,6 +1218,7 @@ export async function assemblePrompt(
         }
       : undefined,
   };
+  profiler.addPhase("world-info", performance.now() - phaseStartedAt);
 
   // ---- Defer WI state persistence to after generation ----
   // Only carry the keys this writer owns. The post-generation save uses
@@ -1215,6 +1230,7 @@ export async function assemblePrompt(
   };
 
   // ---- Macro engine ----
+  phaseStartedAt = performance.now();
   initMacros();
   const groupCharsMap = pf?.groupCharacters;
   const resolveCharName = (cid: string) => {
@@ -1302,6 +1318,7 @@ export async function assemblePrompt(
   // Populate Lumia / Loom / Council / OOC / Sovereign Hand context for macros
   populateLumiaLoomContext(macroEnv, ctx.userId, chat, ctx, settingsMap);
   const macroEnvSeed = cloneEnv(macroEnv);
+  profiler.addPhase("macro-setup", performance.now() - phaseStartedAt);
 
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (
@@ -1325,6 +1342,7 @@ export async function assemblePrompt(
   }
 
   // ---- Pre-loop: retrieve chat vector memories ----
+  phaseStartedAt = performance.now();
   // Reuse settings resolved during cortex pre-flight (avoids duplicate DB reads).
   // Fall back to batch-loaded settings for the non-cortex path.
   const chatMemSettingsRaw = settingsMap.get("chatMemorySettings") ?? null;
@@ -1422,8 +1440,10 @@ export async function assemblePrompt(
     enabled: memoryResult.enabled,
     settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
   };
+  profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
 
   // ---- Databank retrieval ----
+  phaseStartedAt = performance.now();
   // Use the warm-cache pattern: check if a previous generation cached results.
   // On a cold miss, await the pre-flight query so the current generation still
   // gets databank context instead of only warming the cache for the next send.
@@ -1463,6 +1483,7 @@ export async function assemblePrompt(
     count: databankResult?.count ?? 0,
     enabled: activeDatabankIds.length > 0,
   };
+  profiler.addPhase("databank-retrieval", performance.now() - phaseStartedAt);
 
   // Detect if any enabled block uses the {{memories}} macro
   const macroHandlesMemory = blocks.some(
@@ -1475,6 +1496,7 @@ export async function assemblePrompt(
   );
 
   // ---- Resolve #mentions in user messages ----
+  phaseStartedAt = performance.now();
   // 1. Strip #tags from ALL user messages so raw tags never reach the LLM.
   // 2. Resolve + build the document appendix only from the LAST user message's tags.
   // This handles queued messages, regen, swipe, and dry-run correctly.
@@ -1568,6 +1590,7 @@ export async function assemblePrompt(
     }
   }
   pruneEmptyWorldInfoCacheEntries(wiCache);
+  profiler.addPhase("macro-prepass", performance.now() - phaseStartedAt);
 
   // Yield before the main block iteration — WI macro evaluation above can run
   // 100s of macro expansions back-to-back with only microtask yields between
@@ -1593,6 +1616,7 @@ export async function assemblePrompt(
   let firstChatIdx = -1;
   let jailbreakBlockResolved = false;
   let blockYieldCounter = 0;
+  phaseStartedAt = performance.now();
 
   for (const block of blocks) {
     // Skip disabled blocks
@@ -1972,8 +1996,10 @@ export async function assemblePrompt(
       }
     }
   }
+  profiler.addPhase("assembly-loop", performance.now() - phaseStartedAt);
 
   // ---- Post-history instructions fallback ----
+  phaseStartedAt = performance.now();
   // If the character has post_history_instructions but no jailbreak block resolved
   // it (e.g. the preset's jailbreak block is empty or missing the {{jailbreak}} macro),
   // inject the character's post_history_instructions as a system message at the end.
@@ -2475,6 +2501,7 @@ export async function assemblePrompt(
   // that Anthropic/Vertex-Anthropic reject with "text content blocks must
   // contain non-whitespace text".
   stripEmptyTextParts(result);
+  profiler.addPhase("post-assembly-injections", performance.now() - phaseStartedAt);
 
   // ---- Collapse all messages into a single user message (if enabled) ----
   const advSettings: AdvancedSettings | undefined = prompts.advancedSettings;
@@ -2498,13 +2525,17 @@ export async function assemblePrompt(
 
   // Prompt-target regex scripts can materially shrink or expand chat history;
   // run them before the token-budget clipper so clipping uses final content.
-  await applyPromptRegexScriptsBeforeClipping(
-    result,
-    ctx,
-    characterId,
-    macroEnv,
+  await profiler.measure("prompt-regex", () =>
+    applyPromptRegexScriptsBeforeClipping(
+      result,
+      ctx,
+      characterId,
+      macroEnv,
+    )
   );
-  await resolvePromptMacrosAfterRegexPass(result, macroEnv);
+  await profiler.measure("post-regex-macros", () =>
+    resolvePromptMacrosAfterRegexPass(result, macroEnv)
+  );
   stripEmptyTextParts(result);
 
   // ---- Context budget clipping ----
@@ -2516,12 +2547,14 @@ export async function assemblePrompt(
   // Yield before the sync tokenization loop below — on long chats this can
   // count thousands of messages in a tight loop and monopolise the event loop.
   await yieldAndCheckAbort(ctx.signal);
-  const contextClipStats = await clipToContextBudget(
-    result,
-    connection?.model ?? null,
-    parameters.max_context_length as number | null | undefined,
-    parameters.max_tokens as number | null | undefined,
-    ctx.signal,
+  const contextClipStats = await profiler.measure("context-clip", () =>
+    clipToContextBudget(
+      result,
+      connection?.model ?? null,
+      parameters.max_context_length as number | null | undefined,
+      parameters.max_tokens as number | null | undefined,
+      ctx.signal,
+    )
   );
 
   // Build memory stats for dry-run diagnostics
@@ -2618,6 +2651,9 @@ export async function assemblePrompt(
     macroEnv,
     macroEnvSeed,
   };
+  } finally {
+    profiler.finish();
+  }
 }
 
 function normalizeGuidedGenerations(input: unknown): GuidedGeneration[] {

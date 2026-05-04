@@ -113,6 +113,10 @@ import {
   resolveRenderedMessageContent,
 } from "./chat-macro-render.service";
 import { cloneEnv } from "../macros";
+import {
+  assemblePromptInWorker,
+  canUsePromptAssemblyWorker,
+} from "./prompt-assembly-worker-client";
 
 interface GenerateInput {
   userId: string;
@@ -912,27 +916,7 @@ async function runPromptPipeline(opts: {
   if (opts.inputMessages) {
     messages = opts.inputMessages;
   } else {
-    // Batch-prefetch all data the assembly pipeline needs in ~7 queries
-    // instead of the ~35-40 scattered individual calls inside assemblePrompt.
-    // Thread the signal so prefetch yields + bails out if the user aborts
-    // during its synchronous DB reads.
-    const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
-    const prefetched = await prefetchAssemblyData({
-      userId: opts.userId,
-      chatId: opts.chatId,
-      connectionId: opts.connectionId,
-      presetId: opts.presetId,
-      forcePresetId: opts.forcePresetId,
-      personaId: opts.personaId,
-      personaAddonStates: opts.personaAddonStates,
-      generationType: opts.generationType as GenerationType,
-      excludeMessageId: opts.excludeMessageId,
-      targetCharacterId: opts.targetCharacterId,
-      signal: opts.signal,
-    });
-
-    // All presets (classic and lumi) go through the same assembly path
-    const assemblyResult = await assemblePrompt({
+    const assemblyCtx = {
       userId: opts.userId,
       chatId: opts.chatId,
       connectionId: opts.connectionId,
@@ -950,9 +934,35 @@ async function runPromptPipeline(opts: {
       precomputedVectorEntries: opts.precomputedVectorEntries,
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
-      prefetched,
       signal: opts.signal,
-    });
+    };
+
+    let assemblyResult: Awaited<ReturnType<typeof assemblePrompt>>;
+
+    if (canUsePromptAssemblyWorker()) {
+      try {
+        assemblyResult = await assemblePromptInWorker(assemblyCtx);
+      } catch (err: any) {
+        if (opts.signal?.aborted || err?.name === "AbortError") throw err;
+        console.warn(
+          "[generate] Prompt assembly worker failed; falling back to in-process assembly:",
+          err?.message || err,
+        );
+        const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
+        const prefetched = await prefetchAssemblyData(assemblyCtx);
+        assemblyResult = await assemblePrompt({ ...assemblyCtx, prefetched });
+      }
+    } else {
+      // Batch-prefetch all data the assembly pipeline needs in ~7 queries
+      // instead of the ~35-40 scattered individual calls inside assemblePrompt.
+      // Thread the signal so prefetch yields + bails out if the user aborts
+      // during its synchronous DB reads.
+      const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
+      const prefetched = await prefetchAssemblyData(assemblyCtx);
+
+      // All presets (classic and lumi) go through the same assembly path
+      assemblyResult = await assemblePrompt({ ...assemblyCtx, prefetched });
+    }
 
     messages = assemblyResult.messages;
     assembledParams = assemblyResult.parameters;

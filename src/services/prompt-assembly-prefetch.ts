@@ -21,6 +21,7 @@ import { applyPersonaAddonStates } from "./persona-addon-states";
 import { normalizeCortexConfig, DEFAULT_CORTEX_CONFIG } from "./memory-cortex/config";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import type { BookSource } from "./prompt-assembly.service";
+import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
 
 /**
  * All settings keys the assembly pipeline may need. Loaded in a single
@@ -52,23 +53,35 @@ const ALL_SETTINGS_KEYS = [
 ];
 
 export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<PrefetchedData> {
+  const profiler = createPromptAssemblyProfiler("prefetch", {
+    chatId: ctx.chatId,
+    generationType: ctx.generationType,
+  });
+
+  try {
   // Macrotask yield + abort check at the top. Without this, a stop clicked
   // during the first ~500ms of assembly stayed queued behind prefetch's
   // synchronous DB reads (which can total 100-300ms on large chats with
   // hundreds of WI entries) — the event loop had no chance to process the
   // incoming /generate/stop request until the first internal yield, and by
   // then the user had already perceived an unresponsive stop button.
-  await new Promise<void>(r => setTimeout(r, 0));
+  await profiler.measure("entry-yield", () => new Promise<void>(r => setTimeout(r, 0)));
   if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
 
   // ── 1. Batch settings (1 query for ~25 keys) ─────────────────────────
-  const allSettings = settingsSvc.getSettingsByKeys(ctx.userId, ALL_SETTINGS_KEYS);
+  const allSettings = profiler.measureSync("settings", () =>
+    settingsSvc.getSettingsByKeys(ctx.userId, ALL_SETTINGS_KEYS)
+  );
 
   // ── 2. Core entities (each 1 query) ──────────────────────────────────
-  const chat = chatsSvc.getChat(ctx.userId, ctx.chatId);
+  const chat = profiler.measureSync("chat", () =>
+    chatsSvc.getChat(ctx.userId, ctx.chatId)
+  );
   if (!chat) throw new Error("Chat not found");
 
-  const allMessages = chatsSvc.getMessages(ctx.userId, ctx.chatId);
+  const allMessages = profiler.measureSync("messages", () =>
+    chatsSvc.getMessages(ctx.userId, ctx.chatId)
+  );
   const messages = ctx.excludeMessageId
     ? allMessages.filter(m => m.id !== ctx.excludeMessageId)
     : allMessages;
@@ -78,17 +91,21 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   // 50-200ms. Yielding here lets Bun process pending HTTP requests and
   // WebSocket frames before we continue with more sync DB work.
   if (allMessages.length > 200) {
-    await new Promise<void>(r => setTimeout(r, 0));
+    await profiler.measure("post-messages-yield", () => new Promise<void>(r => setTimeout(r, 0)));
     if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
   }
 
   const characterId = ctx.targetCharacterId || chat.character_id;
-  const character = charactersSvc.getCharacter(ctx.userId, characterId);
+  const character = profiler.measureSync("character", () =>
+    charactersSvc.getCharacter(ctx.userId, characterId)
+  );
   if (!character) throw new Error("Character not found");
 
-  let persona = applyPersonaAddonStates(
-    personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId),
-    ctx.personaAddonStates,
+  let persona = profiler.measureSync("persona", () =>
+    applyPersonaAddonStates(
+      personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId),
+      ctx.personaAddonStates,
+    )
   );
 
   // Resolve attached global add-ons for the persona
@@ -96,22 +113,30 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     const attachedRefs = (persona.metadata?.attached_global_addons as Array<{ id: string; enabled: boolean }>) ?? [];
     const enabledIds = attachedRefs.filter(a => a.enabled).map(a => a.id);
     if (enabledIds.length > 0) {
-      const resolved = globalAddonsSvc.getGlobalAddonsByIds(ctx.userId, enabledIds);
+      const resolved = profiler.measureSync("global-addons", () =>
+        globalAddonsSvc.getGlobalAddonsByIds(ctx.userId, enabledIds)
+      );
       persona = { ...persona, metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved } };
     }
   }
 
-  const connection = ctx.connectionId
-    ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
-    : connectionsSvc.getDefaultConnection(ctx.userId);
+  const connection = profiler.measureSync("connection", () =>
+    ctx.connectionId
+      ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
+      : connectionsSvc.getDefaultConnection(ctx.userId)
+  );
 
   const resolvedPresetId = ctx.presetId || connection?.preset_id;
-  const preset = resolvedPresetId
-    ? presetsSvc.getPreset(ctx.userId, resolvedPresetId)
-    : null;
+  const preset = profiler.measureSync("preset", () =>
+    resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null
+  );
 
   // ── 3. Embedding config (1 setting + 1 secret decrypt — only async op) ─
-  const embeddingConfig = await embeddingsSvc.getEmbeddingConfig(ctx.userId);
+  const embeddingConfig = await profiler.measure("embedding-config", () =>
+    embeddingsSvc.getEmbeddingConfig(ctx.userId)
+  );
+
+  if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
 
   // ── 4. World book entries (2 queries total) ──────────────────────────
   const globalWorldBooks = (allSettings.get("globalWorldBooks") as string[] | undefined) ?? [];
@@ -141,25 +166,39 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     seen.add(id); allBookIds.push(id); bookSourceMap.set(id, "global");
   }
 
-  const entriesByBook = worldBooksSvc.listEntriesForBooks(ctx.userId, allBookIds);
+  const entriesByBook = profiler.measureSync("world-book-entries", () =>
+    worldBooksSvc.listEntriesForBooks(ctx.userId, allBookIds)
+  );
   const allEntries: import("../types/world-book").WorldBookEntry[] = [];
   for (const bookId of allBookIds) {
     const bookEntries = entriesByBook.get(bookId);
     if (bookEntries) allEntries.push(...bookEntries);
   }
 
+  // Large lorebooks make listEntriesForBooks + row hydration a noticeable
+  // synchronous stretch. Give pending navigation/status requests a chance to run
+  // before group character loads and cortex config derivation continue.
+  if (allEntries.length > 200) {
+    await profiler.measure("post-world-books-yield", () => new Promise<void>(r => setTimeout(r, 0)));
+    if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+
   // ── 5. Group characters (1 batch query) ──────────────────────────────
   const isGroup = chat.metadata?.group === true;
   const groupCharacterIds: string[] = isGroup ? (chat.metadata.character_ids || []) : [];
-  const groupCharacters = groupCharacterIds.length > 0
-    ? charactersSvc.getCharactersByIds(ctx.userId, groupCharacterIds)
-    : undefined;
+  const groupCharacters = profiler.measureSync("group-characters", () =>
+    groupCharacterIds.length > 0
+      ? charactersSvc.getCharactersByIds(ctx.userId, groupCharacterIds)
+      : undefined
+  );
 
   // ── 6. Derive cortex config from settings (pure computation) ─────────
-  const cortexRaw = allSettings.get("memoryCortexConfig");
-  const cortexConfig = cortexRaw
-    ? normalizeCortexConfig(cortexRaw)
-    : { ...DEFAULT_CORTEX_CONFIG };
+  const cortexConfig = profiler.measureSync("cortex-config", () => {
+    const cortexRaw = allSettings.get("memoryCortexConfig");
+    return cortexRaw
+      ? normalizeCortexConfig(cortexRaw)
+      : { ...DEFAULT_CORTEX_CONFIG };
+  });
 
   return {
     chat,
@@ -178,4 +217,7 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     groupCharacters,
     cortexConfig,
   };
+  } finally {
+    profiler.finish();
+  }
 }
