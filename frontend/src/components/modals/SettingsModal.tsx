@@ -445,6 +445,7 @@ function DisplaySettings() {
 function ChatSettings() {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
+  const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
@@ -540,21 +541,30 @@ function ChatSettings() {
       </div>
 
       {displayMode === 'bubble' && (
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>User message alignment</label>
-          <div className={styles.segmented}>
-            {(['left', 'right'] as const).map((align) => (
-              <button
-                key={align}
-                type="button"
-                className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
-                onClick={() => setSetting('bubbleUserAlign', align)}
-              >
-                {align === 'left' ? 'Left' : 'Right'}
-              </button>
-            ))}
+        <>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>User message alignment</label>
+            <div className={styles.segmented}>
+              {(['left', 'right'] as const).map((align) => (
+                <button
+                  key={align}
+                  type="button"
+                  className={clsx(styles.segmentedBtn, (bubbleUserAlign ?? 'right') === align && styles.segmentedBtnActive)}
+                  onClick={() => setSetting('bubbleUserAlign', align)}
+                >
+                  {align === 'left' ? 'Left' : 'Right'}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+
+          <Toggle.Checkbox
+            checked={!bubbleHideAvatarBg}
+            onChange={(checked) => setSetting('bubbleHideAvatarBg', !checked)}
+            label="Show character art in bubble backgrounds"
+            hint="Uses the message avatar as a subtle dissolving background in Bubble mode"
+          />
+        </>
       )}
 
       <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Chat Width</h3>
