@@ -69,6 +69,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     activeGenerationId: null,
     regeneratingMessageId: null,
     streamingGenerationType: null,
+    lastCompletedGenerationType: null,
     lastPooledSeq: null,
     totalChatLength: 0,
     impersonateDraftContent: null,
@@ -264,7 +265,9 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
-      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null, lastPooledSeq: null })
+      // Preserve the generation type before clearing — auto-summarization
+      // needs to know what kind of generation just finished.
+      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, lastCompletedGenerationType: get().streamingGenerationType, streamingGenerationType: null, lastPooledSeq: null })
     },
 
     stopStreaming: () => {
