@@ -82,6 +82,38 @@ function normalizeReasoningDurationEntries(
   return normalized;
 }
 
+function normalizeNumericEntries(
+  value: unknown,
+  swipeCount: number,
+): (number | null)[] {
+  const normalized = Array.isArray(value)
+    ? value.slice(0, swipeCount).map((entry) =>
+        typeof entry === "number" && Number.isFinite(entry) && entry > 0
+          ? entry
+          : null,
+      )
+    : [];
+  while (normalized.length < swipeCount) normalized.push(null);
+  return normalized;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeObjectEntries(
+  value: unknown,
+  swipeCount: number,
+): (Record<string, unknown> | null)[] {
+  const normalized = Array.isArray(value)
+    ? value.slice(0, swipeCount).map((entry) =>
+        isPlainObject(entry) ? entry : null,
+      )
+    : [];
+  while (normalized.length < swipeCount) normalized.push(null);
+  return normalized;
+}
+
 function normalizeStoredMessageExtra(
   extra: Record<string, unknown> | null | undefined,
   swipeCount: number,
@@ -103,6 +135,18 @@ function normalizeStoredMessageExtra(
     normalized.reasoningDurationBySwipe,
     safeSwipeCount,
   );
+  const tokenCountBySwipe = normalizeNumericEntries(
+    normalized.tokenCountBySwipe,
+    safeSwipeCount,
+  );
+  const generationMetricsBySwipe = normalizeObjectEntries(
+    normalized.generationMetricsBySwipe,
+    safeSwipeCount,
+  );
+  const usageBySwipe = normalizeObjectEntries(
+    normalized.usageBySwipe,
+    safeSwipeCount,
+  );
 
   if (normalized.reasoning === null) {
     reasoningBySwipe[safeLegacySwipeId] = null;
@@ -121,8 +165,33 @@ function normalizeStoredMessageExtra(
     reasoningDurationBySwipe[safeLegacySwipeId] = normalized.reasoningDuration;
   }
 
+  if (normalized.tokenCount === null) {
+    tokenCountBySwipe[safeLegacySwipeId] = null;
+  } else if (
+    typeof normalized.tokenCount === "number" &&
+    Number.isFinite(normalized.tokenCount) &&
+    normalized.tokenCount > 0
+  ) {
+    tokenCountBySwipe[safeLegacySwipeId] = normalized.tokenCount;
+  }
+
+  if (normalized.generationMetrics === null) {
+    generationMetricsBySwipe[safeLegacySwipeId] = null;
+  } else if (isPlainObject(normalized.generationMetrics)) {
+    generationMetricsBySwipe[safeLegacySwipeId] = normalized.generationMetrics;
+  }
+
+  if (normalized.usage === null) {
+    usageBySwipe[safeLegacySwipeId] = null;
+  } else if (isPlainObject(normalized.usage)) {
+    usageBySwipe[safeLegacySwipeId] = normalized.usage;
+  }
+
   delete normalized.reasoning;
   delete normalized.reasoningDuration;
+  delete normalized.tokenCount;
+  delete normalized.generationMetrics;
+  delete normalized.usage;
 
   if (reasoningBySwipe.some((entry) => entry !== null)) {
     normalized.reasoningBySwipe = reasoningBySwipe;
@@ -134,6 +203,24 @@ function normalizeStoredMessageExtra(
     normalized.reasoningDurationBySwipe = reasoningDurationBySwipe;
   } else {
     delete normalized.reasoningDurationBySwipe;
+  }
+
+  if (tokenCountBySwipe.some((entry) => entry !== null)) {
+    normalized.tokenCountBySwipe = tokenCountBySwipe;
+  } else {
+    delete normalized.tokenCountBySwipe;
+  }
+
+  if (generationMetricsBySwipe.some((entry) => entry !== null)) {
+    normalized.generationMetricsBySwipe = generationMetricsBySwipe;
+  } else {
+    delete normalized.generationMetricsBySwipe;
+  }
+
+  if (usageBySwipe.some((entry) => entry !== null)) {
+    normalized.usageBySwipe = usageBySwipe;
+  } else {
+    delete normalized.usageBySwipe;
   }
 
   return normalized;
@@ -150,6 +237,15 @@ function projectActiveSwipeExtra(
   const activeReasoningDuration = Array.isArray(extra.reasoningDurationBySwipe)
     ? extra.reasoningDurationBySwipe[swipeId]
     : null;
+  const activeTokenCount = Array.isArray(extra.tokenCountBySwipe)
+    ? extra.tokenCountBySwipe[swipeId]
+    : null;
+  const activeGenerationMetrics = Array.isArray(extra.generationMetricsBySwipe)
+    ? extra.generationMetricsBySwipe[swipeId]
+    : null;
+  const activeUsage = Array.isArray(extra.usageBySwipe)
+    ? extra.usageBySwipe[swipeId]
+    : null;
 
   if (typeof activeReasoning === "string" && activeReasoning.length > 0) {
     projected.reasoning = activeReasoning;
@@ -165,6 +261,28 @@ function projectActiveSwipeExtra(
     projected.reasoningDuration = activeReasoningDuration;
   } else {
     delete projected.reasoningDuration;
+  }
+
+  if (
+    typeof activeTokenCount === "number" &&
+    Number.isFinite(activeTokenCount) &&
+    activeTokenCount > 0
+  ) {
+    projected.tokenCount = activeTokenCount;
+  } else {
+    delete projected.tokenCount;
+  }
+
+  if (isPlainObject(activeGenerationMetrics)) {
+    projected.generationMetrics = activeGenerationMetrics;
+  } else {
+    delete projected.generationMetrics;
+  }
+
+  if (isPlainObject(activeUsage)) {
+    projected.usage = activeUsage;
+  } else {
+    delete projected.usage;
   }
 
   return projected;
@@ -199,6 +317,42 @@ function removeSwipeScopedExtraEntry(
       normalized.reasoningDurationBySwipe = reasoningDurationBySwipe;
     } else {
       delete normalized.reasoningDurationBySwipe;
+    }
+  }
+
+  if (Array.isArray(normalized.tokenCountBySwipe)) {
+    const tokenCountBySwipe = [
+      ...(normalized.tokenCountBySwipe as (number | null)[]),
+    ];
+    tokenCountBySwipe.splice(removedSwipeId, 1);
+    if (tokenCountBySwipe.some((entry) => entry !== null)) {
+      normalized.tokenCountBySwipe = tokenCountBySwipe;
+    } else {
+      delete normalized.tokenCountBySwipe;
+    }
+  }
+
+  if (Array.isArray(normalized.generationMetricsBySwipe)) {
+    const generationMetricsBySwipe = [
+      ...(normalized.generationMetricsBySwipe as (Record<string, unknown> | null)[]),
+    ];
+    generationMetricsBySwipe.splice(removedSwipeId, 1);
+    if (generationMetricsBySwipe.some((entry) => entry !== null)) {
+      normalized.generationMetricsBySwipe = generationMetricsBySwipe;
+    } else {
+      delete normalized.generationMetricsBySwipe;
+    }
+  }
+
+  if (Array.isArray(normalized.usageBySwipe)) {
+    const usageBySwipe = [
+      ...(normalized.usageBySwipe as (Record<string, unknown> | null)[]),
+    ];
+    usageBySwipe.splice(removedSwipeId, 1);
+    if (usageBySwipe.some((entry) => entry !== null)) {
+      normalized.usageBySwipe = usageBySwipe;
+    } else {
+      delete normalized.usageBySwipe;
     }
   }
 

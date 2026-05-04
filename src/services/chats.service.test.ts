@@ -170,6 +170,45 @@ describe("recent chats", () => {
     expect(restoredSecondSwipe.extra.reasoningDuration).toBe(456);
   });
 
+  test("keeps generation metadata scoped to the active swipe", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      tokenCount: 11,
+      generationMetrics: { model: "first-model", tps: 1.1 },
+      usage: { completion_tokens: 11, total_tokens: 22 },
+    });
+
+    const added = addSwipe("u1", "msg-1", "")!;
+    expect(added.swipe_id).toBe(1);
+    expect(added.extra.tokenCount).toBeUndefined();
+    expect(added.extra.generationMetrics).toBeUndefined();
+    expect(added.extra.usage).toBeUndefined();
+
+    patchMessageExtra("u1", "msg-1", {
+      ...added.extra,
+      tokenCount: 33,
+      generationMetrics: { model: "second-model", tps: 3.3 },
+      usage: { completion_tokens: 33, total_tokens: 44 },
+    });
+
+    const secondSwipe = getMessage("u1", "msg-1")!;
+    expect(secondSwipe.extra.tokenCount).toBe(33);
+    expect(secondSwipe.extra.generationMetrics).toEqual({ model: "second-model", tps: 3.3 });
+    expect(secondSwipe.extra.usage).toEqual({ completion_tokens: 33, total_tokens: 44 });
+
+    const firstSwipe = cycleSwipe("u1", "msg-1", "left")!;
+    expect(firstSwipe.swipe_id).toBe(0);
+    expect(firstSwipe.extra.tokenCount).toBe(11);
+    expect(firstSwipe.extra.generationMetrics).toEqual({ model: "first-model", tps: 1.1 });
+    expect(firstSwipe.extra.usage).toEqual({ completion_tokens: 11, total_tokens: 22 });
+
+    const restoredSecondSwipe = cycleSwipe("u1", "msg-1", "right")!;
+    expect(restoredSecondSwipe.swipe_id).toBe(1);
+    expect(restoredSecondSwipe.extra.tokenCount).toBe(33);
+    expect(restoredSecondSwipe.extra.generationMetrics).toEqual({ model: "second-model", tps: 3.3 });
+    expect(restoredSecondSwipe.extra.usage).toEqual({ completion_tokens: 33, total_tokens: 44 });
+  });
+
   test("converts a solo chat into a new group chat with copied messages", () => {
     seedChat("solo", "c1", "Alpha chat", JSON.stringify({ author_note: "keep me" }), 200);
     seedMessage("msg-1", "solo", "Hello there", { greeting: true }, { index: 0, sendDate: 100 });
