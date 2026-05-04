@@ -58,7 +58,7 @@ export function ToolCard({ message, isLatestInChain, onAccept, onReject, onCance
         ) : payload.error ? (
           <div className={styles.errorBox}>
             <span className={styles.errorLabel}>Tool Error</span>
-            <p>{payload.error.message || "Tool execution failed"}</p>
+            <p>{getToolErrorMessage(payload.error.message)}</p>
           </div>
         ) : (
           <ToolOutput output={payload.output} />
@@ -96,6 +96,20 @@ export function ToolCard({ message, isLatestInChain, onAccept, onReject, onCance
       </div>
     </div>
   );
+}
+
+function getToolErrorMessage(message: string | undefined): string {
+  if (!message) return "Tool execution failed. Check the connection and try again.";
+  if (
+    message.startsWith("Choose a ") ||
+    message.startsWith("Add source material") ||
+    message === "Generation was canceled." ||
+    message === "Unknown Dream Weaver tool." ||
+    message === "The tool could not finish. Check the connection and try again."
+  ) {
+    return message;
+  }
+  return "Tool execution failed. Check the connection and try again.";
 }
 
 function formatToolName(tool: string): string {

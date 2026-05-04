@@ -6,6 +6,7 @@ import type {
   DreamWeaverVisualProvider,
   DreamWeaverVisualReference,
 } from '@/api/dream-weaver'
+import { BASE_URL } from '@/api/client'
 import { imagesApi } from '@/api/images'
 import { hasComfyRequiredPromptMappings } from '../visual-studio/comfyui/mapped-fields'
 
@@ -98,40 +99,43 @@ function getVisualJobResult(input: VisualJobResultLike): Record<string, unknown>
   return input as Record<string, unknown>
 }
 
+function getText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function resolveSafeVisualImageUrl(value: unknown): string | null {
+  const raw = getText(value)
+  if (!raw) return null
+  if (raw.startsWith('data:image/') || raw.startsWith('blob:')) return raw
+
+  const browserOrigin = typeof window !== 'undefined' ? window.location.origin : null
+  if (!browserOrigin) return raw.startsWith('/') ? raw : null
+
+  try {
+    const url = new URL(raw, browserOrigin)
+    const apiOrigin = new URL(BASE_URL, browserOrigin).origin
+    if (url.origin === browserOrigin || url.origin === apiOrigin) return raw
+  } catch {
+    return null
+  }
+
+  return null
+}
+
 export function resolveVisualJobImageUrl(input: VisualJobResultLike): string | null {
   const result = getVisualJobResult(input)
   if (!result) return null
-  if (typeof result.image_url === 'string' && result.image_url.trim()) {
-    return result.image_url
-  }
-  if (typeof result.imageUrl === 'string' && result.imageUrl.trim()) {
-    return result.imageUrl
-  }
-  if (typeof result.image_id === 'string' && result.image_id.trim()) {
-    return imagesApi.url(result.image_id)
-  }
-  if (typeof result.imageId === 'string' && result.imageId.trim()) {
-    return imagesApi.url(result.imageId)
-  }
-  return null
+  const imageId = getText(result.image_id) ?? getText(result.imageId)
+  if (imageId) return imagesApi.url(imageId)
+  return resolveSafeVisualImageUrl(result.image_url) ?? resolveSafeVisualImageUrl(result.imageUrl)
 }
 
 export function resolveVisualJobImageReference(input: VisualJobResultLike): VisualJobImageReference | null {
   const result = getVisualJobResult(input)
   if (!result) return null
 
-  const imageId =
-    typeof result.image_id === 'string' && result.image_id.trim()
-      ? result.image_id
-      : typeof result.imageId === 'string' && result.imageId.trim()
-        ? result.imageId
-        : null
-  const imageUrl =
-    typeof result.image_url === 'string' && result.image_url.trim()
-      ? result.image_url
-      : typeof result.imageUrl === 'string' && result.imageUrl.trim()
-        ? result.imageUrl
-        : null
+  const imageId = getText(result.image_id) ?? getText(result.imageId)
+  const imageUrl = resolveSafeVisualImageUrl(result.image_url) ?? resolveSafeVisualImageUrl(result.imageUrl)
 
   if (!imageId && !imageUrl) return null
   return {
@@ -143,13 +147,9 @@ export function resolveVisualJobImageReference(input: VisualJobResultLike): Visu
 export function resolveVisualReferenceImageUrl(
   reference: Pick<DreamWeaverVisualReference, 'image_url' | 'image_id'> | null | undefined,
 ): string | null {
-  if (typeof reference?.image_url === 'string' && reference.image_url.trim()) {
-    return reference.image_url
-  }
-  if (typeof reference?.image_id === 'string' && reference.image_id.trim()) {
-    return imagesApi.url(reference.image_id)
-  }
-  return null
+  const imageId = getText(reference?.image_id)
+  if (imageId) return imagesApi.url(imageId)
+  return resolveSafeVisualImageUrl(reference?.image_url)
 }
 
 export function getVisualWorkspaceState(input: {

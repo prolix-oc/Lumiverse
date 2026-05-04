@@ -42,6 +42,19 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function toPublicVisualError(error: unknown): string {
+  if (error instanceof Error) {
+    const lower = error.message.toLowerCase();
+    if (error.name === "AbortError" || lower.includes("abort") || lower.includes("timed out")) {
+      return "Image generation timed out. Try again with a shorter prompt or a longer timeout.";
+    }
+    if (lower.includes("unsupported")) {
+      return "That image provider is not supported for Dream Weaver visuals.";
+    }
+  }
+  return "Image generation failed. Check the image connection and try again.";
+}
+
 async function generateWithOptionalStreaming(
   job: DreamWeaverVisualJob,
   input: StartDreamWeaverVisualJobInput,
@@ -161,7 +174,7 @@ async function executeDreamWeaverVisualJob(
     emitJobEvent(EventType.DREAM_WEAVER_VISUAL_JOB_COMPLETED, completed);
   } catch (error) {
     console.error("[DreamWeaver:Visual] Job failed. job=%s error=%s", job.id, toErrorMessage(error));
-    const failed = failVisualJob(job.id, job.userId, toErrorMessage(error));
+    const failed = failVisualJob(job.id, job.userId, toPublicVisualError(error));
     emitJobEvent(EventType.DREAM_WEAVER_VISUAL_JOB_FAILED, failed);
   } finally {
     input.onSettled?.();

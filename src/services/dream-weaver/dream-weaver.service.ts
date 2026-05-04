@@ -25,9 +25,11 @@ import { executeTool } from "./tools/executor";
 import { getAcceptedPortraitReference } from "./portrait-reference";
 
 function rowToSession(row: any): DreamWeaverSession {
+  const sessionNumber = Number(row.session_number);
   return {
     id: row.id,
     user_id: row.user_id,
+    session_number: Number.isFinite(sessionNumber) ? sessionNumber : 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
     dream_text: row.dream_text ?? "",
@@ -42,6 +44,17 @@ function rowToSession(row: any): DreamWeaverSession {
     character_id: row.character_id ?? null,
     launch_chat_id: row.launch_chat_id ?? null,
   };
+}
+
+function nextSessionNumber(userId: string): number {
+  const row = getDb()
+    .prepare(`
+      SELECT COALESCE(MAX(session_number), 0) + 1 AS next
+      FROM dream_weaver_sessions
+      WHERE user_id = ?
+    `)
+    .get(userId) as { next: number };
+  return row.next;
 }
 
 function normalizeWorkspaceKind(value: unknown): DreamWeaverWorkspaceKind {
@@ -148,25 +161,29 @@ export function createSession(userId: string, input: CreateSessionInput): DreamW
   const now = Math.floor(Date.now() / 1000);
   const dreamText = input.dream_text?.trim() ?? "";
 
-  db.prepare(`
-    INSERT INTO dream_weaver_sessions (
-      id, user_id, created_at, updated_at,
-      dream_text, tone, constraints, dislikes, persona_id, connection_id, model, workspace_kind
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    userId,
-    now,
-    now,
-    dreamText,
-    input.tone?.trim() || null,
-    input.constraints?.trim() || null,
-    input.dislikes?.trim() || null,
-    input.persona_id || null,
-    input.connection_id || null,
-    normalizeOptionalText(input.model),
-    normalizeWorkspaceKind(input.workspace_kind),
-  );
+  db.transaction(() => {
+    const sessionNumber = nextSessionNumber(userId);
+    db.prepare(`
+      INSERT INTO dream_weaver_sessions (
+        id, user_id, session_number, created_at, updated_at,
+        dream_text, tone, constraints, dislikes, persona_id, connection_id, model, workspace_kind
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      userId,
+      sessionNumber,
+      now,
+      now,
+      dreamText,
+      input.tone?.trim() || null,
+      input.constraints?.trim() || null,
+      input.dislikes?.trim() || null,
+      input.persona_id || null,
+      input.connection_id || null,
+      normalizeOptionalText(input.model),
+      normalizeWorkspaceKind(input.workspace_kind),
+    );
+  })();
 
   return getSession(userId, id)!;
 }
@@ -256,6 +273,10 @@ export async function updateSession(
     SET ${updates.join(", ")}
     WHERE id = ? AND user_id = ?
   `).run(...params);
+
+  if ("dream_text" in input || "workspace_kind" in input) {
+    messagesSvc.invalidateDraftCache(sessionId);
+  }
 
   return getSession(userId, sessionId)!;
 }
@@ -493,6 +514,116 @@ export function appendDreamSource(userId: string, sessionId: string) {
   });
 }
 
+export interface RunSuiteResult {
+  status: "done" | "error";
+  cardIds: string[];
+  queued: number;
+  total: number;
+  failedCardId?: string;
+  errorMessage?: string;
+}
+
+const DEFAULT_SUITE_TOOLS = [
+  "set_name",
+  "set_appearance",
+  "set_personality",
+  "set_scenario",
+  "set_first_message",
+  "set_voice_guidance",
+] as const;
+
+export function publicToolErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.message.includes("no connection configured")) return "Choose a text connection before running Dream Weaver tools.";
+    if (err.message.includes("no model configured")) return "Choose a model before running Dream Weaver tools.";
+    if (err.name === "AbortError" || err.message.toLowerCase().includes("abort")) return "Generation was canceled.";
+  }
+  return "The tool could not finish. Check the connection and try again.";
+}
+
+export async function runDefaultSuite(userId: string, sessionId: string): Promise<RunSuiteResult> {
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+
+  let draft = messagesSvc.deriveWorkspace(userId, sessionId);
+  if (draft.sources.length === 0) {
+    throw new Error("Add source material with /dream before running generation tools.");
+  }
+
+  const cardIds: string[] = [];
+
+  for (const toolName of DEFAULT_SUITE_TOOLS) {
+    const tool = getTool(toolName);
+    if (!tool) continue;
+
+    const card = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "tool_card",
+      payload: {
+        tool: tool.name,
+        args: {},
+        output: null,
+        error: null,
+        nudge_text: null,
+        duration_ms: null,
+        token_usage: null,
+      },
+      toolName: tool.name,
+      status: "running",
+    });
+    cardIds.push(card.id);
+
+    try {
+      const result = await executeTool({
+        userId,
+        tool,
+        session,
+        draft,
+        args: {},
+        nudgeText: null,
+      });
+      messagesSvc.updateToolCard(userId, card.id, {
+        status: "pending",
+        output: result.output as Record<string, unknown>,
+        error: null,
+        durationMs: result.durationMs,
+        tokenUsage: result.tokenUsage,
+      });
+      draft = tool.apply(draft, result.output);
+    } catch (err: unknown) {
+      const errorMessage = publicToolErrorMessage(err);
+      messagesSvc.updateToolCard(userId, card.id, {
+        status: "pending",
+        error: { message: errorMessage },
+        durationMs: 0,
+      });
+      getDb()
+        .prepare(`UPDATE dream_weaver_sessions SET updated_at = unixepoch() WHERE id = ? AND user_id = ?`)
+        .run(sessionId, userId);
+      return {
+        status: "error",
+        cardIds,
+        queued: cardIds.length,
+        total: DEFAULT_SUITE_TOOLS.length,
+        failedCardId: card.id,
+        errorMessage,
+      };
+    }
+  }
+
+  getDb()
+    .prepare(`UPDATE dream_weaver_sessions SET updated_at = unixepoch() WHERE id = ? AND user_id = ?`)
+    .run(sessionId, userId);
+
+  return {
+    status: "done",
+    cardIds,
+    queued: cardIds.length,
+    total: DEFAULT_SUITE_TOOLS.length,
+  };
+}
+
 const inflightAborts = new Map<string, AbortController>();
 
 export async function runToolCard(userId: string, messageId: string): Promise<void> {
@@ -502,7 +633,7 @@ export async function runToolCard(userId: string, messageId: string): Promise<vo
   if (!tool) {
     messagesSvc.updateToolCard(userId, messageId, {
       status: "pending",
-      error: { message: `Unknown tool: ${message.tool_name}` },
+      error: { message: "Unknown Dream Weaver tool." },
       durationMs: 0,
     });
     return;
@@ -539,7 +670,7 @@ export async function runToolCard(userId: string, messageId: string): Promise<vo
     }
     messagesSvc.updateToolCard(userId, messageId, {
       status: "pending",
-      error: { message: err.message ?? "Tool execution failed" },
+      error: { message: publicToolErrorMessage(err) },
       durationMs: 0,
     });
   } finally {

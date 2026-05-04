@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
 import { CloseButton } from '@/components/shared/CloseButton'
@@ -11,6 +11,7 @@ import { useVisualStudio } from './hooks/useVisualStudio'
 import { toast } from '@/lib/toast'
 import { StudioTab } from './tabs/StudioTab'
 import { VisualsTab } from './tabs/VisualsTab'
+import { useProgressTracker } from './hooks/useProgressTracker'
 import styles from './DreamWeaverStudio.module.css'
 
 const EMPTY_VOICE_GUIDANCE = {
@@ -64,6 +65,8 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
   const studio = useDreamWeaverStudio(sessionId)
   const draftV1 = useMemo(() => workspaceToV1(studio.draft), [studio.draft])
   const workspaceKind = studio.session?.workspace_kind === 'scenario' ? 'scenario' : 'character'
+  const progressFields = useProgressTracker(studio.draft, workspaceKind)
+  const finalizeHelpId = useId()
   const isFinalized = Boolean(studio.session?.character_id)
   const hasSource = Boolean(
     studio.session?.dream_text?.trim()
@@ -77,13 +80,28 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
   const footerStatus = isFinalized
     ? 'Updates the existing generated card.'
     : 'Creates a new card when finalized.'
+  const missingFinalizeMessage = missingFinalizeFields.length > 0
+    ? `Needs ${formatMissingFields(missingFinalizeFields)} before finalizing.`
+    : null
   const handleVisualDraftUpdate = useCallback((patch: Partial<DreamWeaverDraft>) => {
     if (!patch.visual_assets) return
-    void dreamWeaverApi.updateVisualAssets(sessionId, patch.visual_assets).catch((error) => {
+    void dreamWeaverApi.updateVisualAssets(sessionId, patch.visual_assets).catch((error: unknown) => {
       console.error('Failed to persist Dream Weaver visual assets', error)
+      toast.error('Failed to save visual settings. Try again before finalizing.', { title: 'Dream Weaver' })
     })
   }, [sessionId])
   const visuals = useVisualStudio(sessionId, draftV1, handleVisualDraftUpdate)
+
+  const prevFinalized = useRef(isFinalized)
+  useEffect(() => {
+    if (!prevFinalized.current && isFinalized) {
+      toast.success(
+        `${workspaceKind === 'scenario' ? 'Scenario' : 'Character'} created. You can now open it in chat.`,
+        { title: 'Dream Weaver' },
+      )
+    }
+    prevFinalized.current = isFinalized
+  }, [isFinalized, workspaceKind])
 
   const handleClose = useCallback(() => {
     closeModal()
@@ -126,7 +144,7 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                 <div className={styles.headerLeft}>
                   <span className={styles.headerLabel}>Dream Weaver Studio</span>
                   <h2 className={styles.headerTitle}>
-                    {studio.draft?.name || 'New Dream'}
+                    {sessionDisplayName(studio.draft, studio.session)}
                   </h2>
                 </div>
                 <div className={styles.headerRight}>
@@ -170,7 +188,7 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
 
                   <div className={styles.canvas}>
                     {studio.activeTab === 'studio' && (
-                      <StudioTab sessionId={sessionId} hasSource={hasSource} onWorkspaceChanged={studio.refreshDraft} />
+                      <StudioTab sessionId={sessionId} hasSource={hasSource} workspaceKind={workspaceKind} progressFields={progressFields} onWorkspaceChanged={studio.refreshDraft} />
                     )}
                     {studio.activeTab === 'visuals' && (
                       <VisualsTab draft={draftV1} worldStale={false} visuals={visuals} />
@@ -182,11 +200,16 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
               <footer className={styles.footer}>
                 <div className={styles.footerLeft}>
                   <span className={styles.sessionName}>
-                    {studio.draft?.name || studio.session?.dream_text?.slice(0, 40) || 'Untitled'}
+                    {sessionDisplayName(studio.draft, studio.session)}
                   </span>
                   <span className={styles.saveStatus} data-dirty={!isFinalized || undefined}>
                     {footerStatus}
                   </span>
+                  {missingFinalizeMessage && (
+                    <span id={finalizeHelpId} className={styles.missingFields}>
+                      {missingFinalizeMessage}
+                    </span>
+                  )}
                 </div>
                 <div className={styles.footerRight}>
                   <Button
@@ -202,8 +225,9 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
                     size="sm"
                     onClick={handleFinalize}
                     loading={studio.finalizing}
-                    disabled={studio.finalizing}
-                    title={missingFinalizeFields.length > 0 ? `Needs ${formatMissingFields(missingFinalizeFields)}` : undefined}
+                    disabled={studio.finalizing || missingFinalizeFields.length > 0}
+                    aria-describedby={missingFinalizeMessage ? finalizeHelpId : undefined}
+                    title={missingFinalizeFields.length > 0 ? `Needs: ${formatMissingFields(missingFinalizeFields)}` : undefined}
                   >
                     {finalizeLabel}
                   </Button>
@@ -223,6 +247,16 @@ export function DreamWeaverStudio({ sessionId }: DreamWeaverStudioProps) {
     </>,
     document.body,
   )
+}
+
+function sessionDisplayName(
+  _draft: ReturnType<typeof useDreamWeaverStudio>['draft'],
+  session: ReturnType<typeof useDreamWeaverStudio>['session'],
+): string {
+  if (session) {
+    return session.session_number > 0 ? `Session #${session.session_number}` : 'Session'
+  }
+  return 'New Dream'
 }
 
 function getMissingFinalizeFields(

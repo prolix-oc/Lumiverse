@@ -5,9 +5,13 @@
   color: var(--lumiverse-text);
 }
 
+.run[data-status="accepted"] .content {
+  border-top-color: color-mix(in srgb, var(--lumiverse-success) 25%, transparent);
+}
+
 .run[data-status="rejected"],
 .run[data-status="superseded"] {
-  opacity: 0.58;
+  opacity: 0.45;
 }
 
 .content {
@@ -352,6 +356,14 @@
   background: var(--lumiverse-fill-subtle);
   border-color: var(--lumiverse-border);
   color: var(--lumiverse-text);
+}
+
+.cancelBtn:focus-visible,
+.btn:focus-visible,
+.acceptBtn:focus-visible,
+.rejectBtn:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
 }
 
 .actions {

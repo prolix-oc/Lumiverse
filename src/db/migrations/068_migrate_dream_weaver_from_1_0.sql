@@ -557,6 +557,7 @@ ALTER TABLE dream_weaver_sessions RENAME TO dream_weaver_sessions_1_0;
 CREATE TABLE dream_weaver_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
+  session_number INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   dream_text TEXT NOT NULL DEFAULT '',
@@ -580,6 +581,7 @@ CREATE TABLE dream_weaver_sessions (
 INSERT INTO dream_weaver_sessions (
   id,
   user_id,
+  session_number,
   created_at,
   updated_at,
   dream_text,
@@ -598,6 +600,10 @@ INSERT INTO dream_weaver_sessions (
 SELECT
   id,
   user_id,
+  ROW_NUMBER() OVER (
+    PARTITION BY user_id
+    ORDER BY COALESCE(created_at, unixepoch()) ASC, id ASC
+  ),
   COALESCE(created_at, unixepoch()),
   COALESCE(updated_at, unixepoch()),
   COALESCE(dream_text, ''),
@@ -671,6 +677,9 @@ CREATE INDEX IF NOT EXISTS idx_dw_sessions_user
 
 CREATE INDEX IF NOT EXISTS idx_dw_sessions_status
   ON dream_weaver_sessions(user_id, status);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dw_sessions_user_number
+  ON dream_weaver_sessions(user_id, session_number);
 
 CREATE INDEX IF NOT EXISTS idx_dwm_session_seq
   ON dream_weaver_messages(session_id, seq);

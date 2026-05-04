@@ -12,9 +12,10 @@ interface Props {
   onReject: (id: string) => void;
   onCancel: (id: string) => void;
   onRetry: (msg: DreamWeaverMessage, nudge: string | null) => void;
+  onSaveDream?: (messageId: string, newText: string) => Promise<void>;
 }
 
-export function ChatLog({ messages, onAccept, onReject, onCancel, onRetry }: Props) {
+export function ChatLog({ messages, onAccept, onReject, onCancel, onRetry, onSaveDream }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" });
@@ -29,10 +30,10 @@ export function ChatLog({ messages, onAccept, onReject, onCancel, onRetry }: Pro
     <div className={styles.log} ref={ref}>
       {messages.length === 0 && (
         <div className={styles.emptyState}>
-          <div className={styles.emptyKicker}>Studio Ready</div>
-          <h3>Add source material first.</h3>
+          <div className={styles.emptyKicker}>Where to start</div>
+          <h3>Describe your concept.</h3>
           <p>
-            Use <code>/dream</code> to add the source, then run focused tools like <code>/name</code>, <code>/personality</code>, or <code>/scenario</code>.
+            Type <code>/dream</code> followed by a few sentences about your character — their personality, look, or role. Once your source is set, run individual tools like <code>/name</code> or <code>/personality</code>, or use Run Full Suite to fill everything at once.
           </p>
         </div>
       )}
@@ -42,10 +43,12 @@ export function ChatLog({ messages, onAccept, onReject, onCancel, onRetry }: Pro
           return (
             <DreamSummary
               key={m.id}
+              messageId={m.id}
               title={p.title || "Dream"}
-              dreamText={p.content || p.dream_text}
+              dreamText={String(p.content || p.dream_text || "")}
               tone={p.tone}
               dislikes={p.dislikes}
+              onSave={onSaveDream}
             />
           );
         }

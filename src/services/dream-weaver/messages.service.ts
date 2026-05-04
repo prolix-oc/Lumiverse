@@ -138,6 +138,94 @@ export function updateToolCard(
   return updated;
 }
 
+function getPrimaryDreamSourceMessageId(userId: string, sessionId: string): string | null {
+  const row = getDb()
+    .prepare(`
+      SELECT id
+      FROM dream_weaver_messages
+      WHERE session_id = ? AND user_id = ?
+        AND (
+          (kind = 'source_card' AND status = 'accepted')
+          OR kind = 'dream_summary'
+        )
+      ORDER BY seq ASC
+      LIMIT 1
+    `)
+    .get(sessionId, userId) as { id?: string } | undefined;
+  return row?.id ?? null;
+}
+
+export function updateSourceMessageContent(
+  userId: string,
+  sessionId: string,
+  messageId: string,
+  content: string,
+): DreamWeaverMessage {
+  const existing = getMessage(userId, messageId);
+  if (!existing || existing.session_id !== sessionId) throw new Error("Message not found");
+  if (existing.kind !== "source_card" && existing.kind !== "dream_summary") {
+    throw new Error("Not a source message");
+  }
+
+  const nextContent = content.trim();
+  if (!nextContent) throw new Error("Dream source text is required");
+
+  const payload = { ...(existing.payload as Record<string, unknown>) };
+  const previousContent =
+    typeof payload.content === "string"
+      ? payload.content
+      : typeof payload.dream_text === "string"
+        ? payload.dream_text
+        : "";
+
+  if (existing.kind === "source_card") {
+    payload.content = nextContent;
+  } else {
+    payload.dream_text = nextContent;
+    payload.content = nextContent;
+  }
+
+  getDb()
+    .prepare(`UPDATE dream_weaver_messages SET payload = ? WHERE id = ? AND user_id = ?`)
+    .run(JSON.stringify(payload), messageId, userId);
+
+  const primaryMessageId = getPrimaryDreamSourceMessageId(userId, sessionId);
+  const sessionRow = getDb()
+    .prepare(`SELECT dream_text FROM dream_weaver_sessions WHERE id = ? AND user_id = ?`)
+    .get(sessionId, userId) as { dream_text?: string | null } | undefined;
+  const isPrimary =
+    primaryMessageId === messageId ||
+    (sessionRow?.dream_text ?? "").trim() === previousContent.trim();
+
+  if (isPrimary) {
+    getDb()
+      .prepare(`
+        UPDATE dream_weaver_sessions
+        SET dream_text = ?, updated_at = unixepoch()
+        WHERE id = ? AND user_id = ?
+      `)
+      .run(nextContent, sessionId, userId);
+  } else {
+    getDb()
+      .prepare(`UPDATE dream_weaver_sessions SET updated_at = unixepoch() WHERE id = ? AND user_id = ?`)
+      .run(sessionId, userId);
+  }
+
+  invalidateDraftCache(sessionId);
+  const updated = getMessage(userId, messageId)!;
+  eventBus.emit(
+    EventType.DREAM_WEAVER_MESSAGE_UPDATED,
+    {
+      sessionId,
+      messageId,
+      status: updated.status,
+      payload: updated.payload,
+    },
+    userId,
+  );
+  return updated;
+}
+
 export function deleteMessage(userId: string, messageId: string): void {
   const existing = getMessage(userId, messageId);
   if (!existing) return;

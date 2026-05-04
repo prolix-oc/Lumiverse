@@ -1,4 +1,6 @@
 .composer {
+  position: relative;
+  z-index: 2;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -84,6 +86,11 @@
 }
 
 .suggestions {
+  position: absolute;
+  left: 16px;
+  right: 58px;
+  bottom: calc(100% + 8px);
+  z-index: 10;
   display: grid;
   gap: 3px;
   max-height: min(260px, 34vh);
@@ -92,6 +99,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: var(--lumiverse-radius-md);
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 88%, var(--lumiverse-primary));
+  box-shadow: var(--lumiverse-shadow-lg);
 }
 
 .suggestionHeader {
@@ -142,6 +150,21 @@
   color: var(--lumiverse-primary-text);
 }
 
+.suggestionIcon[data-category="soul"] {
+  background: color-mix(in srgb, var(--lumiverse-primary) 15%, transparent);
+  color: var(--lumiverse-primary-text);
+}
+
+.suggestionIcon[data-category="world"] {
+  background: color-mix(in srgb, var(--lumiverse-success, #4ade80) 15%, transparent);
+  color: color-mix(in srgb, var(--lumiverse-success, #4ade80) 80%, var(--lumiverse-text));
+}
+
+.suggestionIcon[data-category="lifecycle"] {
+  background: color-mix(in srgb, var(--lumiverse-text-muted) 12%, transparent);
+  color: var(--lumiverse-text-muted);
+}
+
 .suggestionMain {
   min-width: 0;
   display: grid;
@@ -182,6 +205,11 @@
 }
 
 @media (max-width: 640px) {
+  .suggestions {
+    left: 12px;
+    right: 12px;
+  }
+
   .suggestion {
     grid-template-columns: 24px minmax(0, 1fr);
   }

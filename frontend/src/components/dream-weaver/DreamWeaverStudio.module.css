@@ -103,6 +103,11 @@
   color: var(--lumiverse-text);
 }
 
+.kindButton:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 1px;
+}
+
 .kindButton[data-active] {
   background: color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
   color: var(--lumiverse-primary-text);
@@ -218,6 +223,12 @@
   color: var(--lumiverse-text);
 }
 
+.tab:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
 .tab[data-active] {
   color: var(--lumiverse-text);
   font-weight: 600;
@@ -231,8 +242,6 @@
   min-height: 0;
   position: relative;
   overflow: hidden;
-  overflow-x: hidden;
-  padding: 0 20px;
 }
 
 
@@ -268,6 +277,14 @@
 
 .saveStatus[data-dirty] {
   color: var(--lumiverse-warning);
+}
+
+.missingFields {
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .footerRight {
@@ -309,14 +326,20 @@
     border-radius: 0;
   }
 
-  .canvas {
-    padding: 0 12px;
-  }
-
   .footer {
     align-items: stretch;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .footerLeft {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .missingFields {
+    white-space: normal;
   }
 
   .footerRight {

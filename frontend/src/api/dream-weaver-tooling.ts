@@ -56,6 +56,15 @@ export interface DreamWeaverToolTokenUsage {
   model: string;
 }
 
+export interface DreamWeaverSuiteResult {
+  status: "done" | "error";
+  cardIds: string[];
+  queued: number;
+  total: number;
+  failedCardId?: string;
+  errorMessage?: string;
+}
+
 export const dreamWeaverToolingApi = {
   async listTools(): Promise<ToolCatalogEntry[]> {
     const res = await apiClient.get<{ tools: ToolCatalogEntry[] }>(`/dream-weaver/tools`);
@@ -81,6 +90,12 @@ export const dreamWeaverToolingApi = {
     body: { tool: string; args?: Record<string, unknown>; nudge_text?: string | null; supersedes_id?: string | null; raw?: string | null },
   ): Promise<{ userCommandId: string | null; cardId: string }> {
     return apiClient.post(`/dream-weaver/sessions/${sessionId}/invoke`, body);
+  },
+  async runSuite(sessionId: string): Promise<DreamWeaverSuiteResult> {
+    return apiClient.post(`/dream-weaver/sessions/${sessionId}/suite`, {}, { timeout: 0 });
+  },
+  async updateSourceMessage(sessionId: string, messageId: string, content: string): Promise<DreamWeaverMessage> {
+    return apiClient.put(`/dream-weaver/sessions/${sessionId}/messages/${messageId}/source`, { content });
   },
   async accept(sessionId: string, messageId: string): Promise<DreamWeaverMessage> {
     return apiClient.post(`/dream-weaver/sessions/${sessionId}/messages/${messageId}/accept`, {});

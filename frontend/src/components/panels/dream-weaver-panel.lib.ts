@@ -14,9 +14,7 @@ export interface DreamWeaverSelectablePersona {
 }
 
 export function getDreamWeaverSessionTitle(session: DreamWeaverSession): string {
-  const source = session.dream_text.trim()
-  if (source) return source.length > 48 ? `${source.slice(0, 48).trimEnd()}…` : source
-  return session.workspace_kind === 'scenario' ? 'Untitled scenario studio' : 'Untitled character studio'
+  return session.session_number > 0 ? `Session #${session.session_number}` : 'Session'
 }
 
 export function getDreamWeaverSessionPreview(session: DreamWeaverSession): string {
@@ -113,6 +111,7 @@ export function resolveSelectedDreamWeaverPersonaId(
 function buildSearchableText(session: DreamWeaverSession): string {
   return [
     session.dream_text,
+    session.session_number > 0 ? `session ${session.session_number}` : null,
     session.workspace_kind,
     session.tone,
   ]

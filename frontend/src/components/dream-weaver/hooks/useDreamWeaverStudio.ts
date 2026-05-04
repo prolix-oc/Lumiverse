@@ -27,7 +27,8 @@ export function useDreamWeaverStudio(sessionId: string) {
     try {
       const d = await dreamWeaverToolingApi.getDraft(sessionId);
       setDraft(d);
-    } catch {
+    } catch (e: unknown) {
+      setErrorMessage(e instanceof Error ? e.message : "Failed to refresh draft");
     }
   }, [sessionId]);
 

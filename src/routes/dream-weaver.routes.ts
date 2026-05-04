@@ -59,6 +59,18 @@ const DREAM_SOURCE_TOOL = {
   conflictMode: "append" as const,
 };
 
+function publicDreamWeaverTextError(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const lower = error.message.toLowerCase();
+    if (lower.includes("no connection")) return "Choose a text connection before running Dream Weaver tools.";
+    if (lower.includes("no model")) return "Choose a model before running Dream Weaver tools.";
+    if (error.name === "AbortError" || lower.includes("abort") || lower.includes("timed out")) {
+      return "Tag generation timed out.";
+    }
+  }
+  return fallback;
+}
+
 function buildToolHelpText(): string {
   const tools = [HELP_TOOL, DREAM_SOURCE_TOOL, ...listTools().filter((tool) => tool.userInvocable)];
   const lines = [
@@ -325,6 +337,43 @@ app.post("/sessions/:id/invoke", async (c) => {
   return c.json({ userCommandId, cardId: card.id });
 });
 
+app.post("/sessions/:id/suite", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  try {
+    const result = await dreamWeaverSvc.runDefaultSuite(userId, sessionId);
+    return c.json(result, 201);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Suite failed";
+    if (message === "Session not found") return c.json({ error: message }, 404);
+    if (message.includes("Add source material")) return c.json({ error: message }, 400);
+    return c.json({ error: "Suite failed. Check the connection and try again." }, 422);
+  }
+});
+
+app.put("/sessions/:sid/messages/:mid/source", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const checked = getSessionMessage(userId, sessionId, c.req.param("mid"));
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
+
+  const body = await c.req.json().catch(() => ({})) as { content?: unknown };
+  if (typeof body.content !== "string") {
+    return c.json({ error: "Dream source text is required" }, 400);
+  }
+
+  try {
+    const updated = messagesSvc.updateSourceMessageContent(userId, sessionId, c.req.param("mid"), body.content);
+    return c.json(updated);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Could not update source";
+    if (message === "Message not found") return c.json({ error: message }, 404);
+    if (message === "Not a source message") return c.json({ error: message }, 400);
+    if (message.includes("required")) return c.json({ error: message }, 400);
+    throw error;
+  }
+});
+
 app.post("/sessions/:sid/messages/:mid/accept", (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("sid");
@@ -503,7 +552,7 @@ app.post("/visual/tag-suggestions", async (c) => {
     const isAbort = error instanceof Error && (error.name === "AbortError" || error.message.includes("abort"));
     const message = isAbort
       ? "Tag generation timed out."
-      : error instanceof Error ? error.message : "Tag generation failed.";
+      : publicDreamWeaverTextError(error, "Tag generation failed. Check the text connection and try again.");
     return c.json({ error: message }, 422);
   } finally {
     dwAbort?.cleanup();

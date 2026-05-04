@@ -1,0 +1,92 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 96%, var(--lumiverse-primary));
+  flex-shrink: 0;
+}
+
+.bar[data-done] {
+  background: color-mix(in srgb, var(--lumiverse-success, #4ade80) 5%, var(--lumiverse-bg-deep));
+  border-bottom-color: color-mix(in srgb, var(--lumiverse-success, #4ade80) 18%, var(--lumiverse-border));
+}
+
+.label {
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 20px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-hint);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    background var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast);
+}
+
+.field[data-complete] {
+  border-color: color-mix(in srgb, var(--lumiverse-success, #4ade80) 35%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-success, #4ade80) 10%, var(--lumiverse-fill-subtle));
+  color: color-mix(in srgb, var(--lumiverse-success, #4ade80) 75%, var(--lumiverse-text));
+}
+
+.field[data-required] {
+  border-color: color-mix(in srgb, var(--lumiverse-warning, #fb923c) 35%, transparent);
+  background: color-mix(in srgb, var(--lumiverse-warning, #fb923c) 8%, var(--lumiverse-fill-subtle));
+  color: color-mix(in srgb, var(--lumiverse-warning, #fb923c) 70%, var(--lumiverse-text-dim));
+}
+
+.count {
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.countSep {
+  color: var(--lumiverse-text-hint);
+  font-weight: 400;
+  margin: 0 1px;
+}
+
+@media (max-width: 640px) {
+  .bar {
+    padding: 6px 12px;
+    gap: 8px;
+  }
+
+  .label {
+    display: none;
+  }
+
+  .field {
+    font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+    padding: 2px 6px;
+  }
+}

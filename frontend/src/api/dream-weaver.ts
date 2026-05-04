@@ -175,6 +175,7 @@ export interface DreamWeaverDraft {
 export interface DreamWeaverSession {
   id: string
   user_id: string
+  session_number: number
   created_at: number
   updated_at: number
   dream_text: string

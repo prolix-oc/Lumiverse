@@ -344,6 +344,9 @@ export default function DreamWeaverPanel() {
               placeholder="Optional. Paste a premise, scene, imported card notes, worldbook ideas, or anything worth preserving."
               rows={6}
             />
+            {dreamText.length > 0 && (
+              <span className={styles.charCount}>{dreamText.length.toLocaleString()} characters</span>
+            )}
           </div>
 
           {/* Persona / Connection / Model */}

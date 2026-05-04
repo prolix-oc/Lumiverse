@@ -50,6 +50,7 @@ export function useDreamWeaverMessages(sessionId: string | null) {
           error?: unknown;
           duration_ms?: number | null;
           token_usage?: unknown;
+          payload?: Record<string, unknown>;
         }) => {
           if (payload.sessionId !== sessionId) return;
           setMessages((prev) =>
@@ -60,6 +61,7 @@ export function useDreamWeaverMessages(sessionId: string | null) {
                     status: payload.status,
                     payload: {
                       ...m.payload,
+                      ...(payload.payload !== undefined ? payload.payload : {}),
                       ...(payload.output !== undefined ? { output: payload.output } : {}),
                       ...(payload.error !== undefined ? { error: payload.error } : {}),
                       ...(payload.duration_ms !== undefined ? { duration_ms: payload.duration_ms } : {}),
@@ -105,11 +107,16 @@ export function useDreamWeaverMessages(sessionId: string | null) {
     await dreamWeaverToolingApi.cancel(sessionId, messageId);
     await loadMessages();
   }, [loadMessages, sessionId]);
+  const updateSource = useCallback(async (messageId: string, content: string) => {
+    if (!sessionId) return;
+    await dreamWeaverToolingApi.updateSourceMessage(sessionId, messageId, content);
+    await loadMessages();
+  }, [loadMessages, sessionId]);
   const dream = useCallback(async () => {
     if (!sessionId) return;
     await dreamWeaverToolingApi.dream(sessionId);
     await loadMessages();
   }, [loadMessages, sessionId]);
 
-  return { messages, loading, invoke, accept, reject, cancel, dream };
+  return { messages, loading, invoke, accept, reject, cancel, updateSource, dream };
 }
