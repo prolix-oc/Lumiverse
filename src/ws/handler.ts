@@ -1,4 +1,5 @@
 import { upgradeWebSocket } from "hono/bun";
+import { Buffer } from "node:buffer";
 import { eventBus } from "./bus";
 import { EventType } from "./events";
 import { auth } from "../auth";
@@ -6,6 +7,9 @@ import { consumeTicket } from "./tickets";
 import { getWorkerHost } from "../spindle/lifecycle";
 import * as managerSvc from "../spindle/manager.service";
 import { getFirstUserId } from "../auth/seed";
+
+const WS_MESSAGE_SIZE_LIMIT_DEFAULT = 65_536;
+const WS_MESSAGE_SIZE_LIMIT_SPINDLE_BACKEND_MSG = 4 * 1024 * 1024;
 
 export const wsHandler = upgradeWebSocket((c) => {
   // Authenticate during upgrade — extract userId + sessionId
@@ -116,12 +120,28 @@ export const wsHandler = upgradeWebSocket((c) => {
         const raw = (ws as any).raw as import("bun").ServerWebSocket<unknown>;
         if (raw) eventBus.touchClient(raw);
 
-        // Guard against oversized payloads — legitimate client messages are
-        // small control frames (ping, visibility, spindle results). 64 KB is
-        // generous; anything larger is either a bug or an attack attempting to
-        // burn GC time via a deeply nested JSON parse.
+        // Guard against oversized payloads. Most client messages are small
+        // control frames, but extension backend messages can carry user data.
         const raw_data = event.data as string;
-        if (raw_data.length > 65_536) return;
+        const rawDataBytes = Buffer.byteLength(raw_data, "utf8");
+        let sizeLimit = WS_MESSAGE_SIZE_LIMIT_DEFAULT;
+        let detectedType: string | null = null;
+
+        if (rawDataBytes > WS_MESSAGE_SIZE_LIMIT_DEFAULT) {
+          const typeMatch = raw_data.slice(0, 256).match(/^\s*\{\s*"type"\s*:\s*"([^"]+)"/);
+          detectedType = typeMatch?.[1] ?? null;
+          if (detectedType === "SPINDLE_BACKEND_MSG") {
+            sizeLimit = WS_MESSAGE_SIZE_LIMIT_SPINDLE_BACKEND_MSG;
+          }
+        }
+
+        if (rawDataBytes > sizeLimit) {
+          console.warn(
+            `[WS] dropped oversized message: ${rawDataBytes} bytes ` +
+              `(limit=${sizeLimit}, type=${detectedType ?? "unknown"})`,
+          );
+          return;
+        }
 
         const data = JSON.parse(raw_data);
         if (data.type === "ping") {
