@@ -53,6 +53,7 @@ export default function ChatHeads() {
   const headOffsetsRef = useRef<{ x: number; y: number }[]>([])
   const gravityLastPosRef = useRef({ x: 0, y: 0 })
   const gravityRafRef = useRef(0)
+  const leaderIndexRef = useRef(0)
 
   const reconcileChatHeads = useStore((s) => s.reconcileChatHeads)
 
@@ -201,30 +202,39 @@ export default function ChatHeads() {
 
       const SPRING = 0.25
       const EPSILON = 0.5
+      const L = leaderIndexRef.current
 
-      offsets[0] = { x: 0, y: 0 }
+      if (offsets[L]) offsets[L] = { x: 0, y: 0 }
 
       let moving = false
-      for (let i = 1; i < offsets.length; i++) {
-        // Counteract container movement — this head hasn't caught up yet
+      
+      // Heads after leader follow the one before them
+      for (let i = L + 1; i < offsets.length; i++) {
         offsets[i].x -= delta.x
         offsets[i].y -= delta.y
-
-        // Chain spring: each head follows the one before it
         const target = offsets[i - 1]
         offsets[i].x += (target.x - offsets[i].x) * SPRING
         offsets[i].y += (target.y - offsets[i].y) * SPRING
+        if (Math.abs(offsets[i].x) > EPSILON || Math.abs(offsets[i].y) > EPSILON) moving = true
+      }
 
-        if (Math.abs(offsets[i].x) > EPSILON || Math.abs(offsets[i].y) > EPSILON) {
-          moving = true
-        }
+      // Heads before leader follow the one after them
+      for (let i = L - 1; i >= 0; i--) {
+        offsets[i].x -= delta.x
+        offsets[i].y -= delta.y
+        const target = offsets[i + 1]
+        offsets[i].x += (target.x - offsets[i].x) * SPRING
+        offsets[i].y += (target.y - offsets[i].y) * SPRING
+        if (Math.abs(offsets[i].x) > EPSILON || Math.abs(offsets[i].y) > EPSILON) moving = true
       }
 
       // Apply CSS transforms directly to DOM
       heads.forEach((el) => {
         const idx = parseInt(el.dataset.headIdx || '0', 10)
-        if (idx > 0 && offsets[idx]) {
+        if (idx !== L && offsets[idx]) {
           el.style.transform = `translate(${offsets[idx].x}px, ${offsets[idx].y}px)`
+        } else {
+          el.style.transform = ''
         }
       })
 
@@ -250,6 +260,19 @@ export default function ChatHeads() {
       dragging.current = true
       dragStartPos.current = { x: e.clientX, y: e.clientY }
       offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+      
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      if (el) {
+        const headEl = (el as HTMLElement).closest?.('[data-head-idx]') as HTMLElement | null
+        if (headEl?.dataset.headIdx) {
+          leaderIndexRef.current = parseInt(headEl.dataset.headIdx, 10)
+        } else {
+          leaderIndexRef.current = 0
+        }
+      } else {
+        leaderIndexRef.current = 0
+      }
+
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       e.preventDefault()
 
@@ -444,6 +467,7 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
   const isActive =
     head.status === 'assembling' ||
     head.status === 'council' ||
+    head.status === 'waiting' ||
     head.status === 'reasoning' ||
     head.status === 'streaming'
   const isCompleted = head.status === 'completed' || head.status === 'stopped'
@@ -477,6 +501,11 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
       {/* Assembly: spinning ring around avatar border */}
       {head.status === 'assembling' && (
         <div className={styles.assemblyRing} />
+      )}
+
+      {/* Waiting (TTFT): pulsing ring around avatar border */}
+      {head.status === 'waiting' && (
+        <div className={styles.waitingRing} />
       )}
 
       {/* Council: wrench inside speech bubble (top-left) */}
@@ -540,6 +569,7 @@ function StatusBadge({ status }: { status: ChatHeadEntry['status'] }) {
   switch (status) {
     case 'assembling':
     case 'council':
+    case 'waiting':
       return <div className={`${styles.badge} ${styles.badgeAssembling}`} />
     case 'council_failed':
       return <div className={`${styles.badge} ${styles.badgeError}`} />

@@ -57,17 +57,19 @@ app.post("/stop", async (c) => {
 app.get("/active", (c) => {
   const userId = c.get("userId");
   const entries = poolSvc.getChatHeadPoolsForUser(userId);
-  return c.json(entries.map((e) => ({
-    generationId: e.generationId,
-    chatId: e.chatId,
-    status: e.status === "streaming" && e.reasoning.length > 0 && e.content.length === 0 ? "reasoning" : e.status,
-    generationType: e.generationType,
-    characterName: e.characterName,
-    characterId: e.characterId,
-    model: e.model,
-    startedAt: e.startedAt,
-    councilRetryPending: e.councilRetryPending || false,
-  })));
+  return c.json(entries.map((e) => {
+    return {
+      generationId: e.generationId,
+      chatId: e.chatId,
+      status: e.status,
+      generationType: e.generationType,
+      characterName: e.characterName,
+      characterId: e.characterId,
+      model: e.model,
+      startedAt: e.startedAt,
+      councilRetryPending: e.councilRetryPending || false,
+    };
+  }));
 });
 
 app.post("/acknowledge", async (c) => {
@@ -86,12 +88,12 @@ app.get("/status/:chatId", (c) => {
   const chatId = c.req.param("chatId");
   const entry = poolSvc.getPoolForChat(userId, chatId);
   if (!entry) return c.json({ active: false });
-  const active = entry.status === "assembling" || entry.status === "council" || entry.status === "streaming";
-  const effectiveStatus = entry.status === "streaming" && entry.reasoning.length > 0 && entry.content.length === 0 ? "reasoning" : entry.status;
+  const active = entry.status === "assembling" || entry.status === "council" || entry.status === "waiting" || entry.status === "reasoning" || entry.status === "streaming";
+  
   return c.json({
     active,
     generationId: entry.generationId,
-    status: effectiveStatus,
+    status: entry.status,
     councilRetryPending: entry.councilRetryPending || false,
     councilToolsFailure: entry.councilToolsFailure,
     content: entry.content,

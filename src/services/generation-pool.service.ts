@@ -10,10 +10,12 @@
  */
 
 import type { GenerationType } from "../llm/types";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type PoolStatus = "assembling" | "council" | "streaming" | "completed" | "stopped" | "error";
+export type PoolStatus = "assembling" | "council" | "waiting" | "reasoning" | "streaming" | "completed" | "stopped" | "error";
 
 export interface PooledTokensEntry {
   generationId: string;
@@ -117,7 +119,11 @@ export function setPoolStatus(generationId: string, status: PoolStatus): void {
   const entry = pool.get(generationId);
   if (!entry) return;
   entry.status = status;
-  if (status === "streaming" && !entry.streamingStartedAt) {
+}
+
+export function markStreamingStarted(generationId: string): void {
+  const entry = pool.get(generationId);
+  if (entry && !entry.streamingStartedAt) {
     entry.streamingStartedAt = Date.now();
   }
 }
@@ -136,8 +142,9 @@ export function appendPoolContent(generationId: string, text: string): number {
   }
   if (!entry.firstTokenAt) entry.firstTokenAt = now;
   if (!entry.firstContentTokenAt) entry.firstContentTokenAt = now;
-  if (entry.status === "assembling" || entry.status === "council") {
+  if (entry.status === "assembling" || entry.status === "council" || entry.status === "waiting" || entry.status === "reasoning") {
     setPoolStatus(generationId, "streaming");
+    eventBus.emit(EventType.GENERATION_PHASE_CHANGED, { generationId, chatId: entry.chatId, phase: "streaming" }, entry.userId);
   }
   entry.content += text;
   return ++entry.tokenSeq;
@@ -153,8 +160,9 @@ export function appendPoolReasoning(generationId: string, text: string): number 
   const now = Date.now();
   if (!entry.reasoningStartedAt) entry.reasoningStartedAt = now;
   if (!entry.firstTokenAt) entry.firstTokenAt = now;
-  if (entry.status === "assembling" || entry.status === "council") {
-    setPoolStatus(generationId, "streaming");
+  if (entry.status === "assembling" || entry.status === "council" || entry.status === "waiting") {
+    setPoolStatus(generationId, "reasoning");
+    eventBus.emit(EventType.GENERATION_PHASE_CHANGED, { generationId, chatId: entry.chatId, phase: "reasoning" }, entry.userId);
   }
   entry.reasoning += text;
   return ++entry.tokenSeq;

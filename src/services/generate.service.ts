@@ -2371,6 +2371,8 @@ async function runGeneration(
   // progress event with the resolved breakdown metadata.
   // Pool status transitions to 'streaming' when the first actual token arrives
   // so that reconnecting clients see 'assembling' while waiting for TTFT.
+  pool.setPoolStatus(generationId, "waiting");
+  pool.markStreamingStarted(generationId);
 
   type PendingStreamSegment = {
     token: string;

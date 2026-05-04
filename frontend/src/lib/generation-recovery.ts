@@ -48,7 +48,7 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
     return
   }
 
-  if (genStatus.active && genStatus.generationId && genStatus.status === 'streaming') {
+  if (genStatus.active && genStatus.generationId && (genStatus.status === 'streaming' || genStatus.status === 'reasoning')) {
     latest.startStreaming(genStatus.generationId, genStatus.targetMessageId)
     if (genStatus.content) latest.replaceStreamContent(genStatus.content)
     if (genStatus.reasoning) latest.replaceStreamReasoning(genStatus.reasoning)

@@ -13,6 +13,7 @@ export enum EventType {
   CHAT_SWITCHED = 'CHAT_SWITCHED',
   GENERATION_STARTED = 'GENERATION_STARTED',
   GENERATION_IN_PROGRESS = 'GENERATION_IN_PROGRESS',
+  GENERATION_PHASE_CHANGED = 'GENERATION_PHASE_CHANGED',
   STREAM_TOKEN_RECEIVED = 'STREAM_TOKEN_RECEIVED',
   GENERATION_ENDED = 'GENERATION_ENDED',
   GENERATION_STOPPED = 'GENERATION_STOPPED',
@@ -246,6 +247,12 @@ export interface GenerationStartedPayload {
 
 export interface GenerationInProgressPayload extends GenerationStartedPayload {
   model?: string
+}
+
+export interface GenerationPhaseChangedPayload {
+  generationId: string
+  chatId: string
+  phase: 'reasoning' | 'streaming'
 }
 
 export interface GenerationMetrics {

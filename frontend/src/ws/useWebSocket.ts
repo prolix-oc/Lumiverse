@@ -17,6 +17,7 @@ import type {
   StreamTokenPayload,
   GenerationStartedPayload,
   GenerationInProgressPayload,
+  GenerationPhaseChangedPayload,
   GenerationEndedPayload,
   GenerationAcknowledgedPayload,
   MessageSentPayload,
@@ -259,10 +260,21 @@ export function useWebSocket() {
         }
 
         state.updateChatHead(payload.generationId, {
+          status: 'waiting',
           ...(payload.model ? { model: payload.model } : {}),
           ...(payload.characterName ? { characterName: payload.characterName } : {}),
           ...(payload.characterId ? { characterId: payload.characterId } : {}),
         })
+      }),
+
+      wsClient.on(EventType.GENERATION_PHASE_CHANGED, (payload: GenerationPhaseChangedPayload) => {
+        const state = store.getState()
+        if (payload.generationId) {
+          const head = state.chatHeads.find((h) => h.generationId === payload.generationId)
+          if (head && head.status !== payload.phase) {
+            state.updateChatHead(payload.generationId, { status: payload.phase })
+          }
+        }
       }),
 
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
@@ -278,14 +290,9 @@ export function useWebSocket() {
             state.appendStreamToken(payload.token)
           }
         }
-        // Update chat head status only on actual transitions (not every token)
-        if (payload.generationId) {
-          const newStatus = payload.type === 'reasoning' ? 'reasoning' as const : 'streaming' as const
-          const head = state.chatHeads.find((h) => h.generationId === payload.generationId)
-          if (head && head.status !== newStatus) {
-            state.updateChatHead(payload.generationId, { status: newStatus })
-          }
-        }
+        // Phase transitions are now handled explicitly by GENERATION_PHASE_CHANGED
+        // to ensure immediate updates globally across tabs without polling, instead
+        // of relying on the stream token receiver to infer phase changes.
       }),
 
       wsClient.on(EventType.GENERATION_ENDED, (payload: GenerationEndedPayload) => {

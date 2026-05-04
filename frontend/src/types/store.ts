@@ -1142,7 +1142,7 @@ export interface FloatingAvatarSlice {
 
 // ---- Chat Heads (floating generation status) ----
 
-export type ChatHeadStatus = 'assembling' | 'council' | 'council_failed' | 'reasoning' | 'streaming' | 'completed' | 'stopped' | 'error'
+export type ChatHeadStatus = 'assembling' | 'council' | 'council_failed' | 'waiting' | 'reasoning' | 'streaming' | 'completed' | 'stopped' | 'error'
 
 export interface ChatHeadEntry {
   generationId: string

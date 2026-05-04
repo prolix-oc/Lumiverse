@@ -45,6 +45,10 @@ interface SpindleNotice {
   detail: string
 }
 
+const SPINDLE_NOTICE_SHOW_DELAY_MS = 180
+const SPINDLE_NOTICE_HIDE_DELAY_MS = 280
+const SPINDLE_NOTICE_MIN_VISIBLE_MS = 700
+
 interface CortexRebuildStatus {
   chatId?: string
   status: string
@@ -163,6 +167,11 @@ function buildSpindleNotice(payload: SpindlePreGenerationActivityPayload): Spind
 export default function ChatView() {
   const { chatId } = useParams<{ chatId: string }>()
   const autoSwitchedPersonaIdRef = useRef<string | null>(null)
+  const spindleActiveRef = useRef(new Map<string, SpindlePreGenerationActivityPayload>())
+  const spindleLatestRef = useRef<SpindlePreGenerationActivityPayload | null>(null)
+  const spindleShowTimerRef = useRef<number | null>(null)
+  const spindleHideTimerRef = useRef<number | null>(null)
+  const spindleVisibleAtRef = useRef<number | null>(null)
   const [ingestionStatus, setIngestionStatus] = useState<CortexIngestionStatus | null>(null)
   const [rebuildStatus, setRebuildStatus] = useState<CortexRebuildStatus | null>(null)
   const [spindleNotice, setSpindleNotice] = useState<SpindleNotice | null>(null)
@@ -200,8 +209,64 @@ export default function ChatView() {
   useEffect(() => {
     if (!chatId) return
     let cancelled = false
+
+    const clearSpindleShowTimer = () => {
+      if (spindleShowTimerRef.current !== null) {
+        window.clearTimeout(spindleShowTimerRef.current)
+        spindleShowTimerRef.current = null
+      }
+    }
+
+    const clearSpindleHideTimer = () => {
+      if (spindleHideTimerRef.current !== null) {
+        window.clearTimeout(spindleHideTimerRef.current)
+        spindleHideTimerRef.current = null
+      }
+    }
+
+    const getSpindleActivityKey = (payload: SpindlePreGenerationActivityPayload) => `${payload.phase}:${payload.extensionId}`
+
+    const getLatestActivePayload = () => {
+      const latest = spindleLatestRef.current
+      if (latest && spindleActiveRef.current.has(getSpindleActivityKey(latest))) {
+        return latest
+      }
+      const values = Array.from(spindleActiveRef.current.values())
+      return values[values.length - 1] ?? null
+    }
+
+    const showSpindleNotice = (payload: SpindlePreGenerationActivityPayload) => {
+      clearSpindleShowTimer()
+      clearSpindleHideTimer()
+      spindleVisibleAtRef.current = Date.now()
+      setSpindleNotice(buildSpindleNotice(payload))
+    }
+
+    const scheduleSpindleHide = () => {
+      clearSpindleShowTimer()
+      clearSpindleHideTimer()
+      const visibleAt = spindleVisibleAtRef.current
+      const elapsed = visibleAt ? Date.now() - visibleAt : SPINDLE_NOTICE_MIN_VISIBLE_MS
+      const delay = Math.max(SPINDLE_NOTICE_HIDE_DELAY_MS, SPINDLE_NOTICE_MIN_VISIBLE_MS - elapsed)
+      spindleHideTimerRef.current = window.setTimeout(() => {
+        spindleHideTimerRef.current = null
+        spindleVisibleAtRef.current = null
+        setSpindleNotice(null)
+      }, delay)
+    }
+
+    const resetSpindleNotice = () => {
+      spindleActiveRef.current.clear()
+      spindleLatestRef.current = null
+      clearSpindleShowTimer()
+      clearSpindleHideTimer()
+      spindleVisibleAtRef.current = null
+      setSpindleNotice(null)
+    }
+
     setIngestionStatus(null)
     setRebuildStatus(null)
+    resetSpindleNotice()
 
     Promise.all([
       memoryCortexApi.getIngestionStatus(chatId).catch(() => null),
@@ -226,25 +291,62 @@ export default function ChatView() {
 
     const offSpindle = wsClient.on(EventType.SPINDLE_PRE_GENERATION_ACTIVITY, (payload: SpindlePreGenerationActivityPayload) => {
       if (!payload || payload.chatId !== chatId) return
-      if (payload.status === 'started' || payload.status === 'error') {
-        setSpindleNotice(buildSpindleNotice(payload))
+
+      const key = getSpindleActivityKey(payload)
+
+      if (payload.status === 'started') {
+        spindleActiveRef.current.set(key, payload)
+        spindleLatestRef.current = payload
+        clearSpindleHideTimer()
+        if (spindleVisibleAtRef.current !== null) {
+          setSpindleNotice(buildSpindleNotice(payload))
+        } else if (spindleShowTimerRef.current === null) {
+          spindleShowTimerRef.current = window.setTimeout(() => {
+            spindleShowTimerRef.current = null
+            const activePayload = getLatestActivePayload()
+            if (activePayload) showSpindleNotice(activePayload)
+          }, SPINDLE_NOTICE_SHOW_DELAY_MS)
+        }
         return
       }
-      setSpindleNotice(null)
+
+      spindleActiveRef.current.delete(key)
+
+      if (payload.status === 'error') {
+        spindleLatestRef.current = null
+        showSpindleNotice(payload)
+        return
+      }
+
+      const nextPayload = getLatestActivePayload()
+      spindleLatestRef.current = nextPayload
+      if (nextPayload) {
+        if (spindleVisibleAtRef.current !== null) {
+          setSpindleNotice(buildSpindleNotice(nextPayload))
+        }
+        return
+      }
+
+      if (spindleVisibleAtRef.current !== null) {
+        scheduleSpindleHide()
+      } else {
+        clearSpindleShowTimer()
+      }
     })
 
     const offGenerationProgress = wsClient.on(EventType.GENERATION_IN_PROGRESS, (payload: any) => {
       if (!payload || payload.chatId !== chatId) return
-      setSpindleNotice(null)
+      resetSpindleNotice()
     })
 
     const offGenerationEnd = wsClient.on(EventType.GENERATION_ENDED, (payload: any) => {
       if (!payload || payload.chatId !== chatId) return
-      setSpindleNotice(null)
+      resetSpindleNotice()
     })
 
     return () => {
       cancelled = true
+      resetSpindleNotice()
       offIngestion()
       offRebuild()
       offSpindle()

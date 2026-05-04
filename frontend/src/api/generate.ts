@@ -187,7 +187,7 @@ export interface BreakdownResponse {
 export interface GenerationStatusResponse {
   active: boolean
   generationId?: string
-  status?: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  status?: 'assembling' | 'council' | 'waiting' | 'streaming' | 'completed' | 'stopped' | 'error' | 'reasoning'
   councilRetryPending?: boolean
   councilToolsFailure?: {
     generationId: string
@@ -221,7 +221,7 @@ export interface GenerationStatusResponse {
 export interface ActiveGenerationEntry {
   generationId: string
   chatId: string
-  status: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  status: 'assembling' | 'council' | 'waiting' | 'streaming' | 'completed' | 'stopped' | 'error' | 'reasoning'
   generationType: string
   characterName: string
   characterId?: string
