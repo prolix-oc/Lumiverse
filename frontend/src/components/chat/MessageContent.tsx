@@ -1202,8 +1202,7 @@ function TrustedYouTubeEmbed({ embed }: { embed: TrustedYouTubeEmbed }) {
         title={embed.title}
         loading="lazy"
         referrerPolicy="strict-origin-when-cross-origin"
-        allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
-        sandbox="allow-scripts allow-same-origin allow-presentation"
+        allow="fullscreen; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
         allowFullScreen
       />
     </div>

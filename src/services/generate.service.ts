@@ -995,6 +995,7 @@ async function runPromptPipeline(opts: {
       messages as import("lumiverse-spindle-types").LlmMessageDTO[],
       spindleContext,
       opts.userId,
+      opts.signal,
     );
     messages = interceptorResult.messages as unknown as LlmMessage[];
     interceptorParameters = interceptorResult.parameters;

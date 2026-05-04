@@ -8,6 +8,7 @@ export type {
   MessageSentPayload,
   MessageEditedPayload,
   MessageDeletedPayload,
+  SpindlePreGenerationActivityPayload,
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
   SpindleToastPayload,

@@ -2903,6 +2903,7 @@ export class WorkerHost {
     this.interceptorUnregister?.();
     this.interceptorUnregister = interceptorPipeline.register({
       extensionId: this.extensionId,
+      extensionName: this.manifest.name || this.manifest.identifier,
       userId: scopedUserId,
       priority: priority ?? 100,
       resolveTimeoutMs,
@@ -5230,6 +5231,7 @@ export class WorkerHost {
     this.contextHandlerUnregister?.();
     this.contextHandlerUnregister = contextHandlerChain.register({
       extensionId: this.extensionId,
+      extensionName: this.manifest.name || this.manifest.identifier,
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       handler: async (context) => {
@@ -5284,6 +5286,7 @@ export class WorkerHost {
     this.messageContentProcessorUnregister?.();
     this.messageContentProcessorUnregister = messageContentProcessorChain.register({
       extensionId: this.extensionId,
+      extensionName: this.manifest.name || this.manifest.identifier,
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       handler: async (ctx: MessageContentProcessorCtx) => {

@@ -1,5 +1,6 @@
 import type { LlmMessageDTO } from "lumiverse-spindle-types";
 import { DEFAULT_INTERCEPTOR_TIMEOUT_MS } from "../services/spindle-settings.service";
+import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
 
 export interface InterceptorBreakdownEntry {
   messageIndex: number;
@@ -18,6 +19,7 @@ export interface InterceptorResult {
 
 export interface Interceptor {
   extensionId: string;
+  extensionName?: string;
   userId?: string | null;
   priority: number; // lower = runs first
   /**
@@ -32,6 +34,12 @@ export interface Interceptor {
     messages: LlmMessageDTO[],
     context: unknown
   ) => Promise<InterceptorResult>;
+}
+
+function getChatId(context: unknown): string | null {
+  if (!context || typeof context !== "object") return null;
+  const chatId = (context as { chatId?: unknown }).chatId;
+  return typeof chatId === "string" && chatId ? chatId : null;
 }
 
 class InterceptorPipeline {
@@ -56,15 +64,20 @@ class InterceptorPipeline {
   async run(
     messages: LlmMessageDTO[],
     context: unknown,
-    userId?: string | null
+    userId?: string | null,
+    signal?: AbortSignal,
   ): Promise<InterceptorResult> {
     let result = messages;
     let mergedParameters: Record<string, unknown> | undefined;
     const mergedBreakdown: InterceptorBreakdownEntry[] = [];
+    const chatId = getChatId(context);
 
     for (const interceptor of this.interceptors) {
       if (interceptor.userId && interceptor.userId !== userId) {
         continue;
+      }
+      if (signal?.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
       }
       let timeoutMs = DEFAULT_INTERCEPTOR_TIMEOUT_MS;
       if (interceptor.resolveTimeoutMs) {
@@ -78,22 +91,45 @@ class InterceptorPipeline {
           );
         }
       }
+      emitSpindlePreGenerationActivity({
+        chatId,
+        userId,
+        phase: "interceptor",
+        status: "started",
+        extensionId: interceptor.extensionId,
+        extensionName: interceptor.extensionName,
+      });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let abortHandler: (() => void) | undefined;
       try {
         const output = await Promise.race([
           interceptor.handler(result, context),
-          new Promise<never>((_, reject) =>
-            setTimeout(
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
               () =>
                 reject(
                   new Error(
                     `Interceptor from ${interceptor.extensionId} timed out (${Math.round(timeoutMs / 1000)}s)`
                   )
                 ),
-              timeoutMs
-            )
-          ),
+              timeoutMs,
+            );
+            if (signal) {
+              abortHandler = () =>
+                reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+              signal.addEventListener("abort", abortHandler, { once: true });
+            }
+          }),
         ]);
         result = output.messages;
+        emitSpindlePreGenerationActivity({
+          chatId,
+          userId,
+          phase: "interceptor",
+          status: "completed",
+          extensionId: interceptor.extensionId,
+          extensionName: interceptor.extensionName,
+        });
         if (output.parameters && Object.keys(output.parameters).length > 0) {
           mergedParameters = { ...mergedParameters, ...output.parameters };
         }
@@ -101,11 +137,36 @@ class InterceptorPipeline {
           mergedBreakdown.push(...output.breakdown);
         }
       } catch (err) {
+        if (signal?.aborted) {
+          emitSpindlePreGenerationActivity({
+            chatId,
+            userId,
+            phase: "interceptor",
+            status: "aborted",
+            extensionId: interceptor.extensionId,
+            extensionName: interceptor.extensionName,
+          });
+          throw err;
+        }
+        emitSpindlePreGenerationActivity({
+          chatId,
+          userId,
+          phase: "interceptor",
+          status: "error",
+          extensionId: interceptor.extensionId,
+          extensionName: interceptor.extensionName,
+          error: err instanceof Error ? err.message : String(err),
+        });
         console.error(
           `[Spindle] Interceptor error from ${interceptor.extensionId}:`,
           err
         );
         // Continue with previous result on error
+      } finally {
+        if (timeout) clearTimeout(timeout);
+        if (signal && abortHandler) {
+          signal.removeEventListener("abort", abortHandler);
+        }
       }
     }
 

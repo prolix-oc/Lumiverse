@@ -1,3 +1,5 @@
+import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
+
 export type MessageContentProcessorOrigin =
   | "create"
   | "update"
@@ -22,6 +24,7 @@ export interface MessageContentProcessorResult {
 
 export interface MessageContentProcessor {
   extensionId: string;
+  extensionName?: string;
   userId?: string | null;
   priority: number;
   handler: (
@@ -29,7 +32,7 @@ export interface MessageContentProcessor {
   ) => Promise<MessageContentProcessorResult | void>;
 }
 
-const MESSAGE_CONTENT_PROCESSOR_TIMEOUT_MS = 2_000;
+const MESSAGE_CONTENT_PROCESSOR_TIMEOUT_MS = 10_000;
 
 class MessageContentProcessorChain {
   private handlers: MessageContentProcessor[] = [];
@@ -65,6 +68,15 @@ class MessageContentProcessorChain {
         throw signal.reason ?? new DOMException("Aborted", "AbortError");
       }
 
+      emitSpindlePreGenerationActivity({
+        chatId: result.chatId,
+        userId,
+        phase: "message_content_processor",
+        status: "started",
+        extensionId: handler.extensionId,
+        extensionName: handler.extensionName,
+      });
+
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let abortHandler: (() => void) | undefined;
       try {
@@ -98,8 +110,35 @@ class MessageContentProcessorChain {
             ...(nextExtra !== result.extra ? { extra: nextExtra } : {}),
           };
         }
+        emitSpindlePreGenerationActivity({
+          chatId: result.chatId,
+          userId,
+          phase: "message_content_processor",
+          status: "completed",
+          extensionId: handler.extensionId,
+          extensionName: handler.extensionName,
+        });
       } catch (err) {
-        if (signal?.aborted) throw err;
+        if (signal?.aborted) {
+          emitSpindlePreGenerationActivity({
+            chatId: result.chatId,
+            userId,
+            phase: "message_content_processor",
+            status: "aborted",
+            extensionId: handler.extensionId,
+            extensionName: handler.extensionName,
+          });
+          throw err;
+        }
+        emitSpindlePreGenerationActivity({
+          chatId: result.chatId,
+          userId,
+          phase: "message_content_processor",
+          status: "error",
+          extensionId: handler.extensionId,
+          extensionName: handler.extensionName,
+          error: err instanceof Error ? err.message : String(err),
+        });
         console.error(
           `[Spindle] Message content processor error from ${handler.extensionId}:`,
           err

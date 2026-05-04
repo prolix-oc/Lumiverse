@@ -28,6 +28,7 @@ import ExpressionDisplay from './expressions/ExpressionDisplay'
 import FloatingAvatarViewer from './FloatingAvatarViewer'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
+import type { SpindlePreGenerationActivityPayload } from '@/types/ws-events'
 import styles from './ChatView.module.css'
 import clsx from 'clsx'
 
@@ -36,6 +37,12 @@ interface CortexNotice {
   title: string
   detail: string
   percent?: number
+}
+
+interface SpindleNotice {
+  variant: 'processing' | 'error'
+  title: string
+  detail: string
 }
 
 interface CortexRebuildStatus {
@@ -131,11 +138,34 @@ function normalizeRebuildStatus(payload: CortexRebuildStatus | null): CortexRebu
   return payload.status === 'idle' || payload.status === 'complete' ? null : payload
 }
 
+function buildSpindleNotice(payload: SpindlePreGenerationActivityPayload): SpindleNotice {
+  const phaseLabel: Record<SpindlePreGenerationActivityPayload['phase'], string> = {
+    message_content_processor: 'processing your message',
+    context_handler: 'preparing generation context',
+    interceptor: 'running a prompt interceptor',
+  }
+
+  if (payload.status === 'error') {
+    return {
+      variant: 'error',
+      title: 'Extension',
+      detail: payload.error || `${payload.extensionName} failed while ${phaseLabel[payload.phase]}.`,
+    }
+  }
+
+  return {
+    variant: 'processing',
+    title: 'Extension',
+    detail: `${payload.extensionName} is ${phaseLabel[payload.phase]}`,
+  }
+}
+
 export default function ChatView() {
   const { chatId } = useParams<{ chatId: string }>()
   const autoSwitchedPersonaIdRef = useRef<string | null>(null)
   const [ingestionStatus, setIngestionStatus] = useState<CortexIngestionStatus | null>(null)
   const [rebuildStatus, setRebuildStatus] = useState<CortexRebuildStatus | null>(null)
+  const [spindleNotice, setSpindleNotice] = useState<SpindleNotice | null>(null)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const setMessages = useStore((s) => s.setMessages)
   const messages = useStore((s) => s.messages)
@@ -160,6 +190,12 @@ export default function ChatView() {
   useEditKeyboard()
 
   const cortexNotice = useMemo(() => buildCortexNotice(ingestionStatus, rebuildStatus), [ingestionStatus, rebuildStatus])
+
+  useEffect(() => {
+    if (!spindleNotice || spindleNotice.variant !== 'error') return
+    const timer = window.setTimeout(() => setSpindleNotice(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [spindleNotice])
 
   useEffect(() => {
     if (!chatId) return
@@ -188,10 +224,32 @@ export default function ChatView() {
       setRebuildStatus(normalizeRebuildStatus(payload))
     })
 
+    const offSpindle = wsClient.on(EventType.SPINDLE_PRE_GENERATION_ACTIVITY, (payload: SpindlePreGenerationActivityPayload) => {
+      if (!payload || payload.chatId !== chatId) return
+      if (payload.status === 'started' || payload.status === 'error') {
+        setSpindleNotice(buildSpindleNotice(payload))
+        return
+      }
+      setSpindleNotice(null)
+    })
+
+    const offGenerationProgress = wsClient.on(EventType.GENERATION_IN_PROGRESS, (payload: any) => {
+      if (!payload || payload.chatId !== chatId) return
+      setSpindleNotice(null)
+    })
+
+    const offGenerationEnd = wsClient.on(EventType.GENERATION_ENDED, (payload: any) => {
+      if (!payload || payload.chatId !== chatId) return
+      setSpindleNotice(null)
+    })
+
     return () => {
       cancelled = true
       offIngestion()
       offRebuild()
+      offSpindle()
+      offGenerationProgress()
+      offGenerationEnd()
     }
   }, [chatId])
 
@@ -541,20 +599,34 @@ export default function ChatView() {
         )}
 
         <div className={styles.chatColumn}>
-          {cortexNotice && (
-            <div className={styles.cortexNoticeDock} aria-live="polite" aria-atomic="true">
-              <div className={clsx(styles.cortexNotice, cortexNotice.variant === 'error' && styles.cortexNoticeError)}>
-                <span className={styles.cortexNoticeStatus} aria-hidden="true" />
-                <span className={styles.cortexNoticeTitle}>{cortexNotice.title}</span>
-                <span className={styles.cortexNoticeSeparator} aria-hidden="true">•</span>
-                <span className={styles.cortexNoticeDetail}>{cortexNotice.detail}</span>
-                <span className={styles.cortexNoticePercent}>{typeof cortexNotice.percent === 'number' ? `${cortexNotice.percent}%` : ''}</span>
-                {typeof cortexNotice.percent === 'number' && (
-                  <span className={styles.cortexNoticeBar} aria-hidden="true">
-                    <span className={styles.cortexNoticeFill} style={{ transform: `scaleX(${Math.max(0, Math.min(1, cortexNotice.percent / 100))})` }} />
+          {(spindleNotice || cortexNotice) && (
+            <div className={styles.noticeDock} aria-live="polite" aria-atomic="true">
+              {spindleNotice && (
+                <div className={clsx(styles.cortexNotice, styles.spindleNotice, spindleNotice.variant === 'error' && styles.cortexNoticeError)}>
+                  <span className={styles.cortexNoticeStatus} aria-hidden="true" />
+                  <span className={styles.cortexNoticeTitle}>{spindleNotice.title}</span>
+                  <span className={styles.cortexNoticeSeparator} aria-hidden="true">•</span>
+                  <span className={styles.cortexNoticeDetail}>{spindleNotice.detail}</span>
+                  <span className={styles.cortexNoticePercent} />
+                  <span className={clsx(styles.cortexNoticeBar, styles.spindleNoticeBar)} aria-hidden="true">
+                    <span className={styles.spindleNoticeFill} />
                   </span>
-                )}
-              </div>
+                </div>
+              )}
+              {cortexNotice && (
+                <div className={clsx(styles.cortexNotice, cortexNotice.variant === 'error' && styles.cortexNoticeError)}>
+                  <span className={styles.cortexNoticeStatus} aria-hidden="true" />
+                  <span className={styles.cortexNoticeTitle}>{cortexNotice.title}</span>
+                  <span className={styles.cortexNoticeSeparator} aria-hidden="true">•</span>
+                  <span className={styles.cortexNoticeDetail}>{cortexNotice.detail}</span>
+                  <span className={styles.cortexNoticePercent}>{typeof cortexNotice.percent === 'number' ? `${cortexNotice.percent}%` : ''}</span>
+                  {typeof cortexNotice.percent === 'number' && (
+                    <span className={styles.cortexNoticeBar} aria-hidden="true">
+                      <span className={styles.cortexNoticeFill} style={{ transform: `scaleX(${Math.max(0, Math.min(1, cortexNotice.percent / 100))})` }} />
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
           <div className={styles.chatColumnInner} style={innerStyle} data-select-mode={messageSelectMode || undefined}>

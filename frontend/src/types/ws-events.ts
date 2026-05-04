@@ -46,6 +46,7 @@ export enum EventType {
   SPINDLE_EXTENSION_ERROR = 'SPINDLE_EXTENSION_ERROR',
   SPINDLE_EXTENSION_STATUS = 'SPINDLE_EXTENSION_STATUS',
   SPINDLE_RUNTIME_STATS = 'SPINDLE_RUNTIME_STATS',
+  SPINDLE_PRE_GENERATION_ACTIVITY = 'SPINDLE_PRE_GENERATION_ACTIVITY',
   SPINDLE_BULK_UPDATE_PROGRESS = 'SPINDLE_BULK_UPDATE_PROGRESS',
   SPINDLE_BULK_UPDATE_COMPLETE = 'SPINDLE_BULK_UPDATE_COMPLETE',
   SPINDLE_FRONTEND_MSG = 'SPINDLE_FRONTEND_MSG',
@@ -184,6 +185,15 @@ export interface OperatorProgressPayload {
   operation: string
   status: 'in_progress' | 'complete' | 'error'
   message: string
+}
+
+export interface SpindlePreGenerationActivityPayload {
+  chatId: string
+  phase: 'message_content_processor' | 'context_handler' | 'interceptor'
+  status: 'started' | 'completed' | 'error' | 'aborted'
+  extensionId: string
+  extensionName: string
+  error?: string
 }
 
 export interface WSEvent<T = any> {

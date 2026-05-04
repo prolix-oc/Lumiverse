@@ -1,8 +1,17 @@
+import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
+
 export interface ContextHandler {
   extensionId: string;
+  extensionName?: string;
   userId?: string | null;
   priority: number; // lower = runs first
   handler: (context: unknown) => Promise<unknown>;
+}
+
+function getChatId(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const chatId = (value as { chatId?: unknown }).chatId;
+  return typeof chatId === "string" && chatId ? chatId : null;
 }
 
 class ContextHandlerChain {
@@ -39,6 +48,16 @@ class ContextHandlerChain {
         throw signal.reason ?? new DOMException("Aborted", "AbortError");
       }
 
+      const chatId = getChatId(result);
+      emitSpindlePreGenerationActivity({
+        chatId,
+        userId,
+        phase: "context_handler",
+        status: "started",
+        extensionId: handler.extensionId,
+        extensionName: handler.extensionName,
+      });
+
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let abortHandler: (() => void) | undefined;
       try {
@@ -61,8 +80,35 @@ class ContextHandlerChain {
             }
           }),
         ]);
+        emitSpindlePreGenerationActivity({
+          chatId,
+          userId,
+          phase: "context_handler",
+          status: "completed",
+          extensionId: handler.extensionId,
+          extensionName: handler.extensionName,
+        });
       } catch (err) {
-        if (signal?.aborted) throw err;
+        if (signal?.aborted) {
+          emitSpindlePreGenerationActivity({
+            chatId,
+            userId,
+            phase: "context_handler",
+            status: "aborted",
+            extensionId: handler.extensionId,
+            extensionName: handler.extensionName,
+          });
+          throw err;
+        }
+        emitSpindlePreGenerationActivity({
+          chatId,
+          userId,
+          phase: "context_handler",
+          status: "error",
+          extensionId: handler.extensionId,
+          extensionName: handler.extensionName,
+          error: err instanceof Error ? err.message : String(err),
+        });
         console.error(
           `[Spindle] Context handler error from ${handler.extensionId}:`,
           err

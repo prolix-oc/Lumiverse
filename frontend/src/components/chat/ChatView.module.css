@@ -98,6 +98,7 @@
   position: relative;
 }
 
+.noticeDock,
 .cortexNoticeDock {
   position: absolute;
   top: 48px;
@@ -105,6 +106,9 @@
   right: 12px;
   z-index: 5;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   justify-content: center;
   pointer-events: none;
 }
@@ -209,6 +213,35 @@
 
 .cortexNoticeError .cortexNoticeFill {
   background: linear-gradient(90deg, var(--lumiverse-danger, #ff6b6b), color-mix(in srgb, var(--lumiverse-danger, #ff6b6b) 60%, white));
+}
+
+.spindleNotice {
+  border-color: color-mix(in srgb, var(--lumiverse-accent, var(--lumiverse-primary)) 34%, var(--lcs-glass-border, var(--lumiverse-border)));
+  background: color-mix(in srgb, var(--lumiverse-accent, var(--lumiverse-primary)) 10%, var(--lcs-glass-bg, var(--lumiverse-bg-elevated)));
+  box-shadow: var(--lumiverse-shadow-sm), 0 0 0 1px color-mix(in srgb, var(--lumiverse-accent, var(--lumiverse-primary)) 16%, transparent);
+}
+
+.spindleNoticeBar {
+  background: color-mix(in srgb, var(--lumiverse-accent, var(--lumiverse-primary)) 16%, transparent);
+}
+
+.spindleNoticeFill {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--lumiverse-accent, var(--lumiverse-primary)), transparent);
+  animation: spindleNoticeSweep 1.2s ease-in-out infinite;
+}
+
+@keyframes spindleNoticeSweep {
+  0% {
+    transform: translateX(-140%);
+  }
+
+  100% {
+    transform: translateX(260%);
+  }
 }
 
 .chatToolbar {
@@ -352,6 +385,7 @@
 }
 
 @media (max-width: 600px) {
+  .noticeDock,
   .cortexNoticeDock {
     top: 54px;
     left: 8px;
