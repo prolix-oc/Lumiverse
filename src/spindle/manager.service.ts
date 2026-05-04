@@ -272,6 +272,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "characters",
   "chats",
   "world_books",
+  "regex_scripts",
   "databanks",
   "personas",
   "push_notification",
