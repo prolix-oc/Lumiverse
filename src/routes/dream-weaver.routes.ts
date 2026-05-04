@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import * as dreamWeaverSvc from "../services/dream-weaver/dream-weaver.service";
+import * as messagesSvc from "../services/dream-weaver/messages.service";
+import { listTools, getTool } from "../services/dream-weaver/tools/registry";
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { discoverCapabilities, getComfyUIObjectInfo } from "../image-gen/comfyui-discovery";
 import { detectInjectionPoints } from "../image-gen/comfyui-workflow-parser";
@@ -23,9 +25,69 @@ import {
 } from "../services/dream-weaver/visual-studio/service";
 import { suggestVisualTags } from "../services/dream-weaver/visual-studio/tag-suggester";
 import { getDWGenParams, createDWTimeout } from "../services/dream-weaver/dw-gen-params";
-import type { DreamWeaverVisualAsset, DW_DRAFT_V1 } from "../types/dream-weaver";
+import type { DreamWeaverVisualAsset } from "../types/dream-weaver";
 
 const app = new Hono();
+
+function getSessionMessage(userId: string, sessionId: string, messageId: string) {
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return { error: "Session not found" as const, status: 404 as const };
+  const message = messagesSvc.getMessage(userId, messageId);
+  if (!message || message.session_id !== sessionId) {
+    return { error: "Message not found" as const, status: 404 as const };
+  }
+  return { session, message };
+}
+
+const HELP_TOOL = {
+  name: "help",
+  displayName: "Help",
+  category: "lifecycle" as const,
+  userInvocable: true,
+  slashCommand: "/help",
+  description: "Show available Dream Weaver tools and command examples.",
+  conflictMode: "append" as const,
+};
+
+const DREAM_SOURCE_TOOL = {
+  name: "dream_source",
+  displayName: "Add Dream Source",
+  category: "lifecycle" as const,
+  userInvocable: true,
+  slashCommand: "/dream",
+  description: "Add dream/source material to the studio without running generation.",
+  conflictMode: "append" as const,
+};
+
+function publicDreamWeaverTextError(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const lower = error.message.toLowerCase();
+    if (lower.includes("no connection")) return "Choose a text connection before running Dream Weaver tools.";
+    if (lower.includes("no model")) return "Choose a model before running Dream Weaver tools.";
+    if (error.name === "AbortError" || lower.includes("abort") || lower.includes("timed out")) {
+      return "Tag generation timed out.";
+    }
+  }
+  return fallback;
+}
+
+function buildToolHelpText(): string {
+  const tools = [HELP_TOOL, DREAM_SOURCE_TOOL, ...listTools().filter((tool) => tool.userInvocable)];
+  const lines = [
+    "Available Dream Weaver tools",
+    "",
+    "Type a slash command, then add optional guidance after it. Examples:",
+    "/appearance make the hair shorter and less polished",
+    "/personality push the cruelty into subtle social control",
+    "/add_lorebook add a rumor about the school parking lot",
+    "",
+    ...tools.map((tool) => {
+      const command = tool.slashCommand ?? `/${tool.name}`;
+      return `${command} — ${tool.displayName}: ${tool.description}`;
+    }),
+  ];
+  return lines.join("\n");
+}
 
 // Create session
 app.post("/sessions", async (c) => {
@@ -60,53 +122,30 @@ app.put("/sessions/:id", async (c) => {
   return c.json(session);
 });
 
-// Generate draft
-app.post("/sessions/:id/generate", async (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const session = dreamWeaverSvc.generateDraft(userId, sessionId);
-  return c.json(session);
-});
-
-// Generate world package (fire-and-forget — progress via WS events)
-app.post("/sessions/:id/generate/world", (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const session = dreamWeaverSvc.generateWorld(userId, sessionId);
-  return c.json(session);
-});
-
 // Finalize
 app.post("/sessions/:id/finalize", async (c) => {
   const userId = c.get("userId");
   const sessionId = c.req.param("id");
-  const result = await dreamWeaverSvc.finalize(userId, sessionId);
-  return c.json(result);
-});
-
-// Extend draft (additive generation)
-app.post("/sessions/:id/extend", async (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const body = await c.req.json();
-  const result = await dreamWeaverSvc.extendDraft(userId, sessionId, body);
-  return c.json(result);
-});
-
-// Sync world content
-app.post("/sessions/:id/sync-world", (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const result = dreamWeaverSvc.syncWorldToCharacter(userId, sessionId);
-  return c.json(result);
-});
-
-// Repair missing character-card data for legacy finalized sessions
-app.post("/sessions/:id/repair-character", (c) => {
-  const userId = c.get("userId");
-  const sessionId = c.req.param("id");
-  const result = dreamWeaverSvc.repairCharacterCardDataFromSessionIfMissing(userId, sessionId);
-  return c.json(result);
+  let body: { accepted_portrait_image_id?: string | null } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+  try {
+    const result = await dreamWeaverSvc.finalize(userId, sessionId, body);
+    return c.json(result);
+  } catch (error: any) {
+    const message = error?.message || "Finalize failed";
+    if (
+      message.includes("Workspace incomplete")
+      || message.includes("Session not found")
+      || message.includes("Portrait image not found")
+    ) {
+      return c.json({ error: message }, message.includes("Session not found") ? 404 : 400);
+    }
+    throw error;
+  }
 });
 
 // Delete session
@@ -115,6 +154,252 @@ app.delete("/sessions/:id", (c) => {
   const sessionId = c.req.param("id");
   dreamWeaverSvc.deleteSession(userId, sessionId);
   return c.json({ success: true });
+});
+
+app.get("/tools", (c) => {
+  const tools = [HELP_TOOL, DREAM_SOURCE_TOOL, ...listTools()].map((t) => ({
+    name: t.name,
+    displayName: t.displayName,
+    category: t.category,
+    userInvocable: t.userInvocable,
+    slashCommand: t.slashCommand ?? null,
+    description: t.description,
+    conflictMode: t.conflictMode,
+  }));
+  return c.json({ tools });
+});
+
+app.get("/sessions/:id/messages", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  const messages = messagesSvc.listMessages(userId, sessionId);
+  return c.json({ messages });
+});
+
+app.get("/sessions/:id/draft", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  const draft = messagesSvc.deriveWorkspace(userId, sessionId);
+  return c.json({ draft });
+});
+
+app.put("/sessions/:id/visual-assets", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const body = await c.req.json() as { visual_assets?: unknown };
+  try {
+    const draft = dreamWeaverSvc.updateVisualAssets(userId, sessionId, body.visual_assets);
+    return c.json({ draft });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not update visual assets";
+    const status = message === "Session not found" ? 404 : 400;
+    return c.json({ error: message }, status);
+  }
+});
+
+app.post("/sessions/:id/dream", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  try {
+    dreamWeaverSvc.appendDreamSource(userId, sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not add dream source";
+    return c.json({ error: message }, 422);
+  }
+  return c.json({ ok: true });
+});
+
+app.post("/sessions/:id/invoke", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  const body = await c.req.json() as {
+    tool: string;
+    args?: Record<string, unknown>;
+    nudge_text?: string | null;
+    supersedes_id?: string | null;
+    raw?: string | null;
+  };
+
+  const session = dreamWeaverSvc.getSession(userId, sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+
+  if (body.tool === "help") {
+    const userCommand = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "user_command",
+      payload: {
+        raw: body.raw?.trim() || "/help",
+        parsed: { tool: "help", args: {} },
+      },
+    });
+    const note = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "system_note",
+      payload: {
+        text: buildToolHelpText(),
+        level: "info",
+      },
+    });
+    return c.json({ userCommandId: userCommand.id, cardId: note.id });
+  }
+
+  if (body.tool === "dream_source") {
+    const content = (body.nudge_text ?? body.raw ?? "").replace(/^\/dream\b/i, "").trim();
+    if (!content) return c.json({ error: "Dream source text is required" }, 400);
+    const userCommand = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "user_command",
+      payload: {
+        raw: body.raw?.trim() || `/dream ${content}`,
+        parsed: { tool: "dream_source", args: {} },
+      },
+    });
+    const source = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "source_card",
+      payload: {
+        id: crypto.randomUUID(),
+        type: "dream",
+        title: "Dream",
+        content,
+        tone: session.tone,
+        constraints: session.constraints,
+        dislikes: session.dislikes,
+      },
+      status: "accepted",
+    });
+    return c.json({ userCommandId: userCommand.id, cardId: source.id });
+  }
+
+  const tool = getTool(body.tool);
+  if (!tool) return c.json({ error: `Unknown tool: ${body.tool}` }, 400);
+
+  const isRetryOrNudge = !!body.supersedes_id;
+  if (!tool.userInvocable && !isRetryOrNudge) {
+    return c.json({ error: `Tool ${body.tool} is not user-invocable` }, 403);
+  }
+
+  const workspace = messagesSvc.deriveWorkspace(userId, sessionId);
+  if (workspace.sources.length === 0) {
+    return c.json({ error: "Add source material with /dream before running generation tools." }, 400);
+  }
+
+  if (body.supersedes_id) {
+    const checked = getSessionMessage(userId, sessionId, body.supersedes_id);
+    if ("error" in checked) return c.json({ error: checked.error }, checked.status);
+    messagesSvc.markSuperseded(userId, body.supersedes_id);
+  }
+
+  let userCommandId: string | null = null;
+  if (tool.userInvocable) {
+    const um = messagesSvc.appendMessage({
+      sessionId,
+      userId,
+      kind: "user_command",
+      payload: {
+        raw: body.raw?.trim() || tool.slashCommand || `/${tool.name}`,
+        parsed: { tool: tool.name, args: body.args ?? {} },
+      },
+    });
+    userCommandId = um.id;
+  }
+
+  const card = messagesSvc.appendMessage({
+    sessionId,
+    userId,
+    kind: "tool_card",
+    payload: {
+      tool: tool.name,
+      args: body.args ?? {},
+      output: null,
+      error: null,
+      nudge_text: body.nudge_text ?? null,
+      duration_ms: null,
+      token_usage: null,
+    },
+    toolName: tool.name,
+    status: "running",
+    supersedesId: body.supersedes_id ?? null,
+  });
+
+  void dreamWeaverSvc.runToolCard(userId, card.id);
+
+  return c.json({ userCommandId, cardId: card.id });
+});
+
+app.post("/sessions/:id/suite", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+  try {
+    const result = await dreamWeaverSvc.runDefaultSuite(userId, sessionId);
+    return c.json(result, 201);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Suite failed";
+    if (message === "Session not found") return c.json({ error: message }, 404);
+    if (message.includes("Add source material")) return c.json({ error: message }, 400);
+    return c.json({ error: "Suite failed. Check the connection and try again." }, 422);
+  }
+});
+
+app.put("/sessions/:sid/messages/:mid/source", async (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const checked = getSessionMessage(userId, sessionId, c.req.param("mid"));
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
+
+  const body = await c.req.json().catch(() => ({})) as { content?: unknown };
+  if (typeof body.content !== "string") {
+    return c.json({ error: "Dream source text is required" }, 400);
+  }
+
+  try {
+    const updated = messagesSvc.updateSourceMessageContent(userId, sessionId, c.req.param("mid"), body.content);
+    return c.json(updated);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Could not update source";
+    if (message === "Message not found") return c.json({ error: message }, 404);
+    if (message === "Not a source message") return c.json({ error: message }, 400);
+    if (message.includes("required")) return c.json({ error: message }, 400);
+    throw error;
+  }
+});
+
+app.post("/sessions/:sid/messages/:mid/accept", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const checked = getSessionMessage(userId, sessionId, c.req.param("mid"));
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
+  const updated = messagesSvc.acceptToolCard(userId, c.req.param("mid"));
+  return c.json(updated);
+});
+
+app.post("/sessions/:sid/messages/:mid/reject", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const checked = getSessionMessage(userId, sessionId, c.req.param("mid"));
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
+  const updated = messagesSvc.rejectToolCard(userId, c.req.param("mid"));
+  return c.json(updated);
+});
+
+app.post("/sessions/:sid/messages/:mid/cancel", (c) => {
+  const userId = c.get("userId");
+  const sessionId = c.req.param("sid");
+  const messageId = c.req.param("mid");
+  const checked = getSessionMessage(userId, sessionId, messageId);
+  if ("error" in checked) return c.json({ error: checked.error }, checked.status);
+  dreamWeaverSvc.cancelToolCard(userId, messageId);
+  return c.json({ ok: true });
 });
 
 // Import ComfyUI workflow
@@ -234,9 +519,8 @@ app.post("/visual/tag-suggestions", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
 
-  const { sessionId, draft: providedDraft } = body as {
+  const { sessionId } = body as {
     sessionId: string;
-    draft?: DW_DRAFT_V1 | null;
   };
   if (!sessionId) {
     return c.json({ error: "sessionId is required" }, 400);
@@ -245,9 +529,10 @@ app.post("/visual/tag-suggestions", async (c) => {
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
 
-  const draft = providedDraft ?? dreamWeaverSvc.parseStoredDreamWeaverDraft(session.draft);
-  if (!draft) {
-    return c.json({ error: "Generate a Soul draft first." }, 400);
+  const workspace = messagesSvc.deriveWorkspace(userId, sessionId);
+  const draft = dreamWeaverSvc.getLegacyDraftSnapshot(userId, sessionId);
+  if (!workspace.name && !workspace.personality) {
+    return c.json({ error: "Generate or accept card fields first." }, 400);
   }
 
   const dwParams = getDWGenParams(userId);
@@ -267,7 +552,7 @@ app.post("/visual/tag-suggestions", async (c) => {
     const isAbort = error instanceof Error && (error.name === "AbortError" || error.message.includes("abort"));
     const message = isAbort
       ? "Tag generation timed out."
-      : error instanceof Error ? error.message : "Tag generation failed.";
+      : publicDreamWeaverTextError(error, "Tag generation failed. Check the text connection and try again.");
     return c.json({ error: message }, 422);
   } finally {
     dwAbort?.cleanup();
@@ -293,6 +578,10 @@ app.post("/visual/jobs", async (c) => {
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   const session = dreamWeaverSvc.getSession(userId, sessionId);
   if (!session) return c.json({ error: "Session not found" }, 404);
+  if (asset.asset_type !== "card_portrait") {
+    return c.json({ error: "Only card portrait assets can be generated from Dream Weaver" }, 400);
+  }
+  const draft = dreamWeaverSvc.getLegacyDraftSnapshot(userId, sessionId);
 
   const apiKey = await secretsSvc.getSecret(userId, imageGenConnectionSecretKey(connectionId)) ?? "";
 
@@ -306,7 +595,7 @@ app.post("/visual/jobs", async (c) => {
   const job = startDreamWeaverVisualJob({
     userId,
     sessionId,
-    draft: dreamWeaverSvc.parseStoredDreamWeaverDraft(session.draft),
+    draft,
     asset,
     connection,
     apiKey,

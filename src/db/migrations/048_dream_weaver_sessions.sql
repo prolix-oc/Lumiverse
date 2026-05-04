@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS dream_weaver_sessions (
   dislikes TEXT,
   persona_id TEXT,
   connection_id TEXT,
+  model TEXT,
 
   -- Generated draft (DW_DRAFT_V1 JSON)
   draft TEXT,

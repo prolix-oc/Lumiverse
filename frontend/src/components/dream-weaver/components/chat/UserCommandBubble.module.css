@@ -1,0 +1,19 @@
+.bubble {
+  align-self: flex-end;
+  max-width: 62%;
+  padding: 9px 13px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 74%, transparent);
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font-family: var(--lumiverse-font-mono);
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .bubble {
+    max-width: 86%;
+  }
+}

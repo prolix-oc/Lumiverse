@@ -23,6 +23,7 @@ New to Lumiverse? Start here:
 | Guide | What You'll Learn |
 |-------|-------------------|
 | [Characters](characters/index.md) | Import, create, and customize AI characters |
+| [Dream Weaver](dream-weaver/index.md) | Make character and scenario cards from your ideas |
 | [Chatting](chatting/index.md) | Send messages, use swipes, branch conversations |
 | [Personas](personas/index.md) | Create your own identity for roleplay |
 | [Connections](connections/index.md) | Connect to AI providers (OpenAI, Claude, etc.) |

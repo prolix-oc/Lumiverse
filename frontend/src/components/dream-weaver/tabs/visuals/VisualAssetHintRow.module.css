@@ -10,7 +10,7 @@
   align-items: center;
   gap: 0.45rem;
   padding: 0.35rem 0.7rem;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--lumiverse-border) 92%, transparent);
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 38%, transparent);
 }

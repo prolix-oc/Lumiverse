@@ -37,7 +37,7 @@
 
 .suggestButton {
   padding: 0.42rem 0.78rem;
-  border-radius: 999px;
+  border-radius: var(--lumiverse-radius-md);
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 12%, transparent);
   color: var(--lumiverse-text);
@@ -59,7 +59,7 @@
 
 .token {
   padding: 0.28rem 0.55rem;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 8%, transparent);
   color: var(--lumiverse-text);
@@ -71,7 +71,7 @@
   width: 100%;
   min-height: 150px;
   padding: 0.95rem 1rem;
-  border-radius: 18px;
+  border-radius: var(--lumiverse-radius-md);
   border: 1px solid color-mix(in srgb, var(--lumiverse-border) 94%, transparent);
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 48%, transparent);
   color: var(--lumiverse-text);
@@ -92,14 +92,9 @@
   flex-direction: column;
   gap: 0.65rem;
   padding: 0.9rem 1rem;
-  border-radius: 16px;
+  border-radius: var(--lumiverse-radius-md);
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--lumiverse-primary) 9%, transparent),
-      color-mix(in srgb, var(--lumiverse-bg-elevated) 70%, transparent)
-    );
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 70%, transparent);
 }
 
 .reviewHeader {
@@ -134,7 +129,7 @@
 
 .reviewPreview {
   padding: 0.8rem 0.9rem;
-  border-radius: 14px;
+  border-radius: var(--lumiverse-radius-md);
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 78%, transparent);
   color: var(--lumiverse-text);
   font-size: calc(0.84rem * var(--lumiverse-font-scale, 1));
@@ -144,7 +139,7 @@
 .reviewError {
   margin: 0;
   font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
-  color: #ff8a8a;
+  color: var(--lumiverse-danger);
 }
 
 .reviewActions {
@@ -156,7 +151,7 @@
 .reviewPrimary,
 .reviewSecondary {
   padding: 0.55rem 0.82rem;
-  border-radius: 12px;
+  border-radius: var(--lumiverse-radius-md);
   font-size: calc(0.8rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   cursor: pointer;
@@ -165,7 +160,7 @@
 .reviewPrimary {
   border: none;
   background: var(--lumiverse-primary);
-  color: var(--lumiverse-primary-contrast, #fff);
+  color: var(--lumiverse-primary-contrast, var(--lumiverse-bg-deep));
 }
 
 .reviewSecondary {
@@ -199,9 +194,9 @@
 .generateButton {
   padding: 0.78rem 1.2rem;
   border: none;
-  border-radius: 14px;
+  border-radius: var(--lumiverse-radius-md);
   background: var(--lumiverse-primary);
-  color: var(--lumiverse-primary-contrast, #fff);
+  color: var(--lumiverse-primary-contrast, var(--lumiverse-bg-deep));
   font-size: calc(0.86rem * var(--lumiverse-font-scale, 1));
   font-weight: 800;
   cursor: pointer;

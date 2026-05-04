@@ -3,8 +3,53 @@
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   container-type: inline-size;
+}
+
+.createSurface {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 86%, transparent);
+  border-radius: var(--lumiverse-radius-md);
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 54%, transparent);
+}
+
+.createHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.createTitleBlock {
+  min-width: 0;
+}
+
+.createKicker {
+  display: block;
+  color: var(--lumiverse-primary);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.createTitle {
+  margin: 3px 0 0;
+  color: var(--lumiverse-text);
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.kindField {
+  display: flex;
+  flex: 0 0 min(230px, 45%);
+  flex-direction: column;
+  gap: 6px;
 }
 
 /* ── Field atoms ── */
@@ -19,6 +64,43 @@
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
+}
+
+.charCount {
+  align-self: flex-end;
+  color: var(--lumiverse-text-hint);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1;
+}
+
+.kindToggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.kindButton {
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kindButton:hover {
+  color: var(--lumiverse-text);
+}
+
+.kindButton[data-active] {
+  background: color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
+  color: var(--lumiverse-primary-text);
 }
 
 /* ── Selector row ── */
@@ -44,6 +126,7 @@
 
 .dreamBtn {
   width: 100%;
+  min-height: 34px;
 }
 
 /* ── Refine collapsible ── */
@@ -138,7 +221,105 @@
 .sessionsEmpty {
   color: var(--lumiverse-text-muted);
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  padding: 4px 0;
+  padding: 8px 0;
+}
+
+.archiveTools {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.archiveFilters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-md);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.archiveFilter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.archiveFilter:hover {
+  color: var(--lumiverse-text);
+}
+
+.archiveFilter[data-active] {
+  background: color-mix(in srgb, var(--lumiverse-primary) 16%, transparent);
+  color: var(--lumiverse-primary-text);
+}
+
+.archiveFilterCount {
+  color: currentColor;
+  opacity: 0.72;
+  font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+}
+
+.archiveSearch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-md);
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text-dim);
+}
+
+.archiveSearch:focus-within {
+  border-color: var(--lumiverse-border-hover);
+  background: var(--lumiverse-fill-medium);
+}
+
+.archiveSearch input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.archiveSearch input::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.archiveSearch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.archiveSearch button:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
 }
 
 .archiveList {
@@ -218,6 +399,11 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 0 10px;
+  background: transparent;
+}
+
+.sessionRow[data-finalized] {
+  background: color-mix(in srgb, var(--lumiverse-success) 6%, transparent);
 }
 
 .sessionRow + .sessionRow {
@@ -277,10 +463,35 @@
   text-transform: uppercase;
 }
 
+.sessionKind {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 80%, transparent);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .sessionStatus[data-generating] {
   color: var(--lumiverse-primary);
   border-color: color-mix(in srgb, var(--lumiverse-primary) 22%, transparent);
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+}
+
+.sessionStatus[data-status='finalized'] {
+  color: var(--lumiverse-success);
+  border-color: color-mix(in srgb, var(--lumiverse-success) 28%, transparent);
+  background: var(--lumiverse-success-015);
+}
+
+.sessionStatus[data-status='error'] {
+  color: var(--lumiverse-danger);
+  border-color: color-mix(in srgb, var(--lumiverse-danger) 24%, transparent);
+  background: var(--lumiverse-danger-015);
 }
 
 .sessionStatusSpin {
@@ -374,5 +585,26 @@
 @keyframes sessionStatusSpin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@container (max-width: 420px) {
+  .createHeader {
+    flex-direction: column;
+  }
+
+  .kindField {
+    width: 100%;
+    flex-basis: auto;
+  }
+}
+
+@container (max-width: 330px) {
+  .archiveFilters {
+    grid-template-columns: 1fr;
+  }
+
+  .archiveFilter {
+    justify-content: space-between;
   }
 }

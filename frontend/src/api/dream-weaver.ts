@@ -175,6 +175,7 @@ export interface DreamWeaverDraft {
 export interface DreamWeaverSession {
   id: string
   user_id: string
+  session_number: number
   created_at: number
   updated_at: number
   dream_text: string
@@ -184,64 +185,25 @@ export interface DreamWeaverSession {
   persona_id: string | null
   connection_id: string | null
   model: string | null
-  draft: string | null
-  status: 'draft' | 'generating' | 'complete' | 'error'
-  soul_state: 'empty' | 'generating' | 'ready' | 'error'
-  world_state: 'empty' | 'ready' | 'stale'
-  soul_revision: number
-  world_source_revision: number | null
+  workspace_kind: 'character' | 'scenario'
+  status: 'draft' | 'generating' | 'complete' | 'finalized' | 'legacy_closed' | 'error'
   character_id: string | null
   launch_chat_id: string | null
 }
 
-export interface DreamWeaverDraftResult {
-  session: DreamWeaverSession
-  draft: DreamWeaverDraft
-}
-
-export interface DreamWeaverFinalizeResult {
-  session: DreamWeaverSession
-  characterId: string
-  chatId: string | null
-  alreadyFinalized: boolean
-}
-
-export interface DreamWeaverRepairCharacterResult {
-  characterId: string | null
-  repaired: boolean
-}
-
-export type ExtendTarget =
-  | 'greetings'
-  | 'alternate_fields.description'
-  | 'alternate_fields.personality'
-  | 'alternate_fields.scenario'
-  | 'lorebook_entries'
-  | 'npc_definitions'
-
-export interface ExtendDraftInput {
-  target: ExtendTarget
-  instruction?: string
-  count?: number
-  /** For lorebook_entries: generate entries inside this specific book instead of creating a new book. */
-  bookId?: string
-}
-
-export interface ExtendDraftResult {
-  target: ExtendTarget
-  items: any[]
-  /** Present when entries were generated for a specific existing book. */
-  bookId?: string
+export interface DreamWeaverFinalizeInput {
+  accepted_portrait_image_id?: string | null
 }
 
 export interface CreateSessionInput {
-  dream_text: string
+  dream_text?: string
   tone?: string
   constraints?: string
   dislikes?: string
   persona_id?: string
   connection_id?: string
   model?: string
+  workspace_kind?: 'character' | 'scenario'
 }
 
 export interface UpdateSessionInput {
@@ -252,7 +214,7 @@ export interface UpdateSessionInput {
   persona_id?: string | null
   connection_id?: string | null
   model?: string | null
-  draft?: DreamWeaverDraft | null
+  workspace_kind?: 'character' | 'scenario'
 }
 
 export function createDefaultVisualAssets(): DreamWeaverVisualAsset[] {
@@ -591,48 +553,16 @@ export const dreamWeaverApi = {
   updateSession: (id: string, input: UpdateSessionInput) =>
     apiClient.put<DreamWeaverSession>(`/dream-weaver/sessions/${id}`, input),
 
-  generateDraft: (id: string) =>
-    apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/generate`, {}),
+  updateVisualAssets: (id: string, visualAssets: DreamWeaverVisualAsset[]) =>
+    apiClient.put<{ draft: unknown }>(`/dream-weaver/sessions/${id}/visual-assets`, {
+      visual_assets: visualAssets,
+    }),
 
-  generateWorld: (id: string) =>
-    apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/generate/world`, {}),
-
-  finalize: (id: string) =>
-    apiClient.post<DreamWeaverFinalizeResult>(`/dream-weaver/sessions/${id}/finalize`, {}),
-
-  repairCharacter: (id: string) =>
-    apiClient.post<DreamWeaverRepairCharacterResult>(`/dream-weaver/sessions/${id}/repair-character`, {}),
-
-  extend: (
-    id: string,
-    input: ExtendDraftInput,
-    options?: { timeoutMs?: number | null },
-  ) => {
-    // Mirror the user's Dream Weaver timeout setting onto the HTTP client so
-    // the browser doesn't abort while the backend is still waiting on the LLM.
-    // `null` (None) disables the frontend timeout entirely. Otherwise add a
-    // 5s buffer so the backend's nicer error message wins the race. Falls back
-    // to a generous 120s default when no setting is provided.
-    let requestOptions: { timeout: number } = { timeout: 120_000 }
-    if (options && 'timeoutMs' in options) {
-      const ms = options.timeoutMs
-      requestOptions = { timeout: ms == null || ms <= 0 ? 0 : ms + 5_000 }
-    }
-    return apiClient.post<ExtendDraftResult>(
-      `/dream-weaver/sessions/${id}/extend`,
-      input,
-      requestOptions,
-    )
-  },
+  finalize: (id: string, input: DreamWeaverFinalizeInput = {}) =>
+    apiClient.post<DreamWeaverSession>(`/dream-weaver/sessions/${id}/finalize`, input),
 
   deleteSession: (id: string) =>
     apiClient.del(`/dream-weaver/sessions/${id}`),
-
-  syncWorld: (id: string) =>
-    apiClient.post<{ worldBookIds: string[]; regexScriptsCreated: number }>(
-      `/dream-weaver/sessions/${id}/sync-world`,
-      {},
-    ),
 
   importComfyUIWorkflow: (connectionId: string, workflow: unknown) =>
     apiClient.post<{ config: ComfyUIWorkflowConfig }>(
@@ -661,7 +591,6 @@ export const dreamWeaverApi = {
 
   suggestVisualTags: (
     sessionId: string,
-    draft?: DreamWeaverDraft | null,
     options?: { timeoutMs?: number | null },
   ) => {
     // Mirror the user's Dream Weaver timeout setting onto the HTTP client so
@@ -676,7 +605,7 @@ export const dreamWeaverApi = {
     }
     return apiClient.post<DreamWeaverVisualTagSuggestion>(
       '/dream-weaver/visual/tag-suggestions',
-      { sessionId, draft },
+      { sessionId },
       requestOptions,
     )
   },

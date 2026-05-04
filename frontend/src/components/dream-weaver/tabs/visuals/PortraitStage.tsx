@@ -24,6 +24,13 @@ function getProgressMessage(job: DreamWeaverVisualJob | null): string | null {
   return null
 }
 
+function getPublicErrorMessage(error: string | null): string | null {
+  if (!error) return null
+  return error.toLowerCase().includes('timed out')
+    ? 'Image generation timed out. Try again with a shorter prompt or a longer timeout.'
+    : 'Image generation failed. Check the image connection and try again.'
+}
+
 export function PortraitStage({
   asset,
   acceptedImageUrl,
@@ -36,7 +43,7 @@ export function PortraitStage({
   const progressMessage = getProgressMessage(activeJob)
   const errorMessage =
     activeJob?.status === 'failed' && typeof activeJob.error === 'string'
-      ? activeJob.error
+      ? getPublicErrorMessage(activeJob.error)
       : null
 
   if (candidateImageUrl) {
@@ -55,14 +62,14 @@ export function PortraitStage({
           <div className={styles.pane}>
             <div className={styles.paneLabel}>Accepted</div>
             {acceptedImageUrl ? (
-              <img src={acceptedImageUrl} alt="Accepted portrait" className={styles.image} />
+              <img src={acceptedImageUrl} alt="Accepted portrait" className={styles.image} referrerPolicy="no-referrer" />
             ) : (
               <div className={styles.emptyImage}>No accepted portrait yet.</div>
             )}
           </div>
           <div className={styles.pane}>
             <div className={styles.paneLabel}>New Result</div>
-            <img src={candidateImageUrl} alt="Candidate portrait" className={styles.image} />
+            <img src={candidateImageUrl} alt="Candidate portrait" className={styles.image} referrerPolicy="no-referrer" />
           </div>
         </div>
         <div className={styles.actions}>
@@ -98,7 +105,7 @@ export function PortraitStage({
 
       <div className={styles.hero}>
         {acceptedImageUrl ? (
-          <img src={acceptedImageUrl} alt={asset?.label ?? 'Accepted portrait'} className={styles.image} />
+          <img src={acceptedImageUrl} alt={asset?.label ?? 'Accepted portrait'} className={styles.image} referrerPolicy="no-referrer" />
         ) : (
           <div className={styles.emptyImage}>
             <span className={styles.emptyTitle}>No portrait yet.</span>

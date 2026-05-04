@@ -28,6 +28,12 @@ nav = [
     { "Expressions" = "characters/expressions.md" },
     { "Alternate Fields & Avatars" = "characters/alternate-fields.md" },
   ] },
+  { "Dream Weaver" = [
+    { "Overview" = "dream-weaver/index.md" },
+    { "Studio Workflow" = "dream-weaver/studio-workflow.md" },
+    { "Sources & Roadmap" = "dream-weaver/sources-and-roadmap.md" },
+    { "Visuals & Finalizing" = "dream-weaver/visuals-and-finalizing.md" },
+  ] },
   { "Chatting" = [
     { "Overview" = "chatting/index.md" },
     { "Starting a Chat" = "chatting/starting-a-chat.md" },
