@@ -54,8 +54,8 @@ export function startServer(isDev: boolean): void {
   if (instance?.proc) return;
 
   const args = isDev
-    ? ["bun", "run", "--watch", ENTRY]
-    : ["bun", "run", ENTRY];
+    ? ["bun", "--watch", ENTRY]
+    : ["bun", ENTRY];
 
   const restartCount = instance ? instance.restartCount : 0;
 
