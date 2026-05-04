@@ -58,7 +58,6 @@
   right: 0;
   padding-bottom: 8px;
   contain: layout style;
-  will-change: transform;
 }
 
 .errorBubble {

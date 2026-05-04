@@ -82,4 +82,9 @@ export const COMMON_PARAMS = {
     max: 3,
     description: "Penalise repeated tokens. Values above 1 discourage repetition.",
   },
+  prompt_caching: {
+    type: "boolean" as const,
+    default: false,
+    description: "Automatically cache prompts to reduce cost and latency for repetitive prefixes.",
+  },
 } satisfies ParameterSchemaMap;

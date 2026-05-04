@@ -51,6 +51,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
   const [useSubscriptionApi, setUseSubscriptionApi] = useState(profile?.metadata?.use_subscription_api || false)
   const [useZaiCodingPlanEndpoint, setUseZaiCodingPlanEndpoint] = useState(profile?.metadata?.use_coding_plan_endpoint || false)
+  const [anthropicPromptCaching, setAnthropicPromptCaching] = useState(profile?.metadata?.prompt_caching ?? false)
   const [bindReasoning, setBindReasoning] = useState(!!profile?.metadata?.reasoningBindings)
   const reasoningSettings = useStore((s) => s.reasoningSettings)
   const [boundReasoningSettings, setBoundReasoningSettings] = useState<ReasoningSettings>(
@@ -207,6 +208,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const showResponsesApiToggle = provider === 'openai'
   const showSubscriptionApiToggle = provider === 'nanogpt'
   const showZaiCodingPlanToggle = provider === 'zai'
+  const showAnthropicPromptCachingToggle = provider === 'anthropic'
   const isOpenRouter = provider === 'openrouter'
   // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
   // field has no purpose and we don't display it.
@@ -287,6 +289,11 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } else {
       delete metadata.use_coding_plan_endpoint
     }
+    if (showAnthropicPromptCachingToggle) {
+      metadata.prompt_caching = anthropicPromptCaching
+    } else {
+      delete metadata.prompt_caching
+    }
     if (bindReasoning) {
       metadata.reasoningBindings = { settings: normalizedBoundReasoningSettings }
     } else {
@@ -324,7 +331,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, bindReasoning, boundReasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCaching, bindReasoning, boundReasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
 
   return (
     <div className={styles.form}>
@@ -431,6 +438,11 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       {showZaiCodingPlanToggle && (
         <FormField label="">
           <Toggle.Checkbox checked={useZaiCodingPlanEndpoint} onChange={setUseZaiCodingPlanEndpoint} label="Use Coding Plan Endpoint" hint="Use /api/coding/paas/v4 for Z.AI Coding Plan access instead of the general /api/paas/v4 endpoint" />
+        </FormField>
+      )}
+      {showAnthropicPromptCachingToggle && (
+        <FormField label="">
+          <Toggle.Checkbox checked={anthropicPromptCaching} onChange={setAnthropicPromptCaching} label="Enable Prompt Caching" hint="Automatically cache prompts to reduce cost and latency for repetitive prefixes" />
         </FormField>
       )}
       {isOpenRouter && (

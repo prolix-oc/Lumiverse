@@ -32,6 +32,7 @@ export class AnthropicProvider implements LlmProvider {
       top_p: COMMON_PARAMS.top_p,
       top_k: COMMON_PARAMS.top_k,
       stop: COMMON_PARAMS.stop,
+      prompt_caching: COMMON_PARAMS.prompt_caching,
     },
     requiresMaxTokens: true,
     supportsSystemRole: true,
@@ -156,6 +157,11 @@ export class AnthropicProvider implements LlmProvider {
           }))
         : undefined;
 
+    const inputTokens = (data.usage?.input_tokens || 0) +
+                        (data.usage?.cache_read_input_tokens || 0) +
+                        (data.usage?.cache_creation_input_tokens || 0);
+    const outputTokens = data.usage?.output_tokens || 0;
+
     return {
       content: textContent,
       reasoning: thinkingContent || undefined,
@@ -163,9 +169,9 @@ export class AnthropicProvider implements LlmProvider {
       tool_calls: toolCalls,
       usage: data.usage
         ? {
-            prompt_tokens: data.usage.input_tokens,
-            completion_tokens: data.usage.output_tokens,
-            total_tokens: data.usage.input_tokens + data.usage.output_tokens,
+            prompt_tokens: inputTokens,
+            completion_tokens: outputTokens,
+            total_tokens: inputTokens + outputTokens,
           }
         : undefined,
     };
@@ -224,7 +230,10 @@ export class AnthropicProvider implements LlmProvider {
 
             if (data.type === "message_start" && data.message?.usage) {
               // Capture input token count from message_start (output tokens arrive in message_delta)
-              streamInputTokens = data.message.usage.input_tokens || 0;
+              const u = data.message.usage;
+              streamInputTokens = (u.input_tokens || 0) +
+                                  (u.cache_read_input_tokens || 0) +
+                                  (u.cache_creation_input_tokens || 0);
             } else if (data.type === "content_block_start") {
               if (data.content_block?.type === "tool_use") {
                 pendingToolCalls.push({
@@ -453,6 +462,7 @@ export class AnthropicProvider implements LlmProvider {
     "thinking",
     "output_config",
     "system",
+    "prompt_caching",
   ]);
 
   private buildBody(request: GenerationRequest, stream: boolean): any {
@@ -534,6 +544,11 @@ export class AnthropicProvider implements LlmProvider {
     if (!omitSampling && params.top_p !== undefined) body.top_p = params.top_p;
     if (!omitSampling && params.top_k !== undefined) body.top_k = params.top_k;
     if (params.stop) body.stop_sequences = params.stop;
+
+    const enableCaching = params.prompt_caching === true;
+    if (enableCaching) {
+      body.cache_control = { type: "ephemeral" };
+    }
 
     // Extended/adaptive thinking
     const normalizedThinking = this.normalizeThinkingConfig(params.thinking);

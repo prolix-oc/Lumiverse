@@ -32,3 +32,40 @@ describe("AnthropicProvider thinking config", () => {
     });
   });
 });
+
+describe("AnthropicProvider caching config", () => {
+  test("requires explicit enabling for caching", () => {
+    const provider = new AnthropicProvider();
+
+    const body = (provider as any).buildBody(
+      {
+        model: "claude-sonnet-4-6",
+        messages: [{ role: "user", content: "hi" }],
+        parameters: {
+          max_tokens: 256,
+        },
+      },
+      false,
+    );
+
+    expect(body.cache_control).toBeUndefined();
+  });
+
+  test("can explicitly enable caching", () => {
+    const provider = new AnthropicProvider();
+
+    const body = (provider as any).buildBody(
+      {
+        model: "claude-sonnet-4-6",
+        messages: [{ role: "user", content: "hi" }],
+        parameters: {
+          max_tokens: 256,
+          prompt_caching: true,
+        },
+      },
+      false,
+    );
+
+    expect(body.cache_control).toEqual({ type: "ephemeral" });
+  });
+});
