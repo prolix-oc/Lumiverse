@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useState, useSyncExternalStore, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useVirtualizer, defaultRangeExtractor, type Range } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
 import {
@@ -6,18 +6,11 @@ import {
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
 import { useStore } from '@/store'
-import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById } from '@/lib/avatarUrls'
-import { imagesApi } from '@/api/images'
 import MessageCard from './MessageCard'
-import MessageContent from './MessageContent'
-import ReasoningBlock from './ReasoningBlock'
-import StreamingIndicator from './StreamingIndicator'
 import GroupChatProgressBar from './GroupChatProgressBar'
 import GroupChatMemberBar from './GroupChatMemberBar'
-import LazyImage from '@/components/shared/LazyImage'
 import type { Message } from '@/types/api'
 import styles from './MessageList.module.css'
-import bubbleStyles from './BubbleMessage.module.css'
 
 interface MessageListProps {
   messages: Message[]
@@ -131,56 +124,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       rangeWarmTimerRef.current = null
     }, duration)
   }, [isCoarsePointer])
-  const streamingContent = useStore((s) => s.streamingContent)
-  const streamingReasoning = useStore((s) => s.streamingReasoning)
-  const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
-  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const streamingError = useStore((s) => s.streamingError)
-  const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
-  const autoParse = useStore((s) => s.reasoningSettings.autoParse)
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
-  const activePersonaId = useStore((s) => s.activePersonaId)
-  const personas = useStore((s) => s.personas)
-  const streamingGenerationType = useStore((s) => s.streamingGenerationType)
-  const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
-  const isImpersonateStream = streamingGenerationType === 'impersonate'
-  const isImpersonateDraft = streamingGenerationType === 'impersonate_draft'
-  const impersonateUserLeft = isImpersonateStream && bubbleUserAlign === 'left'
-
-  // The store's appendStreamToken state machine already separates reasoning
-  // from content during streaming. Skip the redundant per-frame regex scan
-  // that was re-extracting <think> tags from already-clean streamingContent.
-  const streamDisplay = streamingContent
-  const activeCharacterId = useStore((s) => s.activeCharacterId)
-  const characters = useStore((s) => s.characters)
   const isGroupChat = useStore((s) => s.isGroupChat)
-  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
-  const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const isNudgeLoopActive = useStore((s) => s.isNudgeLoopActive)
-
-  // For streaming, use the group's active character if in a group chat
-  const streamCharacterId = isGroupChat && activeGroupCharacterId ? activeGroupCharacterId : activeCharacterId
-  const streamCharacter = streamCharacterId ? characters.find((c) => c.id === streamCharacterId) : null
-  const activeCharacter = activeCharacterId ? characters.find((c) => c.id === activeCharacterId) : null
-  const streamDisplayName = useMemo(() => {
-    const characterName = (streamCharacter?.name || activeCharacter?.name || '').trim()
-    if (characterName) return characterName
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.is_user) continue
-      const candidate = (m.name || '').trim()
-      if (candidate && !/^assistant$/i.test(candidate)) return candidate
-    }
-
-    return 'Assistant'
-  }, [streamCharacter?.name, activeCharacter?.name, messages])
-  const activePersona = personas.find((p) => p.id === activePersonaId)
-  const userName = activePersona?.name ?? 'User'
   const isBubble = displayMode === 'bubble'
-  const getCharAvatar = isBubble ? getCharacterAvatarLargeUrlById : getCharacterAvatarThumbUrlById
-  const getPersonaAvatar = isBubble ? getPersonaAvatarLargeUrlById : getPersonaAvatarThumbUrlById
-  const getImgUrl = isBubble ? imagesApi.largeUrl : imagesApi.smallUrl
   const estimateSize = isBubble ? 260 : 180
 
   useEffect(() => {
@@ -347,12 +295,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       lastScrollTopRef.current = latest.scrollTop
     })
   }, [rowVirtualizer, setPrependVisualOffset, visibleMessages.length])
-
-  const avatarUrl = isImpersonateStream
-    ? getPersonaAvatar(activePersonaId, activePersona?.image_id ?? null)
-    : (activeChatAvatarId && streamCharacterId === activeCharacterId)
-      ? getImgUrl(activeChatAvatarId)
-      : getCharAvatar(streamCharacterId, streamCharacter?.image_id ?? null)
 
   const BOTTOM_REPIN_EPSILON = 6
 
@@ -722,69 +664,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
       {/* Group chat progress bar during nudge loop */}
       {isGroupChat && isNudgeLoopActive && <GroupChatProgressBar />}
-
-      {/* Streaming message bubble — shows tokens as they arrive (only for new messages, not regeneration or continue) */}
-      {isStreaming && !regeneratingMessageId && streamingGenerationType !== 'continue' && !isImpersonateDraft && (streamDisplay || !streamingError) && (() => {
-        const bubbleName = isImpersonateStream ? userName : streamDisplayName
-        const bubbleStyleClass = isImpersonateStream ? bubbleStyles.user : bubbleStyles.character
-        const nameStyleClass = isImpersonateStream ? bubbleStyles.nameUser : bubbleStyles.nameChar
-        return (
-          <div className={`${bubbleStyles.card} ${bubbleStyleClass} ${impersonateUserLeft ? bubbleStyles.userLeft : ''} ${bubbleStyles.streaming}`}>
-            <div className={bubbleStyles.bubble}>
-              <div className={bubbleStyles.header}>
-                <div className={bubbleStyles.headerLeft}>
-                  <div className={bubbleStyles.avatar}>
-                    {avatarUrl ? (
-                      <LazyImage
-                        src={avatarUrl}
-                        alt={bubbleName}
-                        fallback={
-                          <div className={bubbleStyles.avatarFallback}>
-                            {bubbleName?.[0]?.toUpperCase() || '?'}
-                          </div>
-                        }
-                      />
-                    ) : (
-                      <div className={bubbleStyles.avatarFallback}>
-                        {bubbleName?.[0]?.toUpperCase() || '?'}
-                      </div>
-                    )}
-                  </div>
-                  <div className={bubbleStyles.metaWrap}>
-                    <span className={`${bubbleStyles.name} ${nameStyleClass}`}>
-                      {bubbleName}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              {streamingReasoning && (
-                <ReasoningBlock
-                  reasoning={streamingReasoning}
-                  reasoningDuration={streamingReasoningDuration ?? undefined}
-                  reasoningStartedAt={streamingReasoningStartedAt}
-                  isStreaming
-                  variant="bubble"
-                  align={isImpersonateStream && !impersonateUserLeft ? 'right' : undefined}
-                />
-              )}
-              <div className={bubbleStyles.content}>
-                {streamDisplay ? (
-                  <MessageContent
-                    content={streamDisplay}
-                    isUser={isImpersonateStream}
-                    userName={userName}
-                    isStreaming
-                    lockStreamingHeight={false}
-                    chatId={chatId}
-                  />
-                ) : (
-                  <StreamingIndicator />
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })()}
 
       {/* Generation error display */}
       {streamingError && (

@@ -276,6 +276,14 @@ export interface DryRunResult {
       rerankRejected: number;
       topK: number;
       blockerMessages: string[];
+      timingsMs?: {
+        queryBuild: number;
+        queryEmbed: number;
+        search: number;
+        ranking: number;
+        merge: number;
+        total: number;
+      };
     };
   };
   memoryStats?: import("../llm/types").MemoryStats;
@@ -1082,6 +1090,8 @@ async function runPromptPipeline(opts: {
               placement,
               depth,
               macroEnv,
+              undefined,
+              { source: "prompt_backend" },
             ),
           };
         } else if (Array.isArray(msg.content)) {
@@ -1096,6 +1106,8 @@ async function runPromptPipeline(opts: {
                       placement,
                       depth,
                       macroEnv,
+                      undefined,
+                      { source: "prompt_backend" },
                     ),
                   }
                 : part,
@@ -1131,6 +1143,8 @@ async function runPromptPipeline(opts: {
             placement,
             undefined,
             macroEnv,
+            undefined,
+            { source: "prompt_backend" },
           );
         }
       }
@@ -2530,6 +2544,8 @@ async function runGeneration(
         "ai_output",
         0,
         macroEnv,
+        undefined,
+        { source: "response_backend" },
       );
       if (fullReasoning) {
         fullReasoning = await regexScriptsSvc.applyRegexScripts(
@@ -2538,6 +2554,8 @@ async function runGeneration(
           "reasoning",
           0,
           macroEnv,
+          undefined,
+          { source: "response_backend" },
         );
       }
     }
@@ -2846,6 +2864,8 @@ async function runGeneration(
             "ai_output",
             0,
             macroEnv,
+            undefined,
+            { source: "response_backend" },
           );
           if (fullReasoning) {
             fullReasoning = await regexScriptsSvc.applyRegexScripts(
@@ -2854,6 +2874,8 @@ async function runGeneration(
               "reasoning",
               0,
               macroEnv,
+              undefined,
+              { source: "response_backend" },
             );
           }
         }

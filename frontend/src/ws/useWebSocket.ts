@@ -35,6 +35,16 @@ import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
 
+const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
+const LOCAL_REGEN_PLACEHOLDER_PREFIX = '__regen_placeholder_'
+
+function isLocalStreamPlaceholderId(id: string | null | undefined) {
+  return !!id && (
+    id.startsWith(LOCAL_STREAM_PLACEHOLDER_PREFIX)
+    || id.startsWith(LOCAL_REGEN_PLACEHOLDER_PREFIX)
+  )
+}
+
 /**
  * Fetch the latest messages using the tail endpoint (single request).
  * Returns the last N messages from the chat, where N is the user's messagesPerPage setting.
@@ -128,7 +138,7 @@ export function useWebSocket() {
           // real staged message from the backend instead of adding a duplicate.
           if (
             state.isStreaming &&
-            state.regeneratingMessageId?.startsWith('__regen_placeholder_') &&
+            isLocalStreamPlaceholderId(state.regeneratingMessageId) &&
             !payload.message.is_user &&
             !payload.message.content
           ) {
@@ -309,7 +319,7 @@ export function useWebSocket() {
           if (payload.error) {
             // Remove client-side placeholder if regeneration failed before backend saved a real message
             const regenId = state.regeneratingMessageId
-            if (regenId?.startsWith('__regen_placeholder_')) {
+            if (isLocalStreamPlaceholderId(regenId)) {
               state.removeMessage(regenId)
             }
             state.setStreamingError(payload.error)
@@ -391,6 +401,8 @@ export function useWebSocket() {
               return
             }
 
+            const optimisticMessageId = state.regeneratingMessageId
+
             // End streaming immediately, then reconcile the full message list
             // from backend source-of-truth to avoid id/index race conditions.
             // Image gen is deferred until AFTER reconciliation completes so its
@@ -402,7 +414,11 @@ export function useWebSocket() {
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
               }
-            }).catch(() => { /* ignore */ }).finally(() => {
+            }).catch(() => {
+              if (isLocalStreamPlaceholderId(optimisticMessageId)) {
+                store.getState().removeMessage(optimisticMessageId)
+              }
+            }).finally(() => {
               const latest = store.getState()
               // Drain the @mention queue — kick off the next mentioned member's
               // turn. Skips if the active chat no longer matches, the queue is
@@ -545,7 +561,7 @@ export function useWebSocket() {
       wsClient.on(EventType.GENERATION_ERROR, () => {
         const state = store.getState()
         const regenId = state.regeneratingMessageId
-        if (regenId?.startsWith('__regen_placeholder_')) {
+        if (isLocalStreamPlaceholderId(regenId)) {
           state.removeMessage(regenId)
         }
         state.stopStreaming()

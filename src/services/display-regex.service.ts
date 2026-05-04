@@ -163,5 +163,6 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
       resolvedFindPatterns: input.resolvedFindPatterns,
       resolvedReplacements: input.resolvedReplacements,
     },
+    { source: "display_backend" },
   );
 }

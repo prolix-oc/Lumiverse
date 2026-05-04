@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { Plus, Upload, Download, Trash2, Globe, User, MessageCircle, ChevronRight, FolderPlus, Check, X, Link, Unlink } from 'lucide-react'
+import { Plus, Upload, Download, Trash2, Globe, User, MessageCircle, ChevronRight, FolderPlus, Check, X, Link, Unlink, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/shared/FormComponents'
 import { useStore } from '@/store'
 import { regexApi } from '@/api/regex'
@@ -8,7 +8,7 @@ import { useFolders } from '@/hooks/useFolders'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
-import type { RegexScript, RegexScope } from '@/types/regex'
+import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/regex'
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
 
@@ -43,6 +43,13 @@ const REPLACE_HTML = [
   { label: '<mark>', value: '<mark>$1</mark>' },
   { label: '<del>', value: '<del>$1</del>' },
 ] as const
+
+function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
+  const raw = script.metadata?.regex_performance
+  if (!raw || typeof raw !== 'object') return null
+  if (raw.slow !== true || typeof raw.version !== 'number') return null
+  return raw as RegexPerformanceMetadata
+}
 
 export default function RegexPanel() {
   const regexScripts = useStore((s) => s.regexScripts)
@@ -509,17 +516,32 @@ function ScriptRow({
   activePresetId: string | null
 }) {
   const replaceRef = useRef<HTMLTextAreaElement>(null)
+  const performance = getRegexPerformanceMetadata(script)
+  const warningText = performance
+    ? performance.timed_out
+      ? 'Timed out during regex execution'
+      : `Slow regex detected (${(performance.elapsed_ms / 1000).toFixed(1)}s)`
+    : null
 
   return (
     <div>
       <div
-        className={clsx(styles.scriptRow, expanded && styles.scriptRowExpanded)}
+        className={clsx(
+          styles.scriptRow,
+          expanded && styles.scriptRowExpanded,
+          performance && styles.scriptRowSlow,
+        )}
         onClick={onToggleExpand}
       >
         <Badge size="sm">{scopeIcon}</Badge>
         <span className={clsx(styles.scriptName, script.disabled && styles.scriptNameDisabled)}>
           {script.name}
         </span>
+        {performance && (
+          <span className={styles.slowBadge} title={warningText ?? undefined} aria-label={warningText ?? undefined}>
+            <TriangleAlert size={12} /> Slow
+          </span>
+        )}
         {targetBadge}
         <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center' }}>
           <Toggle.Switch
@@ -553,6 +575,16 @@ function ScriptRow({
               onChange={(e) => onUpdate({ name: e.target.value })}
             />
           </div>
+          {performance && (
+            <div className={styles.warningBox}>
+              <TriangleAlert size={14} />
+              <span>
+                {performance.timed_out
+                  ? 'This script hit the regex timeout and was skipped during execution.'
+                  : `This script was flagged as slow after taking ${(performance.elapsed_ms / 1000).toFixed(1)}s to run.`}
+              </span>
+            </div>
+          )}
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Folder</label>
             <FolderDropdown

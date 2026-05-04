@@ -4747,6 +4747,7 @@ export class WorkerHost {
       swipe_id?: number;
       swipe_dates?: number[];
       reasoning?: { text?: string | null; duration?: number | null };
+      skipChunkRebuild?: boolean;
     }
   ): void {
     try {
@@ -4791,6 +4792,7 @@ export class WorkerHost {
         swipes: patch.swipes,
         swipe_id: patch.swipe_id,
         swipe_dates: patch.swipe_dates,
+        skipChunkRebuild: patch.skipChunkRebuild === true,
       });
 
       this.postToWorker({ type: "response", requestId, result: true });

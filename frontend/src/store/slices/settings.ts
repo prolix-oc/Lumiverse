@@ -363,6 +363,9 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
   setVoiceSettings: (partial) =>
     set((state) => {
       const voiceSettings = { ...state.voiceSettings, ...partial }
+      if (partial.sttProvider === 'webspeech') {
+        voiceSettings.sttConnectionId = null
+      }
       if (partial.speechDetectionRules) {
         voiceSettings.speechDetectionRules = { ...state.voiceSettings.speechDetectionRules, ...partial.speechDetectionRules }
       }

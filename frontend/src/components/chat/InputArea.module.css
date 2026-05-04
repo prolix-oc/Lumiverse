@@ -492,6 +492,30 @@
   cursor: default;
 }
 
+.sttBtnActive {
+  color: var(--lumiverse-primary-contrast, #fff);
+  background: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 82%, transparent);
+}
+
+.sttBtnActive:hover {
+  color: var(--lumiverse-primary-contrast, #fff);
+  background: color-mix(in srgb, var(--lumiverse-danger-hover, #dc2626) 88%, transparent);
+}
+
+.sttSpinner {
+  animation: stt-spin 1s linear infinite;
+}
+
+@keyframes stt-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ── Input row — textarea + send button ── */
 .inputRow {
   display: flex;
@@ -514,6 +538,80 @@
     box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
   overflow: hidden;
   position: relative;
+}
+
+.inputWrapperWithStatus {
+  min-height: 58px;
+}
+
+.sttIndicator {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 12%, var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04)));
+  border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #ef4444) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.sttIndicatorWave {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.sttIndicatorBar {
+  width: 3px;
+  height: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 68%, white 20%);
+  transform-origin: center bottom;
+  animation: stt-wave 900ms ease-in-out infinite;
+}
+
+.sttIndicatorBar:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.sttIndicatorBar:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.sttIndicatorBar:nth-child(4) {
+  animation-delay: 360ms;
+}
+
+.sttIndicatorLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  font-weight: 600;
+}
+
+@keyframes stt-wave {
+  0%, 100% {
+    transform: scaleY(0.4);
+    opacity: 0.55;
+  }
+
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
 }
 
 /* Mirror layer that renders @mention pills behind the (transparent) textarea.
@@ -562,6 +660,10 @@
   pointer-events: none;
   user-select: none;
   z-index: 0;
+}
+
+.textareaWithStatus {
+  padding-top: 32px;
 }
 
 .textareaMirror::-webkit-scrollbar {

@@ -1045,6 +1045,18 @@ export interface McpServersSlice {
 }
 
 // ---- TTS Connections Slice ----
+export interface SttConnectionsSlice {
+  sttProfiles: import('@/types/api').SttConnectionProfile[]
+  sttProviders: import('@/types/api').SttProviderInfo[]
+
+  setSttProfiles: (profiles: import('@/types/api').SttConnectionProfile[]) => void
+  addSttProfile: (profile: import('@/types/api').SttConnectionProfile) => void
+  updateSttProfile: (id: string, updates: Partial<import('@/types/api').SttConnectionProfile>) => void
+  removeSttProfile: (id: string) => void
+  setSttProviders: (providers: import('@/types/api').SttProviderInfo[]) => void
+}
+
+// ---- TTS Connections Slice ----
 export interface TtsConnectionsSlice {
   ttsProfiles: import('@/types/api').TtsConnectionProfile[]
   ttsProviders: import('@/types/api').TtsProviderInfo[]
@@ -1064,7 +1076,7 @@ export interface SpeechDetectionRules {
 }
 
 export interface VoiceSettings {
-  sttProvider: 'webspeech' | 'openai'
+  sttProvider: 'webspeech' | 'connection'
   sttLanguage: string
   sttContinuous: boolean
   sttInterimResults: boolean
@@ -1210,6 +1222,7 @@ export type AppStore = ChatSlice &
   RegexSlice &
   ExpressionSlice &
   ImageGenConnectionsSlice &
+  SttConnectionsSlice &
   TtsConnectionsSlice &
   McpServersSlice &
   LoadoutsSlice &

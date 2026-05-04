@@ -5,17 +5,23 @@ export interface STTResult {
   isFinal: boolean
 }
 
+export interface STTAudioFormat {
+  mimeType: string
+  fileName: string
+}
+
 export interface STTEngine {
-  start(): void
+  start(): void | Promise<void>
   stop(): void
   onResult(cb: (result: STTResult) => void): void
   onError(cb: (err: Error) => void): void
+  onStop(cb: () => void): void
   isListening(): boolean
   destroy(): void
 }
 
 export interface STTConfig {
-  provider: 'webspeech' | 'openai'
+  provider: 'webspeech' | 'connection'
   language: string
   continuous: boolean
   interimResults: boolean
@@ -43,10 +49,29 @@ export function isWebSpeechAvailable(): boolean {
   return SpeechRecognitionClass != null
 }
 
+export function getSupportedSTTAudioFormat(): STTAudioFormat | null {
+  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') return null
+
+  const candidates: STTAudioFormat[] = [
+    { mimeType: 'audio/webm;codecs=opus', fileName: 'recording.webm' },
+    { mimeType: 'audio/webm', fileName: 'recording.webm' },
+    { mimeType: 'audio/mp4', fileName: 'recording.mp4' },
+    { mimeType: 'audio/mp4;codecs=mp4a.40.2', fileName: 'recording.m4a' },
+    { mimeType: 'audio/aac', fileName: 'recording.aac' },
+  ]
+
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported(candidate.mimeType)) return candidate
+  }
+
+  return { mimeType: '', fileName: 'recording.webm' }
+}
+
 class WebSpeechEngine implements STTEngine {
   private recognition: any = null
   private resultCb: ((r: STTResult) => void) | null = null
   private errorCb: ((e: Error) => void) | null = null
+  private stopCb: (() => void) | null = null
   private listening = false
 
   constructor(private config: STTConfig) {
@@ -83,6 +108,7 @@ class WebSpeechEngine implements STTEngine {
         try { this.recognition.start() } catch { /* ignore */ }
       } else {
         this.listening = false
+        this.stopCb?.()
       }
     }
   }
@@ -105,6 +131,10 @@ class WebSpeechEngine implements STTEngine {
     this.errorCb = cb
   }
 
+  onStop(cb: () => void): void {
+    this.stopCb = cb
+  }
+
   isListening(): boolean {
     return this.listening
   }
@@ -114,6 +144,7 @@ class WebSpeechEngine implements STTEngine {
     try { this.recognition.abort() } catch { /* ignore */ }
     this.resultCb = null
     this.errorCb = null
+    this.stopCb = null
   }
 }
 
@@ -122,14 +153,35 @@ class WebSpeechEngine implements STTEngine {
 class OpenAISTTEngine implements STTEngine {
   private resultCb: ((r: STTResult) => void) | null = null
   private errorCb: ((e: Error) => void) | null = null
+  private stopCb: (() => void) | null = null
   private listening = false
   private mediaRecorder: MediaRecorder | null = null
   private stream: MediaStream | null = null
   private chunks: Blob[] = []
+  private audioFormat: STTAudioFormat | null = null
 
   constructor(private config: STTConfig) {}
 
+  private cleanupStream(): void {
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop())
+      this.stream = null
+    }
+  }
+
+  private cleanupRecorder(): void {
+    this.mediaRecorder = null
+    this.chunks = []
+    this.audioFormat = null
+  }
+
   async start(): Promise<void> {
+    const audioFormat = getSupportedSTTAudioFormat()
+    if (!audioFormat) {
+      this.errorCb?.(new Error('Audio recording is not supported in this browser'))
+      return
+    }
+
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch (err) {
@@ -139,26 +191,33 @@ class OpenAISTTEngine implements STTEngine {
 
     this.listening = true
     this.chunks = []
+    this.audioFormat = audioFormat
 
-    this.mediaRecorder = new MediaRecorder(this.stream, {
-      mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm',
-    })
+    this.mediaRecorder = audioFormat.mimeType
+      ? new MediaRecorder(this.stream, { mimeType: audioFormat.mimeType })
+      : new MediaRecorder(this.stream)
 
     this.mediaRecorder.ondataavailable = (e) => {
       if (e.data.size > 0) this.chunks.push(e.data)
     }
 
     this.mediaRecorder.onstop = async () => {
-      if (this.chunks.length === 0) return
-      const blob = new Blob(this.chunks, { type: 'audio/webm' })
+      if (this.chunks.length === 0) {
+        this.cleanupStream()
+        this.cleanupRecorder()
+        this.resultCb?.({ text: '', isFinal: true })
+        this.stopCb?.()
+        return
+      }
+
+      const blob = new Blob(this.chunks, { type: this.audioFormat?.mimeType || 'audio/webm' })
       this.chunks = []
 
       try {
         const result = await sttApi.transcribe(blob, {
           language: this.config.language,
           connectionId: this.config.connectionId || undefined,
+          fileName: this.audioFormat?.fileName,
         })
         this.resultCb?.({ text: result.text, isFinal: true })
       } catch (err) {
@@ -168,6 +227,10 @@ class OpenAISTTEngine implements STTEngine {
       // Auto-restart in continuous mode
       if (this.listening && this.config.continuous) {
         this.startRecording()
+      } else {
+        this.cleanupStream()
+        this.cleanupRecorder()
+        this.stopCb?.()
       }
     }
 
@@ -195,6 +258,10 @@ class OpenAISTTEngine implements STTEngine {
     this.errorCb = cb
   }
 
+  onStop(cb: () => void): void {
+    this.stopCb = cb
+  }
+
   isListening(): boolean {
     return this.listening
   }
@@ -204,11 +271,10 @@ class OpenAISTTEngine implements STTEngine {
     if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
       try { this.mediaRecorder.stop() } catch { /* ignore */ }
     }
-    if (this.stream) {
-      this.stream.getTracks().forEach((t) => t.stop())
-      this.stream = null
-    }
+    this.cleanupStream()
+    this.cleanupRecorder()
     this.resultCb = null
     this.errorCb = null
+    this.stopCb = null
   }
 }

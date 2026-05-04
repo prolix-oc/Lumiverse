@@ -60,6 +60,75 @@ export interface SummaryQueryOptions {
   seed?: number;
 }
 
+const UUID_HEX_SQL = "LOWER(REPLACE(c.id, '-', ''))";
+
+function normalizeShuffleSeed(seed?: number): number {
+  if (typeof seed !== "number" || !Number.isFinite(seed)) {
+    return Math.floor(Date.now() / 86_400_000);
+  }
+  return Math.trunc(seed);
+}
+
+function buildDiscoverBoostSql(lastChatParam = "?"): string {
+  return `(
+    CASE WHEN COALESCE(cs.chat_count, 0) = 0 THEN 0.18 ELSE 0 END
+    + (MIN(COALESCE((${lastChatParam} - cs.last_chat_at) / 86400.0, 365.0), 365.0) / 365.0) * 0.08
+    + CASE
+        WHEN COALESCE(cs.chat_count, 0) = 0 THEN 0.04
+        ELSE (MIN(MAX(24 - COALESCE(cs.chat_count, 0), 0), 24) / 24.0) * 0.04
+      END
+  )`;
+}
+
+function buildHexDigitPermutation(seed: number): string[] {
+  const digits = "0123456789abcdef".split("");
+  let state = (Math.abs(seed) % 0x7fffffff) || 1;
+  for (let i = digits.length - 1; i > 0; i -= 1) {
+    state = (state * 48271) % 0x7fffffff;
+    const swapIndex = state % (i + 1);
+    [digits[i], digits[swapIndex]] = [digits[swapIndex], digits[i]];
+  }
+  return digits;
+}
+
+function advanceShufflePrng(state: number): number {
+  return (state * 48271) % 0x7fffffff;
+}
+
+function buildShuffleWeights(seed: number, count: number): number[] {
+  let state = (Math.abs(seed) % 0x7fffffff) || 1;
+  return Array.from({ length: count }, () => {
+    state = advanceShufflePrng(state);
+    return (state % 1009) + 17;
+  });
+}
+
+function buildTranslatedHexCharSql(position: number, permutation: string[]): string {
+  const cases = permutation
+    .map((mappedDigit, index) => `WHEN '${index.toString(16)}' THEN '${mappedDigit}'`)
+    .join(" ");
+  return `(CASE SUBSTR(${UUID_HEX_SQL}, ${position}, 1) ${cases} ELSE '0' END)`;
+}
+
+function buildTranslatedHexValueSql(position: number, permutation: string[]): string {
+  const cases = permutation
+    .map((mappedDigit, index) => `WHEN '${index.toString(16)}' THEN ${parseInt(mappedDigit, 16)}`)
+    .join(" ");
+  return `(CASE SUBSTR(${UUID_HEX_SQL}, ${position}, 1) ${cases} ELSE 0 END)`;
+}
+
+function buildSeededShuffleSql(seed: number): string {
+  const permutation = buildHexDigitPermutation(seed);
+  return Array.from({ length: 32 }, (_, index) => buildTranslatedHexCharSql(index + 1, permutation)).join(" || ");
+}
+
+function buildSeededShuffleValueSql(seed: number): string {
+  const permutation = buildHexDigitPermutation(seed);
+  const weights = buildShuffleWeights(seed, 32);
+  const terms = weights.map((weight, index) => `(${buildTranslatedHexValueSql(index + 1, permutation)} * ${weight})`);
+  return `(((${terms.join(" + ")}) % 65521) / 65521.0)`;
+}
+
 export function listCharacterSummaries(
   userId: string,
   pagination: PaginationParams,
@@ -164,7 +233,7 @@ function listCharacterSummariesDiscover(
 ): PaginatedResult<CharacterSummary> {
   const db = getDb();
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const shuffleSeed = options.seed ?? Math.floor(Date.now() / 86_400_000);
+  const shuffleSeed = normalizeShuffleSeed(options.seed);
   const { search, tags, favoriteIds, filterMode = "all" } = options;
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
@@ -214,6 +283,9 @@ function listCharacterSummariesDiscover(
   }
 
   const whereStr = whereClauses.join(" AND ");
+  const discoverBoostSql = buildDiscoverBoostSql();
+  const shuffleKeySql = buildSeededShuffleSql(shuffleSeed);
+  const shuffleValueSql = buildSeededShuffleValueSql(shuffleSeed);
 
   const countRow = db
     .query(`SELECT COUNT(*) as count FROM characters c ${extraJoin} WHERE ${whereStr}`)
@@ -233,26 +305,23 @@ function listCharacterSummariesDiscover(
       GROUP BY character_id
     ) cs ON cs.character_id = c.id
     WHERE ${whereStr}
-    ORDER BY (
-      CASE WHEN COALESCE(cs.chat_count, 0) = 0 THEN 1000 ELSE 0 END
-      + MIN(COALESCE((? - cs.last_chat_at) / 86400, 365), 365)
-      + CASE WHEN COALESCE(cs.chat_count, 0) > 0
-          THEN MAX(100 - COALESCE(cs.chat_count, 0) * 2, 0)
-          ELSE 0 END
-      + ABS(
-          (UNICODE(SUBSTR(c.id, 1, 1)) * 31
-           + UNICODE(SUBSTR(c.id, 5, 1)) * 17
-           + UNICODE(SUBSTR(c.id, 10, 1)) * 13
-           + ?) % 200
-        )
-    ) DESC
+    ORDER BY ((${shuffleValueSql}) - (${discoverBoostSql})) ASC,
+             ${shuffleKeySql} ASC,
+             c.updated_at DESC,
+             c.id ASC
     LIMIT ? OFFSET ?
   `;
 
-  // Params: chats subquery userId, then where params, then score params, then pagination
+  // Params: chats subquery userId, then where params, then discover params, then pagination
   const rows = db
     .query(dataSql)
-    .all(userId, ...whereParams, nowSeconds, shuffleSeed, pagination.limit, pagination.offset) as any[];
+    .all(
+      userId,
+      ...whereParams,
+      nowSeconds,
+      pagination.limit,
+      pagination.offset,
+    ) as any[];
 
   return {
     data: rows.map(rowToSummary),
@@ -325,13 +394,13 @@ export function listCharacters(userId: string, pagination: PaginationParams): Pa
 }
 
 /**
- * Discovery sort: surfaces characters the user hasn't interacted with recently.
+ * Discovery sort: surfaces characters the user hasn't interacted with recently,
+ * while still producing a broad seeded shuffle across the full gallery.
  *
- * Score components (higher = more discoverable):
- *   - Never chatted bonus:  +1000
- *   - Days since last chat: +0‑365  (capped)
- *   - Rarity bonus:         +0‑100  (fewer chats = higher)
- *   - Deterministic shuffle: +0‑200  (UUID-seeded, changes daily or on demand)
+ * Ordering model:
+ *   - Seeded shuffle key generates a stable full-list permutation per seed.
+ *   - Discover boost nudges untouched and stale characters upward without locking the
+ *     first page to the same cohort every time.
  */
 export function listCharactersDiscover(
   userId: string,
@@ -340,7 +409,10 @@ export function listCharactersDiscover(
 ): PaginatedResult<Character> {
   const db = getDb();
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const shuffleSeed = seed ?? Math.floor(Date.now() / 86_400_000); // daily by default
+  const shuffleSeed = normalizeShuffleSeed(seed);
+  const discoverBoostSql = buildDiscoverBoostSql();
+  const shuffleKeySql = buildSeededShuffleSql(shuffleSeed);
+  const shuffleValueSql = buildSeededShuffleValueSql(shuffleSeed);
 
   const countRow = db
     .query("SELECT COUNT(*) as count FROM characters WHERE user_id = ?")
@@ -359,25 +431,16 @@ export function listCharactersDiscover(
       GROUP BY character_id
     ) cs ON cs.character_id = c.id
     WHERE c.user_id = ?
-    ORDER BY (
-      CASE WHEN COALESCE(cs.chat_count, 0) = 0 THEN 1000 ELSE 0 END
-      + MIN(COALESCE((? - cs.last_chat_at) / 86400, 365), 365)
-      + CASE WHEN COALESCE(cs.chat_count, 0) > 0
-          THEN MAX(100 - COALESCE(cs.chat_count, 0) * 2, 0)
-          ELSE 0 END
-      + ABS(
-          (UNICODE(SUBSTR(c.id, 1, 1)) * 31
-           + UNICODE(SUBSTR(c.id, 5, 1)) * 17
-           + UNICODE(SUBSTR(c.id, 10, 1)) * 13
-           + ?) % 200
-        )
-    ) DESC
+    ORDER BY ((${shuffleValueSql}) - (${discoverBoostSql})) ASC,
+             ${shuffleKeySql} ASC,
+             c.updated_at DESC,
+             c.id ASC
     LIMIT ? OFFSET ?
   `;
 
   const rows = db
     .query(dataSql)
-    .all(userId, userId, nowSeconds, shuffleSeed, pagination.limit, pagination.offset) as any[];
+    .all(userId, userId, nowSeconds, pagination.limit, pagination.offset) as any[];
 
   return {
     data: rows.map(rowToCharacter),

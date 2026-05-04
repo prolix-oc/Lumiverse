@@ -3,6 +3,16 @@ export type RegexScope = 'global' | 'character' | 'chat'
 export type RegexTarget = 'prompt' | 'response' | 'display'
 export type RegexMacroMode = 'none' | 'raw' | 'escaped'
 
+export interface RegexPerformanceMetadata {
+  slow: boolean
+  timed_out: boolean
+  elapsed_ms: number
+  threshold_ms: number
+  detected_at: number
+  source: 'prompt_backend' | 'response_backend' | 'display_backend' | 'display_client'
+  version: number
+}
+
 export interface RegexScript {
   id: string
   user_id: string

@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, MicOff, LoaderCircle } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
@@ -27,6 +27,7 @@ import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
+import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTEngine } from '@/lib/sttEngine'
 
 interface InputAreaProps {
   chatId: string
@@ -35,6 +36,50 @@ interface InputAreaProps {
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const queueModLabel = isMac ? 'Cmd' : 'Ctrl'
 const TEXTAREA_MAX_HEIGHT = 180
+
+type STTCommandState = {
+  thoughtDepth: number
+}
+
+function normalizeSTTTranscript(raw: string, state: STTCommandState): string {
+  if (!raw.trim()) return ''
+
+  const commandPattern = /\b(?:quote\s+(?:start|end)|open\s+quote|close\s+quote|single\s+quote|apostrophe|thought\s+(?:start|end)|begin\s+thought|end\s+thought|asterisk|em\s+dash)\b/gi
+
+  return raw
+    .replace(commandPattern, (match) => {
+      const command = match.toLowerCase().replace(/\s+/g, ' ').trim()
+
+      if (command === 'quote start' || command === 'quote end' || command === 'open quote' || command === 'close quote') return '"'
+      if (command === 'single quote' || command === 'apostrophe') return "'"
+      if (command === 'em dash') return '—'
+      if (command === 'asterisk') return '*'
+      if (command === 'thought start' || command === 'begin thought') {
+        const marker = state.thoughtDepth >= 1 ? '**' : '*'
+        state.thoughtDepth += 1
+        return marker
+      }
+      if (command === 'thought end' || command === 'end thought') {
+        const marker = state.thoughtDepth > 1 ? '**' : '*'
+        state.thoughtDepth = Math.max(0, state.thoughtDepth - 1)
+        return marker
+      }
+
+      return match
+    })
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\s+([”’])/g, '$1')
+    .replace(/([“‘])\s+/g, '$1')
+    .replace(/\s*—\s*/g, ' — ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+function stripSTTSendCommand(raw: string): { text: string; shouldSend: boolean } {
+  const match = raw.match(/^(.*?)(?:[\s,.;:!?-]*)send\s+message\s*$/i)
+  if (!match) return { text: raw.trim(), shouldSend: false }
+  return { text: (match[1] || '').trim(), shouldSend: true }
+}
 
 // Slugify a character name into a stable @mention token. Matches the
 // databank `#` convention (lowercase, hyphen-separated, diacritics stripped).
@@ -84,6 +129,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [atActiveIdx, setAtActiveIdx] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
+  const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
   const queueLockRef = useRef(false)
@@ -97,6 +143,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
+  const voiceSettings = useStore((s) => s.voiceSettings)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const regenFeedback = useStore((s) => s.regenFeedback)
@@ -349,6 +396,35 @@ export default function InputArea({ chatId }: InputAreaProps) {
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
+  const [sttStatus, setSttStatus] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle')
+  const sttEngineRef = useRef<STTEngine | null>(null)
+  const sttDraftBaseRef = useRef('')
+  const sttInterimTextRef = useRef('')
+  const sttFinalSegmentsRef = useRef<string[]>([])
+  const sttNormalizedFinalSegmentsRef = useRef<string[]>([])
+  const sttCommandStateRef = useRef<STTCommandState>({ thoughtDepth: 0 })
+  const sttShouldSendRef = useRef(false)
+
+  const isSTTSupported = useMemo(() => {
+    if (voiceSettings.sttProvider === 'webspeech') return isWebSpeechAvailable()
+    return getSupportedSTTAudioFormat() != null && typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  }, [voiceSettings.sttProvider])
+  const isListeningToSTT = sttStatus === 'starting' || sttStatus === 'listening' || sttStatus === 'processing'
+  const showSTTIndicator = isListeningToSTT
+  const sttIndicatorLabel = useMemo(() => {
+    if (sttStatus === 'starting') return voiceSettings.sttProvider === 'webspeech' ? 'Starting mic' : 'Preparing recording'
+    if (sttStatus === 'processing') return voiceSettings.sttProvider === 'webspeech' ? 'Finalizing transcript' : 'Transcribing audio'
+    if (sttStatus === 'listening') return voiceSettings.sttProvider === 'webspeech' ? 'Listening' : 'Recording'
+    return ''
+  }, [sttStatus, voiceSettings.sttProvider])
+
+  const stopSTTSession = useCallback((mode: 'stop' | 'destroy' = 'stop') => {
+    const engine = sttEngineRef.current
+    if (!engine) return
+    if (mode === 'destroy') engine.destroy()
+    else engine.stop()
+    if (mode === 'destroy') sttEngineRef.current = null
+  }, [])
 
   const syncTextareaMirrorScroll = useCallback(() => {
     const ta = textareaRef.current
@@ -368,6 +444,18 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const queueTextareaSelection = useCallback((start: number, end = start, direction: 'forward' | 'backward' | 'none' = 'none') => {
     pendingSelectionRef.current = { start, end, direction }
   }, [])
+
+  const applySTTTranscript = useCallback((transcript: string, moveCaret = false) => {
+    const base = sttDraftBaseRef.current
+    const normalized = transcript.trim()
+    const nextText = normalized
+      ? (base ? `${base.replace(/\s+$/, '')} ${normalized}` : normalized)
+      : base
+
+    setText(nextText)
+    if (moveCaret) queueTextareaSelection(nextText.length)
+  }, [queueTextareaSelection])
+
 
   useLayoutEffect(() => {
     const ta = textareaRef.current
@@ -398,6 +486,11 @@ export default function InputArea({ chatId }: InputAreaProps) {
       requestAnimationFrame(() => resizeTextarea(textareaRef.current))
     }
   }, [impersonateDraftContent, setImpersonateDraftContent, resizeTextarea])
+
+  useEffect(() => () => {
+    sttEngineRef.current?.destroy()
+    sttEngineRef.current = null
+  }, [])
 
   // ── Draft input persistence ──────────────────────────────────────────
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -876,6 +969,45 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
 
+  const finalizeSTTTranscript = useCallback(() => {
+    const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
+    const shouldSend = sttShouldSendRef.current
+
+    sttInterimTextRef.current = ''
+    sttFinalSegmentsRef.current = []
+    sttNormalizedFinalSegmentsRef.current = []
+    sttCommandStateRef.current = { thoughtDepth: 0 }
+    sttShouldSendRef.current = false
+
+    setSttStatus('idle')
+    stopSTTSession('destroy')
+
+    if (!transcript) {
+      pendingSTTActionRef.current = null
+      applySTTTranscript('', true)
+      return
+    }
+
+    pendingSTTActionRef.current = shouldSend ? 'send' : 'queue'
+    applySTTTranscript(transcript, true)
+  }, [applySTTTranscript, stopSTTSession])
+
+  useEffect(() => {
+    const pendingAction = pendingSTTActionRef.current
+    if (!pendingAction) return
+    if (!text.trim()) {
+      pendingSTTActionRef.current = null
+      return
+    }
+
+    pendingSTTActionRef.current = null
+    if (pendingAction === 'send') {
+      void handleSend()
+      return
+    }
+    void handleQueueMessage()
+  }, [text, handleQueueMessage, handleSend])
+
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isStreaming) return
     const nonce = ++generationNonceRef.current
@@ -1334,6 +1466,112 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
     runAutocompleteDetection(ta)
   }, [runAutocompleteDetection])
+
+  const handleSTTToggle = useCallback(async () => {
+    if (isStreaming) return
+
+    if (isListeningToSTT) {
+      setSttStatus('processing')
+      stopSTTSession('stop')
+      return
+    }
+
+    if (!isSTTSupported) {
+      toast.warning(
+        voiceSettings.sttProvider === 'webspeech'
+          ? 'Speech recognition is not available in this browser'
+          : 'Audio recording is not supported in this browser',
+      )
+      return
+    }
+
+    if (voiceSettings.sttProvider === 'connection' && !voiceSettings.sttConnectionId) {
+      toast.warning('Select an STT connection in Voice settings first')
+      openModal('settings')
+      return
+    }
+
+    try {
+      setSttStatus('starting')
+      sttDraftBaseRef.current = text.trimEnd()
+      sttInterimTextRef.current = ''
+      sttFinalSegmentsRef.current = []
+      sttNormalizedFinalSegmentsRef.current = []
+      sttCommandStateRef.current = { thoughtDepth: 0 }
+      sttShouldSendRef.current = false
+
+      const engine = createSTTEngine({
+        provider: voiceSettings.sttProvider,
+        language: voiceSettings.sttLanguage,
+        continuous: voiceSettings.sttContinuous,
+        interimResults: voiceSettings.sttInterimResults,
+        connectionId: voiceSettings.sttConnectionId,
+      })
+      sttEngineRef.current?.destroy()
+      sttEngineRef.current = engine
+
+      engine.onResult((result) => {
+        if (result.isFinal) {
+          const { text: commandStrippedText, shouldSend } = stripSTTSendCommand(result.text)
+          if (shouldSend) sttShouldSendRef.current = true
+
+          const normalizedSegment = normalizeSTTTranscript(commandStrippedText, sttCommandStateRef.current)
+          sttFinalSegmentsRef.current = [...sttFinalSegmentsRef.current, result.text.trim()].filter(Boolean)
+          sttNormalizedFinalSegmentsRef.current = [...sttNormalizedFinalSegmentsRef.current, normalizedSegment].filter(Boolean)
+          sttInterimTextRef.current = ''
+        } else {
+          const { text: commandStrippedText } = stripSTTSendCommand(result.text)
+          sttInterimTextRef.current = normalizeSTTTranscript(commandStrippedText, { ...sttCommandStateRef.current })
+        }
+
+        const transcript = [...sttNormalizedFinalSegmentsRef.current, sttInterimTextRef.current].filter(Boolean).join(' ')
+        applySTTTranscript(transcript, result.isFinal)
+        setSttStatus(engine.isListening() ? 'listening' : 'idle')
+      })
+
+      engine.onStop(() => {
+        void finalizeSTTTranscript()
+      })
+
+      engine.onError((err) => {
+        const msg = err.message || 'Speech-to-text failed'
+        stopSTTSession('destroy')
+        sttInterimTextRef.current = ''
+        sttFinalSegmentsRef.current = []
+        sttNormalizedFinalSegmentsRef.current = []
+        sttCommandStateRef.current = { thoughtDepth: 0 }
+        sttShouldSendRef.current = false
+        setSttStatus('idle')
+        toast.error(msg, { title: 'Speech-to-Text Failed' })
+      })
+
+      await engine.start()
+      setSttStatus(engine.isListening() ? 'listening' : 'idle')
+      if (engine.isListening()) {
+        toast.info(voiceSettings.sttProvider === 'webspeech' ? 'Listening… tap again to stop' : 'Recording… tap again to transcribe', { duration: 2000 })
+      }
+    } catch (err: any) {
+      stopSTTSession('destroy')
+      setSttStatus('idle')
+      toast.error(err?.message || 'Failed to start speech-to-text', { title: 'Speech-to-Text Failed' })
+    }
+  }, [isStreaming, isListeningToSTT, isSTTSupported, voiceSettings, text, openModal, applySTTTranscript, stopSTTSession, finalizeSTTTranscript])
+
+  useEffect(() => {
+    if (isStreaming && isListeningToSTT) {
+      stopSTTSession('destroy')
+      setSttStatus('idle')
+    }
+  }, [isStreaming, isListeningToSTT, stopSTTSession])
+
+  useEffect(() => {
+    if (!isListeningToSTT) return
+    if (voiceSettings.sttProvider !== 'webspeech' && sttStatus === 'processing') return
+    if (voiceSettings.sttProvider === 'connection' && !voiceSettings.sttConnectionId) {
+      stopSTTSession('destroy')
+      setSttStatus('idle')
+    }
+  }, [voiceSettings.sttProvider, voiceSettings.sttConnectionId, isListeningToSTT, sttStatus, stopSTTSession])
 
   const handleCompositionStart = useCallback(() => {
     isComposingRef.current = true
@@ -2208,13 +2446,60 @@ export default function InputArea({ chatId }: InputAreaProps) {
           </button>
         )}
 
-        <div className={styles.inputWrapper}>
-          <div ref={mirrorRef} className={styles.textareaMirror} aria-hidden="true">
+        {!isStreaming && (
+          <button
+            type="button"
+            className={clsx(styles.attachBtn, styles.sttBtn, isListeningToSTT && styles.sttBtnActive)}
+            onClick={handleSTTToggle}
+            disabled={!isSTTSupported}
+            title={
+              !isSTTSupported
+                ? voiceSettings.sttProvider === 'webspeech'
+                  ? 'Speech recognition unavailable in this browser'
+                  : 'Audio recording unavailable in this browser'
+                : sttStatus === 'processing'
+                  ? 'Processing speech'
+                  : isListeningToSTT
+                    ? 'Stop speech-to-text'
+                    : 'Start speech-to-text'
+            }
+            aria-label={
+              sttStatus === 'processing'
+                ? 'Processing speech'
+                : isListeningToSTT
+                  ? 'Stop speech-to-text'
+                  : 'Start speech-to-text'
+            }
+            aria-pressed={isListeningToSTT}
+          >
+            {sttStatus === 'processing' || sttStatus === 'starting' ? (
+              <LoaderCircle size={16} className={styles.sttSpinner} />
+            ) : isListeningToSTT ? (
+              <MicOff size={16} />
+            ) : (
+              <Mic size={16} />
+            )}
+          </button>
+        )}
+
+        <div className={clsx(styles.inputWrapper, showSTTIndicator && styles.inputWrapperWithStatus)}>
+          {showSTTIndicator && (
+            <div className={styles.sttIndicator} aria-live="polite">
+              <span className={styles.sttIndicatorWave} aria-hidden="true">
+                <span className={styles.sttIndicatorBar} />
+                <span className={styles.sttIndicatorBar} />
+                <span className={styles.sttIndicatorBar} />
+                <span className={styles.sttIndicatorBar} />
+              </span>
+              <span className={styles.sttIndicatorLabel}>{sttIndicatorLabel}</span>
+            </div>
+          )}
+          <div ref={mirrorRef} className={clsx(styles.textareaMirror, showSTTIndicator && styles.textareaWithStatus)} aria-hidden="true">
             {mirrorContent}
           </div>
           <textarea
             ref={textareaRef}
-            className={styles.textarea}
+            className={clsx(styles.textarea, showSTTIndicator && styles.textareaWithStatus)}
             value={text}
             onChange={handleInput}
             onScroll={handleTextareaScroll}

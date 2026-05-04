@@ -104,6 +104,14 @@ export interface WorldBookDiagnostics {
     threshold_rejected: number;
     hits_after_rerank_cutoff: number;
     rerank_rejected: number;
+    timings_ms: {
+      query_build: number;
+      query_embed: number;
+      search: number;
+      ranking: number;
+      merge: number;
+      total: number;
+    };
   };
   keyword_hits: Array<{
     entry_id: string;

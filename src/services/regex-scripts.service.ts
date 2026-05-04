@@ -24,6 +24,39 @@ import {
 } from "../utils/regex-sandbox";
 
 const REGEX_SCRIPT_TIMEOUT_MS = 500;
+const REGEX_SLOW_WARNING_MS = 5_000;
+
+type RegexPerformanceSource = "prompt_backend" | "response_backend" | "display_backend" | "display_client";
+
+interface RegexPerformanceMetadata {
+  slow: boolean;
+  timed_out: boolean;
+  elapsed_ms: number;
+  threshold_ms: number;
+  detected_at: number;
+  source: RegexPerformanceSource;
+  version: number;
+}
+
+export interface RegexPerformanceIssue {
+  scriptId: string;
+  name: string;
+  elapsedMs: number;
+  thresholdMs: number;
+  timedOut: boolean;
+  source: RegexPerformanceSource;
+  newlyFlagged: boolean;
+}
+
+interface RegexPerformanceReportResult {
+  script: RegexScript | null;
+  newlyFlagged: boolean;
+}
+
+interface ApplyRegexScriptOptions {
+  source?: RegexPerformanceSource;
+  onPerformanceIssue?: (issue: RegexPerformanceIssue) => void;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -113,6 +146,88 @@ function emitRegexChanged(userId: string, id: string): void {
   const script = getRegexScript(userId, id);
   if (!script) return;
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
+}
+
+function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
+  const raw = script.metadata?.regex_performance;
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<RegexPerformanceMetadata>;
+  if (value.slow !== true) return null;
+  if (typeof value.version !== "number") return null;
+  return {
+    slow: true,
+    timed_out: value.timed_out === true,
+    elapsed_ms: typeof value.elapsed_ms === "number" ? value.elapsed_ms : 0,
+    threshold_ms: typeof value.threshold_ms === "number" ? value.threshold_ms : REGEX_SLOW_WARNING_MS,
+    detected_at: typeof value.detected_at === "number" ? value.detected_at : 0,
+    source: (value.source as RegexPerformanceSource) || "display_backend",
+    version: value.version,
+  };
+}
+
+function withoutRegexPerformanceMetadata(metadata: Record<string, any> | null | undefined): Record<string, any> {
+  if (!metadata || typeof metadata !== "object") return {};
+  const next = { ...metadata };
+  delete next.regex_performance;
+  return next;
+}
+
+function shouldResetRegexPerformance(input: UpdateRegexScriptInput): boolean {
+  return [
+    "find_regex",
+    "replace_string",
+    "flags",
+    "placement",
+    "target",
+    "min_depth",
+    "max_depth",
+    "trim_strings",
+    "substitute_macros",
+  ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
+}
+
+export function reportRegexScriptPerformance(
+  userId: string,
+  id: string,
+  issue: { elapsedMs: number; timedOut?: boolean; thresholdMs?: number; source?: RegexPerformanceSource },
+): RegexPerformanceReportResult {
+  const script = getRegexScript(userId, id);
+  if (!script) return { script: null, newlyFlagged: false };
+
+  const thresholdMs = issue.thresholdMs ?? REGEX_SLOW_WARNING_MS;
+  const timedOut = issue.timedOut === true;
+  if (!timedOut && issue.elapsedMs < thresholdMs) return { script, newlyFlagged: false };
+
+  const existing = getRegexPerformanceMetadata(script);
+  if (
+    existing &&
+    existing.version === script.updated_at &&
+    existing.timed_out === timedOut &&
+    existing.threshold_ms === thresholdMs
+  ) {
+    return { script, newlyFlagged: false };
+  }
+
+  const nextMetadata = {
+    ...withoutRegexPerformanceMetadata(script.metadata),
+    regex_performance: {
+      slow: true,
+      timed_out: timedOut,
+      elapsed_ms: Math.max(0, Math.round(issue.elapsedMs)),
+      threshold_ms: thresholdMs,
+      detected_at: Math.floor(Date.now() / 1000),
+      source: issue.source ?? "display_backend",
+      version: script.updated_at,
+    } satisfies RegexPerformanceMetadata,
+  };
+
+  getDb().query("UPDATE regex_scripts SET metadata = ? WHERE id = ? AND user_id = ?").run(
+    JSON.stringify(nextMetadata),
+    id,
+    userId,
+  );
+  emitRegexChanged(userId, id);
+  return { script: getRegexScript(userId, id), newlyFlagged: true };
 }
 
 function resolveCreateDisabledState(input: CreateRegexScriptInput, activePresetId: string | null): boolean {
@@ -395,6 +510,9 @@ export function updateRegexScript(
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const isPresetBound = !!existing.preset_id;
   const nextInput: UpdateRegexScriptInput = { ...input };
+  if (shouldResetRegexPerformance(nextInput)) {
+    nextInput.metadata = withoutRegexPerformanceMetadata(nextInput.metadata ?? existing.metadata);
+  }
   const hasPresetIdUpdate = Object.prototype.hasOwnProperty.call(nextInput, "preset_id");
   const nextPresetId = hasPresetIdUpdate ? normalizeOptionalId(nextInput.preset_id) : existing.preset_id;
   const mayPersistPresetEnablement = !!nextPresetId && nextPresetId === activePresetId;
@@ -803,6 +921,7 @@ export async function applyRegexScripts(
     resolvedFindPatterns?: Map<string, string>;
     resolvedReplacements?: Map<string, string>;
   },
+  options?: ApplyRegexScriptOptions,
 ): Promise<string> {
   let result = content;
 
@@ -816,6 +935,7 @@ export async function applyRegexScripts(
       if (script.max_depth !== null && depth > script.max_depth) continue;
     }
 
+    const startedAt = Date.now();
     try {
       let findRegex = script.find_regex;
       const preResolvedFind = resolvedTemplates?.resolvedFindPatterns?.get(script.id);
@@ -876,8 +996,42 @@ export async function applyRegexScripts(
           }
         }
       }
+
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= REGEX_SLOW_WARNING_MS) {
+        const flagged = reportRegexScriptPerformance(script.user_id, script.id, {
+          elapsedMs,
+          thresholdMs: REGEX_SLOW_WARNING_MS,
+          source: options?.source,
+        });
+        options?.onPerformanceIssue?.({
+          scriptId: script.id,
+          name: script.name,
+          elapsedMs,
+          thresholdMs: REGEX_SLOW_WARNING_MS,
+          timedOut: false,
+          source: options?.source ?? "display_backend",
+          newlyFlagged: flagged.newlyFlagged,
+        });
+      }
     } catch (e) {
       if (e instanceof RegexTimeoutError) {
+        const elapsedMs = Date.now() - startedAt;
+        const flagged = reportRegexScriptPerformance(script.user_id, script.id, {
+          elapsedMs,
+          timedOut: true,
+          thresholdMs: REGEX_SCRIPT_TIMEOUT_MS,
+          source: options?.source,
+        });
+        options?.onPerformanceIssue?.({
+          scriptId: script.id,
+          name: script.name,
+          elapsedMs,
+          thresholdMs: REGEX_SCRIPT_TIMEOUT_MS,
+          timedOut: true,
+          source: options?.source ?? "display_backend",
+          newlyFlagged: flagged.newlyFlagged,
+        });
         console.warn(
           `[RegexScripts] Script "${script.name}" (${script.id}) exceeded ${REGEX_SCRIPT_TIMEOUT_MS}ms, skipping`,
         );

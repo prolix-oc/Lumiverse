@@ -43,4 +43,6 @@ export interface UpdateMessageInput {
   swipe_id?: number;
   /** Replace the per-swipe date array. Must have the same length as `swipes`. */
   swipe_dates?: number[];
+  /** Internal-only escape hatch for extension/system rewrites that should not invalidate chat chunks. */
+  skipChunkRebuild?: boolean;
 }

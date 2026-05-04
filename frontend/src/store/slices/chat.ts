@@ -4,6 +4,9 @@ import type { Message } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 
 export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
+  const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
+  const LOCAL_REGEN_PLACEHOLDER_PREFIX = '__regen_placeholder_'
+
   // Tracks recently ended generation IDs, so that a late `startStreaming()`
   // call (e.g. from an HTTP response arriving after the WS GENERATION_ENDED
   // event in sidecar-council mode) doesn't restart a zombie streaming state.
@@ -52,6 +55,41 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       if (a.created_at !== b.created_at) return a.created_at - b.created_at
       return a.id.localeCompare(b.id)
     })
+  }
+
+  function isLocalStreamingPlaceholderId(id: string | null | undefined) {
+    return !!id && (
+      id.startsWith(LOCAL_STREAM_PLACEHOLDER_PREFIX)
+      || id.startsWith(LOCAL_REGEN_PLACEHOLDER_PREFIX)
+    )
+  }
+
+  function shouldUseLocalStreamPlaceholder(generationType: string | null | undefined) {
+    return generationType !== 'continue' && generationType !== 'impersonate_draft'
+  }
+
+  function createLocalStreamPlaceholder(state: ChatSlice): Message | null {
+    if (!state.activeChatId) return null
+
+    const lastMessage = state.messages[state.messages.length - 1]
+    const now = Math.floor(Date.now() / 1000)
+
+    return {
+      id: `${LOCAL_STREAM_PLACEHOLDER_PREFIX}${Date.now()}`,
+      chat_id: state.activeChatId,
+      index_in_chat: (lastMessage?.index_in_chat ?? -1) + 1,
+      is_user: false,
+      name: '',
+      content: '',
+      send_date: now,
+      swipe_id: 0,
+      swipes: [''],
+      swipe_dates: [now],
+      extra: {},
+      parent_message_id: null,
+      branch_id: null,
+      created_at: now,
+    }
   }
 
   return {
@@ -162,14 +200,31 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
+
+      const current = get()
+      let nextRegeneratingMessageId = regeneratingMessageId ?? null
+      let nextMessages = current.messages
+      let nextTotalChatLength = current.totalChatLength
+
+      if (!nextRegeneratingMessageId && shouldUseLocalStreamPlaceholder(generationType)) {
+        const placeholder = createLocalStreamPlaceholder(current)
+        if (placeholder) {
+          nextRegeneratingMessageId = placeholder.id
+          nextMessages = sortMessagesByPosition([...current.messages, placeholder])
+          nextTotalChatLength = current.totalChatLength + 1
+        }
+      }
+
       set({
+        messages: nextMessages,
+        totalChatLength: nextTotalChatLength,
         isStreaming: true,
         streamingContent: '',
         streamingReasoning: '',
         streamingReasoningDuration: null,
         streamingError: null,
         activeGenerationId: null,
-        regeneratingMessageId: regeneratingMessageId ?? null,
+        regeneratingMessageId: nextRegeneratingMessageId,
         streamingGenerationType: generationType ?? null,
       })
     },
@@ -188,13 +243,16 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       if (generationId === get().activeGenerationId) return
 
       const current = get()
+
+      const resolvedRegeneratingMessageId = regeneratingMessageId ?? current.regeneratingMessageId
+
       // If we're already in an optimistic streaming state (beginStreaming was
       // called), just wire up the generation ID without resetting buffers —
       // tokens may have already started arriving via WS.
       if (current.isStreaming && !current.activeGenerationId) {
         set({
           activeGenerationId: generationId,
-          regeneratingMessageId: regeneratingMessageId ?? current.regeneratingMessageId,
+          regeneratingMessageId: resolvedRegeneratingMessageId,
         })
         return
       }
@@ -203,14 +261,30 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
+
+      let nextRegeneratingMessageId = resolvedRegeneratingMessageId ?? null
+      let nextMessages = current.messages
+      let nextTotalChatLength = current.totalChatLength
+
+      if (!nextRegeneratingMessageId && shouldUseLocalStreamPlaceholder(current.streamingGenerationType)) {
+        const placeholder = createLocalStreamPlaceholder(current)
+        if (placeholder) {
+          nextRegeneratingMessageId = placeholder.id
+          nextMessages = sortMessagesByPosition([...current.messages, placeholder])
+          nextTotalChatLength = current.totalChatLength + 1
+        }
+      }
+
       set({
+        messages: nextMessages,
+        totalChatLength: nextTotalChatLength,
         isStreaming: true,
         streamingContent: '',
         streamingReasoning: '',
         streamingReasoningDuration: null,
         streamingError: null,
         activeGenerationId: generationId,
-        regeneratingMessageId: regeneratingMessageId ?? null,
+        regeneratingMessageId: nextRegeneratingMessageId,
       })
     },
 
@@ -277,7 +351,27 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
-      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null, lastPooledSeq: null })
+      set((state) => {
+        const shouldRemovePlaceholder = isLocalStreamingPlaceholderId(state.regeneratingMessageId)
+        return {
+          ...(shouldRemovePlaceholder
+            ? {
+                messages: state.messages.filter((message) => message.id !== state.regeneratingMessageId),
+                totalChatLength: Math.max(0, state.totalChatLength - 1),
+              }
+            : {}),
+          isStreaming: false,
+          streamingContent: '',
+          streamingReasoning: '',
+          streamingReasoningDuration: null,
+          streamingReasoningStartedAt: null,
+          streamingError: null,
+          activeGenerationId: null,
+          regeneratingMessageId: null,
+          streamingGenerationType: null,
+          lastPooledSeq: null,
+        }
+      })
     },
 
     setStreamingError: (error) => {
@@ -287,7 +381,25 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       rawStreamContent = ''
       rawStreamReasoning = ''
       reasoningStartedAt = 0
-      set({ streamingError: error, isStreaming: false, streamingReasoningDuration: null, streamingReasoningStartedAt: null, activeGenerationId: null, regeneratingMessageId: null, streamingGenerationType: null, lastPooledSeq: null })
+      set((state) => {
+        const shouldRemovePlaceholder = isLocalStreamingPlaceholderId(state.regeneratingMessageId)
+        return {
+          ...(shouldRemovePlaceholder
+            ? {
+                messages: state.messages.filter((message) => message.id !== state.regeneratingMessageId),
+                totalChatLength: Math.max(0, state.totalChatLength - 1),
+              }
+            : {}),
+          streamingError: error,
+          isStreaming: false,
+          streamingReasoningDuration: null,
+          streamingReasoningStartedAt: null,
+          activeGenerationId: null,
+          regeneratingMessageId: null,
+          streamingGenerationType: null,
+          lastPooledSeq: null,
+        }
+      })
     },
 
     markGenerationEnded: (generationId) => {

@@ -32,6 +32,7 @@ if (isTermuxLikeEnvironment()) {
   process.env.TMP = tempDir;
   process.env.TEMP = tempDir;
   console.log(`[startup] Temp directory: ${tempDir}`);
+  console.log("[startup] Termux LanceDB mode: cross-process write locking enabled");
 }
 
 try {

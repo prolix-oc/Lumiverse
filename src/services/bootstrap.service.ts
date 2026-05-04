@@ -1,4 +1,5 @@
 import * as connectionsSvc from "./connections.service";
+import * as sttConnectionsSvc from "./stt-connections.service";
 import * as ttsConnectionsSvc from "./tts-connections.service";
 import * as imageGenConnectionsSvc from "./image-gen-connections.service";
 import * as packsSvc from "./packs.service";
@@ -14,6 +15,7 @@ import { getProviderList } from "../llm/registry";
 import { getTtsProviderList } from "../tts/registry";
 import { getImageProviderList } from "../image-gen/registry";
 import type { ConnectionProfile } from "../types/connection-profile";
+import type { SttConnectionProfile } from "../types/stt-connection";
 import type { TtsConnectionProfile } from "../types/tts-connection";
 import type { ImageGenConnectionProfile } from "../types/image-gen-connection";
 import type { Pack } from "../types/pack";
@@ -42,6 +44,10 @@ export interface BootstrapPayload {
   };
   tts: {
     connections: PaginatedResult<TtsConnectionProfile>;
+    providers: ProviderSummaryEntry[];
+  };
+  stt: {
+    connections: PaginatedResult<SttConnectionProfile>;
     providers: ProviderSummaryEntry[];
   };
   imageGen: {
@@ -156,6 +162,14 @@ function listTtsProviders(): ProviderSummaryEntry[] {
   }));
 }
 
+function listSttProviders(): ProviderSummaryEntry[] {
+  return sttConnectionsSvc.listProviders().map((p) => ({
+    id: p.id,
+    name: p.name,
+    capabilities: p.capabilities,
+  }));
+}
+
 function listImageGenProviders(): ProviderSummaryEntry[] {
   return getImageProviderList().map((p) => ({
     id: p.name,
@@ -215,6 +229,7 @@ export async function buildBootstrapPayload(
   const [
     startupSettings,
     llmConnections, llmProviders,
+    sttConnections, sttProviders,
     ttsConnections, ttsProviders,
     imageGenConnections, imageGenProviders,
     packs, personas, regexScripts,
@@ -224,6 +239,8 @@ export async function buildBootstrapPayload(
     safe("startupSettings", () => getStartupSettings(userId), {} as StartupSettings),
     safe("llm.connections", () => connectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<ConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
     safe("llm.providers", () => listLlmProviders(), [] as ProviderListEntry[]),
+    safe("stt.connections", () => sttConnectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<SttConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
+    safe("stt.providers", () => listSttProviders(), [] as ProviderSummaryEntry[]),
     safe("tts.connections", () => ttsConnectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<TtsConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
     safe("tts.providers", () => listTtsProviders(), [] as ProviderSummaryEntry[]),
     safe("imageGen.connections", () => imageGenConnectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<ImageGenConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
@@ -239,6 +256,7 @@ export async function buildBootstrapPayload(
   const payload: BootstrapPayload = {
     startupSettings,
     llm: { connections: llmConnections, providers: llmProviders },
+    stt: { connections: sttConnections, providers: sttProviders },
     tts: { connections: ttsConnections, providers: ttsProviders },
     imageGen: { connections: imageGenConnections, providers: imageGenProviders },
     packs,

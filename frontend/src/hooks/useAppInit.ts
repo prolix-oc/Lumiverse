@@ -3,6 +3,7 @@ import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS } from 'lumiverse-spi
 import { useStore } from '@/store'
 import { bootstrapApi, type BootstrapPayload } from '@/api/bootstrap'
 import { connectionsApi } from '@/api/connections'
+import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { personasApi } from '@/api/personas'
@@ -57,6 +58,7 @@ async function initialize(): Promise<void> {
     errors = {
       'startupSettings': 'fallback',
       'llm.connections': 'fallback', 'llm.providers': 'fallback',
+      'stt.connections': 'fallback', 'stt.providers': 'fallback',
       'tts.connections': 'fallback', 'tts.providers': 'fallback',
       'imageGen.connections': 'fallback', 'imageGen.providers': 'fallback',
       'packs': 'fallback', 'personas': 'fallback', 'regexScripts': 'fallback',
@@ -98,6 +100,9 @@ function applyBootstrap(payload: BootstrapPayload, errors: Record<string, string
 
   if (!errors['llm.connections']) store.setProfiles(payload.llm.connections.data)
   if (!errors['llm.providers']) store.setProviders(payload.llm.providers)
+
+  if (!errors['stt.connections']) store.setSttProfiles(payload.stt.connections.data)
+  if (!errors['stt.providers']) store.setSttProviders(payload.stt.providers)
 
   if (!errors['tts.connections']) store.setTtsProfiles(payload.tts.connections.data)
   if (!errors['tts.providers']) store.setTtsProviders(payload.tts.providers)
@@ -150,6 +155,16 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setProfiles(profilesRes.value.data)
       if (providersRes.status === 'fulfilled') store.setProviders(providersRes.value.providers)
+    })
+  }
+
+  if (errors['stt.connections'] || errors['stt.providers']) {
+    Promise.allSettled([
+      sttConnectionsApi.list({ limit: 100 }),
+      sttConnectionsApi.providers(),
+    ]).then(([profilesRes, providersRes]) => {
+      if (profilesRes.status === 'fulfilled') store.setSttProfiles(profilesRes.value.data)
+      if (providersRes.status === 'fulfilled') store.setSttProviders(providersRes.value.providers)
     })
   }
 

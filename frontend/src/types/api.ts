@@ -363,6 +363,59 @@ export interface ImageGenProviderInfo {
   capabilities: ImageGenProviderCapabilities;
 }
 
+// ---- STT Connection ----
+export interface SttConnectionProfile {
+  id: string;
+  name: string;
+  provider: string;
+  api_url: string;
+  model: string;
+  is_default: boolean;
+  has_api_key: boolean;
+  default_parameters: Record<string, any>;
+  metadata: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateSttConnectionInput {
+  name: string;
+  provider: string;
+  api_url?: string;
+  model?: string;
+  is_default?: boolean;
+  default_parameters?: Record<string, any>;
+  metadata?: Record<string, any>;
+  api_key?: string;
+}
+
+export type UpdateSttConnectionInput = Partial<CreateSttConnectionInput>;
+
+export interface SttConnectionTestResult {
+  success: boolean;
+  message: string;
+  provider: string;
+}
+
+export interface SttConnectionModelsResult {
+  models: Array<{ id: string; label: string }>;
+  provider: string;
+  error?: string;
+}
+
+export interface SttProviderCapabilities {
+  apiKeyRequired: boolean;
+  modelListStyle: 'static';
+  staticModels: Array<{ id: string; label: string }>;
+  defaultUrl: string;
+}
+
+export interface SttProviderInfo {
+  id: string;
+  name: string;
+  capabilities: SttProviderCapabilities;
+}
+
 // ---- TTS Connection ----
 export interface TtsConnectionProfile {
   id: string;
@@ -726,6 +779,14 @@ export interface WorldBookDiagnostics {
     threshold_rejected: number;
     hits_after_rerank_cutoff: number;
     rerank_rejected: number;
+    timings_ms: {
+      query_build: number;
+      query_embed: number;
+      search: number;
+      ranking: number;
+      merge: number;
+      total: number;
+    };
   };
   keyword_hits: Array<{
     entry_id: string;

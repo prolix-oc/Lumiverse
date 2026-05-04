@@ -121,6 +121,24 @@ export interface DryRunResponse {
     vectorActivated: number
     totalActivated: number
     queryPreview: string
+    vectorRetrieval?: {
+      eligibleCount: number
+      hitsBeforeThreshold: number
+      hitsAfterThreshold: number
+      thresholdRejected: number
+      hitsAfterRerankCutoff: number
+      rerankRejected: number
+      topK: number
+      blockerMessages: string[]
+      timingsMs?: {
+        queryBuild: number
+        queryEmbed: number
+        search: number
+        ranking: number
+        merge: number
+        total: number
+      }
+    }
   }
   memoryStats?: {
     enabled: boolean

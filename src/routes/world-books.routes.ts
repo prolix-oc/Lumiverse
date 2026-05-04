@@ -530,6 +530,13 @@ app.post("/:id/diagnostics", async (c) => {
         topK: Math.max(1, worldBookVectorSettings.retrievalTopK || embeddings.retrieval_top_k || 4),
         cap: Math.max(1, worldBookVectorSettings.retrievalTopK || embeddings.retrieval_top_k || 4),
         blockerMessages: [] as string[],
+        timingsMs: {
+          queryBuildMs: 0,
+          queryEmbedMs: 0,
+          searchMs: 0,
+          rankingMs: 0,
+          totalMs: 0,
+        },
       };
 
   blockerMessages.push(...vectorDetail.blockerMessages);
@@ -684,6 +691,14 @@ app.post("/:id/diagnostics", async (c) => {
       threshold_rejected: selectedCandidateTrace.filter((item) => item.retrievalStage === "rejected_by_similarity_threshold").length,
       hits_after_rerank_cutoff: selectedCandidateTrace.filter((item) => item.retrievalStage === "shortlisted" || item.retrievalStage === "trimmed_by_top_k").length,
       rerank_rejected: selectedCandidateTrace.filter((item) => item.retrievalStage === "rejected_by_rerank_cutoff").length,
+      timings_ms: {
+        query_build: vectorDetail.timingsMs?.queryBuildMs ?? 0,
+        query_embed: vectorDetail.timingsMs?.queryEmbedMs ?? 0,
+        search: vectorDetail.timingsMs?.searchMs ?? 0,
+        ranking: vectorDetail.timingsMs?.rankingMs ?? 0,
+        merge: mergedWorldInfo.mergeDurationMs ?? 0,
+        total: (vectorDetail.timingsMs?.totalMs ?? 0) + (mergedWorldInfo.mergeDurationMs ?? 0),
+      },
     },
     keyword_hits: keywordHits,
     vector_hits: vectorTrace.filter((item) =>

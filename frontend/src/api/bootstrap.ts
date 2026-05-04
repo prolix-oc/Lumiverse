@@ -1,6 +1,7 @@
 import { get } from './client'
 import type {
   ConnectionProfile, ProviderInfo,
+  SttConnectionProfile, SttProviderInfo,
   TtsConnectionProfile, TtsProviderInfo,
   ImageGenConnectionProfile, ImageGenProviderInfo,
   Pack, Persona, PaginatedResult,
@@ -19,6 +20,10 @@ export interface BootstrapPayload {
   llm: {
     connections: PaginatedResult<ConnectionProfile>
     providers: ProviderInfo[]
+  }
+  stt: {
+    connections: PaginatedResult<SttConnectionProfile>
+    providers: SttProviderInfo[]
   }
   tts: {
     connections: PaginatedResult<TtsConnectionProfile>

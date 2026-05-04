@@ -112,6 +112,9 @@ export enum EventType {
   // TTS Connections
   TTS_CONNECTION_CHANGED = "TTS_CONNECTION_CHANGED",
 
+  // STT Connections
+  STT_CONNECTION_CHANGED = "STT_CONNECTION_CHANGED",
+
   // Theme overrides (Spindle extensions)
   SPINDLE_THEME_OVERRIDES = "SPINDLE_THEME_OVERRIDES",
 

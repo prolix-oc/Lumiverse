@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { useStore } from '@/store'
 import { applyDisplayRegex, applyDisplayRegexAsync } from '@/lib/regex/compiler'
 import { resolveMacrosBatch } from '@/api/macros'
+import { regexApi } from '@/api/regex'
+import { toast } from '@/lib/toast'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
+import type { RegexScript } from '@/types/regex'
 
 interface ResolvedDisplayRegexTemplates {
   resolvedFindPatterns: Map<string, string>
@@ -34,12 +37,45 @@ interface ResolvedContentState {
   value: string
 }
 
+interface SlowRegexReport {
+  script: RegexScript
+  elapsedMs: number
+  timedOut: boolean
+  thresholdMs: number
+}
+
 const displayRegexResolutionCache = new Map<string, DisplayRegexCacheEntry>()
 const displayRegexContentCache = new Map<string, DisplayRegexContentCacheEntry>()
 const displayPreprocessCache = new Map<string, { value?: string; promise?: Promise<string> }>()
 const DISPLAY_PREPROCESS_CACHE_MAX = 500
 const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexCacheVersion = 0
+const slowDisplayRegexToastKeys = new Set<string>()
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs >= 1000) return `${(elapsedMs / 1000).toFixed(1)}s`
+  return `${Math.round(elapsedMs)}ms`
+}
+
+function reportSlowDisplayRegex(script: RegexScript, elapsedMs: number, timedOut: boolean, thresholdMs: number): void {
+  const versionKey = `${script.id}:${script.updated_at}`
+  if (!slowDisplayRegexToastKeys.has(versionKey)) {
+    slowDisplayRegexToastKeys.add(versionKey)
+    toast.warning(
+      timedOut
+        ? `Display regex "${script.name}" timed out and was flagged in Regex Scripts.`
+        : `Display regex "${script.name}" ran for ${formatElapsedMs(elapsedMs)} and was flagged in Regex Scripts.`,
+      { title: 'Slow Regex Script', duration: 7000 },
+    )
+  }
+
+  void regexApi.reportPerformance(script.id, {
+    elapsed_ms: elapsedMs,
+    timed_out: timedOut,
+    threshold_ms: thresholdMs,
+    source: 'display_client',
+  }).catch(() => {})
+}
 
 function fnv1a(s: string): string {
   let h = 0x811c9dc5
@@ -228,6 +264,7 @@ export function useDisplayRegex(
   }, [messageIndex])
 
   const content = useDisplayPreprocessed(rawContent, activeChatId, preprocessOpts)
+  const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
 
   const displayScripts = useMemo(
     () =>
@@ -361,18 +398,35 @@ export function useDisplayRegex(
 
   const fallbackContent = useMemo(
     () => {
-      if (displayScripts.length === 0) return content
-      return applyDisplayRegex(content, displayScripts, {
+      const slowReports: SlowRegexReport[] = []
+      if (displayScripts.length === 0) {
+        pendingSlowReportsRef.current = slowReports
+        return content
+      }
+      const next = applyDisplayRegex(content, displayScripts, {
         isUser,
         depth,
         macroCtx,
         resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
         resolvedReplacements: resolvedTemplates.resolvedReplacements,
         dynamicMacros,
+      }, ({ script, elapsedMs, timedOut, thresholdMs }) => {
+        slowReports.push({ script, elapsedMs, timedOut, thresholdMs })
       })
+      pendingSlowReportsRef.current = slowReports
+      return next
     },
     [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros],
   )
+
+  useEffect(() => {
+    const reports = pendingSlowReportsRef.current
+    if (reports.length === 0) return
+    pendingSlowReportsRef.current = []
+    for (const report of reports) {
+      reportSlowDisplayRegex(report.script, report.elapsedMs, report.timedOut, report.thresholdMs)
+    }
+  }, [fallbackContent])
 
   const hasRawMacroScripts = useMemo(
     () => displayScripts.some((s) => s.substitute_macros === 'raw'),

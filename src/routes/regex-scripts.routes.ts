@@ -268,6 +268,25 @@ app.post("/:id/duplicate", (c) => {
   return c.json(script, 201);
 });
 
+// POST /:id/report-performance — persist slow/timed-out regex warning metadata
+app.post("/:id/report-performance", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const elapsedMs = Number(body?.elapsed_ms);
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return c.json({ error: "elapsed_ms must be a non-negative number" }, 400);
+  }
+
+  const result = svc.reportRegexScriptPerformance(userId, c.req.param("id"), {
+    elapsedMs,
+    timedOut: !!body?.timed_out,
+    thresholdMs: Number.isFinite(Number(body?.threshold_ms)) ? Number(body.threshold_ms) : undefined,
+    source: typeof body?.source === "string" ? body.source : undefined,
+  });
+  if (!result.script) return c.json({ error: "Not found" }, 404);
+  return c.json(result.script);
+});
+
 // PUT /:id/toggle — quick enable/disable
 app.put("/:id/toggle", async (c) => {
   const userId = c.get("userId");

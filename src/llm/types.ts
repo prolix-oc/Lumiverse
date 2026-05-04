@@ -306,6 +306,14 @@ export interface AssemblyResult {
       rerankRejected: number;
       topK: number;
       blockerMessages: string[];
+      timingsMs?: {
+        queryBuild: number;
+        queryEmbed: number;
+        search: number;
+        ranking: number;
+        merge: number;
+        total: number;
+      };
     };
   };
   /** Statistics from long-term memory retrieval. */

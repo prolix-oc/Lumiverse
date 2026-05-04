@@ -1,8 +1,9 @@
 import * as secretsSvc from "./secrets.service";
+import * as sttConnectionsSvc from "./stt-connections.service";
 
 /** Secret key pattern for LLM connections (matches connections.service.ts) */
 function connectionSecretKey(id: string): string {
-  return `connection_${id}_api_key`;
+  return sttConnectionsSvc.sttConnectionSecretKey(id);
 }
 
 export interface TranscribeInput {
@@ -10,7 +11,7 @@ export interface TranscribeInput {
   fileName: string;
   model?: string;
   language?: string;
-  /** LLM connection ID whose OpenAI API key to use */
+  /** STT connection ID whose API key to use */
   connectionId?: string;
 }
 
@@ -21,7 +22,12 @@ export interface TranscribeResult {
 
 export async function transcribe(userId: string, input: TranscribeInput): Promise<TranscribeResult> {
   if (!input.connectionId) {
-    throw new Error("No connection ID provided for STT — configure an OpenAI connection in Voice settings");
+    throw new Error("No connection ID provided for STT — configure an STT connection in Voice settings");
+  }
+
+  const profile = sttConnectionsSvc.getConnection(userId, input.connectionId);
+  if (!profile) {
+    throw new Error("Selected STT connection was not found");
   }
 
   const apiKey = await secretsSvc.getSecret(userId, connectionSecretKey(input.connectionId));
@@ -31,12 +37,12 @@ export async function transcribe(userId: string, input: TranscribeInput): Promis
 
   const formData = new FormData();
   formData.append("file", new Blob([input.audioData]), input.fileName);
-  formData.append("model", input.model || "gpt-4o-transcribe");
+  formData.append("model", input.model || profile.model || "gpt-4o-transcribe");
   if (input.language) {
     formData.append("language", input.language);
   }
 
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+  const res = await fetch(`${sttConnectionsSvc.resolveSttApiUrl(profile)}/audio/transcriptions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -46,7 +52,7 @@ export async function transcribe(userId: string, input: TranscribeInput): Promis
 
   if (!res.ok) {
     const err = await res.text().catch(() => "Unknown error");
-    throw new Error(`OpenAI STT error ${res.status}: ${err}`);
+    throw new Error(`STT error ${res.status}: ${err}`);
   }
 
   const data = (await res.json()) as any;

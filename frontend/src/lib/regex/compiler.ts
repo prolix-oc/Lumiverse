@@ -1,4 +1,4 @@
-import type { RegexScript, RegexPlacement, RegexMacroMode } from '@/types/regex'
+import type { RegexScript, RegexPlacement, RegexMacroMode, RegexPerformanceMetadata } from '@/types/regex'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
 
 interface DisplayRegexMatch {
@@ -141,6 +141,28 @@ interface ApplyDisplayRegexContext {
   dynamicMacros?: Record<string, string>
 }
 
+interface SlowRegexReport {
+  script: RegexScript
+  elapsedMs: number
+  timedOut: boolean
+  thresholdMs: number
+}
+
+const DISPLAY_SLOW_REGEX_WARNING_MS = 5_000
+
+function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
+  const raw = script.metadata?.regex_performance
+  if (!raw || typeof raw !== 'object') return null
+  if (raw.slow !== true || typeof raw.version !== 'number') return null
+  return raw as RegexPerformanceMetadata
+}
+
+function shouldReportSlowRegex(script: RegexScript, elapsedMs: number): boolean {
+  if (elapsedMs < DISPLAY_SLOW_REGEX_WARNING_MS) return false
+  const current = getRegexPerformanceMetadata(script)
+  return !current || current.version !== script.updated_at
+}
+
 function mapToRecord(map?: Map<string, string>): Record<string, string> | undefined {
   if (!map || map.size === 0) return undefined
   return Object.fromEntries(map.entries())
@@ -183,6 +205,7 @@ export function applyDisplayRegex(
   content: string,
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
+  onSlowRegex?: (report: SlowRegexReport) => void,
 ): string {
   let result = content
 
@@ -208,6 +231,7 @@ export function applyDisplayRegex(
     const regex = compileRegex(findRegex, script.flags)
     if (!regex) continue
 
+    const startedAt = performance.now()
     try {
       let replaceString = script.replace_string
 
@@ -245,6 +269,16 @@ export function applyDisplayRegex(
         while (result.includes(trim)) {
           result = result.replaceAll(trim, '')
         }
+      }
+
+      const elapsedMs = Math.round(performance.now() - startedAt)
+      if (shouldReportSlowRegex(script, elapsedMs)) {
+        onSlowRegex?.({
+          script,
+          elapsedMs,
+          timedOut: false,
+          thresholdMs: DISPLAY_SLOW_REGEX_WARNING_MS,
+        })
       }
     } catch {
       // Skip invalid regex silently

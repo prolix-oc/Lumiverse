@@ -5,6 +5,7 @@ import {
   createRegexScript,
   exportRegexScripts,
   getRegexScript,
+  reportRegexScriptPerformance,
   switchPresetBoundRegexScripts,
   toggleRegexScript,
   updateRegexScript,
@@ -224,5 +225,43 @@ describe("preset-bound regex activation", () => {
     switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: "preset-2" });
     expect(mustGetScript(presetOneEnabledId).disabled).toBe(true);
     expect(mustGetScript(presetTwoEnabledId).disabled).toBe(false);
+  });
+});
+
+describe("regex performance reporting", () => {
+  test("flags a slow regex script in metadata", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Slow Script",
+      find_regex: "one",
+    });
+    expect(typeof created).not.toBe("string");
+
+    const script = created as Exclude<typeof created, string>;
+    const result = reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 5200,
+      source: "display_client",
+    });
+
+    expect(result.newlyFlagged).toBe(true);
+    expect(result.script?.metadata?.regex_performance?.slow).toBe(true);
+    expect(result.script?.metadata?.regex_performance?.source).toBe("display_client");
+    expect(result.script?.metadata?.regex_performance?.version).toBe(script.updated_at);
+  });
+
+  test("clears performance warning metadata when regex definition changes", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Editable Slow Script",
+      find_regex: "one",
+    });
+    expect(typeof created).not.toBe("string");
+
+    const script = created as Exclude<typeof created, string>;
+    reportRegexScriptPerformance(USER_ID, script.id, {
+      elapsedMs: 5200,
+      source: "display_client",
+    });
+
+    const updated = updateRegexScript(USER_ID, script.id, { find_regex: "two" });
+    expect(updated && typeof updated !== "string" ? updated.metadata.regex_performance : undefined).toBeUndefined();
   });
 });

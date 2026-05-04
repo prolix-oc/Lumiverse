@@ -1,6 +1,6 @@
 import { connect, Index, rerankers, type Connection, type Table } from "@lancedb/lancedb";
 import { dirname, join } from "path";
-import { mkdirSync, readdirSync, renameSync, rmSync, existsSync } from "fs";
+import { mkdirSync, readdirSync, renameSync, rmSync, existsSync, readFileSync } from "fs";
 import { env } from "../env";
 import { getDb } from "../db/connection";
 import * as settingsSvc from "./settings.service";
@@ -421,8 +421,99 @@ const CLEANUP_GRACE_PERIOD_MS = 2 * 60_000;
 // ---------------------------------------------------------------------------
 const WRITE_LOCK_WAIT_TIMEOUT_MS = 120_000; // 120s max wait to acquire the lock
 const MAX_WRITE_LOCK_QUEUE = 50;           // reject if more than 50 waiters queued
+const CROSS_PROCESS_WRITE_LOCK_DIR = join(env.dataDir, ".lancedb-write-lock");
+const CROSS_PROCESS_WRITE_LOCK_INFO = join(CROSS_PROCESS_WRITE_LOCK_DIR, "owner.json");
+const CROSS_PROCESS_WRITE_LOCK_POLL_MS = 250;
+const CROSS_PROCESS_WRITE_LOCK_STALE_MS = 5 * 60_000;
 const _writeLockQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 let _writeLockHeld = false;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function tryWriteCrossProcessLockInfo(): void {
+  try {
+    Bun.write(
+      CROSS_PROCESS_WRITE_LOCK_INFO,
+      JSON.stringify({
+        pid: process.pid,
+        acquiredAt: Date.now(),
+        cwd: process.cwd(),
+      }),
+    ).catch(() => {});
+  } catch {}
+}
+
+function readCrossProcessLockInfo(): { pid?: number; acquiredAt?: number } | null {
+  try {
+    if (!existsSync(CROSS_PROCESS_WRITE_LOCK_INFO)) return null;
+    const raw = readFileSync(CROSS_PROCESS_WRITE_LOCK_INFO, "utf8");
+    const parsed = JSON.parse(raw) as { pid?: unknown; acquiredAt?: unknown };
+    return {
+      pid: typeof parsed.pid === "number" && Number.isFinite(parsed.pid) ? parsed.pid : undefined,
+      acquiredAt: typeof parsed.acquiredAt === "number" && Number.isFinite(parsed.acquiredAt) ? parsed.acquiredAt : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldBreakStaleCrossProcessLock(): boolean {
+  if (!existsSync(CROSS_PROCESS_WRITE_LOCK_DIR)) return false;
+
+  const info = readCrossProcessLockInfo();
+  const ageMs = info?.acquiredAt ? Date.now() - info.acquiredAt : Number.POSITIVE_INFINITY;
+  if (ageMs < CROSS_PROCESS_WRITE_LOCK_STALE_MS) return false;
+  if (info?.pid && isProcessAlive(info.pid)) return false;
+  return true;
+}
+
+async function acquireCrossProcessWriteLockIfNeeded(): Promise<(() => void) | null> {
+  if (!LANCEDB_TERMUX_LIKE) return null;
+
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      mkdirSync(CROSS_PROCESS_WRITE_LOCK_DIR, { recursive: false });
+      tryWriteCrossProcessLockInfo();
+      return () => {
+        try {
+          rmSync(CROSS_PROCESS_WRITE_LOCK_DIR, { recursive: true, force: true });
+        } catch {}
+      };
+    } catch (err: any) {
+      if (err?.code !== "EEXIST") throw err;
+
+      if (shouldBreakStaleCrossProcessLock()) {
+        try {
+          rmSync(CROSS_PROCESS_WRITE_LOCK_DIR, { recursive: true, force: true });
+          console.warn(`[embeddings] Cleared stale cross-process LanceDB write lock at ${CROSS_PROCESS_WRITE_LOCK_DIR}`);
+          continue;
+        } catch {}
+      }
+
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= WRITE_LOCK_WAIT_TIMEOUT_MS) {
+        throw new Error(
+          `[embeddings] Cross-process LanceDB write lock acquisition timed out after ${WRITE_LOCK_WAIT_TIMEOUT_MS}ms (${CROSS_PROCESS_WRITE_LOCK_DIR})`,
+        );
+      }
+
+      await sleep(Math.min(CROSS_PROCESS_WRITE_LOCK_POLL_MS, WRITE_LOCK_WAIT_TIMEOUT_MS - waitedMs));
+    }
+  }
+}
 
 async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   if (!_writeLockHeld) {
@@ -446,9 +537,11 @@ async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
       entry.resolve = () => { clearTimeout(timer); origResolve(); };
     });
   }
+  const releaseCrossProcessLock = await acquireCrossProcessWriteLockIfNeeded();
   try {
     return await fn();
   } finally {
+    releaseCrossProcessLock?.();
     const next = _writeLockQueue.shift();
     if (next) next.resolve();
     else _writeLockHeld = false;

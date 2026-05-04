@@ -1195,7 +1195,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   const activeContentChanged =
     patchedContent ||
     (swipeShapeTouched && newSwipes[newSwipeId] !== existing.swipes[existing.swipe_id]);
-  if (activeContentChanged) {
+  if (activeContentChanged && input.skipChunkRebuild !== true) {
     try {
       memoryCortex.invalidateCortexCache(updated.chat_id);
       memoryCortex.invalidateLinkedCortexCache(updated.chat_id);

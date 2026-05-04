@@ -2,6 +2,7 @@ import { get, post, put, del } from './client'
 import type { PaginatedResult } from '@/types/api'
 import type {
   RegexScript,
+  RegexPerformanceMetadata,
   CreateRegexScriptInput,
   UpdateRegexScriptInput,
   RegexScriptExport,
@@ -70,5 +71,9 @@ export const regexApi = {
 
   testRegex(params: { find_regex: string; replace_string: string; flags: string; content: string }) {
     return post<{ result: string; matches: number; error?: string }>('/regex-scripts/test', params)
+  },
+
+  reportPerformance(id: string, payload: { elapsed_ms: number; timed_out?: boolean; threshold_ms?: number; source?: RegexPerformanceMetadata['source'] }) {
+    return post<RegexScript>(`/regex-scripts/${id}/report-performance`, payload)
   },
 }
