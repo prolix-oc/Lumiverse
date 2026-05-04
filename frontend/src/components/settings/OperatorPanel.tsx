@@ -1659,53 +1659,72 @@ export default function OperatorPanel() {
           {vectorHealth ? (
             vectorHealth.exists ? (
               <>
-                <div className={styles.statusGrid}>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Rows</span>
-                    <span className={styles.statusValue}>{vectorHealth.rowCount.toLocaleString()}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Vector Index</span>
-                    <span className={styles.statusValue}>{vectorHealth.vectorIndexReady ? 'Active' : 'Pending'}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Scalar Indexes</span>
-                    <span className={styles.statusValue}>{vectorHealth.scalarIndexReady ? 'Active' : 'Pending'}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>FTS Index</span>
-                    <span className={styles.statusValue}>{vectorHealth.ftsIndexReady ? 'Active' : 'Pending'}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Unindexed Rows</span>
-                    <span className={styles.statusValue}>{vectorHealth.unindexedRowEstimate.toLocaleString()}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Indexes</span>
-                    <span className={styles.statusValue}>{vectorHealth.indexes.length}</span>
-                  </div>
-                </div>
-
-                {vectorHealth.indexes.length > 0 && (
-                  <div className={styles.dbInfoGrid}>
-                    <div className={styles.dbInfoBlock}>
-                      <span className={styles.statusLabel}>Index Details</span>
-                      <span className={styles.dbInlineText}>
-                        {vectorHealth.indexes.map((idx) =>
-                          idx.type ? `${idx.name} (${idx.type})` : idx.name
-                        ).join(' · ')}
-                      </span>
-                    </div>
-                    {vectorHealth.lastIndexRebuildAt > 0 && (
+                {Object.entries(vectorHealth.tables ?? { embeddings: vectorHealth }).map(([tableName, tableHealth]) => (
+                  <div key={tableName} style={{ marginBottom: 16 }}>
+                    <div className={styles.dbInfoGrid} style={{ marginBottom: 10 }}>
                       <div className={styles.dbInfoBlock}>
-                        <span className={styles.statusLabel}>Last Index Rebuild</span>
-                        <span className={styles.dbInlineText}>
-                          {new Date(vectorHealth.lastIndexRebuildAt).toLocaleString()}
-                        </span>
+                        <span className={styles.statusLabel}>Table</span>
+                        <span className={styles.dbInlineText}>{tableName}</span>
+                      </div>
+                    </div>
+
+                    {tableHealth.exists ? (
+                      <>
+                        <div className={styles.statusGrid}>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Rows</span>
+                            <span className={styles.statusValue}>{tableHealth.rowCount.toLocaleString()}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Vector Index</span>
+                            <span className={styles.statusValue}>{tableHealth.vectorIndexReady ? 'Active' : 'Pending'}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Scalar Indexes</span>
+                            <span className={styles.statusValue}>{tableHealth.scalarIndexReady ? 'Active' : 'Pending'}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>FTS Index</span>
+                            <span className={styles.statusValue}>{tableHealth.ftsIndexReady ? 'Active' : 'Pending'}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Unindexed Rows</span>
+                            <span className={styles.statusValue}>{tableHealth.unindexedRowEstimate.toLocaleString()}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Indexes</span>
+                            <span className={styles.statusValue}>{tableHealth.indexes.length}</span>
+                          </div>
+                        </div>
+
+                        {tableHealth.indexes.length > 0 && (
+                          <div className={styles.dbInfoGrid}>
+                            <div className={styles.dbInfoBlock}>
+                              <span className={styles.statusLabel}>Index Details</span>
+                              <span className={styles.dbInlineText}>
+                                {tableHealth.indexes.map((idx) =>
+                                  idx.type ? `${idx.name} (${idx.type})` : idx.name
+                                ).join(' · ')}
+                              </span>
+                            </div>
+                            {tableHealth.lastIndexRebuildAt > 0 && (
+                              <div className={styles.dbInfoBlock}>
+                                <span className={styles.statusLabel}>Last Index Rebuild</span>
+                                <span className={styles.dbInlineText}>
+                                  {new Date(tableHealth.lastIndexRebuildAt).toLocaleString()}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className={styles.disabledHint}>
+                        Table not initialized yet.
                       </div>
                     )}
                   </div>
-                )}
+                ))}
               </>
             ) : (
               <div className={styles.disabledHint}>

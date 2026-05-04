@@ -95,10 +95,15 @@ export async function processDocument(userId: string, docId: string): Promise<vo
       return;
     }
 
-    // 3. Delete old chunks (for reprocessing)
+    // 3. Delete old Lance vectors before SQLite chunk IDs are replaced.
+    // Reprocessing generates new chunk IDs, so deleting SQLite rows first would
+    // orphan the previous Lance rows and make disk usage grow without bound.
+    await deleteDocumentVectors(userId, docId);
+
+    // 4. Delete old chunks (for reprocessing)
     crud.deleteChunksForDocument(docId);
 
-    // 4. Insert chunk rows into SQLite
+    // 5. Insert chunk rows into SQLite
     const chunkRows = chunkResults.map((c) => ({
       id: crypto.randomUUID(),
       documentId: docId,
@@ -122,7 +127,7 @@ export async function processDocument(userId: string, docId: string): Promise<vo
 
     crud.updateDocumentStatus(docId, "processing", { totalChunks: chunkRows.length });
 
-    // 5. Vectorize chunks
+    // 6. Vectorize chunks
     const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
     if (isProcessingAborted(docId, controller.signal)) return;
 
@@ -136,7 +141,7 @@ export async function processDocument(userId: string, docId: string): Promise<vo
     await vectorizeChunks(userId, doc, chunkRows, cfg, controller.signal);
     if (isProcessingAborted(docId, controller.signal)) return;
 
-    // 6. Mark as ready
+    // 7. Mark as ready
     crud.updateDocumentStatus(docId, "ready", { totalChunks: chunkRows.length });
     emitStatus(userId, doc, "ready", undefined, chunkRows.length);
 

@@ -5,18 +5,21 @@ import type { MacroEnv } from "../macros/types";
 export interface LlmTextPart {
   type: "text";
   text: string;
+  cache_control?: Record<string, unknown>;
 }
 
 export interface LlmImagePart {
   type: "image";
   data: string;      // base64-encoded
   mime_type: string;  // e.g. "image/png", "image/jpeg"
+  cache_control?: Record<string, unknown>;
 }
 
 export interface LlmAudioPart {
   type: "audio";
   data: string;      // base64-encoded
   mime_type: string;  // e.g. "audio/wav", "audio/mp3"
+  cache_control?: Record<string, unknown>;
 }
 
 export type LlmMessagePart = LlmTextPart | LlmImagePart | LlmAudioPart;
@@ -25,6 +28,7 @@ export interface LlmMessage {
   role: "system" | "user" | "assistant";
   content: string | LlmMessagePart[];
   name?: string;
+  cache_control?: Record<string, unknown>;
 }
 
 /** Helper: extract the text content from an LlmMessage regardless of format. */
@@ -53,6 +57,14 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>; // JSON Schema
   strict?: boolean;
   inputExamples?: Array<Record<string, unknown>>;
+  cache_control?: Record<string, unknown>;
+}
+
+export interface GenerationUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  provider_raw?: Record<string, unknown>;
 }
 
 export interface GenerationParameters {
@@ -79,11 +91,7 @@ export interface GenerationResponse {
   finish_reason: string;
   /** Present when the LLM requested function calls instead of (or in addition to) generating text. */
   tool_calls?: ToolCallResult[];
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
+  usage?: GenerationUsage;
 }
 
 export interface StreamChunk {
@@ -92,11 +100,7 @@ export interface StreamChunk {
   finish_reason?: string;
   /** Accumulated function calls (set on the final chunk when finish_reason indicates tool use). */
   tool_calls?: ToolCallResult[];
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
+  usage?: GenerationUsage;
 }
 
 // --- Prompt Assembly Types ---

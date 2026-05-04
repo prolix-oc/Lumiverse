@@ -8,6 +8,12 @@ import {
   getReasoningBindingSummary,
   normalizeReasoningSettingsForProvider,
 } from '@/lib/reasoning-binding'
+import {
+  buildAnthropicPromptCachingMetadata,
+  DEFAULT_ANTHROPIC_PROMPT_CACHING,
+  parseAnthropicPromptCachingSettings,
+  type AnthropicPromptCachingSettings,
+} from '@/lib/anthropic-prompt-caching'
 import ModelCombobox from './ModelCombobox'
 import OpenRouterSettings from './OpenRouterSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
@@ -41,6 +47,11 @@ const VERTEX_REGIONS = [
   'northamerica-northeast1', 'australia-southeast1', 'global',
 ]
 
+const ANTHROPIC_CACHE_TTL_OPTIONS = [
+  { value: '5m', label: '5 minutes' },
+  { value: '1h', label: '1 hour' },
+]
+
 export default function ConnectionForm({ providers, profile, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || 'openai')
@@ -51,7 +62,9 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
   const [useSubscriptionApi, setUseSubscriptionApi] = useState(profile?.metadata?.use_subscription_api || false)
   const [useZaiCodingPlanEndpoint, setUseZaiCodingPlanEndpoint] = useState(profile?.metadata?.use_coding_plan_endpoint || false)
-  const [anthropicPromptCaching, setAnthropicPromptCaching] = useState(profile?.metadata?.prompt_caching ?? false)
+  const [anthropicPromptCachingSettings, setAnthropicPromptCachingSettings] = useState<AnthropicPromptCachingSettings>(
+    () => parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching)
+  )
   const [bindReasoning, setBindReasoning] = useState(!!profile?.metadata?.reasoningBindings)
   const reasoningSettings = useStore((s) => s.reasoningSettings)
   const [boundReasoningSettings, setBoundReasoningSettings] = useState<ReasoningSettings>(
@@ -220,6 +233,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   useEffect(() => {
     setBindReasoning(!!profile?.metadata?.reasoningBindings)
     setBoundReasoningSettings({ ...(profile?.metadata?.reasoningBindings?.settings || reasoningSettings) })
+    setAnthropicPromptCachingSettings(parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching))
   }, [profile?.id])
 
   const handlePollinationsSignIn = useCallback(async () => {
@@ -290,7 +304,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       delete metadata.use_coding_plan_endpoint
     }
     if (showAnthropicPromptCachingToggle) {
-      metadata.prompt_caching = anthropicPromptCaching
+      metadata.prompt_caching = buildAnthropicPromptCachingMetadata(anthropicPromptCachingSettings)
     } else {
       delete metadata.prompt_caching
     }
@@ -331,7 +345,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCaching, bindReasoning, boundReasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, bindReasoning, boundReasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
 
   return (
     <div className={styles.form}>
@@ -441,9 +455,67 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
         </FormField>
       )}
       {showAnthropicPromptCachingToggle && (
-        <FormField label="">
-          <Toggle.Checkbox checked={anthropicPromptCaching} onChange={setAnthropicPromptCaching} label="Enable Prompt Caching" hint="Automatically cache prompts to reduce cost and latency for repetitive prefixes" />
-        </FormField>
+        <>
+          <FormField label="">
+            <Toggle.Checkbox
+              checked={anthropicPromptCachingSettings.enabled}
+              onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                ...current,
+                enabled: checked,
+                automatic: checked ? current.automatic : DEFAULT_ANTHROPIC_PROMPT_CACHING.automatic,
+              }))}
+              label="Enable Prompt Caching"
+              hint="Automatically cache prompts to reduce cost and latency for repetitive prefixes"
+            />
+          </FormField>
+          {anthropicPromptCachingSettings.enabled && (
+            <>
+              <FormField label="Prompt Cache TTL" hint="Anthropic defaults to a 5-minute cache. Use 1 hour for slower follow-up flows at higher write cost.">
+                <Select
+                  value={anthropicPromptCachingSettings.ttl}
+                  onChange={(ttl) => setAnthropicPromptCachingSettings((current) => ({ ...current, ttl: ttl as '5m' | '1h' }))}
+                  options={ANTHROPIC_CACHE_TTL_OPTIONS}
+                />
+              </FormField>
+              <FormField label="">
+                <Toggle.Checkbox
+                  checked={anthropicPromptCachingSettings.automatic}
+                  onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({ ...current, automatic: checked }))}
+                  label="Use Automatic Caching"
+                  hint="Apply Anthropic's top-level automatic cache breakpoint to the last eligible block."
+                />
+              </FormField>
+              <FormField label="Explicit Cache Breakpoints" hint="Add Anthropic block-level breakpoints on request sections that stay stable across calls.">
+                <div className={styles.toggleStack}>
+                  <Toggle.Checkbox
+                    checked={anthropicPromptCachingSettings.breakpoints.tools}
+                    onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                      ...current,
+                      breakpoints: { ...current.breakpoints, tools: checked },
+                    }))}
+                    label="Cache Tools"
+                  />
+                  <Toggle.Checkbox
+                    checked={anthropicPromptCachingSettings.breakpoints.system}
+                    onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                      ...current,
+                      breakpoints: { ...current.breakpoints, system: checked },
+                    }))}
+                    label="Cache System Prompt"
+                  />
+                  <Toggle.Checkbox
+                    checked={anthropicPromptCachingSettings.breakpoints.messages}
+                    onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                      ...current,
+                      breakpoints: { ...current.breakpoints, messages: checked },
+                    }))}
+                    label="Cache Conversation Prefix"
+                  />
+                </div>
+              </FormField>
+            </>
+          )}
+        </>
       )}
       {isOpenRouter && (
         <OpenRouterSettings

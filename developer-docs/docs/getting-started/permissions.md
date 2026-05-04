@@ -36,7 +36,7 @@ These are always available:
 | `"world_books"` | Full CRUD on world books and their entries (list, get, create, update, delete) |
 | `"databanks"` | Full CRUD on databanks and their documents (list, get, create, update, delete, reprocess, read parsed content) |
 | `"personas"` | Full CRUD on personas (list, get, create, update, delete) + active switching + attached world book retrieval |
-| `"chat_mutation"` | Read and modify chat messages (append, update, delete) |
+| `"chat_mutation"` | Read and modify chat messages (append, update, delete, hide/unhide, inspect raw message history) |
 | `"event_tracking"` | Track, query, and replay extension-level telemetry events |
 | `"ui_panels"` | Create floating widgets and docked edge panels that overlay/consume screen space |
 | `"app_manipulation"` | Mount unrestricted portals into the document body that persist across routes. Also grants access to the Theme API for applying CSS variable overrides on top of the user's theme |

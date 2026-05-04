@@ -92,6 +92,15 @@
   margin-top: 1px;
 }
 
+.itemCachingMeta {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: #d97757;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
 .activeCheck {
   color: var(--lumiverse-primary);
   flex-shrink: 0;

@@ -64,6 +64,7 @@ export interface QuietGenerateResponse {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
+    provider_raw?: Record<string, unknown>
   }
 }
 
@@ -96,6 +97,12 @@ export interface DryRunResponse {
   assistantPrefill?: string
   model: string
   provider: string
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    provider_raw?: Record<string, unknown>
+  }
   tokenCount?: {
     total_tokens: number
     breakdown: {
@@ -198,6 +205,13 @@ export interface BreakdownResponse {
   maxContext: number
   model: string
   provider: string
+  parameters?: Record<string, unknown>
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    provider_raw?: Record<string, unknown>
+  }
   presetName?: string
   tokenizer_name: string | null
 }

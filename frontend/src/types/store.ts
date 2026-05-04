@@ -962,6 +962,13 @@ export interface BreakdownCacheEntry {
   maxContext: number
   model: string
   provider: string
+  parameters?: Record<string, unknown>
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    provider_raw?: Record<string, unknown>
+  }
   presetName?: string
   tokenizer_name: string | null
   chatId?: string

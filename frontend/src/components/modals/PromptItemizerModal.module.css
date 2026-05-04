@@ -94,6 +94,24 @@
   font-weight: 500;
 }
 
+.cacheSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.cacheSummaryMetric {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(217, 119, 87, 0.08);
+  color: rgba(217, 119, 87, 0.92);
+}
+
 /* Accordion */
 .accordion {
   border: 1px solid var(--lumiverse-border);
@@ -221,6 +239,25 @@
   font-variant-numeric: tabular-nums;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.cacheHint {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+}
+
+.cacheHintCached {
+  background: rgba(217, 119, 87, 0.12);
+  color: rgba(217, 119, 87, 0.92);
+}
+
+.cacheHintMiss {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--lumiverse-text-dim);
 }
 
 .tokenPct {

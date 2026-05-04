@@ -7,6 +7,7 @@ import {
   getReasoningBindingTitle,
   normalizeReasoningSettingsForProvider,
 } from '@/lib/reasoning-binding'
+import { formatAnthropicPromptCachingSummary } from '@/lib/anthropic-prompt-caching'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
@@ -201,6 +202,9 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
     : null
   const boundReasoningSummary = normalizedBoundReasoning ? getReasoningBindingSummary(normalizedBoundReasoning) : null
   const boundReasoningTitle = normalizedBoundReasoning ? getReasoningBindingTitle(normalizedBoundReasoning) : undefined
+  const anthropicCachingSummary = profile.provider === 'anthropic'
+    ? formatAnthropicPromptCachingSummary(profile.metadata?.prompt_caching)
+    : null
 
   if (editing) {
     return (
@@ -240,6 +244,11 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
               {boundReasoningSummary && (
                 <span className={styles.itemReasoningMeta} title={boundReasoningTitle}>
                   {boundReasoningSummary}
+                </span>
+              )}
+              {anthropicCachingSummary && (
+                <span className={styles.itemCachingMeta} title={anthropicCachingSummary}>
+                  {anthropicCachingSummary}
                 </span>
               )}
             </div>

@@ -76,4 +76,14 @@ export interface VectorStoreHealth {
   unindexedRowEstimate: number
   lastIndexRebuildAt: number
   indexes: Array<{ name: string; type?: string }>
+  tables?: Record<string, {
+    exists: boolean
+    rowCount: number
+    vectorIndexReady: boolean
+    scalarIndexReady: boolean
+    ftsIndexReady: boolean
+    unindexedRowEstimate: number
+    lastIndexRebuildAt: number
+    indexes: Array<{ name: string; type?: string }>
+  }>
 }

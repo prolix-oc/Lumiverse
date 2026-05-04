@@ -205,6 +205,118 @@ function collectTrailingUserMessageIds(userId: string, chatId: string): string[]
   return trailing;
 }
 
+function injectConnectionMetadataFlags(
+  connection: { provider: string; metadata?: Record<string, any> },
+  params: GenerationParameters,
+): void {
+  if (connection.metadata?.use_responses_api) {
+    params.use_responses_api = true;
+  }
+
+  if (connection.provider === "anthropic") {
+    const cacheSetting = connection.metadata?.prompt_caching;
+    if (
+      cacheSetting === true ||
+      (cacheSetting && typeof cacheSetting === "object" && !Array.isArray(cacheSetting))
+    ) {
+      params.prompt_caching = cacheSetting;
+    }
+  }
+
+  if (
+    connection.provider === "openrouter" &&
+    connection.metadata?.openrouter
+  ) {
+    params._openrouter = connection.metadata.openrouter;
+  }
+}
+
+type AnthropicPromptCachingConfig = {
+  enabled: boolean;
+  automatic: boolean;
+  cacheControl?: Record<string, unknown>;
+  breakpoints: {
+    tools: boolean;
+    system: boolean;
+    messages: boolean;
+  };
+};
+
+function resolveAnthropicPromptCachingConfig(
+  metadata: Record<string, any> | undefined,
+): AnthropicPromptCachingConfig {
+  const raw = metadata?.prompt_caching;
+  if (raw !== true && (!raw || typeof raw !== "object" || Array.isArray(raw))) {
+    return {
+      enabled: false,
+      automatic: false,
+      breakpoints: { tools: false, system: false, messages: false },
+    };
+  }
+
+  const record = raw === true ? { type: "ephemeral" } : raw;
+  const breakpoints =
+    record.breakpoints && typeof record.breakpoints === "object" && !Array.isArray(record.breakpoints)
+      ? record.breakpoints
+      : {};
+
+  return {
+    enabled: true,
+    automatic: record.automatic !== false,
+    cacheControl: {
+      type: "ephemeral",
+      ...(record.ttl === "1h" ? { ttl: "1h" } : {}),
+    },
+    breakpoints: {
+      tools: breakpoints.tools === true,
+      system: breakpoints.system === true,
+      messages: breakpoints.messages === true,
+    },
+  };
+}
+
+function applyAnthropicCacheBreakpointsToMessages(
+  messages: LlmMessage[],
+  config: AnthropicPromptCachingConfig,
+): LlmMessage[] {
+  if (!config.enabled) return messages;
+  const lastConversationIdx = config.breakpoints.messages
+    ? (() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role !== "system") return i;
+        }
+        return -1;
+      })()
+    : -1;
+  return messages.map((message, index) => {
+    const shouldCacheSystem = config.breakpoints.system && message.role === "system";
+    const shouldCacheMessage = index === lastConversationIdx;
+    if (!shouldCacheSystem && !shouldCacheMessage) return message;
+    return {
+      ...message,
+      cache_control: config.cacheControl,
+    };
+  });
+}
+
+function applyAnthropicCacheBreakpointsToTools(
+  tools: ToolDefinition[] | undefined,
+  config: AnthropicPromptCachingConfig,
+): ToolDefinition[] | undefined {
+  if (!tools || !config.enabled || !config.breakpoints.tools) return tools;
+  return tools.map((tool) => ({
+    ...tool,
+    cache_control: config.cacheControl,
+  }));
+}
+
+export const __test__ = {
+  injectConnectionMetadataFlags,
+  resolveAnthropicPromptCachingConfig,
+  applyAnthropicCacheBreakpointsToMessages,
+  applyAnthropicCacheBreakpointsToTools,
+};
+
 export interface RawGenerateInput {
   provider: string;
   model: string;
@@ -2142,18 +2254,19 @@ export async function startGeneration(
         // Strip internal-only keys before they reach the provider
         delete mergedParams.max_context_length;
 
-        // Inject connection-level metadata flags into parameters (e.g. use_responses_api)
-        if (connection.metadata?.use_responses_api) {
-          mergedParams.use_responses_api = true;
-        }
+        injectConnectionMetadataFlags(connection, mergedParams);
 
-        // Inject OpenRouter-specific settings from connection metadata
-        if (
-          connection.provider === "openrouter" &&
-          connection.metadata?.openrouter
-        ) {
-          mergedParams._openrouter = connection.metadata.openrouter;
-        }
+        const anthropicCaching = resolveAnthropicPromptCachingConfig(
+          connection.metadata,
+        );
+        messages = applyAnthropicCacheBreakpointsToMessages(
+          messages,
+          anthropicCaching,
+        );
+        inlineTools = applyAnthropicCacheBreakpointsToTools(
+          inlineTools,
+          anthropicCaching,
+        );
 
         // Resolve preset name for breakdown display
         const presetId = input.preset_id || connection.preset_id;
@@ -3136,6 +3249,8 @@ async function runGeneration(
               maxContext: lifecycle.maxContext || 0,
               model: lifecycle.model,
               provider: lifecycle.providerName || "",
+              parameters,
+              usage: streamUsage,
               presetName: lifecycle.presetName,
               tokenizer_name: tokenResult.tokenizer_name,
             };
@@ -3547,11 +3662,26 @@ async function prepareRawCall(
     input.model,
     parameters,
   );
+  if (provider.name === "anthropic" && reasoningConnection?.metadata) {
+    injectConnectionMetadataFlags(reasoningConnection, parameters);
+  }
   const request: GenerationRequest = {
-    messages: input.messages,
+    messages:
+      provider.name === "anthropic"
+        ? applyAnthropicCacheBreakpointsToMessages(
+            input.messages,
+            resolveAnthropicPromptCachingConfig(reasoningConnection?.metadata),
+          )
+        : input.messages,
     model: input.model,
     parameters,
-    tools: input.tools,
+    tools:
+      provider.name === "anthropic"
+        ? applyAnthropicCacheBreakpointsToTools(
+            input.tools,
+            resolveAnthropicPromptCachingConfig(reasoningConnection?.metadata),
+          )
+        : input.tools,
     signal: input.signal,
   };
   return { provider, apiKey, apiUrl, request };
@@ -3584,15 +3714,11 @@ async function prepareQuietCall(
     mergedParams,
   );
 
-  // Inject connection-level metadata flags into parameters (e.g. use_responses_api)
-  if (connection.metadata?.use_responses_api) {
-    mergedParams.use_responses_api = true;
-  }
+  injectConnectionMetadataFlags(connection, mergedParams);
 
-  // Inject OpenRouter-specific settings from connection metadata
-  if (connection.provider === "openrouter" && connection.metadata?.openrouter) {
-    mergedParams._openrouter = connection.metadata.openrouter;
-  }
+  const anthropicCaching = resolveAnthropicPromptCachingConfig(
+    connection.metadata,
+  );
 
   // Allow callers (e.g. Memory Cortex sidecar) to override the model without
   // swapping connection profiles. Strip the key from parameters so it doesn't
@@ -3604,10 +3730,19 @@ async function prepareQuietCall(
   if ("model" in mergedParams) delete (mergedParams as any).model;
 
   const request: GenerationRequest = {
-    messages: input.messages,
+    messages:
+      provider.name === "anthropic"
+        ? applyAnthropicCacheBreakpointsToMessages(
+            input.messages,
+            anthropicCaching,
+          )
+        : input.messages,
     model: paramModel || connection.model,
     parameters: mergedParams,
-    tools: input.tools,
+    tools:
+      provider.name === "anthropic"
+        ? applyAnthropicCacheBreakpointsToTools(input.tools, anthropicCaching)
+        : input.tools,
     signal: input.signal,
   };
 
@@ -3757,16 +3892,11 @@ export async function summarizeGenerate(
     }
     mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
 
-    // Inject connection-level metadata flags
-    if (connection.metadata?.use_responses_api) {
-      mergedParams.use_responses_api = true;
-    }
-    if (
-      connection.provider === "openrouter" &&
-      connection.metadata?.openrouter
-    ) {
-      mergedParams._openrouter = connection.metadata.openrouter;
-    }
+    injectConnectionMetadataFlags(connection, mergedParams);
+
+    const anthropicCaching = resolveAnthropicPromptCachingConfig(
+      connection.metadata,
+    );
 
     applyEffectiveReasoningSettings(
       userId,
@@ -3777,10 +3907,19 @@ export async function summarizeGenerate(
     );
 
     const request: GenerationRequest = {
-      messages: input.messages,
+      messages:
+        provider.name === "anthropic"
+          ? applyAnthropicCacheBreakpointsToMessages(
+              input.messages,
+              anthropicCaching,
+            )
+          : input.messages,
       model: sidecarModel || connection.model,
       parameters: mergedParams,
-      tools: input.tools,
+      tools:
+        provider.name === "anthropic"
+          ? applyAnthropicCacheBreakpointsToTools(input.tools, anthropicCaching)
+          : input.tools,
     };
 
     // Use streaming when tools are present — some providers only emit tool call

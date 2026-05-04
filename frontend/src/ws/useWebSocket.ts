@@ -356,6 +356,8 @@ export function useWebSocket() {
                 maxContext: bd.maxContext || 0,
                 model: bd.model || '',
                 provider: bd.provider || '',
+                parameters: bd.parameters,
+                usage: bd.usage,
                 presetName: bd.presetName,
                 tokenizer_name: bd.tokenizer_name || null,
                 chatId: payload.chatId,

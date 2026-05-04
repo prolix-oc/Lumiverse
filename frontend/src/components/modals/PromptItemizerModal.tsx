@@ -8,6 +8,7 @@ import { generateApi, type DryRunMessage, type DryRunResponse } from '@/api/gene
 import type { BreakdownCacheEntry } from '@/types/store'
 import { groupBreakdownEntries, getBlockDisplayColor } from '@/lib/prompt-breakdown'
 import type { BreakdownGroup } from '@/lib/prompt-breakdown'
+import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
 import styles from './PromptItemizerModal.module.css'
@@ -83,6 +84,8 @@ export default function PromptItemizerModal() {
           maxContext: res.maxContext,
           model: res.model,
           provider: res.provider,
+          parameters: res.parameters,
+          usage: res.usage,
           presetName: res.presetName,
           tokenizer_name: res.tokenizer_name,
         }
@@ -178,6 +181,30 @@ export default function PromptItemizerModal() {
   }, [flatEntries])
 
   const selectedEntry = flatEntries.find((item) => item.key === selectedEntryKey) ?? null
+  const cacheHints = useMemo(
+    () => data
+      ? getAnthropicBreakdownCacheHints({
+          provider: data.provider,
+          parameters: data.parameters,
+          breakdown: data.entries,
+        })
+      : [],
+    [data],
+  )
+  const anthropicCacheUsage = useMemo(
+    () => data ? getAnthropicCacheUsageSummary(data.provider, data.usage) : null,
+    [data],
+  )
+  const cacheHintsByKey = useMemo(() => {
+    const map = new Map<string, { kind: 'cached' | 'miss'; label: string }>()
+    flatEntries.forEach((item, index) => {
+      const hint = cacheHints[index]
+      if (hint) map.set(item.key, hint)
+    })
+    return map
+  }, [flatEntries, cacheHints])
+  const selectedEntryIndex = selectedEntry ? flatEntries.findIndex((item) => item.key === selectedEntry.key) : -1
+  const selectedCacheHint = selectedEntryIndex >= 0 ? cacheHints[selectedEntryIndex] : undefined
   const selectedChatHistoryMessages = useMemo(() => {
     if (!selectedEntry || selectedEntry.entry.type !== 'chat_history') return null
 
@@ -238,6 +265,19 @@ export default function PromptItemizerModal() {
             {!loading && data && rawView === 'off' && (
               <>
                 <StackedBar groups={mainGroups} total={data.totalTokens} />
+                {anthropicCacheUsage && (
+                  <div className={styles.cacheSummary}>
+                    <span>Anthropic cache</span>
+                    <span className={styles.cacheSummaryMetric}>read {anthropicCacheUsage.cacheReadInputTokens.toLocaleString()}</span>
+                    <span className={styles.cacheSummaryMetric}>write {anthropicCacheUsage.cacheCreationInputTokens.toLocaleString()}</span>
+                    {anthropicCacheUsage.cacheCreation5mInputTokens > 0 && (
+                      <span className={styles.cacheSummaryMetric}>5m {anthropicCacheUsage.cacheCreation5mInputTokens.toLocaleString()}</span>
+                    )}
+                    {anthropicCacheUsage.cacheCreation1hInputTokens > 0 && (
+                      <span className={styles.cacheSummaryMetric}>1h {anthropicCacheUsage.cacheCreation1hInputTokens.toLocaleString()}</span>
+                    )}
+                  </div>
+                )}
                 <Legend groups={mainGroups} />
                 {mainGroups.map((group) => (
                   <GroupAccordion
@@ -248,6 +288,7 @@ export default function PromptItemizerModal() {
                     onToggle={() => toggleGroup(group.label)}
                     selectedEntryKey={selectedEntryKey}
                     onSelectEntry={setSelectedEntryKey}
+                    cacheHintsByKey={cacheHintsByKey}
                   />
                 ))}
                 {sidecarGroup && sidecarGroup.tokens > 0 && (
@@ -262,6 +303,7 @@ export default function PromptItemizerModal() {
                       onToggle={() => toggleGroup(sidecarGroup.label)}
                       selectedEntryKey={selectedEntryKey}
                       onSelectEntry={setSelectedEntryKey}
+                      cacheHintsByKey={cacheHintsByKey}
                     />
                   </>
                 )}
@@ -274,6 +316,18 @@ export default function PromptItemizerModal() {
                           <span className={styles.entryInspectorTitle}>{selectedEntry.entry.name}</span>
                           <span className={styles.headerBadge}>{selectedEntry.entry.tokens.toLocaleString()} tokens</span>
                           <span className={styles.headerBadge}>{selectedEntry.entry.type}</span>
+                          {selectedCacheHint && (
+                            <span
+                              className={clsx(
+                                styles.cacheHint,
+                                selectedCacheHint.kind === 'cached'
+                                  ? styles.cacheHintCached
+                                  : styles.cacheHintMiss,
+                              )}
+                            >
+                              {selectedCacheHint.kind === 'cached' ? 'cached' : 'uncached'}
+                            </span>
+                          )}
                           {selectedEntry.entry.role && (
                             <span className={clsx(styles.tokenRole, ROLE_CLASS[selectedEntry.entry.role])}>
                               {selectedEntry.entry.role}
@@ -418,13 +472,14 @@ function Legend({ groups }: { groups: BreakdownGroup[] }) {
   )
 }
 
-function GroupAccordion({ group, total, open, onToggle, selectedEntryKey, onSelectEntry }: {
+function GroupAccordion({ group, total, open, onToggle, selectedEntryKey, onSelectEntry, cacheHintsByKey }: {
   group: BreakdownGroup
   total: number
   open: boolean
   onToggle: () => void
   selectedEntryKey?: string | null
   onSelectEntry?: (key: string) => void
+  cacheHintsByKey: Map<string, { kind: 'cached' | 'miss'; label: string }>
 }) {
   return (
     <div className={styles.accordion}>
@@ -443,6 +498,7 @@ function GroupAccordion({ group, total, open, onToggle, selectedEntryKey, onSele
             {group.entries.map((entry, i) => {
               const pct = total > 0 ? ((entry.tokens / total) * 100).toFixed(1) : '0.0'
               const entryKey = getEntryKey(group.label, i)
+              const cacheHint = cacheHintsByKey.get(entryKey)
 
               return (
                 <button
@@ -463,6 +519,17 @@ function GroupAccordion({ group, total, open, onToggle, selectedEntryKey, onSele
                     {entry.role && (
                       <span className={clsx(styles.tokenRole, ROLE_CLASS[entry.role])}>
                         {entry.role}
+                      </span>
+                    )}
+                    {cacheHint && (
+                      <span
+                        className={clsx(
+                          styles.cacheHint,
+                          cacheHint.kind === 'cached' ? styles.cacheHintCached : styles.cacheHintMiss,
+                        )}
+                        title={cacheHint.label}
+                      >
+                        {cacheHint.kind === 'cached' ? 'cached' : 'uncached'}
                       </span>
                     )}
                   </div>

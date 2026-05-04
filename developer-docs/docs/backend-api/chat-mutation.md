@@ -41,6 +41,12 @@ await spindle.chat.updateMessage(chatId, messageId, {
   reasoning: { text: null, duration: null }, // clear both
 })
 
+// Advanced: persist a maintenance rewrite without rebuilding chat chunks
+await spindle.chat.updateMessage(chatId, messageId, {
+  content: '<tracker type="sim">...</tracker>',
+  skipChunkRebuild: true,
+})
+
 // Delete a message
 await spindle.chat.deleteMessage(chatId, messageId)
 
@@ -79,6 +85,7 @@ type UpdateMessagePatch = {
     text?: string | null       // null clears extra.reasoning
     duration?: number | null   // null clears extra.reasoning_duration
   }
+  skipChunkRebuild?: boolean
 }
 ```
 
@@ -89,6 +96,8 @@ All fields are optional; `undefined` leaves the field untouched. Precedence rule
 - **Navigation-only.** Supply `swipe_id` alone to cycle the active slot; content is re-derived from the existing `swipes` array.
 - **`swipe_dates` auto-align.** If you rewrite `swipes` without supplying `swipe_dates`, the host pads new slots with the current timestamp and truncates trailing dates if the array shrank. If you want precise control, supply both.
 - **Reasoning is independent.** `reasoning.text` and `reasoning.duration` are cleared independently with `null` — they are not forced to move together.
+- **Chunk rebuilds are default behavior.** When the active message content changes, the host invalidates chat-memory cache and rebuilds `chat_chunks` so retrieval stays aligned with canonical stored content.
+- **`skipChunkRebuild` is an advanced escape hatch.** Set `skipChunkRebuild: true` only for extension/host maintenance rewrites where you intentionally do not want that content edit to churn chat chunks.
 
 ### Validation
 
@@ -112,6 +121,18 @@ These throw rather than silently clamp — partial writes would drift `swipes` /
 `reasoning` targets the host-owned `extra.reasoning` (text) and `extra.reasoning_duration` (ms) fields that the LLM pipeline populates during generation. Supplying `reasoning: { text: "..." }` overwrites the text without touching the duration; supplying `reasoning: { duration: null }` clears the duration without touching the text.
 
 A reasoning patch with no `metadata` patch still persists — the host writes the mutated `extra` bag whenever either `metadata` or `reasoning` touched it.
+
+### Chat-chunk side effects
+
+By default, `spindle.chat.updateMessage()` keeps retrieval data in sync with canonical chat content:
+
+- If the active message content changes, the host invalidates chat-memory caches.
+- It then rebuilds the chat's stored `chat_chunks` from canonical messages.
+- Hidden messages remain excluded from chunk generation as usual.
+
+`skipChunkRebuild: true` suppresses that rebuild path for the current update only. This is intended for advanced maintenance scenarios such as extension-owned normalization, metadata-preserving rewrites, or legacy-format repair where the canonical stored message must change but retrieval should remain untouched.
+
+Use it sparingly. If you suppress rebuilds for semantic content edits, retrieval and memory-cortex data can drift away from the stored transcript until some later operation rebuilds the chat.
 
 ## Hidden Messages
 

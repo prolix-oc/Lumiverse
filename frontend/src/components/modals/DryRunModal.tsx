@@ -9,6 +9,7 @@ import { useStore } from '@/store'
 import type { DryRunResponse, DryRunMessage } from '@/api/generate'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
+import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import styles from './DryRunModal.module.css'
 import clsx from 'clsx'
 
@@ -208,6 +209,14 @@ export default function DryRunModal() {
     () => tokenCount?.breakdown || [],
     [tokenCount],
   )
+  const breakdownCacheHints = useMemo(
+    () => getAnthropicBreakdownCacheHints({ provider, parameters, breakdown }),
+    [provider, parameters, breakdown],
+  )
+  const anthropicCacheUsage = useMemo(
+    () => getAnthropicCacheUsageSummary(provider, modalProps.usage),
+    [provider, modalProps.usage],
+  )
 
   const parametersJson = useMemo(
     () => JSON.stringify(parameters, null, 2),
@@ -342,11 +351,19 @@ export default function DryRunModal() {
                         {tokenCount.tokenizer_name && (
                           <span className={styles.breakdownSource}>via {tokenCount.tokenizer_name}</span>
                         )}
+                        {anthropicCacheUsage && (
+                          <span className={styles.breakdownSource}>
+                            read {anthropicCacheUsage.cacheReadInputTokens.toLocaleString()} • write {anthropicCacheUsage.cacheCreationInputTokens.toLocaleString()}
+                            {anthropicCacheUsage.cacheCreation5mInputTokens > 0 && ` • 5m ${anthropicCacheUsage.cacheCreation5mInputTokens.toLocaleString()}`}
+                            {anthropicCacheUsage.cacheCreation1hInputTokens > 0 && ` • 1h ${anthropicCacheUsage.cacheCreation1hInputTokens.toLocaleString()}`}
+                          </span>
+                        )}
                       </div>
                     )}
                       <div className={styles.breakdownList}>
                         {breakdown.map((entry, i) => {
                           const tokens = tokenBreakdown[i]?.tokens
+                          const cacheHint = breakdownCacheHints[i]
                           return (
                             <div key={i} className={styles.breakdownEntry}>
                               <span className={styles.breakdownLabel}>{entry.name}</span>
@@ -356,11 +373,24 @@ export default function DryRunModal() {
                               <span className={styles.breakdownSource}>{entry.type}</span>
                               {entry.role && (
                                 <span className={styles.breakdownRole}>{entry.role}</span>
-                            )}
-                            {tokens != null && (
-                              <span className={styles.breakdownTokens}>
-                                {tokens.toLocaleString()} tokens
-                              </span>
+                             )}
+                              {cacheHint && (
+                                <span
+                                  className={clsx(
+                                    styles.breakdownCacheHint,
+                                    cacheHint.kind === 'cached'
+                                      ? styles.breakdownCacheHintCached
+                                      : styles.breakdownCacheHintMiss,
+                                  )}
+                                  title={cacheHint.label}
+                                >
+                                  {cacheHint.kind === 'cached' ? 'cached' : 'uncached'}
+                                </span>
+                              )}
+                             {tokens != null && (
+                               <span className={styles.breakdownTokens}>
+                                 {tokens.toLocaleString()} tokens
+                               </span>
                             )}
                           </div>
                         )

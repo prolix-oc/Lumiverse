@@ -356,7 +356,7 @@ export interface LumiModuleDonePayload {
   content?: string
   error?: string
   durationMs: number
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; provider_raw?: Record<string, unknown> }
 }
 
 export interface LumiPipelineCompletedPayload {
@@ -364,7 +364,7 @@ export interface LumiPipelineCompletedPayload {
   status: 'success' | 'skipped' | 'error' | 'aborted'
   reason?: string
   totalDurationMs?: number
-  totalUsage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  totalUsage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; provider_raw?: Record<string, unknown> }
 }
 
 export interface SpindleThemeOverridesPayload {

@@ -3,6 +3,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { createCooperativeYielder, readWithAbort } from "../stream-utils";
 import {
   getTextContent,
+  type GenerationUsage,
   type GenerationRequest,
   type GenerationResponse,
   type StreamChunk,
@@ -20,6 +21,7 @@ const API_VERSION = "2023-06-01";
 
 export class AnthropicProvider implements LlmProvider {
   private static readonly PROMPT_PLACEHOLDER = "Let's get started.";
+  private static readonly CACHE_TTLS = new Set(["5m", "1h"]);
 
   readonly name = "anthropic";
   readonly displayName = "Anthropic";
@@ -109,6 +111,60 @@ export class AnthropicProvider implements LlmProvider {
     return Object.keys(next).length > 0 ? next : undefined;
   }
 
+  private normalizeCacheControl(
+    value: unknown,
+  ): Record<string, unknown> | undefined {
+    if (value === true) {
+      return { type: "ephemeral" };
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+
+    const record = value as Record<string, unknown>;
+    if (record.type !== "ephemeral") {
+      return undefined;
+    }
+
+    const normalized: Record<string, unknown> = { type: "ephemeral" };
+    if (
+      typeof record.ttl === "string" &&
+      AnthropicProvider.CACHE_TTLS.has(record.ttl)
+    ) {
+      normalized.ttl = record.ttl;
+    }
+    return normalized;
+  }
+
+  private buildUsage(data: any): GenerationUsage | undefined {
+    if (!data?.usage) return undefined;
+    const inputTokens =
+      (data.usage.input_tokens || 0) +
+      (data.usage.cache_read_input_tokens || 0) +
+      (data.usage.cache_creation_input_tokens || 0);
+    const outputTokens = data.usage.output_tokens || 0;
+    return {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens,
+      provider_raw: { ...data.usage },
+    };
+  }
+
+  private buildStreamingUsage(
+    inputTokens: number,
+    outputTokens: number,
+    rawUsage?: Record<string, unknown>,
+  ): GenerationUsage | undefined {
+    if (!inputTokens && !outputTokens && !rawUsage) return undefined;
+    return {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens,
+      provider_raw: rawUsage,
+    };
+  }
+
   async generate(
     apiKey: string,
     apiUrl: string,
@@ -157,23 +213,12 @@ export class AnthropicProvider implements LlmProvider {
           }))
         : undefined;
 
-    const inputTokens = (data.usage?.input_tokens || 0) +
-                        (data.usage?.cache_read_input_tokens || 0) +
-                        (data.usage?.cache_creation_input_tokens || 0);
-    const outputTokens = data.usage?.output_tokens || 0;
-
     return {
       content: textContent,
       reasoning: thinkingContent || undefined,
       finish_reason: toolCalls ? "tool_calls" : data.stop_reason || "end_turn",
       tool_calls: toolCalls,
-      usage: data.usage
-        ? {
-            prompt_tokens: inputTokens,
-            completion_tokens: outputTokens,
-            total_tokens: inputTokens + outputTokens,
-          }
-        : undefined,
+      usage: this.buildUsage(data),
     };
   }
 
@@ -204,6 +249,7 @@ export class AnthropicProvider implements LlmProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     let streamInputTokens = 0;
+    let streamUsageRaw: Record<string, unknown> | undefined;
     const maybeYield = createCooperativeYielder(64, request.signal);
 
     // Tool call accumulation — Anthropic streams tool_use as content blocks
@@ -231,6 +277,7 @@ export class AnthropicProvider implements LlmProvider {
             if (data.type === "message_start" && data.message?.usage) {
               // Capture input token count from message_start (output tokens arrive in message_delta)
               const u = data.message.usage;
+              streamUsageRaw = { ...u };
               streamInputTokens = (u.input_tokens || 0) +
                                   (u.cache_read_input_tokens || 0) +
                                   (u.cache_creation_input_tokens || 0);
@@ -261,14 +308,14 @@ export class AnthropicProvider implements LlmProvider {
               }
             } else if (data.type === "message_delta") {
               const outputTokens = data.usage?.output_tokens || 0;
-              const usage =
-                streamInputTokens || outputTokens
-                  ? {
-                      prompt_tokens: streamInputTokens,
-                      completion_tokens: outputTokens,
-                      total_tokens: streamInputTokens + outputTokens,
-                    }
-                  : undefined;
+              const usageRaw = data.usage
+                ? { ...(streamUsageRaw || {}), ...data.usage }
+                : streamUsageRaw;
+              const usage = this.buildStreamingUsage(
+                streamInputTokens,
+                outputTokens,
+                usageRaw,
+              );
 
               const stopReason = data.delta?.stop_reason;
               if (stopReason) {
@@ -347,32 +394,66 @@ export class AnthropicProvider implements LlmProvider {
     return (data.data || []).map((m: any) => m.id).sort();
   }
 
+  private applyCacheControl(
+    target: Record<string, unknown>,
+    cacheControl: unknown,
+  ): Record<string, unknown> {
+    const normalized = this.normalizeCacheControl(cacheControl);
+    return normalized ? { ...target, cache_control: normalized } : target;
+  }
+
   /** Format message content for the Anthropic API, handling multipart (vision) content. */
   private formatContent(m: LlmMessage): string | any[] {
-    if (typeof m.content === "string") return m.content;
+    if (typeof m.content === "string") {
+      if (!this.normalizeCacheControl(m.cache_control)) return m.content;
+      return [
+        this.applyCacheControl({ type: "text", text: m.content }, m.cache_control),
+      ];
+    }
     return m.content.map((part: LlmMessagePart) => {
       switch (part.type) {
         case "text":
-          return { type: "text", text: part.text };
+          return this.applyCacheControl({ type: "text", text: part.text }, part.cache_control);
         case "image":
-          return {
+          return this.applyCacheControl({
             type: "image",
             source: {
               type: "base64",
               media_type: part.mime_type,
               data: part.data,
             },
-          };
+          }, part.cache_control);
         case "audio":
           // Anthropic doesn't support native audio content blocks — include as text note
-          return {
+          return this.applyCacheControl({
             type: "text",
             text: `[Audio attachment: ${part.mime_type}]`,
-          };
+          }, part.cache_control);
         default:
           return { type: "text", text: "" };
       }
     });
+  }
+
+  private formatSystemMessage(m: LlmMessage): Array<Record<string, unknown>> {
+    if (typeof m.content === "string") {
+      const text = this.finalizeSystemText([m.content]);
+      return text
+        ? [this.applyCacheControl({ type: "text", text }, m.cache_control)]
+        : [];
+    }
+
+    return m.content
+      .filter((part): part is Extract<LlmMessagePart, { type: "text" }> =>
+        part.type === "text",
+      )
+      .map((part) => this.finalizeSystemText([part.text])
+        ? this.applyCacheControl(
+            { type: "text", text: this.finalizeSystemText([part.text]) as string },
+            part.cache_control,
+          )
+        : null)
+      .filter((part): part is Record<string, unknown> => !!part);
   }
 
   /**
@@ -380,16 +461,20 @@ export class AnthropicProvider implements LlmProvider {
    * practice, Lumiverse does not need block-level system features here, and the
    * string form is the least error-prone across custom-body inputs and proxies.
    */
-  private normalizeSystemParam(value: unknown): string | undefined {
+  private normalizeSystemParam(value: unknown):
+    | Array<Record<string, unknown>>
+    | undefined {
     if (typeof value === "string") {
-      return this.finalizeSystemText([value]);
+      const text = this.finalizeSystemText([value]);
+      return text ? [{ type: "text", text }] : undefined;
     }
 
-    const chunks: string[] = [];
+    const blocks: Array<Record<string, unknown>> = [];
 
     const visit = (input: unknown) => {
       if (typeof input === "string") {
-        if (input) chunks.push(input);
+        const text = this.finalizeSystemText([input]);
+        if (text) blocks.push({ type: "text", text });
         return;
       }
       if (Array.isArray(input)) {
@@ -400,11 +485,21 @@ export class AnthropicProvider implements LlmProvider {
 
       const record = input as Record<string, unknown>;
       if (typeof record.text === "string") {
-        if (record.text) chunks.push(record.text);
+        const text = this.finalizeSystemText([record.text]);
+        if (text) {
+          blocks.push(
+            this.applyCacheControl({ type: "text", text }, record.cache_control),
+          );
+        }
         return;
       }
       if (typeof record.content === "string") {
-        if (record.content) chunks.push(record.content);
+        const text = this.finalizeSystemText([record.content]);
+        if (text) {
+          blocks.push(
+            this.applyCacheControl({ type: "text", text }, record.cache_control),
+          );
+        }
         return;
       }
       if (record.content !== undefined) {
@@ -417,7 +512,7 @@ export class AnthropicProvider implements LlmProvider {
     };
 
     visit(value);
-    return this.finalizeSystemText(chunks);
+    return blocks.length > 0 ? blocks : undefined;
   }
 
   /**
@@ -468,7 +563,7 @@ export class AnthropicProvider implements LlmProvider {
   private buildBody(request: GenerationRequest, stream: boolean): any {
     const params = request.parameters || {};
     const omitSampling = this.isOpus47Model(request.model);
-    const systemBlocks: Array<{ type: "text"; text: string }> = [];
+    const systemBlocks: Array<Record<string, unknown>> = [];
     const normalizedMessages: Array<{
       role: "user" | "assistant";
       content: string | any[];
@@ -477,8 +572,7 @@ export class AnthropicProvider implements LlmProvider {
 
     for (const message of request.messages) {
       if (!sawNonSystem && message.role === "system") {
-        const text = this.finalizeSystemText([getTextContent(message)]);
-        if (text) systemBlocks.push({ type: "text", text });
+        systemBlocks.push(...this.formatSystemMessage(message));
         continue;
       }
 
@@ -527,7 +621,7 @@ export class AnthropicProvider implements LlmProvider {
 
     const normalizedParamSystem = this.normalizeSystemParam(params.system);
     if (normalizedParamSystem) {
-      systemBlocks.push({ type: "text", text: normalizedParamSystem });
+      systemBlocks.push(...normalizedParamSystem);
     }
     if (systemBlocks.length > 0) {
       body.system = systemBlocks;
@@ -545,9 +639,11 @@ export class AnthropicProvider implements LlmProvider {
     if (!omitSampling && params.top_k !== undefined) body.top_k = params.top_k;
     if (params.stop) body.stop_sequences = params.stop;
 
-    const enableCaching = params.prompt_caching === true;
-    if (enableCaching) {
-      body.cache_control = { type: "ephemeral" };
+    const normalizedCacheControl = this.normalizeCacheControl(
+      params.prompt_caching,
+    );
+    if (normalizedCacheControl) {
+      body.cache_control = normalizedCacheControl;
     }
 
     // Extended/adaptive thinking
@@ -586,6 +682,9 @@ export class AnthropicProvider implements LlmProvider {
         name: t.name,
         description: t.description,
         input_schema: t.parameters,
+        ...(this.normalizeCacheControl(t.cache_control)
+          ? { cache_control: this.normalizeCacheControl(t.cache_control) }
+          : {}),
         ...(t.strict !== undefined ? { strict: t.strict } : {}),
         ...(t.inputExamples ? { input_examples: t.inputExamples } : {}),
       }));
