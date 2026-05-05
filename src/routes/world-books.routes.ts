@@ -478,7 +478,7 @@ app.post("/:id/diagnostics", async (c) => {
   const worldBookVectorSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: embeddings.retrieval_top_k,
   });
-  const queryPreview = await getWorldInfoVectorQueryPreview(userId, messages);
+  const queryPreview = await getWorldInfoVectorQueryPreview(userId, messages, chat.id);
   const blockerMessages: string[] = [];
 
   if (!isAttached) {

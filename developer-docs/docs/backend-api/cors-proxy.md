@@ -21,6 +21,8 @@ const response = await spindle.cors('https://api.example.com/data', {
 | `method` | `string` | HTTP method. Default: `"GET"` |
 | `headers` | `Record<string, string>` | Request headers |
 | `body` | `string` | Request body (for POST/PUT/PATCH) |
+| `responseType` | `"text" \| "arraybuffer"` | Return text or transparent binary media data |
+| `mediaType` | `"image" \| "audio"` | Restrict transparent binary responses to image or audio data |
 
 ## Response Shape
 
@@ -49,13 +51,13 @@ The `corsProxy` method is only available when:
 
 Requests from sandboxed widgets flow through the same host-side CORS proxy pipeline (`spindle.cors()`), so the same URL validation, SSRF protection, timeout, and body-size limits apply.
 
-### Binary (image) responses
+### Binary media responses
 
-When `corsProxy()` is used from inside a sandbox frame, the host automatically sets `responseType: "arraybuffer"`. The backend then:
+When `corsProxy()` is used from inside a sandbox frame for binary media, the host sets `responseType: "arraybuffer"`. The backend then:
 
-1. Validates that the remote server's `Content-Type` starts with `image/`.
-2. For raster formats, validates the file magic bytes (PNG, JPEG, GIF, WebP, BMP).
-3. For SVG, validates the XML preamble.
+1. Validates that the remote server's `Content-Type` matches the requested `mediaType`.
+2. For images, validates magic bytes for PNG, JPEG, GIF, WebP, BMP, or SVG.
+3. For audio, validates common browser-playable formats such as MP3, WAV, Ogg/Opus/Vorbis, FLAC, M4A/MP4, WebM, and MIDI.
 4. Returns the body as a **base64-encoded string** (`encoding: "base64"`) so it can safely cross the WebSocket boundary.
 
 The frontend decodes the base64 payload back into a `Uint8Array` before delivering it to the sandbox:
@@ -68,7 +70,17 @@ const url = URL.createObjectURL(blob)
 img.src = url
 ```
 
-If the fetched resource is **not** an image, the promise rejects with an error such as:
+Sandboxed widgets can use the dedicated audio helpers instead of manually building blobs:
+
+```ts
+const audio = await window.spindleSandbox.createAudio('https://example.com/bgm.mp3', {
+  controls: true,
+  loop: true,
+})
+document.body.appendChild(audio.element)
+```
+
+If the fetched resource does not match the requested media type, the promise rejects with an error such as:
 
 ```
 CORS proxy transparent proxy only serves image data (received Content-Type: application/json)

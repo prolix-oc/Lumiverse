@@ -281,8 +281,10 @@ export function invalidateDisplayRegexCacheForVars(changedVars: ReadonlySet<stri
       }
     }
   }
+  const resolutionWasNonEmpty = displayRegexResolutionCache.size > 0
   displayRegexResolutionCache.clear()
   for (const messageId of affectedMessages) bumpPerMessageCv(messageId)
+  if (resolutionWasNonEmpty) bumpGlobalCv()
 }
 
 async function resolveMacrosBatchChunked(
@@ -477,7 +479,7 @@ export function useDisplayRegex(
     displayRegexResolutionCache.get(templateCacheKey)?.promise?.then(applyResolvedTemplates)
 
     return () => { cancelled = true }
-  }, [scriptsNeedingResolution, templateCacheKey, activeChatId, activeCharacterId, activePersonaId])
+  }, [scriptsNeedingResolution, templateCacheKey, activeChatId, activeCharacterId, activePersonaId, cvSnapshot])
 
   const fallbackContent = useMemo(
     () => {

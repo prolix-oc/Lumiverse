@@ -93,6 +93,8 @@ Inside a sandbox frame, the host injects a minimal API on `window.spindleSandbox
 | `onMessage(handler)` | Listen for messages from the host extension |
 | `requestResize(height?)` | Ask the host to resize the iframe |
 | `corsProxy(url, options?)` | Fetch a URL through the extension's CORS proxy (requires `cors_proxy` permission) |
+| `fetchAudio(url, options?)` | Fetch remote audio through the CORS proxy and return a sandbox-local blob URL |
+| `createAudio(url, options?)` | Fetch remote audio through the CORS proxy and return a configured `HTMLAudioElement` handle |
 
 ```ts
 // Inside the sandboxed iframe HTML
@@ -103,9 +105,19 @@ const url = URL.createObjectURL(blob)
 document.getElementById('avatar').src = url
 ```
 
-`corsProxy` is only available if the extension has the `cors_proxy` permission. It routes requests through the backend worker's existing `spindle.cors()` path, so the same SSRF validation, timeouts, and response-size limits apply.
+`corsProxy`, `fetchAudio`, and `createAudio` are only available if the extension has the `cors_proxy` permission. They route requests through the backend worker's existing `spindle.cors()` path, so the same SSRF validation, timeouts, and response-size limits apply.
 
-**Important:** the transparent proxy only serves **image** content. The backend validates both the `Content-Type` header (`image/*`) and the file magic bytes before returning data. Non-image requests are rejected.
+**Important:** the transparent proxy only serves approved **image** or **audio** content. The backend validates both the `Content-Type` header and file magic bytes before returning data. Other requests are rejected.
+
+```ts
+// Inside the sandboxed iframe HTML
+const bgm = await window.spindleSandbox.createAudio('https://example.com/bgm.mp3', {
+  controls: true,
+  loop: true,
+  volume: 0.6,
+})
+document.body.appendChild(bgm.element)
+```
 
 ## `ctx.dom.query(selector)` / `ctx.dom.queryAll(selector)`
 

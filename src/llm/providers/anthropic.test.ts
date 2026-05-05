@@ -151,7 +151,7 @@ describe("AnthropicProvider usage mapping", () => {
     const provider = new AnthropicProvider();
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = async () =>
+    globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
           content: [{ type: "text", text: "hello" }],
@@ -168,7 +168,7 @@ describe("AnthropicProvider usage mapping", () => {
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
-      ) as any;
+      )) as unknown as typeof fetch;
 
     try {
       const response = await provider.generate("key", "", {
