@@ -228,7 +228,7 @@ function buildHeadInjection(options: {
   return [
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'; upgrade-insecure-requests;">`,
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; media-src https: data: blob:; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'; upgrade-insecure-requests;">`,
     '<meta name="color-scheme" content="dark light">',
     '<style>html,body{margin:0;padding:0;background:transparent!important}body{box-sizing:border-box;overflow-x:hidden}:root{color-scheme:dark light}</style>',
     '<script>(function(){',
