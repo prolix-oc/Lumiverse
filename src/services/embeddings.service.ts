@@ -817,6 +817,47 @@ async function upsertEmbeddingRows(rows: EmbeddingRow[], reason: string): Promis
   });
 }
 
+const WORLD_BOOK_MIGRATION_BATCH_SIZE = 250;
+
+function isRetryableMergeInsertError(err: Error): boolean {
+  return isRetryableBatchError(err)
+    || /resources exhausted|failed to allocate|hashjoininput/i.test(err.message);
+}
+
+async function mergeInsertRowsInBatches(
+  table: Table,
+  rows: EmbeddingRow[],
+  label: string,
+  initialBatchSize: number,
+): Promise<void> {
+  const process = async (batch: EmbeddingRow[], currentSize: number): Promise<void> => {
+    try {
+      await table
+        .mergeInsert("id")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute(asLanceRows(batch));
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (isRetryableMergeInsertError(error) && currentSize > 1) {
+        const half = Math.max(1, Math.floor(currentSize / 2));
+        console.warn(
+          `[embeddings] ${label}: mergeInsert batch of ${batch.length} failed (${error.message}); retrying in sub-batches of ${half}`,
+        );
+        for (let i = 0; i < batch.length; i += half) {
+          await process(batch.slice(i, i + half), half);
+        }
+        return;
+      }
+      throw error;
+    }
+  };
+
+  for (let i = 0; i < rows.length; i += initialBatchSize) {
+    await process(rows.slice(i, i + initialBatchSize), initialBatchSize);
+  }
+}
+
 const worldBookVectorVersionChecked = new Set<string>();
 
 // Periodically clear the version-check cache so it doesn't grow unbounded.
@@ -1636,17 +1677,8 @@ export async function getVectorStoreHealth(): Promise<{
     unindexedRowEstimate: number;
     lastIndexRebuildAt: number;
     indexes: Array<{ name: string; type?: string }>;
-  }>;
+  }>; 
 }> {
-  // Keep operator-panel health aligned with the read path: if startup migration
-  // hasn't run yet, try the same lazy world-book migration before reporting the
-  // dedicated table as missing/empty.
-  try {
-    await migrateWorldBookRowsToDedicatedTable();
-  } catch (err) {
-    console.warn("[embeddings] Vector store health lazy WI migration failed:", err);
-  }
-
   const readTableHealth = async (tableName: string) => {
     const table = await getTableIfExists(tableName);
     const state = getTableState(tableName);
@@ -1797,22 +1829,36 @@ async function migrateWorldBookRowsToDedicatedTable(): Promise<{ migratedRows: n
       return;
     }
 
-    const worldBookTable = await getOrCreateTable(WORLD_BOOK_EMBEDDINGS_TABLE, migratedRows, true);
+    let worldBookTable = await getTableIfExists(WORLD_BOOK_EMBEDDINGS_TABLE, true);
+    if (!worldBookTable) {
+      worldBookTable = await getOrCreateTable(WORLD_BOOK_EMBEDDINGS_TABLE, migratedRows.slice(0, 1), true);
+    }
+
+    await mergeInsertRowsInBatches(
+      worldBookTable,
+      migratedRows,
+      "world-book lazy migration",
+      WORLD_BOOK_MIGRATION_BATCH_SIZE,
+    );
     await ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
     await ensureScalarIndexes(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
     await ensureFtsIndex(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
-    await worldBookTable
-      .mergeInsert("id")
-      .whenMatchedUpdateAll()
-      .whenNotMatchedInsertAll()
-      .execute(asLanceRows(migratedRows));
 
     const migratedEntryIds = [...new Set(migratedRows.map((row) => row.source_id))];
     const latestUpdatedAt = migratedRows.reduce((max, row) => Math.max(max, row.updated_at), 0);
     updateWorldBookEntriesVectorState(migratedEntryIds, "indexed", latestUpdatedAt || Math.floor(Date.now() / 1000), null);
 
-    await runtimeTable.delete(`source_type = 'world_book_entry'`);
     migratedRowsCount = migratedRows.length;
+
+    try {
+      await runtimeTable.delete(`source_type = 'world_book_entry'`);
+    } catch (err) {
+      console.warn(
+        `[embeddings] World-book migration copied ${migratedRows.length} row(s) into ${WORLD_BOOK_EMBEDDINGS_TABLE}, but failed to delete legacy rows from ${EMBEDDINGS_TABLE}:`,
+        err,
+      );
+    }
+
     console.info(`[embeddings] Migrated ${migratedRows.length} world-book embedding row(s) into ${WORLD_BOOK_EMBEDDINGS_TABLE}`);
   });
 
