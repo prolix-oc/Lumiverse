@@ -79,14 +79,19 @@ export function persistMacroVariableState(
 ): void {
   const chat = chatsSvc.getChat(userId, chatId);
   if (!chat) return;
+
+  const existingMacroVars = (chat.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
+  const existingLocal = (existingMacroVars.local as Record<string, string> | undefined) ?? {};
+  const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
+  const existingChatVars = (chat.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
   const macroVariables = {
-    ...((chat.metadata?.macro_variables as Record<string, unknown>) || {}),
-    local: Object.fromEntries(env.variables.local),
-    global: Object.fromEntries(env.variables.global),
+    ...existingMacroVars,
+    local: { ...existingLocal, ...Object.fromEntries(env.variables.local) },
+    global: { ...existingGlobal, ...Object.fromEntries(env.variables.global) },
   };
   chatsSvc.mergeChatMetadata(userId, chatId, {
     macro_variables: macroVariables,
-    chat_variables: Object.fromEntries(env.variables.chat),
+    chat_variables: { ...existingChatVars, ...Object.fromEntries(env.variables.chat) },
   });
 }
 
@@ -115,14 +120,19 @@ export async function reconcileChatMessageMacros(
 
   if (input.persistVariables !== false && localVariables && globalVariables && chatVariables) {
     const chat = chatsSvc.getChat(input.userId, input.chatId);
+    // Env values win on collision but concurrent extension writes survive.
+    const existingMacroVars = (chat?.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
+    const existingLocal = (existingMacroVars.local as Record<string, string> | undefined) ?? {};
+    const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
+    const existingChatVars = (chat?.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
     const macroVariables = {
-      ...((chat?.metadata?.macro_variables as Record<string, unknown>) || {}),
-      local: localVariables,
-      global: globalVariables,
+      ...existingMacroVars,
+      local: { ...existingLocal, ...localVariables },
+      global: { ...existingGlobal, ...globalVariables },
     };
     chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
       macro_variables: macroVariables,
-      chat_variables: chatVariables,
+      chat_variables: { ...existingChatVars, ...chatVariables },
     });
   }
 
