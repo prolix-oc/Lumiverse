@@ -102,7 +102,7 @@ const active = await spindle.regex_scripts.getActive({
 | `max_depth` | `number \| null` | No | Upper bound on chat-history depth. |
 | `trim_strings` | `string[]` | No | Additional substrings stripped from output after the regex pass. |
 | `run_on_edit` | `boolean` | No | Re-run the rule when a message is edited. |
-| `substitute_macros` | `"none" \| "raw" \| "escaped"` | No | How CBS / `{{...}}` macros inside the rule resolve. Default `"none"`. |
+| `substitute_macros` | `"none" \| "raw" \| "escaped" \| "after"` | No | How CBS / `{{...}}` macros inside the rule resolve. Prefer `"after"` for any rule whose `replace_string` contains macros — see "Macro substitution modes" below. Default `"none"`. |
 | `disabled` | `boolean` | No | Create as disabled. |
 | `sort_order` | `number` | No | Lower values run earlier within the same scope tier. Default `0`. |
 | `description` | `string` | No | Free-form note. |
@@ -132,7 +132,7 @@ Same fields as `RegexScriptCreateDTO`, all optional.
   max_depth: number | null
   trim_strings: string[]        // additional substrings stripped from output
   run_on_edit: boolean
-  substitute_macros: "none" | "raw" | "escaped"
+  substitute_macros: "none" | "raw" | "escaped" | "after"
   disabled: boolean
   sort_order: number            // lower runs earlier within the same scope tier
   description: string
@@ -142,6 +142,19 @@ Same fields as `RegexScriptCreateDTO`, all optional.
   updated_at: number
 }
 ```
+
+### Macro substitution modes
+
+`substitute_macros` controls **when** macros inside `replace_string` evaluate relative to capture-group substitution. The mode you pick is mostly a performance decision — all four are correct, but their cost and capability profiles differ.
+
+- **`"none"`** — no macro evaluation. `replace_string` is substituted as-is by the regex engine; capture refs (`$1`, `$&`, `$<name>`) work, but any `{{...}}` survives literal in the output. Use when you don't need macros.
+- **`"raw"`** — substitute captures into `replace_string` first, then evaluate the result **per match**. Macros can reference captures (e.g. `{{lower::$1}}`). Cost: N `evaluate()` calls for N matches.
+- **`"escaped"`** — evaluate `replace_string` **once before** substitution, then double-escape `$` so capture refs do not fire. Cost: one `evaluate()` call per render. Cannot use captures (`$1` is dead).
+- **`"after"`** — substitute captures literally with native `String.replace`, then run one `evaluate()` over the **entire result body**. Cost: one `evaluate()` call per render. Macros can reference captures (they appear as plain text by the time evaluation runs).
+
+**Prefer `"after"` whenever your `replace_string` contains macros.** It collapses N evaluation calls to one (matching `"escaped"` performance) while keeping capture support (matching `"raw"` capability). It also matches how single-pass parsers in upstream regex pipelines already work, so ported rules behave the same.
+
+The one observable difference from `"raw"`: stateful macros (`{{counter::*}}`, `{{addvar::*::1}}{{getvar::*}}` patterns, etc.) accumulate left-to-right across matches in `"after"` mode rather than running in isolation per match. A counter that emitted `1, 1, 1, 1` under `"raw"` emits `1, 2, 3, 4` under `"after"`. The `"after"` behavior is almost always what you actually want; stay on `"raw"` only if you specifically need per-match isolation.
 
 !!! note "Targets and where they fire"
     - **`prompt`** rules run during prompt assembly, against each message before it goes to the LLM. They do not modify stored content.

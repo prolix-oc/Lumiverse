@@ -93,6 +93,17 @@ export function registerRegexRefMacros(): void {
           } else {
             result = text;
           }
+        } else if (script.substitute_macros === "after") {
+          const substituted = await regexReplaceSandboxed(
+            findRegex,
+            script.flags,
+            text,
+            script.replace_string,
+            REGEX_REF_TIMEOUT_MS,
+          );
+          result = substituted !== text
+            ? (await evaluate(substituted, ctx.env, registry)).text
+            : substituted;
         } else {
           // "none" or "escaped" mode
           let replaceString = script.replace_string;

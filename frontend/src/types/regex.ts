@@ -1,7 +1,7 @@
 export type RegexPlacement = 'user_input' | 'ai_output' | 'world_info' | 'reasoning'
 export type RegexScope = 'global' | 'character' | 'chat'
 export type RegexTarget = 'prompt' | 'response' | 'display'
-export type RegexMacroMode = 'none' | 'raw' | 'escaped'
+export type RegexMacroMode = 'none' | 'raw' | 'escaped' | 'after'
 
 export interface RegexPerformanceMetadata {
   slow: boolean

@@ -65,7 +65,7 @@ const VALID_PLACEMENTS = new Set(["user_input", "ai_output", "world_info", "reas
 const VALID_SCOPES = new Set(["global", "character", "chat"]);
 const VALID_TARGETS = new Set(["prompt", "response", "display"]);
 const VALID_FLAGS = new Set(["g", "i", "m", "s", "u"]);
-const VALID_MACRO_MODES = new Set(["none", "raw", "escaped"]);
+const VALID_MACRO_MODES = new Set(["none", "raw", "escaped", "after"]);
 const MAX_PATTERN_LENGTH = 10_000;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
 
@@ -361,8 +361,19 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
   if (input.scope !== undefined && !VALID_SCOPES.has(input.scope)) {
     return `Invalid scope: ${input.scope}`;
   }
-  if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
-    return "scope_id is required for non-global scope";
+  if (isCreate) {
+    if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
+      return "scope_id is required for non-global scope";
+    }
+  } else {
+    if (
+      input.scope !== undefined &&
+      input.scope !== "global" &&
+      input.scope_id !== undefined &&
+      !input.scope_id
+    ) {
+      return "scope_id is required for non-global scope";
+    }
   }
   if (input.target !== undefined && !VALID_TARGETS.has(input.target)) {
     return `Invalid target: ${input.target}`;
@@ -985,6 +996,17 @@ export async function applyRegexScripts(
           );
           result = rebuildFromMatches(result, matches, replacements);
         }
+      } else if (macroEnv && script.substitute_macros === "after") {
+        const substituted = await regexReplaceSandboxed(
+          findRegex,
+          script.flags,
+          result,
+          script.replace_string,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
+        const evalResult = await evaluate(substituted, macroEnv, registry);
+        foldFingerprint(options?.outFingerprint, evalResult);
+        result = evalResult.text;
       } else {
         // "none" or "escaped" mode: resolve macros first (if applicable), then
         // run the actual replace inside the sandbox.
