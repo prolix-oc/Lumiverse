@@ -8,54 +8,10 @@ import { validateHost } from "../utils/safe-fetch";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import * as mcpServersSvc from "./mcp-servers.service";
+import { assertStdioLaunchAllowed } from "./mcp-stdio-policy";
 import type { McpServerProfile, McpDiscoveredTool, McpServerStatus } from "../types/mcp-server";
 
 const ALLOW_PRIVATE = process.env.ALLOW_MCP_PRIVATE_NETWORKS === "true";
-
-/**
- * Whitelist of allowed stdio command basenames. MCP servers are spawned as
- * child processes; without a whitelist any authenticated user who can create
- * an MCP server profile gets arbitrary OS command execution by setting
- * command="/bin/bash". Operators who legitimately need to launch other
- * binaries can extend this list via MCP_STDIO_ALLOWED_COMMANDS (comma-
- * separated basenames).
- */
-const DEFAULT_STDIO_ALLOWED = [
-  "node", "bun", "deno", "python", "python3",
-  "npx", "uvx", "uv", "pipx", "pnpm", "yarn",
-];
-const STDIO_ALLOWED_COMMANDS = new Set(
-  (process.env.MCP_STDIO_ALLOWED_COMMANDS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .concat(DEFAULT_STDIO_ALLOWED),
-);
-
-function commandBasename(command: string): string {
-  // Strip path components (handles both / and \ separators).
-  const lastSlash = Math.max(command.lastIndexOf("/"), command.lastIndexOf("\\"));
-  const base = lastSlash >= 0 ? command.slice(lastSlash + 1) : command;
-  // Strip a single trailing .exe (Windows) for the comparison.
-  return base.toLowerCase().replace(/\.exe$/, "");
-}
-
-function assertStdioCommandAllowed(command: string): void {
-  if (!command || typeof command !== "string") {
-    throw new Error("MCP stdio command is required");
-  }
-  // Reject obvious shell-meta or argument-injection attempts in the command itself.
-  if (/[;&|`$<>\n\r]/.test(command)) {
-    throw new Error("MCP stdio command contains disallowed characters");
-  }
-  const base = commandBasename(command);
-  if (!STDIO_ALLOWED_COMMANDS.has(base)) {
-    throw new Error(
-      `MCP stdio command "${base}" is not in the allowlist. ` +
-        `Set MCP_STDIO_ALLOWED_COMMANDS to extend it.`,
-    );
-  }
-}
 
 interface McpClientEntry {
   client: Client;
@@ -410,7 +366,7 @@ class McpClientManager {
   }
 
   private async buildStdioTransport(userId: string, server: McpServerProfile): Promise<Transport> {
-    assertStdioCommandAllowed(server.command);
+    assertStdioLaunchAllowed(server.command, server.args);
 
     const envValues = await mcpServersSvc.getServerEnv(userId, server.id);
 

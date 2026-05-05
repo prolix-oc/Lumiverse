@@ -76,7 +76,7 @@ export class SMBFileSystem implements FileSystem {
       // Try as a file by listing parent with the filename as pattern
       try {
         const dir = posix.dirname(path);
-        const base = posix.basename(path);
+        const base = this.toSmbPath(posix.basename(path));
         const smbDir = this.toSmbPath(dir);
         const output = await this.runCommand(`cd "${smbDir}"; ls "${base}"`);
         return output.trim().length > 0 && !output.includes("NT_STATUS_");
