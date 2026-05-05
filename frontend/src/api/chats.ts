@@ -78,6 +78,10 @@ export const chatsApi = {
     return del<void>(`/chats/${chatId}/members/${characterId}`)
   },
 
+  setGroupMemberAlternateFields(chatId: string, characterId: string, selections: Record<string, string | null>) {
+    return patch<Chat>(`/chats/${chatId}/members/${characterId}/alternate-fields`, { selections })
+  },
+
   reattributeUserMessages(chatId: string, personaId: string) {
     return post<{ success: true; updated: number; persona_id: string; persona_name: string }>(
       `/chats/${chatId}/reattribute-user-messages`,

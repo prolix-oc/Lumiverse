@@ -26,7 +26,6 @@ export interface TrustedHostsSuggestions {
 // Matches letters, digits, dots, hyphens, underscores; plus bracketed IPv6. No
 // wildcards, no paths, no schemes. Port is added by normalization below.
 const HOSTNAME_PATTERN = /^(?:\[[0-9a-f:%.]+\]|[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)$/i;
-const TAILSCALE_DNS_SUFFIX = ".ts.net";
 const MAX_CONFIGURED_HOSTS = 32;
 const REVERSE_LOOKUP_TIMEOUT_MS = 1500;
 const TAILSCALE_TIMEOUT_MS = 2000;
@@ -66,7 +65,7 @@ interface NormalizedTrustedInput {
 
 // ─── Normalization / validation ─────────────────────────────────────────────
 
-function originForExplicitTailscaleUrl(input: string): NormalizedTrustedInput | null {
+function originForExplicitUrl(input: string): NormalizedTrustedInput | null {
   const trimmed = input.trim();
   if (!/^https?:\/\//i.test(trimmed)) return null;
 
@@ -78,8 +77,9 @@ function originForExplicitTailscaleUrl(input: string): NormalizedTrustedInput | 
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-  const hostname = parsed.hostname.toLowerCase();
-  if (!hostname.endsWith(TAILSCALE_DNS_SUFFIX)) return null;
+  if (parsed.username || parsed.password) {
+    throw new InvalidTrustedHostError(`Credentials are not allowed in trusted host URLs: ${input}`);
+  }
 
   const host = parsed.host.toLowerCase();
   if (!HOSTNAME_PATTERN.test(parsed.hostname) && !HOSTNAME_PATTERN.test(`[${parsed.hostname}]`)) {
@@ -95,8 +95,8 @@ function normalizeTrustedInput(input: string): NormalizedTrustedInput {
     throw new InvalidTrustedHostError("Host must be a string");
   }
 
-  const explicitTailscaleOrigin = originForExplicitTailscaleUrl(input);
-  if (explicitTailscaleOrigin) return explicitTailscaleOrigin;
+  const explicitOrigin = originForExplicitUrl(input);
+  if (explicitOrigin) return explicitOrigin;
 
   let value = input.trim();
   if (!value) throw new InvalidTrustedHostError("Host cannot be empty");
@@ -159,11 +159,10 @@ function normalizeTrustedInput(input: string): NormalizedTrustedInput {
 
 /**
  * Accepts user-entered values like "machine", "machine:7860",
- * "http://machine.tailnet.ts.net", "[::1]:7860". Returns a normalized
+ * "https://app.example.com", "machine.tailnet.ts.net", "[::1]:7860". Returns a normalized
  * lowercase entry suitable for persistence, or throws InvalidTrustedHostError.
- * Port defaults to env.port when omitted, except explicit `*.ts.net` URL
- * origins are preserved so Tailscale Serve's default HTTPS origin can be
- * allowlisted exactly.
+ * Port defaults to env.port when omitted, except explicit URL origins are
+ * preserved so reverse-proxy HTTPS origins can be allowlisted exactly.
  */
 export function normalizeHost(input: string): string {
   return normalizeTrustedInput(input).value;

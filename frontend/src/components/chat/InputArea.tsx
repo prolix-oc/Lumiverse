@@ -183,13 +183,58 @@ export default function InputArea({ chatId }: InputAreaProps) {
       .catch(() => setHasExpressions(false))
   }, [activeCharacterId])
 
-  // Track alternate fields for the active character
+  // Track alternate fields for the active character or group members.
   type AltFieldVariant = { id: string; label: string; content: string }
+  const ALT_FIELD_NAMES = ['description', 'personality', 'scenario'] as const
   const [altFieldsData, setAltFieldsData] = useState<Record<string, AltFieldVariant[]>>({})
+  const [groupAltFieldsData, setGroupAltFieldsData] = useState<Record<string, Record<string, AltFieldVariant[]>>>({})
   const [altFieldSelections, setAltFieldSelections] = useState<Record<string, string>>({})
-  const hasAltFields = Object.values(altFieldsData).some((arr) => arr.length > 0)
+  const [groupAltFieldSelections, setGroupAltFieldSelections] = useState<Record<string, Record<string, string>>>({})
+  const [groupScenarioMode, setGroupScenarioMode] = useState<'individual' | 'member' | 'custom'>('individual')
+  const hasSingleAltFields = Object.values(altFieldsData).some((arr) => arr.length > 0)
+  const groupMembersWithAltFields = useMemo(() => {
+    if (!isGroupChat) return []
+    return groupCharacterIds
+      .map((id) => {
+        const char = characters.find((c) => c.id === id)
+        const altFields = groupAltFieldsData[id]
+        const hasAlternates = altFields && Object.values(altFields).some((arr) => Array.isArray(arr) && arr.length > 0)
+        return char && hasAlternates ? { char, altFields } : null
+      })
+      .filter(Boolean) as Array<{ char: typeof characters[number]; altFields: Record<string, AltFieldVariant[]> }>
+  }, [isGroupChat, groupCharacterIds, characters, groupAltFieldsData])
+  const hasAltFields = isGroupChat ? groupMembersWithAltFields.length > 0 : hasSingleAltFields
+  const activeAltSelectionCount = isGroupChat
+    ? Object.values(groupAltFieldSelections).reduce((total, selections) => total + Object.keys(selections || {}).length, 0)
+    : Object.keys(altFieldSelections).length
 
   useEffect(() => {
+    if (isGroupChat) {
+      setAltFieldsData({})
+      if (groupCharacterIds.length === 0) { setGroupAltFieldsData({}); return }
+      let cancelled = false
+      Promise.all(groupCharacterIds.map(async (id) => {
+        const cached = characters.find((c) => c.id === id)
+        if (cached?.extensions?.alternate_fields) {
+          return { id, altFields: cached.extensions.alternate_fields as Record<string, AltFieldVariant[]> }
+        }
+        const fetched = await charactersApi.get(id).catch(() => null)
+        if (fetched) useStore.getState().updateCharacter(fetched.id, fetched)
+        return { id, altFields: fetched?.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined }
+      }))
+        .then((items) => {
+          if (cancelled) return
+          const next: Record<string, Record<string, AltFieldVariant[]>> = {}
+          for (const item of items) {
+            if (item.altFields && typeof item.altFields === 'object') next[item.id] = item.altFields
+          }
+          setGroupAltFieldsData(next)
+        })
+        .catch(() => { if (!cancelled) setGroupAltFieldsData({}) })
+      return () => { cancelled = true }
+    }
+
+    setGroupAltFieldsData({})
     if (!activeCharacterId) { setAltFieldsData({}); return }
     charactersApi.get(activeCharacterId)
       .then((c) => {
@@ -197,15 +242,29 @@ export default function InputArea({ chatId }: InputAreaProps) {
         setAltFieldsData(af && typeof af === 'object' ? af : {})
       })
       .catch(() => setAltFieldsData({}))
-  }, [activeCharacterId])
+  }, [activeCharacterId, isGroupChat, groupCharacterIds, characters])
 
   // Load per-chat alternate field selections
   useEffect(() => {
-    if (!chatId || !hasAltFields) { setAltFieldSelections({}); return }
+    if (!chatId) {
+      setAltFieldSelections({})
+      setGroupAltFieldSelections({})
+      setGroupScenarioMode('individual')
+      return
+    }
     chatsApi.get(chatId, { messages: false })
-      .then((chat) => setAltFieldSelections((chat.metadata?.alternate_field_selections as Record<string, string>) || {}))
-      .catch(() => setAltFieldSelections({}))
-  }, [chatId, hasAltFields])
+      .then((chat) => {
+        setAltFieldSelections((chat.metadata?.alternate_field_selections as Record<string, string>) || {})
+        setGroupAltFieldSelections((chat.metadata?.group_alternate_field_selections as Record<string, Record<string, string>>) || {})
+        const mode = chat.metadata?.group_scenario_override?.mode
+        setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
+      })
+      .catch(() => {
+        setAltFieldSelections({})
+        setGroupAltFieldSelections({})
+        setGroupScenarioMode('individual')
+      })
+  }, [chatId])
 
   useEffect(() => {
     if (!chatId) { setImpersonationPresetId(null); return }
@@ -234,6 +293,23 @@ export default function InputArea({ chatId }: InputAreaProps) {
       console.error('[AltFields] Failed to save:', err)
     }
   }, [chatId, altFieldSelections])
+
+  const handleGroupAltFieldSelect = useCallback(async (characterId: string, field: string, variantId: string | null) => {
+    const memberSelections = { ...(groupAltFieldSelections[characterId] || {}) }
+    if (variantId) memberSelections[field] = variantId
+    else delete memberSelections[field]
+
+    const newSelections = { ...groupAltFieldSelections }
+    if (Object.keys(memberSelections).length > 0) newSelections[characterId] = memberSelections
+    else delete newSelections[characterId]
+    setGroupAltFieldSelections(newSelections)
+
+    try {
+      await chatsApi.setGroupMemberAlternateFields(chatId, characterId, memberSelections)
+    } catch (err) {
+      console.error('[AltFields] Failed to save group member selection:', err)
+    }
+  }, [chatId, groupAltFieldSelections])
 
   // Track persona add-ons for the active persona
   const [personaAddons, setPersonaAddons] = useState<PersonaAddon[]>([])
@@ -1705,18 +1781,26 @@ export default function InputArea({ chatId }: InputAreaProps) {
               {sendPersonaId && <span className={styles.badge}>1</span>}
             </button>
             {hasAltFields && (() => {
-              const selectionCount = Object.keys(altFieldSelections).length
+              const selectionCount = activeAltSelectionCount
               const hasSelection = selectionCount > 0
-              // Build a descriptive title so the user can confirm what's bound
-              // to this chat without opening the popover.
               const titleParts: string[] = []
-              for (const [field, variantId] of Object.entries(altFieldSelections)) {
-                const variant = altFieldsData[field]?.find((v) => v.id === variantId)
-                if (variant) titleParts.push(`${field}: ${variant.label}`)
+              if (isGroupChat) {
+                for (const { char, altFields } of groupMembersWithAltFields) {
+                  const selections = groupAltFieldSelections[char.id] || {}
+                  const labels = Object.entries(selections)
+                    .map(([field, variantId]) => altFields[field]?.find((v) => v.id === variantId)?.label)
+                    .filter(Boolean)
+                  if (labels.length > 0) titleParts.push(`${char.name}: ${labels.join(', ')}`)
+                }
+              } else {
+                for (const [field, variantId] of Object.entries(altFieldSelections)) {
+                  const variant = altFieldsData[field]?.find((v) => v.id === variantId)
+                  if (variant) titleParts.push(`${field}: ${variant.label}`)
+                }
               }
               const title = hasSelection
-                ? `Alternate fields — ${titleParts.join(', ')}`
-                : 'Alternate fields'
+                ? `Alternate fields${titleParts.length > 0 ? ` - ${titleParts.join(', ')}` : ''}`
+                : isGroupChat ? 'Group alternate fields' : 'Alternate fields'
               return (
                 <button
                   type="button"
@@ -1924,6 +2008,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
                       onSaved: (updatedChat: import('@/types/api').Chat) => {
                         const value = updatedChat.metadata?.impersonation_preset_id
                         setImpersonationPresetId(typeof value === 'string' && value ? value : null)
+                        const mode = updatedChat.metadata?.group_scenario_override?.mode
+                        setGroupScenarioMode(mode === 'member' || mode === 'custom' ? mode : 'individual')
                       },
                     })
                   } catch (err) {
@@ -2160,69 +2246,155 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
           {renderPopover === 'altFields' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
-              <div className={styles.quickSetName}>Alternate Fields</div>
-              {(['description', 'personality', 'scenario'] as const).map((field) => {
-                const variants = altFieldsData[field]
-                if (!Array.isArray(variants) || variants.length === 0) return null
-                const selectedId = altFieldSelections[field] || ''
-                const isOverridden = !!selectedId
-                return (
-                  <div
-                    key={field}
-                    className={styles.popRowBtn}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'default',
-                      // Subtle accent border on rows that have an active override
-                      // so the user sees at a glance which fields are bound.
-                      borderLeft: isOverridden
-                        ? '2px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
-                        : '2px solid transparent',
-                      paddingLeft: isOverridden ? 6 : 8,
-                    }}
-                  >
-                    <span
-                      style={{
-                        textTransform: 'capitalize',
-                        color: isOverridden
-                          ? 'var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
-                          : undefined,
-                        fontWeight: isOverridden ? 600 : undefined,
-                      }}
-                    >
-                      {field}
-                    </span>
-                    <select
-                      style={{
-                        marginLeft: 8,
-                        flex: 1,
-                        minWidth: 0,
-                        padding: '3px 6px',
-                        fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))',
-                        background: 'var(--lumiverse-fill-hover)',
-                        border: isOverridden
-                          ? '1px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.6))'
-                          : '1px solid var(--lumiverse-border)',
-                        borderRadius: 6,
-                        color: 'var(--lumiverse-text)',
-                        outline: 'none',
-                        cursor: 'pointer',
-                      }}
-                      value={selectedId}
-                      onChange={(e) => handleAltFieldSelect(field, e.target.value || null)}
-                    >
-                      <option value="">Default</option>
-                      {variants.map((v) => (
-                        <option key={v.id} value={v.id}>{v.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )
-              })}
-              {Object.values(altFieldsData).every((arr) => !arr?.length) && (
-                <div className={styles.popEmpty}>No alternate fields configured.</div>
+              <div className={styles.quickSetName}>{isGroupChat ? 'Group Alternate Fields' : 'Alternate Fields'}</div>
+              {isGroupChat ? (
+                <>
+                  {groupScenarioMode !== 'individual' && (
+                    <div className={styles.popEmpty}>Scenario is controlled by Group Scenario settings.</div>
+                  )}
+                  {groupMembersWithAltFields.map(({ char, altFields }) => {
+                    const memberSelections = groupAltFieldSelections[char.id] || {}
+                    const memberSelectionCount = Object.keys(memberSelections).length
+                    return (
+                      <div
+                        key={char.id}
+                        className={styles.popRowBtn}
+                        style={{
+                          alignItems: 'stretch',
+                          flexDirection: 'column',
+                          cursor: 'default',
+                          borderLeft: memberSelectionCount > 0
+                            ? '2px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
+                            : '2px solid transparent',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className={styles.personaAvatar}>
+                            {char.avatar_path || char.image_id ? (
+                              <img
+                                className={styles.personaAvatarImg}
+                                src={getCharacterAvatarThumbUrlById(char.id, char.image_id) || undefined}
+                                alt={char.name}
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span className={styles.personaFallback}>{char.name.slice(0, 1).toUpperCase()}</span>
+                            )}
+                          </span>
+                          <span className={styles.personaNameGroup}>
+                            <span>{char.name}</span>
+                            {memberSelectionCount > 0 && <span className={styles.personaTitle}>{memberSelectionCount} active</span>}
+                          </span>
+                        </div>
+                        <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+                          {ALT_FIELD_NAMES.map((field) => {
+                            const variants = altFields[field]
+                            if (!Array.isArray(variants) || variants.length === 0) return null
+                            const selectedId = memberSelections[field] || ''
+                            const isScenarioDisabled = field === 'scenario' && groupScenarioMode !== 'individual'
+                            return (
+                              <label key={field} style={{ display: 'grid', gridTemplateColumns: '82px minmax(0, 1fr)', gap: 8, alignItems: 'center' }}>
+                                <span style={{ textTransform: 'capitalize', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: selectedId ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)' }}>{field}</span>
+                                <select
+                                  style={{
+                                    minWidth: 0,
+                                    padding: '3px 6px',
+                                    fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))',
+                                    background: 'var(--lumiverse-fill-hover)',
+                                    border: selectedId
+                                      ? '1px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.6))'
+                                      : '1px solid var(--lumiverse-border)',
+                                    borderRadius: 6,
+                                    color: 'var(--lumiverse-text)',
+                                    outline: 'none',
+                                    cursor: isScenarioDisabled ? 'not-allowed' : 'pointer',
+                                    opacity: isScenarioDisabled ? 0.55 : 1,
+                                  }}
+                                  value={selectedId}
+                                  disabled={isScenarioDisabled}
+                                  title={isScenarioDisabled ? 'Scenario is controlled by Group Scenario settings' : undefined}
+                                  onChange={(e) => handleGroupAltFieldSelect(char.id, field, e.target.value || null)}
+                                >
+                                  <option value="">Default</option>
+                                  {variants.map((v) => (
+                                    <option key={v.id} value={v.id}>{v.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {groupMembersWithAltFields.length === 0 && (
+                    <div className={styles.popEmpty}>No group members have alternate fields configured.</div>
+                  )}
+                </>
+              ) : (
+                <>
+                  {ALT_FIELD_NAMES.map((field) => {
+                    const variants = altFieldsData[field]
+                    if (!Array.isArray(variants) || variants.length === 0) return null
+                    const selectedId = altFieldSelections[field] || ''
+                    const isOverridden = !!selectedId
+                    return (
+                      <div
+                        key={field}
+                        className={styles.popRowBtn}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          cursor: 'default',
+                          borderLeft: isOverridden
+                            ? '2px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
+                            : '2px solid transparent',
+                          paddingLeft: isOverridden ? 6 : 8,
+                        }}
+                      >
+                        <span
+                          style={{
+                            textTransform: 'capitalize',
+                            color: isOverridden
+                              ? 'var(--lumiverse-primary, rgba(140, 130, 255, 0.95))'
+                              : undefined,
+                            fontWeight: isOverridden ? 600 : undefined,
+                          }}
+                        >
+                          {field}
+                        </span>
+                        <select
+                          style={{
+                            marginLeft: 8,
+                            flex: 1,
+                            minWidth: 0,
+                            padding: '3px 6px',
+                            fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))',
+                            background: 'var(--lumiverse-fill-hover)',
+                            border: isOverridden
+                              ? '1px solid var(--lumiverse-primary, rgba(140, 130, 255, 0.6))'
+                              : '1px solid var(--lumiverse-border)',
+                            borderRadius: 6,
+                            color: 'var(--lumiverse-text)',
+                            outline: 'none',
+                            cursor: 'pointer',
+                          }}
+                          value={selectedId}
+                          onChange={(e) => handleAltFieldSelect(field, e.target.value || null)}
+                        >
+                          <option value="">Default</option>
+                          {variants.map((v) => (
+                            <option key={v.id} value={v.id}>{v.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )
+                  })}
+                  {Object.values(altFieldsData).every((arr) => !arr?.length) && (
+                    <div className={styles.popEmpty}>No alternate fields configured.</div>
+                  )}
+                </>
               )}
             </div>
           )}

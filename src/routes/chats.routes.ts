@@ -148,6 +148,25 @@ app.delete("/:id/members/:characterId", (c) => {
   return c.json(updated);
 });
 
+app.patch("/:id/members/:characterId/alternate-fields", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const selections = body?.selections;
+  if (!selections || typeof selections !== "object" || Array.isArray(selections)) {
+    return c.json({ error: "selections must be an object" }, 400);
+  }
+  const updated = svc.setGroupMemberAlternateFields(
+    userId,
+    c.req.param("id"),
+    c.req.param("characterId"),
+    selections,
+  );
+  if (!updated) {
+    return c.json({ error: "Not found, not a group chat/member, or invalid alternate field selection" }, 400);
+  }
+  return c.json(updated);
+});
+
 app.get("/:id", (c) => {
   const userId = c.get("userId");
   const chat = svc.getChat(userId, c.req.param("id"));

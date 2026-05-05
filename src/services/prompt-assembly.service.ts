@@ -424,6 +424,31 @@ const ALTERNATE_FIELD_NAMES = [
   "scenario",
 ] as const;
 
+function getAlternateFieldSelections(
+  character: Character,
+  chat: Chat,
+): Record<string, string> | undefined {
+  if (chat.metadata?.group === true) {
+    const byCharacter = chat.metadata.group_alternate_field_selections as
+      | Record<string, Record<string, string>>
+      | undefined;
+    const memberSelections = byCharacter?.[character.id];
+    if (memberSelections && typeof memberSelections === "object") {
+      return memberSelections;
+    }
+
+    // Legacy compatibility: flat selections predate per-member group bindings.
+    // Apply them only to the primary group character, never to every member.
+    return chat.character_id === character.id
+      ? (chat.metadata.alternate_field_selections as Record<string, string> | undefined)
+      : undefined;
+  }
+
+  return chat.metadata?.alternate_field_selections as
+    | Record<string, string>
+    | undefined;
+}
+
 /**
  * Resolves per-chat alternate field selections onto a character object.
  * Returns a shallow copy with overridden fields, or the original if no overrides apply.
@@ -432,9 +457,7 @@ function resolveCharacterWithAlternateFields(
   character: Character,
   chat: Chat,
 ): Character {
-  const selections = chat.metadata?.alternate_field_selections as
-    | Record<string, string>
-    | undefined;
+  const selections = getAlternateFieldSelections(character, chat);
   if (!selections) return character;
 
   const altFields = character.extensions?.alternate_fields as

@@ -101,6 +101,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+const ALTERNATE_FIELD_NAMES = new Set(["description", "personality", "scenario"]);
+
+function hasAlternateVariant(character: any, field: string, variantId: string): boolean {
+  const altFields = character?.extensions?.alternate_fields;
+  if (!isPlainObject(altFields)) return false;
+  const variants = altFields[field];
+  return Array.isArray(variants) && variants.some((v) => isPlainObject(v) && v.id === variantId);
+}
+
 function normalizeObjectEntries(
   value: unknown,
   swipeCount: number,
@@ -861,6 +870,50 @@ export function setGroupMute(userId: string, chatId: string, characterId: string
   return updateChat(userId, chatId, { metadata: newMetadata });
 }
 
+export function setGroupMemberAlternateFields(
+  userId: string,
+  chatId: string,
+  characterId: string,
+  selections: Record<string, unknown>,
+): Chat | null {
+  const chat = getChat(userId, chatId);
+  if (!chat || !chat.metadata?.group) return null;
+
+  const characterIds: string[] = chat.metadata.character_ids || [];
+  if (!characterIds.includes(characterId)) return null;
+
+  const character = getCharacter(userId, characterId);
+  if (!character) return null;
+
+  const normalized: Record<string, string> = {};
+  for (const [field, rawVariantId] of Object.entries(selections)) {
+    if (!ALTERNATE_FIELD_NAMES.has(field)) return null;
+    if (rawVariantId === null || rawVariantId === undefined || rawVariantId === "") continue;
+    if (typeof rawVariantId !== "string") return null;
+    if (!hasAlternateVariant(character, field, rawVariantId)) return null;
+    normalized[field] = rawVariantId;
+  }
+
+  const currentByCharacter = isPlainObject(chat.metadata.group_alternate_field_selections)
+    ? { ...chat.metadata.group_alternate_field_selections }
+    : {};
+
+  if (Object.keys(normalized).length > 0) {
+    currentByCharacter[characterId] = normalized;
+  } else {
+    delete currentByCharacter[characterId];
+  }
+
+  const nextMetadata = { ...chat.metadata };
+  if (Object.keys(currentByCharacter).length > 0) {
+    nextMetadata.group_alternate_field_selections = currentByCharacter;
+  } else {
+    delete nextMetadata.group_alternate_field_selections;
+  }
+
+  return updateChat(userId, chatId, { metadata: nextMetadata });
+}
+
 // ---- Group chat member management ----
 
 export function addGroupMember(
@@ -929,12 +982,27 @@ export function removeGroupMember(userId: string, chatId: string, characterId: s
     delete groupExpressions[characterId];
   }
 
+  // Clean up per-member alternate field selections
+  const groupAlternateFieldSelections = isPlainObject(chat.metadata.group_alternate_field_selections)
+    ? { ...chat.metadata.group_alternate_field_selections }
+    : undefined;
+  if (groupAlternateFieldSelections && characterId in groupAlternateFieldSelections) {
+    delete groupAlternateFieldSelections[characterId];
+  }
+
   const newMetadata = {
     ...chat.metadata,
     character_ids: newCharacterIds,
     muted_character_ids: mutedIds,
     ...(groupExpressions !== undefined && { group_expressions: groupExpressions }),
+    ...(groupAlternateFieldSelections !== undefined && {
+      group_alternate_field_selections: groupAlternateFieldSelections,
+    }),
   };
+
+  if (groupAlternateFieldSelections && Object.keys(groupAlternateFieldSelections).length === 0) {
+    delete newMetadata.group_alternate_field_selections;
+  }
 
   // If the removed character was the primary character_id on the chat row,
   // reassign to the first remaining member

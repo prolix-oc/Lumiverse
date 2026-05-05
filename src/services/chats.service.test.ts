@@ -10,6 +10,8 @@ import {
   listRecentChats,
   listRecentChatsGrouped,
   patchMessageExtra,
+  removeGroupMember,
+  setGroupMemberAlternateFields,
 } from "./chats.service";
 
 function initChatsTestDb(): void {
@@ -21,8 +23,22 @@ function initChatsTestDb(): void {
     id TEXT PRIMARY KEY,
     user_id TEXT,
     name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    personality TEXT NOT NULL DEFAULT '',
+    scenario TEXT NOT NULL DEFAULT '',
+    first_mes TEXT NOT NULL DEFAULT '',
+    mes_example TEXT NOT NULL DEFAULT '',
+    creator TEXT NOT NULL DEFAULT '',
+    creator_notes TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    post_history_instructions TEXT NOT NULL DEFAULT '',
     avatar_path TEXT,
-    image_id TEXT
+    image_id TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    alternate_greetings TEXT NOT NULL DEFAULT '[]',
+    extensions TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL DEFAULT 1
   )`);
 
   db.run(`CREATE TABLE chats (
@@ -55,6 +71,12 @@ function initChatsTestDb(): void {
 
 function seedCharacter(id: string, name: string): void {
   getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)").run(id, "u1", name);
+}
+
+function seedCharacterWithExtensions(id: string, extensions: Record<string, unknown> = {}): void {
+  getDb()
+    .query("INSERT INTO characters (id, user_id, name, extensions) VALUES (?, ?, ?, ?)")
+    .run(id, "u1", id, JSON.stringify(extensions));
 }
 
 function seedChat(id: string, characterId: string, name: string, metadata: string, updatedAt: number): void {
@@ -250,5 +272,64 @@ describe("recent chats", () => {
       },
     ]);
     expect(original.metadata).toEqual({ author_note: "keep me" });
+  });
+});
+
+describe("group member alternate fields", () => {
+  test("merges selections for one member without clobbering other members", () => {
+    const extensions = {
+      alternate_fields: {
+        personality: [{ id: "bold", label: "Bold", content: "Bold personality" }],
+      },
+    };
+    seedCharacterWithExtensions("char1", extensions);
+    seedCharacterWithExtensions("char2", extensions);
+    seedChat("chat1", "char1", "Group", JSON.stringify({
+      group: true,
+      character_ids: ["char1", "char2"],
+      group_alternate_field_selections: { char2: { personality: "bold" } },
+    }), 1);
+
+    const updated = setGroupMemberAlternateFields("u1", "chat1", "char1", { personality: "bold" });
+
+    expect(updated?.metadata.group_alternate_field_selections).toEqual({
+      char1: { personality: "bold" },
+      char2: { personality: "bold" },
+    });
+  });
+
+  test("rejects invalid variants", () => {
+    seedCharacterWithExtensions("char1", {
+      alternate_fields: {
+        personality: [{ id: "known", label: "Known", content: "Known personality" }],
+      },
+    });
+    seedCharacterWithExtensions("char2");
+    seedChat("chat1", "char1", "Group", JSON.stringify({ group: true, character_ids: ["char1", "char2"] }), 1);
+
+    const updated = setGroupMemberAlternateFields("u1", "chat1", "char1", { personality: "missing" });
+
+    expect(updated).toBeNull();
+    expect(getChat("u1", "chat1")?.metadata.group_alternate_field_selections).toBeUndefined();
+  });
+
+  test("removing a member clears stale alternate field selections", () => {
+    seedCharacterWithExtensions("char1");
+    seedCharacterWithExtensions("char2");
+    seedCharacterWithExtensions("char3");
+    seedChat("chat1", "char1", "Group", JSON.stringify({
+      group: true,
+      character_ids: ["char1", "char2", "char3"],
+      group_alternate_field_selections: {
+        char2: { personality: "bold" },
+        char3: { personality: "quiet" },
+      },
+    }), 1);
+
+    const updated = removeGroupMember("u1", "chat1", "char2");
+
+    expect(updated?.metadata.group_alternate_field_selections).toEqual({
+      char3: { personality: "quiet" },
+    });
   });
 });
