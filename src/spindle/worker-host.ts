@@ -662,6 +662,37 @@ function validateImageMagicBytes(data: Uint8Array, contentType: string): boolean
   return false;
 }
 
+/** Validate common browser-playable audio containers before proxying to widgets. */
+function validateAudioMagicBytes(data: Uint8Array, contentType: string): boolean {
+  if (data.length < 4) return false;
+
+  // MP3: ID3 tag or MPEG frame sync.
+  if (data[0] === 0x49 && data[1] === 0x44 && data[2] === 0x33) return true;
+  if (data[0] === 0xFF && (data[1] & 0xE0) === 0xE0) return true;
+
+  // WAV: RIFF....WAVE.
+  if (data.length >= 12 && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46) {
+    if (data[8] === 0x57 && data[9] === 0x41 && data[10] === 0x56 && data[11] === 0x45) return true;
+  }
+
+  // Ogg / Opus / Vorbis.
+  if (data[0] === 0x4F && data[1] === 0x67 && data[2] === 0x67 && data[3] === 0x53) return true;
+
+  // FLAC.
+  if (data[0] === 0x66 && data[1] === 0x4C && data[2] === 0x61 && data[3] === 0x43) return true;
+
+  // MP4/M4A: ISO BMFF ftyp box.
+  if (data.length >= 12 && data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) return true;
+
+  // WebM/Matroska: EBML header.
+  if (data[0] === 0x1A && data[1] === 0x45 && data[2] === 0xDF && data[3] === 0xA3) return true;
+
+  // MIDI.
+  if (contentType.includes("midi") && data[0] === 0x4D && data[1] === 0x54 && data[2] === 0x68 && data[3] === 0x64) return true;
+
+  return false;
+}
+
 function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
   const out = new Uint8Array(total);
   let offset = 0;
@@ -5109,6 +5140,7 @@ export class WorkerHost {
     url: string,
     options: any
   ): Promise<void> {
+    options = options || {};
     if (!managerSvc.hasPermission(this.manifest.identifier, "cors_proxy")) {
       this.postToWorker({
         type: "response",
@@ -5119,6 +5151,7 @@ export class WorkerHost {
     }
 
     const isBinary = options?.responseType === "arraybuffer";
+    const binaryMediaType = options?.mediaType === "audio" ? "audio" : "image";
 
     try {
       // Validate URL against SSRF before making the request
@@ -5152,17 +5185,23 @@ export class WorkerHost {
         }
 
         if (isBinary) {
-          // Transparent proxy for sandboxed widgets: only serve image data
+          // Transparent proxy for sandboxed widgets: only serve approved media data.
           const contentType = (response.headers.get("content-type") || "").toLowerCase();
-          if (!contentType.startsWith("image/")) {
+          const isAllowedContentType = binaryMediaType === "audio"
+            ? contentType.startsWith("audio/") || contentType.startsWith("application/ogg")
+            : contentType.startsWith("image/");
+          if (!isAllowedContentType) {
             throw new Error(
-              `CORS proxy transparent proxy only serves image data (received Content-Type: ${contentType || "unknown"})`
+              `CORS proxy transparent proxy only serves ${binaryMediaType} data (received Content-Type: ${contentType || "unknown"})`
             );
           }
 
           const binary = await readResponseBodyBinaryCapped(response, CORS_PROXY_MAX_BODY_BYTES);
-          if (!contentType.includes("svg") && !validateImageMagicBytes(binary, contentType)) {
-            throw new Error("CORS proxy transparent proxy rejected: downloaded content does not match a known image format");
+          const hasValidMagic = binaryMediaType === "audio"
+            ? validateAudioMagicBytes(binary, contentType)
+            : contentType.includes("svg") || validateImageMagicBytes(binary, contentType);
+          if (!hasValidMagic) {
+            throw new Error(`CORS proxy transparent proxy rejected: downloaded content does not match a known ${binaryMediaType} format`);
           }
 
           this.postToWorker({
