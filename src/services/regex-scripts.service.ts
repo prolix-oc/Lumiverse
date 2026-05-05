@@ -361,8 +361,19 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
   if (input.scope !== undefined && !VALID_SCOPES.has(input.scope)) {
     return `Invalid scope: ${input.scope}`;
   }
-  if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
-    return "scope_id is required for non-global scope";
+  if (isCreate) {
+    if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
+      return "scope_id is required for non-global scope";
+    }
+  } else {
+    if (
+      input.scope !== undefined &&
+      input.scope !== "global" &&
+      input.scope_id !== undefined &&
+      !input.scope_id
+    ) {
+      return "scope_id is required for non-global scope";
+    }
   }
   if (input.target !== undefined && !VALID_TARGETS.has(input.target)) {
     return `Invalid target: ${input.target}`;
