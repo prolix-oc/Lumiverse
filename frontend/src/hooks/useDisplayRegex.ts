@@ -374,7 +374,7 @@ export function useDisplayRegex(
       if (hasMacroSyntax(s.find_regex)) {
         templates[`find:${s.id}`] = s.find_regex
       }
-      if (s.substitute_macros !== 'raw' && hasMacroSyntax(s.replace_string)) {
+      if (s.substitute_macros !== 'raw' && s.substitute_macros !== 'after' && hasMacroSyntax(s.replace_string)) {
         templates[`replace:${s.id}`] = s.replace_string
       }
     }
@@ -418,7 +418,7 @@ export function useDisplayRegex(
       if (hasMacroSyntax(s.find_regex)) {
         templates[`find:${s.id}`] = s.find_regex
       }
-      if (s.substitute_macros !== 'raw' && hasMacroSyntax(s.replace_string)) {
+      if (s.substitute_macros !== 'raw' && s.substitute_macros !== 'after' && hasMacroSyntax(s.replace_string)) {
         templates[`replace:${s.id}`] = s.replace_string
       }
     }

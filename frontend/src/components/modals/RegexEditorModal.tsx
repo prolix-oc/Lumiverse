@@ -402,6 +402,7 @@ export default function RegexEditorModal() {
                         { m: 'none' as const, label: 'None' },
                         { m: 'raw' as const, label: 'Raw' },
                         { m: 'escaped' as const, label: 'Escaped' },
+                        { m: 'after' as const, label: 'After' },
                       ]).map(({ m, label }) => (
                         <button
                           key={m}

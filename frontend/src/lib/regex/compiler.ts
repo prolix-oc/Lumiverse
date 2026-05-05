@@ -258,6 +258,8 @@ export function applyDisplayRegex(
             ? resolveReplacementMacros(withCaptures, 'raw', context.macroCtx)
             : withCaptures
         })
+      } else if (script.substitute_macros === 'after') {
+        result = result.replace(regex, replaceString)
       } else {
         // Prefer backend-resolved replacement string (full macro engine)
         if (script.substitute_macros !== 'none') {
@@ -359,6 +361,14 @@ export async function applyDisplayRegexAsync(
             matches,
             fallbackReplacements.map((value, index) => resolvedTemplates[`${script.id}:${index}`] ?? value),
           )
+        }
+      } else if (script.substitute_macros === 'after') {
+        const substituted = result.replace(regex, script.replace_string)
+        if (hasMacroSyntax(substituted)) {
+          const resolved = await resolveRawTemplates({ [`${script.id}:body`]: substituted })
+          result = resolved[`${script.id}:body`] ?? substituted
+        } else {
+          result = substituted
         }
       } else {
         let replaceString = script.replace_string
