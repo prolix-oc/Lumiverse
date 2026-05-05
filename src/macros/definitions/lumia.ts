@@ -634,6 +634,7 @@ export function registerLumiaMacros(): void {
   // ---- randomLumia ----
   registry.registerMacro({
     builtIn: true,
+    volatile: true,
     name: "randomLumia",
     category: "Lumia",
     description: "Random Lumia from all loaded packs. Optional arg: name, phys, pers, behav.",

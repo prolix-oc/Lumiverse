@@ -67,6 +67,16 @@ This is primarily useful when your macro has separate display-only and state-mut
 | `returnType` | `"string" \| "integer" \| "number" \| "boolean"` | Optional. Default: `"string"` |
 | `args` | `Array<{ name, description?, required? }>` | Optional argument definitions |
 | `handler` | `function \| ""` | Optional macro handler. Use a function for pull-model macros, or an empty string when using the push model. |
+| `volatile` | `boolean` | Optional. Set `true` when the macro returns different output across calls with the same args (time, randomness, idle duration, etc.) so the display-regex cache doesn't store the result as static. |
+
+!!! note "Reading variables inside a handler"
+    If your handler reads `ctx.env.variables.local` (or `.global`/`.chat`), use `.get(key)` and `.has(key)`. Iteration (`.entries()`, `.keys()`, `for...of`) isn't recorded in the per-resolution dependency fingerprint, so the cached output may be stale longer than expected when those vars change.
+
+!!! note "When to set `volatile: true`"
+    Set the flag when the handler's output isn't a pure function of its args and tracked env reads.
+    **Needs the flag:** time based output (`Date.now()`, `new Date()`), random output (`Math.random()`), stateful side effects (read then write to a var, mutable internal counters), or external calls (HTTP, files, anything outside the env).
+    **Doesn't need the flag (auto invalidates):** variable reads via `.get(key)` / `.has(key)` (the fingerprint records the dependency and the cache invalidates when that var changes), static fields on `env` (character, persona, scenario), and computed-from-tracked-inputs handlers (math, conditionals, string ops) where args evaluate through the same fingerprint mechanism so dependencies propagate.
+    Rule of thumb: if the handler only touches `ctx.args` and `env.variables.<scope>.get(...)`, leave the flag off. If it reaches for `Date`, `Math.random`, or mutates state, set it.
 
 ## Methods
 

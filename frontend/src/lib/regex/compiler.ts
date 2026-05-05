@@ -168,11 +168,17 @@ function mapToRecord(map?: Map<string, string>): Record<string, string> | undefi
   return Object.fromEntries(map.entries())
 }
 
+export interface DisplayRegexBackendResult {
+  result: string
+  touchedVars?: ReadonlySet<string>
+  cacheable?: boolean
+}
+
 async function applyDisplayRegexOnBackend(
   content: string,
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
-): Promise<string | null> {
+): Promise<DisplayRegexBackendResult | null> {
   try {
     const res = await fetch('/api/v1/regex-scripts/apply', {
       method: 'POST',
@@ -194,8 +200,13 @@ async function applyDisplayRegexOnBackend(
       }),
     })
     if (!res.ok) return null
-    const body = await res.json() as { result?: string }
-    return typeof body.result === 'string' ? body.result : null
+    const body = await res.json() as { result?: string; touched_vars?: string[]; cacheable?: boolean }
+    if (typeof body.result !== 'string') return null
+    return {
+      result: body.result,
+      touchedVars: Array.isArray(body.touched_vars) ? new Set(body.touched_vars) : undefined,
+      cacheable: typeof body.cacheable === 'boolean' ? body.cacheable : undefined,
+    }
   } catch {
     return null
   }
@@ -293,7 +304,7 @@ export async function applyDisplayRegexAsync(
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
   resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
-): Promise<string> {
+): Promise<DisplayRegexBackendResult> {
   const backendResult = await applyDisplayRegexOnBackend(content, scripts, context)
   if (backendResult !== null) return backendResult
 
@@ -375,5 +386,5 @@ export async function applyDisplayRegexAsync(
     }
   }
 
-  return result
+  return { result, cacheable: false }
 }

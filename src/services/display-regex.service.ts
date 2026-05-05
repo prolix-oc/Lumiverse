@@ -147,13 +147,20 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
   };
 }
 
-export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<string> {
+export interface ApplyDisplayRegexResult {
+  result: string;
+  touchedVars: ReadonlySet<string>;
+  cacheable: boolean;
+}
+
+export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<ApplyDisplayRegexResult> {
   const placement: RegexPlacement = input.context.is_user ? "user_input" : "ai_output";
   const env = buildEnvFromContext(input.userId, input.context);
   if (env && input.dynamicMacros) {
     mergeDynamicMacros(env, input.dynamicMacros);
   }
-  return applyRegexScripts(
+  const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
+  const result = await applyRegexScripts(
     input.content,
     input.scripts,
     placement,
@@ -163,6 +170,11 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
       resolvedFindPatterns: input.resolvedFindPatterns,
       resolvedReplacements: input.resolvedReplacements,
     },
-    { source: "display_backend" },
+    { source: "display_backend", outFingerprint: fingerprint },
   );
+  return {
+    result,
+    touchedVars: fingerprint.touchedVars,
+    cacheable: fingerprint.cacheable,
+  };
 }

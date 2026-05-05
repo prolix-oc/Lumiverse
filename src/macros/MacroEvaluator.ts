@@ -34,12 +34,12 @@ export async function evaluate(
   registry: MacroRegistry,
   options?: EvaluateOptions,
 ): Promise<EvaluateResult> {
-  if (!input) return { text: "", diagnostics: [] };
+  if (!input) return { text: "", diagnostics: [], touchedVars: EMPTY_TOUCHED_VARS, cacheable: true };
 
   // Fast-path: skip the entire lex/parse/evaluate pipeline when there are
   // no macro markers in the input (the vast majority of stored chat messages).
   if (!HAS_MACRO_RE.test(input)) {
-    return { text: input, diagnostics: [] };
+    return { text: input, diagnostics: [], touchedVars: EMPTY_TOUCHED_VARS, cacheable: true };
   }
 
   // Pre-process: legacy syntax conversion
@@ -53,6 +53,11 @@ export async function evaluate(
   const phase = options?.phase ?? "other";
   const sourceHint = options?.sourceHint;
 
+  // Fingerprint accumulator. Wrapped env records var reads via
+  // env.variables.*.get/has; volatile macros flip cacheable=false.
+  const fingerprint = { touched: new Set<string>(), cacheable: true };
+  const recordingEnv = wrapEnvForFingerprint(env, fingerprint);
+
   // Iterative evaluation: most macros are now recursively expanded inline
   // (see evaluateMacroNode). The outer loop acts as a safety net for the
   // rare case where a macro result depends on state mutated by a later macro
@@ -62,6 +67,7 @@ export async function evaluate(
     if (env.signal?.aborted) throw env.signal.reason ?? new DOMException("Aborted", "AbortError");
 
     if (runInterceptors) {
+      const beforeInterceptor = text;
       text = await macroInterceptorChain.run({
         template: text,
         env: snapshotEnvForInterceptor(env),
@@ -70,11 +76,12 @@ export async function evaluate(
         ...(sourceHint ? { sourceHint } : {}),
         ...(userId !== undefined ? { userId } : {}),
       });
+      if (text !== beforeInterceptor) fingerprint.cacheable = false;
       if (!text.includes("{{")) break;
     }
 
     const ast = parse(text);
-    const result = await evaluateNodes(ast, env, registry, 0, 0, diagnostics);
+    const result = await evaluateNodes(ast, recordingEnv, registry, 0, 0, diagnostics);
     if (result === text) break; // No change — converged
     text = result;
     if (!text.includes("{{")) break; // No more macros to resolve
@@ -83,7 +90,56 @@ export async function evaluate(
   // Post-process: unescape remaining escaped braces
   const final = postprocess(text);
 
-  return { text: final, diagnostics };
+  return { text: final, diagnostics, touchedVars: fingerprint.touched, cacheable: fingerprint.cacheable };
+}
+
+const EMPTY_TOUCHED_VARS: ReadonlySet<string> = new Set<string>();
+
+function wrapEnvForFingerprint(
+  env: MacroEnv,
+  fingerprint: { touched: Set<string>; cacheable: boolean },
+): MacroEnv {
+  const wrappedVars = {
+    local: makeRecordingMap(env.variables.local, "local", fingerprint.touched),
+    global: makeRecordingMap(env.variables.global, "global", fingerprint.touched),
+    chat: makeRecordingMap(env.variables.chat, "chat", fingerprint.touched),
+  };
+  return new Proxy(env, {
+    get(target, prop, receiver) {
+      if (prop === "variables") return wrappedVars;
+      if (prop === "_fingerprint") return fingerprint;
+      return Reflect.get(target, prop, receiver);
+    },
+    set(target, prop, value, receiver) {
+      if (prop === "variables" || prop === "_fingerprint") return true;
+      return Reflect.set(target, prop, value, receiver);
+    },
+  }) as MacroEnv;
+}
+
+function makeRecordingMap(
+  source: Map<string, string>,
+  scope: "local" | "global" | "chat",
+  sink: Set<string>,
+): Map<string, string> {
+  return new Proxy(source, {
+    get(target, prop, receiver) {
+      if (prop === "get") {
+        return (key: string) => {
+          sink.add(`${scope}:${key}`);
+          return target.get(key);
+        };
+      }
+      if (prop === "has") {
+        return (key: string) => {
+          sink.add(`${scope}:${key}`);
+          return target.has(key);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 function preprocessLegacy(input: string): string {
@@ -147,6 +203,7 @@ async function evaluateMacroNode(
   const dynamicKey = node.name.toLowerCase();
   const dynamicLookup = env._dynamicMacrosLower;
   if (!def && dynamicLookup && dynamicLookup.has(dynamicKey)) {
+    if (env._fingerprint) env._fingerprint.cacheable = false;
     const dynamic = dynamicLookup.get(dynamicKey)!;
     let rawResult: string;
     if (typeof dynamic === "string") {
@@ -175,6 +232,8 @@ async function evaluateMacroNode(
     // Unknown macro — pass through as-is
     return reconstructMacro(node);
   }
+
+  if (def.volatile && env._fingerprint) env._fingerprint.cacheable = false;
 
   // Resolve arguments (unless handler wants raw AST)
   let resolvedArgs: string[];

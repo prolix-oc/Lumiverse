@@ -10,7 +10,11 @@ import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
 import { operatorApi } from '@/api/operator'
 import { toast } from '@/lib/toast'
-import { invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
+import {
+  invalidateDisplayRegexCache,
+  invalidateDisplayRegexCacheForMessage,
+  invalidateDisplayRegexCacheForVars,
+} from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import type {
@@ -43,6 +47,35 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
     id.startsWith(LOCAL_STREAM_PLACEHOLDER_PREFIX)
     || id.startsWith(LOCAL_REGEN_PLACEHOLDER_PREFIX)
   )
+}
+
+const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
+const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
+
+interface VarChangeSummary {
+  bagWideVarChange: boolean
+  changedVars: ReadonlySet<string>
+}
+
+function summarizeVarChanges(changedFields: readonly string[]): VarChangeSummary {
+  const changedVars = new Set<string>()
+  let sawBareBag = false
+  for (const f of changedFields) {
+    if (f === 'metadata.macro_variables' || f === 'metadata.chat_variables') {
+      sawBareBag = true
+      continue
+    }
+    if (f.startsWith(MACRO_VARS_PREFIX)) {
+      const tail = f.slice(MACRO_VARS_PREFIX.length)
+      const dot = tail.indexOf('.')
+      if (dot > 0) changedVars.add(`${tail.slice(0, dot)}:${tail.slice(dot + 1)}`)
+    } else if (f.startsWith(CHAT_VARS_PREFIX)) {
+      changedVars.add(`chat:${f.slice(CHAT_VARS_PREFIX.length)}`)
+    }
+  }
+  // Bare bag path is bag-wide only when no leaves describe the change (BE emits both).
+  const bagWideVarChange = sawBareBag && changedVars.size === 0
+  return { bagWideVarChange, changedVars }
 }
 
 /**
@@ -127,7 +160,7 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_SENT, (payload: MessageSentPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
-          invalidateDisplayRegexCache()
+          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
 
           // Suppress completed assistant messages while streaming — the streaming
           // card already displays the content. GENERATION_ENDED will reconcile
@@ -169,7 +202,7 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
-          invalidateDisplayRegexCache()
+          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
 
           // During a continue, the backend updates the target message with combined
           // content right before GENERATION_ENDED. Skip the update while streaming
@@ -190,7 +223,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.removeMessage(payload.messageId)
-          invalidateDisplayRegexCache()
+          if (payload.messageId) invalidateDisplayRegexCacheForMessage(payload.messageId)
         }
       }),
 
@@ -198,14 +231,26 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.updateMessage(payload.message.id, payload.message)
-          invalidateDisplayRegexCache()
+          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
         }
       }),
 
       wsClient.on(EventType.CHAT_CHANGED, (payload: ChatChangedPayload) => {
         const state = store.getState()
         const changedChatId = payload.chat?.id ?? payload.chatId
-        if (changedChatId === state.activeChatId) {
+        if (changedChatId !== state.activeChatId) return
+
+        const changedFields = payload.changedFields
+        if (changedFields === undefined) {
+          invalidateDisplayRegexCache()
+          return
+        }
+        const { bagWideVarChange, changedVars } = summarizeVarChanges(changedFields)
+        if (changedVars.size > 0 && !bagWideVarChange) {
+          invalidateDisplayRegexCacheForVars(changedVars)
+          return
+        }
+        if (bagWideVarChange) {
           invalidateDisplayRegexCache()
         }
       }),

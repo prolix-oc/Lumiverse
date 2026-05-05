@@ -170,7 +170,7 @@ app.post("/apply", async (c) => {
     ? Object.fromEntries(Object.entries(body.dynamic_macros).filter(([, v]) => typeof v === "string")) as Record<string, string>
     : undefined;
 
-  const result = await applyDisplayRegex({
+  const applied = await applyDisplayRegex({
     content,
     scripts: scripts.filter((script) => !script.disabled),
     context: {
@@ -186,7 +186,11 @@ app.post("/apply", async (c) => {
     dynamicMacros,
   });
 
-  return c.json({ result });
+  return c.json({
+    result: applied.result,
+    touched_vars: Array.from(applied.touchedVars),
+    cacheable: applied.cacheable,
+  });
 });
 
 // POST /test — test regex

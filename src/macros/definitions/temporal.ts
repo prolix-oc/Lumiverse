@@ -4,6 +4,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "time",
     category: "Time",
     description: "Current time (HH:MM). Accepts optional UTC offset argument.",
@@ -29,6 +30,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "date",
     category: "Time",
     description: "Current date (Month Day, Year)",
@@ -41,6 +43,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "weekday",
     category: "Time",
     description: "Current day of the week",
@@ -53,6 +56,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "isotime",
     category: "Time",
     description: "Current date and time in ISO 8601 format",
@@ -63,6 +67,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "isodate",
     category: "Time",
     description: "Current date in ISO format (YYYY-MM-DD)",
@@ -76,6 +81,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "datetimeformat",
     category: "Time",
     description: "Format current date/time with a custom Intl pattern",
@@ -103,6 +109,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "idleDuration",
     category: "Time",
     description: "Human-readable time since last message",
@@ -119,6 +126,7 @@ export function registerTimeMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
     name: "timeDiff",
     category: "Time",
     description: "Human-readable difference between two ISO date strings",

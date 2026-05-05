@@ -56,6 +56,7 @@ interface RegexPerformanceReportResult {
 interface ApplyRegexScriptOptions {
   source?: RegexPerformanceSource;
   onPerformanceIssue?: (issue: RegexPerformanceIssue) => void;
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -868,13 +869,25 @@ function rebuildFromMatches(
  * Resolve macros in a regex find pattern based on the substitute_macros mode.
  * The result stays as plain regex source, so `$` is not escaped here.
  */
+function foldFingerprint(
+  acc: { touchedVars: Set<string>; cacheable: boolean } | undefined,
+  result: { touchedVars: ReadonlySet<string>; cacheable: boolean },
+): void {
+  if (!acc) return;
+  for (const v of result.touchedVars) acc.touchedVars.add(v);
+  if (!result.cacheable) acc.cacheable = false;
+}
+
 async function resolveFindMacros(
   findRegex: string,
   mode: RegexScript["substitute_macros"],
   macroEnv: MacroEnv,
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
 ): Promise<string> {
   if (mode === "none") return findRegex;
-  return (await evaluate(findRegex, macroEnv, registry)).text;
+  const result = await evaluate(findRegex, macroEnv, registry);
+  foldFingerprint(outFingerprint, result);
+  return result.text;
 }
 
 /**
@@ -887,10 +900,13 @@ async function resolveReplacementMacros(
   replaceString: string,
   mode: RegexScript["substitute_macros"],
   macroEnv: MacroEnv,
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
 ): Promise<string> {
   if (mode === "none") return replaceString;
 
-  const resolved = (await evaluate(replaceString, macroEnv, registry)).text;
+  const result = await evaluate(replaceString, macroEnv, registry);
+  foldFingerprint(outFingerprint, result);
+  const resolved = result.text;
 
   if (mode === "escaped") {
     // Escape $ so regex replacement doesn't interpret $1, $&, etc.
@@ -942,7 +958,7 @@ export async function applyRegexScripts(
       if (preResolvedFind !== undefined) {
         findRegex = preResolvedFind;
       } else if (macroEnv && script.substitute_macros !== "none") {
-        findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv);
+        findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv, options?.outFingerprint);
       }
 
       if (macroEnv && script.substitute_macros === "raw") {
@@ -962,7 +978,9 @@ export async function applyRegexScripts(
               const withCaptures = substituteRegexCaptures(
                 script.replace_string, fullMatch, groups, index, result, namedGroups,
               );
-              return (await evaluate(withCaptures, macroEnv, registry)).text;
+              const evalResult = await evaluate(withCaptures, macroEnv, registry);
+              foldFingerprint(options?.outFingerprint, evalResult);
+              return evalResult.text;
             }),
           );
           result = rebuildFromMatches(result, matches, replacements);
@@ -977,7 +995,7 @@ export async function applyRegexScripts(
             ? preResolvedReplacement.replace(/\$/g, "$$$$")
             : preResolvedReplacement;
         } else if (macroEnv && script.substitute_macros !== "none") {
-          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
+          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv, options?.outFingerprint);
         }
         result = await regexReplaceSandboxed(
           findRegex,
