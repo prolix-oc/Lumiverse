@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useStore } from '@/store'
 import { applyDisplayRegex, applyDisplayRegexAsync } from '@/lib/regex/compiler'
 import { resolveMacrosBatch } from '@/api/macros'
@@ -20,6 +20,8 @@ interface DisplayRegexCacheEntry {
 interface DisplayRegexContentCacheEntry {
   value?: string
   promise?: Promise<string>
+  touchedVars?: ReadonlySet<string>
+  messageId?: string
 }
 
 export interface DisplayPreprocessOpts {
@@ -46,11 +48,22 @@ interface SlowRegexReport {
 
 const displayRegexResolutionCache = new Map<string, DisplayRegexCacheEntry>()
 const displayRegexContentCache = new Map<string, DisplayRegexContentCacheEntry>()
-const displayPreprocessCache = new Map<string, { value?: string; promise?: Promise<string> }>()
+const displayPreprocessCache = new Map<string, { value?: string; promise?: Promise<string>; touchedVars?: ReadonlySet<string>; messageId?: string }>()
 const DISPLAY_PREPROCESS_CACHE_MAX = 500
 const displayRegexCacheListeners = new Set<() => void>()
-let displayRegexCacheVersion = 0
+let displayRegexGlobalCv = 0
+const displayRegexPerMessageCv = new Map<string, number>()
 const slowDisplayRegexToastKeys = new Set<string>()
+
+function bumpGlobalCv(): void {
+  displayRegexGlobalCv += 1
+  for (const listener of displayRegexCacheListeners) listener()
+}
+
+function bumpPerMessageCv(messageId: string): void {
+  displayRegexPerMessageCv.set(messageId, (displayRegexPerMessageCv.get(messageId) ?? 0) + 1)
+  for (const listener of displayRegexCacheListeners) listener()
+}
 
 function formatElapsedMs(elapsedMs: number): string {
   if (elapsedMs >= 1000) return `${(elapsedMs / 1000).toFixed(1)}s`
@@ -110,16 +123,21 @@ export function useDisplayPreprocessed(
   chatId: string | null,
   opts: DisplayPreprocessOpts | undefined,
 ): string {
-  const cacheVersion = useSyncExternalStore(
+  const messageIdForSnapshot = opts?.messageId ?? null
+  const getSnapshotForThisMessage = useCallback(
+    () => getDisplayRegexCacheSnapshot(messageIdForSnapshot),
+    [messageIdForSnapshot],
+  )
+  const cvSnapshot = useSyncExternalStore(
     subscribeDisplayRegexCache,
-    getDisplayRegexCacheVersion,
-    getDisplayRegexCacheVersion,
+    getSnapshotForThisMessage,
+    getSnapshotForThisMessage,
   )
 
   const key = useMemo(() => {
     if (!opts?.messageId || !chatId) return null
-    return `${cacheVersion}|${chatId}|${opts.messageId}|${opts.role}|${content.length}|${fnv1a(content)}`
-  }, [content, opts?.messageId, opts?.role, chatId, cacheVersion])
+    return `${chatId}|${opts.messageId}|${opts.role}|${content.length}|${fnv1a(content)}`
+  }, [content, opts?.messageId, opts?.role, chatId])
 
   const cached = key ? displayPreprocessCache.get(key)?.value : undefined
   const [state, setState] = useState<{ key: string; value: string } | null>(() =>
@@ -145,32 +163,39 @@ export function useDisplayPreprocessed(
       return () => { cancelled = true }
     }
     if (!existing?.promise) {
+      const messageIdForEntry = opts.messageId
+      let assignedPromise: Promise<string>
       const promise = fetchDisplayPreprocess(chatId, {
         messageId: opts.messageId,
         role: opts.role,
         rawContent: content,
       })
         .then((next) => {
-          displayPreprocessCache.set(key, { value: next })
-          if (displayPreprocessCache.size > DISPLAY_PREPROCESS_CACHE_MAX) {
-            const drop = displayPreprocessCache.size - DISPLAY_PREPROCESS_CACHE_MAX
-            let i = 0
-            for (const k of displayPreprocessCache.keys()) {
-              if (i++ >= drop) break
-              displayPreprocessCache.delete(k)
+          if (displayPreprocessCache.get(key)?.promise === assignedPromise) {
+            displayPreprocessCache.set(key, { value: next, messageId: messageIdForEntry })
+            if (displayPreprocessCache.size > DISPLAY_PREPROCESS_CACHE_MAX) {
+              const drop = displayPreprocessCache.size - DISPLAY_PREPROCESS_CACHE_MAX
+              let i = 0
+              for (const k of displayPreprocessCache.keys()) {
+                if (i++ >= drop) break
+                displayPreprocessCache.delete(k)
+              }
             }
           }
           return next
         })
         .catch(() => {
-          displayPreprocessCache.delete(key)
+          if (displayPreprocessCache.get(key)?.promise === assignedPromise) {
+            displayPreprocessCache.delete(key)
+          }
           return content
         })
-      displayPreprocessCache.set(key, { promise })
+      assignedPromise = promise
+      displayPreprocessCache.set(key, { promise, messageId: messageIdForEntry })
     }
     displayPreprocessCache.get(key)?.promise?.then(apply)
     return () => { cancelled = true }
-  }, [key, opts?.messageId, opts?.role, chatId, content])
+  }, [key, opts?.messageId, opts?.role, chatId, content, cvSnapshot])
 
   if (!key) return content
   if (cached !== undefined) return cached
@@ -200,16 +225,64 @@ function subscribeDisplayRegexCache(listener: () => void): () => void {
   return () => displayRegexCacheListeners.delete(listener)
 }
 
-function getDisplayRegexCacheVersion(): number {
-  return displayRegexCacheVersion
+function getDisplayRegexCacheSnapshot(messageId: string | null): string {
+  const perMsg = messageId ? (displayRegexPerMessageCv.get(messageId) ?? 0) : 0
+  return `${displayRegexGlobalCv}|${perMsg}`
 }
 
 export function invalidateDisplayRegexCache(): void {
-  displayRegexCacheVersion += 1
   displayRegexResolutionCache.clear()
   displayRegexContentCache.clear()
   displayPreprocessCache.clear()
-  for (const listener of displayRegexCacheListeners) listener()
+  bumpGlobalCv()
+}
+
+export function invalidateDisplayRegexCacheForMessage(messageId: string): void {
+  let removed = 0
+  for (const [key, entry] of displayRegexContentCache) {
+    if (entry.messageId === messageId) { displayRegexContentCache.delete(key); removed++ }
+  }
+  for (const [key, entry] of displayPreprocessCache) {
+    if (entry.messageId === messageId) { displayPreprocessCache.delete(key); removed++ }
+  }
+  if (removed > 0) bumpPerMessageCv(messageId)
+}
+
+export function invalidateDisplayRegexCacheForVars(changedVars: ReadonlySet<string>): void {
+  if (changedVars.size === 0) return
+  const affectedMessages = new Set<string>()
+  for (const [key, entry] of displayRegexContentCache) {
+    const fp = entry.touchedVars
+    if (!fp) {
+      displayRegexContentCache.delete(key)
+      if (entry.messageId) affectedMessages.add(entry.messageId)
+      continue
+    }
+    for (const v of fp) {
+      if (changedVars.has(v)) {
+        displayRegexContentCache.delete(key)
+        if (entry.messageId) affectedMessages.add(entry.messageId)
+        break
+      }
+    }
+  }
+  for (const [key, entry] of displayPreprocessCache) {
+    const fp = entry.touchedVars
+    if (!fp) {
+      displayPreprocessCache.delete(key)
+      if (entry.messageId) affectedMessages.add(entry.messageId)
+      continue
+    }
+    for (const v of fp) {
+      if (changedVars.has(v)) {
+        displayPreprocessCache.delete(key)
+        if (entry.messageId) affectedMessages.add(entry.messageId)
+        break
+      }
+    }
+  }
+  displayRegexResolutionCache.clear()
+  for (const messageId of affectedMessages) bumpPerMessageCv(messageId)
 }
 
 async function resolveMacrosBatchChunked(
@@ -252,10 +325,15 @@ export function useDisplayRegex(
     if (!preprocessOpts?.messageId) return -1
     return s.messages.findIndex((m) => m.id === preprocessOpts.messageId)
   })
-  const cacheVersion = useSyncExternalStore(
+  const messageIdForSnapshot = preprocessOpts?.messageId ?? null
+  const getSnapshotForThisMessage = useCallback(
+    () => getDisplayRegexCacheSnapshot(messageIdForSnapshot),
+    [messageIdForSnapshot],
+  )
+  const cvSnapshot = useSyncExternalStore(
     subscribeDisplayRegexCache,
-    getDisplayRegexCacheVersion,
-    getDisplayRegexCacheVersion,
+    getSnapshotForThisMessage,
+    getSnapshotForThisMessage,
   )
 
   const dynamicMacros = useMemo(() => {
@@ -305,7 +383,6 @@ export function useDisplayRegex(
     if (templateEntries.length === 0) return null
 
     return JSON.stringify({
-      cacheVersion,
       activeChatId,
       activeCharacterId,
       activePersonaId,
@@ -317,7 +394,7 @@ export function useDisplayRegex(
         s.substitute_macros,
       ]),
     })
-  }, [scriptsNeedingResolution, activeChatId, activeCharacterId, activePersonaId, cacheVersion])
+  }, [scriptsNeedingResolution, activeChatId, activeCharacterId, activePersonaId])
 
   const cachedTemplates = templateCacheKey ? displayRegexResolutionCache.get(templateCacheKey)?.value : undefined
   const [resolvedTemplatesState, setResolvedTemplatesState] = useState<ResolvedTemplatesState | null>(() => (
@@ -365,6 +442,7 @@ export function useDisplayRegex(
     }
 
     if (!cached?.promise) {
+      let assignedPromise: Promise<ResolvedDisplayRegexTemplates>
       const promise = resolveMacrosBatch({
         templates,
         chat_id: activeChatId ?? undefined,
@@ -380,13 +458,18 @@ export function useDisplayRegex(
               next.resolvedReplacements.set(key.slice(8), value)
             }
           }
-          displayRegexResolutionCache.set(templateCacheKey, { value: next })
+          if (displayRegexResolutionCache.get(templateCacheKey)?.promise === assignedPromise) {
+            displayRegexResolutionCache.set(templateCacheKey, { value: next })
+          }
           return next
         })
         .catch(() => {
-          displayRegexResolutionCache.delete(templateCacheKey)
+          if (displayRegexResolutionCache.get(templateCacheKey)?.promise === assignedPromise) {
+            displayRegexResolutionCache.delete(templateCacheKey)
+          }
           return createEmptyResolvedTemplates()
         })
+      assignedPromise = promise
 
       displayRegexResolutionCache.set(templateCacheKey, { promise })
     }
@@ -445,7 +528,6 @@ export function useDisplayRegex(
     if (displayScripts.length === 0 || !hasRawMacroScripts) return null
 
     return JSON.stringify({
-      cacheVersion,
       activeChatId,
       activeCharacterId,
       activePersonaId,
@@ -472,7 +554,6 @@ export function useDisplayRegex(
   }, [
     displayScripts,
     hasRawMacroScripts,
-    cacheVersion,
     activeChatId,
     activeCharacterId,
     activePersonaId,
@@ -504,6 +585,11 @@ export function useDisplayRegex(
     }
 
     if (!cached?.promise) {
+      // Captured once so the .then/.catch handlers can verify the cache
+      // entry hasn't been replaced or invalidated by a CHAT_CHANGED in flight.
+      // Without this guard, an invalidation between the initial set and the
+      // resolve would let the stale fetch result clobber the live key.
+      let assignedPromise: Promise<string>
       const promise = applyDisplayRegexAsync(
         content,
         displayScripts,
@@ -524,16 +610,32 @@ export function useDisplayRegex(
           persona_id: activePersonaId ?? undefined,
         }),
       )
-        .then((next) => {
-          displayRegexContentCache.set(contentCacheKey, { value: next })
+        .then(({ result: next, touchedVars, cacheable }) => {
+          if (displayRegexContentCache.get(contentCacheKey)?.promise === assignedPromise) {
+            if (cacheable !== false) {
+              displayRegexContentCache.set(contentCacheKey, {
+                value: next,
+                ...(touchedVars ? { touchedVars } : {}),
+                ...(preprocessOpts?.messageId ? { messageId: preprocessOpts.messageId } : {}),
+              })
+            } else {
+              displayRegexContentCache.delete(contentCacheKey)
+            }
+          }
           return next
         })
         .catch(() => {
-          displayRegexContentCache.delete(contentCacheKey)
+          if (displayRegexContentCache.get(contentCacheKey)?.promise === assignedPromise) {
+            displayRegexContentCache.delete(contentCacheKey)
+          }
           return fallbackContent
         })
+      assignedPromise = promise
 
-      displayRegexContentCache.set(contentCacheKey, { promise })
+      displayRegexContentCache.set(contentCacheKey, {
+        promise,
+        ...(preprocessOpts?.messageId ? { messageId: preprocessOpts.messageId } : {}),
+      })
     }
 
     displayRegexContentCache.get(contentCacheKey)?.promise?.then(applyResolvedContent)
@@ -554,6 +656,7 @@ export function useDisplayRegex(
     activePersonaId,
     contentCacheKey,
     dynamicMacros,
+    cvSnapshot,
   ])
 
   // Carry the previous resolved value forward across cv-bumps and per-chunk

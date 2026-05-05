@@ -298,6 +298,10 @@ export interface ChatChangedPayload {
   chat?: import('./api').Chat
   chatId?: string
   reattributedUserMessages?: number
+  /** Dot-paths of fields that differ between prior and new chat row.
+   *  Optional; older servers omit it, in which case consumers fall back
+   *  to treating the chat as fully changed. */
+  changedFields?: string[]
 }
 
 export interface ChatSwitchedPayload {
