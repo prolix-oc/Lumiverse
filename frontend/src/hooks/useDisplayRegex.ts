@@ -511,8 +511,10 @@ export function useDisplayRegex(
     }
   }, [fallbackContent])
 
-  const hasRawMacroScripts = useMemo(
-    () => displayScripts.some((s) => s.substitute_macros === 'raw'),
+  const hasAsyncMacroScripts = useMemo(
+    () => displayScripts.some(
+      (s) => s.substitute_macros === 'raw' || s.substitute_macros === 'after',
+    ),
     [displayScripts],
   )
 
@@ -525,7 +527,7 @@ export function useDisplayRegex(
   )
 
   const contentCacheKey = useMemo(() => {
-    if (displayScripts.length === 0 || !hasRawMacroScripts) return null
+    if (displayScripts.length === 0 || !hasAsyncMacroScripts) return null
 
     return JSON.stringify({
       activeChatId,
@@ -553,7 +555,7 @@ export function useDisplayRegex(
     })
   }, [
     displayScripts,
-    hasRawMacroScripts,
+    hasAsyncMacroScripts,
     activeChatId,
     activeCharacterId,
     activePersonaId,
@@ -648,7 +650,7 @@ export function useDisplayRegex(
     macroCtx,
     fallbackContent,
     displayScripts,
-    hasRawMacroScripts,
+    hasAsyncMacroScripts,
     resolvedTemplateKey,
     resolvedTemplates,
     activeChatId,
