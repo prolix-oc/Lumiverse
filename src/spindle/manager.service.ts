@@ -493,15 +493,15 @@ export function bunCmd(...args: string[]): string[] {
  * filter blocks certain syscalls) and `--backend=copyfile` (no hardlinks).
  * Mirrors start.sh's `_proot_bun()` + install_deps().
  */
-function bunInstallCmd(): string[] {
+export function bunInstallCmd(): string[] {
   const isTermux = process.env.LUMIVERSE_IS_TERMUX === "true";
   const isProot = process.env.LUMIVERSE_IS_PROOT === "true";
 
-  if (!isTermux && !isProot) return ["bun", "install"];
+  if (!isTermux && !isProot) return ["bun", "install", "--ignore-scripts"];
 
   if (isProot) {
     // Inside proot-distro: proot already intercepts syscalls
-    return ["bun", "install", "--backend=copyfile"];
+    return ["bun", "install", "--ignore-scripts", "--backend=copyfile"];
   }
 
   // Native Termux: always wrap bun install in proot
@@ -512,14 +512,14 @@ function bunInstallCmd(): string[] {
 
   if (method === "direct") {
     // bun-termux wrapper handles linker; proot adds syscall interception
-    return ["proot", "--link2symlink", "-0", bunPath, "install", "--backend=copyfile"];
+    return ["proot", "--link2symlink", "-0", bunPath, "install", "--ignore-scripts", "--backend=copyfile"];
   }
 
   // grun/proot: explicit glibc linker + proot
   return [
     "proot", "--link2symlink", "-0",
     glibcLd, "--library-path", `${prefix}/glibc/lib`,
-    bunPath, "install", "--backend=copyfile",
+    bunPath, "install", "--ignore-scripts", "--backend=copyfile",
   ];
 }
 

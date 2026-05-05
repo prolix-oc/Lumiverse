@@ -1,11 +1,12 @@
 /**
  * Stdio MCP servers spawn local child processes. Keep the supported command
- * surface narrow and block interpreter flags that execute inline code.
+ * surface narrow and block interpreter/package-runner argument injection.
  */
 const DEFAULT_STDIO_ALLOWED = [
   "node", "bun", "deno", "python", "python3",
-  "npx", "uvx", "uv", "pipx", "pnpm", "yarn",
 ];
+
+const PACKAGE_RUNNERS = new Set(["npx", "uvx", "uv", "pipx", "pnpm", "yarn"]);
 
 const STDIO_ALLOWED_COMMANDS = new Set(
   (process.env.MCP_STDIO_ALLOWED_COMMANDS ?? "")
@@ -13,6 +14,13 @@ const STDIO_ALLOWED_COMMANDS = new Set(
     .map((s) => s.trim())
     .filter(Boolean)
     .concat(DEFAULT_STDIO_ALLOWED),
+);
+
+const STDIO_ALLOWED_PACKAGES = new Set(
+  (process.env.MCP_STDIO_ALLOWED_PACKAGES ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 );
 
 function commandBasename(command: string): string {
@@ -65,6 +73,68 @@ function isInlineCodeArg(commandBase: string, arg: string): boolean {
   return false;
 }
 
+function stripPackageVersion(spec: string): string {
+  if (spec.startsWith("@")) {
+    const versionSep = spec.indexOf("@", 1);
+    return versionSep === -1 ? spec : spec.slice(0, versionSep);
+  }
+  const versionSep = spec.indexOf("@");
+  return versionSep === -1 ? spec : spec.slice(0, versionSep);
+}
+
+function packageArgForRunner(commandBase: string, args: string[]): string | null {
+  if (commandBase === "npx") {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "-y" || arg === "--yes" || arg === "--no-install") continue;
+      if (arg === "--") continue;
+      if (arg === "--package" || arg === "-p" || arg.startsWith("--package=")) return null;
+      if (arg.startsWith("-")) return null;
+      return arg;
+    }
+  }
+
+  if (commandBase === "uvx") {
+    return args.find((arg) => !arg.startsWith("-")) ?? null;
+  }
+
+  if (commandBase === "uv") {
+    if (args[0] !== "tool" || args[1] !== "run") return null;
+    return args.slice(2).find((arg) => !arg.startsWith("-")) ?? null;
+  }
+
+  if (commandBase === "pipx") {
+    if (args[0] !== "run") return null;
+    return args.slice(1).find((arg) => !arg.startsWith("-")) ?? null;
+  }
+
+  if (commandBase === "pnpm" || commandBase === "yarn") {
+    if (args[0] !== "dlx") return null;
+    return args.slice(1).find((arg) => !arg.startsWith("-")) ?? null;
+  }
+
+  return null;
+}
+
+function assertPackageRunnerAllowed(commandBase: string, args: string[]): void {
+  if (!PACKAGE_RUNNERS.has(commandBase)) return;
+  if (STDIO_ALLOWED_PACKAGES.size === 0) {
+    throw new Error(
+      `MCP stdio package runner "${commandBase}" requires MCP_STDIO_ALLOWED_PACKAGES to allow specific packages`,
+    );
+  }
+
+  const packageArg = packageArgForRunner(commandBase, args);
+  if (!packageArg) {
+    throw new Error(`MCP stdio package runner "${commandBase}" uses unsupported arguments`);
+  }
+
+  const packageName = stripPackageVersion(packageArg);
+  if (!STDIO_ALLOWED_PACKAGES.has(packageName) && !STDIO_ALLOWED_PACKAGES.has(packageArg)) {
+    throw new Error(`MCP stdio package "${packageName}" is not in MCP_STDIO_ALLOWED_PACKAGES`);
+  }
+}
+
 export function assertStdioLaunchAllowed(command: string, args: unknown = []): asserts args is string[] {
   const commandBase = assertStdioCommandAllowed(command);
   if (!Array.isArray(args)) {
@@ -88,4 +158,6 @@ export function assertStdioLaunchAllowed(command: string, args: unknown = []): a
       throw new Error(`MCP stdio command "${commandBase}" cannot use inline-code argument "${arg}"`);
     }
   }
+
+  assertPackageRunnerAllowed(commandBase, args);
 }
