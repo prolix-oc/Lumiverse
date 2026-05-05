@@ -8,6 +8,10 @@ A block-level element (`<div>`, `<section>`, `<article>`, `<aside>`, `<nav>`, `<
 
 Standalone `<style>` blocks not inside a wrapper element are extracted together with any subsequent sibling HTML, including complete document-shaped markup.
 
+## Markdown inside widget elements
+
+Plain text inside `<button>`, `<h1>`–`<h6>`, `<select>`, `<option>`, `<textarea>`, `<label>`, and `<summary>` is not reparsed as block-level markdown — lines starting with `+`, `-`, `*`, or `#` render as the literal characters rather than being converted into lists or nested headings, while inline emphasis, inline code, and links still work as expected.
+
 ## Opting out with `data-no-island`
 
 Add `data-no-island` to the outer block element's opening tag to render its content inline instead of inside a shadow root:
