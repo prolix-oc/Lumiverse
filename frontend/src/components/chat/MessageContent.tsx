@@ -871,6 +871,29 @@ function renderIslandMarkdownText(markdown: string): string {
   return `${leadingWhitespace}${html}${trailingWhitespace}`
 }
 
+function renderIslandInlineMarkdownText(markdown: string): string {
+  const leadingWhitespace = markdown.match(/^\s*/)?.[0] ?? ''
+  const trailingWhitespace = markdown.match(/\s*$/)?.[0] ?? ''
+  const core = markdown.trim()
+
+  if (!core) return markdown
+
+  let html = marked.parseInline(core, { async: false }) as string
+  html = normalizeQuotesInHTML(html)
+
+  return `${leadingWhitespace}${html}${trailingWhitespace}`
+}
+
+const INLINE_CONTEXT_TAGS = new Set([
+  'button',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'label',
+  'option',
+  'select',
+  'summary',
+  'textarea',
+])
+
 function extractHtmlIslands(
   raw: string,
   isStreaming: boolean,
@@ -950,6 +973,7 @@ function processMarkdownInIsland(html: string): string {
   // Split into HTML tags (odd indices) and text content (even indices)
   const parts = shielded.split(/(<[^>]*>)/)
   let skipDepth = 0
+  const inlineCtxStack: string[] = []
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i]
@@ -958,6 +982,20 @@ function processMarkdownInIsland(html: string): string {
     if (i % 2 === 1) {
       if (/^<(pre|code|script)\b/i.test(part)) skipDepth++
       else if (/^<\/(pre|code|script)\b/i.test(part)) skipDepth = Math.max(0, skipDepth - 1)
+
+      const openMatch = part.match(/^<([a-z][\w:-]*)\b/i)
+      const closeMatch = part.match(/^<\/([a-z][\w:-]*)\b/i)
+      const isSelfClose = /\/\s*>$/.test(part)
+      if (openMatch && !closeMatch && !isSelfClose) {
+        const tag = openMatch[1].toLowerCase()
+        if (INLINE_CONTEXT_TAGS.has(tag)) inlineCtxStack.push(tag)
+      } else if (closeMatch) {
+        const tag = closeMatch[1].toLowerCase()
+        if (INLINE_CONTEXT_TAGS.has(tag)) {
+          const idx = inlineCtxStack.lastIndexOf(tag)
+          if (idx >= 0) inlineCtxStack.splice(idx, 1)
+        }
+      }
       continue
     }
 
@@ -965,7 +1003,9 @@ function processMarkdownInIsland(html: string): string {
     if (!part.trim() || skipDepth > 0) continue
     if (/^<!--ISLAND_STYLE_\d+-->$/.test(part.trim())) continue
 
-    parts[i] = renderIslandMarkdownText(part)
+    parts[i] = inlineCtxStack.length > 0
+      ? renderIslandInlineMarkdownText(part)
+      : renderIslandMarkdownText(part)
   }
 
   let result = parts.join('')
