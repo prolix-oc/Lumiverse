@@ -1,7 +1,10 @@
 import { getDb } from "../db/connection";
 import * as embeddingsSvc from "./embeddings.service";
-import { sanitizeForVectorization, type SanitizeOptions } from "../utils/content-sanitizer";
+import { type SanitizeOptions } from "../utils/content-sanitizer";
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
+import { type MacroEnv } from "../macros";
+import { resolveAndSanitizeForVectorization } from "./vectorization-content.service";
+import { buildMacroEnvForChat } from "./chats.service";
 
 const MAX_STALE_VISIBLE_MESSAGES = 2;
 const REFRESH_DEBOUNCE_MS = 100;
@@ -105,11 +108,12 @@ function truncateToContextSize(text: string, maxTokens: number): string {
   return text.slice(-maxChars);
 }
 
-function buildQueryText(
+async function buildQueryText(
   messages: MemoryMessageView[],
   settings: embeddingsSvc.ChatMemorySettings,
+  env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
-): string {
+): Promise<string> {
   const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
   const contextSize = Math.max(1, settings.queryContextSize);
 
@@ -117,29 +121,29 @@ function buildQueryText(
     case "last_user_message": {
       const lastUser = [...visibleMessages].reverse().find(m => m.is_user);
       if (!lastUser) return "";
+      const sanitized = await resolveAndSanitizeForVectorization(lastUser.content, env, reasoningStrip);
       return truncateToContextSize(
-        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content, reasoningStrip)}`,
+        `[USER | ${lastUser.name}]: ${sanitized}`,
         settings.queryMaxTokens,
       );
     }
     case "weighted_recent": {
       const queryMessages = visibleMessages.slice(-contextSize);
-      const parts = queryMessages.map(m =>
-        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`,
-      );
+      const parts = await Promise.all(queryMessages.map(async m => {
+        const sanitized = await resolveAndSanitizeForVectorization(m.content, env, reasoningStrip);
+        return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+      }));
       if (parts.length > 0) parts.push(parts[parts.length - 1]);
       return truncateToContextSize(parts.join("\n").trim(), settings.queryMaxTokens);
     }
     case "recent_messages":
     default: {
       const queryMessages = visibleMessages.slice(-contextSize);
-      return truncateToContextSize(
-        queryMessages
-          .map(m => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`)
-          .join("\n")
-          .trim(),
-        settings.queryMaxTokens,
-      );
+      const parts = await Promise.all(queryMessages.map(async m => {
+        const sanitized = await resolveAndSanitizeForVectorization(m.content, env, reasoningStrip);
+        return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+      }));
+      return truncateToContextSize(parts.join("\n").trim(), settings.queryMaxTokens);
     }
   }
 }
@@ -340,7 +344,8 @@ async function computeFreshMemoryResult(
   const settingsSource: "global" | "per_chat" = perChatOverrides ? "per_chat" : "global";
   const sourceMessageCount = getVisibleMessageCount(messages);
   const reasoningStrip = getReasoningStripOptions(userId);
-  const queryText = buildQueryText(messages, settings, reasoningStrip);
+  const env = buildMacroEnvForChat(userId, chatId);
+  const queryText = await buildQueryText(messages, settings, env, reasoningStrip);
   const settingsKey = computeSettingsKey(settings, perChatOverrides, cfg.hybrid_weight_mode);
 
   const chunkStats = getDb()
@@ -569,7 +574,8 @@ export async function readCachedChatMemory(
   const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings, cfg);
   const settingsSource: "global" | "per_chat" = perChatOverrides ? "per_chat" : "global";
   const reasoningStrip = getReasoningStripOptions(userId);
-  const queryText = buildQueryText(messageViews, settings, reasoningStrip);
+  const env = buildMacroEnvForChat(userId, chatId);
+  const queryText = await buildQueryText(messageViews, settings, env, reasoningStrip);
   if (!queryText) {
     return { ...EMPTY_RESULT, enabled: true, settingsSource };
   }

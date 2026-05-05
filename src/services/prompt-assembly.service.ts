@@ -51,7 +51,8 @@ import {
 } from "./world-info-activation.service";
 import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
 import * as chatsSvc from "./chats.service";
-import { stripReasoningTags } from "./chats.service";
+import { stripReasoningTags, buildMacroEnvForChat } from "./chats.service";
+import { resolveAndSanitizeForVectorization } from "./vectorization-content.service";
 import {
   stripDetailsBlocks as _stripDetailsBlocks,
   stripLoomTags as _stripLoomTags,
@@ -972,9 +973,10 @@ export async function assemblePrompt(
           )
         : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
 
-      const cortexQueryText = buildQueryText(
+      const cortexQueryText = await buildQueryText(
         messages,
         effective,
+        buildMacroEnvForChat(ctx.userId, ctx.chatId),
         getReasoningStripOptions(ctx.userId),
       );
       const recentContent = messages
@@ -1180,6 +1182,7 @@ export async function assemblePrompt(
   const vectorQueryPreview = await getWorldInfoVectorQueryPreview(
     ctx.userId,
     messages,
+    ctx.chatId,
   );
   let vectorActivated = ctx.precomputedVectorEntries ?? null;
   let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
@@ -3402,34 +3405,33 @@ function truncateToContextSize(text: string, maxTokens: number): string {
   return text.slice(-maxChars);
 }
 
-function buildWorldInfoVectorQueryPreview(
+async function buildWorldInfoVectorQueryPreview(
   messages: Message[],
   contextSize: number,
+  env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
-): string {
+): Promise<string> {
   const queryMessages = messages
     .filter((m) => !m.extra?.hidden && m.content.trim().length > 0)
     .slice(-Math.max(1, contextSize));
-  return truncateToContextSize(
-    queryMessages
-      .map(
-        (m) =>
-          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(stripReasoningTags(m.content), reasoningStrip)}`,
-      )
-      .join("\n")
-      .trim(),
-    8000,
-  );
+  const parts = await Promise.all(queryMessages.map(async (m) => {
+    const sanitized = await resolveAndSanitizeForVectorization(stripReasoningTags(m.content), env, reasoningStrip);
+    return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+  }));
+  return truncateToContextSize(parts.join("\n").trim(), 8000);
 }
 
 export async function getWorldInfoVectorQueryPreview(
   userId: string,
   messages: Message[],
+  chatId?: string,
 ): Promise<string> {
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  const env = chatId ? buildMacroEnvForChat(userId, chatId) : null;
   return buildWorldInfoVectorQueryPreview(
     messages,
     cfg.preferred_context_size || 3,
+    env,
     getReasoningStripOptions(userId),
   );
 }
@@ -3535,9 +3537,11 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const blockerMessages: string[] = [];
   const topK = Math.max(1, worldBookVectorSettings.retrievalTopK || cfg.retrieval_top_k || 4);
   const queryBuildStartedAt = performance.now();
-  const queryText = buildWorldInfoVectorQueryPreview(
+  const env = buildMacroEnvForChat(userId, chatId);
+  const queryText = await buildWorldInfoVectorQueryPreview(
     messages,
     cfg.preferred_context_size || 3,
+    env,
     getReasoningStripOptions(userId),
   );
   const queryBuildMs = performance.now() - queryBuildStartedAt;
@@ -3872,11 +3876,12 @@ export interface MemoryRetrievalResult {
   chunksPending: number;
 }
 
-function buildQueryText(
+async function buildQueryText(
   messages: Message[],
   settings: import("./embeddings.service").ChatMemorySettings,
+  env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
-): string {
+): Promise<string> {
   const visibleMessages = messages.filter(
     (m) => !m.extra?.hidden && m.content.trim().length > 0,
   );
@@ -3886,18 +3891,18 @@ function buildQueryText(
     case "last_user_message": {
       const lastUser = [...visibleMessages].reverse().find((m) => m.is_user);
       if (!lastUser) return "";
+      const sanitized = await resolveAndSanitizeForVectorization(lastUser.content, env, reasoningStrip);
       return truncateToContextSize(
-        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content, reasoningStrip)}`,
+        `[USER | ${lastUser.name}]: ${sanitized}`,
         settings.queryMaxTokens,
       );
     }
     case "weighted_recent": {
       const queryMessages = visibleMessages.slice(-contextSize);
-      const parts = queryMessages.map(
-        (m) =>
-          `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`,
-      );
-      // Repeat last message for recency bias
+      const parts = await Promise.all(queryMessages.map(async (m) => {
+        const sanitized = await resolveAndSanitizeForVectorization(m.content, env, reasoningStrip);
+        return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+      }));
       if (parts.length > 0) parts.push(parts[parts.length - 1]);
       return truncateToContextSize(
         parts.join("\n").trim(),
@@ -3907,14 +3912,12 @@ function buildQueryText(
     case "recent_messages":
     default: {
       const queryMessages = visibleMessages.slice(-contextSize);
+      const parts = await Promise.all(queryMessages.map(async (m) => {
+        const sanitized = await resolveAndSanitizeForVectorization(m.content, env, reasoningStrip);
+        return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+      }));
       return truncateToContextSize(
-        queryMessages
-          .map(
-            (m) =>
-              `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content, reasoningStrip)}`,
-          )
-          .join("\n")
-          .trim(),
+        parts.join("\n").trim(),
         settings.queryMaxTokens,
       );
     }
