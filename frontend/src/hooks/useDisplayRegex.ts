@@ -204,7 +204,7 @@ export function useDisplayPreprocessed(
   return content
 }
 
-const RAW_MACRO_RE = /\{\{(?!\s*(?:user|char|bot|notChar|not_char|charName)\s*\}\})/
+const RAW_MACRO_RE = /\{\{(?!\s*(?:user|char|bot|notChar|not_char|charName)\s*\}\})/i
 
 /** Quick check for macro syntax in a string. */
 function hasMacroSyntax(s: string): boolean {
@@ -672,6 +672,11 @@ export function useDisplayRegex(
   const staleResolved = stale && (stale.content === content || RAW_MACRO_RE.test(fallbackContent))
     ? stale.value
     : undefined
+
+  // No stale to carry forward (first render of a streaming bubble), so raw input renders cleaner than panel HTML with unresolved macros.
+  if (liveResolved === undefined && staleResolved === undefined && RAW_MACRO_RE.test(fallbackContent)) {
+    return content
+  }
 
   return liveResolved ?? staleResolved ?? fallbackContent
 }
