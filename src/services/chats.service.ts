@@ -696,6 +696,75 @@ export function deleteChat(userId: string, id: string): boolean {
   return result.changes > 0;
 }
 
+function diffChatChangedFields(prev: Chat, next: Chat): string[] {
+  const changed: string[] = [];
+
+  if (prev.name !== next.name) changed.push("name");
+  if (prev.character_id !== next.character_id) changed.push("character_id");
+
+  const prevMeta = (prev.metadata ?? {}) as Record<string, unknown>;
+  const nextMeta = (next.metadata ?? {}) as Record<string, unknown>;
+  const allKeys = new Set([...Object.keys(prevMeta), ...Object.keys(nextMeta)]);
+  for (const key of allKeys) {
+    const a = prevMeta[key];
+    const b = nextMeta[key];
+    if (a === b) continue;
+    if (!(key in prevMeta) || !(key in nextMeta)) {
+      changed.push(`metadata.${key}`);
+      if (key === "macro_variables" || key === "chat_variables") {
+        diffVarBagInto(changed, a, b, `metadata.${key}`);
+      }
+      continue;
+    }
+    if (typeof a !== "object" && typeof b !== "object") {
+      changed.push(`metadata.${key}`);
+      continue;
+    }
+    let aStr: string;
+    let bStr: string;
+    try { aStr = JSON.stringify(a); } catch { aStr = String(a); }
+    try { bStr = JSON.stringify(b); } catch { bStr = String(b); }
+    if (aStr !== bStr) {
+      changed.push(`metadata.${key}`);
+      if (key === "macro_variables" || key === "chat_variables") {
+        diffVarBagInto(changed, a, b, `metadata.${key}`);
+      }
+    }
+  }
+
+  return changed;
+}
+
+function diffVarBagInto(out: string[], prev: unknown, next: unknown, prefix: string): void {
+  const a = (prev && typeof prev === "object" ? prev : {}) as Record<string, unknown>;
+  const b = (next && typeof next === "object" ? next : {}) as Record<string, unknown>;
+
+  if (prefix === "metadata.macro_variables") {
+    for (const scope of ["local", "global", "chat"] as const) {
+      diffLeafBagInto(out, a[scope], b[scope], `${prefix}.${scope}`);
+    }
+    return;
+  }
+  diffLeafBagInto(out, a, b, prefix);
+}
+
+function diffLeafBagInto(out: string[], prev: unknown, next: unknown, prefix: string): void {
+  const a = (prev && typeof prev === "object" ? prev : {}) as Record<string, unknown>;
+  const b = (next && typeof next === "object" ? next : {}) as Record<string, unknown>;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    if (a[k] === b[k]) continue;
+    if (typeof a[k] === "object" || typeof b[k] === "object") {
+      let aStr: string;
+      let bStr: string;
+      try { aStr = JSON.stringify(a[k]); } catch { aStr = String(a[k]); }
+      try { bStr = JSON.stringify(b[k]); } catch { bStr = String(b[k]); }
+      if (aStr === bStr) continue;
+    }
+    out.push(`${prefix}.${k}`);
+  }
+}
+
 export function updateChat(userId: string, id: string, input: UpdateChatInput): Chat | null {
   const existing = getChat(userId, id);
   if (!existing) return null;
@@ -716,7 +785,8 @@ export function updateChat(userId: string, id: string, input: UpdateChatInput): 
 
   getDb().query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
   const updated = getChat(userId, id)!;
-  eventBus.emit(EventType.CHAT_CHANGED, { chat: updated }, userId);
+  const changedFields = diffChatChangedFields(existing, updated);
+  eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
 
   // Detect avatar switch and emit specific event for theme resampling / extensions
   const oldAvatarId = existing.metadata?.active_avatar_id as string | undefined;

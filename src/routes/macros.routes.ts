@@ -37,7 +37,12 @@ app.post("/resolve", async (c) => {
   const env = buildEnvFromIds(userId, body);
 
   const result = await evaluate(body.template, env, registry);
-  return c.json({ text: result.text, diagnostics: result.diagnostics });
+  return c.json({
+    text: result.text,
+    diagnostics: result.diagnostics,
+    touched_vars: Array.from(result.touchedVars),
+    cacheable: result.cacheable,
+  });
 });
 
 /**
@@ -74,17 +79,23 @@ app.post("/resolve-batch", async (c) => {
   // Build environment once and reuse for all templates
   const env = buildEnvFromIds(userId, body);
   const resolved: Record<string, string> = {};
+  const touchedVars: Record<string, string[]> = {};
+  const cacheable: Record<string, boolean> = {};
 
   for (const [key, template] of entries) {
     if (!template) {
       resolved[key] = "";
+      touchedVars[key] = [];
+      cacheable[key] = true;
       continue;
     }
     const result = await evaluate(template, env, registry);
     resolved[key] = result.text;
+    touchedVars[key] = Array.from(result.touchedVars);
+    cacheable[key] = result.cacheable;
   }
 
-  return c.json({ resolved });
+  return c.json({ resolved, touched_vars: touchedVars, cacheable });
 });
 
 /**
