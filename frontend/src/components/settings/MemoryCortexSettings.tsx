@@ -363,6 +363,14 @@ export default function MemoryCortexSettings() {
               <Sparkles size={14} />
               <span>How memories appear in the story</span>
             </div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={config.useChatMemoryFormatting}
+                onChange={(v) => updateConfig({ useChatMemoryFormatting: v })}
+                label="Use Long-Term Chat Memory formatting"
+                hint="Preserves Settings > Advanced > Long-Term Chat Memory > Formatting templates for the injected Long-Term Memory block. Turn off to use Cortex formatter modes below."
+              />
+            </div>
             <div className={styles.formatterGrid}>
               {FORMATTER_OPTIONS.map((opt) => (
                 <button

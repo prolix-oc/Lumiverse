@@ -25,6 +25,7 @@ export interface CortexConfig {
     requestsPerMinute: number;
   };
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
+  useChatMemoryFormatting: boolean;
   contextTokenBudget: number;
   retrievalTimeoutMs: number;
   sidecarTimeoutMs: number;

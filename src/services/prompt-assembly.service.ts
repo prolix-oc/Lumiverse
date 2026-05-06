@@ -1433,6 +1433,7 @@ export async function assemblePrompt(
         character,
         macroEnv,
         ctx.chatId,
+        chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
       );
     } else {
       // Genuinely no memories (new chat, no chunks, etc.) — fall back to vector retrieval
@@ -3960,6 +3961,7 @@ function formatCortexForAssembly(
   character: Character | null,
   macroEnv: MacroEnv,
   chatId: string,
+  chatMemorySettings: import("./embeddings.service").ChatMemorySettings,
 ): Awaited<ReturnType<typeof collectChatVectorMemory>> {
   const shadowResult = memoryCortex.formatShadowPrompt(
     cortexResult.memories,
@@ -3985,11 +3987,19 @@ function formatCortexForAssembly(
     colorMap: colorMapText,
   };
 
+  if (cortexConfig.useChatMemoryFormatting) {
+    return memoryCortex.cortexToMemoryResult(cortexResult, chatMemorySettings);
+  }
+
   return {
     chunks: cortexResult.memories.map((m) => ({
       content: m.content,
       score: m.finalScore,
-      metadata: { components: m.components, entityNames: m.entityNames },
+      metadata: {
+        components: m.components,
+        entityNames: m.entityNames,
+        messageRange: m.messageRange,
+      },
     })),
     formatted: shadowResult.text,
     count: cortexResult.memories.length,

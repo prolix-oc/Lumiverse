@@ -104,6 +104,8 @@ export interface MemoryCortexConfig {
 
   /** How cortex data is formatted for LLM injection */
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
+  /** Render the Long-Term Memory block with the user's chat memory templates */
+  useChatMemoryFormatting: boolean;
   /** Max tokens for all cortex-injected content */
   contextTokenBudget: number;
 
@@ -200,6 +202,7 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     requestsPerMinute: 0,
   },
   formatterMode: "shadow",
+  useChatMemoryFormatting: true,
   contextTokenBudget: 600,
   retrievalTimeoutMs: 60000,
   sidecarTimeoutMs: 60000,
@@ -391,6 +394,9 @@ export function normalizeCortexConfig(
       ),
     },
     formatterMode: input.formatterMode ?? defaults.formatterMode,
+    useChatMemoryFormatting: typeof input.useChatMemoryFormatting === "boolean"
+      ? input.useChatMemoryFormatting
+      : defaults.useChatMemoryFormatting,
     contextTokenBudget: input.contextTokenBudget ?? defaults.contextTokenBudget,
     retrievalTimeoutMs: input.retrievalTimeoutMs ?? defaults.retrievalTimeoutMs,
     sidecarTimeoutMs: input.sidecarTimeoutMs ?? defaults.sidecarTimeoutMs,
