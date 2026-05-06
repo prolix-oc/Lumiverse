@@ -281,10 +281,9 @@ export function invalidateDisplayRegexCacheForVars(changedVars: ReadonlySet<stri
       }
     }
   }
-  const resolutionWasNonEmpty = displayRegexResolutionCache.size > 0
   displayRegexResolutionCache.clear()
   for (const messageId of affectedMessages) bumpPerMessageCv(messageId)
-  if (resolutionWasNonEmpty) bumpGlobalCv()
+  bumpGlobalCv()
 }
 
 async function resolveMacrosBatchChunked(
