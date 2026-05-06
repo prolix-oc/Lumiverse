@@ -213,8 +213,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const indexes = new Set(defaultRangeExtractor(range))
     const nearTail = range.endIndex >= range.count - (isCoarsePointer ? 10 : 8)
     const isWarm = mobileRangeWarm || nearTail
-    const extraBefore = isCoarsePointer ? (isWarm ? 72 : 32) : (isWarm ? 40 : 18)
-    const extraAfter = isCoarsePointer ? (isWarm ? 14 : 8) : (isWarm ? 8 : 4)
+    const extraBefore = isCoarsePointer ? (isWarm ? 32 : 18) : (isWarm ? 18 : 8)
+    const extraAfter = isCoarsePointer ? (isWarm ? 10 : 6) : (isWarm ? 5 : 3)
     const start = Math.max(0, range.startIndex - extraBefore)
     const end = Math.min(range.count - 1, range.endIndex + extraAfter)
 
@@ -240,7 +240,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       const message = visibleMessages[index]
       return message ? estimateMessageSize(message) : estimateSize
     },
-    overscan: isCoarsePointer ? 20 : 14,
+    overscan: isCoarsePointer ? 12 : 8,
     getItemKey,
     rangeExtractor,
     useAnimationFrameWithResizeObserver: true,

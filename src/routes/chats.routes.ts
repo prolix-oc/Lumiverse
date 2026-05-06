@@ -46,6 +46,58 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 
 const app = new Hono();
 
+const DISPLAY_PREPROCESS_BATCH_MAX = 100;
+
+interface DisplayPreprocessItem {
+  messageId?: string;
+  messageIndex?: number;
+  role?: string;
+  rawContent: string;
+}
+
+function parseDisplayPreprocessItem(input: unknown): DisplayPreprocessItem | null {
+  if (!input || typeof input !== "object") return null;
+  const body = input as {
+    messageId?: unknown;
+    messageIndex?: unknown;
+    role?: unknown;
+    rawContent?: unknown;
+  };
+  if (typeof body.rawContent !== "string") return null;
+
+  return {
+    rawContent: body.rawContent,
+    ...(typeof body.messageId === "string" ? { messageId: body.messageId } : {}),
+    ...(typeof body.messageIndex === "number" ? { messageIndex: body.messageIndex } : {}),
+    ...(typeof body.role === "string" ? { role: body.role } : {}),
+  };
+}
+
+async function runDisplayPreprocessItem(
+  userId: string,
+  chatId: string,
+  item: DisplayPreprocessItem,
+  signal?: AbortSignal,
+) {
+  if (messageContentProcessorChain.count === 0) {
+    return { messageId: item.messageId, content: item.rawContent };
+  }
+
+  const processed = await messageContentProcessorChain.run({
+    chatId,
+    content: item.rawContent,
+    origin: "render",
+    userId,
+    ...(item.messageId ? { messageId: item.messageId } : {}),
+    extra: {
+      ...(typeof item.messageIndex === "number" ? { messageIndex: item.messageIndex } : {}),
+      ...(item.role ? { role: item.role, is_user: item.role === "user" } : {}),
+    },
+  }, userId, signal);
+
+  return { messageId: item.messageId, content: processed.content ?? item.rawContent };
+}
+
 // --- Chat endpoints ---
 
 app.get("/", (c) => {
@@ -619,31 +671,34 @@ app.delete("/:chatId/messages/:id/swipe/:idx", (c) => {
 app.post("/:chatId/display-preprocess", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");
-  const body = (await c.req.json().catch(() => null)) as {
-    messageId?: unknown;
-    messageIndex?: unknown;
-    role?: unknown;
-    rawContent?: unknown;
-  } | null;
-  if (!body || typeof body.rawContent !== "string") {
+  const body = await c.req.json().catch(() => null);
+
+  if (body && typeof body === "object" && Array.isArray((body as { items?: unknown }).items)) {
+    const rawItems = (body as { items: unknown[] }).items;
+    if (rawItems.length > DISPLAY_PREPROCESS_BATCH_MAX) {
+      return c.json({ error: `items must contain at most ${DISPLAY_PREPROCESS_BATCH_MAX} entries` }, 400);
+    }
+
+    const items = rawItems.map(parseDisplayPreprocessItem);
+    if (items.some((item) => item === null)) {
+      return c.json({ error: "each item requires rawContent (string)" }, 400);
+    }
+
+    const processed = [];
+    for (const item of items as DisplayPreprocessItem[]) {
+      processed.push(await runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal));
+    }
+
+    return c.json({ items: processed });
+  }
+
+  const item = parseDisplayPreprocessItem(body);
+  if (!item) {
     return c.json({ error: "rawContent (string) required" }, 400);
   }
-  if (messageContentProcessorChain.count === 0) {
-    return c.json({ content: body.rawContent });
-  }
-  const role = typeof body.role === "string" ? body.role : undefined;
-  const processed = await messageContentProcessorChain.run({
-    chatId,
-    content: body.rawContent,
-    origin: "render",
-    userId,
-    ...(typeof body.messageId === "string" ? { messageId: body.messageId } : {}),
-    extra: {
-      ...(typeof body.messageIndex === "number" ? { messageIndex: body.messageIndex } : {}),
-      ...(role ? { role, is_user: role === "user" } : {}),
-    },
-  }, userId, c.req.raw.signal);
-  return c.json({ content: processed.content ?? body.rawContent });
+
+  const processed = await runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal);
+  return c.json({ content: processed.content });
 });
 
 export { app as chatsRoutes };

@@ -26,6 +26,8 @@ interface ChatSummary {
 
 type SortMode = 'date' | 'name' | 'messages'
 
+const EMPTY_GROUP_CHARACTER_IDS: string[] = []
+
 function formatRelativeTime(epochSeconds: number): string {
   const now = Date.now()
   const diff = now - epochSeconds * 1000
@@ -53,7 +55,7 @@ export default function ManageChatsModal() {
   }
   const activeChatId = useStore((s) => s.activeChatId)
 
-  const { characterId, characterName, isGroupChat = false, groupCharacterIds = [] } = modalProps
+  const { characterId, characterName, isGroupChat = false, groupCharacterIds = EMPTY_GROUP_CHARACTER_IDS } = modalProps
   const isGroupContext = isGroupChat && groupCharacterIds.length > 1
 
   const [chats, setChats] = useState<ChatSummary[]>([])

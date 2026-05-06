@@ -46,6 +46,17 @@ interface SlowRegexReport {
   thresholdMs: number
 }
 
+interface DisplayPreprocessBody {
+  messageId: string
+  role: string
+  rawContent: string
+}
+
+interface PendingDisplayPreprocess {
+  body: DisplayPreprocessBody
+  resolve: (value: string) => void
+}
+
 const displayRegexResolutionCache = new Map<string, DisplayRegexCacheEntry>()
 const displayRegexContentCache = new Map<string, DisplayRegexContentCacheEntry>()
 const displayPreprocessCache = new Map<string, { value?: string; promise?: Promise<string>; touchedVars?: ReadonlySet<string>; messageId?: string }>()
@@ -54,6 +65,10 @@ const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexGlobalCv = 0
 const displayRegexPerMessageCv = new Map<string, number>()
 const slowDisplayRegexToastKeys = new Set<string>()
+const displayPreprocessQueues = new Map<string, PendingDisplayPreprocess[]>()
+const DISPLAY_PREPROCESS_BATCH_MAX = 64
+const DISPLAY_PREPROCESS_BATCH_DELAY_MS = 8
+let displayPreprocessFlushTimer: number | null = null
 
 function bumpGlobalCv(): void {
   displayRegexGlobalCv += 1
@@ -99,23 +114,54 @@ function fnv1a(s: string): string {
   return h.toString(16)
 }
 
-async function fetchDisplayPreprocess(
+async function fetchDisplayPreprocessBatch(
   chatId: string,
-  body: { messageId: string; role: string; rawContent: string },
-): Promise<string> {
+  bodies: DisplayPreprocessBody[],
+): Promise<string[]> {
   try {
     const res = await fetch(`/api/v1/chats/${encodeURIComponent(chatId)}/display-preprocess`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ items: bodies }),
       credentials: 'include',
     })
-    if (!res.ok) return body.rawContent
-    const json = (await res.json()) as { content?: unknown }
-    return typeof json.content === 'string' ? json.content : body.rawContent
+    if (!res.ok) return bodies.map((body) => body.rawContent)
+    const json = (await res.json()) as { items?: Array<{ content?: unknown }> }
+    if (!Array.isArray(json.items)) return bodies.map((body) => body.rawContent)
+    return bodies.map((body, index) => {
+      const content = json.items?.[index]?.content
+      return typeof content === 'string' ? content : body.rawContent
+    })
   } catch {
-    return body.rawContent
+    return bodies.map((body) => body.rawContent)
   }
+}
+
+function flushDisplayPreprocessQueue(): void {
+  displayPreprocessFlushTimer = null
+
+  for (const [chatId, queue] of displayPreprocessQueues) {
+    displayPreprocessQueues.delete(chatId)
+    for (let i = 0; i < queue.length; i += DISPLAY_PREPROCESS_BATCH_MAX) {
+      const batch = queue.slice(i, i + DISPLAY_PREPROCESS_BATCH_MAX)
+      void fetchDisplayPreprocessBatch(chatId, batch.map((item) => item.body))
+        .then((contents) => {
+          batch.forEach((item, index) => item.resolve(contents[index] ?? item.body.rawContent))
+        })
+    }
+  }
+}
+
+function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<string> {
+  return new Promise((resolve) => {
+    const queue = displayPreprocessQueues.get(chatId)
+    if (queue) queue.push({ body, resolve })
+    else displayPreprocessQueues.set(chatId, [{ body, resolve }])
+
+    if (displayPreprocessFlushTimer === null) {
+      displayPreprocessFlushTimer = window.setTimeout(flushDisplayPreprocessQueue, DISPLAY_PREPROCESS_BATCH_DELAY_MS)
+    }
+  })
 }
 
 export function useDisplayPreprocessed(

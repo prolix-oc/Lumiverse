@@ -6,9 +6,10 @@ import type { Message } from '@/types/api'
 export function useChunkedMessages(messages: Message[], chatId?: string | null) {
   const messagesPerPage = useStore((s) => s.messagesPerPage) || 50
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [historyExhausted, setHistoryExhausted] = useState(false)
   const loadingRef = useRef(false)
   const prefetchingRef = useRef(false)
-  const prefetchedBatchRef = useRef<{ chatId: string; oldestLoaded: number; data: Message[] } | null>(null)
+  const prefetchedBatchRef = useRef<{ chatId: string; loadedCount: number; data: Message[] } | null>(null)
   const prevChatIdRef = useRef(chatId)
   const justPrependedRef = useRef(false)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
@@ -40,8 +41,13 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
       prevChatIdRef.current = chatId
       prefetchedBatchRef.current = null
       prefetchingRef.current = false
+      setHistoryExhausted(false)
     }
   }, [chatId])
+
+  useEffect(() => {
+    setHistoryExhausted(false)
+  }, [totalChatLength])
 
   const visibleMessages = useMemo(() => {
     return messages.filter((m) => !m.extra?._loom_inject)
@@ -50,26 +56,33 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
   // With DOM virtualization in MessageList, keep all loaded messages available
   // in-memory and only page additional history from the server as needed.
   const hasMore = useMemo(
-    () => messages.length < totalChatLength,
-    [messages.length, totalChatLength]
+    () => !historyExhausted && messages.length < totalChatLength,
+    [historyExhausted, messages.length, totalChatLength]
   )
 
   const getOlderRequest = useCallback(() => {
-    if (!chatId || messages.length >= totalChatLength) return null
+    if (!chatId || historyExhausted || messages.length >= totalChatLength) return null
 
-    const oldestLoaded = messages.length > 0 ? messages[0].index_in_chat : 0
-    const offset = Math.max(0, oldestLoaded - historyBatchSize)
-    const limit = oldestLoaded - offset
+    const loadedCount = messages.length
+    const remainingBeforeLoadedWindow = Math.max(0, totalChatLength - loadedCount)
+    const offset = Math.max(0, remainingBeforeLoadedWindow - historyBatchSize)
+    const limit = remainingBeforeLoadedWindow - offset
     if (limit <= 0) return null
 
-    return { oldestLoaded, offset, limit }
-  }, [chatId, messages, totalChatLength, historyBatchSize])
+    return { loadedCount, offset, limit }
+  }, [chatId, historyExhausted, messages.length, totalChatLength, historyBatchSize])
 
   const applyOlderBatch = useCallback((olderMessages: Message[]) => {
-    if (olderMessages.length === 0) return
+    const existingIds = new Set(messages.map((m) => m.id))
+    const hasNewMessages = olderMessages.some((message) => !existingIds.has(message.id))
+    if (!hasNewMessages) {
+      setHistoryExhausted(true)
+      return false
+    }
     justPrependedRef.current = true
     prependMessages(olderMessages)
-  }, [prependMessages])
+    return true
+  }, [messages, prependMessages])
 
   const prefetchOlder = useCallback(() => {
     if (loadingRef.current || prefetchingRef.current) return
@@ -78,7 +91,7 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
     if (!request || !chatId) return
 
     const cached = prefetchedBatchRef.current
-    if (cached && cached.chatId === chatId && cached.oldestLoaded === request.oldestLoaded) return
+    if (cached && cached.chatId === chatId && cached.loadedCount === request.loadedCount) return
 
     prefetchingRef.current = true
     messagesApi
@@ -86,7 +99,7 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
       .then((result) => {
         prefetchedBatchRef.current = {
           chatId,
-          oldestLoaded: request.oldestLoaded,
+          loadedCount: request.loadedCount,
           data: result.data,
         }
       })
@@ -109,22 +122,23 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
     }
 
     const cached = prefetchedBatchRef.current
-    if (cached && cached.chatId === chatId && cached.oldestLoaded === request.oldestLoaded) {
+    if (cached && cached.chatId === chatId && cached.loadedCount === request.loadedCount) {
       prefetchedBatchRef.current = null
-      applyOlderBatch(cached.data)
+      const didProgress = applyOlderBatch(cached.data)
       setTimeout(() => {
         loadingRef.current = false
-        prefetchOlder()
+        if (didProgress) prefetchOlder()
       }, 0)
       return
     }
 
     setLoadingOlder(true)
+    let didProgress = false
     messagesApi
       .list(chatId, { limit: request.limit, offset: request.offset })
       .then((result) => {
         prefetchedBatchRef.current = null
-        applyOlderBatch(result.data)
+        didProgress = applyOlderBatch(result.data)
       })
       .catch((err) => {
         console.error('[useChunkedMessages] Failed to load older messages:', err)
@@ -133,7 +147,7 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
         setLoadingOlder(false)
         setTimeout(() => {
           loadingRef.current = false
-          prefetchOlder()
+          if (didProgress) prefetchOlder()
         }, 100)
       })
   }, [applyOlderBatch, chatId, getOlderRequest, prefetchOlder])
