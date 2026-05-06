@@ -2944,10 +2944,14 @@ export async function reindexWorldBookEntries(
   entries: WorldBookEntry[],
   options?: {
     batchSize?: number;
+    optimizeAfter?: boolean;
+    rebuildVectorIndex?: boolean;
     onProgress?: (progress: WorldBookReindexProgress) => void;
   }
 ) : Promise<WorldBookReindexResult> {
   const batchSize = Math.max(1, Math.min(options?.batchSize ?? 50, 200));
+  const optimizeAfter = options?.optimizeAfter ?? true;
+  const rebuildVectorIndex = options?.rebuildVectorIndex ?? optimizeAfter;
   const progress: WorldBookReindexProgress = {
     total: entries.length,
     current: 0,
@@ -3111,20 +3115,27 @@ export async function reindexWorldBookEntries(
     await processGroupBatch(entryGroups.slice(i, i + batchSize), batchSize);
   }
 
-  // Compact all fragments into fewer files, prune old versions, and
-  // rebuild vector index so freshly-upserted rows are fully indexed.
-  try {
-    await optimizeTable([WORLD_BOOK_EMBEDDINGS_TABLE]);
-    // After bulk reindex, force a vector index rebuild to absorb all new rows
-    await withWriteLock(async () => {
-      const table = await getTableIfExists(WORLD_BOOK_EMBEDDINGS_TABLE, true);
-      if (table) {
-        getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
-        await ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, table);
+  // Compact all fragments into fewer files, prune old versions, and optionally
+  // rebuild the vector index. Automatic edit indexing uses deferred maintenance
+  // so a burst of edited entries does not repeatedly rewrite a large index.
+  if (optimizeAfter) {
+    try {
+      await optimizeTable([WORLD_BOOK_EMBEDDINGS_TABLE]);
+      // After bulk/manual reindex, force a vector index rebuild to absorb all new rows.
+      if (rebuildVectorIndex) {
+        await withWriteLock(async () => {
+          const table = await getTableIfExists(WORLD_BOOK_EMBEDDINGS_TABLE, true);
+          if (table) {
+            getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
+            await ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, table);
+          }
+        });
       }
-    });
-  } catch (err) {
-    console.warn("[embeddings] Post-reindex optimize failed:", err);
+    } catch (err) {
+      console.warn("[embeddings] Post-reindex optimize failed:", err);
+    }
+  } else {
+    scheduleOptimize("world_book");
   }
 
   return progress;

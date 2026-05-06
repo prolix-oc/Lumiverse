@@ -225,6 +225,8 @@ class VectorizationQueue {
       const cfg = await embeddingsSvc.getEmbeddingConfig(jobs[0].userId);
       await embeddingsSvc.reindexWorldBookEntries(jobs[0].userId, entries, {
         batchSize: Math.max(1, Math.min(cfg.batch_size, entries.length, 200)),
+        optimizeAfter: false,
+        rebuildVectorIndex: false,
       });
       console.info(`[vectorization] Processed ${entries.length} world book entr${entries.length === 1 ? "y" : "ies"}`);
     } catch (err) {
