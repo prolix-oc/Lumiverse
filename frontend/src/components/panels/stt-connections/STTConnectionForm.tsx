@@ -1,6 +1,8 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import { sttConnectionsApi } from '@/api/stt-connections'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
+import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import type {
   SttProviderInfo,
   SttConnectionProfile,
@@ -22,15 +24,53 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
   const [apiUrl, setApiUrl] = useState(profile?.api_url || '')
   const [model, setModel] = useState(profile?.model || '')
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
+  const [models, setModels] = useState<Array<{ id: string; label: string }>>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
 
   const selectedProvider = providers.find((p) => p.id === provider)
   const capabilities = selectedProvider?.capabilities
   const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }))
 
-  const modelOptions = useMemo(
-    () => capabilities?.staticModels || [],
-    [capabilities?.staticModels],
-  )
+  const modelOptions = useMemo(() => {
+    const options = models.length > 0 ? models : capabilities?.staticModels || []
+    if (model && !options.some((option) => option.id === model)) {
+      return [{ id: model, label: model }, ...options]
+    }
+    return options
+  }, [capabilities?.staticModels, model, models])
+
+  const modelIds = useMemo(() => modelOptions.map((option) => option.id), [modelOptions])
+
+  const modelLabels = useMemo(() => {
+    return Object.fromEntries(
+      modelOptions
+        .filter((option) => option.label && option.label !== option.id)
+        .map((option) => [option.id, option.label])
+    )
+  }, [modelOptions])
+
+  const fetchModels = useCallback(async () => {
+    setModelsLoading(true)
+    try {
+      const result = await sttConnectionsApi.previewModels({
+        connection_id: profile?.id,
+        provider,
+        api_url: apiUrl.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+      })
+      setModels(result.models)
+    } catch {
+      setModels([])
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [apiKey, apiUrl, profile?.id, provider])
+
+  useEffect(() => {
+    if (profile?.id && capabilities?.modelListStyle !== 'static') {
+      fetchModels()
+    }
+  }, [profile?.id, capabilities?.modelListStyle, fetchModels])
 
   const handleSubmit = useCallback(() => {
     if (!name.trim()) return
@@ -73,14 +113,19 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
         />
       </FormField>
 
-      <FormField label="Model">
-        <Select
+      <FormField label="Model" hint="Refresh uses the current form values, even before the connection is saved.">
+        <ModelCombobox
           value={model}
           onChange={setModel}
-          options={[
-            { value: '', label: 'Select model...' },
-            ...modelOptions.map((m) => ({ value: m.id, label: m.label })),
-          ]}
+          models={modelIds}
+          modelLabels={modelLabels}
+          loading={modelsLoading}
+          onRefresh={fetchModels}
+          autoRefreshOnFocus
+          refreshKey={`${provider}:${profile?.id || ''}`}
+          appearance="standard"
+          placeholder="gpt-4o-transcribe"
+          emptyMessage="No transcription models found. Enter one manually."
         />
       </FormField>
 

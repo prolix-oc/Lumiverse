@@ -25,6 +25,13 @@ export interface TtsConnectionVoicesPreviewInput {
   api_key?: string;
 }
 
+export interface TtsConnectionModelsPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
+}
+
 function rowToProfile(row: any): TtsConnectionProfile {
   return {
     ...row,
@@ -262,21 +269,44 @@ export async function listConnectionModels(
   const profile = getConnection(userId, id);
   if (!profile) return { models: [], provider: "", error: "Connection not found" };
 
-  const provider = getTtsProvider(profile.provider);
-  if (!provider) {
-    return { models: [], provider: profile.provider, error: `Unknown provider: ${profile.provider}` };
+  const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
+  return listConnectionModelsPreview(userId, {
+    connection_id: id,
+    provider: profile.provider,
+    api_url: profile.api_url,
+    api_key: apiKey || undefined,
+  });
+}
+
+export async function listConnectionModelsPreview(
+  userId: string,
+  input: TtsConnectionModelsPreviewInput
+): Promise<{ models: Array<{ id: string; label: string }>; provider: string; error?: string }> {
+  const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  const providerId = input.provider;
+
+  let apiKey = input.api_key;
+  if (apiKey === undefined && existing && existing.provider === providerId) {
+    apiKey = (await secretsSvc.getSecret(userId, ttsConnectionSecretKey(existing.id))) || undefined;
   }
 
-  const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
+  const provider = getTtsProvider(providerId);
+  if (!provider) {
+    return { models: [], provider: providerId, error: `Unknown provider: ${providerId}` };
+  }
+
   if (!apiKey && provider.capabilities.apiKeyRequired) {
-    return { models: [], provider: profile.provider, error: "No API key" };
+    return { models: [], provider: providerId, error: "No API key" };
   }
 
   try {
-    const models = await provider.listModels(apiKey || "", profile.api_url || "");
-    return { models, provider: profile.provider };
+    const models = await provider.listModels(apiKey || "", input.api_url ?? existing?.api_url ?? "");
+    const error = models.length === 0 && provider.capabilities.modelListStyle === "dynamic"
+      ? "Provider model listing did not include any obvious TTS models"
+      : undefined;
+    return { models, provider: providerId, error };
   } catch (err: any) {
-    return { models: [], provider: profile.provider, error: describeProviderError(err, "Failed to fetch models") };
+    return { models: [], provider: providerId, error: describeProviderError(err, "Failed to fetch models") };
   }
 }
 

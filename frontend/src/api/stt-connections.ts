@@ -42,6 +42,10 @@ export const sttConnectionsApi = {
     return get<SttConnectionModelsResult>(`/stt-connections/${id}/models`)
   },
 
+  previewModels(input: { connection_id?: string; provider: string; api_url?: string; api_key?: string }) {
+    return post<SttConnectionModelsResult>('/stt-connections/models/preview', input)
+  },
+
   setApiKey(id: string, apiKey: string) {
     return put<{ success: boolean }>(`/stt-connections/${id}/api-key`, { api_key: apiKey })
   },

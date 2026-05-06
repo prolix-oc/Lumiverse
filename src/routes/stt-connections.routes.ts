@@ -8,6 +8,13 @@ app.get("/providers", (c) => {
   return c.json({ providers: svc.listProviders() });
 });
 
+app.post("/models/preview", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  const result = await svc.listConnectionModelsPreview(userId, body);
+  return c.json(result);
+});
+
 app.get("/", (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));

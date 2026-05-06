@@ -39,12 +39,7 @@ export class OpenAITtsProvider extends OpenAICompatibleTtsProvider {
       { id: "shimmer", name: "Shimmer" },
       { id: "verse", name: "Verse" },
     ],
-    modelListStyle: "static",
-    staticModels: [
-      { id: "tts-1", label: "TTS-1" },
-      { id: "tts-1-hd", label: "TTS-1 HD" },
-      { id: "gpt-4o-mini-tts", label: "GPT-4o Mini TTS" },
-    ],
+    modelListStyle: "dynamic",
     supportsStreaming: true,
     supportedFormats: ["mp3", "opus", "aac", "flac", "wav", "pcm"],
     defaultUrl: "https://api.openai.com/v1",

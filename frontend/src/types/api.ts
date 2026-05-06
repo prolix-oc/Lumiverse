@@ -405,8 +405,8 @@ export interface SttConnectionModelsResult {
 
 export interface SttProviderCapabilities {
   apiKeyRequired: boolean;
-  modelListStyle: 'static';
-  staticModels: Array<{ id: string; label: string }>;
+  modelListStyle: 'static' | 'dynamic';
+  staticModels?: Array<{ id: string; label: string }>;
   defaultUrl: string;
 }
 
@@ -473,6 +473,13 @@ export interface TtsConnectionVoicesResult {
 }
 
 export interface TtsConnectionVoicesPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
+}
+
+export interface TtsConnectionModelsPreviewInput {
   connection_id?: string;
   provider: string;
   api_url?: string;

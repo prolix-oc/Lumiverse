@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
-import { RefreshCw, Loader } from 'lucide-react'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
+import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import type {
   TtsProviderInfo,
@@ -29,19 +29,66 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
 
   const [voices, setVoices] = useState<TtsVoice[]>([])
   const [voicesLoading, setVoicesLoading] = useState(false)
+  const [models, setModels] = useState<Array<{ id: string; label: string }>>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
 
   const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }))
   const selectedProvider = providers.find((p) => p.id === provider)
   const capabilities = selectedProvider?.capabilities
 
   const modelOptions = useMemo(() => {
-    return capabilities?.staticModels || []
-  }, [capabilities?.staticModels])
+    const options = models.length > 0 ? models : capabilities?.staticModels || []
+    if (model && !options.some((option) => option.id === model)) {
+      return [{ id: model, label: model }, ...options]
+    }
+    return options
+  }, [capabilities?.staticModels, model, models])
+
+  const modelIds = useMemo(() => modelOptions.map((option) => option.id), [modelOptions])
+
+  const modelLabels = useMemo(() => {
+    return Object.fromEntries(
+      modelOptions
+        .filter((option) => option.label && option.label !== option.id)
+        .map((option) => [option.id, option.label])
+    )
+  }, [modelOptions])
 
   const voiceOptions = useMemo(() => {
-    if (voices.length > 0) return voices
-    return capabilities?.staticVoices || []
-  }, [voices, capabilities?.staticVoices])
+    const options = voices.length > 0 ? voices : capabilities?.staticVoices || []
+    if (voice && !options.some((option) => option.id === voice)) {
+      return [{ id: voice, name: voice }, ...options]
+    }
+    return options
+  }, [voices, capabilities?.staticVoices, voice])
+
+  const voiceIds = useMemo(() => voiceOptions.map((option) => option.id), [voiceOptions])
+
+  const voiceLabels = useMemo(() => {
+    return Object.fromEntries(
+      voiceOptions.map((option) => [
+        option.id,
+        option.language ? `${option.name} (${option.language})` : option.name,
+      ])
+    )
+  }, [voiceOptions])
+
+  const fetchModels = useCallback(async () => {
+    setModelsLoading(true)
+    try {
+      const result = await ttsConnectionsApi.previewModels({
+        connection_id: profile?.id,
+        provider,
+        api_url: apiUrl.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+      })
+      setModels(result.models)
+    } catch {
+      setModels([])
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [apiKey, apiUrl, profile?.id, provider])
 
   const fetchVoices = useCallback(async () => {
     setVoicesLoading(true)
@@ -52,7 +99,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
         api_url: apiUrl.trim() || undefined,
         api_key: apiKey.trim() || undefined,
       })
-      if (result.voices.length > 0) setVoices(result.voices)
+      setVoices(result.voices)
     } catch {
       setVoices([])
     } finally {
@@ -65,6 +112,12 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
       fetchVoices()
     }
   }, [profile?.id, capabilities?.voiceListStyle, fetchVoices])
+
+  useEffect(() => {
+    if (profile?.id && capabilities?.modelListStyle === 'dynamic') {
+      fetchModels()
+    }
+  }, [profile?.id, capabilities?.modelListStyle, fetchModels])
 
   const handleSubmit = useCallback(() => {
     if (!name.trim()) return
@@ -108,49 +161,36 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
         />
       </FormField>
 
-      <FormField label="Model">
-        <Select
+      <FormField label="Model" hint={capabilities?.modelListStyle === 'dynamic' ? 'Refresh uses the current form values, even before the connection is saved.' : undefined}>
+        <ModelCombobox
           value={model}
           onChange={setModel}
-          options={[
-            { value: '', label: 'Select model...' },
-            ...modelOptions.map((m) => ({ value: m.id, label: m.label })),
-          ]}
+          models={modelIds}
+          modelLabels={modelLabels}
+          loading={modelsLoading}
+          onRefresh={capabilities?.modelListStyle === 'dynamic' ? fetchModels : undefined}
+          autoRefreshOnFocus={capabilities?.modelListStyle === 'dynamic'}
+          refreshKey={`${provider}:${profile?.id || ''}:models`}
+          appearance="standard"
+          placeholder="gpt-4o-mini-tts"
+          emptyMessage="No TTS models found. Enter one manually."
         />
       </FormField>
 
       <FormField label="Voice" hint={capabilities?.voiceListStyle === 'dynamic' ? 'Refresh uses the current form values, even before the connection is saved.' : undefined}>
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <Select
-            value={voice}
-            onChange={setVoice}
-            options={[
-              { value: '', label: 'Select voice...' },
-              ...voiceOptions.map((v) => ({
-                value: v.id,
-                label: v.language ? `${v.name} (${v.language})` : v.name,
-              })),
-            ]}
-          />
-          {capabilities?.voiceListStyle === 'dynamic' && (
-            <button
-              type="button"
-              onClick={fetchVoices}
-              disabled={voicesLoading}
-              title="Refresh voices"
-              style={{
-                padding: 6,
-                border: 'none',
-                background: 'transparent',
-                cursor: voicesLoading ? 'progress' : 'pointer',
-                color: 'var(--lumiverse-text-muted)',
-                opacity: voicesLoading ? 0.7 : 1,
-              }}
-            >
-              {voicesLoading ? <Loader size={14} /> : <RefreshCw size={14} />}
-            </button>
-          )}
-        </div>
+        <ModelCombobox
+          value={voice}
+          onChange={setVoice}
+          models={voiceIds}
+          modelLabels={voiceLabels}
+          loading={voicesLoading}
+          onRefresh={capabilities?.voiceListStyle === 'dynamic' ? fetchVoices : undefined}
+          autoRefreshOnFocus={capabilities?.voiceListStyle === 'dynamic'}
+          refreshKey={`${provider}:${profile?.id || ''}:voices`}
+          appearance="standard"
+          placeholder="alloy or voice_..."
+          emptyMessage="No voices found. Enter one manually."
+        />
       </FormField>
 
       <FormField label="">

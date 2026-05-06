@@ -44,6 +44,14 @@ app.post("/voices/preview", async (c) => {
   return c.json(result);
 });
 
+app.post("/models/preview", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body?.provider) return c.json({ error: "provider is required" }, 400);
+  const result = await svc.listConnectionModelsPreview(userId, body);
+  return c.json(result);
+});
+
 /** Get TTS connection by ID */
 app.get("/:id", (c) => {
   const userId = c.get("userId");

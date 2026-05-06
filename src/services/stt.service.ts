@@ -30,14 +30,21 @@ export async function transcribe(userId: string, input: TranscribeInput): Promis
     throw new Error("Selected STT connection was not found");
   }
 
+  const provider = sttConnectionsSvc.getProvider(profile.provider);
+  if (!provider) {
+    throw new Error(`Unknown STT provider: ${profile.provider}`);
+  }
+
   const apiKey = await secretsSvc.getSecret(userId, connectionSecretKey(input.connectionId));
   if (!apiKey) {
     throw new Error("No API key found for the selected connection");
   }
 
+  const model = input.model?.trim() || (await sttConnectionsSvc.resolveConnectionModel(provider, profile, apiKey));
+
   const formData = new FormData();
   formData.append("file", new Blob([input.audioData]), input.fileName);
-  formData.append("model", input.model || profile.model || "gpt-4o-transcribe");
+  formData.append("model", model);
   if (input.language) {
     formData.append("language", input.language);
   }

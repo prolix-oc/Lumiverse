@@ -9,12 +9,20 @@ import type {
 } from "../types/stt-connection";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
+import { describeProviderError, fetchProviderJson } from "../utils/provider-errors";
 
 export interface SttProviderCapabilities {
   apiKeyRequired: boolean;
   defaultUrl: string;
-  modelListStyle: "static";
-  staticModels: Array<{ id: string; label: string }>;
+  modelListStyle: "static" | "dynamic";
+  staticModels?: Array<{ id: string; label: string }>;
+}
+
+export interface SttConnectionModelsPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
 }
 
 export interface SttProviderInfo {
@@ -30,14 +38,12 @@ const STT_PROVIDERS: SttProviderInfo[] = [
     capabilities: {
       apiKeyRequired: true,
       defaultUrl: "https://api.openai.com/v1",
-      modelListStyle: "static",
-      staticModels: [
-        { id: "gpt-4o-transcribe", label: "GPT-4o Transcribe" },
-        { id: "whisper-1", label: "Whisper-1" },
-      ],
+      modelListStyle: "dynamic",
     },
   },
 ];
+
+const STT_MODEL_ID_PATTERN = /(?:^|[-_.:/])(transcribe|whisper|stt|speech[-_ ]?to[-_ ]?text)(?:$|[-_.:/])/i;
 
 export function sttConnectionSecretKey(id: string): string {
   return `stt_connection_${id}_api_key`;
@@ -66,6 +72,49 @@ export function resolveSttApiUrl(profile: { provider: string; api_url?: string |
   const raw = (profile.api_url || "").trim();
   const baseUrl = raw || provider?.capabilities.defaultUrl || "https://api.openai.com/v1";
   return baseUrl.replace(/\/+$/, "");
+}
+
+function modelToOption(model: any): { id: string; label: string } | null {
+  const id = typeof model === "string" ? model : model?.id;
+  if (typeof id !== "string" || !id.trim()) return null;
+  const cleanId = id.trim();
+  return { id: cleanId, label: cleanId };
+}
+
+function filterSttModels(data: any): Array<{ id: string; label: string }> {
+  const rawModels: any[] = Array.isArray(data?.data) ? data.data : [];
+  return rawModels
+    .map((model: any) => modelToOption(model))
+    .filter((model: { id: string; label: string } | null): model is { id: string; label: string } => !!model && STT_MODEL_ID_PATTERN.test(model.id))
+    .sort((a: { id: string; label: string }, b: { id: string; label: string }) => a.id.localeCompare(b.id));
+}
+
+async function fetchSttModels(
+  provider: SttProviderInfo,
+  apiKey: string,
+  profile: { provider: string; api_url?: string | null },
+): Promise<Array<{ id: string; label: string }>> {
+  const data = await fetchProviderJson<any>(
+    provider.name,
+    "model listing",
+    `${resolveSttApiUrl(profile)}/models`,
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+  return filterSttModels(data);
+}
+
+export async function resolveConnectionModel(
+  provider: SttProviderInfo,
+  profile: SttConnectionProfile,
+  apiKey: string,
+): Promise<string> {
+  if (profile.model.trim()) return profile.model.trim();
+
+  const models = await fetchSttModels(provider, apiKey, profile);
+  const firstModel = models[0]?.id;
+  if (firstModel) return firstModel;
+
+  throw new Error("No STT model selected and no transcription models were found from the provider");
 }
 
 export function listConnections(userId: string, pagination: PaginationParams): PaginatedResult<SttConnectionProfile> {
@@ -261,8 +310,9 @@ export async function testConnection(userId: string, id: string): Promise<{ succ
   }
 
   try {
+    const model = await resolveConnectionModel(provider, profile, apiKey || "");
     const formData = new FormData();
-    formData.append("model", profile.model || provider.capabilities.staticModels[0]?.id || "gpt-4o-transcribe");
+    formData.append("model", model);
     formData.append("file", new Blob([new Uint8Array(44)], { type: "audio/wav" }), "test.wav");
 
     const res = await fetch(`${resolveSttApiUrl(profile)}/audio/transcriptions`, {
@@ -289,8 +339,44 @@ export async function listConnectionModels(
   const profile = getConnection(userId, id);
   if (!profile) return { models: [], provider: "", error: "Connection not found" };
 
-  const provider = getProvider(profile.provider);
-  if (!provider) return { models: [], provider: profile.provider, error: `Unknown provider: ${profile.provider}` };
+  const apiKey = await secretsSvc.getSecret(userId, sttConnectionSecretKey(id));
+  return listConnectionModelsPreview(userId, {
+    connection_id: id,
+    provider: profile.provider,
+    api_url: profile.api_url,
+    api_key: apiKey || undefined,
+  });
+}
 
-  return { models: provider.capabilities.staticModels, provider: profile.provider };
+export async function listConnectionModelsPreview(
+  userId: string,
+  input: SttConnectionModelsPreviewInput,
+): Promise<{ models: Array<{ id: string; label: string }>; provider: string; error?: string }> {
+  const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  const providerId = input.provider;
+
+  const provider = getProvider(providerId);
+  if (!provider) return { models: [], provider: providerId, error: `Unknown provider: ${providerId}` };
+
+  let apiKey = input.api_key;
+  if (apiKey === undefined && existing && existing.provider === providerId) {
+    apiKey = (await secretsSvc.getSecret(userId, sttConnectionSecretKey(existing.id))) || undefined;
+  }
+
+  if (!apiKey && provider.capabilities.apiKeyRequired) {
+    return { models: [], provider: providerId, error: "No API key" };
+  }
+
+  try {
+    const models = await fetchSttModels(provider, apiKey || "", {
+      provider: providerId,
+      api_url: input.api_url ?? existing?.api_url ?? "",
+    });
+    const error = models.length === 0
+      ? "Provider model listing did not include any obvious transcription models"
+      : undefined;
+    return { models, provider: providerId, error };
+  } catch (err: any) {
+    return { models: [], provider: providerId, error: describeProviderError(err, "Failed to fetch models") };
+  }
 }
