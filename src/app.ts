@@ -297,6 +297,12 @@ if (env.frontendDir) {
     } else if (!path.startsWith("/api/")) {
       c.res.headers.set("Cache-Control", "no-cache");
     }
+    if (path === "/manifest.json") {
+      c.res.headers.set("Content-Type", "application/manifest+json");
+    }
+    if (path === "/sw.js") {
+      c.res.headers.set("Service-Worker-Allowed", "/");
+    }
   });
 
   app.use(
