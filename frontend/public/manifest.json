@@ -1,8 +1,10 @@
 {
+  "id": "/",
   "name": "Lumiverse",
   "short_name": "Lumiverse",
   "description": "Lumiverse chat companion app",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#1C1826",
   "theme_color": "#9370DB",
@@ -16,12 +18,14 @@
     {
       "src": "/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }
