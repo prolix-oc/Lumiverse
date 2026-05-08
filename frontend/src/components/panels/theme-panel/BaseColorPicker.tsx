@@ -3,6 +3,7 @@ import { RotateCcw } from 'lucide-react'
 import type { BaseColorKey, BaseColors } from '@/types/theme'
 import styles from './BaseColorPicker.module.css'
 import clsx from 'clsx'
+import { getSaturationValueFromPoint } from './colorPickerMath'
 
 // ── Color math helpers ──
 
@@ -157,10 +158,7 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
-    const newSat = x * 100
-    const newVal = (1 - y) * 100
+    const { saturation: newSat, value: newVal } = getSaturationValueFromPoint(clientX, clientY, rect)
     const [r, g, b] = hsvToRgb(hue, newSat, newVal)
     setColor(rgbToHex(r, g, b))
   }, [hue, setColor])
