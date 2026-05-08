@@ -304,7 +304,144 @@ export async function saveImageFromDataUrl(
   return image;
 }
 
-/** Prefix used for image gen results — only images with this prefix are publicly accessible. */
+export interface UploadImagesItem {
+  data: Uint8Array;
+  filename: string;
+  mime_type: string;
+  owner_character_id?: string;
+  owner_chat_id?: string;
+}
+
+export interface UploadImagesResult {
+  id?: string;
+  error?: string;
+  image?: Image;
+}
+
+export async function uploadImages(
+  userId: string,
+  items: ReadonlyArray<UploadImagesItem>,
+  options?: {
+    owner_extension_identifier?: string;
+    concurrency?: number;
+  },
+): Promise<UploadImagesResult[]> {
+  if (items.length === 0) return [];
+  const concurrency = Math.min(Math.max(1, options?.concurrency ?? 16), 32);
+  const dir = getImagesDir();
+  const ownerExtensionIdentifier = normalizeOwnershipValue(options?.owner_extension_identifier);
+
+  type Prepared = {
+    id: string;
+    filename: string;
+    item: UploadImagesItem;
+    width: number | null;
+    height: number | null;
+    hasThumbnail: boolean;
+  };
+  const prepared: Array<Prepared | null> = new Array(items.length).fill(null);
+  const errors: Array<string | null> = new Array(items.length).fill(null);
+
+  let next = 0;
+  const sizes = getThumbnailSettings(userId);
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      const item = items[i]!;
+      try {
+        if (!(item.data instanceof Uint8Array) || item.data.byteLength === 0) {
+          throw new Error("Image data must be a non-empty Uint8Array");
+        }
+        const id = crypto.randomUUID();
+        const ext = extname(item.filename || "") || ".bin";
+        const filename = `${id}${ext}`;
+        const filepath = join(dir, filename);
+        const buffer = Buffer.from(item.data);
+        await Bun.write(filepath, buffer);
+
+        let width: number | null = null;
+        let height: number | null = null;
+        let hasThumbnail = false;
+        try {
+          const meta = await sharp(buffer).metadata();
+          width = meta.width ?? null;
+          height = meta.height ?? null;
+          const [smOk, lgOk] = await Promise.all([
+            generateThumbnail(buffer, join(dir, `${id}${thumbSuffix("sm")}`), sizes.smallSize),
+            generateThumbnail(buffer, join(dir, `${id}${thumbSuffix("lg")}`), sizes.largeSize),
+          ]);
+          hasThumbnail = smOk || lgOk;
+        } catch {}
+
+        prepared[i] = { id, filename, item, width, height, hasThumbnail };
+      } catch (err: any) {
+        errors[i] = err?.message ?? String(err);
+      }
+    }
+  };
+  const pool: Promise<void>[] = [];
+  for (let w = 0; w < Math.min(concurrency, items.length); w++) pool.push(worker());
+  await Promise.all(pool);
+
+  const now = Math.floor(Date.now() / 1000);
+  const db = getDb();
+  const insertStmt = db.query(
+    `INSERT INTO images (
+       id, user_id, filename, original_filename, mime_type,
+       width, height, has_thumbnail,
+       owner_extension_identifier, owner_character_id, owner_chat_id,
+       created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  db.transaction(() => {
+    for (let i = 0; i < prepared.length; i++) {
+      const p = prepared[i];
+      if (!p) continue;
+      insertStmt.run(
+        p.id,
+        userId,
+        p.filename,
+        p.item.filename || "",
+        p.item.mime_type || "",
+        p.width,
+        p.height,
+        p.hasThumbnail ? 1 : 0,
+        ownerExtensionIdentifier,
+        normalizeOwnershipValue(p.item.owner_character_id),
+        normalizeOwnershipValue(p.item.owner_chat_id),
+        now,
+      );
+    }
+  })();
+
+  const results: UploadImagesResult[] = new Array(items.length);
+  for (let i = 0; i < items.length; i++) {
+    const p = prepared[i];
+    if (!p) {
+      results[i] = { error: errors[i] ?? "unknown error" };
+      continue;
+    }
+    const image: Image = {
+      id: p.id,
+      filename: p.filename,
+      original_filename: p.item.filename || "",
+      mime_type: p.item.mime_type || "",
+      width: p.width,
+      height: p.height,
+      has_thumbnail: p.hasThumbnail,
+      url: buildImageUrl(p.id, "full"),
+      specificity: "full",
+      owner_extension_identifier: ownerExtensionIdentifier,
+      owner_character_id: normalizeOwnershipValue(p.item.owner_character_id),
+      owner_chat_id: normalizeOwnershipValue(p.item.owner_chat_id),
+      created_at: now,
+    };
+    results[i] = { id: p.id, image };
+  }
+  return results;
+}
+
 export const IMAGE_GEN_FILENAME_PREFIX = "image-gen-";
 
 /**

@@ -6143,47 +6143,58 @@ export class WorkerHost {
         if (!Array.isArray(items)) {
           throw new Error("items must be an array of ImageUploadDTO");
         }
-        const total = items.length;
-        const workers = Math.min(Math.max(1, concurrency ?? 16), 32);
 
-        const results: Array<{ id?: string; error?: string }> = new Array(total);
-        let next = 0;
-        const ext = this.manifest.identifier;
-        const runWorker = async (): Promise<void> => {
-          while (true) {
-            const i = next++;
-            if (i >= total) return;
-            const input = items[i];
-            try {
-              if (!(input?.data instanceof Uint8Array) || input.data.byteLength === 0) {
-                throw new Error("Image data must be a non-empty Uint8Array");
-              }
-              const mimeType = typeof input?.mime_type === "string" && input.mime_type.trim()
-                ? input.mime_type.trim()
-                : "image/png";
-              const filename = typeof input?.filename === "string" && input.filename.trim()
-                ? input.filename.trim()
-                : "image.png";
-              const imageBytes = Uint8Array.from(input.data);
-              const file = new File([imageBytes.buffer], filename, { type: mimeType });
-              const img = await imagesSvc.uploadImage(resolvedUserId, file, {
-                owner_extension_identifier: ext,
-                owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
-                  ? input.owner_character_id.trim()
-                  : undefined,
-                owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
-                  ? input.owner_chat_id.trim()
-                  : undefined,
-              });
-              results[i] = { id: img.id };
-            } catch (err: any) {
-              results[i] = { error: err?.message ?? String(err) };
-            }
+        const normalised: imagesSvc.UploadImagesItem[] = new Array(items.length);
+        const failures: Array<{ index: number; error: string }> = [];
+        for (let i = 0; i < items.length; i++) {
+          const input = items[i];
+          if (!input || typeof input !== "object") {
+            failures.push({ index: i, error: "item must be an object" });
+            continue;
           }
-        };
-        const pool: Promise<void>[] = [];
-        for (let w = 0; w < Math.min(workers, total); w++) pool.push(runWorker());
-        await Promise.all(pool);
+          if (!(input.data instanceof Uint8Array) || input.data.byteLength === 0) {
+            failures.push({ index: i, error: "Image data must be a non-empty Uint8Array" });
+            continue;
+          }
+          normalised[i] = {
+            data: input.data,
+            filename: typeof input.filename === "string" && input.filename.trim()
+              ? input.filename.trim()
+              : "image.png",
+            mime_type: typeof input.mime_type === "string" && input.mime_type.trim()
+              ? input.mime_type.trim()
+              : "image/png",
+            ...(typeof input.owner_character_id === "string" && input.owner_character_id.trim()
+              ? { owner_character_id: input.owner_character_id.trim() }
+              : {}),
+            ...(typeof input.owner_chat_id === "string" && input.owner_chat_id.trim()
+              ? { owner_chat_id: input.owner_chat_id.trim() }
+              : {}),
+          };
+        }
+
+        const validIndices: number[] = [];
+        const validItems: imagesSvc.UploadImagesItem[] = [];
+        for (let i = 0; i < normalised.length; i++) {
+          if (normalised[i] !== undefined) {
+            validIndices.push(i);
+            validItems.push(normalised[i]!);
+          }
+        }
+
+        const batchResults = await imagesSvc.uploadImages(resolvedUserId, validItems, {
+          owner_extension_identifier: this.manifest.identifier,
+          concurrency,
+        });
+
+        const results: Array<{ id?: string; error?: string }> = new Array(items.length);
+        for (const f of failures) results[f.index] = { error: f.error };
+        for (let k = 0; k < validIndices.length; k++) {
+          const out = batchResults[k]!;
+          results[validIndices[k]!] = out.id !== undefined
+            ? { id: out.id }
+            : { error: out.error ?? "unknown error" };
+        }
 
         this.postToWorker({ type: "response", requestId, result: results });
       } catch (err: any) {
