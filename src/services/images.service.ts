@@ -334,16 +334,14 @@ export async function uploadImages(
   type Prepared = {
     id: string;
     filename: string;
+    filepath: string;
     item: UploadImagesItem;
-    width: number | null;
-    height: number | null;
-    hasThumbnail: boolean;
+    isImage: boolean;
   };
   const prepared: Array<Prepared | null> = new Array(items.length).fill(null);
   const errors: Array<string | null> = new Array(items.length).fill(null);
 
   let next = 0;
-  const sizes = getThumbnailSettings(userId);
   const worker = async (): Promise<void> => {
     while (true) {
       const i = next++;
@@ -357,24 +355,14 @@ export async function uploadImages(
         const ext = extname(item.filename || "") || ".bin";
         const filename = `${id}${ext}`;
         const filepath = join(dir, filename);
-        const buffer = Buffer.from(item.data);
-        await Bun.write(filepath, buffer);
-
-        let width: number | null = null;
-        let height: number | null = null;
-        let hasThumbnail = false;
-        try {
-          const meta = await sharp(buffer).metadata();
-          width = meta.width ?? null;
-          height = meta.height ?? null;
-          const [smOk, lgOk] = await Promise.all([
-            generateThumbnail(buffer, join(dir, `${id}${thumbSuffix("sm")}`), sizes.smallSize),
-            generateThumbnail(buffer, join(dir, `${id}${thumbSuffix("lg")}`), sizes.largeSize),
-          ]);
-          hasThumbnail = smOk || lgOk;
-        } catch {}
-
-        prepared[i] = { id, filename, item, width, height, hasThumbnail };
+        await Bun.write(filepath, item.data);
+        prepared[i] = {
+          id,
+          filename,
+          filepath,
+          item,
+          isImage: (item.mime_type || "").startsWith("image/"),
+        };
       } catch (err: any) {
         errors[i] = err?.message ?? String(err);
       }
@@ -404,9 +392,9 @@ export async function uploadImages(
         p.filename,
         p.item.filename || "",
         p.item.mime_type || "",
-        p.width,
-        p.height,
-        p.hasThumbnail ? 1 : 0,
+        null,
+        null,
+        0,
         ownerExtensionIdentifier,
         normalizeOwnershipValue(p.item.owner_character_id),
         normalizeOwnershipValue(p.item.owner_chat_id),
@@ -427,9 +415,9 @@ export async function uploadImages(
       filename: p.filename,
       original_filename: p.item.filename || "",
       mime_type: p.item.mime_type || "",
-      width: p.width,
-      height: p.height,
-      has_thumbnail: p.hasThumbnail,
+      width: null,
+      height: null,
+      has_thumbnail: false,
       url: buildImageUrl(p.id, "full"),
       specificity: "full",
       owner_extension_identifier: ownerExtensionIdentifier,
@@ -438,8 +426,42 @@ export async function uploadImages(
       created_at: now,
     };
     results[i] = { id: p.id, image };
+    if (p.isImage) scheduleDeferredImageProcessing(userId, p.id, p.filepath);
   }
   return results;
+}
+
+function scheduleDeferredImageProcessing(
+  userId: string,
+  id: string,
+  filepath: string,
+): void {
+  void (async () => {
+    try {
+      const buffer = Buffer.from(await Bun.file(filepath).arrayBuffer());
+      let width: number | null = null;
+      let height: number | null = null;
+      try {
+        const meta = await sharp(buffer).metadata();
+        width = meta.width ?? null;
+        height = meta.height ?? null;
+      } catch {
+        return;
+      }
+      const dir = getImagesDir();
+      const sizes = getThumbnailSettings(userId);
+      const [smOk, lgOk] = await Promise.all([
+        ensureThumbnail(`${id}_sm`, buffer, join(dir, `${id}${thumbSuffix("sm")}`), sizes.smallSize),
+        ensureThumbnail(`${id}_lg`, buffer, join(dir, `${id}${thumbSuffix("lg")}`), sizes.largeSize),
+      ]);
+      const hasThumb = smOk || lgOk;
+      getDb()
+        .query("UPDATE images SET width = COALESCE(?, width), height = COALESCE(?, height), has_thumbnail = ? WHERE id = ?")
+        .run(width, height, hasThumb ? 1 : 0, id);
+    } catch (err) {
+      console.warn(`[images] deferred image processing failed for ${id}:`, err);
+    }
+  })();
 }
 
 export const IMAGE_GEN_FILENAME_PREFIX = "image-gen-";
