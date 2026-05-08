@@ -8,7 +8,7 @@ import { getWorkerHost } from "../spindle/lifecycle";
 import * as managerSvc from "../spindle/manager.service";
 import { getFirstUserId } from "../auth/seed";
 
-const WS_MESSAGE_SIZE_LIMIT_DEFAULT = 65_536;
+const WS_MESSAGE_SIZE_LIMIT_DEFAULT = 1024 * 1024;
 const WS_MESSAGE_SIZE_LIMIT_SPINDLE_BACKEND_MSG = 4 * 1024 * 1024;
 
 export const wsHandler = upgradeWebSocket((c) => {
