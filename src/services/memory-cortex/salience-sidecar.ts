@@ -17,6 +17,7 @@ import { scoreChunkHeuristic } from "./salience-heuristic";
 // Results come back as tool_calls with guaranteed JSON args.
 
 import type { ToolDefinition } from "../../llm/types";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 
 // ─── Entity Blocklist ──────────────────────────────────────────
 // Meta-references that LLMs hallucinate as entities. Filtered in post-processing.
@@ -160,9 +161,9 @@ const TOOL_ENTITIES: ToolDefinition = {
           properties: {
             canonical_name: { type: "string", description: "The known/full/primary name of the entity (must match a known entity or be the longer form)." },
             alias: { type: "string", description: "The nickname, shortened name, title, or alternate form discovered in this passage." },
-            evidence: { type: "string", description: "Brief quote or context showing the alias connection, e.g. 'Call me Mel'." },
+            evidence: { type: "string", description: "Required brief quote or context showing the alias connection, e.g. 'Call me Mel'. Do not report an alias without explicit evidence." },
           },
-          required: ["canonical_name", "alias"],
+          required: ["canonical_name", "alias", "evidence"],
         },
         description: "Aliases only when the passage explicitly reveals that two names refer to the same entity. Empty array if none.",
       },
@@ -910,14 +911,17 @@ function validateDiscoveredAliases(raw: any): DiscoveredAlias[] {
         typeof a.alias === "string" &&
         a.canonical_name.trim().length > 0 &&
         a.alias.trim().length > 0 &&
+        typeof a.evidence === "string" &&
+        a.evidence.trim().length > 0 &&
         isValidEntityName(a.canonical_name) &&
         isValidEntityName(a.alias) &&
+        isPlausibleAlias(a.alias, a.canonical_name) &&
         // Alias must differ from canonical name
         a.canonical_name.trim().toLowerCase() !== a.alias.trim().toLowerCase(),
     )
     .map((a: any) => ({
       canonicalName: a.canonical_name.trim(),
-      alias: a.alias.trim(),
-      evidence: typeof a.evidence === "string" ? a.evidence.trim() : undefined,
+      alias: sanitizeAlias(a.alias) ?? a.alias.trim(),
+      evidence: a.evidence.trim(),
     }));
 }

@@ -19,6 +19,7 @@ import {
   getDefaultEntityExtractionFilters,
   type MemoryEntityExtractionFilters,
 } from "./entity-extraction-filters";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 
 // ─── Common Words Filter ───────────────────────────────────────
 // Words that appear capitalized at sentence starts but aren't entities
@@ -847,7 +848,7 @@ export function detectNicknameIntroductions(
     while ((match = pattern.exec(content)) !== null) {
       if (!match.groups) continue;
 
-      const aliasRaw = match.groups.alias?.trim();
+      const aliasRaw = match.groups.alias ? sanitizeAlias(match.groups.alias) : null;
       if (!aliasRaw || aliasRaw.length < 2) continue;
 
       if (knownNameSet.has(aliasRaw.toLowerCase())) continue;
@@ -868,6 +869,7 @@ export function detectNicknameIntroductions(
       seenAliases.add(key);
 
       if (canonical.toLowerCase() === aliasRaw.toLowerCase()) continue;
+      if (!isPlausibleAlias(aliasRaw, canonical)) continue;
 
       results.push({ canonicalName: canonical, alias: aliasRaw });
     }

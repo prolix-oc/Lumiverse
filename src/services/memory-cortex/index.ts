@@ -29,6 +29,7 @@ import { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
 import { extractEntitiesHeuristic, extractMentionExcerpt, detectNicknameIntroductions } from "./entity-extractor";
 import { refineHeuristicDetections } from "./detection-refiner";
 import { filterEntitiesByExtractionFilters } from "./entity-extraction-filters";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 import { runHeuristicAnalysisInWorker } from "./heuristic-worker-host";
 import * as entityGraph from "./entity-graph";
 import * as entityContext from "./entity-context";
@@ -1041,7 +1042,8 @@ export async function processChunk(
         );
 
         const heuristicAliases = heuristicResult?.aliases ?? refinedFallback?.aliases ?? detectNicknameIntroductions(cleanContent, knownEntities, characterNames);
-        const allDiscoveredAliases = [...sidecarDiscoveredAliases, ...heuristicAliases];
+        const allDiscoveredAliases = [...sidecarDiscoveredAliases, ...heuristicAliases]
+          .filter((alias) => isPlausibleAlias(alias.alias, alias.canonicalName));
 
         const graphStart = performance.now();
         const entityIds = entityGraph.ingestChunkEntities(
@@ -1156,7 +1158,7 @@ export async function processChunk(
           }
           if (variantResolved) continue;
 
-          if (descriptionAliases) {
+          if (descriptionAliases && isPlausibleAlias(np.text)) {
             const aliasCanonical = descriptionAliases.get(np.text.toLowerCase());
             if (aliasCanonical) {
               const entity = entityGraph.findEntityByName(data.chatId, aliasCanonical);
@@ -1173,7 +1175,7 @@ export async function processChunk(
             }
           }
 
-          const prefixMatch = findPrefixMatch(np.text, characterNames);
+          const prefixMatch = isPlausibleAlias(np.text) ? findPrefixMatch(np.text, characterNames) : null;
           if (prefixMatch) {
             const entity = entityGraph.findEntityByName(data.chatId, prefixMatch);
             if (entity) {
@@ -1905,8 +1907,8 @@ export function extractDescriptionAliases(
 
 /** Add an alias to the map, including the "without the" variant */
 function addAlias(map: Map<string, string>, alias: string, canonical: string): void {
-  const trimmed = alias.trim();
-  if (trimmed.length < 2 || trimmed.length > 50) return;
+  const trimmed = sanitizeAlias(alias);
+  if (!trimmed || !isPlausibleAlias(trimmed, canonical)) return;
   map.set(trimmed.toLowerCase(), canonical);
   // Also add without leading "the" / "The"
   const withoutThe = trimmed.replace(/^the\s+/i, "");

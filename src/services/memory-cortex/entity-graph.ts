@@ -7,6 +7,7 @@
 
 import { getDb } from "../../db/connection";
 import { extractMentionExcerpt } from "./entity-extractor";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 import type {
   MemoryEntity,
   MemoryEntityRow,
@@ -658,7 +659,7 @@ export function upsertEntity(
 
   if (existing) {
     // Update existing entity, including cross-chunk type evidence.
-    const newAliases = mergeAliases(existing.aliases, extracted.aliases);
+    const newAliases = mergeAliases(existing.aliases, extracted.aliases, existing.name);
     const nextMentionCount = existing.mentionCount + 1;
     const nextMetadata = accumulateTypeEvidence(existing.metadata as EntityMetadataState, extracted, chunkTimestamp);
     const resolvedType = resolveEntityTypeFromEvidence(existing.entityType, nextMetadata, nextMentionCount);
@@ -691,6 +692,9 @@ export function upsertEntity(
 
   // Create new entity
   const id = crypto.randomUUID();
+  const initialAliases = extracted.aliases
+    .map((alias) => sanitizeAlias(alias))
+    .filter((alias): alias is string => !!alias && isPlausibleAlias(alias, extracted.name));
   const initialMetadata = accumulateTypeEvidence(normalizeEntityMetadata(null), extracted, chunkTimestamp);
   const resolvedType = resolveEntityTypeFromEvidence(extracted.type, initialMetadata, 1);
   const confidence = resolveEntityConfidence(
@@ -709,7 +713,7 @@ export function upsertEntity(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
   ).run(
     id, chatId, extracted.name, resolvedType,
-    JSON.stringify(extracted.aliases),
+    JSON.stringify(initialAliases),
     chunkId, chunkId, chunkTimestamp, chunkTimestamp,
     chunkTimestamp, JSON.stringify(persistedMetadata), confidence,
     now, now,
@@ -1653,13 +1657,14 @@ export function populateEntityDescription(entityId: string, excerpt: string): vo
 
 // ─── Helpers ───────────────────────────────────────────────────
 
-function mergeAliases(existing: string[], incoming: string[]): string[] {
+function mergeAliases(existing: string[], incoming: string[], canonicalName?: string): string[] {
   const set = new Set(existing.map((a) => a.toLowerCase()));
   const merged = [...existing];
   for (const alias of incoming) {
-    if (alias && !set.has(alias.toLowerCase())) {
-      merged.push(alias);
-      set.add(alias.toLowerCase());
+    const cleaned = sanitizeAlias(alias);
+    if (cleaned && isPlausibleAlias(cleaned, canonicalName) && !set.has(cleaned.toLowerCase())) {
+      merged.push(cleaned);
+      set.add(cleaned.toLowerCase());
     }
   }
   return merged;

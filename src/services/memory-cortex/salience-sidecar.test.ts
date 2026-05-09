@@ -25,6 +25,9 @@ describe("parseToolCallResults", () => {
           discovered_aliases: [
             { canonical_name: "Melina", alias: "Mel", evidence: "Call me Mel" },
             { canonical_name: "AI", alias: "Guide" },
+            { canonical_name: "Melina", alias: "Personal cost", evidence: "called her personal cost" },
+            { canonical_name: "Melina", alias: "Among the crowd", evidence: "known as among the crowd" },
+            { canonical_name: "Melina", alias: "Guide" },
           ],
           status_changes: [
             { entity: "Melina", change: "arrived", detail: "Melina arrived in Dustwell" },

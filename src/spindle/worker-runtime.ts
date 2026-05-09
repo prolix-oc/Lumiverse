@@ -49,6 +49,7 @@ import type {
   ImageListOptionsDTO,
   ImageUploadDTO,
   ImageUploadFromDataUrlOptionsDTO,
+  ChatMessageDTO,
 } from "lumiverse-spindle-types";
 import { initializeSandbox } from "./worker-runtime-sandbox";
 import {
@@ -1432,15 +1433,9 @@ const spindleApi: RuntimeSpindleAPI = {
     async getMessages(chatId: string) {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chat_get_messages", requestId, chatId });
-      return result as Array<{
-        id: string;
+      return result as Array<ChatMessageDTO & {
         role: "system" | "user" | "assistant";
-        content: string;
-        extra: Record<string, unknown>;
         metadata?: Record<string, unknown>;
-        swipe_id: number;
-        swipes: string[];
-        swipe_dates: number[];
       }>;
     },
     async appendMessage(chatId: string, message, options?: ChatAppendMessageOptions) {

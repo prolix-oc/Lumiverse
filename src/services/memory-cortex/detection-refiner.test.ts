@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { detectNicknameIntroductions } from "./entity-extractor";
 import { refineHeuristicDetections } from "./detection-refiner";
+import { isPlausibleAlias } from "./alias-validation";
 import type { MemoryEntity } from "./types";
 
 const now = Math.floor(Date.now() / 1000);
@@ -54,6 +55,29 @@ describe("detectNicknameIntroductions", () => {
       { canonicalName: "Melina Vale", alias: "Mel" },
       { canonicalName: "Cassian Reed", alias: "Cass" },
     ]);
+  });
+
+  test("rejects common-word and phrase aliases from loose nickname patterns", () => {
+    const knownEntities = [makeEntity("Melina Vale", "character")];
+    const content = [
+      "Melina Vale paused near the door.",
+      "People called her Personal cost when the rumor spread.",
+      "She was known as among the older guards, but no one used a real title.",
+    ].join(" ");
+
+    const aliases = detectNicknameIntroductions(content, knownEntities, ["Melina Vale"]);
+
+    expect(aliases).toEqual([]);
+  });
+});
+
+describe("isPlausibleAlias", () => {
+  test("keeps name-like aliases and rejects prose fragments", () => {
+    expect(isPlausibleAlias("Mel", "Melina Vale")).toBe(true);
+    expect(isPlausibleAlias("The Iron Queen", "Melina Vale")).toBe(true);
+    expect(isPlausibleAlias("Personal cost", "Melina Vale")).toBe(false);
+    expect(isPlausibleAlias("among the nobility", "Melina Vale")).toBe(false);
+    expect(isPlausibleAlias("Barely", "Melina Vale")).toBe(false);
   });
 });
 
@@ -112,5 +136,22 @@ describe("refineHeuristicDetections", () => {
     const canonical = refined.entities.find((entity) => entity.name === "Melina Vale");
     expect(canonical?.type).toBe("character");
     expect(canonical?.aliases).toContain("Mel");
+  });
+
+  test("drops invalid aliases before merging them into entities", () => {
+    const refined = refineHeuristicDetections({
+      content: "Melina Vale heard someone mention Personal cost, but nobody used it as her name.",
+      knownEntities: [makeEntity("Melina Vale", "character")],
+      characterNames: ["Melina Vale"],
+      entities: [
+        { name: "Melina Vale", type: "character", aliases: [], confidence: 1, mentionRole: "subject" },
+      ],
+      relationships: [],
+      aliases: [{ canonicalName: "Melina Vale", alias: "Personal cost", evidence: "bad phrase" }],
+      descriptionAliases: [{ canonicalName: "Melina Vale", alias: "among the crowd" }],
+    });
+
+    const canonical = refined.entities.find((entity) => entity.name === "Melina Vale");
+    expect(canonical?.aliases).toEqual([]);
   });
 });

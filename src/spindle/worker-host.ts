@@ -4741,13 +4741,21 @@ export class WorkerHost {
 
         return {
           id: m.id,
+          chat_id: m.chat_id,
+          index_in_chat: m.index_in_chat,
+          is_user: m.is_user,
+          name: m.name,
           role,
           content: m.content,
+          send_date: m.send_date,
           extra,
           metadata,
           swipe_id: swipeId,
           swipes,
           swipe_dates: swipeDates,
+          parent_message_id: m.parent_message_id,
+          branch_id: m.branch_id,
+          created_at: m.created_at,
         };
       });
 

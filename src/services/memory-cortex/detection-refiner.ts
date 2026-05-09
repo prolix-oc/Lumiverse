@@ -5,6 +5,7 @@ import type {
   MentionRole,
   ExtractedRelationship,
 } from "./types";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 
 export interface RefinerAlias {
   canonicalName: string;
@@ -51,8 +52,9 @@ function dedupeAliases(aliases: RefinerAlias[]): RefinerAlias[] {
   const deduped: RefinerAlias[] = [];
   for (const alias of aliases) {
     const canonicalName = alias.canonicalName.trim();
-    const aliasName = alias.alias.trim();
+    const aliasName = sanitizeAlias(alias.alias);
     if (!canonicalName || !aliasName) continue;
+    if (!isPlausibleAlias(aliasName, canonicalName)) continue;
     const key = `${canonicalName.toLowerCase()}:${aliasName.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
