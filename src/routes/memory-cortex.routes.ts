@@ -269,9 +269,10 @@ async function warmLongTermChatMemory(options: {
   userId: string;
   chatId: string;
   force: boolean;
+  allowRebuild: boolean;
   embeddings: Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>;
 }): Promise<WarmupComponentResult> {
-  const { userId, chatId, force, embeddings } = options;
+  const { userId, chatId, force, allowRebuild, embeddings } = options;
 
   if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
     return { status: "skipped", reason: "chat_vectorization_disabled" };
@@ -291,9 +292,20 @@ async function warmLongTermChatMemory(options: {
     return { status: "complete", reason: "chat_memory_rebuilt" };
   }
 
-  const rebuilt = await chatsSvc.ensureChatMemoryFresh(userId, chatId);
-  if (rebuilt) {
-    return { status: "complete", reason: "chat_memory_warmed" };
+  if (!allowRebuild) {
+    const chat = getChat(userId, chatId);
+    const currentHash = await chatsSvc.getCurrentChatMemoryHash(userId);
+    const storedHash = getStoredChatMemoryHash(chat);
+    if (currentHash && storedHash !== currentHash) {
+      return { status: "skipped", reason: "chat_memory_rebuild_deferred" };
+    }
+  }
+
+  if (allowRebuild) {
+    const rebuilt = await chatsSvc.ensureChatMemoryFresh(userId, chatId);
+    if (rebuilt) {
+      return { status: "complete", reason: "chat_memory_warmed" };
+    }
   }
 
   const resumedChunks = vectorizationQueue.queuePendingChatChunkVectorization(userId, chatId, 4);
@@ -1201,11 +1213,16 @@ app.post("/chats/:chatId/warm", async (c) => {
 
   const embeddings = await embeddingsSvc.getEmbeddingConfig(userId);
   const config = memoryCortex.getCortexConfig(userId);
+  const allowPassiveChunkRebuild = !config.enabled || config.autoWarmup;
 
   const chatMemory = await warmLongTermChatMemory({
     userId,
     chatId,
     force,
+    // Chat chunk rebuilds delete and recreate chunk IDs, which cascades chunk-
+    // scoped Cortex rows. During passive chat-open warmups, only do that when
+    // Cortex is also allowed to rebuild its derived state in the same flow.
+    allowRebuild: force || allowPassiveChunkRebuild,
     embeddings,
   });
 
