@@ -46,7 +46,7 @@ interface MessageContentProcessorCtx {
 | `"update"` | `PUT /api/v1/chats/:chatId/messages/:id` | Edits an existing message's content or extra. |
 | `"swipe_add"` | `POST /api/v1/chats/:chatId/messages/:id/swipe` (with `content`) | Appends a new swipe. |
 | `"swipe_update"` | `PUT /api/v1/chats/:chatId/messages/:id/swipe/:idx` | Rewrites the swipe at `swipeIndex`. |
-| `"render"` | `POST /api/v1/chats/:chatId/display-preprocess` | Per-render transform for display only. Output feeds the display-regex pass and final paint. Does not write to the message row. |
+| `"render"` | `POST /api/v1/chats/:chatId/display-preprocess` AND `POST /api/v1/regex-scripts/apply` | Per-render transform for display only. Output feeds the display-regex pass and final paint. Does not write to the message row. |
 
 Returned `extra` is ignored on swipe origins: swipes share the parent message's `extra`, which `addSwipe` and `updateSwipe` cannot patch. Only `content` is honored.
 
@@ -74,6 +74,9 @@ The render context populates `extra` with hints from the calling frontend:
 | `extra.is_user` | `boolean` | Mirror of `role === "user"`. |
 
 `messageId` is set on the context when the rendered message has one. The route accepts an optional `messageIndex` body field that lands on `extra.messageIndex` if supplied by the caller.
+
+!!! note "The render origin fires twice per visible message"
+    Both `/display-preprocess` and `/regex-scripts/apply` invoke the chain so the body the regex pipeline sees matches the body destined for the frontend. Both calls pass identical `(chatId, messageId, content)`. Handlers doing non-trivial work should dedupe with a small content-hash cache keyed by `(chatId, messageId, fnv1a(content))` so the second invocation is a Map lookup. Invalidate the cache on `CHAT_CHANGED` (var change), `MESSAGE_EDITED`, `MESSAGE_SWIPED`, and `MESSAGE_DELETED`.
 
 ## Return Value
 

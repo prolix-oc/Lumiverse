@@ -1,5 +1,6 @@
 import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames } from "../macros";
 import type { MacroEnv } from "../macros";
+import { messageContentProcessorChain } from "../spindle/message-content-processor";
 import { getEffectiveCharacterName } from "../types/character";
 import type { Chat } from "../types/chat";
 import type { RegexPlacement, RegexScript } from "../types/regex-script";
@@ -18,6 +19,9 @@ export interface DisplayRegexContext {
   persona_id?: string;
   is_user: boolean;
   depth: number;
+  message_id?: string;
+  message_index?: number;
+  role?: "user" | "assistant" | "system";
 }
 
 export interface ApplyDisplayRegexInput {
@@ -28,6 +32,7 @@ export interface ApplyDisplayRegexInput {
   resolvedFindPatterns?: Map<string, string>;
   resolvedReplacements?: Map<string, string>;
   dynamicMacros?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv | undefined {
@@ -155,13 +160,46 @@ export interface ApplyDisplayRegexResult {
 
 export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<ApplyDisplayRegexResult> {
   const placement: RegexPlacement = input.context.is_user ? "user_input" : "ai_output";
+
+  let content = input.content;
+  if (
+    messageContentProcessorChain.count > 0
+    && input.context.chat_id
+    && content.length > 0
+  ) {
+    try {
+      const pre = await messageContentProcessorChain.run(
+        {
+          chatId: input.context.chat_id,
+          content,
+          origin: "render",
+          userId: input.userId,
+          ...(input.context.message_id ? { messageId: input.context.message_id } : {}),
+          extra: {
+            ...(typeof input.context.message_index === "number"
+              ? { messageIndex: input.context.message_index }
+              : {}),
+            ...(input.context.role
+              ? { role: input.context.role, is_user: input.context.role === "user" }
+              : {}),
+          },
+        },
+        input.userId,
+        input.signal,
+      );
+      if (typeof pre.content === "string") content = pre.content;
+    } catch {
+      // Render-MCP failure should not block regex application; fall through with the raw content.
+    }
+  }
+
   const env = buildEnvFromContext(input.userId, input.context);
   if (env && input.dynamicMacros) {
     mergeDynamicMacros(env, input.dynamicMacros);
   }
   const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
   const result = await applyRegexScripts(
-    input.content,
+    content,
     input.scripts,
     placement,
     input.context.depth,

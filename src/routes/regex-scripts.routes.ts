@@ -170,6 +170,11 @@ app.post("/apply", async (c) => {
     ? Object.fromEntries(Object.entries(body.dynamic_macros).filter(([, v]) => typeof v === "string")) as Record<string, string>
     : undefined;
 
+  const ctxRole = typeof context.role === "string"
+    && (context.role === "user" || context.role === "assistant" || context.role === "system")
+    ? (context.role as "user" | "assistant" | "system")
+    : undefined;
+
   const applied = await applyDisplayRegex({
     content,
     scripts: scripts.filter((script) => !script.disabled),
@@ -179,11 +184,15 @@ app.post("/apply", async (c) => {
       persona_id: typeof context.persona_id === "string" ? context.persona_id : undefined,
       is_user: !!context.is_user,
       depth: typeof context.depth === "number" ? context.depth : 0,
+      ...(typeof context.message_id === "string" ? { message_id: context.message_id } : {}),
+      ...(typeof context.message_index === "number" ? { message_index: context.message_index } : {}),
+      ...(ctxRole ? { role: ctxRole } : {}),
     },
     userId,
     resolvedFindPatterns: normalizeResolvedMap(body.resolved_find_patterns),
     resolvedReplacements: normalizeResolvedMap(body.resolved_replacements),
     dynamicMacros,
+    signal: c.req.raw.signal,
   });
 
   return c.json({

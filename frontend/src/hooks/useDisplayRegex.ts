@@ -652,6 +652,8 @@ export function useDisplayRegex(
           resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
           resolvedReplacements: resolvedTemplates.resolvedReplacements,
           dynamicMacros,
+          ...(preprocessOpts?.messageId ? { messageId: preprocessOpts.messageId } : {}),
+          ...(preprocessOpts?.role ? { role: preprocessOpts.role } : {}),
         },
         (templates) => resolveMacrosBatchChunked(templates, {
           chat_id: activeChatId ?? undefined,

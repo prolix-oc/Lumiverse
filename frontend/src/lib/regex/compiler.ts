@@ -139,6 +139,9 @@ interface ApplyDisplayRegexContext {
   resolvedFindPatterns?: Map<string, string>
   resolvedReplacements?: Map<string, string>
   dynamicMacros?: Record<string, string>
+  messageId?: string
+  messageIndex?: number
+  role?: 'user' | 'assistant' | 'system'
 }
 
 interface SlowRegexReport {
@@ -196,6 +199,9 @@ async function applyDisplayRegexOnBackend(
           persona_id: context.personaId,
           is_user: context.isUser,
           depth: context.depth,
+          ...(context.messageId ? { message_id: context.messageId } : {}),
+          ...(typeof context.messageIndex === 'number' ? { message_index: context.messageIndex } : {}),
+          ...(context.role ? { role: context.role } : {}),
         },
       }),
     })
