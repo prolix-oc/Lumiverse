@@ -38,7 +38,7 @@ When transcription finishes, Lumiverse places the dictated text into the chat fl
 By default, a completed STT transcript is queued as a user message. If you want Lumiverse to send it immediately and start generation, end your dictation with `send message`.
 
 !!! example
-    Saying `I open the door slowly send message` sends `I open the door slowly` immediately.
+    Saying `I gently open the door send message` sends `I gently open the door` immediately.
 
 ---
 
