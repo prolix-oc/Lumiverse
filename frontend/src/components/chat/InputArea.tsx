@@ -27,7 +27,7 @@ import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
-import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTEngine } from '@/lib/sttEngine'
+import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
 
 interface InputAreaProps {
   chatId: string
@@ -36,30 +36,108 @@ interface InputAreaProps {
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const queueModLabel = isMac ? 'Cmd' : 'Ctrl'
 const TEXTAREA_MAX_HEIGHT = 180
+const STT_VISUALIZER_BARS = 18
+const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => {
+  const centerBias = 1 - Math.abs(index - ((STT_VISUALIZER_BARS - 1) / 2)) / (STT_VISUALIZER_BARS / 2)
+  return 0.12 + centerBias * 0.22
+})
 
 type STTCommandState = {
   thoughtDepth: number
 }
 
+const STT_COMMAND_ALIASES: Record<string, string[]> = {
+  'quote': ['quote start', 'quote end', 'open quote', 'close quote'],
+  'single quote': ['single quote', 'apostrophe'],
+  'em dash': ['em dash'],
+  'asterisk': ['asterisk'],
+  'thought start': ['thought start', 'begin thought'],
+  'thought end': ['thought end', 'end thought'],
+}
+
+function normalizeSTTCommandWord(word: string): string {
+  if (word === 'quotes') return 'quote'
+  if (word === 'starts') return 'start'
+  if (word === 'ends') return 'end'
+  if (word === 'thoughts') return 'thought'
+  if (word === 'begins') return 'begin'
+  if (word === 'dashes') return 'dash'
+  if (word === 'apostrophes') return 'apostrophe'
+  if (word === 'asterisks') return 'asterisk'
+  return word
+}
+
+function sttCommandEditDistance(a: string, b: string): number {
+  if (a === b) return 0
+  if (Math.abs(a.length - b.length) > 1) return 2
+
+  let edits = 0
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1
+      j += 1
+      continue
+    }
+    edits += 1
+    if (edits > 1) return edits
+    if (a.length > b.length) i += 1
+    else if (b.length > a.length) j += 1
+    else {
+      i += 1
+      j += 1
+    }
+  }
+
+  return edits + (i < a.length || j < b.length ? 1 : 0)
+}
+
+function normalizeSTTCommandCandidate(candidate: string): string | null {
+  const normalized = candidate
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) return null
+
+  const candidateWords = normalized.split(' ').map(normalizeSTTCommandWord)
+  for (const [canonical, aliases] of Object.entries(STT_COMMAND_ALIASES)) {
+    for (const alias of aliases) {
+      const aliasWords = alias.split(' ')
+      if (candidateWords.length !== aliasWords.length) continue
+      const isSimilar = candidateWords.every((word, index) => {
+        const aliasWord = aliasWords[index]
+        return word === aliasWord || (word.length >= 4 && aliasWord.length >= 4 && sttCommandEditDistance(word, aliasWord) <= 1)
+      })
+      if (isSimilar) return canonical
+    }
+  }
+
+  return null
+}
+
 function normalizeSTTTranscript(raw: string, state: STTCommandState): string {
   if (!raw.trim()) return ''
 
-  const commandPattern = /\b(?:quote\s+(?:start|end)|open\s+quote|close\s+quote|single\s+quote|apostrophe|thought\s+(?:start|end)|begin\s+thought|end\s+thought|asterisk|em\s+dash)\b/gi
+  const commandPattern = /\b(?:quotes?\s+(?:starts?|ends?)|open\s+quotes?|close\s+quotes?|single\s+quotes?|apostrophes?|thoughts?\s+(?:starts?|ends?)|begins?\s+thoughts?|ends?\s+thoughts?|asterisks?|em\s+dashes?)\b(?:\s*[,.;:!?]+)?/gi
 
   return raw
     .replace(commandPattern, (match) => {
-      const command = match.toLowerCase().replace(/\s+/g, ' ').trim()
+      const command = normalizeSTTCommandCandidate(match)
+      if (!command) return match
 
-      if (command === 'quote start' || command === 'quote end' || command === 'open quote' || command === 'close quote') return '"'
-      if (command === 'single quote' || command === 'apostrophe') return "'"
+      if (command === 'quote') return '"'
+      if (command === 'single quote') return "'"
       if (command === 'em dash') return '—'
       if (command === 'asterisk') return '*'
-      if (command === 'thought start' || command === 'begin thought') {
+      if (command === 'thought start') {
         const marker = state.thoughtDepth >= 1 ? '**' : '*'
         state.thoughtDepth += 1
         return marker
       }
-      if (command === 'thought end' || command === 'end thought') {
+      if (command === 'thought end') {
         const marker = state.thoughtDepth > 1 ? '**' : '*'
         state.thoughtDepth = Math.max(0, state.thoughtDepth - 1)
         return marker
@@ -67,6 +145,10 @@ function normalizeSTTTranscript(raw: string, state: STTCommandState): string {
 
       return match
     })
+    .replace(/(^|[\s([{"'])(\*{1,2})\s*[.,;:!?]+\s*/g, '$1$2')
+    .replace(/(\*{1,2})\s+[.,;:!?]+(?=\s|$)/g, '$1')
+    .replace(/([.!?])\s+([.!?])(?=\s|$|\*)/g, '$1')
+    .replace(/([.!?])(\*{1,2})\.(?=\s|$)/g, '$1$2')
     .replace(/\s+([,.;:!?])/g, '$1')
     .replace(/\s+([”’])/g, '$1')
     .replace(/([“‘])\s+/g, '$1')
@@ -562,6 +644,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
   const [sttStatus, setSttStatus] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle')
+  const [sttAudioFrame, setSttAudioFrame] = useState<STTAudioFrame | null>(null)
   const sttEngineRef = useRef<STTEngine | null>(null)
   const sttDraftBaseRef = useRef('')
   const sttInterimTextRef = useRef('')
@@ -582,10 +665,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (sttStatus === 'listening') return voiceSettings.sttProvider === 'webspeech' ? 'Listening' : 'Recording'
     return ''
   }, [sttStatus, voiceSettings.sttProvider])
+  const sttVisualizerBars = sttAudioFrame?.frequencies?.length ? sttAudioFrame.frequencies : STT_IDLE_BARS
+  const sttVisualizerLevel = sttAudioFrame ? Math.max(sttAudioFrame.amplitude, sttAudioFrame.peak * 0.65) : 0.16
 
   const stopSTTSession = useCallback((mode: 'stop' | 'destroy' = 'stop') => {
     const engine = sttEngineRef.current
     if (!engine) return
+    setSttAudioFrame(null)
     if (mode === 'destroy') engine.destroy()
     else engine.stop()
     if (mode === 'destroy') sttEngineRef.current = null
@@ -1658,6 +1744,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
     try {
       setSttStatus('starting')
+      setSttAudioFrame(null)
       sttDraftBaseRef.current = text.trimEnd()
       sttInterimTextRef.current = ''
       sttFinalSegmentsRef.current = []
@@ -1675,6 +1762,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
       })
       sttEngineRef.current?.destroy()
       sttEngineRef.current = engine
+
+      engine.onAudioFrame((frame) => {
+        setSttAudioFrame(frame)
+      })
 
       engine.onResult((result) => {
         if (result.isFinal) {
@@ -1696,6 +1787,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       })
 
       engine.onStop(() => {
+        setSttAudioFrame(null)
         void finalizeSTTTranscript()
       })
 
@@ -1707,15 +1799,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
         sttNormalizedFinalSegmentsRef.current = []
         sttCommandStateRef.current = { thoughtDepth: 0 }
         sttShouldSendRef.current = false
+        setSttAudioFrame(null)
         setSttStatus('idle')
         toast.error(msg, { title: 'Speech-to-Text Failed' })
       })
 
       await engine.start()
       setSttStatus(engine.isListening() ? 'listening' : 'idle')
-      if (engine.isListening()) {
-        toast.info(voiceSettings.sttProvider === 'webspeech' ? 'Listening… tap again to stop' : 'Recording… tap again to transcribe', { duration: 2000 })
-      }
     } catch (err: any) {
       stopSTTSession('destroy')
       setSttStatus('idle')
@@ -2693,126 +2783,147 @@ export default function InputArea({ chatId }: InputAreaProps) {
         onChange={(e) => handleAttachFiles(e.target.files)}
       />
 
-      {/* Input row */}
-      <div className={styles.inputRow}>
-        {!isStreaming && (
-          <button
-            type="button"
-            className={styles.attachBtn}
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            title="Attach image or audio"
-            aria-label="Attach file"
-          >
-            <Paperclip size={16} />
-          </button>
-        )}
-
-        {!isStreaming && (
-          <button
-            type="button"
-            className={clsx(styles.attachBtn, styles.sttBtn, isListeningToSTT && styles.sttBtnActive)}
-            onClick={handleSTTToggle}
-            disabled={!isSTTSupported}
-            title={
-              !isSTTSupported
-                ? voiceSettings.sttProvider === 'webspeech'
-                  ? 'Speech recognition unavailable in this browser'
-                  : 'Audio recording unavailable in this browser'
-                : sttStatus === 'processing'
-                  ? 'Processing speech'
-                  : isListeningToSTT
-                    ? 'Stop speech-to-text'
-                    : 'Start speech-to-text'
-            }
-            aria-label={
-              sttStatus === 'processing'
-                ? 'Processing speech'
-                : isListeningToSTT
-                  ? 'Stop speech-to-text'
-                  : 'Start speech-to-text'
-            }
-            aria-pressed={isListeningToSTT}
-          >
-            {sttStatus === 'processing' || sttStatus === 'starting' ? (
-              <LoaderCircle size={16} className={styles.sttSpinner} />
-            ) : isListeningToSTT ? (
-              <MicOff size={16} />
-            ) : (
-              <Mic size={16} />
-            )}
-          </button>
-        )}
-
-        <div className={clsx(styles.inputWrapper, showSTTIndicator && styles.inputWrapperWithStatus)}>
-          {showSTTIndicator && (
-            <div className={styles.sttIndicator} aria-live="polite">
-              <span className={styles.sttIndicatorWave} aria-hidden="true">
-                <span className={styles.sttIndicatorBar} />
-                <span className={styles.sttIndicatorBar} />
-                <span className={styles.sttIndicatorBar} />
-                <span className={styles.sttIndicatorBar} />
-              </span>
-              <span className={styles.sttIndicatorLabel}>{sttIndicatorLabel}</span>
-            </div>
+      {showSTTIndicator ? (
+        <button
+          type="button"
+          className={clsx(
+            styles.sttRecordingPanel,
+            sttAudioFrame && styles.sttIndicatorReactive,
+            sttStatus === 'processing' && styles.sttIndicatorProcessing,
           )}
-          <div ref={mirrorRef} className={clsx(styles.textareaMirror, showSTTIndicator && styles.textareaWithStatus)} aria-hidden="true">
-            {mirrorContent}
-          </div>
-          <textarea
-            ref={textareaRef}
-            className={clsx(styles.textarea, showSTTIndicator && styles.textareaWithStatus)}
-            value={text}
-            onChange={handleInput}
-            onScroll={handleTextareaScroll}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-            onFocus={() => setInputFocused(true)}
-            onBlur={() => setInputFocused(false)}
-            placeholder="Type a message..."
-            rows={1}
-            disabled={isStreaming}
-          />
-        </div>
+          style={{
+            '--stt-glow-x': `${12 + sttVisualizerLevel * 12}%`,
+            '--stt-glow-size': `${10 + sttVisualizerLevel * 24}px`,
+          } as CSSProperties}
+          onClick={sttStatus === 'processing' ? undefined : handleSTTToggle}
+          disabled={sttStatus === 'processing'}
+          title={sttStatus === 'processing' ? 'Processing speech' : 'Stop speech-to-text'}
+          aria-label={sttStatus === 'processing' ? 'Processing speech' : 'Stop speech-to-text'}
+          aria-live="polite"
+        >
+          <span className={styles.sttRecordingStatus}>
+            {sttStatus === 'processing' || sttStatus === 'starting' ? (
+              <LoaderCircle size={15} className={styles.sttSpinner} />
+            ) : (
+              <Mic size={15} />
+            )}
+            <span>{sttIndicatorLabel}</span>
+          </span>
+          <span className={styles.sttRecordingWave} aria-hidden="true">
+            {sttVisualizerBars.map((bar, index) => {
+              const level = Math.max(0.08, Math.min(1, bar))
+              return (
+                <span
+                  key={index}
+                  className={styles.sttIndicatorBar}
+                  style={{
+                    '--stt-bar-height': `${8 + level * 34}px`,
+                    '--stt-bar-opacity': 0.45 + level * 0.55,
+                    '--stt-bar-saturate': 0.95 + level * 0.75,
+                    '--stt-bar-delay': `${index * 34}ms`,
+                  } as CSSProperties}
+                />
+              )
+            })}
+          </span>
+          <span className={styles.sttRecordingHint}>
+            {sttStatus === 'processing' ? 'Transcribing…' : 'Tap to stop and transcribe'}
+          </span>
+        </button>
+      ) : (
+        <div className={styles.inputRow}>
+          {!isStreaming && (
+            <button
+              type="button"
+              className={styles.attachBtn}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              title="Attach image or audio"
+              aria-label="Attach file"
+            >
+              <Paperclip size={16} />
+            </button>
+          )}
 
-        {isStreaming ? (
-          <button
-            type="button"
-            className={clsx(styles.sendBtn, styles.sendBtnStop)}
-            onClick={handleStop}
-            title="Stop generation"
-            aria-label="Stop generation"
-          >
-            <Square size={16} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={styles.sendBtn}
-            onClick={handleSendClick}
-            onTouchStart={handleSendTouchStart}
-            onTouchEnd={handleSendTouchEnd}
-            onTouchCancel={handleSendTouchEnd}
-            title={
-              text.trim() || pendingAttachments.length > 0
-                ? `Send message (${queueModLabel}+click to queue)`
-                : hasQueuedMessages
-                  ? 'Send queued messages'
-                  : 'Nudge for a fresh reply'
-            }
-            aria-label={
-              text.trim() || pendingAttachments.length > 0
-                ? 'Send message'
-                : hasQueuedMessages
-                  ? 'Send queued messages'
-                  : 'Nudge for a fresh reply'
-            }
-          >
-            <Send size={16} />
-          </button>
-        )}
-      </div>
+          {!isStreaming && (
+            <button
+              type="button"
+              className={clsx(styles.attachBtn, styles.sttBtn)}
+              onClick={handleSTTToggle}
+              disabled={!isSTTSupported}
+              title={
+                !isSTTSupported
+                  ? voiceSettings.sttProvider === 'webspeech'
+                    ? 'Speech recognition unavailable in this browser'
+                    : 'Audio recording unavailable in this browser'
+                  : 'Start speech-to-text'
+              }
+              aria-label="Start speech-to-text"
+              aria-pressed={false}
+            >
+              <Mic size={16} />
+            </button>
+          )}
+
+          <div className={styles.inputWrapper}>
+            <div ref={mirrorRef} className={styles.textareaMirror} aria-hidden="true">
+              {mirrorContent}
+            </div>
+            <textarea
+              ref={textareaRef}
+              className={styles.textarea}
+              value={text}
+              onChange={handleInput}
+              onScroll={handleTextareaScroll}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
+              placeholder="Type a message..."
+              rows={1}
+              disabled={isStreaming}
+            />
+          </div>
+
+          {isStreaming ? (
+            <button
+              type="button"
+              className={clsx(styles.sendBtn, styles.sendBtnStop)}
+              onClick={handleStop}
+              title="Stop generation"
+              aria-label="Stop generation"
+            >
+              <Square size={16} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={styles.sendBtn}
+              onClick={handleSendClick}
+              onTouchStart={handleSendTouchStart}
+              onTouchEnd={handleSendTouchEnd}
+              onTouchCancel={handleSendTouchEnd}
+              title={
+                text.trim() || pendingAttachments.length > 0
+                  ? `Send message (${queueModLabel}+click to queue)`
+                  : hasQueuedMessages
+                    ? 'Send queued messages'
+                    : 'Nudge for a fresh reply'
+              }
+              aria-label={
+                text.trim() || pendingAttachments.length > 0
+                  ? 'Send message'
+                  : hasQueuedMessages
+                    ? 'Send queued messages'
+                    : 'Nudge for a fresh reply'
+              }
+            >
+              <Send size={16} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

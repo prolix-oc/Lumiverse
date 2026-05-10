@@ -5,6 +5,12 @@ export interface STTResult {
   isFinal: boolean
 }
 
+export interface STTAudioFrame {
+  amplitude: number
+  peak: number
+  frequencies: number[]
+}
+
 export interface STTAudioFormat {
   mimeType: string
   fileName: string
@@ -16,6 +22,7 @@ export interface STTEngine {
   onResult(cb: (result: STTResult) => void): void
   onError(cb: (err: Error) => void): void
   onStop(cb: () => void): void
+  onAudioFrame(cb: (frame: STTAudioFrame) => void): void
   isListening(): boolean
   destroy(): void
 }
@@ -37,6 +44,93 @@ const STT_VAD_MIN_THRESHOLD = 0.012
 const STT_VAD_NOISE_MULTIPLIER = 3
 const WEB_SPEECH_SILENCE_MS = 1600
 const WEB_SPEECH_RESTART_MS = 80
+const STT_VISUALIZER_BINS = 18
+
+type AudioVisualizerHandle = {
+  stop(): void
+}
+
+function createAudioVisualizer(stream: MediaStream, cb: ((frame: STTAudioFrame) => void) | null): AudioVisualizerHandle | null {
+  if (!cb || typeof window === 'undefined') return null
+
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+  if (!AudioContextClass || typeof requestAnimationFrame === 'undefined') return null
+
+  let audioContext: AudioContext | null = null
+  let sourceNode: MediaStreamAudioSourceNode | null = null
+  let analyser: AnalyserNode | null = null
+  let rafId = 0
+
+  try {
+    audioContext = new AudioContextClass()
+    analyser = audioContext.createAnalyser()
+    analyser.fftSize = 1024
+    analyser.smoothingTimeConstant = 0.76
+    sourceNode = audioContext.createMediaStreamSource(stream)
+    sourceNode.connect(analyser)
+  } catch {
+    try { sourceNode?.disconnect() } catch { /* ignore */ }
+    try { analyser?.disconnect() } catch { /* ignore */ }
+    if (audioContext && audioContext.state !== 'closed') void audioContext.close().catch(() => {})
+    return null
+  }
+
+  const samples = new Float32Array(analyser.fftSize)
+  const frequencies = new Uint8Array(analyser.frequencyBinCount)
+  let lastEmitAt = 0
+
+  const tick = () => {
+    if (!analyser) return
+    const now = performance.now()
+    if (now - lastEmitAt < 33) {
+      rafId = requestAnimationFrame(tick)
+      return
+    }
+    lastEmitAt = now
+
+    analyser.getFloatTimeDomainData(samples)
+    analyser.getByteFrequencyData(frequencies)
+
+    let sum = 0
+    let peak = 0
+    for (let i = 0; i < samples.length; i++) {
+      const abs = Math.abs(samples[i])
+      sum += samples[i] * samples[i]
+      if (abs > peak) peak = abs
+    }
+
+    const bins: number[] = []
+    const usableLength = Math.floor(frequencies.length * 0.72)
+    for (let i = 0; i < STT_VISUALIZER_BINS; i++) {
+      const start = Math.floor((i / STT_VISUALIZER_BINS) * usableLength)
+      const end = Math.max(start + 1, Math.floor(((i + 1) / STT_VISUALIZER_BINS) * usableLength))
+      let total = 0
+      for (let j = start; j < end; j++) total += frequencies[j]
+      bins.push(Math.min(1, total / ((end - start) * 255)))
+    }
+
+    cb({
+      amplitude: Math.min(1, Math.sqrt(sum / samples.length) * 5),
+      peak: Math.min(1, peak),
+      frequencies: bins,
+    })
+    rafId = requestAnimationFrame(tick)
+  }
+
+  rafId = requestAnimationFrame(tick)
+
+  return {
+    stop() {
+      if (rafId) cancelAnimationFrame(rafId)
+      try { sourceNode?.disconnect() } catch { /* ignore */ }
+      try { analyser?.disconnect() } catch { /* ignore */ }
+      if (audioContext && audioContext.state !== 'closed') void audioContext.close().catch(() => {})
+      sourceNode = null
+      analyser = null
+      audioContext = null
+    },
+  }
+}
 
 /**
  * Factory — returns the appropriate STT engine based on config.
@@ -82,6 +176,9 @@ class WebSpeechEngine implements STTEngine {
   private resultCb: ((r: STTResult) => void) | null = null
   private errorCb: ((e: Error) => void) | null = null
   private stopCb: (() => void) | null = null
+  private audioFrameCb: ((frame: STTAudioFrame) => void) | null = null
+  private visualizerStream: MediaStream | null = null
+  private visualizerHandle: AudioVisualizerHandle | null = null
   private listening = false
   private active = false
   private stopping = false
@@ -201,7 +298,31 @@ class WebSpeechEngine implements STTEngine {
   private notifyStop(): void {
     if (this.stopNotified) return
     this.stopNotified = true
+    this.stopMicVisualizer()
     this.stopCb?.()
+  }
+
+  private startMicVisualizer(): void {
+    if (!this.audioFrameCb || typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return
+    void navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((stream) => {
+        if (!this.listening || this.visualizerStream) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+        this.visualizerStream = stream
+        this.visualizerHandle = createAudioVisualizer(stream, this.audioFrameCb)
+      })
+      .catch(() => {})
+  }
+
+  private stopMicVisualizer(): void {
+    this.visualizerHandle?.stop()
+    this.visualizerHandle = null
+    if (this.visualizerStream) {
+      this.visualizerStream.getTracks().forEach((track) => track.stop())
+      this.visualizerStream = null
+    }
   }
 
   start(): void {
@@ -211,6 +332,7 @@ class WebSpeechEngine implements STTEngine {
     this.stopping = false
     this.stopNotified = false
     this.hasResult = false
+    this.startMicVisualizer()
     this.recognition.start()
   }
 
@@ -219,6 +341,7 @@ class WebSpeechEngine implements STTEngine {
     this.clearRestartTimer()
     this.listening = false
     this.stopping = true
+    this.stopMicVisualizer()
     try { this.recognition.stop() } catch { /* ignore */ }
     if (!this.active) {
       this.stopping = false
@@ -238,6 +361,10 @@ class WebSpeechEngine implements STTEngine {
     this.stopCb = cb
   }
 
+  onAudioFrame(cb: (frame: STTAudioFrame) => void): void {
+    this.audioFrameCb = cb
+  }
+
   isListening(): boolean {
     return this.listening
   }
@@ -247,10 +374,12 @@ class WebSpeechEngine implements STTEngine {
     this.clearRestartTimer()
     this.listening = false
     this.stopping = true
+    this.stopMicVisualizer()
     try { this.recognition.abort() } catch { /* ignore */ }
     this.resultCb = null
     this.errorCb = null
     this.stopCb = null
+    this.audioFrameCb = null
   }
 }
 
@@ -260,6 +389,7 @@ class OpenAISTTEngine implements STTEngine {
   private resultCb: ((r: STTResult) => void) | null = null
   private errorCb: ((e: Error) => void) | null = null
   private stopCb: (() => void) | null = null
+  private audioFrameCb: ((frame: STTAudioFrame) => void) | null = null
   private listening = false
   private mediaRecorder: MediaRecorder | null = null
   private stream: MediaStream | null = null
@@ -268,6 +398,7 @@ class OpenAISTTEngine implements STTEngine {
   private audioContext: AudioContext | null = null
   private analyser: AnalyserNode | null = null
   private sourceNode: MediaStreamAudioSourceNode | null = null
+  private visualizerHandle: AudioVisualizerHandle | null = null
   private vadTimer: ReturnType<typeof setTimeout> | null = null
   private recordingStartedAt = 0
   private speechMs = 0
@@ -280,6 +411,7 @@ class OpenAISTTEngine implements STTEngine {
 
   private cleanupStream(): void {
     this.stopSilenceMonitor()
+    this.stopAudioVisualizer()
     if (this.stream) {
       this.stream.getTracks().forEach((t) => t.stop())
       this.stream = null
@@ -304,6 +436,16 @@ class OpenAISTTEngine implements STTEngine {
       this.vadTimer = null
     }
     this.cleanupAudioContext()
+  }
+
+  private startAudioVisualizer(): void {
+    if (!this.stream || this.visualizerHandle) return
+    this.visualizerHandle = createAudioVisualizer(this.stream, this.audioFrameCb)
+  }
+
+  private stopAudioVisualizer(): void {
+    this.visualizerHandle?.stop()
+    this.visualizerHandle = null
   }
 
   private cleanupRecorder(): void {
@@ -393,6 +535,7 @@ class OpenAISTTEngine implements STTEngine {
     this.listening = true
     this.chunks = []
     this.audioFormat = audioFormat
+    this.startAudioVisualizer()
 
     this.mediaRecorder = audioFormat.mimeType
       ? new MediaRecorder(this.stream, { mimeType: audioFormat.mimeType })
@@ -471,6 +614,10 @@ class OpenAISTTEngine implements STTEngine {
     this.stopCb = cb
   }
 
+  onAudioFrame(cb: (frame: STTAudioFrame) => void): void {
+    this.audioFrameCb = cb
+  }
+
   isListening(): boolean {
     return this.listening
   }
@@ -486,5 +633,6 @@ class OpenAISTTEngine implements STTEngine {
     this.resultCb = null
     this.errorCb = null
     this.stopCb = null
+    this.audioFrameCb = null
   }
 }
