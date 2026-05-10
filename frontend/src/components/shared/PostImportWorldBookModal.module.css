@@ -3,6 +3,13 @@
   box-shadow: var(--lumiverse-shadow-xl, 0 24px 64px rgba(0, 0, 0, 0.35));
 }
 
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .header {
   display: flex;
   align-items: flex-start;
@@ -10,6 +17,7 @@
   gap: 16px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
 }
 
 .eyebrow {
@@ -167,6 +175,7 @@
   margin-top: 18px;
   padding: 16px 20px 18px;
   border-top: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
 }
 
 .footerHint {

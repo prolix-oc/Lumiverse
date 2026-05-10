@@ -115,94 +115,96 @@ export default function PostImportWorldBookModal({ book, onClose }: Props) {
         <CloseButton onClick={onClose} />
       </div>
 
-      <div className={styles.intro}>
-        <p className={styles.copy}>
-          Standalone imports stay unattached until you pick a target.
-        </p>
-        <p className={styles.copySubtle}>
-          You can attach this lorebook to a character, tie it to the active persona, or make it globally available.
-        </p>
-      </div>
+      <div className={styles.body}>
+        <div className={styles.intro}>
+          <p className={styles.copy}>
+            Standalone imports stay unattached until you pick a target.
+          </p>
+          <p className={styles.copySubtle}>
+            You can attach this lorebook to a character, tie it to the active persona, or make it globally available.
+          </p>
+        </div>
 
-      {error && <div className={styles.error}>{error}</div>}
+        {error && <div className={styles.error}>{error}</div>}
 
-      <div className={styles.actions}>
-        <button
-          type="button"
-          className={clsx(
-            styles.actionCard,
-            recommendedTarget === 'character' && activeCharacter && styles.actionCardRecommended,
-          )}
-          onClick={attachToCharacter}
-          disabled={!activeCharacter || busy !== null}
-        >
-          <div className={styles.actionTopRow}>
-            <span className={styles.actionIcon}><User size={15} /></span>
-            <span className={clsx(styles.actionBadge, !activeCharacter && styles.actionBadgeMuted)}>
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={clsx(
+              styles.actionCard,
+              recommendedTarget === 'character' && activeCharacter && styles.actionCardRecommended,
+            )}
+            onClick={attachToCharacter}
+            disabled={!activeCharacter || busy !== null}
+          >
+            <div className={styles.actionTopRow}>
+              <span className={styles.actionIcon}><User size={15} /></span>
+              <span className={clsx(styles.actionBadge, !activeCharacter && styles.actionBadgeMuted)}>
+                {activeCharacter
+                  ? recommendedTarget === 'character' ? 'Recommended' : 'Available'
+                  : 'Unavailable'}
+              </span>
+            </div>
+            <span className={styles.actionEyebrow}>Current character</span>
+            <span className={styles.actionTitle}>{activeCharacter ? activeCharacter.name : 'No active character'}</span>
+            <span className={styles.actionMeta}>
               {activeCharacter
-                ? recommendedTarget === 'character' ? 'Recommended' : 'Available'
-                : 'Unavailable'}
+                ? 'Attach this lorebook to the character you are currently chatting with.'
+                : 'Open a character chat first, then attach the lorebook here.'}
             </span>
-          </div>
-          <span className={styles.actionEyebrow}>Current character</span>
-          <span className={styles.actionTitle}>{activeCharacter ? activeCharacter.name : 'No active character'}</span>
-          <span className={styles.actionMeta}>
-            {activeCharacter
-              ? 'Attach this lorebook to the character you are currently chatting with.'
-              : 'Open a character chat first, then attach the lorebook here.'}
-          </span>
-          <span className={styles.actionHint}>{busy === 'character' ? 'Attaching...' : 'Attach now'}</span>
-        </button>
+            <span className={styles.actionHint}>{busy === 'character' ? 'Attaching...' : 'Attach now'}</span>
+          </button>
 
-        <button
-          type="button"
-          className={clsx(
-            styles.actionCard,
-            recommendedTarget === 'persona' && activePersona && styles.actionCardRecommended,
-          )}
-          onClick={attachToPersona}
-          disabled={!activePersona || busy !== null}
-        >
-          <div className={styles.actionTopRow}>
-            <span className={styles.actionIcon}><UserRound size={15} /></span>
-            <span className={clsx(styles.actionBadge, !activePersona && styles.actionBadgeMuted)}>
+          <button
+            type="button"
+            className={clsx(
+              styles.actionCard,
+              recommendedTarget === 'persona' && activePersona && styles.actionCardRecommended,
+            )}
+            onClick={attachToPersona}
+            disabled={!activePersona || busy !== null}
+          >
+            <div className={styles.actionTopRow}>
+              <span className={styles.actionIcon}><UserRound size={15} /></span>
+              <span className={clsx(styles.actionBadge, !activePersona && styles.actionBadgeMuted)}>
+                {activePersona
+                  ? recommendedTarget === 'persona' ? 'Recommended' : 'Available'
+                  : 'Unavailable'}
+              </span>
+            </div>
+            <span className={styles.actionEyebrow}>Active persona</span>
+            <span className={styles.actionTitle}>{activePersona ? activePersona.name : 'No active persona'}</span>
+            <span className={styles.actionMeta}>
               {activePersona
-                ? recommendedTarget === 'persona' ? 'Recommended' : 'Available'
-                : 'Unavailable'}
+                ? 'Use this lorebook whenever this persona is active.'
+                : 'Set an active persona first if you want the lorebook to follow that persona.'}
             </span>
-          </div>
-          <span className={styles.actionEyebrow}>Active persona</span>
-          <span className={styles.actionTitle}>{activePersona ? activePersona.name : 'No active persona'}</span>
-          <span className={styles.actionMeta}>
-            {activePersona
-              ? 'Use this lorebook whenever this persona is active.'
-              : 'Set an active persona first if you want the lorebook to follow that persona.'}
-          </span>
-          <span className={styles.actionHint}>{busy === 'persona' ? 'Attaching...' : 'Attach now'}</span>
-        </button>
+            <span className={styles.actionHint}>{busy === 'persona' ? 'Attaching...' : 'Attach now'}</span>
+          </button>
 
-        <button
-          type="button"
-          className={clsx(
-            styles.actionCard,
-            recommendedTarget === 'global' && styles.actionCardRecommended,
-          )}
-          onClick={addToGlobalBooks}
-          disabled={busy !== null}
-        >
-          <div className={styles.actionTopRow}>
-            <span className={styles.actionIcon}><Globe size={15} /></span>
-            <span className={styles.actionBadge}>
-              {recommendedTarget === 'global' ? 'Recommended' : 'Available'}
+          <button
+            type="button"
+            className={clsx(
+              styles.actionCard,
+              recommendedTarget === 'global' && styles.actionCardRecommended,
+            )}
+            onClick={addToGlobalBooks}
+            disabled={busy !== null}
+          >
+            <div className={styles.actionTopRow}>
+              <span className={styles.actionIcon}><Globe size={15} /></span>
+              <span className={styles.actionBadge}>
+                {recommendedTarget === 'global' ? 'Recommended' : 'Available'}
+              </span>
+            </div>
+            <span className={styles.actionEyebrow}>Global books</span>
+            <span className={styles.actionTitle}>Always active</span>
+            <span className={styles.actionMeta}>
+              Make this lorebook available in every chat until you remove it from global books.
             </span>
-          </div>
-          <span className={styles.actionEyebrow}>Global books</span>
-          <span className={styles.actionTitle}>Always active</span>
-          <span className={styles.actionMeta}>
-            Make this lorebook available in every chat until you remove it from global books.
-          </span>
-          <span className={styles.actionHint}>{busy === 'global' ? 'Saving...' : 'Add globally'}</span>
-        </button>
+            <span className={styles.actionHint}>{busy === 'global' ? 'Saving...' : 'Add globally'}</span>
+          </button>
+        </div>
       </div>
 
       <div className={styles.footer}>
