@@ -188,6 +188,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const ALT_FIELD_NAMES = ['description', 'personality', 'scenario'] as const
   const [altFieldsData, setAltFieldsData] = useState<Record<string, AltFieldVariant[]>>({})
   const [groupAltFieldsData, setGroupAltFieldsData] = useState<Record<string, Record<string, AltFieldVariant[]>>>({})
+  const [altFieldsLoaded, setAltFieldsLoaded] = useState(false)
+  const [groupAltFieldsLoadedIds, setGroupAltFieldsLoadedIds] = useState<string[]>([])
   const [altFieldSelections, setAltFieldSelections] = useState<Record<string, string>>({})
   const [groupAltFieldSelections, setGroupAltFieldSelections] = useState<Record<string, Record<string, string>>>({})
   const [groupScenarioMode, setGroupScenarioMode] = useState<'individual' | 'member' | 'custom'>('individual')
@@ -219,17 +221,25 @@ export default function InputArea({ chatId }: InputAreaProps) {
   useEffect(() => {
     if (isGroupChat) {
       setAltFieldsData({})
-      if (groupCharacterIds.length === 0) { setGroupAltFieldsData({}); return }
+      setAltFieldsLoaded(false)
+      if (groupCharacterIds.length === 0) { setGroupAltFieldsData({}); setGroupAltFieldsLoadedIds([]); return }
       let cancelled = false
       const characterSnapshot = useStore.getState().characters
       Promise.all(groupCharacterIds.map(async (id) => {
         const cached = characterSnapshot.find((c) => c.id === id)
         if (cached?.extensions?.alternate_fields) {
-          return { id, altFields: cached.extensions.alternate_fields as Record<string, AltFieldVariant[]> }
+          return { id, loaded: true, altFields: cached.extensions.alternate_fields as Record<string, AltFieldVariant[]> }
+        }
+        if (cached) {
+          return { id, loaded: true, altFields: undefined }
         }
         const fetched = await charactersApi.get(id).catch(() => null)
         if (fetched) useStore.getState().updateCharacter(fetched.id, fetched)
-        return { id, altFields: fetched?.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined }
+        return {
+          id,
+          loaded: !!fetched,
+          altFields: fetched?.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined,
+        }
       }))
         .then((items) => {
           if (cancelled) return
@@ -238,20 +248,90 @@ export default function InputArea({ chatId }: InputAreaProps) {
             if (item.altFields && typeof item.altFields === 'object') next[item.id] = item.altFields
           }
           setGroupAltFieldsData(next)
+          setGroupAltFieldsLoadedIds(items.filter((item) => item.loaded).map((item) => item.id))
         })
-        .catch(() => { if (!cancelled) setGroupAltFieldsData({}) })
+        .catch(() => { if (!cancelled) { setGroupAltFieldsData({}); setGroupAltFieldsLoadedIds([]) } })
       return () => { cancelled = true }
     }
 
     setGroupAltFieldsData({})
+    setGroupAltFieldsLoadedIds([])
+    setAltFieldsLoaded(false)
     if (!activeCharacterId) { setAltFieldsData({}); return }
     charactersApi.get(activeCharacterId)
       .then((c) => {
         const af = c.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined
         setAltFieldsData(af && typeof af === 'object' ? af : {})
+        setAltFieldsLoaded(true)
       })
-      .catch(() => setAltFieldsData({}))
+      .catch(() => { setAltFieldsData({}); setAltFieldsLoaded(false) })
   }, [activeCharacterId, isGroupChat, groupCharacterKey, groupAltFieldsKey])
+
+  const pruneAltSelections = useCallback((
+    selections: Record<string, string>,
+    altFields: Record<string, AltFieldVariant[]> | undefined,
+  ) => {
+    let changed = false
+    const next: Record<string, string> = {}
+
+    for (const [field, variantId] of Object.entries(selections)) {
+      const variants = altFields?.[field]
+      if (Array.isArray(variants) && variants.some((variant) => variant.id === variantId)) {
+        next[field] = variantId
+      } else {
+        changed = true
+      }
+    }
+
+    return changed ? next : selections
+  }, [])
+
+  useEffect(() => {
+    if (!chatId) return
+
+    if (isGroupChat) {
+      if (groupAltFieldsLoadedIds.length === 0 || Object.keys(groupAltFieldSelections).length === 0) return
+      const loadedIds = new Set(groupAltFieldsLoadedIds)
+      let changed = false
+      const next: Record<string, Record<string, string>> = {}
+
+      for (const [characterId, selections] of Object.entries(groupAltFieldSelections)) {
+        if (!loadedIds.has(characterId)) {
+          next[characterId] = selections
+          continue
+        }
+
+        const pruned = pruneAltSelections(selections, groupAltFieldsData[characterId])
+        if (pruned !== selections) changed = true
+        if (Object.keys(pruned).length > 0) next[characterId] = pruned
+      }
+
+      if (!changed) return
+      setGroupAltFieldSelections(next)
+      chatsApi.patchMetadata(chatId, {
+        group_alternate_field_selections: Object.keys(next).length > 0 ? next : null,
+      }).catch((err) => console.error('[AltFields] Failed to clear stale group selections:', err))
+      return
+    }
+
+    if (!altFieldsLoaded || Object.keys(altFieldSelections).length === 0) return
+    const next = pruneAltSelections(altFieldSelections, altFieldsData)
+    if (next === altFieldSelections) return
+    setAltFieldSelections(next)
+    chatsApi.patchMetadata(chatId, {
+      alternate_field_selections: Object.keys(next).length > 0 ? next : null,
+    }).catch((err) => console.error('[AltFields] Failed to clear stale selections:', err))
+  }, [
+    altFieldSelections,
+    altFieldsData,
+    altFieldsLoaded,
+    chatId,
+    groupAltFieldSelections,
+    groupAltFieldsData,
+    groupAltFieldsLoadedIds,
+    isGroupChat,
+    pruneAltSelections,
+  ])
 
   // Load per-chat alternate field selections
   useEffect(() => {
