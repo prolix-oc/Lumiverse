@@ -721,6 +721,28 @@ function validateAudioMagicBytes(data: Uint8Array, contentType: string): boolean
   return false;
 }
 
+/** Validate common web font container formats before proxying to widgets. */
+function validateFontMagicBytes(data: Uint8Array, _contentType: string): boolean {
+  if (data.length < 4) return false;
+
+  // WOFF: "wOFF"
+  if (data[0] === 0x77 && data[1] === 0x4F && data[2] === 0x46 && data[3] === 0x46) return true;
+
+  // WOFF2: "wOF2"
+  if (data[0] === 0x77 && data[1] === 0x4F && data[2] === 0x46 && data[3] === 0x32) return true;
+
+  // TTF: 00 01 00 00 (TrueType outline version 1.0 fixed-point).
+  if (data[0] === 0x00 && data[1] === 0x01 && data[2] === 0x00 && data[3] === 0x00) return true;
+
+  // OTF: "OTTO"
+  if (data[0] === 0x4F && data[1] === 0x54 && data[2] === 0x54 && data[3] === 0x4F) return true;
+
+  // TTC (TrueType Collection): "ttcf"
+  if (data[0] === 0x74 && data[1] === 0x74 && data[2] === 0x63 && data[3] === 0x66) return true;
+
+  return false;
+}
+
 function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
   const out = new Uint8Array(total);
   let offset = 0;
@@ -5233,7 +5255,10 @@ export class WorkerHost {
     }
 
     const isBinary = options?.responseType === "arraybuffer";
-    const binaryMediaType = options?.mediaType === "audio" ? "audio" : "image";
+    const binaryMediaType: "audio" | "font" | "image" =
+      options?.mediaType === "audio" ? "audio"
+      : options?.mediaType === "font" ? "font"
+      : "image";
 
     try {
       // Validate URL against SSRF before making the request
@@ -5269,9 +5294,17 @@ export class WorkerHost {
         if (isBinary) {
           // Transparent proxy for sandboxed widgets: only serve approved media data.
           const contentType = (response.headers.get("content-type") || "").toLowerCase();
-          const isAllowedContentType = binaryMediaType === "audio"
-            ? contentType.startsWith("audio/") || contentType.startsWith("application/ogg")
-            : contentType.startsWith("image/");
+          const isAllowedContentType =
+            binaryMediaType === "audio"
+              ? contentType.startsWith("audio/") || contentType.startsWith("application/ogg")
+              : binaryMediaType === "font"
+                ? contentType.startsWith("font/") ||
+                  contentType === "application/font-woff" ||
+                  contentType === "application/font-woff2" ||
+                  contentType === "application/x-font-ttf" ||
+                  contentType === "application/x-font-otf" ||
+                  contentType === "application/vnd.ms-fontobject"
+                : contentType.startsWith("image/");
           if (!isAllowedContentType) {
             throw new Error(
               `CORS proxy transparent proxy only serves ${binaryMediaType} data (received Content-Type: ${contentType || "unknown"})`
@@ -5279,9 +5312,12 @@ export class WorkerHost {
           }
 
           const binary = await readResponseBodyBinaryCapped(response, CORS_PROXY_MAX_BODY_BYTES);
-          const hasValidMagic = binaryMediaType === "audio"
-            ? validateAudioMagicBytes(binary, contentType)
-            : contentType.includes("svg") || validateImageMagicBytes(binary, contentType);
+          const hasValidMagic =
+            binaryMediaType === "audio"
+              ? validateAudioMagicBytes(binary, contentType)
+              : binaryMediaType === "font"
+                ? validateFontMagicBytes(binary, contentType)
+                : contentType.includes("svg") || validateImageMagicBytes(binary, contentType);
           if (!hasValidMagic) {
             throw new Error(`CORS proxy transparent proxy rejected: downloaded content does not match a known ${binaryMediaType} format`);
           }

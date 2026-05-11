@@ -22,7 +22,7 @@ const response = await spindle.cors('https://api.example.com/data', {
 | `headers` | `Record<string, string>` | Request headers |
 | `body` | `string` | Request body (for POST/PUT/PATCH) |
 | `responseType` | `"text" \| "arraybuffer"` | Return text or transparent binary media data |
-| `mediaType` | `"image" \| "audio"` | Restrict transparent binary responses to image or audio data |
+| `mediaType` | `"image" \| "audio" \| "font"` | Restrict transparent binary responses to image, audio, or web font data |
 
 ## Response Shape
 
@@ -58,7 +58,8 @@ When `corsProxy()` is used from inside a sandbox frame for binary media, the hos
 1. Validates that the remote server's `Content-Type` matches the requested `mediaType`.
 2. For images, validates magic bytes for PNG, JPEG, GIF, WebP, BMP, or SVG.
 3. For audio, validates common browser-playable formats such as MP3, WAV, Ogg/Opus/Vorbis, FLAC, M4A/MP4, WebM, and MIDI.
-4. Returns the body as a **base64-encoded string** (`encoding: "base64"`) so it can safely cross the WebSocket boundary.
+4. For fonts, validates magic bytes for WOFF, WOFF2, TTF, OTF, and TTC, and accepts `font/*`, `application/font-woff*`, `application/x-font-*`, and `application/vnd.ms-fontobject` Content-Types.
+5. Returns the body as a **base64-encoded string** (`encoding: "base64"`) so it can safely cross the WebSocket boundary.
 
 The frontend decodes the base64 payload back into a `Uint8Array` before delivering it to the sandbox:
 
@@ -78,6 +79,15 @@ const audio = await window.spindleSandbox.createAudio('https://example.com/bgm.m
   loop: true,
 })
 document.body.appendChild(audio.element)
+```
+
+For web fonts the same pattern applies via `fetchFont`. The returned blob URL plugs straight into a dynamically built `@font-face`:
+
+```ts
+const font = await window.spindleSandbox.fetchFont('https://fonts.gstatic.com/s/inter/v13/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1pL7SUc.woff2')
+const style = document.createElement('style')
+style.textContent = `@font-face { font-family: 'Inter'; src: url("${font.url}") format("woff2"); }`
+document.head.appendChild(style)
 ```
 
 If the fetched resource does not match the requested media type, the promise rejects with an error such as:

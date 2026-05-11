@@ -95,6 +95,7 @@ Inside a sandbox frame, the host injects a minimal API on `window.spindleSandbox
 | `corsProxy(url, options?)` | Fetch a URL through the extension's CORS proxy (requires `cors_proxy` permission) |
 | `fetchAudio(url, options?)` | Fetch remote audio through the CORS proxy and return a sandbox-local blob URL |
 | `createAudio(url, options?)` | Fetch remote audio through the CORS proxy and return a configured `HTMLAudioElement` handle |
+| `fetchFont(url, options?)` | Fetch a remote web font through the CORS proxy and return a sandbox-local blob URL usable in `@font-face src: url(...)` |
 
 ```ts
 // Inside the sandboxed iframe HTML
@@ -105,9 +106,9 @@ const url = URL.createObjectURL(blob)
 document.getElementById('avatar').src = url
 ```
 
-`corsProxy`, `fetchAudio`, and `createAudio` are only available if the extension has the `cors_proxy` permission. They route requests through the backend worker's existing `spindle.cors()` path, so the same SSRF validation, timeouts, and response-size limits apply.
+`corsProxy`, `fetchAudio`, `createAudio`, and `fetchFont` are only available if the extension has the `cors_proxy` permission. They route requests through the backend worker's existing `spindle.cors()` path, so the same SSRF validation, timeouts, and response-size limits apply.
 
-**Important:** the transparent proxy only serves approved **image** or **audio** content. The backend validates both the `Content-Type` header and file magic bytes before returning data. Other requests are rejected.
+**Important:** the transparent proxy only serves approved **image**, **audio**, or **web font** content. The backend validates both the `Content-Type` header and file magic bytes before returning data. Other requests are rejected.
 
 ```ts
 // Inside the sandboxed iframe HTML
@@ -117,6 +118,14 @@ const bgm = await window.spindleSandbox.createAudio('https://example.com/bgm.mp3
   volume: 0.6,
 })
 document.body.appendChild(bgm.element)
+```
+
+```ts
+// Inside the sandboxed iframe HTML
+const font = await window.spindleSandbox.fetchFont('https://fonts.gstatic.com/s/inter/v13/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa1pL7SUc.woff2')
+const style = document.createElement('style')
+style.textContent = `@font-face { font-family: 'Inter'; src: url("${font.url}") format("woff2"); } body { font-family: 'Inter', sans-serif; }`
+document.head.appendChild(style)
 ```
 
 ## `ctx.dom.query(selector)` / `ctx.dom.queryAll(selector)`
