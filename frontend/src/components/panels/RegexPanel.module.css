@@ -258,8 +258,9 @@
 }
 
 .flagsRow {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  gap: 4px 8px;
   align-items: center;
 }
 
