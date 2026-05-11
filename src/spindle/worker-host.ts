@@ -3030,7 +3030,9 @@ export class WorkerHost {
       messageIndex,
       name: label,
       role: message.role,
-      content: message.content,
+      content: typeof message.content === "string"
+        ? message.content
+        : message.content.map((part: any) => part.text || "").join(""),
       extensionId: this.manifest.identifier,
       extensionName,
     };

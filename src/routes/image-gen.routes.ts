@@ -15,6 +15,11 @@ app.post("/generate", async (c) => {
   try {
     const result = await svc.generateSceneBackground(userId, body.chatId, {
       forceGeneration: !!body.forceGeneration,
+      promptMode: body.promptMode,
+      prompt: body.prompt,
+      negativePrompt: body.negativePrompt,
+      promptPresetId: body.promptPresetId,
+      outputTarget: body.outputTarget,
     });
     return c.json(result);
   } catch (err: any) {

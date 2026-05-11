@@ -603,6 +603,15 @@ export interface ImageGenSettings {
   enabled: boolean
   activeImageGenConnectionId?: string | null
   includeCharacters: boolean
+  promptMode?: 'scene' | 'custom' | 'parsed_custom'
+  customPrompt?: string
+  customNegativePrompt?: string
+  activePromptPresetId?: string | null
+  promptPresets?: ImageGenPromptPreset[]
+  promptParserConnectionId?: string | null
+  promptParserModel?: string
+  promptParserParameters?: Record<string, any>
+  outputTarget?: 'background' | 'chat_attachment' | 'preview'
   parameters?: Record<string, any>
   sceneChangeThreshold: number
   autoGenerate: boolean
@@ -614,6 +623,17 @@ export interface ImageGenSettings {
   google?: Record<string, any>
   nanogpt?: Record<string, any>
   novelai?: Record<string, any>
+}
+
+export interface ImageGenPromptPreset {
+  id: string
+  name: string
+  mode: 'custom' | 'parsed_custom'
+  prompt: string
+  negativePrompt?: string
+  parserConnectionId?: string | null
+  parserModel?: string
+  parserParameters?: Record<string, any>
 }
 
 // ---- Spindle Slice ----

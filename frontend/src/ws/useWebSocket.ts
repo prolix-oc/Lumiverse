@@ -520,6 +520,7 @@ export function useWebSocket() {
                 imageGenApi.generate({
                   chatId: payload.chatId,
                   forceGeneration: !!latest.imageGeneration.forceGeneration,
+                  outputTarget: 'background',
                 }).then((res) => {
                   if (res.generated && res.imageDataUrl) {
                     store.getState().setSceneBackground(res.imageDataUrl)

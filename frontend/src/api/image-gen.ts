@@ -33,13 +33,18 @@ export interface SceneData {
 export interface ImageGenResponse {
   generated: boolean
   reason?: string
-  scene: SceneData
+  scene?: SceneData
   prompt: string
+  negativePrompt?: string
   provider: string
   imageDataUrl?: string
   imageId?: string
   imageUrl?: string
+  message?: import('@/types/api').Message
 }
+
+export type ImageGenPromptMode = 'scene' | 'custom' | 'parsed_custom'
+export type ImageGenOutputTarget = 'background' | 'chat_attachment' | 'preview'
 
 // Image generation can legitimately take several minutes (especially for
 // ComfyUI/SwarmUI workflows). The backend enforces its own 300s ceiling via
@@ -49,7 +54,15 @@ export interface ImageGenResponse {
 const IMAGE_GEN_TIMEOUT_MS = 310_000
 
 export const imageGenApi = {
-  generate(input: { chatId: string; forceGeneration?: boolean }) {
+  generate(input: {
+    chatId: string
+    forceGeneration?: boolean
+    promptMode?: ImageGenPromptMode
+    prompt?: string
+    negativePrompt?: string
+    promptPresetId?: string | null
+    outputTarget?: ImageGenOutputTarget
+  }) {
     return post<ImageGenResponse>('/image-gen/generate', input, { timeout: IMAGE_GEN_TIMEOUT_MS })
   },
 }

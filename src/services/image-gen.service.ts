@@ -13,6 +13,7 @@ import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import { rawGenerate } from "./generate.service";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
+import type { Message } from "../types/message";
 
 // Ensure image gen providers are registered
 import "../image-gen/index";
@@ -23,6 +24,15 @@ interface ImageGenSettings {
   enabled: boolean;
   activeImageGenConnectionId?: string | null;
   includeCharacters: boolean;
+  promptMode?: ImageGenPromptMode;
+  customPrompt?: string;
+  customNegativePrompt?: string;
+  activePromptPresetId?: string | null;
+  promptPresets?: ImageGenPromptPreset[];
+  promptParserConnectionId?: string | null;
+  promptParserModel?: string;
+  promptParserParameters?: Record<string, any>;
+  outputTarget?: ImageGenOutputTarget;
   sceneChangeThreshold: number;
   autoGenerate: boolean;
   forceGeneration: boolean;
@@ -46,6 +56,15 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   enabled: false,
   activeImageGenConnectionId: null,
   includeCharacters: false,
+  promptMode: "scene",
+  customPrompt: "",
+  customNegativePrompt: "",
+  activePromptPresetId: null,
+  promptPresets: [],
+  promptParserConnectionId: null,
+  promptParserModel: "",
+  promptParserParameters: {},
+  outputTarget: "background",
   sceneChangeThreshold: 2,
   autoGenerate: true,
   forceGeneration: false,
@@ -66,14 +85,40 @@ export interface SceneData {
 export interface ImageGenResult {
   generated: boolean;
   reason?: string;
-  scene: SceneData;
+  scene?: SceneData;
   prompt: string;
+  negativePrompt?: string;
   provider: string;
   imageDataUrl?: string;
   /** Persisted image ID in the images table */
   imageId?: string;
   /** Public URL for the image (works without authentication) */
   imageUrl?: string;
+  /** Message created when outputTarget is chat_attachment. */
+  message?: Message;
+}
+
+export type ImageGenPromptMode = "scene" | "custom" | "parsed_custom";
+export type ImageGenOutputTarget = "background" | "chat_attachment" | "preview";
+
+export interface ImageGenPromptPreset {
+  id: string;
+  name: string;
+  mode: Exclude<ImageGenPromptMode, "scene">;
+  prompt: string;
+  negativePrompt?: string;
+  parserConnectionId?: string | null;
+  parserModel?: string;
+  parserParameters?: Record<string, any>;
+}
+
+export interface GenerateImageOptions {
+  forceGeneration?: boolean;
+  promptMode?: ImageGenPromptMode;
+  prompt?: string;
+  negativePrompt?: string;
+  promptPresetId?: string | null;
+  outputTarget?: ImageGenOutputTarget;
 }
 
 const SCENE_CACHE_MAX = 200;
@@ -108,7 +153,7 @@ export function getImageProviders() {
 export async function generateSceneBackground(
   userId: string,
   chatId: string,
-  opts?: { forceGeneration?: boolean }
+  opts?: GenerateImageOptions
 ): Promise<ImageGenResult> {
   const settings = getImageGenSettings(userId);
 
@@ -149,30 +194,41 @@ export async function generateSceneBackground(
   activeImageGenerations.set(registryKey, { controller, startedAt: Date.now() });
 
   try {
-    // Scene analysis — abortable by supersession or timeout
-    const scene = await analyzeScene(userId, chatId, controller.signal);
-
-    // Scene change threshold
     const cacheKey = `${userId}:${chatId}`;
-    const previous = sceneCache.get(cacheKey) || null;
-    const threshold = Math.max(1, Number(settings.sceneChangeThreshold || 2));
-    const force = !!opts?.forceGeneration || !!settings.forceGeneration;
+    const promptInput = resolvePromptInput(settings, opts);
+    const promptMode = opts?.promptMode || settings.promptMode || "scene";
+    const outputTarget = opts?.outputTarget || settings.outputTarget || "background";
+    const params = { ...connection.default_parameters, ...(settings.parameters || {}) };
+    const promptResult = await resolveImagePrompt(
+      userId,
+      chatId,
+      settings,
+      promptMode,
+      promptInput,
+      params,
+      connection.provider,
+      controller.signal,
+    );
 
-    if (!force && previous && !hasSceneChanged(scene, previous, threshold)) {
-      return {
-        generated: false,
-        reason: "Scene has not changed enough",
-        scene,
-        prompt: buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters),
-        provider: connection.provider,
-      };
+    if (promptResult.scene) {
+      const previous = sceneCache.get(cacheKey) || null;
+      const threshold = Math.max(1, Number(settings.sceneChangeThreshold || 2));
+      const force = !!opts?.forceGeneration || !!settings.forceGeneration;
+
+      if (!force && previous && !hasSceneChanged(promptResult.scene, previous, threshold)) {
+        return {
+          generated: false,
+          reason: "Scene has not changed enough",
+          scene: promptResult.scene,
+          prompt: promptResult.prompt,
+          negativePrompt: promptResult.negativePrompt,
+          provider: connection.provider,
+        };
+      }
     }
 
-    // Build prompt
-    const prompt = buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters);
-
-    // Prepare request parameters — connection defaults first, then panel-level overrides
-    const params = { ...connection.default_parameters, ...(settings.parameters || {}) };
+    if (!promptResult.prompt.trim()) throw new Error("Image generation prompt is required");
+    if (promptResult.negativePrompt) params.negativePrompt = promptResult.negativePrompt;
 
     // For NovelAI: pre-resolve director reference images (orchestration concern)
     if (connection.provider === "novelai") {
@@ -183,8 +239,8 @@ export async function generateSceneBackground(
 
       // Pass character tags from scene analysis
       const charTags =
-        settings.includeCharacters && Array.isArray((scene as any).character_appearances)
-          ? (scene as any).character_appearances
+        settings.includeCharacters && Array.isArray((promptResult.scene as any)?.character_appearances)
+          ? (promptResult.scene as any).character_appearances
               .map((c: any) => ({ tags: String(c?.tags || "") }))
               .filter((c: any) => c.tags)
           : [];
@@ -194,7 +250,8 @@ export async function generateSceneBackground(
     }
 
     const request: ImageGenRequest = {
-      prompt,
+      prompt: promptResult.prompt,
+      negativePrompt: promptResult.negativePrompt,
       model: connection.model,
       parameters: params,
       signal: controller.signal,
@@ -205,12 +262,14 @@ export async function generateSceneBackground(
     // Persist the generated image to the images table
     let imageId: string | undefined;
     let imageUrl: string | undefined;
+    let message: Message | undefined;
     if (response.imageDataUrl) {
       try {
         const image = await imagesSvc.saveImageFromDataUrl(
           userId,
           response.imageDataUrl,
-          `image-gen-${connection.provider}-${Date.now()}.png`
+          `image-gen-${connection.provider}-${Date.now()}.png`,
+          { owner_chat_id: chatId },
         );
         imageId = image.id;
         imageUrl = `/api/v1/image-gen/results/${image.id}`;
@@ -218,25 +277,53 @@ export async function generateSceneBackground(
         const chat = chatsSvc.getChat(userId, chatId);
         if (chat?.character_id) {
           try {
-            gallerySvc.addToGallery(userId, chat.character_id, image.id, "Generated background");
+            gallerySvc.addToGallery(userId, chat.character_id, image.id, "Generated image");
           } catch {
             // Gallery linkage is best-effort; the generated image itself was persisted.
           }
+        }
+
+        if (outputTarget === "chat_attachment") {
+          message = chatsSvc.createMessage(chatId, {
+            is_user: false,
+            name: "ImageGen",
+            content: promptResult.prompt,
+            extra: {
+              image_gen: {
+                provider: connection.provider,
+                prompt: promptResult.prompt,
+                negativePrompt: promptResult.negativePrompt,
+                mode: promptMode,
+              },
+              attachments: [
+                {
+                  type: "image",
+                  image_id: image.id,
+                  mime_type: image.mime_type,
+                  original_filename: image.original_filename,
+                  width: image.width ?? undefined,
+                  height: image.height ?? undefined,
+                },
+              ],
+            },
+          }, userId);
         }
       } catch {
         // Persistence failure is non-fatal — the data URL is still returned
       }
     }
 
-    sceneCacheSet(cacheKey, scene);
+    if (promptResult.scene) sceneCacheSet(cacheKey, promptResult.scene);
     return {
       generated: true,
-      scene,
-      prompt,
+      scene: promptResult.scene,
+      prompt: promptResult.prompt,
+      negativePrompt: promptResult.negativePrompt,
       provider: connection.provider,
       imageDataUrl: response.imageDataUrl,
       imageId,
       imageUrl,
+      message,
     };
   } finally {
     if (timeoutHandle !== null) clearTimeout(timeoutHandle);
@@ -248,26 +335,131 @@ export async function generateSceneBackground(
   }
 }
 
-// --- Scene Analysis ---
+function resolvePromptInput(settings: ImageGenSettings, opts?: GenerateImageOptions): ImageGenPromptPreset {
+  const preset = (settings.promptPresets || []).find((p) => p.id === (opts?.promptPresetId || settings.activePromptPresetId));
+  const requestedMode = opts?.promptMode || preset?.mode || settings.promptMode || "custom";
+  return {
+    id: preset?.id || "inline",
+    name: preset?.name || "Inline prompt",
+    mode: requestedMode === "parsed_custom" ? "parsed_custom" : "custom",
+    prompt: opts?.prompt ?? preset?.prompt ?? settings.customPrompt ?? "",
+    negativePrompt: opts?.negativePrompt ?? preset?.negativePrompt ?? settings.customNegativePrompt ?? "",
+    parserConnectionId: preset?.parserConnectionId ?? settings.promptParserConnectionId ?? null,
+    parserModel: preset?.parserModel ?? settings.promptParserModel ?? "",
+    parserParameters: preset?.parserParameters ?? settings.promptParserParameters ?? {},
+  };
+}
 
-async function analyzeScene(userId: string, chatId: string, signal?: AbortSignal): Promise<SceneData> {
-  const sidecar = getSidecarSettings(userId);
-  if (!sidecar.connectionProfileId || !sidecar.model) {
-    throw new Error("Sidecar LLM connection is required for scene analysis — configure it in the Council panel");
+async function resolveImagePrompt(
+  userId: string,
+  chatId: string,
+  settings: ImageGenSettings,
+  mode: ImageGenPromptMode,
+  input: ImageGenPromptPreset,
+  imageParams: Record<string, any>,
+  providerName: string,
+  signal?: AbortSignal,
+): Promise<{ prompt: string; negativePrompt?: string; scene?: SceneData }> {
+  if (mode === "custom") return { prompt: input.prompt, negativePrompt: input.negativePrompt };
+  if (mode === "parsed_custom") return parseCustomPrompt(userId, chatId, settings, input, signal);
+
+  const scene = await analyzeScene(userId, chatId, settings, signal);
+  return {
+    scene,
+    prompt: buildImagePrompt(scene, providerName, settings.includeCharacters, imageParams),
+    negativePrompt: input.negativePrompt,
+  };
+}
+
+async function parseCustomPrompt(
+  userId: string,
+  chatId: string,
+  settings: ImageGenSettings,
+  input: ImageGenPromptPreset,
+  signal?: AbortSignal,
+): Promise<{ prompt: string; negativePrompt?: string }> {
+  const parser = await resolvePromptParser(userId, settings, input);
+  const response = await rawGenerate(userId, {
+    provider: parser.connection.provider,
+    model: parser.model,
+    connection_id: parser.connection.id,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You rewrite roleplay chat context into an image generation prompt. Return either plain prompt text or JSON with keys prompt and negative_prompt. Do not include markdown fences unless returning JSON.",
+      },
+      ...buildContextMessages(userId, chatId),
+      {
+        role: "user",
+        content: `User image prompt instructions:\n${input.prompt}\n\nReturn the final image prompt now.`,
+      },
+    ],
+    parameters: parser.parameters,
+    signal,
+  });
+
+  return parsePromptResponse(response.content || "", input.negativePrompt);
+}
+
+function parsePromptResponse(input: string, fallbackNegative?: string): { prompt: string; negativePrompt?: string } {
+  const cleaned = input.trim();
+  const fromFence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fromFence?.[1] || cleaned).trim();
+  if (candidate.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(candidate);
+      return {
+        prompt: String(parsed.prompt || parsed.positive_prompt || "").trim(),
+        negativePrompt: parsed.negative_prompt || parsed.negativePrompt || fallbackNegative,
+      };
+    } catch {
+      // Fall through to plain text.
+    }
+  }
+  return { prompt: candidate, negativePrompt: fallbackNegative };
+}
+
+async function resolvePromptParser(userId: string, settings: ImageGenSettings, input?: ImageGenPromptPreset) {
+  const { getConnection } = await import("./connections.service");
+  const configuredId = input?.parserConnectionId || settings.promptParserConnectionId;
+  let model = input?.parserModel || settings.promptParserModel || "";
+  let parameters = input?.parserParameters || settings.promptParserParameters || {};
+
+  if (configuredId) {
+    const connection = getConnection(userId, configuredId);
+    if (!connection) throw new Error("Image prompt parser connection not found");
+    return { connection, model: model || connection.model, parameters };
   }
 
-  // Use LLM connection service for sidecar (not image gen connections)
-  const { getConnection } = await import("./connections.service");
-  const conn = getConnection(userId, sidecar.connectionProfileId);
-  if (!conn) throw new Error("Sidecar connection not found");
+  const sidecar = getSidecarSettings(userId);
+  if (!sidecar.connectionProfileId || !sidecar.model) {
+    throw new Error("Image prompt parser connection is required. Select one in ImageGen settings or configure the Council sidecar.");
+  }
+
+  const connection = getConnection(userId, sidecar.connectionProfileId);
+  if (!connection) throw new Error("Sidecar connection not found");
+  model = model || sidecar.model;
+  parameters = Object.keys(parameters).length > 0 ? parameters : {
+    temperature: sidecar.temperature,
+    top_p: sidecar.topP,
+    max_tokens: sidecar.maxTokens,
+  };
+  return { connection, model, parameters };
+}
+
+// --- Scene Analysis ---
+
+async function analyzeScene(userId: string, chatId: string, settings: ImageGenSettings, signal?: AbortSignal): Promise<SceneData> {
+  const parser = await resolvePromptParser(userId, settings);
 
   const tool = BUILTIN_TOOLS_MAP.get("generate_scene");
   if (!tool) throw new Error("generate_scene council tool is unavailable");
 
   const response = await rawGenerate(userId, {
-    provider: conn.provider,
-    model: sidecar.model,
-    connection_id: sidecar.connectionProfileId,
+    provider: parser.connection.provider,
+    model: parser.model,
+    connection_id: parser.connection.id,
     messages: [
       {
         role: "system",
@@ -277,9 +469,7 @@ async function analyzeScene(userId: string, chatId: string, signal?: AbortSignal
       { role: "user", content: "Return scene JSON now." },
     ],
     parameters: {
-      temperature: sidecar.temperature,
-      top_p: sidecar.topP,
-      max_tokens: sidecar.maxTokens,
+      ...parser.parameters,
     },
     signal,
   });

@@ -4,10 +4,12 @@ import { IconBrush } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { imageGenApi, type SceneData } from '@/api/image-gen'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
+import { connectionsApi } from '@/api/connections'
 import { Toggle } from '@/components/shared/Toggle'
 import { Button, FormField, Select, TextInput, EditorSection, TextArea } from '@/components/shared/FormComponents'
 import ImageLightbox from '@/components/shared/ImageLightbox'
-import type { ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
+import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
+import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
 
 type RefImage = { data: string; mimeType?: string }
@@ -281,6 +283,10 @@ export default function ImageGenPanel() {
   const [lastScene, setLastScene] = useState<SceneData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [generatedPreview, setGeneratedPreview] = useState<string | null>(null)
+  const [llmConnections, setLlmConnections] = useState<ConnectionProfile[]>([])
+  const [parserModels, setParserModels] = useState<Array<{ id: string; label: string }>>([])
+  const [presetName, setPresetName] = useState('')
   const refInputRef = useRef<HTMLInputElement | null>(null)
 
   // Load profiles and providers on mount
@@ -292,7 +298,22 @@ export default function ImageGenPanel() {
     imageGenConnectionsApi.providers().then((res) => {
       if (res.providers?.length) setImageGenProviders(res.providers)
     }).catch(() => {})
+
+    connectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
+      setLlmConnections(res.data)
+    }).catch(() => {})
   }, [setImageGenProfiles, setImageGenProviders])
+
+  useEffect(() => {
+    const connectionId = imageGeneration.promptParserConnectionId
+    if (!connectionId) {
+      setParserModels([])
+      return
+    }
+    connectionsApi.models(connectionId).then((res) => {
+      setParserModels((res.models || []).map((m) => ({ id: m, label: m })))
+    }).catch(() => setParserModels([]))
+  }, [imageGeneration.promptParserConnectionId])
 
   // Resolve active connection and its provider capabilities
   const activeConnection = useMemo(
@@ -344,6 +365,54 @@ export default function ImageGenPanel() {
     setImageGenSettings({ parameters: { ...genParams, [key]: value } } as any)
   }, [genParams, setImageGenSettings])
 
+  const promptPresets = imageGeneration.promptPresets || []
+  const activePromptPreset = promptPresets.find((p) => p.id === imageGeneration.activePromptPresetId) || null
+
+  const applyPromptPreset = useCallback((presetId: string | null) => {
+    const preset = promptPresets.find((p) => p.id === presetId)
+    if (!preset) {
+      setImageGenSettings({ activePromptPresetId: null })
+      return
+    }
+    setImageGenSettings({
+      activePromptPresetId: preset.id,
+      promptMode: preset.mode,
+      customPrompt: preset.prompt,
+      customNegativePrompt: preset.negativePrompt || '',
+      promptParserConnectionId: preset.parserConnectionId || null,
+      promptParserModel: preset.parserModel || '',
+      promptParserParameters: preset.parserParameters || {},
+    } as any)
+  }, [promptPresets, setImageGenSettings])
+
+  const savePromptPreset = useCallback(() => {
+    const name = presetName.trim() || activePromptPreset?.name || 'Image prompt'
+    const existingId = activePromptPreset?.id
+    const nextPreset: ImageGenPromptPreset = {
+      id: existingId || crypto.randomUUID(),
+      name,
+      mode: imageGeneration.promptMode === 'parsed_custom' ? 'parsed_custom' : 'custom',
+      prompt: imageGeneration.customPrompt || '',
+      negativePrompt: imageGeneration.customNegativePrompt || '',
+      parserConnectionId: imageGeneration.promptParserConnectionId || null,
+      parserModel: imageGeneration.promptParserModel || '',
+      parserParameters: imageGeneration.promptParserParameters || {},
+    }
+    const next = existingId
+      ? promptPresets.map((p) => (p.id === existingId ? nextPreset : p))
+      : [...promptPresets, nextPreset]
+    setImageGenSettings({ promptPresets: next, activePromptPresetId: nextPreset.id } as any)
+    setPresetName('')
+  }, [activePromptPreset, imageGeneration, presetName, promptPresets, setImageGenSettings])
+
+  const deletePromptPreset = useCallback(() => {
+    if (!activePromptPreset) return
+    setImageGenSettings({
+      promptPresets: promptPresets.filter((p) => p.id !== activePromptPreset.id),
+      activePromptPresetId: null,
+    } as any)
+  }, [activePromptPreset, promptPresets, setImageGenSettings])
+
   // Reference images (stored per-session in settings)
   const currentRefs: RefImage[] = genParams.referenceImages || []
   const setCurrentRefs = (next: RefImage[]) => {
@@ -361,9 +430,24 @@ export default function ImageGenPanel() {
     setError(null)
     setSceneGenerating(true)
     try {
-      const res = await imageGenApi.generate({ chatId: activeChatId, forceGeneration })
-      setLastScene(res.scene)
-      if (res.generated && res.imageDataUrl) setSceneBackground(res.imageDataUrl)
+      const res = await imageGenApi.generate({
+        chatId: activeChatId,
+        forceGeneration,
+        promptMode: imageGeneration.promptMode || 'scene',
+        prompt: imageGeneration.customPrompt || '',
+        negativePrompt: imageGeneration.customNegativePrompt || '',
+        promptPresetId: imageGeneration.activePromptPresetId || null,
+        outputTarget: imageGeneration.outputTarget || 'background',
+      })
+      setLastScene(res.scene || null)
+      if (res.generated && res.imageDataUrl) {
+        if ((imageGeneration.outputTarget || 'background') === 'background') {
+          setSceneBackground(res.imageDataUrl)
+          setGeneratedPreview(null)
+        } else {
+          setGeneratedPreview(res.imageDataUrl)
+        }
+      }
       if (!res.generated && res.reason) setError(res.reason)
     } catch (err: any) {
       setError(err?.body?.error || err?.message || 'Image generation failed')
@@ -392,12 +476,31 @@ export default function ImageGenPanel() {
     ...imageGenProfiles.map((p) => ({ value: p.id, label: p.name })),
   ], [imageGenProfiles])
 
+  const llmConnectionOptions = useMemo(() => [
+    { value: '', label: 'Use Council sidecar / select...' },
+    ...llmConnections.map((p) => ({ value: p.id, label: p.name })),
+  ], [llmConnections])
+
+  const parserModelOptions = useMemo(() => {
+    const current = imageGeneration.promptParserModel || ''
+    const options = [{ value: '', label: 'Use connection default' }, ...parserModels.map((m) => ({ value: m.id, label: m.label }))]
+    if (current && !options.some((o) => o.value === current)) options.push({ value: current, label: current })
+    return options
+  }, [imageGeneration.promptParserModel, parserModels])
+
+  const promptPresetOptions = useMemo(() => [
+    { value: '', label: 'No saved prompt' },
+    ...promptPresets.map((p) => ({ value: p.id, label: p.name })),
+  ], [promptPresets])
+
   // Resolve the model ID to a human-readable label
   const modelLabel = useMemo(() => {
     if (!activeConnection?.model) return null
     const staticModel = capabilities?.staticModels?.find((m) => m.id === activeConnection.model)
     return staticModel?.label || activeConnection.model
   }, [activeConnection?.model, capabilities?.staticModels])
+
+  const previewSrc = generatedPreview || sceneBackground
 
   return (
     <div className={styles.panel}>
@@ -424,6 +527,124 @@ export default function ImageGenPanel() {
               </div>
             )}
           </FormField>
+
+          <EditorSection title="Prompt Mode" Icon={IconBrush}>
+            <FormField label="Mode" hint="Scene uses the built-in scene parser. Custom sends your prompt directly. Parsed custom rewrites your prompt with chat context first.">
+              <Select
+                value={imageGeneration.promptMode || 'scene'}
+                onChange={(value) => updateTop({ promptMode: value })}
+                options={[
+                  { value: 'scene', label: 'Scene tool' },
+                  { value: 'custom', label: 'Custom prompt' },
+                  { value: 'parsed_custom', label: 'Parsed custom prompt' },
+                ]}
+              />
+            </FormField>
+
+            <FormField label="Output" hint="Choose whether the result becomes the chat background or is inserted as a chat image.">
+              <Select
+                value={imageGeneration.outputTarget || 'background'}
+                onChange={(value) => updateTop({ outputTarget: value })}
+                options={[
+                  { value: 'background', label: 'Set as background' },
+                  { value: 'chat_attachment', label: 'Insert into chat' },
+                  { value: 'preview', label: 'Preview only' },
+                ]}
+              />
+            </FormField>
+
+            {(imageGeneration.promptMode === 'custom' || imageGeneration.promptMode === 'parsed_custom') && (
+              <>
+                <FormField label="Saved Prompt">
+                  <Select
+                    value={imageGeneration.activePromptPresetId || ''}
+                    onChange={(value) => applyPromptPreset(value || null)}
+                    options={promptPresetOptions}
+                  />
+                </FormField>
+
+                <FormField label="Prompt" hint={imageGeneration.promptMode === 'parsed_custom' ? 'Instructions for the parser LLM to turn chat context into the final image prompt.' : 'Sent directly to the image provider.'}>
+                  <TextArea
+                    rows={5}
+                    value={imageGeneration.customPrompt || ''}
+                    onChange={(value) => updateTop({ customPrompt: value })}
+                    placeholder="Describe the image you want to generate..."
+                  />
+                </FormField>
+
+                <FormField label="Negative Prompt">
+                  <TextArea
+                    rows={3}
+                    value={imageGeneration.customNegativePrompt || ''}
+                    onChange={(value) => updateTop({ customNegativePrompt: value })}
+                    placeholder="Optional negative prompt"
+                  />
+                </FormField>
+
+                <div className={styles.inlineRow}>
+                  <TextInput
+                    value={presetName}
+                    onChange={setPresetName}
+                    placeholder={activePromptPreset ? `Rename ${activePromptPreset.name}` : 'Preset name'}
+                  />
+                  <Button variant="secondary" size="sm" onClick={savePromptPreset}>Save Prompt</Button>
+                  {activePromptPreset && <Button variant="danger" size="sm" onClick={deletePromptPreset}>Delete</Button>}
+                </div>
+              </>
+            )}
+          </EditorSection>
+
+          {(imageGeneration.promptMode === 'scene' || imageGeneration.promptMode === 'parsed_custom') && (
+            <EditorSection title="Prompt Parser" Icon={Settings2} defaultExpanded={imageGeneration.promptMode === 'parsed_custom'}>
+              <FormField label="Parser Connection" hint="Overrides the Council sidecar for ImageGen scene/prompt parsing.">
+                <Select
+                  value={imageGeneration.promptParserConnectionId || ''}
+                  onChange={(value) => updateTop({ promptParserConnectionId: value || null, promptParserModel: '' })}
+                  options={llmConnectionOptions}
+                />
+              </FormField>
+
+              <FormField label="Parser Model">
+                <Select
+                  value={imageGeneration.promptParserModel || ''}
+                  onChange={(value) => updateTop({ promptParserModel: value })}
+                  options={parserModelOptions}
+                />
+              </FormField>
+
+              <FormField label={`Parser Temperature (${imageGeneration.promptParserParameters?.temperature ?? 0.4})`}>
+                <input
+                  className={styles.slider}
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={imageGeneration.promptParserParameters?.temperature ?? 0.4}
+                  onChange={(e) => updateTop({ promptParserParameters: { ...(imageGeneration.promptParserParameters || {}), temperature: Number(e.target.value) } })}
+                />
+              </FormField>
+
+              <FormField label={`Parser Top P (${imageGeneration.promptParserParameters?.top_p ?? 1})`}>
+                <input
+                  className={styles.slider}
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={imageGeneration.promptParserParameters?.top_p ?? 1}
+                  onChange={(e) => updateTop({ promptParserParameters: { ...(imageGeneration.promptParserParameters || {}), top_p: Number(e.target.value) } })}
+                />
+              </FormField>
+
+              <FormField label="Parser Max Tokens">
+                <TextInput
+                  value={String(imageGeneration.promptParserParameters?.max_tokens ?? '')}
+                  onChange={(value) => updateTop({ promptParserParameters: { ...(imageGeneration.promptParserParameters || {}), max_tokens: value ? Number(value) : undefined } })}
+                  placeholder="Use connection default"
+                />
+              </FormField>
+            </EditorSection>
+          )}
 
           {/* Dynamic Generation Parameters from Provider Schema */}
           {activeConnection && capabilities && (
@@ -555,13 +776,14 @@ export default function ImageGenPanel() {
             </FormField>
           </EditorSection>
 
-          {sceneBackground && <div className={styles.preview} onClick={() => setLightboxOpen(true)}><img src={sceneBackground} alt="Scene preview" className={styles.previewImg} /></div>}
+          {previewSrc && <div className={styles.preview} onClick={() => setLightboxOpen(true)}><img src={previewSrc} alt="Generated preview" className={styles.previewImg} /></div>}
           {lastScene && <div className={styles.sceneInfo}><div><strong>Scene:</strong> {lastScene.environment}</div><div><strong>Time:</strong> {lastScene.time_of_day}</div><div><strong>Mood:</strong> {lastScene.mood}</div></div>}
 
           <div className={styles.actions}>
             <Button variant="primary" size="sm" icon={<ImageIcon size={14} />} onClick={() => handleGenerate(false)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>{sceneGenerating ? 'Generating...' : 'Generate Now'}</Button>
             <Button variant="secondary" size="sm" icon={<IconBrush size={14} />} onClick={() => handleGenerate(true)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>Force Generate</Button>
-            {sceneBackground && <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => setSceneBackground(null)}>Clear</Button>}
+            {generatedPreview && <Button variant="secondary" size="sm" onClick={() => { setSceneBackground(generatedPreview); setGeneratedPreview(null) }}>Use as Background</Button>}
+            {previewSrc && <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => { setSceneBackground(null); setGeneratedPreview(null) }}>Clear</Button>}
           </div>
 
           {!activeImageGenConnectionId && (
@@ -571,7 +793,7 @@ export default function ImageGenPanel() {
         </>
       )}
 
-      {lightboxOpen && sceneBackground && <ImageLightbox src={sceneBackground} onClose={() => setLightboxOpen(false)} />}
+      {lightboxOpen && previewSrc && <ImageLightbox src={previewSrc} onClose={() => setLightboxOpen(false)} />}
     </div>
   )
 }
