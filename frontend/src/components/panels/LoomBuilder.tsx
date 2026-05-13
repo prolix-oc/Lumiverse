@@ -84,6 +84,7 @@ import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import { Toggle } from '@/components/shared/Toggle'
 import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
+import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
 import s from './LoomBuilder.module.css'
 
 // ============================================================================
@@ -1259,6 +1260,17 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
   const addToast = __contextMeterStore((s) => s.addToast)
+  const activePresetRef = useRef(activePreset)
+  const suppressNextProfileApplyRef = useRef<string | null>(null)
+
+  const getProfileContextKey = useCallback(() => (
+    `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}`
+  ), [presetProfiles.activeChatId, presetProfiles.activeCharacterId])
+
+  const captureDefaults = useCallback(() => {
+    suppressNextProfileApplyRef.current = getProfileContextKey()
+    void presetProfiles.captureDefaults()
+  }, [getProfileContextKey, presetProfiles])
 
   const reapplyDefaults = useCallback(() => {
     const binding = presetProfiles.defaults
@@ -1287,18 +1299,14 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
   // activePreset is read through a ref so user-driven block toggles (which
   // mutate activePreset) don't re-fire this effect and fight the toggle by
   // re-applying the binding.
-  const activePresetRef = useRef(activePreset)
   const lastProfileContextRef = useRef<string | null>(null)
   activePresetRef.current = activePreset
 
   useEffect(() => {
     if (!presetProfiles.isResolved) return
 
-    const contextKey = `${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeSource}`
+    const contextKey = `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}`
     const contextChanged = lastProfileContextRef.current !== contextKey
-    if (contextChanged) {
-      lastProfileContextRef.current = contextKey
-    }
 
     if (
       presetProfiles.resolvedPresetId
@@ -1312,6 +1320,16 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
     const binding = presetProfiles.activeBinding
     const currentBlocks = activePresetRef.current?.blocks
     if (!binding || !currentBlocks?.length) return
+
+    if (!contextChanged) return
+    if (suppressNextProfileApplyRef.current === contextKey) {
+      suppressNextProfileApplyRef.current = null
+      lastProfileContextRef.current = contextKey
+      markLoomRuntimeProfileContext(activePresetRef.current?.id, presetProfiles.activeChatId, presetProfiles.activeCharacterId)
+      return
+    }
+    lastProfileContextRef.current = contextKey
+    markLoomRuntimeProfileContext(activePresetRef.current?.id, presetProfiles.activeChatId, presetProfiles.activeCharacterId)
 
     const updatedBlocks = currentBlocks.map(b =>
       b.id in binding.block_states ? { ...b, enabled: binding.block_states[b.id] } : b
@@ -1715,7 +1733,7 @@ export default function LoomBuilder({ compact = true }: LoomBuilderProps) {
             {!presetProfiles.hasDefaults ? (
               <button
                 className={s.profileBtn}
-                onClick={presetProfiles.captureDefaults}
+                onClick={captureDefaults}
                 disabled={presetProfiles.isLoading}
                 title="Capture the current preset and block states as this preset's defaults"
                 type="button"

@@ -882,6 +882,7 @@ export interface MentionQueueOpts {
   persona_id?: string
   persona_addon_states?: Record<string, boolean>
   preset_id?: string
+  force_preset_id?: boolean
 }
 
 export interface MentionQueue {

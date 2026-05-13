@@ -12,6 +12,7 @@ import { charactersApi } from '@/api/characters'
 import { DRAWER_TABS, registryToCommands } from '@/lib/drawer-tab-registry'
 import { getVisibleSettingsTabs, settingsRegistryToCommands } from '@/lib/settings-tab-registry'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 
 export type CommandScope = 'global' | 'chat' | 'chat-idle' | 'landing' | 'character'
 
@@ -40,15 +41,17 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
+      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
       if (!activeChatId) return
       beginStreaming()
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const res = await generateApi.regenerate({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId),
           generation_type: 'regenerate',
         })
         startStreaming(res.generationId)
@@ -68,15 +71,17 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
+      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
       if (!activeChatId) return
       beginStreaming()
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const res = await generateApi.continueGeneration({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId),
         })
 
         startStreaming(res.generationId)
@@ -276,14 +281,16 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
+      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
       if (!activeChatId) return
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const result = await generateApi.dryRun({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId),
         })
 
         openModal('dryRun', result)

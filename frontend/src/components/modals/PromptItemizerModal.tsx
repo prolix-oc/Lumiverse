@@ -11,6 +11,7 @@ import type { BreakdownGroup } from '@/lib/prompt-breakdown'
 import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import styles from './PromptItemizerModal.module.css'
 import clsx from 'clsx'
 
@@ -44,6 +45,7 @@ export default function PromptItemizerModal() {
   const messages = useStore((s) => s.messages)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
 
   const messageId = modalProps?.messageId as string | undefined
@@ -113,11 +115,13 @@ export default function PromptItemizerModal() {
     setRawLoading(true)
     setRawError(null)
     try {
+      const presetId = getActivePresetForGeneration() || undefined
       const res = await generateApi.dryRun({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId),
         exclude_message_id: messageId,
       })
       setRawData(res)
@@ -128,7 +132,7 @@ export default function PromptItemizerModal() {
     } finally {
       setRawLoading(false)
     }
-  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, getActivePresetForGeneration])
+  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration])
 
   const handleToggleRaw = useCallback(async () => {
     if (rawView !== 'off') {

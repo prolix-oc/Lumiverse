@@ -14,6 +14,7 @@ import { imagesApi } from '@/api/images'
 import { getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
@@ -1115,12 +1116,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
     try {
       const effectivePersonaId = sendPersonaId || activePersonaId
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || 'User'
+      const presetId = getActivePresetForGeneration() || undefined
       const genOpts: import('@/api/generate').GenerateRequest = {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: effectivePersonaId || undefined,
         persona_addon_states: effectivePersonaId === activePersonaId ? activeGenerationAddonStates : undefined,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId),
         generation_type: 'normal' as const,
       }
 
@@ -1168,6 +1171,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
             persona_id: genOpts.persona_id,
             persona_addon_states: genOpts.persona_addon_states,
             preset_id: genOpts.preset_id,
+            force_preset_id: genOpts.force_preset_id,
           },
         })
       } else {
@@ -1303,12 +1307,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
     // 4. Fire generation
     try {
+      const presetId = getActivePresetForGeneration() || undefined
       const genOpts: import('@/api/generate').GenerateRequest = {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId),
         generation_type: 'normal',
         retain_council: retainCouncilForRegens || undefined,
       }
@@ -1355,12 +1361,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
       const targetCharacterId = isGroupChat && typeof lastAssistant?.extra?.character_id === 'string'
         ? lastAssistant.extra.character_id
         : undefined
+      const presetId = getActivePresetForGeneration() || undefined
       const res = await generateApi.continueGeneration({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId),
         target_character_id: targetCharacterId,
         retain_council: retainCouncilForRegens || undefined,
       })
@@ -1390,13 +1398,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     try {
       const forcedPresetId = mode === 'oneliner' ? impersonationPresetId : null
+      const presetId = forcedPresetId || getActivePresetForGeneration() || undefined
       const res = await generateApi.start({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
-        preset_id: forcedPresetId || getActivePresetForGeneration() || undefined,
-        force_preset_id: !!forcedPresetId,
+        preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId),
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
@@ -1525,6 +1534,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
         persona_id: activePersonaId || undefined,
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId),
       })
       openModal('dryRun', result)
     } catch (err: any) {

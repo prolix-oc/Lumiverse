@@ -2477,6 +2477,7 @@ export async function dryRunGeneration(
     chatId: input.chat_id,
     connectionId: input.connection_id,
     presetId: input.preset_id,
+    forcePresetId: input.force_preset_id,
     personaId: input.persona_id,
     personaAddonStates: input.persona_addon_states,
     generationType: genType,
