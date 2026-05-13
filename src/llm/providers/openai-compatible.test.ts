@@ -189,3 +189,127 @@ describe("OpenAICompatibleProvider tool calling wire shape", () => {
     ]);
   });
 });
+
+// DeepSeek thinking-mode (deepseek-reasoner, deepseek-chat with thinking
+// enabled) requires the previous turn's reasoning_content to be echoed back
+// on the assistant message when continuing a conversation that involved a
+// tool call. Without this, the API rejects the request with:
+//   "The `reasoning_content` in the thinking mode must be passed back to
+//   the API." (deepseek 400 invalid_request_error)
+// Per DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode), the
+// requirement applies ONLY to tool-call continuations — plain-text
+// continuations don't need the field. Tests pin that scope deliberately.
+describe("OpenAICompatibleProvider reasoning_content roundtrip", () => {
+  const provider = new TestOpenAICompatibleProvider();
+
+  test("assistant + tool_use parts + reasoning_content → field on assistant body", () => {
+    const body = (provider as any).buildBody(
+      {
+        model: "deepseek-reasoner",
+        messages: [
+          { role: "user", content: "weather?" },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "call_x", name: "lookup", input: { q: "SF" } },
+            ],
+            reasoning_content: "I should look up SF weather.",
+          },
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "call_x", content: "72F" },
+            ],
+          },
+        ],
+        parameters: {},
+      },
+      false,
+    );
+
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { id: "call_x", type: "function", function: { name: "lookup", arguments: '{"q":"SF"}' } },
+      ],
+      reasoning_content: "I should look up SF weather.",
+    });
+  });
+
+  test("assistant + tool_use without reasoning_content → field absent (no undefined / null pollution)", () => {
+    const body = (provider as any).buildBody(
+      {
+        model: "gpt-4o",
+        messages: [
+          { role: "user", content: "x" },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "call_1", name: "ping", input: {} },
+            ],
+          },
+        ],
+        parameters: {},
+      },
+      false,
+    );
+
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { id: "call_1", type: "function", function: { name: "ping", arguments: "{}" } },
+      ],
+    });
+    expect("reasoning_content" in body.messages[1]).toBe(false);
+  });
+
+  test("assistant + text-only parts (no tool_use) + reasoning_content → field NOT propagated", () => {
+    // DeepSeek's docs are explicit: reasoning_content is required only on
+    // tool-call continuations, NOT on plain-text continuations. We honour
+    // that scope and deliberately do not propagate the field for non-tool
+    // assistant turns, even when the script supplies it. If a future
+    // provider requires broader propagation, expand this then — but pinning
+    // the current narrow scope prevents accidental over-propagation.
+    const body = (provider as any).buildBody(
+      {
+        model: "deepseek-reasoner",
+        messages: [
+          { role: "user", content: "what's 2+2?" },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "The answer is 4." },
+            ],
+            reasoning_content: "2+2 is basic arithmetic; the answer is 4.",
+          },
+          { role: "user", content: "thanks" },
+        ],
+        parameters: {},
+      },
+      false,
+    );
+
+    expect("reasoning_content" in body.messages[1]).toBe(false);
+  });
+
+  test("user-role message with reasoning_content → field ignored (only assistant tool-call turns carry reasoning)", () => {
+    // Defensive: reasoning_content on a non-assistant message is meaningless
+    // and shouldn't leak into the request body — DeepSeek's API doesn't
+    // accept reasoning_content on user/system messages.
+    const body = (provider as any).buildBody(
+      {
+        model: "deepseek-reasoner",
+        messages: [
+          { role: "user", content: "hello", reasoning_content: "WRONG SHOULD NOT APPEAR" },
+        ],
+        parameters: {},
+      },
+      false,
+    );
+
+    expect(body.messages[0]).toEqual({ role: "user", content: "hello" });
+    expect("reasoning_content" in body.messages[0]).toBe(false);
+  });
+});

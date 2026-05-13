@@ -309,6 +309,18 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
         .filter((p): p is Extract<LlmMessagePart, { type: "text" }> => p.type === "text")
         .map((p) => p.text)
         .join("");
+      // DeepSeek thinking-mode (`deepseek-reasoner`, `deepseek-chat` with
+      // thinking enabled) requires the previous turn's `reasoning_content` to
+      // be echoed back on the assistant message **when the turn invoked a
+      // tool call** and the conversation continues. Without it, the API
+      // rejects the continuation request with:
+      //   "The `reasoning_content` in the thinking mode must be passed back
+      //   to the API." (deepseek 400 invalid_request_error)
+      // Per DeepSeek's docs, this is required ONLY on tool-call turns —
+      // plain-text continuations do not need the field. We scope propagation
+      // accordingly. Other openai-compatible providers that route DeepSeek
+      // (NanoGPT, OpenRouter, etc.) inherit this behaviour; providers
+      // without thinking mode never receive the field anyway.
       out.push({
         role: "assistant",
         content: text.length > 0 ? text : null,
@@ -317,6 +329,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
           type: "function",
           function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
         })),
+        ...(m.reasoning_content ? { reasoning_content: m.reasoning_content } : {}),
       });
     } else if (nonTool.length > 0) {
       out.push({ role: m.role, content: this.formatContent({ ...m, content: nonTool }) });
