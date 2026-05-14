@@ -1,5 +1,6 @@
 import { Check, Crosshair, Maximize2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   ComfyUIFieldMapping,
   ComfyUIMappedFieldSemantic,
@@ -176,7 +177,7 @@ export function WorkflowEditorModal({
     setMode('map')
   }
 
-  return (
+  return createPortal(
     <div className={styles.overlay} onClick={onClose}>
       <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
         <header className={styles.header}>
@@ -371,6 +372,7 @@ export function WorkflowEditorModal({
 
         {(error || localError) && <div className={styles.error}>{error || localError}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
