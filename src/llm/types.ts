@@ -51,6 +51,8 @@ export interface LlmMessage {
   content: string | LlmMessagePart[];
   name?: string;
   cache_control?: Record<string, unknown>;
+  /** Provider-returned reasoning payload required by some OpenAI-compatible tool-call continuations. */
+  reasoning_content?: string;
 }
 
 /** Helper: extract the text content from an LlmMessage regardless of format. */
