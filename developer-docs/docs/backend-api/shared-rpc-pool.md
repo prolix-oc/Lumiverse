@@ -83,19 +83,41 @@ spindle.rpcPool.handle('tokens.estimate', async ({ requesterExtensionId }) => {
     requesterExtensionId,
     total: estimate.total_tokens,
   }
-})
+}, { requires: [] })
 ```
 
 Registering a handler replaces any previously synced value for the same endpoint. Calling `sync()` later replaces the handler again.
 
 ## Methods
 
-### `spindle.rpcPool.sync(endpoint, value)`
+## Permission Delegation
+
+By default, shared RPC keeps the legacy safe behavior: a reader must have every gated permission currently granted to the endpoint owner. This prevents an extension from using another extension as a confused deputy.
+
+For endpoints that intentionally expose a narrower surface, pass an explicit policy:
+
+```ts
+spindle.rpcPool.sync('presence.state', status, { requires: [] })
+
+spindle.rpcPool.handle('images.caption', async () => {
+  // Gated API calls inside this handler are limited to the declared permissions.
+  return await buildCaption()
+}, { requires: ['images'] })
+```
+
+Policy rules:
+
+- omit the policy to require full owner-permission inheritance
+- `requires: []` makes the endpoint readable without delegating gated permissions
+- `requires: ['images']` requires both owner and requester to have `images`
+- on-demand handlers run with only the declared permissions, so unrelated owner permissions do not bleed into the request
+
+### `spindle.rpcPool.sync(endpoint, value, policy?)`
 
 Publish the latest value for an endpoint.
 
 ```ts
-const endpoint = spindle.rpcPool.sync('status.current', { ok: true })
+const endpoint = spindle.rpcPool.sync('status.current', { ok: true }, { requires: [] })
 // endpoint === 'my_extension.status.current'
 ```
 
@@ -103,17 +125,18 @@ const endpoint = spindle.rpcPool.sync('status.current', { ok: true })
 |---|---|---|
 | `endpoint` | `string` | Bare channel suffix or fully-qualified owned endpoint |
 | `value` | `unknown` | Structured-cloneable value to expose to readers |
+| `policy` | `{ requires?: string[] }` | Optional read policy. Omit for legacy owner-permission inheritance. |
 
 Returns the fully-qualified endpoint string.
 
-### `spindle.rpcPool.handle(endpoint, handler)`
+### `spindle.rpcPool.handle(endpoint, handler, policy?)`
 
 Register an on-demand endpoint handler.
 
 ```ts
-spindle.rpcPool.handle('status.live', async ({ requesterExtensionId }) => {
+spindle.rpcPool.handle('status.live', async ({ requesterExtensionId, effectivePermissions }) => {
   return { requesterExtensionId, now: Date.now() }
-})
+}, { requires: [] })
 ```
 
 The handler receives:
@@ -122,6 +145,7 @@ The handler receives:
 |---|---|---|
 | `endpoint` | `string` | Fully-qualified endpoint being read |
 | `requesterExtensionId` | `string` | Identifier of the extension performing the read |
+| `effectivePermissions` | `readonly string[]` | Gated permissions available to this delegated handler call |
 
 Returns the fully-qualified endpoint string.
 

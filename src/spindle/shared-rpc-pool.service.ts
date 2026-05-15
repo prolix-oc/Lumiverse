@@ -3,8 +3,19 @@ import {
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
 
-type SharedRpcRequestHandler = (requesterExtensionId: string) => Promise<unknown>;
+type SharedRpcRequestHandler = (
+  requesterExtensionId: string,
+  effectivePermissions: readonly string[]
+) => Promise<unknown>;
 type SharedRpcPermissionResolver = (extensionIdentifier: string) => readonly string[];
+
+export type SharedRpcEndpointPolicy = {
+  requires?: readonly string[];
+};
+
+type NormalizedSharedRpcEndpointPolicy = {
+  requiredPermissions: readonly string[];
+};
 
 type SharedRpcEndpointRecord =
   | {
@@ -12,12 +23,14 @@ type SharedRpcEndpointRecord =
       ownerExtensionId: string;
       endpoint: string;
       value: unknown;
+      policy: NormalizedSharedRpcEndpointPolicy | null;
     }
   | {
       mode: "request";
       ownerExtensionId: string;
       endpoint: string;
       handler: SharedRpcRequestHandler;
+      policy: NormalizedSharedRpcEndpointPolicy | null;
     };
 
 const sharedRpcEndpoints = new Map<string, SharedRpcEndpointRecord>();
@@ -36,10 +49,19 @@ function normalizeOwnedEndpoint(ownerExtensionId: string, endpoint: string): str
   return normalizeOwnedSharedRpcEndpoint(ownerExtensionId, endpoint);
 }
 
+function normalizePolicy(policy?: SharedRpcEndpointPolicy): NormalizedSharedRpcEndpointPolicy | null {
+  if (!policy || !Array.isArray(policy.requires)) return null;
+
+  return {
+    requiredPermissions: [...new Set(policy.requires.map((permission) => String(permission).trim()).filter(Boolean))].sort(),
+  };
+}
+
 export function syncSharedRpcEndpoint(
   ownerExtensionId: string,
   endpoint: string,
-  value: unknown
+  value: unknown,
+  policy?: SharedRpcEndpointPolicy
 ): string {
   const normalized = normalizeOwnedEndpoint(ownerExtensionId, endpoint);
   sharedRpcEndpoints.set(normalized, {
@@ -47,6 +69,7 @@ export function syncSharedRpcEndpoint(
     ownerExtensionId,
     endpoint: normalized,
     value,
+    policy: normalizePolicy(policy),
   });
   trackOwnerEndpoint(ownerExtensionId, normalized);
   return normalized;
@@ -55,7 +78,8 @@ export function syncSharedRpcEndpoint(
 export function registerSharedRpcRequestEndpoint(
   ownerExtensionId: string,
   endpoint: string,
-  handler: SharedRpcRequestHandler
+  handler: SharedRpcRequestHandler,
+  policy?: SharedRpcEndpointPolicy
 ): string {
   const normalized = normalizeOwnedEndpoint(ownerExtensionId, endpoint);
   sharedRpcEndpoints.set(normalized, {
@@ -63,6 +87,7 @@ export function registerSharedRpcRequestEndpoint(
     ownerExtensionId,
     endpoint: normalized,
     handler,
+    policy: normalizePolicy(policy),
   });
   trackOwnerEndpoint(ownerExtensionId, normalized);
   return normalized;
@@ -107,10 +132,11 @@ export async function readSharedRpcEndpoint(
   }
 
   if (getGrantedPermissions) {
-    assertRequesterInheritsOwnerPermissions(
+    assertRequesterCanReadEndpoint(
       normalized,
       requesterExtensionId,
       record.ownerExtensionId,
+      record.policy,
       getGrantedPermissions,
     );
   }
@@ -119,25 +145,59 @@ export async function readSharedRpcEndpoint(
     return record.value;
   }
 
-  return await record.handler(requesterExtensionId);
+  const effectivePermissions = getGrantedPermissions
+    ? resolveEffectiveHandlerPermissions(
+        requesterExtensionId,
+        record.ownerExtensionId,
+        record.policy,
+        getGrantedPermissions,
+      )
+    : [];
+
+  return await record.handler(requesterExtensionId, effectivePermissions);
 }
 
-function assertRequesterInheritsOwnerPermissions(
+function assertRequesterCanReadEndpoint(
   endpoint: string,
   requesterExtensionId: string,
   ownerExtensionId: string,
+  policy: NormalizedSharedRpcEndpointPolicy | null,
   getGrantedPermissions: SharedRpcPermissionResolver
 ): void {
   const ownerPermissions = new Set(getGrantedPermissions(ownerExtensionId));
-  if (ownerPermissions.size === 0) return;
+  const requiredPermissions = policy?.requiredPermissions ?? [...ownerPermissions].sort();
+  if (requiredPermissions.length === 0) return;
 
   const requesterPermissions = new Set(getGrantedPermissions(requesterExtensionId));
-  const missing = [...ownerPermissions].filter((permission) => !requesterPermissions.has(permission)).sort();
-  if (missing.length === 0) return;
+  const missingFromRequester = requiredPermissions.filter((permission) => !requesterPermissions.has(permission));
+  const missingFromOwner = policy
+    ? requiredPermissions.filter((permission) => !ownerPermissions.has(permission))
+    : [];
+  if (missingFromRequester.length === 0 && missingFromOwner.length === 0) return;
+
+  if (missingFromOwner.length > 0) {
+    throw new Error(
+      `Shared RPC endpoint "${endpoint}" requires owner "${ownerExtensionId}" permissions: ${missingFromOwner.join(", ")}`
+    );
+  }
 
   throw new Error(
-    `Shared RPC endpoint "${endpoint}" requires requester "${requesterExtensionId}" to inherit owner "${ownerExtensionId}" permissions: ${missing.join(", ")}`
+    policy
+      ? `Shared RPC endpoint "${endpoint}" requires requester "${requesterExtensionId}" permissions: ${missingFromRequester.join(", ")}`
+      : `Shared RPC endpoint "${endpoint}" requires requester "${requesterExtensionId}" to inherit owner "${ownerExtensionId}" permissions: ${missingFromRequester.join(", ")}`
   );
+}
+
+function resolveEffectiveHandlerPermissions(
+  requesterExtensionId: string,
+  ownerExtensionId: string,
+  policy: NormalizedSharedRpcEndpointPolicy | null,
+  getGrantedPermissions: SharedRpcPermissionResolver
+): readonly string[] {
+  if (policy) return policy.requiredPermissions;
+
+  const requesterPermissions = new Set(getGrantedPermissions(requesterExtensionId));
+  return getGrantedPermissions(ownerExtensionId).filter((permission) => requesterPermissions.has(permission)).sort();
 }
 
 export function resetSharedRpcPoolForTests(): void {

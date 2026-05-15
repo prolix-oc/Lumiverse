@@ -91,6 +91,7 @@ import {
   syncSharedRpcEndpoint,
   unregisterSharedRpcEndpoint,
   unregisterSharedRpcEndpointsByOwner,
+  type SharedRpcEndpointPolicy,
 } from "./shared-rpc-pool.service";
 import { getTextContent, type LlmMessage } from "../llm/types";
 import { getDb } from "../db/connection";
@@ -122,11 +123,14 @@ import {
 } from "fs";
 import http from "node:http";
 import https from "node:https";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "crypto";
 import { join, resolve, relative, sep } from "path";
 
 const EPHEMERAL_MAX_FILES = 250;
+const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
 
+type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
 type ChatAppendGenerationOptions = {
@@ -297,8 +301,8 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | WorkerToHost
-  | { type: "rpc_pool_sync"; endpoint: string; value: unknown }
-  | { type: "rpc_pool_register_handler"; endpoint: string }
+  | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy }
+  | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_unregister"; endpoint: string }
   | { type: "rpc_pool_read"; requestId: string; endpoint: string }
   | {
@@ -306,6 +310,7 @@ type RuntimeWorkerToHost =
       requestId: string;
       result?: unknown;
       error?: string;
+      rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
@@ -512,6 +517,8 @@ type RuntimeHostToWorker =
       requestId: string;
       endpoint: string;
       requesterExtensionId: string;
+      rpcPermissionScopeId: string;
+      effectivePermissions: string[];
     }
   | {
       type: "message_content_processor_request";
@@ -878,6 +885,7 @@ export class WorkerHost {
   private frontendProcessKeyIndex = new Map<string, string>();
   private backendProcesses = new Map<string, BackendProcessRecord>();
   private backendProcessKeyIndex = new Map<string, string>();
+  private sharedRpcPermissionScopes = new Map<string, Set<string>>();
 
   constructor(
     public readonly extensionId: string,
@@ -905,6 +913,24 @@ export class WorkerHost {
     if (!userId || userId !== this.installedByUserId) {
       throw new Error("Extension is user-scoped and cannot access this user context");
     }
+  }
+
+  private getGrantedPermissions(): ManagedSpindlePermission[] {
+    const granted = managerSvc.getGrantedPermissions(this.manifest.identifier);
+    const scopeId = sharedRpcPermissionScope.getStore();
+    if (!scopeId) return granted;
+
+    const scoped = this.sharedRpcPermissionScopes.get(scopeId);
+    if (!scoped) return [];
+    return granted.filter((permission) => scoped.has(permission));
+  }
+
+  private hasPermission(permission: ManagedSpindlePermission): boolean {
+    const scopeId = sharedRpcPermissionScope.getStore();
+    if (!scopeId) return managerSvc.hasPermission(this.manifest.identifier, permission);
+
+    const scoped = this.sharedRpcPermissionScopes.get(scopeId);
+    return Boolean(scoped?.has(permission)) && managerSvc.hasPermission(this.manifest.identifier, permission);
   }
 
   private resolveFrontendProcessUserId(userId?: string): string {
@@ -1912,44 +1938,57 @@ export class WorkerHost {
   private requestSharedRpcValue(
     endpoint: string,
     requesterExtensionId: string,
+    effectivePermissions: readonly string[],
   ): Promise<unknown> {
     const requestId = crypto.randomUUID();
+    const rpcPermissionScopeId = crypto.randomUUID();
+    this.sharedRpcPermissionScopes.set(rpcPermissionScopeId, new Set(effectivePermissions));
 
     this.postToWorker({
       type: "rpc_pool_request",
       requestId,
       endpoint,
       requesterExtensionId,
+      rpcPermissionScopeId,
+      effectivePermissions: [...effectivePermissions],
     });
 
     return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        this.sharedRpcPermissionScopes.delete(rpcPermissionScopeId);
+      };
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
+        cleanup();
         reject(new Error(`Shared RPC endpoint "${endpoint}" timed out`));
       }, WorkerHost.SHARED_RPC_REQUEST_TIMEOUT_MS);
 
       this.pendingRequests.set(requestId, {
         resolve: (value) => {
           clearTimeout(timeout);
+          cleanup();
           resolve(value);
         },
         reject: (reason) => {
           clearTimeout(timeout);
+          cleanup();
           reject(reason);
         },
       });
     });
   }
 
-  private handleRpcPoolSync(endpoint: string, value: unknown): void {
-    syncSharedRpcEndpoint(this.manifest.identifier, endpoint, value);
+  private handleRpcPoolSync(endpoint: string, value: unknown, policy?: SharedRpcEndpointPolicy): void {
+    syncSharedRpcEndpoint(this.manifest.identifier, endpoint, value, policy);
   }
 
-  private handleRpcPoolRegisterHandler(endpoint: string): void {
+  private handleRpcPoolRegisterHandler(endpoint: string, policy?: SharedRpcEndpointPolicy): void {
     registerSharedRpcRequestEndpoint(
       this.manifest.identifier,
       endpoint,
-      async (requesterExtensionId) => await this.requestSharedRpcValue(endpoint, requesterExtensionId),
+      async (requesterExtensionId, effectivePermissions) =>
+        await this.requestSharedRpcValue(endpoint, requesterExtensionId, effectivePermissions),
+      policy,
     );
   }
 
@@ -1971,7 +2010,7 @@ export class WorkerHost {
   }
 
   private handleCreateOAuthState(requestId: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "oauth")) {
+    if (!this.hasPermission("oauth")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -1989,6 +2028,13 @@ export class WorkerHost {
   }
 
   private handleMessage(msg: RuntimeWorkerToHost): void {
+    const scopeId = typeof (msg as any).rpcPermissionScopeId === "string"
+      ? (msg as any).rpcPermissionScopeId
+      : undefined;
+    sharedRpcPermissionScope.run(scopeId, () => this.handleMessageInScope(msg));
+  }
+
+  private handleMessageInScope(msg: RuntimeWorkerToHost): void {
     switch (msg.type) {
       case "subscribe_event":
         this.handleSubscribeEvent(msg.event);
@@ -2012,7 +2058,7 @@ export class WorkerHost {
         // Strip parameters if the extension lacks the generation_parameters permission
         let interceptParams = msg.parameters;
         if (interceptParams && Object.keys(interceptParams).length > 0) {
-          if (!managerSvc.hasPermission(this.manifest.identifier, "generation_parameters")) {
+          if (!this.hasPermission("generation_parameters")) {
             console.warn(
               `[Spindle:${this.manifest.identifier}] Stripping interceptor parameters — generation_parameters permission not granted`
             );
@@ -2134,10 +2180,10 @@ export class WorkerHost {
         this.handlePermissionsGetGranted(msg.requestId);
         break;
       case "rpc_pool_sync":
-        this.handleRpcPoolSync(msg.endpoint, msg.value);
+        this.handleRpcPoolSync(msg.endpoint, msg.value, (msg as any).policy);
         break;
       case "rpc_pool_register_handler":
-        this.handleRpcPoolRegisterHandler(msg.endpoint);
+        this.handleRpcPoolRegisterHandler(msg.endpoint, (msg as any).policy);
         break;
       case "rpc_pool_unregister":
         this.handleRpcPoolUnregister(msg.endpoint);
@@ -2775,7 +2821,7 @@ export class WorkerHost {
     // Generation lifecycle/streaming events require the generation permission
     if (
       WorkerHost.GENERATION_EVENTS.has(eventType) &&
-      !managerSvc.hasPermission(this.manifest.identifier, "generation")
+      !this.hasPermission("generation")
     ) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Generation permission required for event: ${event}`
@@ -2974,7 +3020,7 @@ export class WorkerHost {
   // ─── Interceptor registration ────────────────────────────────────────
 
   private handleRegisterInterceptor(priority?: number): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "interceptor")) {
+    if (!this.hasPermission("interceptor")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Interceptor permission not granted`
       );
@@ -3067,7 +3113,7 @@ export class WorkerHost {
   // ─── Tool registration ───────────────────────────────────────────────
 
   private handleRegisterTool(toolDTO: any): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "tools")) {
+    if (!this.hasPermission("tools")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Tools permission not granted`
       );
@@ -3092,7 +3138,7 @@ export class WorkerHost {
     requestId: string,
     input: any
   ): Promise<void> {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+    if (!this.hasPermission("generation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3186,7 +3232,7 @@ export class WorkerHost {
     requestId: string,
     input: any
   ): Promise<void> {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+    if (!this.hasPermission("generation")) {
       this.postToWorker({
         type: "generation_stream_error",
         requestId,
@@ -3310,7 +3356,7 @@ export class WorkerHost {
   // ─── Image Generation (gated by "image_gen" permission) ────────────
 
   private async handleImageGenGenerate(requestId: string, input: any): Promise<void> {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+    if (!this.hasPermission("image_gen")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3391,7 +3437,7 @@ export class WorkerHost {
   }
 
   private handleImageGenProviders(requestId: string, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+    if (!this.hasPermission("image_gen")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3413,7 +3459,7 @@ export class WorkerHost {
   }
 
   private handleImageGenConnectionsList(requestId: string, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+    if (!this.hasPermission("image_gen")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3438,7 +3484,7 @@ export class WorkerHost {
   }
 
   private handleImageGenConnectionsGet(requestId: string, connectionId: string, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+    if (!this.hasPermission("image_gen")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3463,7 +3509,7 @@ export class WorkerHost {
   }
 
   private async handleImageGenModels(requestId: string, connectionId: string, userId?: string): Promise<void> {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "image_gen")) {
+    if (!this.hasPermission("image_gen")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3506,7 +3552,7 @@ export class WorkerHost {
   }
 
   private handleConnectionsList(requestId: string, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+    if (!this.hasPermission("generation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -3552,7 +3598,7 @@ export class WorkerHost {
     connectionId: string,
     userId?: string
   ): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+    if (!this.hasPermission("generation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -4083,7 +4129,7 @@ export class WorkerHost {
   // ─── Ephemeral storage ────────────────────────────────────────────────
 
   private getEphemeralBasePath(): string {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "ephemeral_storage")) {
+    if (!this.hasPermission("ephemeral_storage")) {
       throw new Error(`${PERMISSION_DENIED_PREFIX} ephemeral_storage — Ephemeral storage permission not granted`);
     }
     const base = resolve(this.getStorageRootPath(this.manifest.identifier), ".ephemeral");
@@ -4107,7 +4153,7 @@ export class WorkerHost {
   private getEphemeralReservationsPath(identifier: string = this.manifest.identifier): string {
     if (
       identifier === this.manifest.identifier &&
-      !managerSvc.hasPermission(this.manifest.identifier, "ephemeral_storage")
+      !this.hasPermission("ephemeral_storage")
     ) {
       throw new Error(`${PERMISSION_DENIED_PREFIX} ephemeral_storage — Ephemeral storage permission not granted`);
     }
@@ -4717,7 +4763,7 @@ export class WorkerHost {
 
   private handlePermissionsGetGranted(requestId: string): void {
     try {
-      const granted = managerSvc.getGrantedPermissions(this.manifest.identifier);
+      const granted = this.getGrantedPermissions();
       this.postToWorker({ type: "response", requestId, result: granted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -4742,7 +4788,7 @@ export class WorkerHost {
 
   private handleChatGetMessages(requestId: string, chatId: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
@@ -4804,14 +4850,14 @@ export class WorkerHost {
     options?: ChatAppendMessageOptions,
   ): Promise<void> {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
       const triggerGeneration =
         options === true ||
         (typeof options === "object" && options !== null && options.triggerGeneration === true);
-      if (triggerGeneration && !managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+      if (triggerGeneration && !this.hasPermission("generation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
       }
 
@@ -4890,7 +4936,7 @@ export class WorkerHost {
     }
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
@@ -4946,7 +4992,7 @@ export class WorkerHost {
     messageId: string
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
@@ -4973,7 +5019,7 @@ export class WorkerHost {
     hidden: boolean,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
@@ -5000,7 +5046,7 @@ export class WorkerHost {
     hidden: boolean,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
@@ -5028,7 +5074,7 @@ export class WorkerHost {
     messageId: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+      if (!this.hasPermission("chat_mutation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
       }
 
@@ -5107,7 +5153,7 @@ export class WorkerHost {
   }
 
   private enforceTrackedEventPermission(): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "event_tracking")) {
+    if (!this.hasPermission("event_tracking")) {
       throw new Error(`${PERMISSION_DENIED_PREFIX} event_tracking — Event tracking permission not granted`);
     }
   }
@@ -5249,7 +5295,7 @@ export class WorkerHost {
     options: any
   ): Promise<void> {
     options = options || {};
-    if (!managerSvc.hasPermission(this.manifest.identifier, "cors_proxy")) {
+    if (!this.hasPermission("cors_proxy")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -5378,7 +5424,7 @@ export class WorkerHost {
 
   private handleRegisterContextHandler(priority?: number): void {
     if (
-      !managerSvc.hasPermission(this.manifest.identifier, "context_handler")
+      !this.hasPermission("context_handler")
     ) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Context handler permission not granted`
@@ -5434,7 +5480,7 @@ export class WorkerHost {
   // ─── Message content processor ───────────────────────────────────────
 
   private handleRegisterMessageContentProcessor(priority?: number): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "chat_mutation")) {
+    if (!this.hasPermission("chat_mutation")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] chat_mutation permission not granted for registerMessageContentProcessor`
       );
@@ -5487,7 +5533,7 @@ export class WorkerHost {
   }
 
   private handleRegisterMacroInterceptor(priority?: number): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "macro_interceptor")) {
+    if (!this.hasPermission("macro_interceptor")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] macro_interceptor permission not granted for registerMacroInterceptor`
       );
@@ -5539,7 +5585,7 @@ export class WorkerHost {
   }
 
   private handleRegisterWorldInfoInterceptor(priority?: number): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+    if (!this.hasPermission("generation")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] generation permission not granted for registerWorldInfoInterceptor`
       );
@@ -5858,7 +5904,7 @@ export class WorkerHost {
 
   private handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+      if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -5884,7 +5930,7 @@ export class WorkerHost {
 
   private handleCharactersGet(requestId: string, characterId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+      if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -5904,7 +5950,7 @@ export class WorkerHost {
 
   private handleCharactersCreate(requestId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+      if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -5953,7 +5999,7 @@ export class WorkerHost {
   ): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+        if (!this.hasPermission("characters")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -5985,7 +6031,7 @@ export class WorkerHost {
 
   private handleCharactersUpdate(requestId: string, characterId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+      if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6030,7 +6076,7 @@ export class WorkerHost {
 
   private handleCharactersDelete(requestId: string, characterId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "characters")) {
+      if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6074,7 +6120,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
+      if (!this.hasPermission("images")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6112,7 +6158,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
+      if (!this.hasPermission("images")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6138,7 +6184,7 @@ export class WorkerHost {
   private handleImagesUpload(requestId: string, input: any, userId?: string): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
+        if (!this.hasPermission("images")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6183,7 +6229,7 @@ export class WorkerHost {
   ): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
+        if (!this.hasPermission("images")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6263,7 +6309,7 @@ export class WorkerHost {
   ): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
+        if (!this.hasPermission("images")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6292,7 +6338,7 @@ export class WorkerHost {
 
   private handleImagesDelete(requestId: string, imageId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "images")) {
+      if (!this.hasPermission("images")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6327,7 +6373,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+      if (!this.hasPermission("chats")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6354,7 +6400,7 @@ export class WorkerHost {
 
   private handleChatsGet(requestId: string, chatId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+      if (!this.hasPermission("chats")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6370,7 +6416,7 @@ export class WorkerHost {
 
   private handleChatsGetActive(requestId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+      if (!this.hasPermission("chats")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6392,7 +6438,7 @@ export class WorkerHost {
 
   private handleChatsUpdate(requestId: string, chatId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+      if (!this.hasPermission("chats")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6409,7 +6455,7 @@ export class WorkerHost {
 
   private handleChatsDelete(requestId: string, chatId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+      if (!this.hasPermission("chats")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6479,7 +6525,7 @@ export class WorkerHost {
 
   private handleWorldBooksList(requestId: string, limit?: number, offset?: number, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6505,7 +6551,7 @@ export class WorkerHost {
 
   private handleWorldBooksGet(requestId: string, worldBookId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6521,7 +6567,7 @@ export class WorkerHost {
 
   private handleWorldBooksCreate(requestId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6545,7 +6591,7 @@ export class WorkerHost {
 
   private handleWorldBooksUpdate(requestId: string, worldBookId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6562,7 +6608,7 @@ export class WorkerHost {
 
   private handleWorldBooksDelete(requestId: string, worldBookId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6586,7 +6632,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6612,7 +6658,7 @@ export class WorkerHost {
 
   private handleWorldBookEntriesGet(requestId: string, entryId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6628,7 +6674,7 @@ export class WorkerHost {
 
   private handleWorldBookEntriesCreate(requestId: string, worldBookId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6645,7 +6691,7 @@ export class WorkerHost {
 
   private handleWorldBookEntriesUpdate(requestId: string, entryId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6662,7 +6708,7 @@ export class WorkerHost {
 
   private handleWorldBookEntriesDelete(requestId: string, entryId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6720,7 +6766,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6761,7 +6807,7 @@ export class WorkerHost {
 
   private handleDatabanksGet(requestId: string, databankId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6777,7 +6823,7 @@ export class WorkerHost {
 
   private handleDatabanksCreate(requestId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6808,7 +6854,7 @@ export class WorkerHost {
 
   private handleDatabanksUpdate(requestId: string, databankId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6831,7 +6877,7 @@ export class WorkerHost {
   private handleDatabanksDelete(requestId: string, databankId: string, userId?: string): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        if (!this.hasPermission("databanks")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6858,7 +6904,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6884,7 +6930,7 @@ export class WorkerHost {
 
   private handleDatabankDocumentsGet(requestId: string, documentId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6906,7 +6952,7 @@ export class WorkerHost {
   ): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        if (!this.hasPermission("databanks")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6961,7 +7007,7 @@ export class WorkerHost {
 
   private handleDatabankDocumentsUpdate(requestId: string, documentId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -6984,7 +7030,7 @@ export class WorkerHost {
   private handleDatabankDocumentsDelete(requestId: string, documentId: string, userId?: string): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        if (!this.hasPermission("databanks")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7003,7 +7049,7 @@ export class WorkerHost {
 
   private handleDatabankDocumentsGetContent(requestId: string, documentId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+      if (!this.hasPermission("databanks")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7024,7 +7070,7 @@ export class WorkerHost {
   private handleDatabankDocumentsReprocess(requestId: string, documentId: string, userId?: string): void {
     (async () => {
       try {
-        if (!managerSvc.hasPermission(this.manifest.identifier, "databanks")) {
+        if (!this.hasPermission("databanks")) {
           throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
         }
         const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7067,7 +7113,7 @@ export class WorkerHost {
 
   private handlePersonasList(requestId: string, limit?: number, offset?: number, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7093,7 +7139,7 @@ export class WorkerHost {
 
   private handlePersonasGet(requestId: string, personaId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7109,7 +7155,7 @@ export class WorkerHost {
 
   private handlePersonasGetDefault(requestId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7125,7 +7171,7 @@ export class WorkerHost {
 
   private handlePersonasGetActive(requestId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7147,7 +7193,7 @@ export class WorkerHost {
 
   private handlePersonasCreate(requestId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7175,7 +7221,7 @@ export class WorkerHost {
 
   private handlePersonasUpdate(requestId: string, personaId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7192,7 +7238,7 @@ export class WorkerHost {
 
   private handlePersonasDelete(requestId: string, personaId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7208,7 +7254,7 @@ export class WorkerHost {
 
   private handlePersonasSwitch(requestId: string, personaId: string | null, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7231,7 +7277,7 @@ export class WorkerHost {
 
   private handlePersonasGetWorldBook(requestId: string, personaId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "personas")) {
+      if (!this.hasPermission("personas")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7261,7 +7307,7 @@ export class WorkerHost {
     userId?: string,
   ): Promise<void> {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "world_books")) {
+      if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7323,7 +7369,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+      if (!this.hasPermission("regex_scripts")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7362,7 +7408,7 @@ export class WorkerHost {
 
   private handleRegexScriptsGet(requestId: string, scriptId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+      if (!this.hasPermission("regex_scripts")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7384,7 +7430,7 @@ export class WorkerHost {
     userId?: string,
   ): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+      if (!this.hasPermission("regex_scripts")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7408,7 +7454,7 @@ export class WorkerHost {
 
   private handleRegexScriptsCreate(requestId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+      if (!this.hasPermission("regex_scripts")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7432,7 +7478,7 @@ export class WorkerHost {
 
   private handleRegexScriptsUpdate(requestId: string, scriptId: string, input: any, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+      if (!this.hasPermission("regex_scripts")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7450,7 +7496,7 @@ export class WorkerHost {
 
   private handleRegexScriptsDelete(requestId: string, scriptId: string, userId?: string): void {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "regex_scripts")) {
+      if (!this.hasPermission("regex_scripts")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7472,7 +7518,7 @@ export class WorkerHost {
     userId?: string,
   ): Promise<void> {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "generation")) {
+      if (!this.hasPermission("generation")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7539,7 +7585,7 @@ export class WorkerHost {
     userId?: string,
   ): Promise<void> {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "chats")) {
+      if (!this.hasPermission("chats")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7789,7 +7835,7 @@ export class WorkerHost {
     image?: string,
   ): Promise<void> {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "push_notification")) {
+      if (!this.hasPermission("push_notification")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} push_notification — Push notification permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -7874,7 +7920,7 @@ export class WorkerHost {
 
   private async handlePushGetStatus(requestId: string, userId?: string): Promise<void> {
     try {
-      if (!managerSvc.hasPermission(this.manifest.identifier, "push_notification")) {
+      if (!this.hasPermission("push_notification")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} push_notification — Push notification permission not granted`);
       }
       const resolvedUserId = this.resolveEffectiveUserId(userId);
@@ -8828,7 +8874,7 @@ export class WorkerHost {
   private themeOverrides = new Map<string, ThemeOverrideDTO>();
 
   private handleThemeApply(requestId: string, overrides: ThemeOverrideDTO, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+    if (!this.hasPermission("app_manipulation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -8961,7 +9007,7 @@ export class WorkerHost {
     palette: { accent?: { h?: number; s?: number; l?: number } } | null | undefined,
     userId?: string,
   ): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+    if (!this.hasPermission("app_manipulation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -9002,7 +9048,7 @@ export class WorkerHost {
   }
 
   private handleThemeClear(requestId: string, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+    if (!this.hasPermission("app_manipulation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -9082,7 +9128,7 @@ export class WorkerHost {
   }
 
   private handleThemeGetCurrent(requestId: string, userId?: string): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+    if (!this.hasPermission("app_manipulation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -9125,7 +9171,7 @@ export class WorkerHost {
   }
 
   private async handleColorExtract(requestId: string, imageId: string, userId?: string): Promise<void> {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+    if (!this.hasPermission("app_manipulation")) {
       this.postToWorker({
         type: "response",
         requestId,
@@ -9143,7 +9189,7 @@ export class WorkerHost {
   }
 
   private handleThemeGenerateVariables(requestId: string, config: any): void {
-    if (!managerSvc.hasPermission(this.manifest.identifier, "app_manipulation")) {
+    if (!this.hasPermission("app_manipulation")) {
       this.postToWorker({
         type: "response",
         requestId,

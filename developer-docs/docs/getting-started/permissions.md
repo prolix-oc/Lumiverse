@@ -53,6 +53,7 @@ Permission changes take effect **immediately** — the extension does not restar
 - The host enforces permissions on every API call in real time. A revoked permission blocks the very next request.
 - Your extension receives a `permission_changed` notification so it can react instantly (enable/disable features, update UI, re-register tools, etc.).
 - The local permission cache (`spindle.permissions.has()`) is kept in sync automatically.
+- Shared RPC on-demand handlers run under the endpoint's delegated permission policy during cross-extension calls, so they do not inherit unrelated owner permissions.
 
 This makes permission management fast and seamless for users. Your extension should be designed to activate and deactivate features on the fly.
 

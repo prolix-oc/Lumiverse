@@ -56,6 +56,7 @@ import {
   assertValidSharedRpcEndpoint,
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const nativeProcessExit = process.exit.bind(process);
 
@@ -163,6 +164,15 @@ type BackendProcessLifecycleEvent = {
   metadata?: Record<string, unknown>;
 };
 
+type SharedRpcEndpointPolicy = {
+  requires?: readonly string[];
+};
+
+type SharedRpcPermissionScope = {
+  id: string;
+  effectivePermissions: readonly string[];
+};
+
 type MacroInvocationState = {
   commit: boolean;
 };
@@ -200,15 +210,16 @@ type RuntimeWorkerToHost =
       };
       options?: ChatAppendMessageOptions;
     }
-  | { type: "rpc_pool_sync"; endpoint: string; value: unknown }
-  | { type: "rpc_pool_register_handler"; endpoint: string }
+  | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy; rpcPermissionScopeId?: string }
+  | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy; rpcPermissionScopeId?: string }
   | { type: "rpc_pool_unregister"; endpoint: string }
-  | { type: "rpc_pool_read"; requestId: string; endpoint: string }
+  | { type: "rpc_pool_read"; requestId: string; endpoint: string; rpcPermissionScopeId?: string }
   | {
       type: "rpc_pool_handler_result";
       requestId: string;
       result?: unknown;
       error?: string;
+      rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
@@ -381,6 +392,8 @@ type RuntimeHostToWorker =
       requestId: string;
       endpoint: string;
       requesterExtensionId: string;
+      rpcPermissionScopeId: string;
+      effectivePermissions: string[];
     }
   | {
       type: "message_content_processor_request";
@@ -564,10 +577,11 @@ type RuntimeSpindleAPI = SpindleAPI & {
     onMessage(handler: (event: { processId: string; payload: unknown; userId: string }) => void): () => void;
   };
   rpcPool: {
-    sync(endpoint: string, value: unknown): string;
+    sync(endpoint: string, value: unknown, policy?: SharedRpcEndpointPolicy): string;
     handle(
       endpoint: string,
-      handler: (ctx: { endpoint: string; requesterExtensionId: string }) => unknown | Promise<unknown>
+      handler: (ctx: { endpoint: string; requesterExtensionId: string; effectivePermissions: readonly string[] }) => unknown | Promise<unknown>,
+      policy?: SharedRpcEndpointPolicy,
     ): string;
     read<T = unknown>(endpoint: string): Promise<T>;
     unregister(endpoint: string): void;
@@ -620,15 +634,20 @@ const backendProcessLifecycleHandlers = new Set<(event: BackendProcessLifecycleE
 const backendProcessMessageHandlers = new Set<(event: { processId: string; payload: unknown; userId: string }) => void>();
 const sharedRpcHandlers = new Map<
   string,
-  (ctx: { endpoint: string; requesterExtensionId: string }) => unknown | Promise<unknown>
+  (ctx: { endpoint: string; requesterExtensionId: string; effectivePermissions: readonly string[] }) => unknown | Promise<unknown>
 >();
 const grantedPermissions = new Set<string>();
 const extensionMacroHandlers = new Map<string, (ctx: unknown) => unknown | Promise<unknown>>();
 const macroInvocationStack: MacroInvocationState[] = [];
+const sharedRpcPermissionScope = new AsyncLocalStorage<SharedRpcPermissionScope | undefined>();
 
 // ─── Messaging ───────────────────────────────────────────────────────────
 
 function post(msg: RuntimeWorkerToHost): void {
+  const scope = sharedRpcPermissionScope.getStore();
+  if (scope) {
+    (msg as any).rpcPermissionScopeId = scope.id;
+  }
   if (typeof process.send === "function") {
     process.send(msg);
     return;
@@ -2260,6 +2279,9 @@ const spindleApi: RuntimeSpindleAPI = {
 
   permissions: {
     async getGranted(): Promise<string[]> {
+      const scope = sharedRpcPermissionScope.getStore();
+      if (scope) return [...scope.effectivePermissions];
+
       const requestId = crypto.randomUUID();
       const result = await request({ type: "permissions_get_granted", requestId });
       // Sync local cache with authoritative host response
@@ -2269,6 +2291,8 @@ const spindleApi: RuntimeSpindleAPI = {
       return perms;
     },
     has(permission: string): boolean {
+      const scope = sharedRpcPermissionScope.getStore();
+      if (scope) return scope.effectivePermissions.includes(permission);
       return grantedPermissions.has(permission);
     },
     onDenied(handler: (detail: PermissionDeniedDetail) => void): () => void {
@@ -2286,20 +2310,21 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   rpcPool: {
-    sync(endpoint: string, value: unknown): string {
+    sync(endpoint: string, value: unknown, policy?: SharedRpcEndpointPolicy): string {
       assertMutationAllowed("spindle.rpcPool.sync()");
       const normalized = normalizeOwnedRpcPoolEndpoint(endpoint);
-      post({ type: "rpc_pool_sync", endpoint: normalized, value });
+      post({ type: "rpc_pool_sync", endpoint: normalized, value, policy });
       return normalized;
     },
     handle(
       endpoint: string,
-      handler: (ctx: { endpoint: string; requesterExtensionId: string }) => unknown | Promise<unknown>
+      handler: (ctx: { endpoint: string; requesterExtensionId: string; effectivePermissions: readonly string[] }) => unknown | Promise<unknown>,
+      policy?: SharedRpcEndpointPolicy,
     ): string {
       assertMutationAllowed("spindle.rpcPool.handle()");
       const normalized = normalizeOwnedRpcPoolEndpoint(endpoint);
       sharedRpcHandlers.set(normalized, handler);
-      post({ type: "rpc_pool_register_handler", endpoint: normalized });
+      post({ type: "rpc_pool_register_handler", endpoint: normalized, policy });
       return normalized;
     },
     async read<T = unknown>(endpoint: string): Promise<T> {
@@ -3128,18 +3153,30 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         break;
       }
 
-      Promise.resolve(handler({ endpoint: msg.endpoint, requesterExtensionId: msg.requesterExtensionId })).then(
-        (result) => {
-          post({ type: "rpc_pool_handler_result", requestId: msg.requestId, result });
-        },
-        (err: any) => {
-          post({
-            type: "rpc_pool_handler_result",
-            requestId: msg.requestId,
-            error: err?.message || String(err),
-          });
-        }
-      );
+      const scope = {
+        id: (msg as any).rpcPermissionScopeId,
+        effectivePermissions: Array.isArray((msg as any).effectivePermissions)
+          ? (msg as any).effectivePermissions
+          : [],
+      };
+      sharedRpcPermissionScope.run(scope, () => {
+        Promise.resolve(handler({
+          endpoint: msg.endpoint,
+          requesterExtensionId: msg.requesterExtensionId,
+          effectivePermissions: scope.effectivePermissions,
+        })).then(
+          (result) => {
+            post({ type: "rpc_pool_handler_result", requestId: msg.requestId, result });
+          },
+          (err: any) => {
+            post({
+              type: "rpc_pool_handler_result",
+              requestId: msg.requestId,
+              error: err?.message || String(err),
+            });
+          }
+        );
+      });
       break;
     }
 
