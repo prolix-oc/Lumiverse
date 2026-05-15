@@ -166,10 +166,11 @@ export async function generateSceneBackground(
   chatId: string,
   opts?: GenerateImageOptions
 ): Promise<ImageGenResult> {
-  const settings = getImageGenSettings(userId);
+  let settings = getImageGenSettings(userId);
 
   // Auto-migrate legacy settings to connection profiles
   await maybeAutoMigrate(userId, settings);
+  settings = getImageGenSettings(userId);
 
   // Resolve connection profile
   const connectionId = settings.activeImageGenConnectionId;
@@ -759,7 +760,27 @@ function uint8ToBase64(bytes: Uint8Array): string {
 
 export function getImageGenSettings(userId: string): ImageGenSettings {
   const row = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY);
-  return { ...DEFAULT_IMAGE_SETTINGS, ...(row?.value || {}) };
+  const settings = { ...DEFAULT_IMAGE_SETTINGS, ...(row?.value || {}) };
+  const savedConnectionId = settings.activeImageGenConnectionId || null;
+  const savedConnection = savedConnectionId
+    ? imageGenConnSvc.getConnection(userId, savedConnectionId)
+    : null;
+
+  if (savedConnection) return settings;
+
+  const defaultConnection = imageGenConnSvc.getDefaultConnection(userId);
+  if (!defaultConnection) {
+    if (savedConnectionId) {
+      const next = { ...settings, activeImageGenConnectionId: null };
+      settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+      return next;
+    }
+    return settings;
+  }
+
+  const next = { ...settings, activeImageGenConnectionId: defaultConnection.id };
+  settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+  return next;
 }
 
 // --- Auto-Migration (Legacy Settings → Connection Profiles) ---

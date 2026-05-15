@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings } from '@/types/store'
+import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { BASE_URL } from '@/api/client'
 import { generateUUID } from '@/lib/uuid'
@@ -243,7 +243,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', flushSettings)
 }
 
-export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
+export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> = (set, get) => ({
   settingsLoaded: false,
   landingPageChatsDisplayed: 12,
   landingPageLayoutMode: 'cards',
@@ -539,6 +539,19 @@ export const createSettingsSlice: StateCreator<SettingsSlice> = (set, get) => ({
       if (pendingKeys?.filterTab === 'all') {
         pendingKeys.filterTab = 'characters'
         migratedCharacterFilterTab = true
+      }
+
+      if (patch.imageGeneration) {
+        const profiles = get().imageGenProfiles
+        const savedConnectionId = patch.imageGeneration.activeImageGenConnectionId ?? null
+        const activeImageGenConnectionId = savedConnectionId && profiles.some((profile) => profile.id === savedConnectionId)
+          ? savedConnectionId
+          : profiles.find((profile) => profile.is_default)?.id ?? null
+        patch.activeImageGenConnectionId = activeImageGenConnectionId
+        if (activeImageGenConnectionId !== savedConnectionId) {
+          patch.imageGeneration = { ...patch.imageGeneration, activeImageGenConnectionId }
+          settingsApi.put('imageGeneration', patch.imageGeneration).catch(() => {})
+        }
       }
       if (Object.keys(patch).length > 0) {
         set(patch as any)
