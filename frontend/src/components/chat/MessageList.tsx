@@ -49,6 +49,23 @@ function clampMeasuredRowHeight(value: number) {
   return Math.max(MIN_MEASURED_ROW_HEIGHT, value)
 }
 
+function getUiScale() {
+  if (typeof window === 'undefined') return 1
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale')
+  const parsed = Number.parseFloat(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+}
+
+function getElementLayoutHeight(element: Element) {
+  if (element instanceof HTMLElement && element.offsetHeight > 0) {
+    return element.offsetHeight
+  }
+
+  // getBoundingClientRect() is affected by body-level CSS zoom; virtualizer
+  // coordinates are not, so normalize the rare rect fallback to layout pixels.
+  return element.getBoundingClientRect().height / getUiScale()
+}
+
 function hashString(value: string) {
   let hash = 0x811c9dc5
   for (let i = 0; i < value.length; i += 1) {
@@ -329,7 +346,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     useAnimationFrameWithResizeObserver: true,
     measureElement: (element, entry) => {
       const size = entry?.borderBoxSize?.[0]?.blockSize
-      const rawMeasured = size ?? element.getBoundingClientRect().height
+      const rawMeasured = size ?? getElementLayoutHeight(element)
       const measured = element.getAttribute('data-item-type') === 'message'
         ? clampMeasuredRowHeight(rawMeasured)
         : Math.max(1, Number.isFinite(rawMeasured) ? rawMeasured : 1)
@@ -343,6 +360,26 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       return measured
     },
   })
+
+  useEffect(() => {
+    let pendingRaf = 0
+
+    const handleResize = () => {
+      if (pendingRaf) return
+      pendingRaf = requestAnimationFrame(() => {
+        pendingRaf = 0
+        measuredRowHeightsRef.current = new Map()
+        averageMeasuredHeightRef.current = null
+        rowVirtualizer.measure()
+      })
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+    }
+  }, [rowVirtualizer])
 
   useLayoutEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
@@ -398,7 +435,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     const rowRect = lastRow.getBoundingClientRect()
     const scrollRect = el.getBoundingClientRect()
-    const actualContentBottom = el.scrollTop + (rowRect.bottom - scrollRect.top)
+    const actualContentBottom = el.scrollTop + ((rowRect.bottom - scrollRect.top) / getUiScale())
     const viewportBottom = el.scrollTop + el.clientHeight
     const voidThreshold = Math.max(180, el.clientHeight * 0.55)
 
