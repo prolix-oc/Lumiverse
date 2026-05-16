@@ -106,6 +106,12 @@
   flex-shrink: 0;
 }
 
+.workflowCustomFields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .refGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

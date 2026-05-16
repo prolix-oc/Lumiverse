@@ -9,12 +9,14 @@ import { Toggle } from '@/components/shared/Toggle'
 import { Button, FormField, Select, TextInput, EditorSection, TextArea } from '@/components/shared/FormComponents'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/comfyui/WorkflowEditorModal'
+import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/components/dream-weaver/visual-studio/comfyui/mapped-fields'
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-weaver'
 import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
 import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
 
 type RefImage = { data: string; mimeType?: string }
+const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
 
 function ToggleRow({ checked, onChange, label, hint }: { checked: boolean; onChange: (checked: boolean) => void; label: string; hint?: string }) {
   return (
@@ -40,6 +42,19 @@ function toDataRef(file: File): Promise<RefImage> {
     reader.onerror = () => reject(new Error('Failed to read image file'))
     reader.readAsDataURL(file)
   })
+}
+
+function normalizeComfyControlValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (value == null) return ''
+  return String(value)
+}
+
+function parseComfyControlValue(control: ComfyMappedFieldControl, value: string): string | number | boolean | undefined {
+  if (value === '') return undefined
+  if (control.kind === 'number') return Number(value)
+  if (control.options && typeof control.defaultValue === 'boolean') return value === 'true'
+  return value
 }
 
 /** Combobox for model-component fields backed by a live API fetch. */
@@ -362,6 +377,12 @@ export default function ImageGenPanel() {
   const providerName = activeConnection?.provider || ''
   const isComfyUI = providerName === 'comfyui'
 
+  const comfyCustomControls = useMemo(() => {
+    if (!isComfyUI || !workflowConfig) return []
+    return buildMappedFieldControls(workflowConfig, workflowCapabilities)
+      .filter((control) => control.key.startsWith(COMFY_CUSTOM_CONTROL_PREFIX))
+  }, [isComfyUI, workflowConfig, workflowCapabilities])
+
   const refreshActiveComfyWorkflow = useCallback(async (forceRefresh = false) => {
     if (!activeConnection || activeConnection.provider !== 'comfyui') {
       setWorkflowConfig(null)
@@ -453,6 +474,37 @@ export default function ImageGenPanel() {
   const updateParam = useCallback((key: string, value: any) => {
     setImageGenSettings({ parameters: { ...genParams, [key]: value } } as any)
   }, [genParams, setImageGenSettings])
+
+  const updateComfyCustomControl = useCallback((control: ComfyMappedFieldControl, value: string) => {
+    const customKey = control.key.slice(COMFY_CUSTOM_CONTROL_PREFIX.length)
+    const existingFieldValues = genParams.comfyui_field_values && typeof genParams.comfyui_field_values === 'object'
+      ? genParams.comfyui_field_values
+      : {}
+    const nextCustom = { ...(existingFieldValues.custom || {}) }
+    const parsed = parseComfyControlValue(control, value)
+
+    if (parsed === undefined) {
+      delete nextCustom[customKey]
+    } else {
+      nextCustom[customKey] = parsed
+    }
+
+    setImageGenSettings({
+      parameters: {
+        ...genParams,
+        comfyui_field_values: {
+          ...existingFieldValues,
+          custom: nextCustom,
+        },
+      },
+    } as any)
+  }, [genParams, setImageGenSettings])
+
+  const readComfyCustomControlValue = useCallback((control: ComfyMappedFieldControl) => {
+    const customKey = control.key.slice(COMFY_CUSTOM_CONTROL_PREFIX.length)
+    const customValues = genParams.comfyui_field_values?.custom || {}
+    return normalizeComfyControlValue(customValues[customKey] ?? control.defaultValue)
+  }, [genParams.comfyui_field_values])
 
   const promptPresets = imageGeneration.promptPresets || []
   const activePromptPreset = promptPresets.find((p) => p.id === imageGeneration.activePromptPresetId) || null
@@ -766,6 +818,34 @@ export default function ImageGenPanel() {
                       </Button>
                     </div>
                   </div>
+                  {comfyCustomControls.length > 0 && (
+                    <div className={styles.workflowCustomFields}>
+                      {comfyCustomControls.map((control) => {
+                        const value = readComfyCustomControlValue(control)
+                        return (
+                          <FormField key={control.key} label={control.label} hint="Exposed from the imported ComfyUI workflow.">
+                            {control.options ? (
+                              <Select
+                                value={value}
+                                onChange={(next) => updateComfyCustomControl(control, next)}
+                                options={[
+                                  { value: '', label: '(workflow default)' },
+                                  ...control.options,
+                                ]}
+                              />
+                            ) : (
+                              <TextInput
+                                type={control.kind === 'number' ? 'number' : 'text'}
+                                value={value}
+                                onChange={(next) => updateComfyCustomControl(control, next)}
+                                placeholder={normalizeComfyControlValue(control.defaultValue)}
+                              />
+                            )}
+                          </FormField>
+                        )
+                      })}
+                    </div>
+                  )}
                   {workflowError && <div className={styles.error}>{workflowError}</div>}
                 </EditorSection>
               )}

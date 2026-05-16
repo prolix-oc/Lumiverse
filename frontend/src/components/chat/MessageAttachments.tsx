@@ -46,8 +46,9 @@ export default function MessageAttachments({ attachments, isUser }: MessageAttac
               title={att.original_filename}
             >
               <LazyImage
-                src={imagesApi.smallUrl(att.image_id)}
+                src={imagesApi.url(att.image_id)}
                 alt={att.original_filename}
+                style={{ objectFit: 'contain' }}
                 spinnerSize={18}
               />
             </button>
@@ -60,7 +61,7 @@ export default function MessageAttachments({ attachments, isUser }: MessageAttac
               onClick={() => setLightboxSrc(imagesApi.url(att.image_id))}
             >
               <LazyImage
-                src={imagesApi.smallUrl(att.image_id)}
+                src={imagesApi.url(att.image_id)}
                 alt={att.original_filename}
                 className={styles.inlineImage}
                 style={att.width && att.height
