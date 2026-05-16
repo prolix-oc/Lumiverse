@@ -882,7 +882,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   }, [atQuery, isGroupChat, groupCharacterIds, mutedCharacterIds, characters])
 
   // ResizeObserver — set --lcs-input-safe-zone on parent so scroll padding stays in sync
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
     const parent = el.parentElement
