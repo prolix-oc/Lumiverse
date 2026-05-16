@@ -363,8 +363,17 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   useEffect(() => {
     let pendingRaf = 0
+    let lastWidth = scrollRef.current?.clientWidth ?? window.innerWidth
 
     const handleResize = () => {
+      // estimateMessageSize derives only from column width. A height-only
+      // resize (mobile soft keyboard open/close) leaves every estimate valid,
+      // so wiping the measured-height cache there forces every row back onto
+      // the heuristic estimate and the rows render overlapping until the
+      // per-row ResizeObservers catch up. Only invalidate on a real width change.
+      const nextWidth = scrollRef.current?.clientWidth ?? window.innerWidth
+      if (nextWidth === lastWidth) return
+      lastWidth = nextWidth
       if (pendingRaf) return
       pendingRaf = requestAnimationFrame(() => {
         pendingRaf = 0
