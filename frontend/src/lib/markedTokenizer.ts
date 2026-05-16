@@ -6,6 +6,10 @@ const STRICT_DOUBLE_TILDE_DEL_RE = /^~~(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]
 export function createStrictTildeTokenizer() {
   const tokenizer = new Tokenizer()
 
+  tokenizer.code = function (): Tokens.Code | undefined {
+    return undefined
+  }
+
   tokenizer.del = function (src: string): Tokens.Del | undefined {
     const cap = STRICT_DOUBLE_TILDE_DEL_RE.exec(src)
     if (!cap) return
