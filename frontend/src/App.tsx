@@ -151,6 +151,7 @@ export default function App() {
         <MotionConfig reducedMotion="user">
           <div
             className={styles.app}
+            data-app-root=""
             style={{
               '--spindle-dock-left': `${dockInsets.left}px`,
               '--spindle-dock-right': `${dockInsets.right}px`,

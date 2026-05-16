@@ -304,7 +304,7 @@ export function createAppMountHandle(
     extensionId,
     root,
     className: options?.className,
-    position: options?.position ?? 'end',
+    position: (options?.position ?? 'end') as 'start' | 'end' | 'app-overlay',
     visible: true,
   })
 
