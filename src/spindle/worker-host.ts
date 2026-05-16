@@ -122,6 +122,7 @@ import {
   mkdirSync,
   statSync,
   renameSync,
+  rmSync,
 } from "fs";
 import http from "node:http";
 import https from "node:https";
@@ -3771,7 +3772,10 @@ export class WorkerHost {
   private handleStorageDelete(requestId: string, path: string): void {
     try {
       const fullPath = this.resolveStoragePath(path);
-      if (existsSync(fullPath)) unlinkSync(fullPath);
+      if (existsSync(fullPath)) {
+        if (statSync(fullPath).isDirectory()) rmSync(fullPath, { recursive: true, force: true });
+        else unlinkSync(fullPath);
+      }
       this.postToWorker({ type: "response", requestId, result: true });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -3973,7 +3977,10 @@ export class WorkerHost {
     try {
       const resolvedUserId = this.resolveUserScopedUserId(userId);
       const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      if (existsSync(fullPath)) unlinkSync(fullPath);
+      if (existsSync(fullPath)) {
+        if (statSync(fullPath).isDirectory()) rmSync(fullPath, { recursive: true, force: true });
+        else unlinkSync(fullPath);
+      }
       this.postToWorker({ type: "response", requestId, result: true });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
