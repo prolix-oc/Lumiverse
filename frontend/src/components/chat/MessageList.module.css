@@ -12,6 +12,10 @@
   position: relative;
 }
 
+.list[data-group-chat] {
+  padding-top: 0;
+}
+
 .list::-webkit-scrollbar {
   width: 5px;
 }
@@ -79,12 +83,20 @@
     padding: 8px;
     padding-bottom: var(--lcs-input-safe-zone, 100px);
   }
+
+  .list[data-group-chat] {
+    padding-top: 0;
+  }
 }
 
 @media (max-width: 480px) {
   .list {
     padding: 6px;
     padding-bottom: var(--lcs-input-safe-zone, 100px);
+  }
+
+  .list[data-group-chat] {
+    padding-top: 0;
   }
 }
 

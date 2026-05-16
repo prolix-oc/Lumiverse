@@ -27,7 +27,6 @@ const MOBILE_MOMENTUM_SETTLE_MS = 260
 const MOBILE_RANGE_WARM_MS = 1200
 
 type VirtualListItem =
-  | { type: 'groupBar'; key: string }
   | { type: 'loadingOlder'; key: string }
   | { type: 'message'; key: string; measureKey: string; message: Message; messageIndex: number }
   | { type: 'progressBar'; key: string }
@@ -56,6 +55,13 @@ function getUiScale() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
+function getFontScale() {
+  if (typeof window === 'undefined') return 1
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-font-scale')
+  const parsed = Number.parseFloat(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+}
+
 function getElementLayoutHeight(element: Element) {
   if (element instanceof HTMLElement && element.offsetHeight > 0) {
     return element.offsetHeight
@@ -73,6 +79,17 @@ function hashString(value: string) {
     hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0
   }
   return hash.toString(16)
+}
+
+function stripHtmlForEstimate(value: string) {
+  return value.replace(/<[^>]+>/g, ' ')
+}
+
+function collapseClosedDetailsForEstimate(value: string) {
+  return value.replace(/<details\b(?![^>]*\bopen\b)[^>]*>([\s\S]*?)<\/details>/gi, (_match, inner: string) => {
+    const summary = inner.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/i)?.[1]
+    return stripHtmlForEstimate(summary ?? 'Details')
+  })
 }
 
 export default function MessageList({ messages, chatId, isStreaming }: MessageListProps) {
@@ -169,10 +186,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const virtualListItems = useMemo<VirtualListItem[]>(() => {
     const items: VirtualListItem[] = []
 
-    if (isGroupChat) {
-      items.push({ type: 'groupBar', key: 'group-bar' })
-    }
-
     if (loadingOlder && !isCoarsePointer) {
       items.push({ type: 'loadingOlder', key: 'loading-older' })
     }
@@ -253,17 +266,18 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const bubbleWidth = isBubble ? Math.max(180, width - bubbleInset) : width * (isCompactWidth ? 0.9 : 0.82)
     const charsPerLine = Math.max(24, Math.floor(bubbleWidth / 7.2))
     const content = message.swipes?.[message.swipe_id] ?? message.content ?? ''
-    const explicitLines = content.split('\n').length
-    const wrappedLines = Math.ceil(content.length / charsPerLine)
+    const layoutContent = collapseClosedDetailsForEstimate(content)
+    const explicitLines = layoutContent.split('\n').length
+    const wrappedLines = Math.ceil(layoutContent.length / charsPerLine)
     const lineCount = Math.max(1, explicitLines, wrappedLines)
-    const codeBlockCount = (content.match(/```/g)?.length ?? 0) / 2
+    const codeBlockCount = (layoutContent.match(/```/g)?.length ?? 0) / 2
     const imageCount = message.extra?.attachments?.filter((a) => a.type === 'image').length ?? 0
     const audioCount = message.extra?.attachments?.filter((a) => a.type === 'audio').length ?? 0
-    const inlineStyleCount = content.match(/\bstyle\s*=/gi)?.length ?? 0
-    const htmlBlockCount = content.match(/<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|tr|td|th|iframe|svg|video|audio)\b/gi)?.length ?? 0
-    const hasStyledHtml = /<style[\s>]|\bstyle\s*=|<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|iframe|svg|video|audio)\b/i.test(content)
-    const customTagCount = content.match(/<([a-z][\w]*-[\w-]*)\b[^>]*>([\s\S]*?)<\/\1>/gi)?.length ?? 0
-    const selfClosingCustomTagCount = content.match(/<([a-z][\w]*-[\w-]*)\b[^>]*\/>/gi)?.length ?? 0
+    const inlineStyleCount = layoutContent.match(/\bstyle\s*=/gi)?.length ?? 0
+    const htmlBlockCount = layoutContent.match(/<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|tr|td|th|iframe|svg|video|audio)\b/gi)?.length ?? 0
+    const hasStyledHtml = /<style[\s>]|\bstyle\s*=|<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|iframe|svg|video|audio)\b/i.test(layoutContent)
+    const customTagCount = layoutContent.match(/<([a-z][\w]*-[\w-]*)\b[^>]*>([\s\S]*?)<\/\1>/gi)?.length ?? 0
+    const selfClosingCustomTagCount = layoutContent.match(/<([a-z][\w]*-[\w-]*)\b[^>]*\/>/gi)?.length ?? 0
     const hasExtensionTags = customTagCount > 0 || selfClosingCustomTagCount > 0
     const base = isBubble ? (isPhoneWidth ? 88 : isCompactWidth ? 96 : 104) : 76
     const lineHeight = 23
@@ -327,8 +341,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       switch (item.type) {
         case 'message':
           return estimateMessageSize(item.message, item.measureKey)
-        case 'groupBar':
-          return 48
         case 'loadingOlder':
           return 44
         case 'progressBar':
@@ -361,34 +373,61 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     },
   })
 
+  const measureMountedRows = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const rows = el.querySelectorAll<HTMLElement>('[data-virtual-index]')
+    for (const row of rows) {
+      rowVirtualizer.measureElement(row)
+    }
+  }, [rowVirtualizer])
+
   useEffect(() => {
     let pendingRaf = 0
+    let settleTimer = 0
     let lastWidth = scrollRef.current?.clientWidth ?? window.innerWidth
+    let lastUiScale = getUiScale()
+    let lastFontScale = getFontScale()
+
+    const scheduleMountedMeasure = () => {
+      if (!pendingRaf) {
+        pendingRaf = requestAnimationFrame(() => {
+          pendingRaf = 0
+          measureMountedRows()
+        })
+      }
+
+      if (settleTimer) window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(() => {
+        settleTimer = 0
+        measureMountedRows()
+      }, 180)
+    }
 
     const handleResize = () => {
       // estimateMessageSize derives only from column width. A height-only
       // resize (mobile soft keyboard open/close) leaves every estimate valid,
       // so wiping the measured-height cache there forces every row back onto
-      // the heuristic estimate and the rows render overlapping until the
-      // per-row ResizeObservers catch up. Only invalidate on a real width change.
+      // the heuristic estimate. Measure mounted rows in-place instead of
+      // invalidating the whole list; newly mounted rows measure themselves.
       const nextWidth = scrollRef.current?.clientWidth ?? window.innerWidth
-      if (nextWidth === lastWidth) return
+      const nextUiScale = getUiScale()
+      const nextFontScale = getFontScale()
+      if (nextWidth === lastWidth && nextUiScale === lastUiScale && nextFontScale === lastFontScale) return
       lastWidth = nextWidth
-      if (pendingRaf) return
-      pendingRaf = requestAnimationFrame(() => {
-        pendingRaf = 0
-        measuredRowHeightsRef.current = new Map()
-        averageMeasuredHeightRef.current = null
-        rowVirtualizer.measure()
-      })
+      lastUiScale = nextUiScale
+      lastFontScale = nextFontScale
+      scheduleMountedMeasure()
     }
 
     window.addEventListener('resize', handleResize)
     return () => {
       window.removeEventListener('resize', handleResize)
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      if (settleTimer) window.clearTimeout(settleTimer)
     }
-  }, [rowVirtualizer])
+  }, [measureMountedRows])
 
   useLayoutEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
@@ -450,7 +489,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     if (viewportBottom <= actualContentBottom + voidThreshold) return false
 
-    rowVirtualizer.measure()
+    const visibleRows = el.querySelectorAll<HTMLElement>('[data-virtual-index]')
+    for (const row of visibleRows) {
+      rowVirtualizer.measureElement(row)
+    }
 
     const nextScrollTop = Math.max(0, actualContentBottom - el.clientHeight)
     isProgrammaticScrollRef.current = true
@@ -727,10 +769,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (pendingRaf) return
       pendingRaf = requestAnimationFrame(() => {
         pendingRaf = 0
-        const visibleRows = el.querySelectorAll('[data-index][data-message-id]')
-        for (const row of visibleRows) {
-          rowVirtualizer.measureElement(row)
-        }
+        measureMountedRows()
 
         if (recoverTailVoid()) return
         if (!settleRaf) {
@@ -755,7 +794,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
       if (settleRaf) cancelAnimationFrame(settleRaf)
     }
-  }, [recoverTailVoid, rowVirtualizer])
+  }, [measureMountedRows, recoverTailVoid])
 
   return (
     <div
@@ -769,7 +808,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       onTouchEnd={releaseTouchMomentumHold}
       onTouchCancel={releaseTouchMomentumHold}
       data-chat-scroll="true"
+      data-group-chat={isGroupChat || undefined}
     >
+      {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
       <div
         className={styles.virtualSpace}
         style={{ height: rowVirtualizer.getTotalSize() }}
@@ -784,9 +825,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           let measureKey: string | undefined
 
           switch (item.type) {
-            case 'groupBar':
-              content = <GroupChatMemberBar chatId={chatId} />
-              break
             case 'loadingOlder':
               content = <div className={styles.loadingOlder}>Loading older messages...</div>
               break
