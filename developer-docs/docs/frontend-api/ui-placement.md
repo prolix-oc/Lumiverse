@@ -170,7 +170,7 @@ Mount an unrestricted portal into `document.body` that persists across route cha
 ```ts
 const mount = ctx.ui.mountApp({
   className: 'my-ext-overlay',
-  position: 'end',     // 'start' or 'end' of body
+  position: 'end',     // 'start' | 'end' (body) | 'app-overlay'
 })
 
 // Full control over the mount
@@ -181,6 +181,8 @@ mount.setVisible(false)
 
 mount.destroy()
 ```
+
+`'app-overlay'` mounts inside the app shell, layered below the sidebar drawer and modals. `position: fixed` children still anchor to the viewport, but app chrome covers the overlay through normal stacking instead of you hiding it manually.
 
 ## Input Bar Actions (free — no permission needed)
 

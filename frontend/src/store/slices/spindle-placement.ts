@@ -72,7 +72,7 @@ export interface AppMountState {
   extensionId: string
   root: HTMLElement
   className?: string
-  position: 'start' | 'end'
+  position: 'start' | 'end' | 'app-overlay'
   visible: boolean
 }
 
