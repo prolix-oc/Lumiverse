@@ -33,26 +33,20 @@ const ENTITY_BLOCKLIST = new Set([
 
 // ─── System Prompt ─────────────────────────────────────────────
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a deterministic extraction engine for a roleplay memory system.
+const EXTRACTION_ENGINE_INTRO = `You are a deterministic extraction engine for a roleplay memory system.`;
 
-Convert ONE passage into structured data by calling ALL FOUR tools exactly once.
-Return empty arrays when a tool has nothing to report.
-
-GLOBAL RULES
+// Shared evidence rules. Both the single-passage tool prompt and the batch
+// JSON prompt append their own first line, so this stays mode neutral.
+const EXTRACTION_GLOBAL_RULES = `GLOBAL RULES
 - Use ONLY evidence from the exact passage.
 - Do NOT use genre knowledge, outside world knowledge, or likely guesses.
 - Do NOT invent names, relationships, motives, symbolism, themes, or implications.
 - If a detail is ambiguous, weakly implied, or unsupported, omit it.
-- Prefer omission over contamination. Missing data is acceptable; wrong data is harmful.
-- Treat each tool independently. A relationship or fact must be supported by the passage itself.
+- Prefer omission over contamination. Missing data is acceptable; wrong data is harmful.`;
 
-TOOL CHECKLIST
-1. score_salience
-2. extract_entities
-3. extract_relationships
-4. extract_font_colors
-
-ENTITY RULES
+// Entity, alias, relationship, scoring and font color rules, shared verbatim by
+// both extraction paths so behavior stays identical regardless of batching.
+const EXTRACTION_RULES = `ENTITY RULES
 An entity is a proper name for a specific character, place, item, faction, event, or named concept.
 - Good: "Melina", "Thornhaven", "Sixth Street", "Dark Brotherhood", "Excalibur"
 - Bad: "Barely", "Personal", "Cost", "Strange", "STOP", "Having climbed"
@@ -66,7 +60,7 @@ Do NOT extract:
 - Tracker/header scaffolding such as timestamps, weather labels, status readouts, HUD labels, emoji wrappers, or repeated metadata blocks unless they contain a real proper name that matters outside the scaffold
 
 KNOWN ENTITY RULE
-When known entities are supplied with aliases, ALWAYS use the canonical name in tool output, never the alias.
+When known entities are supplied with aliases, ALWAYS use the canonical name in output, never the alias.
 For truly new entities, use the exact proper name from the passage.
 
 ALIAS RULE
@@ -92,6 +86,22 @@ FONT COLOR RULES
 - Only report colors that are actually present in HTML color tags in the passage.
 - Map each color to the named character directly supported by the passage.
 - If the owner of a color is unclear, omit that attribution instead of guessing.`;
+
+const EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
+
+Convert ONE passage into structured data by calling ALL FOUR tools exactly once.
+Return empty arrays when a tool has nothing to report.
+
+${EXTRACTION_GLOBAL_RULES}
+- Treat each tool independently. A relationship or fact must be supported by the passage itself.
+
+TOOL CHECKLIST
+1. score_salience
+2. extract_entities
+3. extract_relationships
+4. extract_font_colors
+
+${EXTRACTION_RULES}`;
 
 // ─── Tool Definitions ──────────────────────────────────────────
 
@@ -437,6 +447,60 @@ function resolveAliasesInResult(
 
 // ─── Extraction ────────────────────────────────────────────────
 
+// Known entity/character hint block shared by single and batch prompts.
+function buildEntityHint(options?: {
+  characterNames?: string[];
+  knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+}): string {
+  if (options?.knownEntities?.length) {
+    const lines = options.knownEntities
+      .slice(0, 50) // Cap to avoid prompt bloat
+      .map((e) => {
+        const aliasStr = e.aliases.length > 0 ? ` (aka ${e.aliases.join(", ")})` : "";
+        return `- ${e.name} [${e.type}]${aliasStr}`;
+      });
+    return `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
+  }
+  if (options?.characterNames?.length) {
+    return `\n\n<known_characters>\n${options.characterNames.join(", ")}\n</known_characters>\nUse these names exactly if they appear.`;
+  }
+  return "";
+}
+
+// Validate a parsed JSON extraction object into a SidecarExtractionResult.
+function buildResultFromJsonObject(
+  json: any,
+  options?: {
+    characterNames?: string[];
+    knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+  },
+): SidecarExtractionResult {
+  const entities = validateEntities(json.entities_present).filter(
+    (e) => !ENTITY_BLOCKLIST.has(e.name.toLowerCase().trim()),
+  );
+  const relationships = validateRelationships(json.relationships_shown).filter(
+    (r) =>
+      !ENTITY_BLOCKLIST.has(r.source.toLowerCase().trim()) &&
+      !ENTITY_BLOCKLIST.has(r.target.toLowerCase().trim()),
+  );
+
+  let result: SidecarExtractionResult = {
+    score: Math.max(0, Math.min(1, (json.importance ?? 5) / 10)),
+    emotionalTags: validateEmotionalTags(json.emotional_tones),
+    narrativeFlags: validateNarrativeFlags(json.narrative_flags),
+    statusChanges: validateStatusChanges(json.status_changes),
+    keyFacts: validateKeyFacts(json.key_facts),
+    entitiesPresent: entities,
+    relationshipsShown: relationships,
+    fontColors: validateFontColors(json.color_attributions),
+    discoveredAliases: validateDiscoveredAliases(json.discovered_aliases),
+  };
+  if (options?.knownEntities?.length) {
+    result = resolveAliasesInResult(result, options.knownEntities);
+  }
+  return result;
+}
+
 /**
  * Run sidecar-enhanced extraction on a chunk of narrative text.
  * Uses tool calling for structured output — every provider supports this natively.
@@ -457,18 +521,7 @@ export async function extractWithSidecar(
 ): Promise<SidecarExtractionResult | null> {
   try {
     // Build entity context for the prompt — prefer full entities with aliases over bare names
-    let entityHint = "";
-    if (options?.knownEntities?.length) {
-      const lines = options.knownEntities
-        .slice(0, 50) // Cap to avoid prompt bloat
-        .map((e) => {
-          const aliasStr = e.aliases.length > 0 ? ` (aka ${e.aliases.join(", ")})` : "";
-          return `- ${e.name} [${e.type}]${aliasStr}`;
-        });
-      entityHint = `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
-    } else if (options?.characterNames?.length) {
-      entityHint = `\n\n<known_characters>\n${options.characterNames.join(", ")}\n</known_characters>\nUse these names exactly if they appear.`;
-    }
+    const entityHint = buildEntityHint(options);
 
     const response = await generateRawFn({
       connectionId: sidecarConnectionId,
@@ -500,27 +553,7 @@ export async function extractWithSidecar(
     const json = extractJson(response.content);
     if (!json) return null;
 
-    // Apply blocklist to fallback path too
-    const fbEntities = validateEntities(json.entities_present).filter((e) => !ENTITY_BLOCKLIST.has(e.name.toLowerCase().trim()));
-    const fbRelationships = validateRelationships(json.relationships_shown).filter(
-      (r) => !ENTITY_BLOCKLIST.has(r.source.toLowerCase().trim()) && !ENTITY_BLOCKLIST.has(r.target.toLowerCase().trim()),
-    );
-
-    let fbResult: SidecarExtractionResult = {
-      score: Math.max(0, Math.min(1, (json.importance ?? 5) / 10)),
-      emotionalTags: validateEmotionalTags(json.emotional_tones),
-      narrativeFlags: validateNarrativeFlags(json.narrative_flags),
-      statusChanges: validateStatusChanges(json.status_changes),
-      keyFacts: validateKeyFacts(json.key_facts),
-      entitiesPresent: fbEntities,
-      relationshipsShown: fbRelationships,
-      fontColors: validateFontColors(json.color_attributions),
-      discoveredAliases: validateDiscoveredAliases(json.discovered_aliases),
-    };
-    if (options?.knownEntities?.length) {
-      fbResult = resolveAliasesInResult(fbResult, options.knownEntities);
-    }
-    return fbResult;
+    return buildResultFromJsonObject(json, options);
   } catch (err) {
     console.warn("[memory-cortex] Sidecar extraction failed, falling back to heuristic:", err);
     return null;
@@ -557,14 +590,25 @@ export async function scoreChunkWithSidecar(
   };
 }
 
-/**
- * Extract from multiple chunks. Each chunk gets its own tool-calling request.
- * The rebuild pipeline handles concurrency batching — this just processes the array.
- */
-/**
- * Extract from multiple chunks. Each chunk gets its own tool-calling LLM request.
- * The caller handles concurrency batching — this just processes the array.
- */
+const BATCH_EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
+
+You will receive several roleplay passages, each wrapped in <passage index="N"> tags.
+Analyze EACH passage independently and convert it into structured data.
+
+OUTPUT FORMAT
+Return ONLY a single JSON object, no prose, no markdown fences, no commentary:
+{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
+- Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
+- Use empty arrays for any field with nothing to report.
+
+${EXTRACTION_GLOBAL_RULES}
+- Score and extract each passage in isolation. Do NOT carry information between passages.
+
+${EXTRACTION_RULES}`;
+
+// Extract all passages in one LLM request. Results align with input order.
+// Passages the batch drops are retried one by one. A whole batch failure
+// falls back to per chunk extraction.
 export async function extractBatchWithSidecar(
   chunks: Array<{ index: number; content: string }>,
   generateRawFn: SidecarGenerateFn,
@@ -572,13 +616,69 @@ export async function extractBatchWithSidecar(
   options?: { characterNames?: string[]; knownEntities?: Array<{ name: string; type: string; aliases: string[] }> },
 ): Promise<Array<SidecarExtractionResult | null>> {
   if (chunks.length === 0) return [];
+  // One chunk does not benefit from batching.
+  if (chunks.length === 1) {
+    return [await extractWithSidecar(chunks[0].content, generateRawFn, sidecarConnectionId, options).catch(() => null)];
+  }
 
-  // Process each chunk independently — tool calling guarantees structured output per chunk
-  return Promise.all(
-    chunks.map((chunk) =>
-      extractWithSidecar(chunk.content, generateRawFn, sidecarConnectionId, options).catch(() => null),
-    ),
-  );
+  const perChunkFallback = (idxs: number[]) =>
+    Promise.all(
+      idxs.map((i) =>
+        extractWithSidecar(chunks[i].content, generateRawFn, sidecarConnectionId, options).catch(() => null),
+      ),
+    );
+
+  try {
+    const entityHint = buildEntityHint(options);
+    // Array position is the prompt index so results map back positionally.
+    const passages = chunks
+      .map((c, i) => `<passage index="${i}">\n${c.content}\n</passage>`)
+      .join("\n\n");
+
+    const response = await generateRawFn({
+      connectionId: sidecarConnectionId,
+      messages: [
+        { role: "system", content: BATCH_EXTRACTION_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Analyze each roleplay passage below independently. Return the JSON object described in the system prompt with exactly one results entry per passage. Use only the text inside each passage as evidence.${entityHint}\n\n${passages}`,
+        },
+      ],
+      parameters: { temperature: 0.1 },
+    });
+
+    const parsed = extractJsonArray(response.content);
+    const byIndex = new Map<number, any>();
+    if (parsed) {
+      for (const item of parsed) {
+        if (item && typeof item.index === "number") byIndex.set(item.index, item);
+      }
+    }
+
+    const results: Array<SidecarExtractionResult | null> = new Array(chunks.length).fill(null);
+    const missing: number[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const obj = byIndex.get(i);
+      if (obj) {
+        results[i] = buildResultFromJsonObject(obj, options);
+      } else {
+        missing.push(i);
+      }
+    }
+
+    // Retry passages the batch response dropped.
+    if (missing.length > 0) {
+      const recovered = await perChunkFallback(missing);
+      missing.forEach((idx, k) => {
+        results[idx] = recovered[k];
+      });
+    }
+
+    return results;
+  } catch (err) {
+    console.warn("[memory-cortex] Batch sidecar extraction failed, falling back to per-chunk:", err);
+    return perChunkFallback(chunks.map((_, i) => i));
+  }
 }
 
 /** Extract a JSON array from a possibly-fenced response */

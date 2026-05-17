@@ -1390,52 +1390,65 @@ export async function rebuildCortex(
         await yieldToEventLoop();
       }
     } else {
-      // Sidecar path: bounded concurrency queue.
-      // Each slot processes ONE chunk at a time: sends the request, waits for ALL
-      // tool calls to resolve, ingests the result, then takes the next chunk.
-      // At most `concurrency` slots are active simultaneously.
-      //
-      // This avoids spamming the provider — behaves like N sequential pipelines.
-
+      // Each worker pulls up to chunkBatchSize chunks and resolves them in one
+      // request. At most concurrency batch requests run at once.
+      const chunkBatchSize = Math.max(1, config.sidecar?.chunkBatchSize ?? 5);
       let nextChunkIdx = 0;
       let completed = completedBeforeStart;
       const activeGenerateRawFn = generateRawFn!;
       const activeSidecarConnectionId = sidecarConnectionId!;
 
-      async function processNextChunk(): Promise<void> {
-        while (nextChunkIdx < chunks.length) {
-          const idx = nextChunkIdx++;
-          const chunk = chunks[idx];
-          const rawChunkContent = hydrateChunkContentFromMessages(safeJsonArray(chunk.message_ids), chunk.content);
+      const tickProgress = () => {
+        completed++;
+        state.current = completed;
+        state.percent = totalChunks > 0 ? Math.round((completed / totalChunks) * 100) : 100;
+        if (onProgress) onProgress(completed, totalChunks);
+      };
 
+      async function processNextBatch(): Promise<void> {
+        while (nextChunkIdx < chunks.length) {
+          const start = nextChunkIdx;
+          const end = Math.min(start + chunkBatchSize, chunks.length);
+          nextChunkIdx = end;
+
+          const batch = chunks.slice(start, end);
+          const batchInput = batch.map((chunk, i) => ({
+            index: i,
+            content: hydrateChunkContentFromMessages(safeJsonArray(chunk.message_ids), chunk.content),
+          }));
+
+          let sidecarResults: Array<import("./types").SidecarExtractionResult | null>;
           try {
-            // Single request per chunk — sends tools, waits for ALL tool_calls to resolve
-            const sidecarResult = await extractWithSidecar(
-              rawChunkContent,
+            sidecarResults = await extractBatchWithSidecar(
+              batchInput,
               activeGenerateRawFn,
               activeSidecarConnectionId,
               { characterNames },
             );
-
-            if (sidecarResult) {
-              await processChunkWithPrecomputedSidecar(chunk, chatId, userId, characterNames, sidecarResult, descriptionAliases);
-            } else {
-              await processChunkFromRaw(chunk, chatId, userId, characterNames, undefined, undefined, descriptionAliases);
-            }
           } catch {
-            // Sidecar failed — fall back to heuristic for this chunk
-            await processChunkFromRaw(chunk, chatId, userId, characterNames, undefined, undefined, descriptionAliases);
+            sidecarResults = new Array(batch.length).fill(null);
           }
 
-          completed++;
-          state.current = completed;
-          state.percent = totalChunks > 0 ? Math.round((completed / totalChunks) * 100) : 100;
-          if (onProgress) onProgress(completed, totalChunks);
+          for (let i = 0; i < batch.length; i++) {
+            const chunk = batch[i];
+            try {
+              const sidecarResult = sidecarResults[i];
+              if (sidecarResult) {
+                await processChunkWithPrecomputedSidecar(chunk, chatId, userId, characterNames, sidecarResult, descriptionAliases);
+              } else {
+                await processChunkFromRaw(chunk, chatId, userId, characterNames, undefined, undefined, descriptionAliases);
+              }
+            } catch {
+              // fall back to heuristic on ingest failure
+              await processChunkFromRaw(chunk, chatId, userId, characterNames, undefined, undefined, descriptionAliases);
+            }
+            tickProgress();
+          }
         }
       }
 
-      // Launch `concurrency` worker slots — each one pulls chunks sequentially
-      const workers = Array.from({ length: Math.min(concurrency, chunks.length) }, () => processNextChunk());
+      // concurrency workers, each pulls batches
+      const workers = Array.from({ length: Math.min(concurrency, chunks.length) }, () => processNextBatch());
       await Promise.all(workers);
     }
 
