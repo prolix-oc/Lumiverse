@@ -949,7 +949,8 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
       ref={elRef}
       data-virtual-index={virtualIndex}
       data-item-type={itemType}
-      data-index={messageIndex}
+      data-index={virtualIndex}
+      data-message-index={messageIndex}
       data-message-id={messageId}
       data-measure-key={measureKey}
       className={styles.virtualRow}
