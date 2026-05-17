@@ -1687,10 +1687,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   theme: {
-    async apply(overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } }): Promise<void> {
+    async apply(overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } }, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.apply()");
       const requestId = crypto.randomUUID();
-      await request({ type: "theme_apply", requestId, overrides });
+      await request({ type: "theme_apply", requestId, overrides, userId });
     },
     async applyPalette(palette, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.applyPalette()");
