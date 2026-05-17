@@ -237,7 +237,7 @@ export function getCortexWarmupSignature(config: MemoryCortexConfig): string {
   });
 }
 
-function clearDerivedCortexData(chatId: string): void {
+function clearDerivedCortexData(chatId: string, options: { preserveSalience?: boolean } = {}): void {
   const db = getDb();
   invalidateCortexCache(chatId);
   entityGraph.deleteEntitiesForChat(chatId);
@@ -245,9 +245,13 @@ function clearDerivedCortexData(chatId: string): void {
   entityGraph.deleteRelationsForChat(chatId);
   consolidation.deleteConsolidationsForChat(chatId);
   deleteColorMapForChat(chatId);
-  db.query("DELETE FROM memory_salience WHERE chat_id = ?").run(chatId);
+  if (!options.preserveSalience) {
+    db.query("DELETE FROM memory_salience WHERE chat_id = ?").run(chatId);
+  }
   db.query(
-    "UPDATE chat_chunks SET salience_score = NULL, emotional_tags = NULL, entity_ids = NULL, consolidation_id = NULL, cortex_warmup_signature = NULL, cortex_warmup_completed_at = NULL WHERE chat_id = ?",
+    options.preserveSalience
+      ? "UPDATE chat_chunks SET entity_ids = NULL, consolidation_id = NULL, cortex_warmup_signature = NULL, cortex_warmup_completed_at = NULL WHERE chat_id = ?"
+      : "UPDATE chat_chunks SET salience_score = NULL, emotional_tags = NULL, entity_ids = NULL, consolidation_id = NULL, cortex_warmup_signature = NULL, cortex_warmup_completed_at = NULL WHERE chat_id = ?",
   ).run(chatId);
 }
 
@@ -1343,7 +1347,10 @@ export async function rebuildCortex(
     totalChunks = coverage.totalChunks;
 
     if (coverage.requiresFullRebuild) {
-      clearDerivedCortexData(chatId);
+      // Passive warmup runs after chat activity. If the only warmed chunk was
+      // invalidated by an appended message, completedChunks can drop to zero;
+      // keep existing salience visible until replacement scores are upserted.
+      clearDerivedCortexData(chatId, { preserveSalience: true });
       chunks = db
         .query("SELECT * FROM chat_chunks WHERE chat_id = ? ORDER BY created_at ASC")
         .all(chatId) as any[];
