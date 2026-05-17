@@ -470,6 +470,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const BOTTOM_REPIN_EPSILON = 6
 
   const recoverTailVoid = useCallback(() => {
+    // If user deliberately scrolled up, the streaming height-lock 
+    // releasing at stream end must not snap them down.
+    if (!isPinnedRef.current) return false
+
     const el = scrollRef.current
     if (!el || virtualListItems.length === 0) return false
 
