@@ -102,6 +102,7 @@ export const worldBooksApi = {
     return get<{
       total: number
       eligible: number
+      keys_to_clear: number
       constant_skipped: number
       already_vectorized: number
       empty_skipped: number

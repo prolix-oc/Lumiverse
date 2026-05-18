@@ -43,6 +43,7 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
   const [timingOpen, setTimingOpen] = useState(false)
   const [recursionOpen, setRecursionOpen] = useState(false)
   const [metadataOpen, setMetadataOpen] = useState(false)
+  const recursionInvalidated = entry.vectorized
   const vectorStatusClass =
     entry.vector_index_status === 'indexed'
       ? styles.vectorStatusIndexed
@@ -422,25 +423,33 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
           size={12}
           className={clsx(styles.groupToggleIcon, recursionOpen && styles.groupToggleOpen)}
         />
-        Recursion
+        Recursion{recursionInvalidated ? ' (inactive for vector)' : ''}
       </button>
       {recursionOpen && (
         <div className={styles.entryFieldGroup}>
+          {recursionInvalidated && (
+            <div className={styles.inactiveNote}>
+              Vectorized entries do not participate in recursive keyword chaining. Semantic retrieval uses indexed content directly.
+            </div>
+          )}
           <div className={styles.toggleRow}>
             <Toggle.Checkbox
               checked={entry.prevent_recursion}
               onChange={() => onImmediateUpdate(entry.id, { prevent_recursion: !entry.prevent_recursion })}
               label="Prevent Recursion"
+              disabled={recursionInvalidated}
             />
             <Toggle.Checkbox
               checked={entry.exclude_recursion}
               onChange={() => onImmediateUpdate(entry.id, { exclude_recursion: !entry.exclude_recursion })}
               label="Exclude Recursion"
+              disabled={recursionInvalidated}
             />
             <Toggle.Checkbox
               checked={entry.delay_until_recursion}
               onChange={() => onImmediateUpdate(entry.id, { delay_until_recursion: !entry.delay_until_recursion })}
               label="Delay Until Recursion"
+              disabled={recursionInvalidated}
             />
           </div>
         </div>

@@ -3688,11 +3688,20 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
 
   // Check short-TTL cache for rapid dry-run reuse.
+  const cacheConfigSig = [
+    cfg.enabled ? 1 : 0,
+    cfg.vectorize_world_books ? 1 : 0,
+    cfg.dimensions ?? 0,
+    topK,
+    cfg.hybrid_weight_mode,
+    cfg.similarity_threshold,
+    cfg.rerank_cutoff,
+  ].join(":");
   const cacheKey = `${userId}:${chatId}:${worldBookIds.join(",")}:${eligibleEntries
     .map((e) => `${e.id}:${e.content?.length ?? 0}`)
     .join(
       ",",
-    )}:${queryText}:${cfg.enabled ? 1 : 0}:${cfg.vectorize_world_books ? 1 : 0}:${cfg.dimensions ?? 0}:${topK}`;
+    )}:${queryText}:${cacheConfigSig}`;
   const cached = getCachedVectorWiResult(cacheKey);
   if (cached) {
     console.debug("[prompt-assembly] Vector WI cache hit for chat %s", chatId);
@@ -3817,6 +3826,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
           queryText,
           queryVector,
           fetchLimit,
+          cfg.hybrid_weight_mode,
           signal,
         ),
       ),

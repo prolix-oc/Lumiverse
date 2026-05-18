@@ -72,7 +72,7 @@ export default function WorldBookPanel() {
   const [deleteEntryConfirm, setDeleteEntryConfirm] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [convertPreview, setConvertPreview] = useState<{
-    total: number; eligible: number; constant_skipped: number
+    total: number; eligible: number; keys_to_clear: number; constant_skipped: number
     already_vectorized: number; empty_skipped: number; disabled_skipped: number
   } | null>(null)
 
@@ -298,7 +298,7 @@ export default function WorldBookPanel() {
       setReindexing(true)
       const result = await worldBooksApi.convertToVectorized(selectedBookId)
       setVectorSummary(result.summary)
-      setVectorStatus(`Converted ${result.converted} entries. Reindexing vectors...`)
+      setVectorStatus(`Updated ${result.converted} entries. Reindexing vectors...`)
       refetchCurrentPage()
       const reindexResult = await worldBooksApi.reindexVectors(selectedBookId, {
         onProgress: (p) => {
@@ -776,10 +776,11 @@ export default function WorldBookPanel() {
           title="Convert to Vectorized"
           message={
             convertPreview.eligible === 0
-              ? 'No entries are eligible for conversion. All non-constant entries are either already vectorized, empty, or disabled.'
+              ? 'No entries are eligible for conversion. All non-constant entries are either already vectorized with no trigger keywords, empty, or disabled.'
               : <>
-                  <p>This will enable vector activation for <strong>{convertPreview.eligible}</strong> {convertPreview.eligible === 1 ? 'entry' : 'entries'} and immediately start reindexing.</p>
+                  <p>This will enable vector activation for <strong>{convertPreview.eligible}</strong> {convertPreview.eligible === 1 ? 'entry' : 'entries'}, clear their primary and secondary trigger keywords, and immediately start reindexing.</p>
                   <ul style={{ textAlign: 'left', margin: '8px 0', paddingLeft: '20px', fontSize: 'calc(12px * var(--lumiverse-font-scale, 1))', opacity: 0.8 }}>
+                    {convertPreview.keys_to_clear > 0 && <li>{convertPreview.keys_to_clear} {convertPreview.keys_to_clear === 1 ? 'entry has' : 'entries have'} trigger keywords that will be cleared</li>}
                     {convertPreview.constant_skipped > 0 && <li>{convertPreview.constant_skipped} constant {convertPreview.constant_skipped === 1 ? 'entry' : 'entries'} skipped (always active)</li>}
                     {convertPreview.already_vectorized > 0 && <li>{convertPreview.already_vectorized} already vectorized</li>}
                     {convertPreview.empty_skipped > 0 && <li>{convertPreview.empty_skipped} empty {convertPreview.empty_skipped === 1 ? 'entry' : 'entries'} skipped</li>}

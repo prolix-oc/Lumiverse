@@ -184,6 +184,16 @@
   min-width: 180px;
 }
 
+.inactiveNote {
+  padding: 8px 10px;
+  border: 1px solid var(--lumiverse-primary-020);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+}
+
 /* ── Collapsible group ── */
 .groupToggle {
   display: flex;

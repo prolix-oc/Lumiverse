@@ -3153,7 +3153,7 @@ export async function searchWorldBookEntries(
   if (!text) return [];
 
   const [vector] = await cachedEmbedTexts(userId, [text]);
-  const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, text, vector, limit);
+  const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, text, vector, limit, cfg.hybrid_weight_mode);
   return rows.map((row) => ({
     entry_id: row.entry_id,
     score: row.distance,
@@ -3171,6 +3171,7 @@ export async function searchWorldBookEntriesHybridWithVector(
   queryText: string,
   vector: number[],
   limit = 8,
+  hybridWeightMode?: EmbeddingConfig["hybrid_weight_mode"],
   signal?: AbortSignal,
 ): Promise<WorldBookSearchCandidate[]> {
   await ensureWorldBookVectorVersion(userId);
@@ -3219,7 +3220,7 @@ export async function searchWorldBookEntriesHybridWithVector(
     }
   }
 
-  if (trimmedQuery && !signal?.aborted) {
+  if (trimmedQuery && hybridWeightMode !== "vector_first" && !signal?.aborted) {
     try {
       const lexicalRows = await raceWithSignal(
         table
@@ -3286,7 +3287,7 @@ export async function searchWorldBookEntriesWithVector(
   vector: number[],
   limit = 8
 ): Promise<Array<{ entry_id: string; score: number; content: string }>> {
-  const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, "", vector, limit);
+  const rows = await searchWorldBookEntriesHybridWithVector(userId, worldBookId, "", vector, limit, "vector_first");
   return rows.map((row) => ({
     entry_id: row.entry_id,
     score: row.distance,

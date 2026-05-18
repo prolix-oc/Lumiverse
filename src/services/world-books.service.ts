@@ -560,12 +560,13 @@ export function setWorldBookSemanticActivation(
 export function getConvertToVectorizedPreview(
   userId: string,
   worldBookId: string,
-): { total: number; eligible: number; constant_skipped: number; already_vectorized: number; empty_skipped: number; disabled_skipped: number } | null {
+): { total: number; eligible: number; keys_to_clear: number; constant_skipped: number; already_vectorized: number; empty_skipped: number; disabled_skipped: number } | null {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
   const entries = listEntries(userId, worldBookId);
 
   let eligible = 0;
+  let keysToClear = 0;
   let constantSkipped = 0;
   let alreadyVectorized = 0;
   let emptySkipped = 0;
@@ -574,13 +575,17 @@ export function getConvertToVectorizedPreview(
   for (const entry of entries) {
     const hasContent = (entry.content || "").trim().length > 0;
     if (entry.constant) { constantSkipped++; continue; }
-    if (entry.vectorized) { alreadyVectorized++; continue; }
     if (!hasContent) { emptySkipped++; continue; }
     if (entry.disabled) { disabledSkipped++; continue; }
+    const hasKeys = (entry.key?.length ?? 0) > 0 || (entry.keysecondary?.length ?? 0) > 0;
+    if (entry.vectorized && !hasKeys) { alreadyVectorized++; continue; }
     eligible++;
+    if (hasKeys) {
+      keysToClear++;
+    }
   }
 
-  return { total: entries.length, eligible, constant_skipped: constantSkipped, already_vectorized: alreadyVectorized, empty_skipped: emptySkipped, disabled_skipped: disabledSkipped };
+  return { total: entries.length, eligible, keys_to_clear: keysToClear, constant_skipped: constantSkipped, already_vectorized: alreadyVectorized, empty_skipped: emptySkipped, disabled_skipped: disabledSkipped };
 }
 
 export function convertToVectorized(
@@ -595,16 +600,18 @@ export function convertToVectorized(
 
   const converted = db.query(
     `UPDATE world_book_entries
-     SET vectorized = 1,
-         vector_index_status = 'pending',
-         vector_indexed_at = NULL,
-         vector_index_error = NULL,
-         updated_at = ?
-     WHERE world_book_id = ?
-       AND constant = 0
-       AND disabled = 0
-       AND length(trim(content)) > 0
-       AND vectorized = 0`
+      SET vectorized = 1,
+          key = '[]',
+          keysecondary = '[]',
+          vector_index_status = 'pending',
+          vector_indexed_at = NULL,
+          vector_index_error = NULL,
+          updated_at = ?
+      WHERE world_book_id = ?
+        AND constant = 0
+        AND disabled = 0
+        AND length(trim(content)) > 0
+        AND (vectorized = 0 OR key != '[]' OR keysecondary != '[]')`
   ).run(now, worldBookId).changes;
 
   if (converted > 0) {

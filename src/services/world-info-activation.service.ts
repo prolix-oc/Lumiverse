@@ -466,7 +466,7 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
 
   let recursionPassesUsed = 0;
   let newContent = constants
-    .filter((entry) => entry.content && !entry.prevent_recursion)
+    .filter((entry) => entry.content && !entry.prevent_recursion && !entry.vectorized)
     .map((entry) => entry.content);
 
   for (let pass = 0; pass <= maxPasses; pass++) {
@@ -486,6 +486,7 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
       // activated by a recursion pass (pass > 0). It can still activate on
       // pass 0 from the raw chat messages.
       if (pass > 0 && entry.exclude_recursion) continue;
+      if (pass > 0 && entry.vectorized) continue;
       if (entry.key.length === 0) continue;
 
       if (!matcher.shouldActivate(entry, state)) continue;
@@ -512,7 +513,7 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
       activatedThisPass = true;
       // "Prevent Further Recursion" — activated entry's content is not fed
       // back into the scanner for subsequent recursion passes.
-      if (entry.content && !entry.prevent_recursion) newContent.push(entry.content);
+      if (entry.content && !entry.prevent_recursion && !entry.vectorized) newContent.push(entry.content);
     }
 
     if (activatedThisPass && pass > 0) recursionPassesUsed = pass;
