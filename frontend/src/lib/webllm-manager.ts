@@ -6,9 +6,21 @@ import { CreateMLCEngine, type MLCEngine, type InitProgressReport } from "@mlc-a
 class WebLLMManager {
   private engine: MLCEngine | null = null;
   private currentModelId: string | null = null;
+  // WebLLM: module-level abort controller so any caller (InputArea, useSwipeAction)
+  // can abort an in-progress generation without needing a shared React ref.
+  private abortController: AbortController | null = null;
 
   isAvailable(): boolean {
     return !!(navigator as any).gpu;
+  }
+
+  isGenerating(): boolean {
+    return this.abortController !== null;
+  }
+
+  abort(): void {
+    this.abortController?.abort();
+    this.abortController = null;
   }
 
   async loadModel(modelId: string, onProgress: (pct: number) => void): Promise<void> {
@@ -39,30 +51,38 @@ class WebLLMManager {
 
   async generateStream(
     messages: Array<{ role: string; content: string }>,
-    onToken: (token: string) => void,
-    signal: AbortSignal
+    onToken: (token: string) => void
   ): Promise<string> {
     if (!this.engine) {
       throw new Error("WebLLM engine not loaded. Call loadModel() first.");
     }
 
-    const stream = await this.engine.chat.completions.create({
-      messages: messages as any,
-      stream: true,
-      temperature: 1,
-    });
+    // WebLLM: Create a fresh AbortController for this generation and register it
+    // so any caller can abort via webllmManager.abort().
+    this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
-    let fullContent = "";
-    for await (const chunk of stream) {
-      if (signal.aborted) break;
-      const token = chunk.choices[0]?.delta.content ?? "";
-      if (token) {
-        onToken(token);
-        fullContent += token;
+    try {
+      const stream = await this.engine.chat.completions.create({
+        messages: messages as any,
+        stream: true,
+        temperature: 1,
+      });
+
+      let fullContent = "";
+      for await (const chunk of stream) {
+        if (signal.aborted) break;
+        const token = chunk.choices[0]?.delta.content ?? "";
+        if (token) {
+          onToken(token);
+          fullContent += token;
+        }
       }
-    }
 
-    return fullContent;
+      return fullContent;
+    } finally {
+      this.abortController = null;
+    }
   }
 
   unload(): void {
