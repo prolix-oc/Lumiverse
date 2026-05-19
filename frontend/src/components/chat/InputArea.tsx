@@ -29,6 +29,7 @@ import InputBarExtensionActions from './InputBarExtensionActions'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { webllmManager } from '@/lib/webllm-manager'
 
 interface InputAreaProps {
   chatId: string
@@ -215,6 +216,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
+  // WebLLM: abort is managed by webllmManager (module-level), so no ref needed here.
   const queueLockRef = useRef(false)
   const touchTimerRef = useRef<number>(0)
   const isStreaming = useStore((s) => s.isStreaming)
@@ -241,7 +243,12 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const beginStreaming = useStore((s) => s.beginStreaming)
   const startStreaming = useStore((s) => s.startStreaming)
   const stopStreaming = useStore((s) => s.stopStreaming)
+  const endStreaming = useStore((s) => s.endStreaming)
+  const appendStreamToken = useStore((s) => s.appendStreamToken)
   const setStreamingError = useStore((s) => s.setStreamingError)
+  const profiles = useStore((s) => s.profiles)
+  const addChatHead = useStore((s) => s.addChatHead)
+  const deleteChatHead = useStore((s) => s.deleteChatHead)
   const openModal = useStore((s) => s.openModal)
   const setSetting = useStore((s) => s.setSetting)
 
@@ -941,6 +948,11 @@ export default function InputArea({ chatId }: InputAreaProps) {
       if (e.key === 'Escape' && isStreaming) {
         e.preventDefault()
         e.stopPropagation()
+        // WebLLM: abort browser-local generation (from any path — send, regen, continue, swipe)
+        if (webllmManager.isGenerating()) {
+          webllmManager.abort()
+          return
+        }
         generateApi.stop(activeGenerationId || undefined).catch(console.error)
         // If in optimistic phase, revert locally
         if (!activeGenerationId) {
@@ -1092,6 +1104,144 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [text, chatId, isStreaming, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
 
+  // WebLLM: Helper to filter the store message list into the flat role/content array
+  // that WebLLM expects. Loom-injected markers are stripped since they'd confuse
+  // the in-browser model. Pass `excludeId` to drop a specific message (for regen).
+  const buildWebLLMMessages = useCallback((
+    src: typeof messages,
+    excludeId?: string,
+  ): Array<{ role: string; content: string }> => {
+    const result: Array<{ role: string; content: string }> = []
+    for (const m of src) {
+      if (m.extra?._loom_inject) continue
+      if (excludeId && m.id === excludeId) continue
+      const role = m.is_user ? 'user' : 'assistant'
+      const content = typeof m.content === 'string' ? m.content : ''
+      if (content) result.push({ role, content })
+    }
+    return result
+  }, [messages])
+
+  // WebLLM: Core generation runner. Callers are responsible for calling beginStreaming()
+  // BEFORE this (so the stop button appears immediately), and for setting up any
+  // placeholder messages. This function handles model loading, streaming, chat-head
+  // tracking, message persistence, and cleanup.
+  //
+  // mode 'create'              — save a brand-new message, remove any local streaming placeholder
+  // mode 'replace-placeholder' — remove the explicit regen placeholder, save a new message
+  // mode 'continue'            — update an existing message by appending the continuation
+  const runWebLLM = useCallback(async (opts: {
+    chatMessages: Array<{ role: string; content: string }>
+    charName: string
+    mode: 'create' | 'replace-placeholder' | 'continue'
+    placeholderId?: string   // for replace-placeholder
+    targetMessageId?: string // for continue
+    originalContent?: string // for continue (prepend to streamed tokens)
+  }) => {
+    const { chatMessages, charName, mode, placeholderId, targetMessageId, originalContent } = opts
+
+    if (!webllmManager.isAvailable()) {
+      toast.error('WebGPU is not available on this device', { title: 'WebLLM Unavailable' })
+      endStreaming()
+      if (placeholderId) useStore.getState().removeMessage(placeholderId)
+      sendingRef.current = false
+      return
+    }
+
+    const activeProfile = profiles.find((p) => p.id === activeProfileId)
+    const modelId = activeProfile?.model
+    if (!modelId) {
+      toast.error('No model selected. Edit the connection and pick a WebLLM model.', { title: 'WebLLM' })
+      endStreaming()
+      if (placeholderId) useStore.getState().removeMessage(placeholderId)
+      sendingRef.current = false
+      return
+    }
+
+    // Capture the nonce at call time — if a newer generation starts while we are
+    // loading the model, we abandon this one without touching the store.
+    const nonce = generationNonceRef.current
+
+    // WebLLM: Add a chat head with a synthetic generationId so the generation
+    // appears in the active-generations panel even though the backend isn't involved.
+    const syntheticGenId = uuidv7()
+    addChatHead({
+      generationId: syntheticGenId,
+      chatId,
+      characterName: charName || 'Assistant',
+      characterId: activeCharacterId || undefined,
+      avatarUrl: null,
+      status: 'streaming',
+      model: modelId,
+      startedAt: Date.now(),
+    })
+
+    try {
+      if (webllmManager.getCurrentModelId() !== modelId) {
+        const loadToastId = toast.info(`Loading ${modelId}… (first use may take a minute)`, { duration: 120000, dismissible: false })
+        await webllmManager.loadModel(modelId, () => {})
+        toast.dismiss(loadToastId)
+      }
+
+      if (generationNonceRef.current !== nonce) { endStreaming(); deleteChatHead(chatId); return }
+
+      const fullContent = await webllmManager.generateStream(
+        chatMessages,
+        (token) => { if (generationNonceRef.current === nonce) appendStreamToken(token) },
+      )
+
+      if (generationNonceRef.current !== nonce) { endStreaming(); deleteChatHead(chatId); return }
+
+      // Grab the local placeholder ID (if any) before endStreaming clears it.
+      const localPlaceholderId = useStore.getState().regeneratingMessageId
+      endStreaming()
+      deleteChatHead(chatId)
+
+      if (mode === 'create') {
+        const savedMsg = await messagesApi.create(chatId, {
+          is_user: false,
+          name: charName || 'Assistant',
+          content: fullContent,
+        })
+        // Remove the local streaming placeholder that beginStreaming() may have inserted.
+        if (localPlaceholderId) useStore.getState().removeMessage(localPlaceholderId)
+        addMessage(savedMsg)
+      } else if (mode === 'replace-placeholder' && placeholderId) {
+        const savedMsg = await messagesApi.create(chatId, {
+          is_user: false,
+          name: charName || 'Assistant',
+          content: fullContent,
+        })
+        useStore.getState().removeMessage(placeholderId)
+        addMessage(savedMsg)
+      } else if (mode === 'continue' && targetMessageId) {
+        // Append the generated continuation to the original message content.
+        const combined = (originalContent || '') + fullContent
+        await messagesApi.update(chatId, targetMessageId, { content: combined })
+        useStore.getState().updateMessage(targetMessageId, { content: combined })
+      }
+    } catch (err: any) {
+      if (generationNonceRef.current !== nonce) return
+      const msg = err?.message || 'WebLLM generation failed'
+      console.error('[InputArea] WebLLM generation failed:', err)
+      setStreamingError(msg)
+      toast.error(msg, { title: 'WebLLM Error' })
+      endStreaming()
+      deleteChatHead(chatId)
+      if (placeholderId) useStore.getState().removeMessage(placeholderId)
+    } finally {
+      sendingRef.current = false
+    }
+  }, [chatId, profiles, activeProfileId, activeCharacterId, endStreaming, appendStreamToken, setStreamingError, addMessage, addChatHead, deleteChatHead])
+
+  // WebLLM: Entry point for the normal send path.
+  const handleWebLLMGeneration = useCallback((charName: string) => {
+    sendingRef.current = true
+    const chatMessages = buildWebLLMMessages(messages)
+    beginStreaming()
+    void runWebLLM({ chatMessages, charName, mode: 'create' })
+  }, [messages, beginStreaming, buildWebLLMMessages, runWebLLM])
+
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
     const content = text.trim()
@@ -1181,6 +1331,28 @@ export default function InputArea({ chatId }: InputAreaProps) {
         setMentionQueue(null)
       }
 
+      // WebLLM: If the active connection uses the webllm provider, handle generation
+      // entirely in the browser. Save the user message first (if any), then delegate
+      // to handleWebLLMGeneration and return — the backend is never contacted.
+      const activeProfile = profiles.find((p) => p.id === activeProfileId)
+      if (activeProfile?.provider === 'webllm') {
+        if (finalContent || attachments) {
+          const extra: Record<string, any> = {}
+          if (effectivePersonaId) extra.persona_id = effectivePersonaId
+          if (attachments) extra.attachments = attachments
+          const msg = await messagesApi.create(chatId, {
+            is_user: true,
+            name: effectivePersonaName,
+            content: finalContent || '(attached)',
+            extra: Object.keys(extra).length > 0 ? extra : undefined,
+          })
+          addMessage(msg)
+          if (sendPersonaId) setSendPersonaId(null)
+        }
+        void handleWebLLMGeneration(characterName)
+        return
+      }
+
       if (finalContent || attachments) {
         const extra: Record<string, any> = {}
         if (effectivePersonaId) extra.persona_id = effectivePersonaId
@@ -1225,7 +1397,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
+  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea, profiles, characterName, handleWebLLMGeneration])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -1310,6 +1482,22 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
     // 4. Fire generation
     try {
+      // WebLLM: intercept regeneration before calling the backend
+      const activeProfile = profiles.find((p) => p.id === activeProfileId)
+      if (activeProfile?.provider === 'webllm') {
+        sendingRef.current = true
+        // Build messages from current store state (the deleted message is already gone).
+        const chatMessages = buildWebLLMMessages(messages)
+        void runWebLLM({
+          chatMessages,
+          charName: characterName,
+          mode: 'replace-placeholder',
+          placeholderId,
+        })
+        consumeOneshotGuides()
+        return
+      }
+
       const presetId = getActivePresetForGeneration() || undefined
       const genOpts: import('@/api/generate').GenerateRequest = {
         chat_id: chatId,
@@ -1341,7 +1529,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Regeneration Failed' })
     }
-  }, [chatId, isStreaming, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, profiles, characterName, buildWebLLMMessages, runWebLLM])
 
   const handleRegenerate = useCallback(() => {
     if (isStreaming) return
@@ -1358,9 +1546,30 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const handleContinue = useCallback(async () => {
     if (isStreaming) return
     const nonce = ++generationNonceRef.current
+    const lastAssistant = [...messages].reverse().find((msg) => !msg.is_user)
+
     beginStreaming(undefined, 'continue')
+
     try {
-      const lastAssistant = [...messages].reverse().find((msg) => !msg.is_user)
+      // WebLLM: intercept continue before calling the backend
+      const activeProfile = profiles.find((p) => p.id === activeProfileId)
+      if (activeProfile?.provider === 'webllm') {
+        if (!lastAssistant) { endStreaming(); return }
+        sendingRef.current = true
+        // WebLLM: send all messages including the last assistant one; the model treats
+        // it as a partial assistant prefill and continues from where it left off.
+        const chatMessages = buildWebLLMMessages(messages)
+        void runWebLLM({
+          chatMessages,
+          charName: lastAssistant.name || characterName,
+          mode: 'continue',
+          targetMessageId: lastAssistant.id,
+          originalContent: typeof lastAssistant.content === 'string' ? lastAssistant.content : '',
+        })
+        consumeOneshotGuides()
+        return
+      }
+
       const targetCharacterId = isGroupChat && typeof lastAssistant?.extra?.character_id === 'string'
         ? lastAssistant.extra.character_id
         : undefined
@@ -1385,7 +1594,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: 'Continue Failed' })
     }
-  }, [chatId, isStreaming, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isStreaming, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, endStreaming, startStreaming, setStreamingError, consumeOneshotGuides, profiles, characterName, buildWebLLMMessages, runWebLLM])
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isStreaming) return
@@ -1428,6 +1637,11 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
+    // WebLLM: abort browser-local generation from any path (send/regen/continue/swipe)
+    if (webllmManager.isGenerating()) {
+      webllmManager.abort()
+      return
+    }
     try {
       // If we have a generation ID, stop that specific generation.
       // Otherwise (optimistic phase), stop all user generations.
