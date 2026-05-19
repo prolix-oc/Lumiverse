@@ -1,4 +1,8 @@
-import { CreateMLCEngine, type MLCEngine, type InitProgressReport } from "@mlc-ai/web-llm";
+// WebLLM: @mlc-ai/web-llm is intentionally NOT statically imported here.
+// It weighs ~6 MB and is only useful to users who explicitly create a WebLLM
+// connection. Dynamic import inside loadModel() means the chunk is fetched on
+// demand — zero bundle cost for everyone else.
+import type { MLCEngine } from "@mlc-ai/web-llm";
 
 // WebLLM: Singleton manager for the in-browser LLM engine lifecycle.
 // The engine is expensive to initialize (model download + GPU compile),
@@ -40,8 +44,9 @@ class WebLLMManager {
       this.currentModelId = null;
     }
 
+    const { CreateMLCEngine } = await import("@mlc-ai/web-llm");
     this.engine = await CreateMLCEngine(modelId, {
-      initProgressCallback: (report: InitProgressReport) => {
+      initProgressCallback: (report) => {
         onProgress(Math.round(report.progress * 100));
       },
     });
