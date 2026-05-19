@@ -613,6 +613,10 @@ export interface ImageGenSettings {
   promptParserParameters?: Record<string, any>
   outputTarget?: 'background' | 'chat_attachment' | 'preview'
   parameters?: Record<string, any>
+  /** Maximum seconds for ImageGen scene/custom prompt parsing. 0 disables the timeout. */
+  promptGenerationTimeoutSeconds?: number
+  /** Maximum seconds for the image provider generation phase. 0 disables the timeout. */
+  generationTimeoutSeconds?: number
   sceneChangeThreshold: number
   autoGenerate: boolean
   forceGeneration: boolean

@@ -17,6 +17,8 @@ export const createGenerationSlice: StateCreator<AppStore, [], [], GenerationSli
     promptParserParameters: {},
     outputTarget: 'background',
     parameters: {},
+    promptGenerationTimeoutSeconds: 60,
+    generationTimeoutSeconds: 300,
     sceneChangeThreshold: 2,
     autoGenerate: true,
     forceGeneration: false,

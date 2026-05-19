@@ -50,7 +50,12 @@ interface ImageGenSettings {
   /** Per-session parameter overrides set via the Image Gen panel — merged on top of connection.default_parameters at generation time. */
   parameters?: Record<string, any>;
   /**
-   * Maximum seconds to wait for the image provider to respond.
+   * Maximum seconds to wait for the LLM sidecar/parser prompt generation phase.
+   * Defaults to 60. Set to 0 to disable this timeout.
+   */
+  promptGenerationTimeoutSeconds?: number;
+  /**
+   * Maximum seconds to wait for the image provider generation phase.
    * Defaults to 300 (5 minutes). Set to 0 to disable the timeout entirely.
    */
   generationTimeoutSeconds?: number;
@@ -81,6 +86,8 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   recycledImageLimit: 1,
   backgroundOpacity: 0.35,
   fadeTransitionMs: 800,
+  promptGenerationTimeoutSeconds: 60,
+  generationTimeoutSeconds: 300,
 };
 
 export interface SceneData {
@@ -130,6 +137,8 @@ export interface GenerateImageOptions {
   negativePrompt?: string;
   promptPresetId?: string | null;
   outputTarget?: ImageGenOutputTarget;
+  promptGenerationTimeoutSeconds?: number;
+  generationTimeoutSeconds?: number;
 }
 
 const SCENE_CACHE_MAX = 200;
@@ -191,12 +200,7 @@ export async function generateSceneBackground(
 
   // Register this generation up-front so a newer request for the same chat
   // can abort it during *any* phase (scene analysis as well as image gen).
-  // The timeout is an optional trigger; supersession works independently.
-  const timeoutSecs = settings.generationTimeoutSeconds ?? 300;
   const controller = new AbortController();
-  const timeoutHandle = timeoutSecs > 0
-    ? setTimeout(() => controller.abort(new Error(`Image generation timed out after ${timeoutSecs}s`)), timeoutSecs * 1000)
-    : null;
 
   const registryKey = `${userId}:${chatId}`;
   const existing = activeImageGenerations.get(registryKey);
@@ -213,16 +217,29 @@ export async function generateSceneBackground(
     const params = { ...connection.default_parameters, ...(settings.parameters || {}) };
     normalizeRandomSeed(params, !!provider.capabilities.parameters.seed);
     resolveProviderRandomSeed(params, connection.provider);
-    const promptResult = await resolveImagePrompt(
-      userId,
-      chatId,
-      settings,
-      promptMode,
-      promptInput,
-      params,
-      connection.provider,
+    const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
+    const promptSignal = createPhaseTimeoutSignal(
       controller.signal,
+      promptTimeoutSecs,
+      `Image prompt generation timed out after ${promptTimeoutSecs}s`,
     );
+    let promptResult: Awaited<ReturnType<typeof resolveImagePrompt>>;
+    try {
+      promptResult = await resolveImagePrompt(
+        userId,
+        chatId,
+        settings,
+        promptMode,
+        promptInput,
+        params,
+        connection.provider,
+        promptSignal.signal,
+      );
+    } catch (err) {
+      throw resolveAbortReason(promptSignal.signal) ?? err;
+    } finally {
+      promptSignal.cleanup();
+    }
 
     if (promptResult.scene) {
       const previous = sceneCache.get(cacheKey) || null;
@@ -267,15 +284,28 @@ export async function generateSceneBackground(
       await applyComfyUIWorkflowConfig(connection, params, promptResult.prompt, promptResult.negativePrompt);
     }
 
+    const generationTimeoutSecs = resolveTimeoutSeconds(opts?.generationTimeoutSeconds, settings.generationTimeoutSeconds ?? 300);
+    const generationSignal = createPhaseTimeoutSignal(
+      controller.signal,
+      generationTimeoutSecs,
+      `Image generation timed out after ${generationTimeoutSecs}s`,
+    );
     const request: ImageGenRequest = {
       prompt: promptResult.prompt,
       negativePrompt: promptResult.negativePrompt,
       model: connection.model,
       parameters: params,
-      signal: controller.signal,
+      signal: generationSignal.signal,
     };
 
-    const response = await provider.generate(apiKey || "", connection.api_url || "", request);
+    let response: Awaited<ReturnType<typeof provider.generate>>;
+    try {
+      response = await provider.generate(apiKey || "", connection.api_url || "", request);
+    } catch (err) {
+      throw resolveAbortReason(generationSignal.signal) ?? err;
+    } finally {
+      generationSignal.cleanup();
+    }
 
     // Persist the generated image to the images table
     let imageId: string | undefined;
@@ -344,13 +374,44 @@ export async function generateSceneBackground(
       message,
     };
   } finally {
-    if (timeoutHandle !== null) clearTimeout(timeoutHandle);
     // Only clear the registry entry if it still points at our controller —
     // a newer request may have already overwritten it.
     if (activeImageGenerations.get(registryKey)?.controller === controller) {
       activeImageGenerations.delete(registryKey);
     }
   }
+}
+
+function resolveTimeoutSeconds(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : fallback;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function createPhaseTimeoutSignal(
+  parentSignal: AbortSignal,
+  timeoutSeconds: number,
+  timeoutMessage: string,
+): { signal: AbortSignal; cleanup: () => void } {
+  if (timeoutSeconds <= 0) return { signal: parentSignal, cleanup: () => {} };
+
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  if (parentSignal.aborted) abortFromParent();
+  else parentSignal.addEventListener("abort", abortFromParent, { once: true });
+
+  const timeout = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutSeconds * 1000);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parentSignal.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+function resolveAbortReason(signal: AbortSignal): Error | null {
+  return signal.aborted && signal.reason instanceof Error ? signal.reason : null;
 }
 
 async function applyComfyUIWorkflowConfig(

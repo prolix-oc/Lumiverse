@@ -17,6 +17,14 @@ import styles from './ImageGenPanel.module.css'
 
 type RefImage = { data: string; mimeType?: string }
 const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
+const DEFAULT_PROMPT_TIMEOUT_SECONDS = 60
+const DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS = 300
+
+function normalizeTimeoutSeconds(value: string, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(0, Math.floor(parsed))
+}
 
 function ToggleRow({ checked, onChange, label, hint }: { checked: boolean; onChange: (checked: boolean) => void; label: string; hint?: string }) {
   return (
@@ -579,6 +587,8 @@ export default function ImageGenPanel() {
         negativePrompt: imageGeneration.customNegativePrompt || '',
         promptPresetId: imageGeneration.activePromptPresetId || null,
         outputTarget: imageGeneration.outputTarget || 'background',
+        promptGenerationTimeoutSeconds: imageGeneration.promptGenerationTimeoutSeconds ?? DEFAULT_PROMPT_TIMEOUT_SECONDS,
+        generationTimeoutSeconds: imageGeneration.generationTimeoutSeconds ?? DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS,
       })
       setLastScene(res.scene || null)
       if (res.generated && res.imageDataUrl) {
@@ -786,6 +796,28 @@ export default function ImageGenPanel() {
               </FormField>
             </EditorSection>
           )}
+
+          <EditorSection title="Timeouts" Icon={Settings2} defaultExpanded={false}>
+            <FormField label="Prompt Generation Timeout" hint="Seconds to wait for ImageGen scene parsing or parsed custom prompt generation. Set to 0 to disable.">
+              <TextInput
+                type="number"
+                min={0}
+                step={1}
+                value={String(imageGeneration.promptGenerationTimeoutSeconds ?? DEFAULT_PROMPT_TIMEOUT_SECONDS)}
+                onChange={(value) => updateTop({ promptGenerationTimeoutSeconds: normalizeTimeoutSeconds(value, DEFAULT_PROMPT_TIMEOUT_SECONDS) })}
+              />
+            </FormField>
+
+            <FormField label="Image Generation Timeout" hint="Seconds to wait for the image provider after the prompt is ready. Increase this for long ComfyUI workflows, or set to 0 to disable.">
+              <TextInput
+                type="number"
+                min={0}
+                step={1}
+                value={String(imageGeneration.generationTimeoutSeconds ?? DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS)}
+                onChange={(value) => updateTop({ generationTimeoutSeconds: normalizeTimeoutSeconds(value, DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS) })}
+              />
+            </FormField>
+          </EditorSection>
 
           {/* Dynamic Generation Parameters from Provider Schema */}
           {activeConnection && capabilities && (

@@ -20,6 +20,8 @@ app.post("/generate", async (c) => {
       negativePrompt: body.negativePrompt,
       promptPresetId: body.promptPresetId,
       outputTarget: body.outputTarget,
+      promptGenerationTimeoutSeconds: body.promptGenerationTimeoutSeconds,
+      generationTimeoutSeconds: body.generationTimeoutSeconds,
     });
     return c.json(result);
   } catch (err: any) {
