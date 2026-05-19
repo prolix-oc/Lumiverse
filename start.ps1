@@ -134,14 +134,23 @@ function Ensure-Bun {
 
 function Invoke-SetupIfNeeded {
     $identityFile = Join-Path $BackendDir "data\lumiverse.identity"
-    $envFile = Join-Path $BackendDir ".env"
+    $credentialsFile = Join-Path $BackendDir "data\owner.credentials"
 
-    if (-not (Test-Path $identityFile) -or -not (Test-Path $envFile)) {
+    # A migrated data folder is already set up even if .env was not copied.
+    # The backend can fall back to defaults for missing .env values.
+    if (-not (Test-Path $identityFile) -or -not (Test-Path $credentialsFile)) {
         Write-Info "First run detected - launching setup wizard..."
         Write-Host ""
         Install-Deps $BackendDir "backend"
         Push-Location $BackendDir
         try { & bun run scripts/setup-wizard.ts } finally { Pop-Location }
+
+        if (-not (Test-Path $identityFile) -or -not (Test-Path $credentialsFile)) {
+            Write-Err "Setup wizard did not create the required identity and owner credentials."
+            Write-Err "Files expected at: $identityFile and $credentialsFile"
+            Write-Err "Try running the wizard manually: bun run setup"
+            exit 1
+        }
     }
 }
 
