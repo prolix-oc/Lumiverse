@@ -29,6 +29,7 @@ import InputBarExtensionActions from './InputBarExtensionActions'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { webllmManager } from '@/lib/webllm-manager'
 
 interface InputAreaProps {
   chatId: string
@@ -215,6 +216,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
+  // WebLLM: AbortController for the current in-browser generation, so Stop works.
+  const webllmAbortRef = useRef<AbortController | null>(null)
   const queueLockRef = useRef(false)
   const touchTimerRef = useRef<number>(0)
   const isStreaming = useStore((s) => s.isStreaming)
@@ -241,7 +244,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const beginStreaming = useStore((s) => s.beginStreaming)
   const startStreaming = useStore((s) => s.startStreaming)
   const stopStreaming = useStore((s) => s.stopStreaming)
+  const endStreaming = useStore((s) => s.endStreaming)
+  const appendStreamToken = useStore((s) => s.appendStreamToken)
   const setStreamingError = useStore((s) => s.setStreamingError)
+  const profiles = useStore((s) => s.profiles)
   const openModal = useStore((s) => s.openModal)
   const setSetting = useStore((s) => s.setSetting)
 
@@ -941,6 +947,11 @@ export default function InputArea({ chatId }: InputAreaProps) {
       if (e.key === 'Escape' && isStreaming) {
         e.preventDefault()
         e.stopPropagation()
+        // WebLLM: abort browser-local generation instead of calling the backend
+        if (webllmAbortRef.current) {
+          webllmAbortRef.current.abort()
+          return
+        }
         generateApi.stop(activeGenerationId || undefined).catch(console.error)
         // If in optimistic phase, revert locally
         if (!activeGenerationId) {
@@ -1092,6 +1103,89 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [text, chatId, isStreaming, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
 
+  // WebLLM: Run generation entirely in the browser. Called from handleSend when
+  // the active connection uses provider "webllm". The backend is never contacted
+  // for generation — only messagesApi.create() is called to persist the result.
+  const handleWebLLMGeneration = useCallback(async (charName: string) => {
+    if (!webllmManager.isAvailable()) {
+      toast.error('WebGPU is not available on this device', { title: 'WebLLM Unavailable' })
+      return
+    }
+
+    const activeProfile = profiles.find((p) => p.id === activeProfileId)
+    const modelId = activeProfile?.model
+    if (!modelId) {
+      toast.error('No model selected. Edit the connection and choose a WebLLM model.', { title: 'WebLLM' })
+      return
+    }
+
+    sendingRef.current = true
+    const nonce = ++generationNonceRef.current
+
+    try {
+      // Load model (no-op if already loaded for this modelId)
+      if (webllmManager.getCurrentModelId() !== modelId) {
+        const loadToastId = toast.info(`Loading ${modelId}…`, { duration: 60000, dismissible: false })
+        await webllmManager.loadModel(modelId, (_pct) => {
+          // Progress updates are shown in the connection manager pre-download UI;
+          // here we just show a generic loading toast until ready.
+        })
+        toast.dismiss(loadToastId)
+      }
+
+      if (generationNonceRef.current !== nonce) return
+
+      // Build a flat message list from the current chat history.
+      // The backend normally runs prompt assembly (system prompt, world info, etc.)
+      // but WebLLM v1 uses the raw chat messages as-is for simplicity.
+      // WebLLM: loom-injected messages (extra._loom_inject) are internal markers;
+      // skip them since they'd confuse the in-browser model.
+      const chatMessages: Array<{ role: string; content: string }> = []
+      for (const m of messages) {
+        if (m.extra?._loom_inject) continue
+        const role = m.is_user ? 'user' : 'assistant'
+        const content = typeof m.content === 'string' ? m.content : ''
+        if (content) chatMessages.push({ role, content })
+      }
+
+      beginStreaming()
+      if (generationNonceRef.current !== nonce) { endStreaming(); return }
+
+      const controller = new AbortController()
+      webllmAbortRef.current = controller
+
+      const fullContent = await webllmManager.generateStream(
+        chatMessages,
+        (token) => {
+          if (generationNonceRef.current === nonce) appendStreamToken(token)
+        },
+        controller.signal
+      )
+
+      if (generationNonceRef.current !== nonce) { endStreaming(); return }
+
+      endStreaming()
+
+      // Persist the completed message to the backend database.
+      const savedMsg = await messagesApi.create(chatId, {
+        is_user: false,
+        name: charName || 'Assistant',
+        content: fullContent,
+      })
+      addMessage(savedMsg)
+    } catch (err: any) {
+      if (generationNonceRef.current !== nonce) return
+      const msg = err?.message || 'WebLLM generation failed'
+      console.error('[InputArea] WebLLM generation failed:', err)
+      setStreamingError(msg)
+      toast.error(msg, { title: 'WebLLM Error' })
+      endStreaming()
+    } finally {
+      webllmAbortRef.current = null
+      sendingRef.current = false
+    }
+  }, [chatId, profiles, activeProfileId, messages, beginStreaming, endStreaming, appendStreamToken, setStreamingError, addMessage])
+
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
     const content = text.trim()
@@ -1181,6 +1275,28 @@ export default function InputArea({ chatId }: InputAreaProps) {
         setMentionQueue(null)
       }
 
+      // WebLLM: If the active connection uses the webllm provider, handle generation
+      // entirely in the browser. Save the user message first (if any), then delegate
+      // to handleWebLLMGeneration and return — the backend is never contacted.
+      const activeProfile = profiles.find((p) => p.id === activeProfileId)
+      if (activeProfile?.provider === 'webllm') {
+        if (finalContent || attachments) {
+          const extra: Record<string, any> = {}
+          if (effectivePersonaId) extra.persona_id = effectivePersonaId
+          if (attachments) extra.attachments = attachments
+          const msg = await messagesApi.create(chatId, {
+            is_user: true,
+            name: effectivePersonaName,
+            content: finalContent || '(attached)',
+            extra: Object.keys(extra).length > 0 ? extra : undefined,
+          })
+          addMessage(msg)
+          if (sendPersonaId) setSendPersonaId(null)
+        }
+        void handleWebLLMGeneration(characterName)
+        return
+      }
+
       if (finalContent || attachments) {
         const extra: Record<string, any> = {}
         if (effectivePersonaId) extra.persona_id = effectivePersonaId
@@ -1225,7 +1341,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
+  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea, profiles, characterName, handleWebLLMGeneration])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -1428,6 +1544,12 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
+    // WebLLM: If a browser-local generation is running, abort it directly.
+    // No backend call needed — there is no server-side generation to stop.
+    if (webllmAbortRef.current) {
+      webllmAbortRef.current.abort()
+      return
+    }
     try {
       // If we have a generation ID, stop that specific generation.
       // Otherwise (optimistic phase), stop all user generations.

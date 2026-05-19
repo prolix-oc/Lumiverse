@@ -21,6 +21,7 @@ import { SiliconFlowProvider } from "./providers/siliconflow";
 import { InfermaticProvider } from "./providers/infermatic";
 import { CustomProvider } from "./providers/custom";
 import { GoogleVertexProvider } from "./providers/google-vertex";
+import { WebllmProvider } from "./providers/webllm";
 
 const providers = new Map<string, LlmProvider>();
 
@@ -63,3 +64,4 @@ registerProvider(new PollinationsProvider());
 registerProvider(new SiliconFlowProvider());
 registerProvider(new InfermaticProvider());
 registerProvider(new CustomProvider());
+registerProvider(new WebllmProvider());

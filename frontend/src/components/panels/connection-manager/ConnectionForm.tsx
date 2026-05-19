@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { webllmManager } from '@/lib/webllm-manager'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
 import { connectionsApi } from '@/api/connections'
@@ -30,6 +31,16 @@ interface ConnectionFormProps {
   onOAuthCreated?: (profile: ConnectionProfile) => void
 }
 
+// WebLLM: Curated model list sourced from the MLC model registry.
+// Each model downloads once and is cached in the browser's Cache Storage API.
+const WEBLLM_MODELS = [
+  { id: 'Llama-3.2-3B-Instruct-q4f32_1-MLC', label: 'Llama 3.2 3B (recommended, ~2GB)' },
+  { id: 'Llama-3.1-8B-Instruct-q4f32_1-MLC', label: 'Llama 3.1 8B (~5GB)' },
+  { id: 'Phi-3.5-mini-instruct-q4f16_1-MLC', label: 'Phi 3.5 Mini (~2GB)' },
+  { id: 'gemma-2-2b-it-q4f32_1-MLC', label: 'Gemma 2 2B (~1.5GB)' },
+  { id: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC', label: 'Mistral 7B (~4GB)' },
+]
+
 const FALLBACK_PROVIDERS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
@@ -38,6 +49,7 @@ const FALLBACK_PROVIDERS = [
   { value: 'pollinations', label: 'Pollinations (Gen)' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'custom', label: 'Custom (OpenAI-compatible)' },
+  { value: 'webllm', label: 'WebLLM (In-Browser)' },
 ]
 
 const VERTEX_REGIONS = [
@@ -57,7 +69,10 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [provider, setProvider] = useState(profile?.provider || 'openai')
   const [apiKey, setApiKey] = useState('')
   const [apiUrl, setApiUrl] = useState(profile?.api_url || '')
-  const [model, setModel] = useState(profile?.model || '')
+  // WebLLM: default to the first model in the list when creating a new webllm connection
+  const [model, setModel] = useState(
+    profile?.model || (profile?.provider === 'webllm' ? WEBLLM_MODELS[0].id : '')
+  )
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
   const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
   const [useSubscriptionApi, setUseSubscriptionApi] = useState(profile?.metadata?.use_subscription_api || false)
@@ -75,6 +90,11 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [modelsLoading, setModelsLoading] = useState(false)
   const [byopLoading, setByopLoading] = useState(false)
   const [byopStatus, setByopStatus] = useState<string | null>(null)
+  // WebLLM: local state for model pre-download progress in the connection form
+  const [webllmDownloading, setWebllmDownloading] = useState(false)
+  const [webllmDownloadProgress, setWebllmDownloadProgress] = useState(0)
+  const [webllmDownloadError, setWebllmDownloadError] = useState<string | null>(null)
+  const webllmAvailable = webllmManager.isAvailable()
 
   // Vertex AI specific state
   const [vertexRegion, setVertexRegion] = useState(profile?.metadata?.vertex_region || 'us-central1')
@@ -218,6 +238,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     }
   }, [isPollinations, profile?.id])
 
+  const isWebLLM = provider === 'webllm'
   const showResponsesApiToggle = provider === 'openai'
   const showSubscriptionApiToggle = provider === 'nanogpt'
   const showZaiCodingPlanToggle = provider === 'zai'
@@ -225,16 +246,41 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const isOpenRouter = provider === 'openrouter'
   // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
   // field has no purpose and we don't display it.
-  const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI
+  // WebLLM: no API URL or API key needed — runs entirely in the browser.
+  const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI || isWebLLM
+  const hideApiKey = isWebLLM
   const normalizedBoundReasoningSettings = normalizeReasoningSettingsForProvider(boundReasoningSettings, provider, model)
   const normalizedCurrentReasoningSettings = normalizeReasoningSettingsForProvider(reasoningSettings, provider, model)
   const bindingMatchesCurrent = areReasoningSettingsEqual(normalizedBoundReasoningSettings, normalizedCurrentReasoningSettings)
+
+  // WebLLM: when switching to webllm provider in a new connection form, pre-select
+  // the first model so the user doesn't have to interact with the dropdown first.
+  useEffect(() => {
+    if (provider === 'webllm' && !model) {
+      setModel(WEBLLM_MODELS[0].id)
+    }
+  }, [provider, model])
 
   useEffect(() => {
     setBindReasoning(!!profile?.metadata?.reasoningBindings)
     setBoundReasoningSettings({ ...(profile?.metadata?.reasoningBindings?.settings || reasoningSettings) })
     setAnthropicPromptCachingSettings(parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching))
   }, [profile?.id])
+
+  const handleWebLLMPreDownload = useCallback(async () => {
+    if (!model) return
+    setWebllmDownloading(true)
+    setWebllmDownloadProgress(0)
+    setWebllmDownloadError(null)
+    try {
+      await webllmManager.loadModel(model, (pct) => setWebllmDownloadProgress(pct))
+      setWebllmDownloadProgress(100)
+    } catch (err: any) {
+      setWebllmDownloadError(err?.message || 'Download failed')
+    } finally {
+      setWebllmDownloading(false)
+    }
+  }, [model])
 
   const handlePollinationsSignIn = useCallback(async () => {
     setByopStatus(null)
@@ -413,9 +459,11 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
               </div>
             </FormField>
           )}
-          <FormField label="API Key" hint={profile?.has_api_key ? 'Key is set. Enter a new value to replace it.' : undefined}>
-            <TextInput value={apiKey} onChange={setApiKey} placeholder={profile?.has_api_key ? '••••••••' : 'Enter API key'} type="password" />
-          </FormField>
+          {!hideApiKey && (
+            <FormField label="API Key" hint={profile?.has_api_key ? 'Key is set. Enter a new value to replace it.' : undefined}>
+              <TextInput value={apiKey} onChange={setApiKey} placeholder={profile?.has_api_key ? '••••••••' : 'Enter API key'} type="password" />
+            </FormField>
+          )}
         </>
       )}
 
@@ -424,18 +472,64 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
         </FormField>
       )}
-      <FormField label="Model" hint="Refresh uses the current form values, even before the connection is saved.">
-        <ModelCombobox
-          value={model}
-          onChange={setModel}
-          models={models}
-          modelLabels={modelLabels}
-          loading={modelsLoading}
-          onRefresh={fetchModels}
-          appearance="standard"
-          placeholder={isVertexAI ? 'gemini-2.5-flash' : 'gpt-4o'}
-        />
-      </FormField>
+      {isWebLLM ? (
+        // WebLLM: Use a fixed dropdown of supported MLC models instead of the
+        // normal ModelCombobox, which would try to fetch models from a server API.
+        <FormField label="Model" hint="Model downloads once and is cached in your browser. No API key required. Requires WebGPU.">
+          <Select
+            value={model}
+            onChange={setModel}
+            options={WEBLLM_MODELS.map((m) => ({ value: m.id, label: m.label }))}
+          />
+        </FormField>
+      ) : (
+        <FormField label="Model" hint="Refresh uses the current form values, even before the connection is saved.">
+          <ModelCombobox
+            value={model}
+            onChange={setModel}
+            models={models}
+            modelLabels={modelLabels}
+            loading={modelsLoading}
+            onRefresh={fetchModels}
+            appearance="standard"
+            placeholder={isVertexAI ? 'gemini-2.5-flash' : 'gpt-4o'}
+          />
+        </FormField>
+      )}
+      {isWebLLM && (
+        <>
+          {!webllmAvailable && (
+            <FormField label="">
+              <div className={styles.byopStatus}>
+                ⚠ WebGPU is not available on this browser/device. WebLLM requires a WebGPU-compatible browser (Chrome 113+, Edge 113+) on a supported device.
+              </div>
+            </FormField>
+          )}
+          {webllmAvailable && (
+            <FormField label="" hint={webllmDownloadProgress === 100 ? 'Model is cached and ready.' : 'Pre-download the model so the first generation starts instantly.'}>
+              <div className={styles.byopRow}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleWebLLMPreDownload}
+                  disabled={webllmDownloading || !model}
+                >
+                  {webllmDownloading ? `Downloading… ${webllmDownloadProgress}%` : 'Pre-download model'}
+                </Button>
+                {webllmDownloadError && <span className={styles.byopStatus}>{webllmDownloadError}</span>}
+                {!webllmDownloading && webllmDownloadProgress === 100 && (
+                  <span className={styles.byopStatus}>✓ Cached</span>
+                )}
+              </div>
+              {webllmDownloading && (
+                <div style={{ marginTop: 6, height: 4, background: 'var(--surface-3, #333)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${webllmDownloadProgress}%`, background: 'var(--accent, #7c6fe0)', transition: 'width 0.3s' }} />
+                </div>
+              )}
+            </FormField>
+          )}
+        </>
+      )}
       <FormField label="">
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label="Set as default connection" />
       </FormField>
