@@ -301,8 +301,10 @@ function Start-Backend {
 
     Install-Deps $BackendDir "backend"
 
-    # Clear Bun install cache to avoid stale tarballs after updates
-    & bun pm cache rm *> $null
+    # Clear Bun install cache to avoid stale tarballs after updates.
+    # Bun writes its `.env` autoload notice to stderr; PowerShell promotes any
+    # native stderr write to a NativeCommandError, so merge streams and discard.
+    try { & bun pm cache rm 2>&1 | Out-Null } catch { }
 
     $env:FRONTEND_DIR = $frontendDist
     Load-EnvFile
