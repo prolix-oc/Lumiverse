@@ -545,20 +545,35 @@ export function useWebSocket() {
               }
 
               // Don't trigger image gen if a new generation already started,
-              // or if we're in the middle of a group nudge loop.
+              // we're in a group nudge loop, or the user has navigated away
+              // from the chat that just finished generating (the backend would
+              // still create the attachment message, but the local store would
+              // silently drop it because the active chat no longer matches).
               if (
                 !latest.isStreaming &&
                 !latest.isNudgeLoopActive &&
+                latest.activeChatId === payload.chatId &&
                 latest.imageGeneration.enabled &&
                 latest.imageGeneration.autoGenerate !== false &&
                 !latest.sceneGenerating
               ) {
-                const outputTarget = latest.imageGeneration.outputTarget || 'background'
+                const ig = latest.imageGeneration
+                const outputTarget = ig.outputTarget || 'background'
+                // Pass settings from the live store rather than relying on the
+                // backend's persisted row — settings flushes are debounced
+                // ~1.5s, so without this a reply sent right after a toggle
+                // would auto-gen with the previous values.
                 latest.setSceneGenerating(true)
                 imageGenApi.generate({
                   chatId: payload.chatId,
-                  forceGeneration: !!latest.imageGeneration.forceGeneration,
+                  forceGeneration: !!ig.forceGeneration,
                   outputTarget,
+                  promptMode: ig.promptMode,
+                  prompt: ig.customPrompt,
+                  negativePrompt: ig.customNegativePrompt,
+                  promptPresetId: ig.activePromptPresetId ?? null,
+                  promptGenerationTimeoutSeconds: ig.promptGenerationTimeoutSeconds,
+                  generationTimeoutSeconds: ig.generationTimeoutSeconds,
                 }).then((res) => {
                   if (outputTarget === 'background' && res.generated && res.imageDataUrl) {
                     store.getState().setSceneBackground(res.imageDataUrl)

@@ -376,31 +376,31 @@ export async function generateSceneBackground(
     let imageUrl: string | undefined;
     let message: Message | undefined;
     if (response.imageDataUrl) {
+      const image = await imagesSvc.saveImageFromDataUrl(
+        userId,
+        response.imageDataUrl,
+        `image-gen-${connection.provider}-${Date.now()}.png`,
+        { owner_chat_id: chatId },
+      );
+      imageId = image.id;
+      imageUrl = `/api/v1/image-gen/results/${image.id}`;
+
+      const newAttachment = {
+        type: "image" as const,
+        image_id: image.id,
+        mime_type: image.mime_type,
+        original_filename: image.original_filename,
+        width: image.width ?? undefined,
+        height: image.height ?? undefined,
+      };
+      const imageGenMeta = {
+        provider: connection.provider,
+        prompt: promptResult.prompt,
+        negativePrompt: promptResult.negativePrompt,
+        mode: promptMode,
+      };
+
       try {
-        const image = await imagesSvc.saveImageFromDataUrl(
-          userId,
-          response.imageDataUrl,
-          `image-gen-${connection.provider}-${Date.now()}.png`,
-          { owner_chat_id: chatId },
-        );
-        imageId = image.id;
-        imageUrl = `/api/v1/image-gen/results/${image.id}`;
-
-        const newAttachment = {
-          type: "image" as const,
-          image_id: image.id,
-          mime_type: image.mime_type,
-          original_filename: image.original_filename,
-          width: image.width ?? undefined,
-          height: image.height ?? undefined,
-        };
-        const imageGenMeta = {
-          provider: connection.provider,
-          prompt: promptResult.prompt,
-          negativePrompt: promptResult.negativePrompt,
-          mode: promptMode,
-        };
-
         if (outputTarget === "chat_attachment") {
           message = chatsSvc.createMessage(chatId, {
             is_user: false,
@@ -428,24 +428,34 @@ export async function generateSceneBackground(
           }
           message = updated;
         }
+      } catch (err) {
+        // Image is already saved to our DB and (for streaming providers) sits
+        // in the provider's history — surface the failure so the user sees
+        // why nothing landed in chat instead of silently dropping it.
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error("[image-gen] Failed to attach generated image to chat:", err);
+        eventBus.emit(
+          EventType.IMAGE_GEN_ERROR,
+          { assetId: jobId, chatId, message: `Image generated but chat attachment failed: ${detail}` },
+          userId,
+        );
+        throw err;
+      }
 
-        // Gallery linkage is best-effort and not on the response's critical
-        // path — defer to a microtask so the HTTP response (and the chat
-        // re-render that follows from MESSAGE_EDITED) lands sooner.
-        if (settings.addToGallery !== false) {
-          const characterId = chatsSvc.getChat(userId, chatId)?.character_id;
-          if (characterId) {
-            queueMicrotask(() => {
-              try {
-                gallerySvc.linkImageToGallery(userId, characterId, image.id, "Generated image");
-              } catch {
-                // Gallery linkage is best-effort; the image itself is already persisted.
-              }
-            });
-          }
+      // Gallery linkage is best-effort and not on the response's critical
+      // path — defer to a microtask so the HTTP response (and the chat
+      // re-render that follows from MESSAGE_EDITED) lands sooner.
+      if (settings.addToGallery !== false) {
+        const characterId = chatsSvc.getChat(userId, chatId)?.character_id;
+        if (characterId) {
+          queueMicrotask(() => {
+            try {
+              gallerySvc.linkImageToGallery(userId, characterId, image.id, "Generated image");
+            } catch (err) {
+              console.warn("[image-gen] Gallery linkage failed (non-fatal):", err);
+            }
+          });
         }
-      } catch {
-        // Persistence failure is non-fatal — the data URL is still returned
       }
     }
 
