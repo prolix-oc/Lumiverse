@@ -42,6 +42,14 @@ export default defineConfig({
       localsConvention: 'camelCaseOnly',
     },
   },
+  build: {
+    // Vite 8 defaults build.cssMinify to 'lightningcss', which requires the
+    // lightningcss-<platform>-<arch> native binding to load at build time.
+    // On Termux/Android arm64 the binding install is unreliable, and when it
+    // fails the production build emits no CSS — pin to esbuild so the minify
+    // step uses a binding we ship and can rely on across platforms.
+    cssMinify: 'esbuild',
+  },
   server: {
     host: '::',
     proxy: {

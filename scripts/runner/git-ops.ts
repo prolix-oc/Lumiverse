@@ -61,6 +61,35 @@ function shouldRebuildFrontend(changedFiles: string[]): boolean {
   return changedFiles.some(isFrontendBuildInput);
 }
 
+// Termux/proot detection. start.sh exports LUMIVERSE_IS_TERMUX /
+// LUMIVERSE_IS_PROOT before launching the runner so we can mirror its
+// install-time workarounds (copyfile backend, pre-install cache flush) on
+// the operator-panel-driven update + branch-switch + rebuild paths.
+function isTermuxRuntime(): boolean {
+  return process.env.LUMIVERSE_IS_TERMUX === "true";
+}
+
+function isProotRuntime(): boolean {
+  return process.env.LUMIVERSE_IS_PROOT === "true";
+}
+
+function bunInstallCmd(): string[] {
+  if (isTermuxRuntime() || isProotRuntime()) {
+    // Android filesystem emulation can't hardlink — copyfile is the only
+    // backend that reliably installs without "Cannot find package" corruption.
+    return ["bun", "install", "--backend=copyfile"];
+  }
+  return ["bun", "install"];
+}
+
+function clearBunInstallCacheIfTermux(): void {
+  if (!isTermuxRuntime() && !isProotRuntime()) return;
+  const cacheDir = join(process.env.HOME ?? "", ".bun/install/cache");
+  if (cacheDir && existsSync(cacheDir)) {
+    try { rmSync(cacheDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 function summarizeFrontendChanges(changedFiles: string[]): string {
   const relevant = changedFiles.filter(isFrontendBuildInput);
   if (relevant.length === 0) return "";
@@ -296,8 +325,11 @@ export async function switchBranch(
 }
 
 export async function ensureDependencies(frontendDir: string): Promise<void> {
+  const installCmd = bunInstallCmd();
+  clearBunInstallCacheIfTermux();
+
   log("Installing backend dependencies...");
-  await runCommandOrThrow(["bun", "install"], {
+  await runCommandOrThrow(installCmd, {
     cwd: PROJECT_ROOT,
     timeoutMs: TIMEOUT_BUN_INSTALL_MS,
     label: "backend install",
@@ -305,7 +337,7 @@ export async function ensureDependencies(frontendDir: string): Promise<void> {
   log("Backend dependencies updated.");
 
   log("Installing frontend dependencies...");
-  await runCommandOrThrow(["bun", "install"], {
+  await runCommandOrThrow(installCmd, {
     cwd: frontendDir,
     timeoutMs: TIMEOUT_BUN_INSTALL_MS,
     label: "frontend install",
