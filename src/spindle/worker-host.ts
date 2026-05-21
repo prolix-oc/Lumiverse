@@ -1217,9 +1217,7 @@ export class WorkerHost {
 
     const blocked = managerSvc.detectDangerousBackendCapabilities(
       await Bun.file(entryPath).text(),
-      managerSvc.withTemporarilyRelaxedBackendCapabilities(
-        managerSvc.declaredCapabilitiesFromManifest(this.manifest),
-      ),
+      managerSvc.declaredCapabilitiesFromManifest(this.manifest),
     );
     if (blocked.length > 0) {
       throw new Error(

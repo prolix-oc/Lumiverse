@@ -13,7 +13,6 @@ set -euo pipefail
 #   ./start.sh --reset-password  Reset owner account password
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
-#   ./start.sh -r|--relax-capability-blocking  Temporarily relax extension capability blocking
 #   ./start.sh --no-runner      Start without the visual runner
 #
 # Environment overrides:
@@ -98,7 +97,6 @@ MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | m
 USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
-RELAX_CAPABILITY_BLOCKING=false
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;
@@ -110,10 +108,9 @@ for arg in "$@"; do
     --reset-password) MODE="reset-password" ;;
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
-    --relax-capability-blocking|-r) RELAX_CAPABILITY_BLOCKING=true ;;
     --no-runner)    USE_RUNNER=false ;;
     --help|-h)
-      sed -n '3,17p' "$0" | sed 's/^# *//'
+      sed -n '3,16p' "$0" | sed 's/^# *//'
       exit 0
       ;;
     *) err "Unknown argument: $arg"; exit 1 ;;
@@ -556,12 +553,6 @@ start_backend() {
     set -a
     source "$BACKEND_DIR/.env"
     set +a
-  fi
-
-  # TODO_REMOVE_RELAXED_CAPABILITY_BLOCKING: temporary extension compatibility stopgap.
-  if [[ "$RELAX_CAPABILITY_BLOCKING" == true ]]; then
-    export LUMIVERSE_SPINDLE_RELAX_CAPABILITY_BLOCKING="true"
-    warn "Temporarily relaxing Spindle capability blocking for dynamic code/base64 compatibility. Remove this flag after extensions are updated."
   fi
 
   # Decide: visual runner or plain process

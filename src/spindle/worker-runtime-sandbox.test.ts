@@ -43,28 +43,4 @@ describe("initializeSandbox", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr.toString()).toBe("");
   });
-
-  test("can temporarily relax dynamic code blocking", () => {
-    const result = Bun.spawnSync({
-      cmd: [
-        process.execPath,
-        "--eval",
-        `
-          import { initializeSandbox } from "./src/spindle/worker-runtime-sandbox.ts";
-          import { TEMP_RELAX_CAPABILITY_BLOCKING_ENV } from "./src/spindle/capability-relaxation.ts";
-
-          process.env[TEMP_RELAX_CAPABILITY_BLOCKING_ENV] = "true";
-          initializeSandbox();
-
-          if (new Function("return 1")() !== 1) throw new Error("Function constructor was blocked");
-          if (eval("1 + 1") !== 2) throw new Error("eval was blocked");
-        `,
-      ],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr.toString()).toBe("");
-  });
 });
