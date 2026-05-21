@@ -155,9 +155,16 @@
 .resultText ol {
   margin: 0 0 8px;
   padding-left: 20px;
+  list-style-position: outside;
 }
 
-.resultText li {
+.resultText ul li {
+  list-style: disc;
+  margin: 2px 0;
+}
+
+.resultText ol li {
+  list-style: decimal;
   margin: 2px 0;
 }
 

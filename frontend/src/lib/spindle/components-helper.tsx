@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import clsx from 'clsx'
 import type {
   SpindleComponentTarget,
   SpindleComponentsHelper,
@@ -41,6 +42,7 @@ import type {
 } from 'lumiverse-spindle-types'
 
 import { TextInput, TextArea } from '@/components/shared/FormComponents'
+import formStyles from '@/components/shared/FormComponents.module.css'
 import NumericInput from '@/components/shared/NumericInput'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { Toggle } from '@/components/shared/Toggle'
@@ -449,7 +451,7 @@ function NumericInputBridge({ initial, bridge }: { initial: SpindleNumericInputO
       step={props.step}
       placeholder={props.placeholder}
       disabled={props.disabled}
-      className={props.className}
+      className={clsx(formStyles.input, props.className)}
       aria-label={props.ariaLabel}
     />
   )
