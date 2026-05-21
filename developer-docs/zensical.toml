@@ -58,6 +58,7 @@ nav = [
     { "Text Editor" = "backend-api/text-editor.md" },
     { "Modal" = "backend-api/modal.md" },
     { "Push Notifications" = "backend-api/push-notifications.md" },
+    { "Web Search" = "backend-api/web-search.md" },
     { "User Context" = "backend-api/user-presence.md" },
     { "Frontend Communication" = "backend-api/frontend-communication.md" },
     { "Frontend Process Lifecycle" = "backend-api/frontend-processes.md" },

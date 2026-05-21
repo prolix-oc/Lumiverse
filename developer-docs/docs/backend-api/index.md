@@ -49,6 +49,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Modal](modal.md) | Free | Open a system-themed modal overlay with structured content |
 | [Input Prompt](modal.md#input-prompt) | Free | Present a text input modal and await the user's response |
 | [Push Notifications](push-notifications.md) | `push_notification` | Send OS-level push notifications to user devices |
+| [Web Search](web-search.md) | `web_search` | Run searches via the user's configured search provider (SearXNG) and read the safe view of their web search settings |
 | [User Context](user-presence.md) | Free | Check user visibility and read extension-facing user roles |
 | [Frontend Communication](frontend-communication.md) | Free | Message passing to/from frontend |
 | [Frontend Process Lifecycle](frontend-processes.md) | Free | Spawn and supervise long-lived frontend-side controllers |
