@@ -2,6 +2,10 @@
 
 The full stack suite for Lumiverse, a full-featured AI chat application. Provides the data layer, real-time event bus, LLM generation pipeline, and extension runtime.
 
+## Community
+
+Join the conversation on [Discord](https://discord.gg/28rBWVFfCu) for help, updates, and discussion.
+
 ## Tech Stack
 
 - **Runtime** — [Bun](https://bun.sh) (native TypeScript, built-in SQLite, WebSocket, HTTP)
