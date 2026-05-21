@@ -9,6 +9,8 @@ import {
   messageContentProcessorChain,
   type MessageContentProcessorCtx,
 } from "../spindle/message-content-processor";
+import { resolveRenderedMessageContent } from "../services/chat-macro-render.service";
+import { contentHasMacroHints } from "../services/vectorization-content.service";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -79,23 +81,27 @@ async function runDisplayPreprocessItem(
   item: DisplayPreprocessItem,
   signal?: AbortSignal,
 ) {
-  if (messageContentProcessorChain.count === 0) {
-    return { messageId: item.messageId, content: item.rawContent };
+  const processed = messageContentProcessorChain.count > 0
+    ? await messageContentProcessorChain.run({
+        chatId,
+        content: item.rawContent,
+        origin: "render",
+        userId,
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        extra: {
+          ...(typeof item.messageIndex === "number" ? { messageIndex: item.messageIndex } : {}),
+          ...(item.role ? { role: item.role, is_user: item.role === "user" } : {}),
+        },
+      }, userId, signal)
+    : { content: item.rawContent };
+
+  let content = processed.content ?? item.rawContent;
+  if (contentHasMacroHints(content)) {
+    const env = svc.buildMacroEnvForChat(userId, chatId);
+    if (env) content = await resolveRenderedMessageContent(content, env);
   }
 
-  const processed = await messageContentProcessorChain.run({
-    chatId,
-    content: item.rawContent,
-    origin: "render",
-    userId,
-    ...(item.messageId ? { messageId: item.messageId } : {}),
-    extra: {
-      ...(typeof item.messageIndex === "number" ? { messageIndex: item.messageIndex } : {}),
-      ...(item.role ? { role: item.role, is_user: item.role === "user" } : {}),
-    },
-  }, userId, signal);
-
-  return { messageId: item.messageId, content: processed.content ?? item.rawContent };
+  return { messageId: item.messageId, content };
 }
 
 // --- Chat endpoints ---
