@@ -6,10 +6,12 @@ import {
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
 import { useStore } from '@/store'
+import { parseOOC, type OOCBlock } from '@/lib/oocParser'
 import MessageCard from './MessageCard'
 import GroupChatProgressBar from './GroupChatProgressBar'
 import GroupChatMemberBar from './GroupChatMemberBar'
 import type { Message } from '@/types/api'
+import type { OOCStyleType } from '@/types/store'
 import styles from './MessageList.module.css'
 
 interface MessageListProps {
@@ -90,6 +92,45 @@ function collapseClosedDetailsForEstimate(value: string) {
     const summary = inner.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/i)?.[1]
     return stripHtmlForEstimate(summary ?? 'Details')
   })
+}
+
+// Heuristic chrome/line-height contributions per Lumia OOC display mode. These
+// only need to be roughly right; ResizeObserver corrects to the true height on
+// mount and the result is cached in measuredRowHeightsRef. Wrong here just
+// causes a one-frame scroll jump when an OOC-heavy row first mounts.
+const OOC_MODE_ESTIMATE: Record<OOCStyleType, {
+  groupChrome: number
+  entryChrome: number
+  lineHeight: number
+  widthInset: number
+  maxBlockHeight: number
+}> = {
+  irc:     { groupChrome: 64, entryChrome: 36, lineHeight: 22, widthInset: 64, maxBlockHeight: 220 },
+  social:  { groupChrome: 0,  entryChrome: 88, lineHeight: 22, widthInset: 80, maxBlockHeight: 320 },
+  whisper: { groupChrome: 0,  entryChrome: 56, lineHeight: 22, widthInset: 96, maxBlockHeight: 280 },
+  margin:  { groupChrome: 0,  entryChrome: 44, lineHeight: 22, widthInset: 56, maxBlockHeight: 240 },
+  raw:     { groupChrome: 0,  entryChrome: 12, lineHeight: 22, widthInset: 0,  maxBlockHeight: 200 },
+}
+
+function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleWidth: number) {
+  let count = 0
+  let totalEntryHeight = 0
+  const params = OOC_MODE_ESTIMATE[mode] ?? OOC_MODE_ESTIMATE.social
+  const entryWidth = Math.max(140, bubbleWidth - params.widthInset)
+  const entryCharsPerLine = Math.max(20, Math.floor(entryWidth / 7.2))
+
+  for (const block of blocks) {
+    if (block.type !== 'ooc') continue
+    count += 1
+    const text = stripHtmlForEstimate(block.content)
+    const explicitLines = text.split('\n').length
+    const wrappedLines = Math.ceil(text.length / entryCharsPerLine) || 1
+    const lines = Math.max(1, explicitLines, wrappedLines)
+    totalEntryHeight += Math.min(params.maxBlockHeight, params.entryChrome + lines * params.lineHeight)
+  }
+
+  if (count === 0) return 0
+  return params.groupChrome + totalEntryHeight
 }
 
 export default function MessageList({ messages, chatId, isStreaming }: MessageListProps) {
@@ -178,6 +219,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [isCoarsePointer])
   const streamingError = useStore((s) => s.streamingError)
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const isNudgeLoopActive = useStore((s) => s.isNudgeLoopActive)
   const isBubble = displayMode === 'bubble'
@@ -204,6 +246,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         attachmentCount,
         message.extra?.reasoning ? 'reasoning' : 'no-reasoning',
         message.extra?.hidden ? 'hidden' : 'visible',
+        lumiaOOCStyle,
       ].join(':')
 
       items.push({
@@ -227,12 +270,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     items.push({ type: 'bottom', key: 'bottom' })
 
     return items
-  }, [displayMode, isCoarsePointer, isGroupChat, isNudgeLoopActive, loadingOlder, streamingError, visibleMessages])
+  }, [displayMode, isCoarsePointer, isGroupChat, isNudgeLoopActive, loadingOlder, lumiaOOCStyle, streamingError, visibleMessages])
 
   useEffect(() => {
     measuredRowHeightsRef.current = new Map()
     averageMeasuredHeightRef.current = null
-  }, [displayMode, isCoarsePointer])
+  }, [displayMode, isCoarsePointer, lumiaOOCStyle])
 
   useEffect(() => {
     warmMobileRange()
@@ -267,17 +310,28 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const charsPerLine = Math.max(24, Math.floor(bubbleWidth / 7.2))
     const content = message.swipes?.[message.swipe_id] ?? message.content ?? ''
     const layoutContent = collapseClosedDetailsForEstimate(content)
-    const explicitLines = layoutContent.split('\n').length
-    const wrappedLines = Math.ceil(layoutContent.length / charsPerLine)
-    const lineCount = Math.max(1, explicitLines, wrappedLines)
-    const codeBlockCount = (layoutContent.match(/```/g)?.length ?? 0) / 2
+
+    // Lift OOC blocks out of the prose flow: they render as separate React
+    // components (margin note / whisper / social / IRC chat room) with their
+    // own chrome, so counting their text as inline prose double-counts height.
+    const oocBlocks = parseOOC(layoutContent)
+    const hasOOC = oocBlocks.some((b) => b.type === 'ooc')
+    const proseContent = hasOOC
+      ? oocBlocks.filter((b) => b.type === 'text').map((b) => b.content).join('\n')
+      : layoutContent
+    const oocHeight = hasOOC ? estimateOOCContribution(oocBlocks, lumiaOOCStyle, bubbleWidth) : 0
+
+    const explicitLines = proseContent.split('\n').length
+    const wrappedLines = Math.ceil(proseContent.length / charsPerLine)
+    const lineCount = proseContent.length > 0 ? Math.max(1, explicitLines, wrappedLines) : 0
+    const codeBlockCount = (proseContent.match(/```/g)?.length ?? 0) / 2
     const imageCount = message.extra?.attachments?.filter((a) => a.type === 'image').length ?? 0
     const audioCount = message.extra?.attachments?.filter((a) => a.type === 'audio').length ?? 0
-    const inlineStyleCount = layoutContent.match(/\bstyle\s*=/gi)?.length ?? 0
-    const htmlBlockCount = layoutContent.match(/<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|tr|td|th|iframe|svg|video|audio)\b/gi)?.length ?? 0
-    const hasStyledHtml = /<style[\s>]|\bstyle\s*=|<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|iframe|svg|video|audio)\b/i.test(layoutContent)
-    const customTagCount = layoutContent.match(/<([a-z][\w]*-[\w-]*)\b[^>]*>([\s\S]*?)<\/\1>/gi)?.length ?? 0
-    const selfClosingCustomTagCount = layoutContent.match(/<([a-z][\w]*-[\w-]*)\b[^>]*\/>/gi)?.length ?? 0
+    const inlineStyleCount = proseContent.match(/\bstyle\s*=/gi)?.length ?? 0
+    const htmlBlockCount = proseContent.match(/<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|tr|td|th|iframe|svg|video|audio)\b/gi)?.length ?? 0
+    const hasStyledHtml = /<style[\s>]|\bstyle\s*=|<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details|table|iframe|svg|video|audio)\b/i.test(proseContent)
+    const customTagCount = proseContent.match(/<([a-z][\w]*-[\w-]*)\b[^>]*>([\s\S]*?)<\/\1>/gi)?.length ?? 0
+    const selfClosingCustomTagCount = proseContent.match(/<([a-z][\w]*-[\w-]*)\b[^>]*\/>/gi)?.length ?? 0
     const hasExtensionTags = customTagCount > 0 || selfClosingCustomTagCount > 0
     const base = isBubble ? (isPhoneWidth ? 88 : isCompactWidth ? 96 : 104) : 76
     const lineHeight = 23
@@ -297,7 +351,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       ? (isPhoneWidth ? 190 : isCompactWidth ? 230 : 260)
       : 0
     const contentEstimate = Math.max(
-      base + lineCount * lineHeight + mediaHeight + audioHeight + codeHeight + htmlBoost + extensionTagBoost,
+      base + lineCount * lineHeight + mediaHeight + audioHeight + codeHeight + htmlBoost + extensionTagBoost + oocHeight,
       htmlFloor,
       extensionTagFloor,
     )
@@ -306,7 +360,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     // Blend content heuristics with the measured chat average so unknown rows
     // near the loaded tail don't all start from the same poor fixed estimate.
     return clampEstimate(average ? (contentEstimate * 0.7 + average * 0.3) : contentEstimate)
-  }, [isBubble])
+  }, [isBubble, lumiaOOCStyle])
 
   const rangeExtractor = useCallback((range: Range) => {
     const indexes = new Set(defaultRangeExtractor(range))
