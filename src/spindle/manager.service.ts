@@ -578,15 +578,27 @@ function storageDir(identifier: string): string {
   return join(extensionDir(identifier), "storage");
 }
 
-/** Cross-platform move: tries renameSync, falls back to cpSync+rmSync for cross-device moves. */
+/**
+ * Cross-platform move. On Windows, freshly-cloned directories frequently hit
+ * transient EPERM/EBUSY from antivirus, the search indexer, or git child handles
+ * that haven't fully released. Retry a few times with backoff, then fall back to
+ * copy+delete (which also covers cross-device EXDEV).
+ */
 function moveSync(from: string, to: string): void {
-  try {
-    renameSync(from, to);
-  } catch (err: any) {
-    if (err.code !== "EXDEV") throw err;
-    cpSync(from, to, { recursive: true, force: true, errorOnExist: false });
-    rmSync(from, { recursive: true, force: true });
+  const transientCodes = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+  const delays = [50, 100, 200, 400, 800];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err: any) {
+      if (err.code === "EXDEV") break;
+      if (!transientCodes.has(err.code)) throw err;
+      if (attempt < delays.length) Bun.sleepSync(delays[attempt]);
+    }
   }
+  cpSync(from, to, { recursive: true, force: true, errorOnExist: false });
+  rmSync(from, { recursive: true, force: true });
 }
 
 // ─── Manifest parsing ────────────────────────────────────────────────────
