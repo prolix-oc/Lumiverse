@@ -126,7 +126,7 @@
     transform var(--lumiverse-transition-fast);
 }
 
-.cancelBtn:hover {
+.cancelBtn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--confirmation-accent) 14%, var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.1)));
   border-color: var(--confirmation-accent-border);
 }
@@ -152,10 +152,25 @@
     box-shadow var(--lumiverse-transition-fast);
 }
 
-.confirmBtn:hover {
+.confirmBtn:hover:not(:disabled) {
   transform: translateY(-1px);
   filter: brightness(1.05);
   box-shadow: 0 14px 28px color-mix(in srgb, var(--confirmation-accent) 28%, transparent);
+}
+
+.cancelBtn:disabled,
+.confirmBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  transform: none;
+  filter: none;
+}
+
+.loadingLabel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .cancelBtn:focus-visible,

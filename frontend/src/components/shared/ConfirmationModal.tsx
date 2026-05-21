@@ -1,6 +1,7 @@
 import { type CSSProperties, type ReactNode } from 'react'
 import { AlertTriangle, AlertCircle, Info, X } from 'lucide-react'
 import { ModalShell } from './ModalShell'
+import { Spinner } from './Spinner'
 import styles from './ConfirmationModal.module.css'
 
 type Variant = 'danger' | 'warning' | 'safe'
@@ -19,6 +20,14 @@ interface ConfirmationModalProps {
   secondaryVariant?: Variant
   icon?: ReactNode
   zIndex?: number
+  /**
+   * When true, both buttons disable, the confirm button shows a spinner +
+   * `loadingText`, and the modal can't be dismissed (escape, backdrop, or X)
+   * — used to indicate an in-flight async action triggered by Confirm.
+   */
+  loading?: boolean
+  /** Label shown alongside the spinner while `loading` is true. */
+  loadingText?: string
 }
 
 const variantConfig = {
@@ -64,6 +73,8 @@ export default function ConfirmationModal({
   secondaryVariant,
   icon: customIcon,
   zIndex = 10002,
+  loading = false,
+  loadingText = 'Working...',
 }: ConfirmationModalProps) {
   const displayIcon = customIcon || variantIcons[variant]
   const modalStyle = getVariantStyle(variant)
@@ -76,10 +87,14 @@ export default function ConfirmationModal({
       zIndex={zIndex}
       className={styles.modal}
       style={modalStyle}
+      closeOnBackdrop={!loading}
+      closeOnEscape={!loading}
     >
-      <button onClick={onCancel} type="button" className={styles.closeBtn} aria-label="Close">
-        <X size={16} />
-      </button>
+      {!loading && (
+        <button onClick={onCancel} type="button" className={styles.closeBtn} aria-label="Close">
+          <X size={16} />
+        </button>
+      )}
 
       <div className={styles.content}>
         <div className={styles.iconWrap}>
@@ -90,7 +105,12 @@ export default function ConfirmationModal({
       </div>
 
       <div className={styles.actions}>
-        <button onClick={onCancel} type="button" className={styles.cancelBtn}>
+        <button
+          onClick={onCancel}
+          type="button"
+          className={styles.cancelBtn}
+          disabled={loading}
+        >
           {cancelText}
         </button>
         {secondaryText && onSecondary && (
@@ -99,6 +119,7 @@ export default function ConfirmationModal({
             type="button"
             className={styles.confirmBtn}
             style={getVariantStyle(secondaryVariant || variant)}
+            disabled={loading}
           >
             {secondaryText}
           </button>
@@ -108,8 +129,16 @@ export default function ConfirmationModal({
           type="button"
           className={styles.confirmBtn}
           style={modalStyle}
+          disabled={loading}
         >
-          {confirmText}
+          {loading ? (
+            <span className={styles.loadingLabel}>
+              <Spinner size={14} />
+              {loadingText}
+            </span>
+          ) : (
+            confirmText
+          )}
         </button>
       </div>
     </ModalShell>

@@ -2,10 +2,9 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import { auth, allowCreation, CREATION_NONCE_HEADER } from "../auth";
 import { getDb } from "../db/connection";
-import { getUserBaseDir } from "../auth/provision";
 import { hashPassword, verifyPassword } from "../crypto/password";
 import { rateLimit } from "../middleware/rate-limit";
-import { rmSync, existsSync } from "fs";
+import { purgeUser } from "../services/user-data/purge.service";
 
 const app = new Hono();
 
@@ -222,7 +221,8 @@ admin.post("/:id/unban", async (c) => {
   return c.json({ success: true });
 });
 
-// DELETE /:id — delete user and all associated data
+// DELETE /:id — delete user and every artifact they own (SQLite rows,
+// LanceDB vectors, on-disk files, running extensions, MCP clients).
 admin.delete("/:id", async (c) => {
   const { id } = c.req.param();
   const session = c.get("session");
@@ -240,18 +240,13 @@ admin.delete("/:id", async (c) => {
     return c.json({ error: "Admins can only delete user-role accounts" }, 403);
   }
 
-  // Delete auth records (content tables cascade via user_id FK)
-  getDb().run("DELETE FROM session WHERE userId = ?", [id]);
-  getDb().run("DELETE FROM account WHERE userId = ?", [id]);
-  getDb().run('DELETE FROM "user" WHERE id = ?', [id]);
-
-  // Clean up file system
-  const userDir = getUserBaseDir(id);
-  if (existsSync(userDir)) {
-    rmSync(userDir, { recursive: true, force: true });
+  try {
+    const report = await purgeUser(id);
+    return c.json({ success: true, report });
+  } catch (err: any) {
+    console.error(`[users] purge failed for ${id}:`, err);
+    return c.json({ error: err?.message || "Failed to delete user" }, 500);
   }
-
-  return c.json({ success: true });
 });
 
 // Mount admin routes at the root of this router

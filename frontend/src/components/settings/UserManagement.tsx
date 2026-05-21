@@ -297,12 +297,18 @@ export default function UserManagement() {
         <ConfirmationModal
           isOpen
           title="Delete User"
-          message={`Are you sure you want to permanently delete ${confirmDelete.username || confirmDelete.name}? This cannot be undone.`}
+          message={
+            actionLoading === confirmDelete.id
+              ? `Wiping data for ${confirmDelete.username || confirmDelete.name}. This can take a while if they have a lot of chats, vectors, or files.`
+              : `Are you sure you want to permanently delete ${confirmDelete.username || confirmDelete.name}? This cannot be undone.`
+          }
           variant="danger"
           confirmText="Delete"
           cancelText="Cancel"
           onConfirm={handleDelete}
           onCancel={() => setConfirmDelete(null)}
+          loading={actionLoading === confirmDelete.id}
+          loadingText="Deleting..."
         />
       )}
     </div>

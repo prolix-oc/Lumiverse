@@ -144,7 +144,12 @@ const server = Bun.serve({
   hostname: "::",
   fetch: app.fetch,
   websocket,
-  maxRequestBodySize: 1000 * 1024 * 1024, // 1000 MB — matches MAX_CHARX_SIZE in character-card.service.ts
+  // Sized for the user-data import endpoint (full-account archives). Other
+  // upload routes self-cap at the service layer (character imports stay at
+  // MAX_CHARX_SIZE ≈ 1000 MB, image/avatar uploads at a few MB, etc.), so
+  // raising the global ceiling here only widens the door for routes we
+  // explicitly opt-in for via the bodyLimit exclusion list above.
+  maxRequestBodySize: 5 * 1024 * 1024 * 1024, // 5 GB — matches MAX_COMPRESSED_BYTES in user-data import.
   idleTimeout: 255,
 });
 

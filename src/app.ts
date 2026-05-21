@@ -56,6 +56,7 @@ import { webSearchRoutes } from "./routes/web-search.routes";
 import { themeAssetsRoutes } from "./routes/theme-assets.routes";
 import { notificationSoundsRoutes } from "./routes/notification-sounds.routes";
 import { bootstrapRoutes } from "./routes/bootstrap.routes";
+import { userDataRoutes } from "./routes/user-data.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
@@ -142,7 +143,8 @@ app.use("/api/*", async (c, next) => {
     path.endsWith("/expressions/upload-zip") ||
     path === "/api/v1/stt/transcribe" ||
     path === "/api/v1/chats/import" ||
-    path === "/api/v1/chats/import-st"
+    path === "/api/v1/chats/import-st" ||
+    path === "/api/v1/user-data/import"
   ) {
     return next();
   }
@@ -423,6 +425,7 @@ app.route("/api/v1/databanks", databankRoutes);
 app.route("/api/v1/web-search", webSearchRoutes);
 app.route("/api/v1/global-addons", globalAddonsRoutes);
 app.route("/api/v1/bootstrap", bootstrapRoutes);
+app.route("/api/v1/user-data", userDataRoutes);
 
 // Issue single-use WS tickets (behind auth middleware)
 app.post("/api/v1/ws-ticket", (c) => {

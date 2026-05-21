@@ -3,6 +3,7 @@ import {
   Sliders, MessageSquare, Users, PanelRight,
   Compass, Reply, HardDrive, Puzzle, Database, Hash, Activity,
   Globe, Bell, Import, Brain, Terminal, Volume2, Plug, Search, UserRound,
+  PackageOpen,
 } from 'lucide-react'
 import { useStore } from '@/store'
 import type { Command, CommandScope } from '@/lib/commands'
@@ -167,6 +168,15 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'LumiHub cloud sync and sharing settings',
     tabIcon: Globe,
     keywords: ['lumihub', 'cloud', 'sync', 'sharing', 'online', 'hub'],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'dataPortability',
+    shortName: 'Data',
+    tabName: 'Data Portability',
+    tabDescription: 'Export your data or import a previously exported archive',
+    tabIcon: PackageOpen,
+    keywords: ['data', 'portability', 'export', 'import', 'backup', 'restore', 'archive', 'lvbak', 'migrate'],
     component: INLINE_SENTINEL,
   },
   {

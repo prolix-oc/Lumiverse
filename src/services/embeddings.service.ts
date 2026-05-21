@@ -3346,6 +3346,30 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
 }
 
 /**
+ * Drop every LanceDB vector belonging to a user. Used by user-purge so the
+ * embeddings tables don't keep rows pointing at a tombstoned user_id. Does not
+ * touch SQLite or settings — caller is responsible for the surrounding wipe.
+ */
+export async function deleteUserVectors(userId: string): Promise<void> {
+  embeddingCache.clear();
+  worldBookVectorVersionChecked.delete(getWorldBookVectorVersionCacheKey(userId));
+
+  try {
+    await withWriteLock(async () => {
+      for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
+        const table = await getTableIfExists(tableName, true);
+        if (table) {
+          await table.delete(`user_id = ${sqlValue(userId)}`);
+        }
+      }
+    });
+    scheduleOptimize();
+  } catch (err) {
+    console.warn(`[embeddings] Failed to delete LanceDB rows for user ${userId}:`, err);
+  }
+}
+
+/**
  * Force reset the entire LanceDB vector store.
  * Nukes the on-disk LanceDB directory, resets all module state, clears caches,
  * and resets vector index state in SQLite. This is the nuclear option for

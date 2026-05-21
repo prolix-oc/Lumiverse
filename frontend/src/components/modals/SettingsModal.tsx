@@ -29,6 +29,7 @@ import MemoryCortexSettings from '@/components/settings/MemoryCortexSettings'
 import OperatorPanel from '@/components/settings/OperatorPanel'
 import VoiceSettings from '@/components/settings/VoiceSettings'
 import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettings'
+import DataPortability from '@/components/settings/DataPortability'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { getVisibleSettingsTabs } from '@/lib/settings-tab-registry'
@@ -139,6 +140,8 @@ function SettingsView({ view }: { view: string }) {
       return <VoiceSettings />
     case 'mcpServers':
       return <McpServerSettings />
+    case 'dataPortability':
+      return <DataPortability />
     case 'diagnostics':
       return <Diagnostics />
     case 'migration':
