@@ -108,6 +108,8 @@ The start scripts accept flags to control behavior:
     | `--reset-password` | Reset the owner account password |
     | `-m`, `--migrate-st` | Run the [SillyTavern migration](#migrating-from-sillytavern) tool |
     | `--no-runner` | Start without the runner (disables Operator Panel update/restart/branch-switch controls) |
+    | `--upgrade-bun` | Upgrade Bun to the latest stable release, then continue |
+    | `--upgrade-bun-canary` | Upgrade Bun to the latest canary build, then continue |
 
 === "Windows (`start.ps1`)"
 
@@ -122,6 +124,8 @@ The start scripts accept flags to control behavior:
     | `-Mode reset-password` | Reset the owner account password |
     | `-MigrateST` or `-m` | Run the SillyTavern migration tool |
     | `-NoRunner` | Start without the runner (disables Operator Panel update/restart/branch-switch controls) |
+    | `-UpgradeBun` | Upgrade Bun to the latest stable release, then continue |
+    | `-UpgradeBunCanary` | Upgrade Bun to the latest canary build, then continue |
 
 ---
 

@@ -14,6 +14,8 @@ set -euo pipefail
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
+#   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
+#   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
 #
 # Environment overrides:
 #   FRONTEND_PATH   Path to frontend directory (default: ./frontend)
@@ -97,6 +99,7 @@ MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | m
 USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
+BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;
@@ -109,8 +112,10 @@ for arg in "$@"; do
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
+    --upgrade-bun)        BUN_UPGRADE_CHANNEL="stable" ;;
+    --upgrade-bun-canary) BUN_UPGRADE_CHANNEL="canary" ;;
     --help|-h)
-      sed -n '3,16p' "$0" | sed 's/^# *//'
+      sed -n '3,18p' "$0" | sed 's/^# *//'
       exit 0
       ;;
     *) err "Unknown argument: $arg"; exit 1 ;;
@@ -398,6 +403,38 @@ ensure_bun() {
   exit 1
 }
 
+# ─── Bun channel upgrade (optional) ─────────────────────────────────────────
+# Honors --upgrade-bun / --upgrade-bun-canary. Runs after ensure_bun so the
+# binary exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
+# at $BUN_INSTALL/bin/bun. On Termux we route through _bun so the
+# grun/proot wrapper is preserved.
+upgrade_bun_if_requested() {
+  [[ -z "$BUN_UPGRADE_CHANNEL" ]] && return 0
+
+  local before
+  before="$(_bun --version 2>/dev/null || echo unknown)"
+
+  if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+    info "Upgrading Bun to latest canary (current: $before)..."
+    if ! _bun upgrade --canary; then
+      err "Bun canary upgrade failed. Continuing with the existing $before binary."
+      return 0
+    fi
+  else
+    info "Upgrading Bun to latest stable (current: $before)..."
+    # `--stable` is a no-op for users already on stable but forces a switch
+    # back from canary for anyone who previously opted in.
+    if ! _bun upgrade --stable; then
+      err "Bun stable upgrade failed. Continuing with the existing $before binary."
+      return 0
+    fi
+  fi
+
+  local after
+  after="$(_bun --version 2>/dev/null || echo unknown)"
+  ok "Bun upgraded: $before -> $after"
+}
+
 # ─── First-run setup wizard ─────────────────────────────────────────────────
 
 run_setup_if_needed() {
@@ -618,6 +655,7 @@ fi
 
 setup_proot_aliases
 ensure_bun
+upgrade_bun_if_requested
 export_termux_bun_env
 
 case "$MODE" in

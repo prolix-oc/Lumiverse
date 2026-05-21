@@ -28,6 +28,12 @@
 
 .PARAMETER NoRunner
     Start without the visual terminal runner
+
+.PARAMETER UpgradeBun
+    Upgrade Bun to the latest stable release before continuing
+
+.PARAMETER UpgradeBunCanary
+    Upgrade Bun to the latest canary build before continuing
 #>
 
 param(
@@ -45,7 +51,11 @@ param(
     [switch]$NoRunner,
 
     [Alias("k")]
-    [switch]$KillPkgs
+    [switch]$KillPkgs,
+
+    [switch]$UpgradeBun,
+
+    [switch]$UpgradeBunCanary
 )
 
 $ErrorActionPreference = "Stop"
@@ -128,6 +138,36 @@ function Ensure-Bun {
 
     Write-Err "Bun installation failed. Please install manually: https://bun.sh"
     exit 1
+}
+
+# ─── Bun channel upgrade (optional) ─────────────────────────────────────────
+# Honors -UpgradeBun / -UpgradeBunCanary. Runs after Ensure-Bun so the binary
+# exists; `bun upgrade [--canary|--stable]` swaps the binary in-place.
+function Update-BunChannel {
+    if (-not $UpgradeBun -and -not $UpgradeBunCanary) { return }
+
+    $before = try { & bun --version } catch { "unknown" }
+
+    if ($UpgradeBunCanary) {
+        Write-Info "Upgrading Bun to latest canary (current: $before)..."
+        try { & bun upgrade --canary } catch {
+            Write-Err "Bun canary upgrade failed: $_"
+            Write-Warn "Continuing with the existing $before binary."
+            return
+        }
+    } else {
+        Write-Info "Upgrading Bun to latest stable (current: $before)..."
+        # --stable is a no-op for users already on stable but forces a switch
+        # back from canary for anyone who previously opted in.
+        try { & bun upgrade --stable } catch {
+            Write-Err "Bun stable upgrade failed: $_"
+            Write-Warn "Continuing with the existing $before binary."
+            return
+        }
+    }
+
+    $after = try { & bun --version } catch { "unknown" }
+    Write-Ok "Bun upgraded: $before -> $after"
 }
 
 # ─── First-run setup wizard ─────────────────────────────────────────────────
@@ -298,6 +338,7 @@ Write-Host "Lumiverse - Launcher" -ForegroundColor White
 Write-Host ""
 
 Ensure-Bun
+Update-BunChannel
 
 # Allow switches as shorthand for -Mode
 if ($MigrateST) { $Mode = "migrate-st" }
