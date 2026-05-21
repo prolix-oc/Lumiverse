@@ -41,7 +41,7 @@ import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution } from "./font-attribution";
 import { extractRelationshipsHeuristic } from "./relationship-extractor";
 import { extractNPsFromChunk } from "./np-chunker";
-import { stripLoomTags, stripDetailsBlocks } from "../../utils/content-sanitizer";
+import { stripNonProseTags } from "../../utils/content-sanitizer";
 import { getLinkedCortexData, reindexVault, getVaultRow } from "./vault";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
@@ -897,6 +897,9 @@ export async function processChunk(
     let sidecarDiscoveredAliases: Array<{ canonicalName: string; alias: string; evidence?: string }> = [];
 
     const rawChunkContent = hydrateChunkContentFromMessages(data.messageIds, data.content);
+    // Strip non-prose markup (HTML, <details>, <lumia_ooc>, etc.) before any
+    // evaluator sees the chunk — keeps font tags so attribution still works.
+    const proseContent = stripNonProseTags(rawChunkContent, { keepFontTags: true });
     const thoughtDelimiters = config.thoughtMarkers;
 
     const knownEntities = entityGraph.getActiveEntities(data.chatId);
@@ -916,7 +919,7 @@ export async function processChunk(
     const fontStart = performance.now();
     const fontResult = processChunkFontColors(
       data.chatId,
-      rawChunkContent,
+      proseContent,
       [...new Set([...characterNames, ...knownEntities.map((e) => e.name)])],
       entityIdByName,
       thoughtDelimiters,
@@ -970,7 +973,7 @@ export async function processChunk(
 
       try {
         extraction = await extractWithSidecar(
-          rawChunkContent,
+          proseContent,
           boundGenFn,
           activeSidecarConnectionId,
           { characterNames, knownEntities: entityContext },
@@ -1004,8 +1007,8 @@ export async function processChunk(
         emotionalTags: extraction.emotionalTags,
         statusChanges: extraction.statusChanges,
         narrativeFlags: extraction.narrativeFlags,
-        hasDialogue: /[""\u201C]/.test(rawChunkContent),
-        hasAction: /\*[^*]{10,}\*/.test(rawChunkContent),
+        hasDialogue: /[""\u201C]/.test(proseContent),
+        hasAction: /\*[^*]{10,}\*/.test(proseContent),
         hasInternalThought: /\b(thought|wondered|realized|felt|knew)\b/i.test(cleanContent),
         wordCount: cleanContent.split(/\s+/).length,
       };
@@ -1236,9 +1239,8 @@ export async function processChunk(
       // Only runs server-side during sidecar mode (amortized cost acceptable).
       // Does NOT run in heuristic-only mode to protect mobile latency.
       if (sidecarActive) {
-        let npContent = stripLoomTags(cleanContent);
-        npContent = stripDetailsBlocks(npContent);
-        const npCandidates = extractNPsFromChunk(npContent);
+        // cleanContent is already prose-only (stripped upstream), so feed it directly.
+        const npCandidates = extractNPsFromChunk(cleanContent);
         for (const np of npCandidates) {
           const resolved = entityGraph.resolveCanonicalId(np.text, data.chatId);
           if (resolved) {

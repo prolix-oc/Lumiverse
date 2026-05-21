@@ -27,8 +27,8 @@ const LOOM_TAGS_KEEP_CONTENT = [
 ];
 
 const LOOM_STRIP_REGEXES = LOOM_TAGS_STRIP_CONTENT.map((tag) => ({
-  paired: new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "gi"),
-  self: new RegExp(`<${tag}(?:\\s[^>]*)?\\/?>`, "gi"),
+  paired: new RegExp(`\\s*<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>\\s*`, "gi"),
+  self: new RegExp(`\\s*<${tag}(?:\\s[^>]*)?\\/?>\\s*`, "gi"),
 }));
 
 const LOOM_KEEP_REGEXES = LOOM_TAGS_KEEP_CONTENT.map((tag) => ({
@@ -66,12 +66,13 @@ export function stripDetailsBlocks(content: string): string {
 export function stripLoomTags(content: string): string {
   let result = content;
 
-  // Strip meta tags entirely (remove tag + content)
+  // Strip meta tags entirely (remove tag + content + surrounding whitespace,
+  // replacing with a single space so adjacent prose words don't fuse).
   for (const { paired, self } of LOOM_STRIP_REGEXES) {
     paired.lastIndex = 0;
     self.lastIndex = 0;
-    result = result.replace(paired, "");
-    result = result.replace(self, "");
+    result = result.replace(paired, " ");
+    result = result.replace(self, " ");
   }
 
   // Strip narrative tags but preserve inner text
@@ -176,6 +177,59 @@ function stripCustomReasoningBlocks(content: string, prefix: string, suffix: str
     "",
   );
   return result;
+}
+
+export interface StripNonProseOptions {
+  /**
+   * Preserve `<font color="...">` and `<span style="color: ...">` tags so
+   * downstream font-color attribution can still run on the cleaned content.
+   * Orphan `</span>` tags are also preserved for symmetry; orphan losses
+   * are rare in practice because color spans are typically paired.
+   */
+  keepFontTags?: boolean;
+}
+
+/**
+ * Strip non-prose markup so Memory Cortex evaluators (entity / relationship /
+ * salience extraction, sidecar LLM prompts) only see narrative text.
+ *
+ * Removes `<details>` blocks, lumia_ooc and other meta loom tags, reasoning
+ * blocks, and HTML formatting wrappers (preserving inner text where the tag
+ * itself is decorative). When `options.keepFontTags` is true, font color tags
+ * are stashed through the pass so they survive for font-color attribution.
+ */
+export function stripNonProseTags(content: string, options?: StripNonProseOptions): string {
+  let result = content;
+
+  result = result.replace(/\s*<(think|thinking|reasoning)>[\s\S]*?<\/\1>\s*/gi, " ");
+  result = result.replace(/\s*<(think|thinking|reasoning)>[\s\S]*$/gi, "");
+
+  result = stripDetailsBlocks(result);
+  result = stripLoomTags(result);
+
+  if (options?.keepFontTags) {
+    // Pair-stash whole color blocks so orphan opens/closes from non-color spans
+    // are still stripped by the catch-all below.
+    const stash: string[] = [];
+    const stashPair = (re: RegExp) => {
+      result = result.replace(re, (match) => {
+        stash.push(match);
+        return `\x00FT${stash.length - 1}\x00`;
+      });
+    };
+    stashPair(/<font\b[^>]*>[\s\S]*?<\/font\s*>/gi);
+    stashPair(/<span\s+style\s*=\s*["'][^"']*color\s*:[^"']*["'][^>]*>[\s\S]*?<\/span\s*>/gi);
+
+    result = stripHtmlFormattingTags(result);
+    result = stripAllHtmlTagsPreserveContent(result);
+
+    result = result.replace(/\x00FT(\d+)\x00/g, (_, idx) => stash[Number(idx)]);
+  } else {
+    result = stripHtmlFormattingTags(result);
+    result = stripAllHtmlTagsPreserveContent(result);
+  }
+
+  return collapseExcessiveNewlines(result).trim();
 }
 
 /**
