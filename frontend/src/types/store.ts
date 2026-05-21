@@ -396,6 +396,7 @@ export interface SettingsSlice {
   regenFeedback: RegenFeedbackSettings
   swipeGesturesEnabled: boolean
   showMessageTokenCount: boolean
+  messageContextMenuEnabled: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings

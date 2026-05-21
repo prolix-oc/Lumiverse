@@ -738,6 +738,13 @@ function ChatSettings() {
         hint="Displays the token count for assistant messages in the timestamp badge below each message"
       />
 
+      <Toggle.Checkbox
+        checked={useStore((s) => s.messageContextMenuEnabled ?? true)}
+        onChange={(checked) => setSetting('messageContextMenuEnabled', checked)}
+        label="Enable right-click / long-press menu on messages"
+        hint="When off, the in-app context menu won't appear — useful on mobile if you'd rather use the OS's native long-press to select and copy text without competing with the in-app menu."
+      />
+
       <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>Swipe Navigation</h3>
       <p className={styles.helperText}>
         Navigate message swipes using touch gestures (mobile) or arrow keys (desktop). Hold Shift and hover to target a specific message.

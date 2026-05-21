@@ -167,6 +167,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
+  const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
   const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
@@ -178,7 +179,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   const onSwipeLeft = useCallback(() => handleSwipe('left'), [handleSwipe])
   const onSwipeRight = useCallback(() => handleSwipe('right'), [handleSwipe])
   const { canPlay, isPlaying, toggle: togglePlayback } = useMessagePlayback(message.id, message.content)
-  const canOpenContextMenu = !isEditing && !isSelectMode
+  const canOpenContextMenu = !isEditing && !isSelectMode && messageContextMenuEnabled
 
   const closeContextMenu = useCallback(() => setContextMenuPos(null), [])
 
