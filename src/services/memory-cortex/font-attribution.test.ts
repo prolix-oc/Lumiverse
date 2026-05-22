@@ -8,19 +8,25 @@
  * Run: bun test src/services/memory-cortex/font-attribution.test.ts
  */
 
-import { describe, test, expect } from "bun:test";
+import { afterEach, beforeEach, describe, test, expect } from "bun:test";
+import { closeDatabase, getDb, initDatabase } from "../../db/connection";
 import {
   extractColorBlocks,
   stripFontTags,
+  stripThoughtDelimiters,
   attributeColorBlock,
   extractMessageOwner,
   detectParagraphFocalCharacter,
+  processChunkFontColors,
+  formatColorMapForPrompt,
+  getColorMap,
   type ExtractedColorBlock,
 } from "./font-attribution";
 
 // ─── Test Characters ──────────────────────────────────────────
 
 const KNOWN_NAMES = ["Melina", "Kael", "Seraphine", "Voss"];
+const THOUGHT_DELIMITERS = { prefix: "<thinking>", suffix: "</thinking>" };
 
 // Character color assignments in this test narrative:
 //   Melina:    #E6E6FA (speech), #D8BFD8 (narration/thought)
@@ -46,6 +52,54 @@ const WORST_CASE_NARRATIVE = `[CHARACTER | Melina]
 <font color=#3CB371>Seraphine knelt beside Voss, examining the scorch marks with a clinical eye.</font> <font color=#98FB98>"These aren't from combat magic,"</font> <font color=#3CB371>she murmured, pulling a vial from her satchel.</font> <font color=#98FB98>"The pattern is ritualistic. Whoever did this was performing a summoning — or a banishment."</font>
 
 <font color=#DAA520>The mercenary exchanged a look with Melina across the chamber. Neither spoke, but the understanding passed between them — they'd seen this kind of aftermath before, in the Ashenvale ruins.</font> <font color=#FFD700>"We should secure the exits,"</font> <font color=#DAA520>Voss said quietly, rising to his feet and drawing his axe.</font> <font color=#FFD700>"Whatever was bound here might not be gone."</font>`;
+
+const THOUGHT_AND_SPEECH_NARRATIVE = `[CHARACTER | Melina]
+<font color=#C8A2C8><thinking>If the seal was fraying, Melina needed to keep the others calm.</thinking></font> <font color=#E6E6FA>"Stay close to me,"</font> <font color=#D8BFD8>Melina said, lifting her lantern toward the first arch.</font>
+
+<font color=#5F9EA0><thinking>Kael counted the dormant glyphs and hated how many had been carved by a patient hand.</thinking></font> <font color=#87CEEB>"None of these runes are recent,"</font> <font color=#4682B4>Kael warned, crouching beside the dust-lined wall.</font>
+
+<font color=#90EE90><thinking>Seraphine listened for the rhythm of the chamber and felt a pulse answering beneath the stone.</thinking></font> <font color=#98FB98>"There's a heartbeat under the floor,"</font> <font color=#3CB371>Seraphine murmured as her fingers hovered over the cracks.</font>
+
+<font color=#F0E68C><thinking>Voss measured every doorway by escape routes first, because old ruins loved to become graves.</thinking></font> <font color=#FFD700>"Then we choose the exit before we choose the fight,"</font> <font color=#DAA520>Voss replied, shifting his grip on the axe.</font>
+
+<font color=#C8A2C8><thinking>The stale air pressed against her lungs, but Melina would not let fear show on her face.</thinking></font> <font color=#E6E6FA>"Mark the safe path and call it loud,"</font> <font color=#D8BFD8>Melina ordered without taking her eyes off the dark passage.</font>
+
+<font color=#5F9EA0><thinking>If the binding collapsed now, Kael would have only one spell worth trusting.</thinking></font> <font color=#87CEEB>"I can hold the breach for a minute, maybe two,"</font> <font color=#4682B4>he said after tracing the nearest fracture with one gloved thumb.</font>
+
+<font color=#90EE90><thinking>Seraphine knew the others heard bravery, but she heard exhaustion creeping into every breath.</thinking></font> <font color=#98FB98>"When this is over, all of you are drinking the entire recovery draught,"</font> <font color=#3CB371>the healer said, almost smiling despite the tension.</font>
+
+<font color=#F0E68C><thinking>Voss trusted the plan more than the ruin, and the ruin had earned none of his patience.</thinking></font> <font color=#FFD700>"On your signal, I shut the doors and make this chamber ours,"</font> <font color=#DAA520>Voss promised as the final ward flickered awake.</font>`;
+
+function initFontColorTestDb(): void {
+  closeDatabase();
+  initDatabase(":memory:");
+  const db = getDb();
+  db.run(`CREATE TABLE memory_font_colors (
+    id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    entity_id TEXT,
+    hex_color TEXT NOT NULL,
+    usage_type TEXT DEFAULT 'unknown',
+    confidence REAL DEFAULT 0.0,
+    sample_count INTEGER DEFAULT 0,
+    sample_excerpt TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE TABLE memory_entities (
+    id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    name TEXT NOT NULL
+  )`);
+}
+
+beforeEach(() => {
+  initFontColorTestDb();
+});
+
+afterEach(() => {
+  closeDatabase();
+});
 
 // ─── Helper: Create a block for testing attributeColorBlock ───
 
@@ -107,6 +161,20 @@ describe("extractColorBlocks", () => {
     expect(speeches.length).toBeGreaterThanOrEqual(8);
     expect(narrations.length).toBeGreaterThanOrEqual(10);
   });
+
+  test("detects thought blocks using configured delimiters", () => {
+    const content = '<font color=#C8A2C8><thinking>I cannot let them see me hesitate.</thinking></font>';
+    const blocks = extractColorBlocks(content, THOUGHT_DELIMITERS);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].usageType).toBe("thought");
+  });
+
+  test("detects thought blocks wrapped in asterisks", () => {
+    const content = '<font color=#C8A2C8>*I cannot let them see me hesitate.*</font>';
+    const blocks = extractColorBlocks(content);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].usageType).toBe("thought");
+  });
 });
 
 describe("stripFontTags", () => {
@@ -121,6 +189,11 @@ describe("stripFontTags", () => {
     const stripped = stripFontTags(input);
     expect(stripped).not.toContain("<font");
     expect(stripped).toBe("first and second");
+  });
+
+  test("strips configured thought delimiters while preserving inner text", () => {
+    const input = '<thinking>Hold the line.</thinking>';
+    expect(stripThoughtDelimiters(input, THOUGHT_DELIMITERS)).toBe("Hold the line.");
   });
 });
 
@@ -458,5 +531,80 @@ describe("edge cases", () => {
     // "Hi." is only 3 chars, below the 10-char threshold
     expect(result.entityName).toBeNull();
     expect(result.confidence).toBe(0);
+  });
+});
+
+describe("processChunkFontColors", () => {
+  test("tracks configured thought and speech colors for all 4 characters", () => {
+    const chatId = "chat-font-colors";
+    const entityIdByName = new Map<string, string>();
+    const entityNameById = new Map<string, string>();
+    const db = getDb();
+
+    for (const name of KNOWN_NAMES) {
+      const id = `entity-${name.toLowerCase()}`;
+      entityIdByName.set(name.toLowerCase(), id);
+      entityNameById.set(id, name);
+      db.query("INSERT INTO memory_entities (id, chat_id, name) VALUES (?, ?, ?)").run(id, chatId, name);
+    }
+
+    processChunkFontColors(
+      chatId,
+      THOUGHT_AND_SPEECH_NARRATIVE,
+      KNOWN_NAMES,
+      entityIdByName,
+      THOUGHT_DELIMITERS,
+    );
+
+    const mappings = getColorMap(chatId);
+    expect(mappings.length).toBeGreaterThanOrEqual(8);
+
+    const byEntity = new Map<string, Set<string>>();
+    for (const mapping of mappings) {
+      const name = mapping.entityId ? entityNameById.get(mapping.entityId) : undefined;
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (!byEntity.has(key)) byEntity.set(key, new Set());
+      byEntity.get(key)!.add(mapping.usageType);
+    }
+
+    for (const name of KNOWN_NAMES) {
+      const usageTypes = byEntity.get(name.toLowerCase()) || new Set<string>();
+      expect(usageTypes.has("speech")).toBe(true);
+      expect(usageTypes.has("thought")).toBe(true);
+    }
+
+    const prompt = formatColorMapForPrompt(chatId);
+    expect(prompt).toContain("**Melina:**");
+    expect(prompt).toContain("- Speech: #e6e6fa");
+    expect(prompt).toContain("- Thoughts: #c8a2c8");
+    expect(prompt).toContain("**Kael:**");
+    expect(prompt).toContain("- Speech: #87ceeb");
+    expect(prompt).toContain("- Thoughts: #5f9ea0");
+    expect(prompt).toContain("**Seraphine:**");
+    expect(prompt).toContain("- Speech: #98fb98");
+    expect(prompt).toContain("- Thoughts: #90ee90");
+    expect(prompt).toContain("**Voss:**");
+    expect(prompt).toContain("- Speech: #ffd700");
+    expect(prompt).toContain("- Thoughts: #f0e68c");
+  });
+
+  test("tracks asterisk-wrapped thought colors", () => {
+    const chatId = "chat-asterisk-thoughts";
+    const db = getDb();
+    const melinaId = "entity-melina";
+    const entityIdByName = new Map([["melina", melinaId]]);
+
+    db.query("INSERT INTO memory_entities (id, chat_id, name) VALUES (?, ?, ?)").run(melinaId, chatId, "Melina");
+
+    const content = '[CHARACTER | Melina]\n<font color=#C8A2C8>*I cannot let them see me hesitate.*</font> <font color=#E6E6FA>"Stay behind me,"</font> <font color=#D8BFD8>Melina said, drawing steel.</font>';
+
+    processChunkFontColors(chatId, content, ["Melina"], entityIdByName);
+    processChunkFontColors(chatId, content, ["Melina"], entityIdByName);
+
+    const prompt = formatColorMapForPrompt(chatId);
+    expect(prompt).toContain("**Melina:**");
+    expect(prompt).toContain("- Thoughts: #c8a2c8");
+    expect(prompt).toContain("- Speech: #e6e6fa");
   });
 });

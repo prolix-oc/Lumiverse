@@ -1,6 +1,7 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import type { GenerationRequest } from "../types";
+import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 /** Cached model metadata from OpenRouter's /models endpoint. */
 export interface OpenRouterModelInfo {
@@ -55,7 +56,7 @@ export interface OpenRouterConnectionSettings {
 }
 
 // In-memory caches with TTL
-let _modelCache: { data: OpenRouterModelInfo[]; fetchedAt: number } | null = null;
+const _modelCache = new Map<string, { data: OpenRouterModelInfo[]; fetchedAt: number }>();
 let _providerListCache: { data: OpenRouterProviderEntry[]; fetchedAt: number } | null = null;
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -85,7 +86,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
 
   protected extraHeaders(): Record<string, string> {
     return {
-      "HTTP-Referer": "https://lumiverse.app",
+      "HTTP-Referer": "https://lumiverse.chat",
       "X-Title": "Lumiverse",
       "X-OpenRouter-Categories": "ai-chat,roleplay",
     };
@@ -138,10 +139,19 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
         headers: this.headers(apiKey),
       });
       if (res.ok) return true;
+      if (res.status === 401 || res.status === 403) {
+        await throwProviderResponseError(this.displayName, "authentication", res);
+      }
       // Fall back to models endpoint
       return super.validateKey(apiKey, apiUrl);
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "authentication",
+        detail: err instanceof Error ? err.message : "network request failed",
+        retryable: true,
+      });
     }
   }
 
@@ -158,17 +168,26 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
    * Fetch full model metadata from OpenRouter. Cached in-memory with TTL.
    * Used by the credits/models info endpoint.
    */
-  async fetchModelsWithMetadata(apiKey: string, apiUrl: string): Promise<OpenRouterModelInfo[]> {
-    if (_modelCache && Date.now() - _modelCache.fetchedAt < MODEL_CACHE_TTL_MS) {
-      return _modelCache.data;
+  async fetchModelsWithMetadata(
+    apiKey: string,
+    apiUrl: string,
+    opts?: { outputModalities?: string },
+  ): Promise<OpenRouterModelInfo[]> {
+    const cacheKey = opts?.outputModalities?.trim() || "default";
+    const cached = _modelCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
+    const url = new URL(`${this.baseUrl(apiUrl)}/models`);
+    if (opts?.outputModalities?.trim()) {
+      url.searchParams.set("output_modalities", opts.outputModalities.trim());
     }
 
     try {
-      const res = await fetch(`${this.baseUrl(apiUrl)}/models`, {
+      const data = await fetchProviderJson<any>(this.displayName, "model listing", url.toString(), {
         headers: this.headers(apiKey),
       });
-      if (!res.ok) return _modelCache?.data || [];
-      const data = (await res.json()) as any;
       const models: OpenRouterModelInfo[] = (data.data || []).map((m: any) => ({
         id: m.id,
         name: m.name,
@@ -178,10 +197,11 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
         architecture: m.architecture,
         supported_parameters: m.supported_parameters,
       }));
-      _modelCache = { data: models, fetchedAt: Date.now() };
+      _modelCache.set(cacheKey, { data: models, fetchedAt: Date.now() });
       return models;
-    } catch {
-      return _modelCache?.data || [];
+    } catch (err) {
+      if (cached?.data) return cached.data;
+      throw err;
     }
   }
 

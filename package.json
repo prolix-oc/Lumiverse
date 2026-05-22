@@ -1,8 +1,8 @@
 {
   "name": "lumiverse-backend",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "dependencies": {
-    "@lancedb/lancedb": "^0.26.2",
+    "@lancedb/lancedb": "^0.27.2",
     "@lenml/tokenizer-claude": "^3.7.2",
     "@lenml/tokenizers": "^3.7.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -17,12 +17,14 @@
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.16",
     "jsdom": "^29.0.1",
-    "lumiverse-spindle-types": "0.4.21",
+    "lumiverse-spindle-types": "0.5.7",
+    "mute-stream": "^3.0.0",
     "sharp": "^0.34.5",
     "ssh2-sftp-client": "^12.1.1"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.1",
+    "@types/mute-stream": "^0.0.4",
     "@types/ssh2-sftp-client": "^9.0.6",
     "bun-types": "^1.3.10"
   },
@@ -35,6 +37,7 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "build:lancedb:android": "bash scripts/build-lancedb-android.sh",
     "setup": "bun run scripts/setup-wizard.ts",
     "runner": "bun run scripts/runner.ts",
     "runner:dev": "bun run scripts/runner.ts -- --dev",
@@ -42,6 +45,7 @@
     "build:frontend": "cd frontend && bun install && bun run build:checked",
     "build:frontend:fast": "cd frontend && bun install && bun run build",
     "reset-password": "bun run scripts/reset-password.ts",
+    "backfill-character-world-book-ownership": "bun run scripts/backfill-character-world-book-ownership.ts",
     "migrate:st": "bun run scripts/migrate-sillytavern.ts",
     "release": "bash scripts/release.sh",
     "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts"

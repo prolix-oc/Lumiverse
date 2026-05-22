@@ -6,10 +6,16 @@ import LazyImage from '@/components/shared/LazyImage'
 import styles from './FloatingAvatarViewer.module.css'
 
 const MIN_SIZE = 120
-const MAX_SIZE = 600
+const INITIAL_CAP = 600
 const PAD = 12
 const DRAG_BAR_H = 28
 const DRAG_THRESHOLD = 5
+
+// Resize is bounded by the viewport so the drag handle always stays reachable
+const getViewportMax = () => ({
+  maxW: Math.max(MIN_SIZE, window.innerWidth - PAD * 2),
+  maxH: Math.max(MIN_SIZE, window.innerHeight - DRAG_BAR_H - PAD * 2),
+})
 
 export default function FloatingAvatarViewer() {
   const floatingAvatar = useStore((s) => s.floatingAvatar)
@@ -65,8 +71,9 @@ export default function FloatingAvatarViewer() {
         h = BASE
         w = Math.round(BASE * ratio)
       }
-      w = Math.max(MIN_SIZE, Math.min(MAX_SIZE, w))
-      h = Math.max(MIN_SIZE, Math.min(MAX_SIZE, h))
+      const { maxW, maxH } = getViewportMax()
+      w = Math.max(MIN_SIZE, Math.min(Math.min(INITIAL_CAP, maxW), w))
+      h = Math.max(MIN_SIZE, Math.min(Math.min(INITIAL_CAP, maxH), h))
 
       setSize({ width: w, height: h })
 
@@ -84,13 +91,24 @@ export default function FloatingAvatarViewer() {
     img.src = floatingAvatar.imageUrl
   }, [floatingAvatar?.imageUrl, updateFloatingAvatar])
 
-  // Re-clamp on window resize
+  // Re-clamp on window resize — shrink size if viewport no longer fits, then clamp position
   useEffect(() => {
     if (!floatingAvatar) return
     const onResize = () => {
+      const { maxW, maxH } = getViewportMax()
+      const ratio = aspectRatio.current
+      let w = Math.min(size.width, maxW)
+      let h = Math.min(size.height, maxH)
+      if (ratio > 0 && isFinite(ratio)) {
+        if (w / ratio > h) w = Math.round(h * ratio)
+        else h = Math.round(w / ratio)
+      }
+      w = Math.max(MIN_SIZE, w)
+      h = Math.max(MIN_SIZE, h)
+      if (w !== size.width || h !== size.height) setSize({ width: w, height: h })
       setPos((prev) => ({
-        x: Math.max(PAD, Math.min(prev.x, window.innerWidth - size.width - PAD)),
-        y: Math.max(PAD, Math.min(prev.y, window.innerHeight - size.height - DRAG_BAR_H - PAD)),
+        x: Math.max(PAD, Math.min(prev.x, window.innerWidth - w - PAD)),
+        y: Math.max(PAD, Math.min(prev.y, window.innerHeight - h - DRAG_BAR_H - PAD)),
       }))
     }
     window.addEventListener('resize', onResize)
@@ -160,13 +178,14 @@ export default function FloatingAvatarViewer() {
     const dy = e.clientY - resizeStart.current.y
     const delta = Math.max(dx, dy)
     const ratio = aspectRatio.current
+    const { maxW, maxH } = getViewportMax()
 
     let newWidth = resizeStart.current.w + delta
-    newWidth = Math.max(MIN_SIZE, Math.min(MAX_SIZE, newWidth))
+    newWidth = Math.max(MIN_SIZE, Math.min(maxW, newWidth))
     let newHeight = Math.round(newWidth / ratio)
 
-    if (newHeight > MAX_SIZE) {
-      newHeight = MAX_SIZE
+    if (newHeight > maxH) {
+      newHeight = maxH
       newWidth = Math.round(newHeight * ratio)
     } else if (newHeight < MIN_SIZE) {
       newHeight = MIN_SIZE
@@ -174,6 +193,10 @@ export default function FloatingAvatarViewer() {
     }
 
     setSize({ width: newWidth, height: newHeight })
+    setPos((prev) => ({
+      x: Math.max(PAD, Math.min(prev.x, window.innerWidth - newWidth - PAD)),
+      y: Math.max(PAD, Math.min(prev.y, window.innerHeight - newHeight - DRAG_BAR_H - PAD)),
+    }))
   }, [])
 
   const handleResizeUp = useCallback((e: React.PointerEvent) => {
@@ -181,8 +204,8 @@ export default function FloatingAvatarViewer() {
     resizing.current = false
     e.preventDefault()
     e.stopPropagation()
-    updateFloatingAvatar({ width: size.width, height: size.height })
-  }, [size, updateFloatingAvatar])
+    updateFloatingAvatar({ width: size.width, height: size.height, x: pos.x, y: pos.y })
+  }, [size, pos, updateFloatingAvatar])
 
   if (!floatingAvatar) return null
 

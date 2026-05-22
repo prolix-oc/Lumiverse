@@ -99,52 +99,11 @@ app.post("/lucid-cards/import", async (c) => {
 
   const packData = rawData.pack || rawData;
 
-  // Transform from Lucid.cards camelCase format to PackImportPayload
-  const payload = {
-    name: packData.packName || body.slug,
-    author: packData.packAuthor || "",
-    coverUrl: packData.coverUrl || undefined,
-    version: String(packData.version || 1),
-    sourceUrl: `https://lucid.cards/api/lumia-dlc/${body.slug}`,
-    extras: packData.packExtras?.length ? { items: packData.packExtras } : {},
-    lumiaItems: (packData.lumiaItems || []).map((item: any) => ({
-      name: item.lumiaName || item.name || "Unknown",
-      avatarUrl: item.avatarUrl || undefined,
-      authorName: item.authorName || "",
-      definition: item.lumiaDefinition || item.definition || "",
-      personality: item.lumiaPersonality || item.personality || "",
-      behavior: item.lumiaBehavior || item.behavior || "",
-      genderIdentity: item.genderIdentity ?? 0,
-      version: String(item.version || 1),
-    })),
-    loomItems: (packData.loomItems || []).map((item: any) => {
-      const cat = (item.loomCategory || item.category || "").toLowerCase();
-      const category = cat.includes("utility") || cat.includes("utilities") ? "loom_utility"
-        : cat.includes("retrofit") ? "retrofit"
-        : "narrative_style";
-      return {
-        name: item.loomName || item.name || "Unknown",
-        content: item.loomContent || item.content || "",
-        category,
-        authorName: item.authorName || "",
-        version: String(item.version || 1),
-      };
-    }),
-    loomTools: (packData.loomTools || []).map((tool: any) => ({
-      toolName: tool.toolName || tool.tool_name || "unknown_tool",
-      displayName: tool.displayName || tool.display_name || "",
-      description: tool.description || "",
-      prompt: tool.prompt || "",
-      inputSchema: tool.inputSchema || tool.input_schema || {},
-      resultVariable: tool.resultVariable || tool.result_variable || "",
-      storeInDeliberation: tool.storeInDeliberation ?? tool.store_in_deliberation ?? false,
-      authorName: tool.authorName || "",
-      version: String(tool.version || 1),
-    })),
-  };
-
   try {
-    const pack = svc.importPack(userId, payload);
+    const pack = svc.importPack(userId, {
+      ...packData,
+      sourceUrl: `https://lucid.cards/api/lumia-dlc/${body.slug}`,
+    });
     return c.json(pack, 201);
   } catch (err: any) {
     return c.json({ error: err.message || "Import failed" }, 400);
@@ -179,6 +138,13 @@ app.get("/:id/export", (c) => {
   const payload = svc.exportPack(userId, c.req.param("id"));
   if (!payload) return c.json({ error: "Not found" }, 404);
   return c.json(payload);
+});
+
+app.post("/:id/repair-legacy-gender-mapping", (c) => {
+  const userId = c.get("userId");
+  const pack = svc.repairOldLumiverseGenderMapping(userId, c.req.param("id"));
+  if (!pack) return c.json({ error: "Not found" }, 404);
+  return c.json(pack);
 });
 
 // --- Lumia Item endpoints ---

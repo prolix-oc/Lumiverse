@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { Plus, Upload, Download, Trash2, Globe, User, MessageCircle, ChevronRight, FolderPlus, Check, X } from 'lucide-react'
+import { Plus, Upload, Download, Trash2, Globe, User, MessageCircle, ChevronRight, FolderPlus, Check, X, Link, Unlink, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/shared/FormComponents'
 import { useStore } from '@/store'
 import { regexApi } from '@/api/regex'
@@ -8,7 +8,7 @@ import { useFolders } from '@/hooks/useFolders'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
-import type { RegexScript, RegexScope } from '@/types/regex'
+import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/regex'
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
 
@@ -44,6 +44,13 @@ const REPLACE_HTML = [
   { label: '<del>', value: '<del>$1</del>' },
 ] as const
 
+function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
+  const raw = script.metadata?.regex_performance
+  if (!raw || typeof raw !== 'object') return null
+  if (raw.slow !== true || typeof raw.version !== 'number') return null
+  return raw as RegexPerformanceMetadata
+}
+
 export default function RegexPanel() {
   const regexScripts = useStore((s) => s.regexScripts)
   const loadRegexScripts = useStore((s) => s.loadRegexScripts)
@@ -54,6 +61,7 @@ export default function RegexPanel() {
   const toggleRegexScript = useStore((s) => s.toggleRegexScript)
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
 
   const [scopeFilter, setScopeFilter] = useState<ScopeFilterValue>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -191,6 +199,39 @@ export default function RegexPanel() {
     }
   }, [toggleRegexScript])
 
+  const handleBindToPreset = useCallback(async (script: RegexScript, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!activeLoomPresetId) {
+      toast.error('Select a Loom preset before binding regex scripts')
+      return
+    }
+    const nextPresetId = script.preset_id === activeLoomPresetId ? null : activeLoomPresetId
+    try {
+      await updateRegexScript(script.id, { preset_id: nextPresetId })
+      toast.success(nextPresetId ? 'Regex bound to active preset' : 'Regex unbound from preset')
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message)
+    }
+  }, [activeLoomPresetId, updateRegexScript])
+
+  const handleBindFolderToPreset = useCallback(async (scripts: RegexScript[], folderLabel: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!activeLoomPresetId) {
+      toast.error('Select a Loom preset before binding regex folders')
+      return
+    }
+    const allBound = scripts.length > 0 && scripts.every((s) => s.preset_id === activeLoomPresetId)
+    const nextPresetId = allBound ? null : activeLoomPresetId
+    try {
+      await Promise.all(scripts.map((script) => updateRegexScript(script.id, { preset_id: nextPresetId })))
+      toast.success(nextPresetId
+        ? `Bound "${folderLabel}" to active preset`
+        : `Unbound "${folderLabel}" from active preset`)
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message)
+    }
+  }, [activeLoomPresetId, updateRegexScript])
+
   const handleExport = useCallback(async () => {
     try {
       const data = await regexApi.exportScripts()
@@ -199,6 +240,22 @@ export default function RegexPanel() {
       const a = document.createElement('a')
       a.href = url
       a.download = 'regex-scripts.json'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message)
+    }
+  }, [])
+
+  const handleExportFolder = useCallback(async (folder: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      const data = await regexApi.exportScripts(undefined, { folder })
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${folder || 'uncategorized'}-regex-scripts.json`
       a.click()
       URL.revokeObjectURL(url)
     } catch (err: any) {
@@ -348,14 +405,38 @@ export default function RegexPanel() {
                   </span>
                   <span className={styles.folderCount}>{group.scripts.length}</span>
                   {group.folder && (
-                    <button
-                      className={styles.folderDeleteBtn}
-                      onClick={(e) => handleDeleteFolder(group.scripts, folderLabel, e)}
-                      title={`Delete all scripts in "${folderLabel}"`}
-                      aria-label={`Delete all scripts in ${folderLabel}`}
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    <>
+                      {activeLoomPresetId && (
+                        <button
+                          className={styles.folderDeleteBtn}
+                          onClick={(e) => handleBindFolderToPreset(group.scripts, folderLabel, e)}
+                          title={group.scripts.every((s) => s.preset_id === activeLoomPresetId)
+                            ? `Unbind "${folderLabel}" from active preset`
+                            : `Bind "${folderLabel}" to active preset`}
+                          aria-label={group.scripts.every((s) => s.preset_id === activeLoomPresetId)
+                            ? `Unbind ${folderLabel} from active preset`
+                            : `Bind ${folderLabel} to active preset`}
+                        >
+                          {group.scripts.every((s) => s.preset_id === activeLoomPresetId) ? <Unlink size={12} /> : <Link size={12} />}
+                        </button>
+                      )}
+                      <button
+                        className={styles.folderDeleteBtn}
+                        onClick={(e) => handleExportFolder(group.folder, e)}
+                        title={`Export scripts in "${folderLabel}"`}
+                        aria-label={`Export scripts in ${folderLabel}`}
+                      >
+                        <Download size={12} />
+                      </button>
+                      <button
+                        className={styles.folderDeleteBtn}
+                        onClick={(e) => handleDeleteFolder(group.scripts, folderLabel, e)}
+                        title={`Delete all scripts in "${folderLabel}"`}
+                        aria-label={`Delete all scripts in ${folderLabel}`}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </>
                   )}
                 </div>
                 {!isCollapsed &&
@@ -367,12 +448,14 @@ export default function RegexPanel() {
                       onToggleExpand={() => setExpandedId(expandedId === script.id ? null : script.id)}
                       onDelete={(e) => handleDelete(script.id, e)}
                       onToggle={(disabled, e) => handleToggle(script.id, disabled, e)}
+                      onBindPreset={(e) => handleBindToPreset(script, e)}
                       onUpdate={(updates) => updateRegexScript(script.id, updates)}
                       onOpenModal={() => openModal('regexEditor', { scriptId: script.id })}
                       targetBadge={targetBadge(script.target)}
                       scopeIcon={scopeIcon(script.scope)}
                       folders={folders}
                       onCreateFolder={createFolder}
+                      activePresetId={activeLoomPresetId}
                     />
                   ))}
               </div>
@@ -387,12 +470,14 @@ export default function RegexPanel() {
               onToggleExpand={() => setExpandedId(expandedId === script.id ? null : script.id)}
               onDelete={(e) => handleDelete(script.id, e)}
               onToggle={(disabled, e) => handleToggle(script.id, disabled, e)}
+              onBindPreset={(e) => handleBindToPreset(script, e)}
               onUpdate={(updates) => updateRegexScript(script.id, updates)}
               onOpenModal={() => openModal('regexEditor', { scriptId: script.id })}
               targetBadge={targetBadge(script.target)}
               scopeIcon={scopeIcon(script.scope)}
               folders={folders}
               onCreateFolder={createFolder}
+              activePresetId={activeLoomPresetId}
             />
           ))
         )}
@@ -407,37 +492,56 @@ function ScriptRow({
   onToggleExpand,
   onDelete,
   onToggle,
+  onBindPreset,
   onUpdate,
   onOpenModal,
   targetBadge,
   scopeIcon,
   folders,
   onCreateFolder,
+  activePresetId,
 }: {
   script: RegexScript
   expanded: boolean
   onToggleExpand: () => void
   onDelete: (e: React.MouseEvent) => void
   onToggle: (disabled: boolean, e: React.MouseEvent) => void
+  onBindPreset: (e: React.MouseEvent) => void
   onUpdate: (updates: Record<string, any>) => void
   onOpenModal: () => void
   targetBadge: React.ReactNode
   scopeIcon: React.ReactNode
   folders: string[]
   onCreateFolder: (name: string) => void
+  activePresetId: string | null
 }) {
   const replaceRef = useRef<HTMLTextAreaElement>(null)
+  const performance = getRegexPerformanceMetadata(script)
+  const warningText = performance
+    ? performance.timed_out
+      ? 'Timed out during regex execution'
+      : `Slow regex detected (${(performance.elapsed_ms / 1000).toFixed(1)}s)`
+    : null
 
   return (
     <div>
       <div
-        className={clsx(styles.scriptRow, expanded && styles.scriptRowExpanded)}
+        className={clsx(
+          styles.scriptRow,
+          expanded && styles.scriptRowExpanded,
+          performance && styles.scriptRowSlow,
+        )}
         onClick={onToggleExpand}
       >
         <Badge size="sm">{scopeIcon}</Badge>
         <span className={clsx(styles.scriptName, script.disabled && styles.scriptNameDisabled)}>
           {script.name}
         </span>
+        {performance && (
+          <span className={styles.slowBadge} title={warningText ?? undefined} aria-label={warningText ?? undefined}>
+            <TriangleAlert size={12} /> Slow
+          </span>
+        )}
         {targetBadge}
         <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center' }}>
           <Toggle.Switch
@@ -445,6 +549,17 @@ function ScriptRow({
             onChange={(v) => onToggle(!v, { stopPropagation: () => {} } as React.MouseEvent)}
           />
         </div>
+        {activePresetId && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className={styles.deleteBtn}
+            onClick={onBindPreset}
+            title={script.preset_id === activePresetId ? 'Unbind from active preset' : 'Bind to active preset'}
+          >
+            {script.preset_id === activePresetId ? <Unlink size={13} /> : <Link size={13} />}
+          </Button>
+        )}
         <Button size="icon-sm" variant="danger-ghost" className={styles.deleteBtn} onClick={onDelete} title="Delete">
           <Trash2 size={13} />
         </Button>
@@ -460,6 +575,16 @@ function ScriptRow({
               onChange={(e) => onUpdate({ name: e.target.value })}
             />
           </div>
+          {performance && (
+            <div className={styles.warningBox}>
+              <TriangleAlert size={14} />
+              <span>
+                {performance.timed_out
+                  ? 'This script hit the regex timeout and was skipped during execution.'
+                  : `This script was flagged as slow after taking ${(performance.elapsed_ms / 1000).toFixed(1)}s to run.`}
+              </span>
+            </div>
+          )}
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Folder</label>
             <FolderDropdown
@@ -531,6 +656,10 @@ function ScriptRow({
                   { f: 'i', hint: 'Case insensitive' },
                   { f: 'm', hint: 'Multiline' },
                   { f: 's', hint: 'Dotall — . matches newlines' },
+                  { f: 'u', hint: 'Unicode' },
+                  { f: 'v', hint: 'Unicode sets (ES2024) — superset of u' },
+                  { f: 'd', hint: 'Has indices' },
+                  { f: 'y', hint: 'Sticky' },
                 ].map(({ f, hint }) => (
                   <label key={f} className={styles.flagCheck} title={hint}>
                     <input

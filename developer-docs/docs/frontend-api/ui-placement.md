@@ -2,6 +2,10 @@
 
 Beyond the basic `ctx.ui.mount()` for fixed mount points, extensions can request richer screen placements.
 
+These placement APIs return normal host DOM roots. Render directly into those roots for ordinary extension UI.
+
+If a placement needs an isolated child document with inline scripts, create and append a `ctx.dom.createSandboxFrame(...)` inside the returned root instead of replacing the placement path itself.
+
 ## Drawer Tabs (free — no permission needed)
 
 Register a tab in the ViewportDrawer sidebar. Max 4 per extension, 8 global.
@@ -166,7 +170,7 @@ Mount an unrestricted portal into `document.body` that persists across route cha
 ```ts
 const mount = ctx.ui.mountApp({
   className: 'my-ext-overlay',
-  position: 'end',     // 'start' or 'end' of body
+  position: 'end',     // 'start' | 'end' (body) | 'app-overlay'
 })
 
 // Full control over the mount
@@ -177,6 +181,8 @@ mount.setVisible(false)
 
 mount.destroy()
 ```
+
+`'app-overlay'` mounts inside the app shell, layered below the sidebar drawer and modals. `position: fixed` children still anchor to the viewport, but app chrome covers the overlay through normal stacking instead of you hiding it manually.
 
 ## Input Bar Actions (free — no permission needed)
 

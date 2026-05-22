@@ -2,9 +2,17 @@ import { useCallback, useMemo } from 'react'
 import { Brain } from 'lucide-react'
 import { IconBolt } from '@tabler/icons-react'
 import { useStore } from '@/store'
+import {
+  areReasoningSettingsEqual,
+  getEffortOptions,
+  getReasoningBindingSummary,
+  normalizeReasoningSettingsForProvider,
+  TOGGLE_ONLY_PROVIDERS,
+} from '@/lib/reasoning-binding'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
+import NumericInput from '@/components/shared/NumericInput'
 import { Toggle } from '@/components/shared/Toggle'
-import type { ReasoningSettings, ReasoningEffort } from '@/types/store'
+import type { ReasoningSettings, ReasoningEffort, ThinkingDisplay } from '@/types/store'
 import styles from './PresetManager.module.css'
 import clsx from 'clsx'
 
@@ -14,67 +22,6 @@ const REASONING_PRESETS: { label: string; prefix: string; suffix: string }[] = [
   { label: 'o1', prefix: '<reasoning>\n', suffix: '\n</reasoning>' },
 ]
 
-// ── Provider-specific reasoning effort configurations ──
-
-interface EffortOption { value: ReasoningEffort; label: string }
-
-/** Providers where reasoning is toggle-only (enabled/disabled) with no effort granularity. */
-const TOGGLE_ONLY_PROVIDERS = new Set(['moonshot', 'zai'])
-
-const OPENROUTER_EFFORTS: EffortOption[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'none', label: 'None (disabled)' },
-  { value: 'minimal', label: 'Minimal' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'Extra High' },
-]
-
-const GOOGLE_EFFORTS: EffortOption[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'minimal', label: 'Minimal' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-]
-
-const ANTHROPIC_EFFORTS: EffortOption[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'max', label: 'Max' },
-]
-
-const NANOGPT_EFFORTS: EffortOption[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'none', label: 'None (disabled)' },
-  { value: 'minimal', label: 'Minimal' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-]
-
-const GENERIC_EFFORTS: EffortOption[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'max', label: 'Max' },
-]
-
-function getEffortOptions(provider: string | undefined): EffortOption[] {
-  switch (provider) {
-    case 'openrouter': return OPENROUTER_EFFORTS
-    case 'google':
-    case 'google_vertex': return GOOGLE_EFFORTS
-    case 'anthropic': return ANTHROPIC_EFFORTS
-    case 'nanogpt': return NANOGPT_EFFORTS
-    default: return GENERIC_EFFORTS
-  }
-}
-
 export default function PresetManager() {
   const reasoningSettings = useStore((s) => s.reasoningSettings)
   const promptBias = useStore((s) => s.promptBias)
@@ -83,19 +30,37 @@ export default function PresetManager() {
   // Derive provider from active connection profile
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
-  const activeProvider = useMemo(() => {
+  const activeProfile = useMemo(() => {
     if (!activeProfileId) return undefined
-    return profiles.find((p) => p.id === activeProfileId)?.provider
+    return profiles.find((p) => p.id === activeProfileId)
   }, [activeProfileId, profiles])
+  const activeProvider = activeProfile?.provider
+  const activeModel = activeProfile?.model
+  const activeBinding = activeProfile?.metadata?.reasoningBindings?.settings
+  const activeBindingPromptBias = activeProfile?.metadata?.reasoningBindings?.promptBias
+  const normalizedActiveBinding = activeBinding
+    ? normalizeReasoningSettingsForProvider(activeBinding, activeProvider, activeModel)
+    : null
 
   const isToggleOnly = activeProvider ? TOGGLE_ONLY_PROVIDERS.has(activeProvider) : false
-  const effortOptions = getEffortOptions(activeProvider)
+  const isApiReasoningDisabled = !reasoningSettings.apiReasoning
+  const effortOptions = getEffortOptions(activeProvider, activeModel)
+  const isAnthropic = activeProvider === 'anthropic'
+  const activeBindingMatchesPanel = normalizedActiveBinding
+    ? areReasoningSettingsEqual(normalizedActiveBinding, reasoningSettings)
+      && (typeof activeBindingPromptBias !== 'string' || activeBindingPromptBias === promptBias)
+    : false
 
   const updateReasoning = useCallback(
     (partial: Partial<ReasoningSettings>) => {
-      setSetting('reasoningSettings', { ...reasoningSettings, ...partial })
+      const next = normalizeReasoningSettingsForProvider(
+        { ...reasoningSettings, ...partial },
+        activeProvider,
+        activeModel,
+      )
+      setSetting('reasoningSettings', next)
     },
-    [reasoningSettings, setSetting]
+    [activeModel, activeProvider, reasoningSettings, setSetting]
   )
 
   const activePreset = REASONING_PRESETS.find(
@@ -109,6 +74,19 @@ export default function PresetManager() {
     <div className={styles.panel}>
       {/* ── Reasoning / CoT ── */}
       <CollapsibleSection title="Reasoning / CoT" icon={<Brain size={14} />} defaultExpanded>
+        {normalizedActiveBinding && (
+          <div className={styles.bindingBanner}>
+            <div className={styles.bindingBannerTitle}>Saved on {activeProfile?.name}</div>
+            <div className={styles.bindingBannerText}>
+              {getReasoningBindingSummary(normalizedActiveBinding, activeBindingPromptBias)}
+            </div>
+            {!activeBindingMatchesPanel && (
+              <div className={styles.bindingBannerHint}>
+                The panel has been changed locally. Edit the connection and use Capture Current to update the saved snapshot.
+              </div>
+            )}
+          </div>
+        )}
         {/* Quick preset buttons */}
         <div className={styles.presetRow}>
           {REASONING_PRESETS.map((p) => (
@@ -128,6 +106,8 @@ export default function PresetManager() {
           <div className={styles.fieldGroup}>
             <span className={styles.label}>Prefix</span>
             <input
+              name="reasoning-prefix"
+              aria-label="Reasoning prefix"
               className={styles.input}
               value={reasoningSettings.prefix}
               onChange={(e) => updateReasoning({ prefix: e.target.value })}
@@ -137,6 +117,8 @@ export default function PresetManager() {
           <div className={styles.fieldGroup}>
             <span className={styles.label}>Suffix</span>
             <input
+              name="reasoning-suffix"
+              aria-label="Reasoning suffix"
               className={styles.input}
               value={reasoningSettings.suffix}
               onChange={(e) => updateReasoning({ suffix: e.target.value })}
@@ -170,16 +152,19 @@ export default function PresetManager() {
         </div>
 
         {/* Reasoning effort */}
-        <div className={styles.fieldGroup}>
+        <div className={clsx(styles.fieldGroup, (isToggleOnly || isApiReasoningDisabled) && styles.fieldGroupDisabled)}>
           <span className={styles.label}>
             Reasoning Effort
             {isToggleOnly && <span className={styles.toggleOnlyHint}> (toggle-only for {activeProvider})</span>}
+            {!isToggleOnly && isApiReasoningDisabled && <span className={styles.toggleOnlyHint}> (disabled while API reasoning is off)</span>}
           </span>
           <select
-            className={clsx(styles.select, isToggleOnly && styles.selectDisabled)}
+            name="reasoning-effort"
+            aria-label="Reasoning effort"
+            className={clsx(styles.select, (isToggleOnly || isApiReasoningDisabled) && styles.selectDisabled)}
             value={reasoningSettings.reasoningEffort}
             onChange={(e) => updateReasoning({ reasoningEffort: e.target.value as ReasoningEffort })}
-            disabled={isToggleOnly}
+            disabled={isToggleOnly || isApiReasoningDisabled}
           >
             {!currentEffortValid && (
               <option value={reasoningSettings.reasoningEffort}>
@@ -192,19 +177,40 @@ export default function PresetManager() {
           </select>
         </div>
 
+        {/* Anthropic-only: thinking.display field on the Messages API */}
+        {isAnthropic && (
+          <div className={clsx(styles.fieldGroup, isApiReasoningDisabled && styles.fieldGroupDisabled)}>
+            <span className={styles.label}>Thinking Display</span>
+            <select
+              name="thinking-display"
+              aria-label="Thinking display"
+              className={clsx(styles.select, isApiReasoningDisabled && styles.selectDisabled)}
+              value={reasoningSettings.thinkingDisplay ?? 'auto'}
+              onChange={(e) => updateReasoning({ thinkingDisplay: e.target.value as ThinkingDisplay })}
+              disabled={isApiReasoningDisabled}
+            >
+              <option value="auto">Auto (model default)</option>
+              <option value="summarized">Summarized</option>
+              <option value="omitted">Omitted</option>
+            </select>
+            <span className={styles.toggleDesc}>
+              {isApiReasoningDisabled
+                ? 'Only sent when API reasoning is enabled.'
+                : 'Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.'}
+            </span>
+          </div>
+        )}
+
         {/* Keep N reasoning blocks in history */}
         <div className={styles.fieldGroup}>
           <span className={styles.label}>Keep in history</span>
           <div className={styles.historyRow}>
-            <input
-              type="number"
+            <NumericInput
               className={styles.input}
               min={-1}
               value={reasoningSettings.keepInHistory}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10)
-                if (!Number.isNaN(v)) updateReasoning({ keepInHistory: v })
-              }}
+              integer
+              onChange={(value) => updateReasoning({ keepInHistory: value ?? reasoningSettings.keepInHistory })}
             />
             <span className={styles.historyHint}>
               {reasoningSettings.keepInHistory === -1
@@ -223,6 +229,8 @@ export default function PresetManager() {
         <div className={styles.fieldGroup}>
           <span className={styles.label}>Start Reply With</span>
           <textarea
+            name="prompt-bias"
+            aria-label="Start reply with"
             className={styles.textarea}
             value={promptBias}
             onChange={(e) => setSetting('promptBias', e.target.value)}

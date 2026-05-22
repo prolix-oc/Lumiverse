@@ -6,6 +6,12 @@
  */
 
 /** Transform from Lucid.cards / extension raw format to PackImportPayload */
+function normalizeImportedGenderIdentity(value: unknown): 0 | 1 | 2 | 3 {
+  const num = Number(value)
+  if (num === 0 || num === 1 || num === 2 || num === 3) return num
+  return 3
+}
+
 export function transformLucidPack(packData: any, catalogEntry: any) {
   const cat = (c: string) => {
     const lower = (c || '').toLowerCase()
@@ -28,7 +34,7 @@ export function transformLucidPack(packData: any, catalogEntry: any) {
       definition: item.lumiaDefinition || item.definition || '',
       personality: item.lumiaPersonality || item.personality || '',
       behavior: item.lumiaBehavior || item.behavior || '',
-      genderIdentity: item.genderIdentity ?? 0,
+      genderIdentity: normalizeImportedGenderIdentity(item.genderIdentity ?? item.gender_identity),
       version: String(item.version || 1),
     })),
     loomItems: (packData.loomItems || []).map((item: any) => ({

@@ -1,0 +1,351 @@
+/* =====================================================================
+   PROMPT VARIABLES EDITOR — creator-side schema for {{var::name}} macros
+   Dense, card-based form with type-coded accent bars.
+   ===================================================================== */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---- Accordion header ---- */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.headerToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  line-height: 1.2;
+  transition: color var(--lumiverse-transition-fast);
+}
+
+.headerToggle:hover {
+  color: var(--lumiverse-text);
+  opacity: 0.85;
+}
+
+.headerCount {
+  font-weight: 400;
+  color: var(--lumiverse-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  line-height: 1.5;
+}
+
+.hint code {
+  font-family: var(--lumiverse-font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 4px;
+  color: var(--lumiverse-text);
+}
+
+/* ---- Card list ---- */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.card {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px 10px;
+  padding: 12px 12px 12px 18px;
+  background: var(--lumiverse-bg-darker);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    background-color var(--lumiverse-transition-fast);
+}
+
+.card:hover {
+  border-color: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+  background: var(--lumiverse-bg-dark);
+}
+
+.card:focus-within {
+  border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+}
+
+/* Left accent bar — type-coded. Subtle saturation: the card is still
+   clearly the subject. */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent, var(--lumiverse-text-dim));
+  opacity: 0.55;
+}
+
+.typeText     { --accent: #38bdf8; }   /* sky */
+.typeTextarea { --accent: #a78bfa; }   /* violet */
+.typeNumber   { --accent: #fbbf24; }   /* amber */
+.typeSlider   { --accent: #34d399; }   /* emerald */
+
+/* ---- Field primitives ---- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  line-height: 1;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.22));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 7px;
+  color: var(--lumiverse-text);
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  font-family: inherit;
+  outline: none;
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.textarea {
+  min-height: 64px;
+  max-height: 220px;
+  resize: vertical;
+  line-height: 1.5;
+  padding: 8px 10px;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010, rgba(147, 112, 219, 0.1));
+}
+
+.inputMono {
+  font-family: var(--lumiverse-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.2px;
+}
+
+/* ---- Grid column spans ---- */
+
+.colFull    { grid-column: span 12; }
+.colHalf    { grid-column: span 6; }
+.colThird   { grid-column: span 4; }
+
+.headerRow {
+  grid-column: span 12;
+  display: grid;
+  grid-template-columns: 20px 128px 1fr 30px;
+  gap: 10px;
+  align-items: end;
+}
+
+/* When the dup chip is active we still want the row to line up — chip
+   sits on top of the Name field via its own stacking. */
+
+.handle {
+  width: 20px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  border-radius: 4px;
+  opacity: 0.4;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.card:hover .handle {
+  opacity: 0.8;
+}
+
+.handle:active {
+  cursor: grabbing;
+}
+
+.nameField {
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nameRow .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dupChip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--lumiverse-warning, #f59e0b) 18%, transparent);
+  color: var(--lumiverse-warning, #f59e0b);
+  border: 1px solid color-mix(in oklab, var(--lumiverse-warning, #f59e0b) 40%, transparent);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.deleteBtn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 7px;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition:
+    color var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    background-color var(--lumiverse-transition-fast);
+}
+
+.deleteBtn:hover {
+  color: var(--lumiverse-danger, #ef4444);
+  border-color: color-mix(in oklab, var(--lumiverse-danger, #ef4444) 50%, var(--lumiverse-border));
+  background: color-mix(in oklab, var(--lumiverse-danger, #ef4444) 10%, transparent);
+}
+
+/* Slider type previews the range visually so creators see what end-users
+   will see. Lives next to the default stepper. */
+
+.sliderPreview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 10px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 7px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+}
+
+.sliderPreviewTrack {
+  width: 100%;
+  accent-color: var(--lumiverse-primary, #c4b5fd);
+}
+
+.sliderPreviewScale {
+  display: flex;
+  justify-content: space-between;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+}
+
+/* ---- Empty state inside the accordion ---- */
+
+.empty {
+  padding: 16px 14px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 8px;
+  text-align: center;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* ---- Button parity with LoomBuilder's .btn but self-contained so the
+        header works when the consuming file's stylesheet classes aren't
+        in scope. ---- */
+
+.addBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.addBtn:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+}
+
+/* ---- Narrow container fallback — if the BlockEditor panel shrinks, the
+        12-col grid collapses gracefully. ---- */
+
+@container (max-width: 360px) {
+  .headerRow {
+    grid-template-columns: 20px 1fr 30px;
+  }
+  .headerRow .typeField {
+    grid-column: 2 / -1;
+  }
+  .colHalf,
+  .colThird {
+    grid-column: span 12;
+  }
+}

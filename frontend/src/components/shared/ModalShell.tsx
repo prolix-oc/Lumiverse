@@ -1,4 +1,4 @@
-import { useEffect, useCallback, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useCallback, useRef, type ReactNode, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import styles from './ModalShell.module.css'
@@ -29,6 +29,8 @@ export function ModalShell({
   className,
   style,
 }: ModalShellProps) {
+  const backdropPointerDownRef = useRef<EventTarget | null>(null)
+
   useEffect(() => {
     if (!isOpen) return
     const handleEscape = (e: KeyboardEvent) => {
@@ -42,9 +44,19 @@ export function ModalShell({
     }
   }, [isOpen, onClose, closeOnEscape])
 
+  const handleBackdropPointerDown = useCallback((e: React.PointerEvent) => {
+    backdropPointerDownRef.current = e.target === e.currentTarget ? e.currentTarget : null
+  }, [])
+
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (closeOnBackdrop && e.target === e.currentTarget) onClose()
+      if (
+        closeOnBackdrop
+        && e.target === e.currentTarget
+        && backdropPointerDownRef.current === e.currentTarget
+      ) {
+        onClose()
+      }
     },
     [onClose, closeOnBackdrop],
   )
@@ -58,6 +70,7 @@ export function ModalShell({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
+          onPointerDown={handleBackdropPointerDown}
           onClick={handleBackdropClick}
           style={{ zIndex }}
         >

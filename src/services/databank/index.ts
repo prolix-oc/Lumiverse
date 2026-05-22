@@ -20,6 +20,7 @@ export {
   getDocumentBySlug,
   searchDocumentsBySlug,
   deleteDocument,
+  updateDocumentFile,
   updateDocumentStatus,
   insertChunks,
   getChunksForDocument,
@@ -30,7 +31,20 @@ export {
 // Document processing
 export { parseDocument, isSupportedFormat, getSupportedExtensions } from "./document-parser.service";
 export { chunkDocument } from "./document-chunker.service";
-export { processDocument, deleteDocumentVectors, deleteDatabankVectors } from "./vectorization.service";
+export {
+  processDocument,
+  abortDocumentProcessing,
+  abortDatabankProcessing,
+  deleteDocumentVectors,
+  deleteDatabankVectors,
+} from "./vectorization.service";
+export {
+  DATABANK_SETTINGS_KEY,
+  DEFAULT_DATABANK_SETTINGS,
+  normalizeDatabankSettings,
+  loadDatabankSettings,
+  saveDatabankSettings,
+} from "./databank-settings.service";
 
 // Retrieval
 export {
@@ -44,10 +58,20 @@ export {
 export { resolveActiveDatabankIds } from "./scope-resolver.service";
 
 // Mention resolution
-export { resolveMentions, formatMentionsAsAppendix } from "./mention-resolver.service";
+export {
+  extractMentionSlugs,
+  stripMentions,
+  lookupSlugsInScope,
+  resolveSlugContent,
+  formatMentionsAsAppendix,
+  clearResolveCache,
+} from "./mention-resolver.service";
 
 // Web scraping
 export { scrapeUrl, ScrapeError, type ScrapedContent, type ScrapeErrorType } from "./web-scraper.service";
+
+// Fuse
+export { fuseDatabanks, FuseError, type FuseResult } from "./fuse.service";
 
 // Types
 export type {
@@ -62,3 +86,4 @@ export type {
   DatabankRetrievalResult,
   ResolvedMention,
 } from "./types";
+export type { DatabankSettings } from "./databank-settings.service";

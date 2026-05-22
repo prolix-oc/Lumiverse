@@ -16,7 +16,7 @@ Choose your base theme:
 |------|-------------|
 | **Dark** | Dark background with light text (default) |
 | **Light** | Light background with dark text |
-| **Auto** | Follows your system preference |
+| **System** | Follows your operating system's light/dark preference |
 
 ### Accent Color
 
@@ -37,6 +37,10 @@ Controls the roundness of UI elements (buttons, cards, inputs):
 ### Font Scale
 
 Adjusts the global text size. Useful for accessibility or personal preference.
+
+### UI Scale
+
+Scales every UI element — panels, controls, chrome — proportionally between 0.8× and 1.5×. Where **Font Scale** only resizes text, **UI Scale** zooms the entire interface, which is handy on very high-density displays or for people who like a more compact (or more spacious) layout overall.
 
 ### Glass Effect
 
@@ -71,10 +75,44 @@ Extension theme overrides are scoped per-extension and automatically cleared whe
 
 ## Importing & Exporting Themes
 
-You can save and share theme configurations:
+You can save and share theme configurations from the **Theme Panel**:
 
-- **Export** — Save your current theme settings as a shareable file
-- **Import** — Load a theme configuration from a file
+- **Export** — Save the current theme settings (mode, accent, base colors, radius, scales, glass) as a JSON file
+- **Import** — Load a theme JSON
+
+For richer sharing — including custom CSS, component overrides, and bundled assets — use **Theme Packs** (see below).
+
+---
+
+## Custom CSS & Component Overrides
+
+For full styling control beyond what the Theme Panel exposes, open **Settings → Appearance → Custom CSS** (or invoke the Custom CSS modal from the Theme Panel). It supports:
+
+- **Custom CSS** — raw CSS that's injected after the built-in stylesheet, so you can override any variable or selector
+- **Component Overrides** — drop-in TSX replacements for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
+
+---
+
+## Theme Assets & Bundles
+
+When your custom CSS needs imagery (cursors, backgrounds, decorative SVGs, icon sets), upload it as a **theme asset** instead of pasting a remote URL:
+
+1. Open the **Theme Assets** panel inside the Custom CSS modal
+2. Drag an image, SVG, or font file onto the upload zone — Lumiverse assigns it a slug under a per-theme `bundle_id`
+3. Reference it from your CSS with the relative path the panel gives you (e.g. `url(./my-cursor.png)`); Lumiverse rewrites those references to the safe `/api/v1/theme-assets/bundles/...` URL at runtime so paths keep working when the theme is shared
+
+Optimizing uploaded PNG/JPG assets to WebP is available from each asset's menu — useful for trimming large theme packs.
+
+---
+
+## Theme Packs
+
+A **Theme Pack** bundles everything together — theme variables, custom CSS, component overrides, and uploaded assets — into a single shareable file. From the Custom CSS modal you can:
+
+- **Export Pack** — Package the current theme + CSS + assets into a zip you can hand to someone else
+- **Import Pack** — Load a pack into Lumiverse. Imported component overrides arrive disabled by default and must be explicitly enabled, which prevents an untrusted pack from running arbitrary code on import.
+
+Theme Packs travel with their assets, so a recipient sees exactly what you see without needing to re-upload images.
 
 ---
 

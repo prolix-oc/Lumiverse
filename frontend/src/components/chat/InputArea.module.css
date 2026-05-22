@@ -190,7 +190,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  max-height: min(240px, 35vh);
+  max-height: min(240px, calc(35vh / var(--lumiverse-ui-scale, 1)));
   overflow-y: auto;
   animation: popover-fade 220ms cubic-bezier(0.4, 0, 0.2, 1) both;
   will-change: opacity, transform;
@@ -346,6 +346,56 @@
   padding: 2px 6px;
 }
 
+.addonPopoverHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
+  padding: 2px 6px;
+}
+
+.addonCreateToggle {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--lumiverse-primary, rgba(140, 130, 255, 0.9));
+  cursor: pointer;
+}
+
+.addonCreateForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+}
+
+.addonCreateInput,
+.addonCreateTextarea {
+  width: 100%;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 7px;
+  background: var(--lumiverse-bg, rgba(20, 18, 28, 0.7));
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  padding: 6px 8px;
+  outline: none;
+}
+
+.addonCreateTextarea {
+  resize: vertical;
+  min-height: 58px;
+}
+
 .stopBtn {
   color: var(--lumiverse-danger, #ef4444);
 }
@@ -442,6 +492,30 @@
   cursor: default;
 }
 
+.sttBtnActive {
+  color: var(--lumiverse-primary-contrast, #fff);
+  background: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 82%, transparent);
+}
+
+.sttBtnActive:hover {
+  color: var(--lumiverse-primary-contrast, #fff);
+  background: color-mix(in srgb, var(--lumiverse-danger-hover, #dc2626) 88%, transparent);
+}
+
+.sttSpinner {
+  animation: stt-spin 1s linear infinite;
+}
+
+@keyframes stt-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ── Input row — textarea + send button ── */
 .inputRow {
   display: flex;
@@ -463,6 +537,194 @@
     background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
   overflow: hidden;
+  position: relative;
+}
+
+.sttRecordingPanel {
+  width: 100%;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(96px, 0.72fr) minmax(120px, 1.3fr) minmax(112px, 0.72fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #ef4444) 24%, transparent);
+  border-radius: var(--lcs-radius, 14px);
+  background:
+    radial-gradient(circle at var(--stt-glow-x, 14%) 50%, color-mix(in srgb, var(--lumiverse-danger, #ef4444) 30%, transparent), transparent 46%),
+    linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-danger, #ef4444) 16%, var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04))), color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 9%, var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04))));
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
+    0 0 var(--stt-glow-size, 11px) color-mix(in srgb, var(--lumiverse-danger, #ef4444) 16%, transparent);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease,
+    background 120ms ease;
+}
+
+.sttRecordingPanel:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 34%, transparent);
+  transform: translateY(-1px);
+}
+
+.sttRecordingPanel:disabled {
+  cursor: progress;
+}
+
+.sttIndicatorProcessing {
+  opacity: 0.82;
+}
+
+.sttRecordingStatus,
+.sttRecordingHint {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.sttRecordingStatus {
+  justify-content: flex-start;
+}
+
+.sttRecordingHint {
+  justify-content: flex-end;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.55));
+  font-weight: 600;
+}
+
+.sttRecordingWave {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  height: 44px;
+  min-width: 0;
+}
+
+.sttIndicatorBar {
+  flex: 1 1 0;
+  max-width: 7px;
+  min-width: 3px;
+  height: var(--stt-bar-height, 5px);
+  min-height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, white 34%, var(--lumiverse-danger, #ef4444) 66%),
+    color-mix(in srgb, var(--lumiverse-danger, #ef4444) 74%, var(--lumiverse-primary, #8c82ff) 26%)
+  );
+  box-shadow: 0 0 8px color-mix(in srgb, var(--lumiverse-danger, #ef4444) 30%, transparent);
+  transform-origin: center bottom;
+  animation: stt-wave 1100ms ease-in-out infinite;
+  animation-delay: var(--stt-bar-delay, 0ms);
+  transition: height 80ms linear, opacity 80ms linear, filter 80ms linear;
+}
+
+.sttIndicatorReactive .sttIndicatorBar {
+  animation: none;
+  opacity: var(--stt-bar-opacity, 0.55);
+  filter: saturate(var(--stt-bar-saturate, 1));
+}
+
+@keyframes stt-wave {
+  0%, 100% {
+    transform: scaleY(0.55);
+    opacity: 0.48;
+  }
+
+  50% {
+    transform: scaleY(1.05);
+    opacity: 1;
+  }
+}
+
+/* Mirror layer that renders @mention pills behind the (transparent) textarea.
+   Font / padding / line-height / wrap rules MUST stay locked to `.textarea`
+   so wrapped glyphs land on the same x/y as the caret. Every text-metric
+   property (kerning, ligatures, letter-spacing, tab-size, etc.) is pinned
+   explicitly — UA defaults for <textarea> vs <div> differ on Android, and
+   any divergence compounds across a line into visible caret drift. */
+.textareaMirror {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-weight: inherit;
+  font-style: normal;
+  font-variant-ligatures: none;
+  font-variant-numeric: normal;
+  font-feature-settings: normal;
+  font-kerning: none;
+  font-synthesis: none;
+  line-height: 1.5;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-indent: 0;
+  text-rendering: auto;
+  text-transform: none;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  padding: 9px 14px;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  /* Reserve the same scrollbar gutter the textarea reserves so both wrap at
+     identical content widths. scrollbar-width keeps the gutter deterministic
+     across Firefox/Chromium; -webkit-scrollbar rules below hide the visible
+     thumb so only the textarea's scrollbar is visible on Android/iOS. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+.textareaMirror::-webkit-scrollbar {
+  width: 3px;
+}
+
+.textareaMirror::-webkit-scrollbar-thumb,
+.textareaMirror::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Pills must be layout-neutral — no padding, margin, or font-weight change
+   (all of which would shift glyph advances and drift the caret). The extra
+   breathing room around the text comes from `box-shadow`, which paints
+   outside the border box without affecting layout. */
+.mentionPill {
+  background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%, transparent);
+}
+
+.mentionPillMuted {
+  background: color-mix(in srgb, var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6)) 16%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6)) 16%, transparent);
+}
+
+.documentPill {
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 18%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-info, #42a5f5) 18%, transparent);
 }
 
 .inputWrapper:focus-within {
@@ -478,17 +740,54 @@
   outline: none;
   background: transparent;
   color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  -webkit-text-fill-color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  caret-color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  box-sizing: border-box;
   font-family: inherit;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-weight: inherit;
+  font-style: normal;
+  font-variant-ligatures: none;
+  font-variant-numeric: normal;
+  font-feature-settings: normal;
+  font-kerning: none;
+  font-synthesis: none;
   line-height: 1.5;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-indent: 0;
+  text-rendering: auto;
+  text-transform: none;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   padding: 9px 14px;
   min-height: 40px;
   max-height: 180px;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* Match the mirror's gutter so wrap widths stay identical once the
+     textarea grows past its max-height and a scrollbar appears. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  position: relative;
+  z-index: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .textarea::placeholder {
   color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+  -webkit-text-fill-color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+}
+
+.textarea::selection {
+  background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 35%, transparent);
 }
 
 .textarea:disabled {
@@ -597,6 +896,20 @@
   }
 }
 
+@media (pointer: coarse) {
+  /* iOS/Android selection handles can be clipped when the focused textarea is
+     nested inside rounded wrappers that hide overflow or use paint
+     containment. Let the native selection UI escape while editing. */
+  .container:focus-within {
+    overflow: visible;
+    contain: layout style;
+  }
+
+  .inputWrapper:focus-within {
+    overflow: visible;
+  }
+}
+
 @media (max-width: 600px) {
   .container {
     bottom: 8px;
@@ -613,12 +926,33 @@
   /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px).
      Compensate the taller line-height (16px × 1.5 = 24px) with reduced vertical
      padding so the textarea stays 40px — matching the buttons. */
-  .textarea {
+  .textarea,
+  .textareaMirror {
     font-size: max(16px, calc(14px * var(--lumiverse-font-scale, 1)));
     padding: 8px 14px;
   }
 
   .inputRow {
     gap: 4px;
+  }
+
+  .sttRecordingPanel {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    min-height: 86px;
+    padding: 10px 12px;
+  }
+
+  .sttRecordingStatus,
+  .sttRecordingHint {
+    justify-content: center;
+  }
+
+  .sttRecordingHint {
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  }
+
+  .sttRecordingWave {
+    height: 38px;
   }
 }

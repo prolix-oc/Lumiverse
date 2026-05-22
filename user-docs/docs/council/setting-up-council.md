@@ -24,6 +24,7 @@ Each council member is based on a **Lumia item** from an installed pack.
 |---------|-------------|
 | **Role** | A label for this member's function (e.g., "Story Architect," "Dialogue Coach") |
 | **Tools** | Which council tools this member can use |
+| **Historical deliberations retained** | Optional per-tool count of prior successful deliberations to remember in this chat |
 | **Chance** | Probability (0-100) this member participates in each deliberation |
 
 ### Chance
@@ -66,6 +67,28 @@ You can add multiple council members, each with different Lumia personas and too
 - **World Builder** — Uses scene and description tools
 
 Each member brings their own perspective based on their Lumia's personality and assigned tools.
+
+---
+
+## Enabling Historical Deliberations
+
+Historical deliberations give a council member continuity across turns. Use them when a member/tool should remember plans it has already proposed, warnings it has raised, or story threads it is intentionally developing in the background.
+
+To enable historical deliberations for a member:
+
+1. Open the **Council** panel
+2. Expand the council member
+3. Assign the tool that should keep continuity
+4. Set that tool's **Historical deliberations retained** value above `0`
+
+The setting is per member/tool assignment. For example, you can retain `3` prior **Suggest Direction** outputs for a Story Architect while leaving that same member's **Voice Concern** history disabled.
+
+Historical entries are included in two places:
+
+- The sidecar council tool sees prior outputs from the same member/tool before writing its next deliberation.
+- The main model receives a separate historical-baseline block alongside the current `{{lumiaCouncilDeliberation}}` output.
+
+Lumiverse labels historical deliberations as continuity context only. They are not treated as a required template and should not override current chat history, active world info, or the latest user message.
 
 ---
 

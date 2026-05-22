@@ -74,7 +74,7 @@
 
 .label {
   font-family: "Courier New", "Monaco", "Consolas", monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.8px;
   text-transform: uppercase;
@@ -134,7 +134,7 @@
   border: 2px solid var(--lumiverse-border);
   background: linear-gradient(135deg, var(--lumiverse-primary) 0%, color-mix(in srgb, var(--lumiverse-primary) 80%, black) 100%);
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   margin-left: -10px;
   box-shadow: var(--lumiverse-shadow-sm);

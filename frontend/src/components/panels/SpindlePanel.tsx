@@ -6,9 +6,10 @@ import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
+import SpindleSettings from './SpindleSettings'
 import { Spinner } from '@/components/shared/Spinner'
-import { Button } from '@/components/shared/FormComponents'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { getSafeHttpsUrl } from '@/lib/navigationSafety'
 import { toast } from '@/lib/toast'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
@@ -87,7 +88,11 @@ export default function SpindlePanel() {
     [loadingAction, extensionOperationStatus]
   )
 
+  // Extensions are also loaded on auth and resynced on WS events
+  // (see `useWebSocket.ts`), so if the store is already populated we skip
+  // the redundant mount-time fetch — the list is kept fresh by the WS layer.
   useEffect(() => {
+    if (useStore.getState().extensions.length > 0) return
     loadExtensions()
   }, [loadExtensions])
 
@@ -369,6 +374,8 @@ export default function SpindlePanel() {
 
       {importSummary && <div className={styles.importSummary}>{importSummary}</div>}
 
+      <SpindleSettings />
+
       <SpindleUIControlPanel />
 
       {/* Extensions list */}
@@ -511,61 +518,83 @@ export default function SpindlePanel() {
                 ) : null
               })()}
 
-              {/* Actions row */}
-              <div className={styles.extensionActions}>
-                <Button
-                  size="icon" variant="ghost"
-                  onClick={() => handleUpdate(ext)}
-                  disabled={isExtBusy(ext.id) || !canManage}
-                  title={canManage ? 'Update' : 'Managed by operator'}
-                  icon={extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'updating'
-                    ? <Spinner size={14} fast />
-                    : <RefreshCw size={14} />}
-                />
-                <Button
-                  size="icon" variant="ghost"
-                  onClick={() => handleRestart(ext)}
-                  disabled={isExtBusy(ext.id) || !ext.enabled}
-                  title={ext.enabled ? 'Restart extension' : 'Extension is not enabled'}
-                  icon={extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'restarting'
-                    ? <Spinner size={14} fast />
-                    : <RotateCw size={14} />}
-                />
-                {ext.github && (
-                  <a
-                    className={styles.githubLink}
-                    href={ext.github}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="GitHub"
+              {/* Actions row — labeled primaries + small secondary icons */}
+              <div className={styles.actionRow}>
+                <div className={styles.primaryActions}>
+                  <button
+                    type="button"
+                    className={styles.labeledBtn}
+                    onClick={() => handleUpdate(ext)}
+                    disabled={isExtBusy(ext.id) || !canManage}
+                    title={canManage ? 'Pull and rebuild from remote' : 'Managed by operator'}
                   >
-                    <Github size={14} />
-                  </a>
-                )}
-                {canManage && (
-                  <Button
-                    size="icon" variant="ghost"
-                    className={clsx(branchMenuExtId === ext.id && styles.actionBtnActive)}
-                    onClick={() => handleOpenBranchMenu(ext)}
-                    disabled={isExtBusy(ext.id)}
-                    title="Switch branch"
-                    icon={<IconVersions size={14} />}
-                  />
-                )}
-                <Button
-                  size="icon" variant="ghost"
-                  onClick={() => openSettings('extensions')}
-                  disabled={!ext.has_frontend}
-                  title={ext.has_frontend ? 'Open extension settings' : 'No frontend settings available'}
-                  icon={<SlidersHorizontal size={14} />}
-                />
-                <Button
-                  size="icon" variant="danger-ghost"
-                  onClick={() => handleRemove(ext)}
-                  disabled={isExtBusy(ext.id) || !canManage}
-                  title={canManage ? 'Remove' : 'Managed by operator'}
-                  icon={<Trash2 size={14} />}
-                />
+                    {extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'updating'
+                      ? <Spinner size={14} fast />
+                      : <RefreshCw size={14} />}
+                    <span>Update</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.labeledBtn}
+                    onClick={() => handleRestart(ext)}
+                    disabled={isExtBusy(ext.id) || !ext.enabled}
+                    title={ext.enabled ? 'Restart extension worker' : 'Extension is not enabled'}
+                  >
+                    {extensionOperationStatus?.extensionId === ext.id && extensionOperationStatus.operation === 'restarting'
+                      ? <Spinner size={14} fast />
+                      : <RotateCw size={14} />}
+                    <span>Restart</span>
+                  </button>
+                  {canManage && (
+                    <button
+                      type="button"
+                      className={clsx(
+                        styles.labeledBtn,
+                        branchMenuExtId === ext.id && styles.labeledBtnActive,
+                      )}
+                      onClick={() => handleOpenBranchMenu(ext)}
+                      disabled={isExtBusy(ext.id)}
+                      title="Switch branch"
+                    >
+                      <IconVersions size={14} />
+                      <span>Branch</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={styles.labeledBtn}
+                    onClick={() => openSettings('extensions')}
+                    disabled={!ext.has_frontend}
+                    title={ext.has_frontend ? 'Open extension settings' : 'No frontend settings available'}
+                  >
+                    <SlidersHorizontal size={14} />
+                    <span>Settings</span>
+                  </button>
+                </div>
+                <div className={styles.secondaryActions}>
+                  {getSafeHttpsUrl(ext.github) && (
+                    <a
+                      className={styles.iconBtnSmall}
+                      href={getSafeHttpsUrl(ext.github)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="View on GitHub"
+                      aria-label="View on GitHub"
+                    >
+                      <Github size={13} />
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    className={clsx(styles.iconBtnSmall, styles.iconBtnDanger)}
+                    onClick={() => handleRemove(ext)}
+                    disabled={isExtBusy(ext.id) || !canManage}
+                    title={canManage ? 'Remove extension' : 'Managed by operator'}
+                    aria-label="Remove extension"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               </div>
 
               {/* Branch switch dropdown */}

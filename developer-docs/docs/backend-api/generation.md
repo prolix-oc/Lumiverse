@@ -54,6 +54,210 @@ const results = await spindle.generate.batch({
 | `messages` | `LlmMessageDTO[]` | The message array to send |
 | `parameters` | `Record<string, unknown>` | Optional LLM parameters (temperature, max_tokens, etc.) |
 | `connection_id` | `string` | Optional. Use a specific connection profile (see Connection Profiles below) |
+| `tools` | `ToolSchemaDTO[]` | Optional. Function/tool schemas exposed to the model (raw / quiet only). See Tool calling below |
+| `signal` | `AbortSignal` | Optional. Cancel the in-flight LLM request when the signal fires (see Cancellation below) |
+
+---
+
+## Tool calling
+
+Pass tool schemas via `tools` and the model can call them. Tool calls land in `response.tool_calls` (non-stream) or the terminal `done` chunk (stream) as `ToolCallDTO[]`. You execute the tool, then send the result back as a `tool_result` part on the next user message.
+
+```ts
+const result = await spindle.generate.raw({
+  type: 'raw',
+  messages: [{ role: 'user', content: 'What is the weather in SF?' }],
+  tools: [{
+    name: 'get_weather',
+    description: 'Look up current weather for a city.',
+    parameters: {
+      type: 'object',
+      properties: { city: { type: 'string' } },
+      required: ['city'],
+    },
+  }],
+})
+
+// result.tool_calls?.[0] = { name: 'get_weather', args: { city: 'SF' }, call_id: 'toolu_…' }
+```
+
+Round-trip the call by appending two messages: an `assistant` with a `tool_use` part carrying the same `call_id`, then a `user` with a `tool_result` part keyed back to it.
+
+```ts
+const followup = await spindle.generate.raw({
+  type: 'raw',
+  messages: [
+    { role: 'user', content: 'What is the weather in SF?' },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'toolu_abc', name: 'get_weather', input: { city: 'SF' } },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_abc', content: '72F, clear' },
+      ],
+    },
+  ],
+  tools: [/* same schema */],
+})
+```
+
+### Parts
+
+| Type | Fields | Used by |
+|---|---|---|
+| `text` | `text: string` | Any role |
+| `image` | `data: string` (base64), `mime_type: string` | `user` |
+| `audio` | `data: string` (base64), `mime_type: string` | `user` |
+| `tool_use` | `id`, `name`, `input: Record<string, unknown>` | `assistant` |
+| `tool_result` | `tool_use_id`, `content: string`, `is_error?: boolean` | `user` |
+
+Use the same `call_id` returned in `ToolCallDTO` as `tool_use.id` and `tool_result.tool_use_id`. Provider adapters translate to each upstream's native shape (Anthropic content blocks, OpenAI `tool_calls` / `role:"tool"`, Gemini `functionCall` / `functionResponse`, OpenAI Responses API `function_call` / `function_call_output`).
+
+!!! note "Tool result formatting"
+    Anthropic requires the `tool_result` parts to come first in the content array of the user message that follows an assistant `tool_use`. The host enforces this; you just need to put them in a dedicated user message that immediately follows.
+
+### ToolSchemaDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | Function name the model uses to invoke the tool |
+| `description` | `string` | Natural-language description shown to the model |
+| `parameters` | `JSONSchema` | JSON Schema for the call arguments |
+
+### ToolCallDTO
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | Tool name matching one of your `ToolSchemaDTO` entries |
+| `args` | `Record<string, unknown>` | Parsed JSON arguments |
+| `call_id` | `string` | Provider call id (Anthropic `id`, OpenAI `id`, synthetic UUID for Gemini). Pass back as `tool_use.id` / `tool_result.tool_use_id` |
+
+---
+
+## Cancellation
+
+Every generation method (`raw`, `quiet`, `batch`, `rawStream`, `quietStream`) accepts an optional `AbortSignal`. When the signal fires, the upstream LLM HTTP request is torn down and the call rejects with a standard `DOMException` whose `.name === "AbortError"`.
+
+The signal is consumed inside the extension worker and never crosses the wire. When abort fires, the worker posts an internal `cancel_generation` message to the host, which calls `controller.abort()` on the `AbortController` it created for the upstream provider call.
+
+```ts
+const controller = new AbortController()
+const timer = setTimeout(() => controller.abort(), 5_000)
+
+try {
+  const result = await spindle.generate.raw({
+    messages: [{ role: 'user', content: 'Write a long essay…' }],
+    signal: controller.signal,
+  })
+  // result: { content, finish_reason, usage }
+} catch (err) {
+  if (err.name === 'AbortError') {
+    spindle.log.info('Generation cancelled')
+  } else {
+    throw err
+  }
+} finally {
+  clearTimeout(timer)
+}
+```
+
+Compose with `AbortSignal.timeout()` and `AbortSignal.any()` for richer cancellation semantics:
+
+```ts
+const userController = new AbortController()
+const signal = AbortSignal.any([
+  userController.signal,
+  AbortSignal.timeout(30_000),
+])
+
+await spindle.generate.quiet({ messages, signal })
+```
+
+For `batch`, the same signal is threaded into every sub-request. Aborting mid-flight cancels the in-flight call and prevents any not-yet-started sequential calls from beginning. With `concurrent: true`, every parallel call sees the abort.
+
+---
+
+## Streaming
+
+Stream tokens incrementally as the LLM emits them, instead of waiting for the full response. `rawStream` and `quietStream` mirror their non-streaming counterparts but return an `AsyncGenerator<StreamChunkDTO>` that you can iterate with `for await`.
+
+The generator yields one or more `token` / `reasoning` chunks and exactly one terminal `done` chunk carrying the aggregated response. If the call fails or is aborted, the generator throws instead of yielding `done`.
+
+### `spindle.generate.rawStream(input)`
+
+```ts
+let acc = ''
+for await (const chunk of spindle.generate.rawStream({
+  provider: 'openai',
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Tell me a story.' }],
+})) {
+  if (chunk.type === 'token') {
+    acc += chunk.token
+    process.stdout.write(chunk.token)
+  } else if (chunk.type === 'reasoning') {
+    spindle.log.info(`[thinking] ${chunk.token}`)
+  } else if (chunk.type === 'done') {
+    spindle.log.info(`Final usage: ${chunk.usage?.total_tokens} tokens`)
+    spindle.log.info(`finish_reason: ${chunk.finish_reason}`)
+  }
+}
+```
+
+### `spindle.generate.quietStream(input)`
+
+Same semantics as `rawStream`, but uses the user's active connection profile and preset parameters (no `provider`/`model` required).
+
+```ts
+for await (const chunk of spindle.generate.quietStream({
+  messages: [{ role: 'user', content: 'Hello!' }],
+})) {
+  if (chunk.type === 'token') process.stdout.write(chunk.token)
+}
+```
+
+### Cancelling a stream
+
+`rawStream` / `quietStream` accept the same `AbortSignal` as the non-streaming methods. The generator throws `AbortError` on abort. You can also break out of the `for await` loop early — the generator's cleanup posts a cancel message to tear down the upstream request.
+
+```ts
+const controller = new AbortController()
+setTimeout(() => controller.abort(), 2_000)
+
+try {
+  for await (const chunk of spindle.generate.rawStream({
+    messages: [{ role: 'user', content: 'Long answer…' }],
+    signal: controller.signal,
+  })) {
+    if (chunk.type === 'token') process.stdout.write(chunk.token)
+  }
+} catch (err) {
+  if (err.name === 'AbortError') spindle.log.info('Stream cancelled')
+  else throw err
+}
+
+// Or break early — same effect, no AbortController needed:
+for await (const chunk of spindle.generate.quietStream({ messages })) {
+  if (chunk.type === 'token' && shouldStop()) break // host receives cancel
+}
+```
+
+### StreamChunkDTO
+
+A discriminated union with three variants:
+
+| `type` | Fields | Description |
+|---|---|---|
+| `"token"` | `token: string` | Incremental content token. |
+| `"reasoning"` | `token: string` | Incremental chain-of-thought token (provider-dependent). |
+| `"done"` | `content: string`, `reasoning?: string`, `finish_reason: string`, `tool_calls?: ToolCallDTO[]`, `usage?: { prompt_tokens, completion_tokens, total_tokens }` | Terminal chunk — emitted exactly once on success. Carries the aggregated response so you don't need to accumulate manually if you don't want to. |
+
+!!! note "No `batchStream`"
+    Batch is just a wrapper around N raw calls. If you want parallel streamed responses, run `Promise.all([rawStream(a), rawStream(b)])` and consume each iterator however you like.
 
 ---
 
@@ -134,11 +338,15 @@ Each entry represents one block in the assembled prompt:
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | `string` | Block type: `"block"`, `"chat_history"`, `"world_info"`, `"authors_note"`, `"utility"`, `"long_term_memory"`, `"separator"`, `"append"`, `"sidecar"`. |
+| `type` | `string` | Block type: `"block"`, `"chat_history"`, `"world_info"`, `"authors_note"`, `"utility"`, `"long_term_memory"`, `"separator"`, `"append"`, `"sidecar"`, `"extension"`. |
 | `name` | `string` | Human-readable block name. |
 | `role` | `string` | Message role (`"system"`, `"user"`, `"assistant"`). |
 | `content` | `string` | The resolved text content. |
 | `blockId` | `string` | Preset block ID (if from a preset block). |
+| `extensionId` | `string` | Present for interceptor-injected breakdown blocks. Resolved from the installed extension manifest. |
+| `extensionName` | `string` | Human-readable extension attribution for interceptor-injected breakdown blocks. |
+
+When an interceptor returns `breakdown: [{ messageIndex, name? }]`, the host turns those referenced messages into `type: "extension"` breakdown entries. This means retrieval or prompt-engineering extensions can expose their injected context in both dry-run results and persisted prompt breakdown snapshots without having to parse or diff the final prompt themselves.
 
 ### ActivationStatsDTO
 

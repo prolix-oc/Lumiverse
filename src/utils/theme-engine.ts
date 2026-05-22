@@ -108,6 +108,24 @@ function ensureReadable(color: string, isDark: boolean): string {
   return `hsl(${Math.round(h * 360)}, ${Math.round(clampedS)}%, ${Math.round(clampedL)}%)`;
 }
 
+/**
+ * Clamp a surface color so it stays within eye-comfort ranges for the mode.
+ * Dark mode: cap brightness so backgrounds never feel like light mode.
+ * Light mode: floor brightness so backgrounds never feel like dark mode.
+ */
+function constrainSurface(color: string, isDark: boolean): string {
+  const rgb = parseColorToRgb(color);
+  if (!rgb) return color;
+  const lum = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+  if (isDark && lum > 80) {
+    return adjustHex(color, -((lum - 80) / 175) * 0.5);
+  }
+  if (!isDark && lum < 200) {
+    return adjustHex(color, ((200 - lum) / 200) * 0.35);
+  }
+  return color;
+}
+
 function contrastFor(color: string): string {
   const rgb = parseColorToRgb(color);
   if (!rgb) return "#fff";
@@ -131,19 +149,19 @@ function contrastFor(color: string): string {
 }
 
 function hexRgba(hex: string, a: number): string {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return `rgba(128, 128, 128, ${a})`;
-  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`;
+  const parsed = parseColorToRgb(hex);
+  if (!parsed) return `rgba(128, 128, 128, ${a})`;
+  return `rgba(${parsed[0]}, ${parsed[1]}, ${parsed[2]}, ${a})`;
 }
 
 function adjustHex(hex: string, factor: number): string {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return hex;
+  const parsed = parseColorToRgb(hex);
+  if (!parsed) return hex;
   const adjust = (c: number) => Math.round(clamp(c + factor * 255, 0, 255));
-  const r = adjust(rgb[0]);
-  const g = adjust(rgb[1]);
-  const b = adjust(rgb[2]);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  const r = adjust(parsed[0]);
+  const g = adjust(parsed[1]);
+  const b = adjust(parsed[2]);
+  return `rgb(${r} ${g} ${b})`;
 }
 
 // ── Main generator ──
@@ -161,7 +179,7 @@ export function generateThemeVariables(input: ThemeVariablesInput): Record<strin
   const vars: Record<string, string> = {};
 
   // ── Primary accent ──
-  const pL = isDark ? l : l - 20;
+  const pL = isDark ? Math.min(Math.max(l, 56), 75) : Math.min(Math.max(l - 20, 25), 45);
   vars["--lumiverse-primary"] = hsla(h, s, pL, 0.9);
   vars["--lumiverse-primary-hover"] = hsla(h, s, pL + 7, 0.95);
   vars["--lumiverse-primary-light"] = hsla(h, s, pL, 0.1);
@@ -370,35 +388,40 @@ export function generateThemeVariables(input: ThemeVariablesInput): Record<strin
       vars["--lumiverse-secondary-border"] = hexRgba(bc.secondary, 0.25);
     }
     if (bc.background) {
-      vars["--lumiverse-bg"] = bc.background;
-      vars["--lumiverse-bg-elevated"] = adjustHex(bc.background, 0.04);
-      vars["--lumiverse-bg-hover"] = adjustHex(bc.background, 0.06);
-      vars["--lumiverse-bg-deep"] = adjustHex(bc.background, -0.05);
+      const bg = constrainSurface(bc.background, isDark);
+      vars["--lumiverse-bg"] = bg;
+      vars["--lumiverse-bg-elevated"] = adjustHex(bg, 0.04);
+      vars["--lumiverse-bg-hover"] = adjustHex(bg, 0.06);
+      vars["--lumiverse-bg-deep"] = adjustHex(bg, -0.05);
     }
     if (bc.text) {
-      vars["--lumiverse-text"] = bc.text;
-      vars["--lumiverse-text-muted"] = hexRgba(bc.text, 0.65);
-      vars["--lumiverse-text-dim"] = hexRgba(bc.text, 0.4);
-      vars["--lumiverse-text-hint"] = hexRgba(bc.text, 0.3);
+      const text = ensureReadable(bc.text, isDark);
+      vars["--lumiverse-text"] = text;
+      vars["--lumiverse-text-muted"] = hexRgba(text, 0.65);
+      vars["--lumiverse-text-dim"] = hexRgba(text, 0.4);
+      vars["--lumiverse-text-hint"] = hexRgba(text, 0.3);
     }
     if (bc.danger) {
-      vars["--lumiverse-danger"] = bc.danger;
-      vars["--lumiverse-danger-hover"] = adjustHex(bc.danger, -0.06);
-      vars["--lumiverse-danger-015"] = hexRgba(bc.danger, 0.15);
-      vars["--lumiverse-danger-020"] = hexRgba(bc.danger, 0.2);
-      vars["--lumiverse-danger-050"] = hexRgba(bc.danger, 0.5);
+      const danger = ensureReadable(bc.danger, isDark);
+      vars["--lumiverse-danger"] = danger;
+      vars["--lumiverse-danger-hover"] = adjustHex(danger, -0.06);
+      vars["--lumiverse-danger-015"] = hexRgba(danger, 0.15);
+      vars["--lumiverse-danger-020"] = hexRgba(danger, 0.2);
+      vars["--lumiverse-danger-050"] = hexRgba(danger, 0.5);
     }
     if (bc.success) {
-      vars["--lumiverse-success"] = bc.success;
-      vars["--lumiverse-success-015"] = hexRgba(bc.success, 0.15);
-      vars["--lumiverse-success-020"] = hexRgba(bc.success, 0.2);
-      vars["--lumiverse-success-050"] = hexRgba(bc.success, 0.5);
+      const success = ensureReadable(bc.success, isDark);
+      vars["--lumiverse-success"] = success;
+      vars["--lumiverse-success-015"] = hexRgba(success, 0.15);
+      vars["--lumiverse-success-020"] = hexRgba(success, 0.2);
+      vars["--lumiverse-success-050"] = hexRgba(success, 0.5);
     }
     if (bc.warning) {
-      vars["--lumiverse-warning"] = bc.warning;
-      vars["--lumiverse-warning-015"] = hexRgba(bc.warning, 0.15);
-      vars["--lumiverse-warning-020"] = hexRgba(bc.warning, 0.2);
-      vars["--lumiverse-warning-050"] = hexRgba(bc.warning, 0.5);
+      const warning = ensureReadable(bc.warning, isDark);
+      vars["--lumiverse-warning"] = warning;
+      vars["--lumiverse-warning-015"] = hexRgba(warning, 0.15);
+      vars["--lumiverse-warning-020"] = hexRgba(warning, 0.2);
+      vars["--lumiverse-warning-050"] = hexRgba(warning, 0.5);
     }
     if (bc.speech) {
       vars["--lumiverse-prose-dialogue"] = ensureReadable(bc.speech, isDark);

@@ -34,13 +34,17 @@ export function useImageGenProgress(assetId: string | null | undefined): ImageGe
     const unsubs = [
       wsClient.on(EventType.IMAGE_GEN_PROGRESS, (payload: { assetId: string; step: number; totalSteps: number; preview?: string; nodeId?: string }) => {
         if (payload.assetId !== assetId) return
-        setState({
-          step: payload.step,
-          totalSteps: payload.totalSteps,
-          preview: payload.preview,
-          nodeId: payload.nodeId,
+        // Comfy/Swarm interleave step-only events (no preview field) with
+        // preview frames. Preserve the previous preview/nodeId so the <img>
+        // element stays mounted between frames — otherwise it unmounts on
+        // every step event and visibly bounces the surrounding layout.
+        setState((prev) => ({
+          step: typeof payload.step === 'number' ? payload.step : prev.step,
+          totalSteps: typeof payload.totalSteps === 'number' ? payload.totalSteps : prev.totalSteps,
+          preview: payload.preview ?? prev.preview,
+          nodeId: payload.nodeId ?? prev.nodeId,
           isGenerating: true,
-        })
+        }))
       }),
 
       wsClient.on(EventType.IMAGE_GEN_COMPLETE, (payload: { assetId: string }) => {

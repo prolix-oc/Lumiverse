@@ -12,8 +12,8 @@
  * shared backend.
  */
 
-import { getConnInfo } from "hono/bun";
 import type { Context, MiddlewareHandler } from "hono";
+import { getClientIp } from "../utils/client-ip";
 
 export interface RateLimitOptions {
   /** Maximum requests in the rolling window. */
@@ -65,13 +65,7 @@ export function stopRateLimitSweep(): void {
 }
 
 function defaultKey(c: Context, bucket: string): string {
-  try {
-    const info = getConnInfo(c);
-    const ip = info.remote.address ?? "unknown";
-    return `${bucket}:${ip}`;
-  } catch {
-    return `${bucket}:unknown`;
-  }
+  return `${bucket}:${getClientIp(c)}`;
 }
 
 function consumeToken(

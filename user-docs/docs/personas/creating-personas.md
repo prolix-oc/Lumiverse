@@ -12,6 +12,7 @@ Setting up a persona takes just a minute and makes a noticeable difference in ho
     - **Name** (required) — How the AI addresses you
     - **Title** — A short description shown in the persona card
     - **Description** — Your character's appearance, personality, and background
+    - **Pronouns** — Subjective, objective, and possessive forms (e.g. *she / her / her*). These power the `{{personaSubjectivePronoun}}`, `{{personaObjectivePronoun}}`, and `{{personaPossessivePronoun}}` macros and reinforce the AI's grammar choices. Blank fields fall back to *they / them / their*.
 4. Optionally:
     - Upload an **avatar**
     - Assign a **folder** for organization

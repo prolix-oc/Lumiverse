@@ -107,7 +107,7 @@ export function VisualPromptFields({ visuals }: VisualPromptFieldsProps) {
                 onClick={visuals.onAcceptSuggestedTags}
                 disabled={!visuals.pendingTagSuggestion}
               >
-                Accept
+                Apply Tags
               </button>
               <button
                 type="button"

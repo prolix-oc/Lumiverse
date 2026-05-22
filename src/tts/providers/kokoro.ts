@@ -1,5 +1,6 @@
 import type { TtsProviderCapabilities } from "../param-schema";
 import { OpenAICompatibleTtsProvider } from "./openai-compatible-tts";
+import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 export class KokoroTtsProvider extends OpenAICompatibleTtsProvider {
   readonly name = "kokoro";
@@ -99,9 +100,11 @@ export class KokoroTtsProvider extends OpenAICompatibleTtsProvider {
         signal: AbortSignal.timeout(5000),
       });
       // 200 or 400 (bad request) both indicate reachability
+      if (res.status >= 500) await throwProviderResponseError(this.displayName, "connection check", res);
       return res.status < 500;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({ provider: this.displayName, operation: "connection check", detail: err instanceof Error ? err.message : "network request failed", retryable: true });
     }
   }
 }

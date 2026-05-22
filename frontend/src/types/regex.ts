@@ -1,7 +1,17 @@
 export type RegexPlacement = 'user_input' | 'ai_output' | 'world_info' | 'reasoning'
 export type RegexScope = 'global' | 'character' | 'chat'
 export type RegexTarget = 'prompt' | 'response' | 'display'
-export type RegexMacroMode = 'none' | 'raw' | 'escaped'
+export type RegexMacroMode = 'none' | 'raw' | 'escaped' | 'after'
+
+export interface RegexPerformanceMetadata {
+  slow: boolean
+  timed_out: boolean
+  elapsed_ms: number
+  threshold_ms: number
+  detected_at: number
+  source: 'prompt_backend' | 'response_backend' | 'display_backend' | 'display_client'
+  version: number
+}
 
 export interface RegexScript {
   id: string
@@ -50,6 +60,8 @@ export interface CreateRegexScriptInput {
   sort_order?: number
   description?: string
   folder?: string
+  preset_id?: string | null
+  character_id?: string | null
   metadata?: Record<string, any>
 }
 

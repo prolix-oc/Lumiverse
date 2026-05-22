@@ -21,11 +21,17 @@ export default function TTSConnectionManager() {
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<TtsConnectionProfile | null>(null)
 
+  // `useAppInit` preloads TTS profiles + providers right after auth. Only
+  // show the loading placeholder on a true cold mount (empty store);
+  // otherwise render from the store and refresh silently in the background.
   useEffect(() => {
     let cancelled = false
 
+    const storeState = useStore.getState()
+    const cacheHit = storeState.ttsProfiles.length > 0 && storeState.ttsProviders.length > 0
+
     async function init() {
-      setLoading(true)
+      if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
           ttsConnectionsApi.list({ limit: 100 }),
@@ -44,7 +50,7 @@ export default function TTSConnectionManager() {
       } catch (err) {
         console.error('[TTSConnectionManager] Init failed:', err)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && !cacheHit) setLoading(false)
       }
     }
 

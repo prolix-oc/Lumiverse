@@ -1,4 +1,4 @@
-import { get, put } from './client'
+import { get, put, del } from './client'
 
 interface SettingRow {
   key: string
@@ -25,5 +25,10 @@ export const settingsApi = {
   /** PUT /settings — bulk upsert, body is a flat { key: value } object */
   putMany(settings: Record<string, any>) {
     return put<SettingRow[]>('/settings', settings)
+  },
+
+  /** DELETE /settings/:key — remove a single setting */
+  delete(key: string) {
+    return del<{ deleted: boolean }>(`/settings/${encodeURIComponent(key)}`)
   },
 }

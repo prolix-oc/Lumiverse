@@ -1,7 +1,18 @@
 import type { SpeechDetectionRules } from '@/types/store'
 
 export type SegmentType = 'asterisked' | 'quoted' | 'undecorated'
-export type SegmentAction = 'speech' | 'narration' | 'skip'
+/**
+ * What to do with a parsed segment:
+ *   - 'speech'    → read by the speaker's character voice
+ *   - 'narration' → read by the narrator voice (falls back to speech)
+ *   - 'thought'   → read by the speaker's character voice. Distinct from
+ *                   'speech' because thoughts belong to a character but are
+ *                   typically asterisked rather than quoted, and a future
+ *                   thought-specific voice setting can branch on this tag
+ *                   without re-classifying everything else.
+ *   - 'skip'      → don't read
+ */
+export type SegmentAction = 'speech' | 'narration' | 'thought' | 'skip'
 
 /**
  * Tags whose inner text is prose that SHOULD be spoken. Any tag not in this
@@ -168,7 +179,7 @@ export interface TextSegment {
 function resolveAction(type: SegmentType, rules: SpeechDetectionRules): SegmentAction {
   switch (type) {
     case 'asterisked':
-      return rules.asterisked === 'skip' ? 'skip' : 'narration'
+      return rules.asterisked
     case 'quoted':
       return rules.quoted
     case 'undecorated':

@@ -4,7 +4,7 @@
  * install commands to the installer module.
  */
 import type { LumiHubWSMessage } from "./types";
-import { installCharacter, installWorldbook } from "./installer";
+import { installCharacter, installPreset, installTheme, installWorldbook } from "./installer";
 import { buildInstallManifest } from "./manifest";
 import { updateLastConnected } from "../services/lumihub-link.service";
 import { getFirstUserId } from "../auth/seed";
@@ -12,6 +12,8 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import {
   validateInstallCharacterPayload,
+  validateInstallPresetPayload,
+  validateInstallThemePayload,
   validateInstallWorldbookPayload,
 } from "./payload-validation";
 
@@ -146,7 +148,7 @@ class LumiHubWSClient {
           type: "instance_info",
           id: crypto.randomUUID(),
           payload: {
-            capabilities: ["character_import", "chub_import", "worldbook_import", "manifest_sync"],
+            capabilities: ["character_import", "chub_import", "worldbook_import", "theme_import", "preset_import", "manifest_sync"],
             version: "1.0.0",
           },
           timestamp: Date.now(),
@@ -163,6 +165,14 @@ class LumiHubWSClient {
 
       case "install_worldbook":
         this.handleInstallWorldbook(msg);
+        break;
+
+      case "install_theme":
+        this.handleInstallTheme(msg);
+        break;
+
+      case "install_preset":
+        this.handleInstallPreset(msg);
         break;
 
       default:
@@ -251,6 +261,88 @@ class LumiHubWSClient {
     }
   }
 
+  private async handleInstallTheme(msg: LumiHubWSMessage): Promise<void> {
+    const validation = validateInstallThemePayload(msg.payload);
+    if (!validation.ok) {
+      console.warn(`[LumiHub WS] Rejected install_theme payload: ${validation.error}`);
+      this.send({
+        type: "install_result",
+        id: crypto.randomUUID(),
+        replyTo: msg.id,
+        payload: { requestId: msg.id, success: false, error: validation.error },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const payload = validation.value;
+    console.log(`[LumiHub WS] Theme install request: ${payload.themeName}`);
+
+    eventBus.emit(EventType.LUMIHUB_INSTALL_STARTED, {
+      characterName: payload.themeName,
+      source: payload.source,
+      type: "theme",
+    });
+
+    const result = await installTheme(msg.id, payload);
+
+    this.send({
+      type: "install_result",
+      id: crypto.randomUUID(),
+      replyTo: msg.id,
+      payload: result,
+      timestamp: Date.now(),
+    });
+
+    if (!result.success) {
+      eventBus.emit(EventType.LUMIHUB_INSTALL_FAILED, {
+        characterName: payload.themeName,
+        error: result.error,
+        type: "theme",
+      });
+    }
+  }
+
+  private async handleInstallPreset(msg: LumiHubWSMessage): Promise<void> {
+    const validation = validateInstallPresetPayload(msg.payload);
+    if (!validation.ok) {
+      console.warn(`[LumiHub WS] Rejected install_preset payload: ${validation.error}`);
+      this.send({
+        type: "install_result",
+        id: crypto.randomUUID(),
+        replyTo: msg.id,
+        payload: { requestId: msg.id, success: false, error: validation.error },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const payload = validation.value;
+    console.log(`[LumiHub WS] Preset install request: ${payload.presetName}`);
+
+    eventBus.emit(EventType.LUMIHUB_INSTALL_STARTED, {
+      characterName: payload.presetName,
+      source: payload.source,
+      type: "preset",
+    });
+
+    const result = await installPreset(msg.id, payload);
+
+    this.send({
+      type: "install_result",
+      id: crypto.randomUUID(),
+      replyTo: msg.id,
+      payload: result,
+      timestamp: Date.now(),
+    });
+
+    if (!result.success) {
+      eventBus.emit(EventType.LUMIHUB_INSTALL_FAILED, {
+        characterName: payload.presetName,
+        error: result.error,
+        type: "preset",
+      });
+    }
+  }
+
   /** Build and send the install manifest to LumiHub. */
   private syncManifest(): void {
     try {
@@ -283,6 +375,7 @@ class LumiHubWSClient {
     if (this.eventListenersRegistered) return;
     this.eventListenersRegistered = true;
     const trigger = () => this.debouncedManifestSync();
+    eventBus.on(EventType.CHARACTER_CREATED, trigger);
     eventBus.on(EventType.CHARACTER_EDITED, trigger);
     eventBus.on(EventType.CHARACTER_DELETED, trigger);
     eventBus.on(EventType.LUMIHUB_INSTALL_COMPLETED, trigger);

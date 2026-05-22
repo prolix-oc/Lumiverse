@@ -5,6 +5,7 @@ set -euo pipefail
 # Usage:
 #   ./start.sh                  Start backend, serve pre-built frontend (default)
 #   ./start.sh -b|--build       Rebuild frontend before starting backend
+#   ./start.sh -a|--auto-open   Open the default browser after the backend starts
 #   ./start.sh --build-only     Build frontend only, don't start backend
 #   ./start.sh --backend-only   Start backend only, skip frontend serving
 #   ./start.sh --dev            Start backend in watch mode (no frontend build)
@@ -13,6 +14,8 @@ set -euo pipefail
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
+#   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
+#   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
 #
 # Environment overrides:
 #   FRONTEND_PATH   Path to frontend directory (default: ./frontend)
@@ -95,9 +98,12 @@ _proot_bun() {
 MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | migrate-st | kill-pkgs
 USE_RUNNER=true
 FORCE_BUILD=false
+AUTO_OPEN=false
+BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;
+    --auto-open|-a) AUTO_OPEN=true ;;
     --build-only)   MODE="build-only" ;;
     --backend-only) MODE="backend-only" ;;
     --dev)          MODE="dev" ;;
@@ -106,8 +112,10 @@ for arg in "$@"; do
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
+    --upgrade-bun)        BUN_UPGRADE_CHANNEL="stable" ;;
+    --upgrade-bun-canary) BUN_UPGRADE_CHANNEL="canary" ;;
     --help|-h)
-      sed -n '3,15p' "$0" | sed 's/^# \?//'
+      sed -n '3,18p' "$0" | sed 's/^# *//'
       exit 0
       ;;
     *) err "Unknown argument: $arg"; exit 1 ;;
@@ -395,27 +403,91 @@ ensure_bun() {
   exit 1
 }
 
+# ─── Bun channel upgrade (optional) ─────────────────────────────────────────
+# Honors --upgrade-bun / --upgrade-bun-canary. Runs after ensure_bun so the
+# binary exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
+# at $BUN_INSTALL/bin/bun. On native Termux we cannot use `bun upgrade` —
+# Bun's built-in updater probes for `ld` and aborts ("unsupported on systems
+# without ld") because Termux uses bionic, not glibc. Instead we rebuild the
+# bun-termux wrapper, which is the source of truth for Bun on Termux.
+upgrade_bun_if_requested() {
+  [[ -z "$BUN_UPGRADE_CHANNEL" ]] && return 0
+
+  local before
+  before="$(_bun --version 2>/dev/null || echo unknown)"
+
+  # ── Native Termux path ────────────────────────────────────────────────────
+  # proot-distro (IS_PROOT) is a real glibc env, so it falls through to the
+  # standard `bun upgrade` path below.
+  if [[ "$IS_TERMUX" == true ]]; then
+    if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+      warn "Bun canary builds are not supported on native Termux — the bun-termux"
+      warn "wrapper only packages stable releases. Skipping upgrade; continuing"
+      warn "with the existing $before binary."
+      warn "If you specifically need canary, run inside a proot-distro Linux instead."
+      return 0
+    fi
+
+    info "Updating bun-termux wrapper (current Bun: $before)..."
+    if [[ ! -d "$HOME/.bun-termux" ]]; then
+      warn "bun-termux directory not found at \$HOME/.bun-termux."
+      warn "  Reinstall it: rm -rf \$HOME/.bun-termux && ./start.sh"
+      warn "Continuing with the existing $before binary."
+      return 0
+    fi
+
+    if ! (cd "$HOME/.bun-termux" && git pull && make && make install); then
+      err "bun-termux rebuild failed. Continuing with the existing $before binary."
+      return 0
+    fi
+
+    local after
+    after="$(_bun --version 2>/dev/null || echo unknown)"
+    ok "Bun upgraded via bun-termux: $before -> $after"
+    return 0
+  fi
+
+  # ── Standard path (macOS, Linux, proot-distro, WSL, etc.) ─────────────────
+  if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+    info "Upgrading Bun to latest canary (current: $before)..."
+    if ! _bun upgrade --canary; then
+      err "Bun canary upgrade failed. Continuing with the existing $before binary."
+      return 0
+    fi
+  else
+    info "Upgrading Bun to latest stable (current: $before)..."
+    # `--stable` is a no-op for users already on stable but forces a switch
+    # back from canary for anyone who previously opted in.
+    if ! _bun upgrade --stable; then
+      err "Bun stable upgrade failed. Continuing with the existing $before binary."
+      return 0
+    fi
+  fi
+
+  local after
+  after="$(_bun --version 2>/dev/null || echo unknown)"
+  ok "Bun upgraded: $before -> $after"
+}
+
 # ─── First-run setup wizard ─────────────────────────────────────────────────
 
 run_setup_if_needed() {
   local identity_file="$BACKEND_DIR/data/lumiverse.identity"
   local credentials_file="$BACKEND_DIR/data/owner.credentials"
-  local env_file="$BACKEND_DIR/.env"
 
-  # Run wizard if any required setup file is missing.
-  # The credentials file is the critical one — without it seedOwner()
-  # will exit(1) because there's no owner account to create.
-  if [[ ! -f "$identity_file" || ! -f "$credentials_file" || ! -f "$env_file" ]]; then
+  # A migrated data folder is already set up even if .env was not copied.
+  # The backend can fall back to defaults for missing .env values.
+  if [[ ! -f "$identity_file" || ! -f "$credentials_file" ]]; then
     info "First run detected — launching setup wizard..."
     echo ""
     install_deps "$BACKEND_DIR" "backend"
     (cd "$BACKEND_DIR" && _bun run scripts/setup-wizard.ts)
 
-    # Verify the wizard actually created the credentials file.
+    # Verify the wizard actually created the critical data files.
     # On some platforms (Termux) the interactive prompts can fail silently.
-    if [[ ! -f "$credentials_file" ]]; then
-      err "Setup wizard did not create owner credentials."
-      err "File expected at: $credentials_file"
+    if [[ ! -f "$identity_file" || ! -f "$credentials_file" ]]; then
+      err "Setup wizard did not create the required identity and owner credentials."
+      err "Files expected at: $identity_file and $credentials_file"
       err "Try running the wizard manually:  bun run setup"
       exit 1
     fi
@@ -439,6 +511,22 @@ run_migrate_st() {
   (cd "$BACKEND_DIR" && _bun run migrate:st)
 }
 
+open_browser() {
+  local url="$1"
+
+  if [[ "$OSTYPE" == "darwin"* ]] && command -v open &>/dev/null; then
+    open "$url" &>/dev/null &
+  elif command -v xdg-open &>/dev/null; then
+    xdg-open "$url" &>/dev/null &
+  elif command -v termux-open-url &>/dev/null; then
+    termux-open-url "$url" &>/dev/null &
+  elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    cmd /c start "" "$url" &>/dev/null &
+  else
+    warn "Could not find a browser opener for $url"
+  fi
+}
+
 # ─── Kill packages (nuke + reinstall) ──────────────────────────────────────
 
 kill_pkgs() {
@@ -460,9 +548,20 @@ kill_pkgs() {
 install_deps() {
   local dir="$1"
   local name="$2"
+  # Stamp written only after `bun install` exits 0. Its absence next to an
+  # existing node_modules means a previous install was interrupted (crash,
+  # kill, OOM, proot path-translation error mid-stream) — tree can't be
+  # trusted, so nuke node_modules and reinstall from scratch.
+  local stamp="$dir/node_modules/.lumiverse-install-complete"
+
+  if [[ -d "$dir/node_modules" && ! -f "$stamp" ]]; then
+    warn "Detected interrupted $name install — removing node_modules and retrying..."
+    rm -rf "$dir/node_modules"
+  fi
 
   info "Installing $name dependencies..."
 
+  local install_status=0
   if [[ "$IS_TERMUX" == true ]]; then
     # Android doesn't support hardlinks — use file copy backend instead.
     # Clear Bun's install cache first — filesystem emulation can corrupt
@@ -473,23 +572,30 @@ install_deps() {
     # Always wrap bun install in proot on Termux — Android's seccomp filter
     # blocks certain syscalls that bun install needs, causing "Bad system call"
     # (SIGSYS) errors. _proot_bun handles both linker and syscall issues.
-    (cd "$dir" && _proot_bun install --backend=copyfile)
-    # Rolldown's native binary for Android ARM64 isn't auto-resolved by Bun on
-    # Termux — add it explicitly so Vite can build the frontend.
-    (cd "$dir" && _proot_bun add @rolldown/binding-android-arm64 --backend=copyfile 2>/dev/null || true)
+    # The Android arm64 native bindings (@rolldown/binding-android-arm64,
+    # lightningcss-android-arm64) are declared as optionalDependencies in
+    # frontend/package.json and resolve automatically here.
+    # --ignore-scripts: proot's path translation makes getcwd() fail when bun
+    # forks lifecycle scripts (ssh2, cpu-features), producing spurious
+    # CouldntReadCurrentDirectory errors. Both packages fall back to pure-JS.
+    (cd "$dir" && _proot_bun install --backend=copyfile --ignore-scripts) || install_status=$?
   elif [[ "$IS_PROOT" == true ]]; then
     # Inside proot-distro: proot already intercepts syscalls, just need copyfile backend
     if [[ -d "$HOME/.bun/install/cache" ]]; then
       rm -rf "$HOME/.bun/install/cache"
     fi
-    (cd "$dir" && bun install --backend=copyfile)
-    # Rolldown's native binary for Android ARM64 isn't auto-resolved by Bun in
-    # proot — add it explicitly so Vite can build the frontend.
-    (cd "$dir" && bun add @rolldown/binding-android-arm64 --backend=copyfile 2>/dev/null || true)
+    (cd "$dir" && bun install --backend=copyfile --ignore-scripts) || install_status=$?
   else
-    (cd "$dir" && bun install)
+    (cd "$dir" && bun install) || install_status=$?
   fi
 
+  if [[ $install_status -ne 0 ]]; then
+    err "$name install failed (exit $install_status) — node_modules will be cleaned on next launch"
+    return $install_status
+  fi
+
+  # Stamp success so next launch knows this tree is complete.
+  touch "$stamp" 2>/dev/null || true
   ok "$name dependencies installed"
 }
 
@@ -525,8 +631,8 @@ start_backend() {
 
   install_deps "$BACKEND_DIR" "backend"
 
-  # Clear Bun transpiler cache to avoid stale bytecode after updates
-  _bun --clear-cache 2>/dev/null || true
+  # Clear Bun install cache to avoid stale tarballs after updates
+  _bun pm cache rm >/dev/null 2>&1 || true
 
   # Export FRONTEND_DIR for the backend process
   export FRONTEND_DIR="$frontend_dist"
@@ -541,11 +647,17 @@ start_backend() {
   # Decide: visual runner or plain process
   if [[ "$USE_RUNNER" == true ]] && [[ -t 1 ]]; then
     # Interactive terminal — use the visual runner (fall back to plain if it crashes)
-    local runner_args=""
-    if [[ "$MODE" == "dev" ]]; then
-      runner_args="-- --dev"
+    local runner_args=()
+    if [[ "$MODE" == "dev" || "$AUTO_OPEN" == true ]]; then
+      runner_args+=("--")
     fi
-    (cd "$BACKEND_DIR" && _bun run scripts/runner.ts $runner_args) || {
+    if [[ "$MODE" == "dev" ]]; then
+      runner_args+=("--dev")
+    fi
+    if [[ "$AUTO_OPEN" == true ]]; then
+      runner_args+=("--auto-open")
+    fi
+    (cd "$BACKEND_DIR" && _bun run scripts/runner.ts "${runner_args[@]}") || {
       warn "Visual runner failed — falling back to plain mode..."
       USE_RUNNER=false
     }
@@ -556,6 +668,12 @@ start_backend() {
     echo ""
     echo -e "${BOLD}Starting Lumiverse Backend on port ${PORT:-7860}...${NC}"
     echo ""
+
+    if [[ "$AUTO_OPEN" == true ]]; then
+      local url="http://localhost:${PORT:-7860}"
+      info "Opening $url..."
+      (sleep 2; open_browser "$url") &
+    fi
 
     if [[ "$MODE" == "dev" ]]; then
       (cd "$BACKEND_DIR" && _bun run dev)
@@ -592,6 +710,7 @@ fi
 
 setup_proot_aliases
 ensure_bun
+upgrade_bun_if_requested
 export_termux_bun_env
 
 case "$MODE" in

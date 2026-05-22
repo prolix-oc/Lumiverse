@@ -20,3 +20,12 @@ export function setCharacterWorldBookIds(
   delete next.world_book_id // strip legacy field
   return next
 }
+
+export function getEmbeddedCharacterBookEntryCount(
+  extensions: Record<string, any> | undefined,
+): number {
+  const entries = extensions?.character_book?.entries
+  if (Array.isArray(entries)) return entries.length
+  if (entries && typeof entries === 'object') return Object.keys(entries).length
+  return 0
+}

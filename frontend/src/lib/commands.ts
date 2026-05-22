@@ -12,6 +12,7 @@ import { charactersApi } from '@/api/characters'
 import { DRAWER_TABS, registryToCommands } from '@/lib/drawer-tab-registry'
 import { getVisibleSettingsTabs, settingsRegistryToCommands } from '@/lib/settings-tab-registry'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 
 export type CommandScope = 'global' | 'chat' | 'chat-idle' | 'landing' | 'character'
 
@@ -40,15 +41,17 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
+      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
       if (!activeChatId) return
       beginStreaming()
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const res = await generateApi.regenerate({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
           generation_type: 'regenerate',
         })
         startStreaming(res.generationId)
@@ -68,15 +71,17 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
+      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
       if (!activeChatId) return
       beginStreaming()
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const res = await generateApi.continueGeneration({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
         })
 
         startStreaming(res.generationId)
@@ -189,12 +194,14 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat',
     run: () => {
-      const { activeCharacterId, characters, openModal } = useStore.getState()
+      const { activeCharacterId, characters, isGroupChat, groupCharacterIds, openModal } = useStore.getState()
       if (!activeCharacterId) return
       const char = characters.find((c) => c.id === activeCharacterId)
       openModal('manageChats', {
         characterId: activeCharacterId,
-        characterName: char?.name || 'Character',
+        characterName: isGroupChat ? 'Group Chat' : (char?.name || 'Character'),
+        isGroupChat,
+        groupCharacterIds,
       })
     },
   },
@@ -249,15 +256,15 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, messages, updateMessage, addToast } = useStore.getState()
+      const { activeChatId, messages, addToast } = useStore.getState()
       if (!activeChatId || messages.length === 0) return
       const last = messages[messages.length - 1]
       const newHidden = !last.extra?.hidden
       try {
-        await messagesApi.update(activeChatId, last.id, {
+        const updated = await messagesApi.update(activeChatId, last.id, {
           extra: { ...last.extra, hidden: newHidden },
         })
-        updateMessage(last.id, { extra: { ...last.extra, hidden: newHidden } })
+        useStore.getState().updateMessage(updated.id, updated)
         addToast({ type: 'success', message: newHidden ? 'Message hidden from context' : 'Message visible in context' })
       } catch {
         addToast({ type: 'error', message: 'Failed to update message' })
@@ -274,14 +281,16 @@ export const COMMANDS: Command[] = [
     group: 'Actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
+      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
       if (!activeChatId) return
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const result = await generateApi.dryRun({
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
         })
 
         openModal('dryRun', result)

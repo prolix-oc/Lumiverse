@@ -110,6 +110,120 @@ const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: 
 
 const ENDEARMENT_TERMS = /\b(sweetheart|darling|honey|love|dear|babe|baby|gorgeous|beautiful|handsome|sunshine|angel|princess|prince|my\s+love|my\s+dear)\b/i;
 const HOSTILITY_TERMS = /\b(bastard|traitor|coward|fool|idiot|scum|monster|freak|rat|snake|worm|liar|murderer|thief|criminal)\b/i;
+const ENTITY_BOUNDARY_CHAR = /[A-Za-z0-9_]/;
+const MAX_RELATIONSHIP_ENTITIES = 24;
+const MAX_MENTIONS_PER_ENTITY = 6;
+const PAIR_PROXIMITY_WINDOW = 260;
+const PAIR_CONTEXT_PADDING = 180;
+
+interface EntityMentionIndex {
+  name: string;
+  mentions: number[];
+}
+
+interface PairCandidate {
+  source: string;
+  target: string;
+  content: string;
+}
+
+function hasEntityBoundary(content: string, start: number, end: number): boolean {
+  const before = start > 0 ? content[start - 1] : "";
+  const after = end < content.length ? content[end] : "";
+  return !ENTITY_BOUNDARY_CHAR.test(before) && !ENTITY_BOUNDARY_CHAR.test(after);
+}
+
+function collectEntityMentions(content: string, entityName: string): number[] {
+  const lowerContent = content.toLowerCase();
+  const lowerName = entityName.toLowerCase();
+  const mentions: number[] = [];
+  let cursor = 0;
+
+  while (mentions.length < MAX_MENTIONS_PER_ENTITY) {
+    const idx = lowerContent.indexOf(lowerName, cursor);
+    if (idx === -1) break;
+    const end = idx + lowerName.length;
+    if (hasEntityBoundary(content, idx, end)) {
+      mentions.push(idx);
+    }
+    cursor = idx + lowerName.length;
+  }
+
+  return mentions;
+}
+
+function buildMentionIndex(content: string, entityNames: string[]): EntityMentionIndex[] {
+  const deduped = new Map<string, string>();
+  for (const rawName of entityNames) {
+    const trimmed = rawName.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!deduped.has(key)) deduped.set(key, trimmed);
+  }
+
+  const indexed: EntityMentionIndex[] = [];
+  for (const name of deduped.values()) {
+    const mentions = collectEntityMentions(content, name);
+    if (mentions.length === 0) continue;
+    indexed.push({ name, mentions });
+  }
+
+  indexed.sort((a, b) => {
+    if (b.mentions.length !== a.mentions.length) return b.mentions.length - a.mentions.length;
+    if (a.mentions[0] !== b.mentions[0]) return a.mentions[0] - b.mentions[0];
+    return b.name.length - a.name.length;
+  });
+
+  return indexed.slice(0, MAX_RELATIONSHIP_ENTITIES);
+}
+
+function mentionsAreNearby(a: number[], b: number[]): boolean {
+  let i = 0;
+  let j = 0;
+
+  while (i < a.length && j < b.length) {
+    const delta = Math.abs(a[i] - b[j]);
+    if (delta <= PAIR_PROXIMITY_WINDOW) return true;
+    if (a[i] < b[j]) i++;
+    else j++;
+  }
+
+  return false;
+}
+
+function buildPairContentWindow(
+  content: string,
+  source: string,
+  sourceMentions: number[],
+  target: string,
+  targetMentions: number[],
+): string {
+  let i = 0;
+  let j = 0;
+  let bestSource = sourceMentions[0] ?? 0;
+  let bestTarget = targetMentions[0] ?? 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  while (i < sourceMentions.length && j < targetMentions.length) {
+    const src = sourceMentions[i];
+    const tgt = targetMentions[j];
+    const distance = Math.abs(src - tgt);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestSource = src;
+      bestTarget = tgt;
+    }
+    if (src < tgt) i++;
+    else j++;
+  }
+
+  const start = Math.max(0, Math.min(bestSource, bestTarget) - PAIR_CONTEXT_PADDING);
+  const end = Math.min(
+    content.length,
+    Math.max(bestSource + source.length, bestTarget + target.length) + PAIR_CONTEXT_PADDING,
+  );
+  return content.slice(start, end);
+}
 
 // ─── Main Extraction ───────────────────────────────────────────
 
@@ -128,44 +242,76 @@ export function extractRelationshipsHeuristic(
 ): HeuristicRelationship[] {
   if (entityNames.length < 2) return [];
 
+  const indexedEntities = buildMentionIndex(content, entityNames);
+  if (indexedEntities.length < 2) return [];
+
+  const names = indexedEntities.map((entity) => entity.name);
+  const mentionsByName = new Map(indexedEntities.map((entity) => [entity.name, entity.mentions]));
+  const candidateDirectedPairs: PairCandidate[] = [];
+  const candidateUndirectedPairs: PairCandidate[] = [];
+
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const left = names[i];
+      const right = names[j];
+      const leftMentions = mentionsByName.get(left) || [];
+      const rightMentions = mentionsByName.get(right) || [];
+      if (!mentionsAreNearby(leftMentions, rightMentions)) continue;
+      const pairContent = buildPairContentWindow(content, left, leftMentions, right, rightMentions);
+      candidateUndirectedPairs.push({ source: left, target: right, content: pairContent });
+      candidateDirectedPairs.push(
+        { source: left, target: right, content: pairContent },
+        { source: right, target: left, content: pairContent },
+      );
+    }
+  }
+
+  if (candidateUndirectedPairs.length === 0) {
+    if (emotionalTags.length > 0) {
+      const coRel = inferFromEmotionalContext(names[0], names[1], emotionalTags);
+      return coRel ? [coRel] : [];
+    }
+    return [];
+  }
+
   const relationships: HeuristicRelationship[] = [];
   const seen = new Set<string>(); // Deduplicate "A→B type" combos
+  const hasDialogue = /[""\u201C]/.test(content);
+  const hasCoordination = /\band\b/i.test(content);
+  const hasPossessive = /[''\u2019]s\b|\bof\b/i.test(content);
+  const hasAddressTerms = hasDialogue && (ENDEARMENT_TERMS.test(content) || HOSTILITY_TERMS.test(content));
+  const hasProximitySignals = /\b(?:beside|next\s+to|near|across\s+from|facing|opposite|behind|alongside)\b/i.test(content);
 
-  // For each ordered pair of entities
-  for (let i = 0; i < entityNames.length; i++) {
-    for (let j = 0; j < entityNames.length; j++) {
-      if (i === j) continue;
-      const source = entityNames[i];
-      const target = entityNames[j];
+  // 1. Verb-mediated: "Source [verb] Target" or "Source [verb] ... Target"
+  for (const pair of candidateDirectedPairs) {
+    const verbRels = detectVerbMediated(pair.source, pair.target, pair.content);
+    for (const rel of verbRels) {
+      const key = `${pair.source}→${pair.target}:${rel.type}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        relationships.push(rel);
+      }
+    }
+  }
 
-      // 1. Verb-mediated: "Source [verb] Target" or "Source [verb] ... Target"
-      const verbRels = detectVerbMediated(source, target, content);
-      for (const rel of verbRels) {
-        const key = `${source}→${target}:${rel.type}`;
+  // 2. Relational nouns: "Source's [relation]" or "Target's [relation]" nearby
+  if (hasPossessive) {
+    for (const pair of candidateUndirectedPairs) {
+      const nounRels = detectRelationalNouns(pair.source, pair.target, pair.content);
+      for (const rel of nounRels) {
+        const key = `${rel.source}→${rel.target}:${rel.type}`;
         if (!seen.has(key)) {
           seen.add(key);
           relationships.push(rel);
-        }
-      }
-
-      // 2. Relational nouns: "Source's [relation]" or "Target's [relation]" nearby
-      if (i < j) { // Only process each pair once — function checks both directions
-        const nounRels = detectRelationalNouns(source, target, content);
-        for (const rel of nounRels) {
-          const key = `${rel.source}→${rel.target}:${rel.type}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            relationships.push(rel);
-          }
         }
       }
     }
   }
 
   // 3. Coordinated agents: "Name1 and Name2" — check surrounding verbs
-  for (let i = 0; i < entityNames.length; i++) {
-    for (let j = i + 1; j < entityNames.length; j++) {
-      const coordRel = detectCoordinatedAction(entityNames[i], entityNames[j], content);
+  if (hasCoordination) {
+    for (const pair of candidateUndirectedPairs) {
+      const coordRel = detectCoordinatedAction(pair.source, pair.target, pair.content);
       if (coordRel) {
         const key = `${coordRel.source}→${coordRel.target}:${coordRel.type}`;
         if (!seen.has(key)) {
@@ -177,10 +323,9 @@ export function extractRelationshipsHeuristic(
   }
 
   // 4. Terms of endearment/hostility in dialogue near two names
-  for (let i = 0; i < entityNames.length; i++) {
-    for (let j = 0; j < entityNames.length; j++) {
-      if (i === j) continue;
-      const termRel = detectTermsOfAddress(entityNames[i], entityNames[j], content);
+  if (hasAddressTerms) {
+    for (const pair of candidateDirectedPairs) {
+      const termRel = detectTermsOfAddress(pair.source, pair.target, pair.content);
       if (termRel) {
         const key = `${termRel.source}→${termRel.target}:${termRel.type}`;
         if (!seen.has(key)) {
@@ -192,9 +337,9 @@ export function extractRelationshipsHeuristic(
   }
 
   // 5. Physical proximity / shared space
-  for (let i = 0; i < entityNames.length; i++) {
-    for (let j = i + 1; j < entityNames.length; j++) {
-      const proxRel = detectPhysicalProximity(entityNames[i], entityNames[j], content);
+  if (hasProximitySignals || hasDialogue) {
+    for (const pair of candidateUndirectedPairs) {
+      const proxRel = detectPhysicalProximity(pair.source, pair.target, pair.content);
       if (proxRel) {
         const key = `${proxRel.source}→${proxRel.target}:${proxRel.type}`;
         if (!seen.has(key)) {
@@ -208,8 +353,8 @@ export function extractRelationshipsHeuristic(
   // 6. Emotional co-occurrence fallback
   // If two entities appear together and we have strong emotional tags but no
   // explicit verb pattern, infer a weak relationship from the emotional context
-  if (relationships.length === 0 && entityNames.length >= 2 && emotionalTags.length > 0) {
-    const coRel = inferFromEmotionalContext(entityNames[0], entityNames[1], emotionalTags);
+  if (relationships.length === 0 && names.length >= 2 && emotionalTags.length > 0) {
+    const coRel = inferFromEmotionalContext(names[0], names[1], emotionalTags);
     if (coRel) relationships.push(coRel);
   }
 

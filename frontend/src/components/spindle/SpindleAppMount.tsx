@@ -25,9 +25,24 @@ export default function SpindleAppMount({ mount }: Props) {
       container.replaceChildren(mount.root)
     }
 
-    if (mount.position === 'start') {
+    if (mount.position === 'app-overlay') {
+      const appRoot = document.querySelector('[data-app-root]')
+      if (appRoot) {
+        container.style.position = 'relative'
+        container.style.zIndex = '9990'
+        appRoot.appendChild(container)
+      } else {
+        container.style.position = ''
+        container.style.zIndex = ''
+        document.body.appendChild(container)
+      }
+    } else if (mount.position === 'start') {
+      container.style.position = ''
+      container.style.zIndex = ''
       document.body.insertBefore(container, document.body.firstChild)
     } else {
+      container.style.position = ''
+      container.style.zIndex = ''
       document.body.appendChild(container)
     }
 

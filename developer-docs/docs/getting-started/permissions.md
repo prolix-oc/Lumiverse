@@ -8,6 +8,7 @@ These are always available:
 
 - **Events** — subscribe to any Lumiverse event
 - **Storage** — read/write to your extension's scoped storage directory
+- **Shared RPC Pool** — publish and read cross-extension latest-state endpoints
 - **User Storage** — per-user isolated storage, even for operator-scoped (globally installed) extensions
 - **Secure Enclave** — encrypted at-rest secret storage (AES-256-GCM), per-user isolated
 - **Macros** — register custom `{{macros}}` for use in prompts
@@ -32,15 +33,19 @@ These are always available:
 | `"ephemeral_storage"` | Use temporary storage with TTL, memory pooling, and per-extension quotas |
 | `"characters"` | Full CRUD on character cards (list, get, create, update, delete) |
 | `"chats"` | CRUD on chat sessions (list, get, update, delete) + get active chat |
+| `"presets"` | CRUD on user presets, prompt blocks, and derived category groups |
 | `"world_books"` | Full CRUD on world books and their entries (list, get, create, update, delete) |
+| `"databanks"` | Full CRUD on databanks and their documents (list, get, create, update, delete, reprocess, read parsed content) |
+| `"memories"` | Full CRUD on the Memory Cortex (entities, relations, consolidations, salience, vaults, chat links) and long-term chat memory (vectorized chunks, top-K retrieval, warmup, cache) |
 | `"personas"` | Full CRUD on personas (list, get, create, update, delete) + active switching + attached world book retrieval |
-| `"chat_mutation"` | Read and modify chat messages (append, update, delete) |
+| `"chat_mutation"` | Read and modify chat messages (append, update, delete, hide/unhide, inspect raw message history) |
 | `"event_tracking"` | Track, query, and replay extension-level telemetry events |
 | `"ui_panels"` | Create floating widgets and docked edge panels that overlay/consume screen space |
 | `"app_manipulation"` | Mount unrestricted portals into the document body that persist across routes. Also grants access to the Theme API for applying CSS variable overrides on top of the user's theme |
 | `"oauth"` | Register an OAuth callback handler to receive authorization redirects from external services |
 | `"push_notification"` | Send OS-level push notifications to users' devices even when the app is closed or backgrounded |
 | `"image_gen"` | Generate images via image gen connection profiles. Also grants access to list providers, connections, and models |
+| `"web_search"` | Run searches against the user's configured web search provider (currently SearXNG) and read the safe view of their web search settings. The host enforces all upstream limits — extensions cannot supply their own endpoint or API key |
 
 Users grant permissions individually from the Extensions panel. Your extension should degrade gracefully if a permission isn't granted.
 
@@ -51,6 +56,7 @@ Permission changes take effect **immediately** — the extension does not restar
 - The host enforces permissions on every API call in real time. A revoked permission blocks the very next request.
 - Your extension receives a `permission_changed` notification so it can react instantly (enable/disable features, update UI, re-register tools, etc.).
 - The local permission cache (`spindle.permissions.has()`) is kept in sync automatically.
+- Shared RPC on-demand handlers run under the endpoint's delegated permission policy during cross-extension calls, so they do not inherit unrelated owner permissions.
 
 This makes permission management fast and seamless for users. Your extension should be designed to activate and deactivate features on the fly.
 

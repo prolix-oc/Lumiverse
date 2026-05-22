@@ -2,6 +2,7 @@ import type { ImageProvider } from "../provider";
 import type { ImageProviderCapabilities } from "../param-schema";
 import type { ImageGenRequest, ImageGenResponse } from "../types";
 import { applyRawOverride } from "../types";
+import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 export class GoogleGeminiImageProvider implements ImageProvider {
   readonly name = "google_gemini";
@@ -93,26 +94,22 @@ export class GoogleGeminiImageProvider implements ImageProvider {
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl(apiUrl)}/models?key=${apiKey}`);
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({ provider: this.displayName, operation: "authentication", detail: err instanceof Error ? err.message : "network request failed", retryable: true });
     }
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
-    try {
-      const res = await fetch(`${this.baseUrl(apiUrl)}/models?key=${apiKey}`);
-      if (!res.ok) return this.capabilities.staticModels || [];
-      const data = (await res.json()) as any;
-      const models = (data.models || [])
-        .map((m: any) => m.name?.replace("models/", "") || m.name)
-        .filter((n: string) => n && n.includes("image"))
-        .sort();
-      if (models.length === 0) return this.capabilities.staticModels || [];
-      return models.map((id: string) => ({ id, label: id }));
-    } catch {
-      return this.capabilities.staticModels || [];
-    }
+    const data = await fetchProviderJson<any>(this.displayName, "model listing", `${this.baseUrl(apiUrl)}/models?key=${apiKey}`);
+    const models = (data.models || [])
+      .map((m: any) => m.name?.replace("models/", "") || m.name)
+      .filter((n: string) => n && n.includes("image"))
+      .sort();
+    if (models.length === 0) return this.capabilities.staticModels || [];
+    return models.map((id: string) => ({ id, label: id }));
   }
 
   private baseUrl(apiUrl: string): string {

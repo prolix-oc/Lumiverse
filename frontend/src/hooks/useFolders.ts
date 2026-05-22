@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { settingsApi } from '@/api/settings'
 
-type FolderSettingsKey = 'personaFolders' | 'regexScriptFolders'
+type FolderSettingsKey = 'personaFolders' | 'regexScriptFolders' | 'worldBookFolders'
 
 /**
  * Manages folder names backed by a settings key, merged with folders
@@ -48,6 +48,22 @@ export function useFolders(
     [settingsKey]
   )
 
+  const renameFolder = useCallback(
+    (oldName: string, newName: string) => {
+      const source = oldName.trim()
+      const target = newName.trim()
+      if (!source || !target || source === target) return
+
+      setStoredFolders((prev) => {
+        const next = prev.filter((f) => f !== source)
+        if (!next.includes(target)) next.push(target)
+        settingsApi.put(settingsKey, next).catch(() => {})
+        return next
+      })
+    },
+    [settingsKey]
+  )
+
   const deleteFolder = useCallback(
     (name: string) => {
       setStoredFolders((prev) => {
@@ -59,5 +75,5 @@ export function useFolders(
     [settingsKey]
   )
 
-  return { folders, createFolder, deleteFolder }
+  return { folders, createFolder, renameFolder, deleteFolder }
 }

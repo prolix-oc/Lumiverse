@@ -12,8 +12,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [focused, setFocused] = useState<string | null>(null)
   const login = useStore((s) => s.login)
+  const authError = useStore((s) => s.authError)
   const navigate = useNavigate()
   const formRef = useRef<HTMLFormElement>(null)
+  const visibleError = error ?? authError
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -33,13 +35,19 @@ export default function LoginPage() {
   // Scroll focused input into view on mobile virtual keyboard
   useEffect(() => {
     if (!focused) return
-    const timer = setTimeout(() => {
+    const scrollFocusedInput = () => {
       formRef.current?.querySelector(`#${focused}`)?.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
       })
-    }, 300)
-    return () => clearTimeout(timer)
+    }
+    const timers = [100, 350, 650].map((delay) => setTimeout(scrollFocusedInput, delay))
+    window.visualViewport?.addEventListener('resize', scrollFocusedInput)
+
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer))
+      window.visualViewport?.removeEventListener('resize', scrollFocusedInput)
+    }
   }, [focused])
 
   return (
@@ -110,6 +118,7 @@ export default function LoginPage() {
               <div className={clsx(styles.inputWrap, focused === 'username' && styles.inputWrapFocused)}>
                 <input
                   id="username"
+                  name="username"
                   className={styles.input}
                   type="text"
                   value={username}
@@ -117,7 +126,11 @@ export default function LoginPage() {
                   onFocus={() => setFocused('username')}
                   onBlur={() => setFocused(null)}
                   autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   autoFocus
+                  spellCheck={false}
+                  enterKeyHint="next"
                   placeholder="Enter your username"
                 />
               </div>
@@ -133,6 +146,7 @@ export default function LoginPage() {
               <div className={clsx(styles.inputWrap, focused === 'password' && styles.inputWrapFocused)}>
                 <input
                   id="password"
+                  name="password"
                   className={styles.input}
                   type="password"
                   value={password}
@@ -140,19 +154,21 @@ export default function LoginPage() {
                   onFocus={() => setFocused('password')}
                   onBlur={() => setFocused(null)}
                   autoComplete="current-password"
+                  autoCapitalize="none"
+                  enterKeyHint="done"
                   placeholder="Enter your password"
                 />
               </div>
             </motion.div>
 
-            {error && (
+            {visibleError && (
               <motion.div
                 className={styles.error}
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 transition={{ duration: 0.2 }}
               >
-                <div className={styles.errorInner}>{error}</div>
+                <div className={styles.errorInner}>{visibleError}</div>
               </motion.div>
             )}
 

@@ -257,12 +257,16 @@ app.post("/:id/update", async (c) => {
       await lifecycle.stopExtension(ext.id);
     }
 
-    const updated = await managerSvc.update(ext.identifier);
+    await managerSvc.update(ext.identifier);
 
     // Restart if was enabled
     if (ext.enabled) {
       await lifecycle.startExtension(ext.id);
     }
+
+    // Re-fetch so the returned status reflects the post-restart state
+    const finalExt = await managerSvc.getExtension(ext.id);
+    const result = finalExt ?? ext;
 
     eventBus.emit(EventType.SPINDLE_EXTENSION_STATUS, {
       extensionId: ext.id,
@@ -270,7 +274,7 @@ app.post("/:id/update", async (c) => {
       name: ext.name,
     });
 
-    return c.json(updated);
+    return c.json(result);
   } catch (err: any) {
     return c.json({ error: err.message }, 400);
   }
@@ -503,14 +507,18 @@ app.post("/:id/switch-branch", async (c) => {
       await lifecycle.stopExtension(ext.id);
     }
 
-    const updated = await managerSvc.switchBranch(ext.identifier, body.branch);
+    await managerSvc.switchBranch(ext.identifier, body.branch);
 
     // Restart if was enabled
     if (ext.enabled) {
       await lifecycle.startExtension(ext.id);
     }
 
-    return c.json(updated);
+    // Re-fetch so the returned status reflects the post-restart state
+    const finalExt = await managerSvc.getExtension(ext.id);
+    const result = finalExt ?? ext;
+
+    return c.json(result);
   } catch (err: any) {
     return c.json({ error: err.message }, 400);
   }
@@ -540,7 +548,7 @@ app.get("/:id/frontend", async (c) => {
     headers: {
       "Content-Type": "application/javascript",
       "Cache-Control": "no-cache",
-      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none';",
+      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; upgrade-insecure-requests;",
     },
   });
 });

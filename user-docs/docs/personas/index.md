@@ -20,6 +20,7 @@ A **persona** represents *you* in the conversation. While you can chat without o
 | **Name** | Your display name in chat (replaces `{{user}}` in prompts) |
 | **Title** | A short tagline shown under your name in the persona switcher |
 | **Description** | Your character description — sent to the AI via `{{persona}}` |
+| **Pronouns** | Subjective / objective / possessive pronouns (e.g. *they / them / their*), used by macros and to nudge the AI toward correct grammar |
 | **Avatar** | Your profile image |
 | **Folder** | Organizational grouping in the persona panel |
 | **Default** | Whether this persona activates automatically |

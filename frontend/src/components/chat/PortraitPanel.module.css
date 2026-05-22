@@ -262,7 +262,7 @@
 .mosaicImg {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -278,7 +278,47 @@
 }
 
 /* ── Responsive ── */
-/* Mobile hide is handled by .portraitSide in ChatView.module.css */
+/* Mobile presentation is handled via .portraitSide in ChatView.module.css
+   (slim tab) and the .panelOuterMobile* classes below (slide-in drawer). */
+
+/* ── Mobile drawer mode ──
+   When mobileDrawer={true}, the panel detaches from the inline layout and
+   becomes a fixed-position slide-in sheet. The slim tab in ChatView remains
+   the entry point; ChatView also renders the dismiss backdrop. */
+.panelOuterMobile {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: min(360px, calc(100vw - 48px));
+  flex: none;
+  overflow: visible;
+  z-index: 9991;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: auto;
+}
+
+.panelOuterMobileRight {
+  right: 0;
+  transform: translateX(100%);
+}
+
+.panelOuterMobileLeft {
+  left: 0;
+  transform: translateX(-100%);
+}
+
+.panelOuterMobileOpen {
+  transform: translateX(0);
+}
+
+.panelOuterMobile .panel {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: 0;
+  padding-top: max(18px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+}
 
 @media (min-width: 601px) and (max-width: 900px) {
   .panel {

@@ -15,19 +15,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: #4caf50;
 }
 
 .statusIdle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
 .entryCount {
   margin-left: auto;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 400;
   color: var(--lumiverse-text-dim);
 }
@@ -57,13 +57,13 @@
 
 .sourceName {
   flex: 1;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .sourceCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -85,7 +85,7 @@
   cursor: pointer;
   text-align: left;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .entryHeader:hover {
@@ -114,7 +114,7 @@
 }
 
 .methodBadge {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -127,7 +127,7 @@
 }
 
 .entryScore {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   flex-shrink: 0;
 }
@@ -139,7 +139,7 @@
 
 .entryKeys {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -155,7 +155,7 @@
   border-radius: 8px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .statsBarWarning {
@@ -195,6 +195,6 @@
   text-align: center;
   padding: 32px 16px;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
 }

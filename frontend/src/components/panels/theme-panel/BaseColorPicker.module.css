@@ -45,7 +45,7 @@
 }
 
 .swatchLabel {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -63,7 +63,7 @@
 /* ── Editing label ── */
 
 .editingLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -84,6 +84,8 @@
   overflow: hidden;
   cursor: crosshair;
   border: 1px solid var(--lumiverse-border);
+  touch-action: none;
+  user-select: none;
 }
 
 .canvas {
@@ -127,6 +129,8 @@
     hsl(360, 100%, 50%)
   );
   border: 1px solid var(--lumiverse-border);
+  touch-action: none;
+  user-select: none;
 }
 
 .hueThumb {
@@ -157,7 +161,7 @@
 }
 
 .inputLabel {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -170,7 +174,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-font-mono);
   text-align: center;
   outline: none;
@@ -200,7 +204,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);

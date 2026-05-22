@@ -70,12 +70,15 @@ export default function AlternateFieldSwitcher({ chatId }: { chatId: string }) {
       setSelections(newSelections)
 
       const newMetadata = { ...(chatMetadata || {}), alternate_field_selections: newSelections }
+      const payload = Object.keys(newSelections).length > 0
+        ? { alternate_field_selections: newSelections }
+        : { alternate_field_selections: null }
       if (Object.keys(newSelections).length === 0) {
         delete newMetadata.alternate_field_selections
       }
 
       try {
-        await chatsApi.update(chatId, { metadata: newMetadata })
+        await chatsApi.patchMetadata(chatId, payload)
         setChatMetadata(newMetadata)
       } catch (err) {
         console.error('[AlternateFieldSwitcher] Failed to save:', err)
@@ -112,6 +115,8 @@ export default function AlternateFieldSwitcher({ chatId }: { chatId: string }) {
               <div key={field} className={styles.fieldRow}>
                 <span className={styles.fieldLabel}>{FIELD_LABELS[field]}</span>
                 <select
+                  name={`alt-field-${field}`}
+                  aria-label={FIELD_LABELS[field]}
                   className={styles.fieldSelect}
                   value={selectedId || ''}
                   onChange={(e) => handleSelect(field, e.target.value || null)}

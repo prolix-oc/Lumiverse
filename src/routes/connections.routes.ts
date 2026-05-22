@@ -18,6 +18,14 @@ app.post("/", async (c) => {
   return c.json(conn, 201);
 });
 
+app.post("/models/preview", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body?.provider) return c.json({ error: "provider is required" }, 400);
+  const result = await svc.listConnectionModelsPreview(userId, body);
+  return c.json(result);
+});
+
 app.get("/:id", (c) => {
   const userId = c.get("userId");
   const conn = svc.getConnection(userId, c.req.param("id"));
@@ -48,6 +56,13 @@ app.post("/:id/test", async (c) => {
 app.get("/:id/models", async (c) => {
   const userId = c.get("userId");
   const result = await svc.listConnectionModels(userId, c.req.param("id"));
+  return c.json(result);
+});
+
+app.get("/:id/nanogpt-usage", async (c) => {
+  const userId = c.get("userId");
+  const result = await svc.fetchNanoGptSubscriptionUsage(userId, c.req.param("id"));
+  if (!result) return c.json({ error: "Failed to fetch NanoGPT usage" }, 502);
   return c.json(result);
 });
 

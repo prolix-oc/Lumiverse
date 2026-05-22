@@ -10,7 +10,100 @@
   justify-content: center;
   padding: 40px 16px;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+}
+
+.profileBar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle, var(--lumiverse-fill));
+}
+
+.profileHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.profileLabel {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-dim);
+}
+
+.profileBtnGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.profileBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.profileBtn:hover:not(:disabled) {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
+.profileBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.profileBtnActive {
+  background: color-mix(in srgb, var(--lumiverse-primary) 15%, transparent);
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 45%, var(--lumiverse-border));
+  color: var(--lumiverse-primary);
+}
+
+.profileBtnDismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.profileSourceBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
+  color: var(--lumiverse-primary);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 /* ── Master Toggle ────────────────────────────────── */
@@ -28,7 +121,7 @@
   padding: 8px 16px;
   border-radius: 8px;
   border: 1px solid var(--lumiverse-border);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -69,7 +162,7 @@
   border: none;
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -90,7 +183,7 @@
 }
 
 .inlineHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-dim);
   padding: 8px 10px;
@@ -103,7 +196,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-warning, #e5a93e);
   padding: 8px 10px;
@@ -188,7 +281,7 @@
 }
 
 .memberName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -207,7 +300,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -271,7 +364,7 @@
 
 .inlineLabel {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   display: flex;
@@ -289,12 +382,16 @@
   align-items: center;
   gap: 10px;
   flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .chanceHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
-  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+  line-height: 1.35;
 }
 
 .memberDivider {
@@ -323,7 +420,7 @@
   border: 1px solid var(--lumiverse-primary);
   background: transparent;
   color: var(--lumiverse-primary);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -346,7 +443,7 @@
   gap: 4px;
   padding: 3px 9px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
   color: var(--lumiverse-primary);
@@ -379,8 +476,45 @@
   opacity: 1;
 }
 
+.toolHistoryControls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lumiverse-bg) 70%, transparent);
+}
+
+.toolHistoryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.toolHistoryInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.toolHistoryName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+}
+
+.toolHistoryHint {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
 .noTools {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
 }
@@ -395,7 +529,7 @@
 
 /* Helper text */
 .memberHelperText {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-dim);
   padding: 8px 10px;
@@ -429,7 +563,7 @@
   gap: 4px;
   padding: 7px 14px;
   border-radius: 7px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -507,7 +641,7 @@
   border: none;
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -561,7 +695,7 @@
 .addDropdownEmpty {
   padding: 20px 12px;
   text-align: center;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -618,7 +752,7 @@
 }
 
 .addDropdownName {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -627,7 +761,7 @@
 }
 
 .addDropdownPack {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -663,7 +797,7 @@
 }
 
 .toolCategoryLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -676,7 +810,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -686,7 +820,7 @@
 }
 
 .toolExtBadge {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -710,7 +844,7 @@
 /* ── Loading / Empty ──────────────────────────────── */
 
 .loadingItems {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   padding: 8px 0;
 }
@@ -719,5 +853,5 @@
   text-align: center;
   padding: 20px 12px;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }

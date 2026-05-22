@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from '@/lib/toast'
 import { charactersApi } from '@/api/characters'
@@ -11,12 +11,34 @@ import type { Character, CharacterSummary, TagCount } from '@/types/api'
 import type { LorebookInfo } from '@/components/modals/BulkImportProgressModal'
 import type { ExpressionsImportInfo } from '@/components/modals/ExpressionsImportModal'
 import type { AlternateFieldsSummaryInfo } from '@/components/modals/AlternateFieldsSummaryModal'
+import { getEmbeddedCharacterBookEntryCount } from '@/utils/character-world-books'
+
+/**
+ * If a character carries a portable LoRA hint in `extensions.lumiverse_image_gen_lora`,
+ * surface it as a non-blocking toast so the user knows the original creator
+ * expects a specific LoRA. Never auto-fetches the source URL — Lumiverse
+ * displays only.
+ */
+function maybeShowImportedLoraHint(character: Character): void {
+  const raw = (character.extensions as any)?.lumiverse_image_gen_lora
+  if (!raw || typeof raw !== 'object') return
+  if (typeof raw.lora_filename !== 'string' || !raw.lora_filename) return
+  if (typeof raw.weight !== 'number' || !Number.isFinite(raw.weight)) return
+  const suffix = typeof raw.source_url === 'string' && raw.source_url
+    ? ' Source URL is visible in the Image LoRA tab.'
+    : ''
+  toast.info(
+    `${character.name} expects LoRA "${raw.lora_filename}" @ ${raw.weight}. Configure it in the character editor's Image LoRA tab.${suffix}`,
+    { duration: 8000 },
+  )
+}
 
 const SEARCH_DEBOUNCE_MS = 150
 
 export function useCharacterBrowser() {
   const navigate = useNavigate()
   const [currentPage, setCurrentPage] = useState(1)
+  const settingsLoaded = useStore((s) => s.settingsLoaded)
   const charactersPerPage = useStore((s) => s.charactersPerPage)
   const setSetting = useStore((s) => s.setSetting)
 
@@ -106,10 +128,27 @@ export function useCharacterBrowser() {
     })
   }, [])
 
+  useEffect(() => {
+    const refresh = () => {
+      setFetchVersion((v) => v + 1)
+    }
+    const offCreated = wsClient.on(EventType.CHARACTER_CREATED, refresh)
+    const offEdited = wsClient.on(EventType.CHARACTER_EDITED, refresh)
+    const offDeleted = wsClient.on(EventType.CHARACTER_DELETED, refresh)
+    return () => {
+      offCreated()
+      offEdited()
+      offDeleted()
+    }
+  }, [])
+
   // ─── Server-side paginated summaries (the fast path) ────────────────────
   const [browserItems, setBrowserItems] = useState<CharacterSummary[]>([])
   const [browserTotal, setBrowserTotal] = useState(0)
   const [allTags, setAllTags] = useState<TagCount[]>([])
+  const [favoriteCharacters, setFavoriteCharacters] = useState<CharacterSummary[]>([])
+  const favoriteMutationSeqRef = useRef(0)
+  const favoritesRef = useRef(favorites)
 
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -118,45 +157,75 @@ export function useCharacterBrowser() {
     return () => clearTimeout(debounceRef.current)
   }, [searchQuery])
 
+  useEffect(() => {
+    favoritesRef.current = favorites
+  }, [favorites])
+
+  const buildSummaryParams = useCallback(
+    (options?: {
+      page?: number
+      favoritesOverride?: string[]
+      limit?: number
+      offset?: number
+    }) => {
+      const activeFavorites = options?.favoritesOverride ?? favoritesRef.current
+      const limit = options?.limit ?? charactersPerPage
+      const offset = options?.offset ?? ((options?.page ?? currentPage) - 1) * charactersPerPage
+      const params: Record<string, any> = { limit, offset }
+
+      if (sortField === 'shuffle') {
+        params.sort = 'discover'
+        params.seed = shuffleSeed
+      } else {
+        params.sort = sortField
+        params.direction = sortDirection
+      }
+
+      if (debouncedQuery.trim()) {
+        params.search = debouncedQuery.trim()
+      }
+
+      if (selectedTags.length > 0) {
+        params.tags = selectedTags.join(',')
+      }
+
+      if (filterTab === 'favorites' || filterTab === 'characters') {
+        params.filter = filterTab === 'favorites' ? 'favorites' : 'non-favorites'
+        if (activeFavorites.length > 0) {
+          params.favorite_ids = activeFavorites.join(',')
+        }
+      }
+
+      return params
+    },
+    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, filterTab]
+  )
+
+  const loadAllCharacters = useCallback(async () => {
+    const PAGE = 200
+    let all: Character[] = []
+    let offset = 0
+    let total = Infinity
+    while (offset < total) {
+      const result = await charactersApi.list({ limit: PAGE, offset })
+      all = all.concat(result.data)
+      total = result.total
+      offset += result.data.length
+      if (result.data.length < PAGE) break
+    }
+    setCharacters(all)
+  }, [setCharacters])
+
   // ─── Fetch current page from server ─────────────────────────────────────
   useEffect(() => {
+    if (!settingsLoaded) return
+
     let cancelled = false
+    favoriteMutationSeqRef.current += 1
     setLoading(true)
 
-    const params: Record<string, any> = {
-      limit: charactersPerPage,
-      offset: (currentPage - 1) * charactersPerPage,
-    }
-
-    // Sort
-    if (sortField === 'shuffle') {
-      params.sort = 'discover'
-      params.seed = shuffleSeed
-    } else {
-      params.sort = sortField
-      params.direction = sortDirection
-    }
-
-    // Search
-    if (debouncedQuery.trim()) {
-      params.search = debouncedQuery.trim()
-    }
-
-    // Tag filter
-    if (selectedTags.length > 0) {
-      params.tags = selectedTags.join(',')
-    }
-
-    // Favorites filter
-    if (filterTab === 'favorites' || filterTab === 'characters') {
-      params.filter = filterTab === 'favorites' ? 'favorites' : 'non-favorites'
-      if (favorites.length > 0) {
-        params.favorite_ids = favorites.join(',')
-      }
-    }
-
     charactersApi
-      .listSummaries(params)
+      .listSummaries(buildSummaryParams())
       .then((result) => {
         if (cancelled) return
         setBrowserItems(result.data)
@@ -171,32 +240,18 @@ export function useCharacterBrowser() {
       })
 
     return () => { cancelled = true }
-  }, [currentPage, charactersPerPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, filterTab, favorites, fetchVersion])
+  }, [buildSummaryParams, fetchVersion, settingsLoaded])
 
   // ─── Load tags once ─────────────────────────────────────────────────────
   useEffect(() => {
     charactersApi.listTags().then(setAllTags).catch(() => {})
-  }, [])
+  }, [fetchVersion])
 
   // ─── Background: populate store with full characters (for other components) ──
   useEffect(() => {
     if (charactersLoaded) return
-    const loadAll = async () => {
-      const PAGE = 200
-      let all: Character[] = []
-      let offset = 0
-      let total = Infinity
-      while (offset < total) {
-        const result = await charactersApi.list({ limit: PAGE, offset })
-        all = all.concat(result.data)
-        total = result.total
-        offset += result.data.length
-        if (result.data.length < PAGE) break
-      }
-      setCharacters(all)
-    }
-    loadAll().catch((err) => console.error('[CharacterBrowser] Background load failed:', err))
-  }, [charactersLoaded, setCharacters])
+    loadAllCharacters().catch((err) => console.error('[CharacterBrowser] Background load failed:', err))
+  }, [charactersLoaded, loadAllCharacters])
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -206,11 +261,34 @@ export function useCharacterBrowser() {
   const totalPages = Math.max(1, Math.ceil(browserTotal / charactersPerPage))
   const safePage = Math.min(currentPage, totalPages)
 
-  // Favorite characters (from store, for slider — uses full character data)
-  const favoriteCharacters = useMemo(
-    () => characters.filter((c) => favorites.includes(c.id)),
-    [characters, favorites]
-  )
+  // Favorite slider: fetch summaries directly so it doesn't wait for the
+  // background full-character crawl to complete.
+  useEffect(() => {
+    if (!settingsLoaded) return
+    if (favorites.length === 0) {
+      setFavoriteCharacters([])
+      return
+    }
+
+    let cancelled = false
+    charactersApi
+      .listSummaries({
+        limit: favorites.length,
+        offset: 0,
+        sort: 'recent',
+        direction: 'desc',
+        filter: 'favorites',
+        favorite_ids: favorites.join(','),
+      })
+      .then((result) => {
+        if (!cancelled) setFavoriteCharacters(result.data)
+      })
+      .catch((err) => {
+        if (!cancelled) console.error('[CharacterBrowser] Failed to load favorite summaries:', err)
+      })
+
+    return () => { cancelled = true }
+  }, [favorites, settingsLoaded, fetchVersion])
 
   // Reshuffle
   const handleToggleSortDirection = useCallback(() => {
@@ -247,10 +325,11 @@ export function useCharacterBrowser() {
         addCharacter(result.character)
         setBrowserTotal((t) => t + 1)
         setFetchVersion((v) => v + 1)
-        if (result.character.extensions?.character_book?.entries?.length > 0
+        if (getEmbeddedCharacterBookEntryCount(result.character.extensions) > 0
             && !(result.character.extensions?.world_book_ids?.length > 0)) {
           setPendingLorebookImport(result.character)
         }
+        maybeShowImportedLoraHint(result.character)
       } catch (err: any) {
         const msg = err?.body?.message || err?.message || 'Import failed'
         setImportError(msg)
@@ -289,6 +368,7 @@ export function useCharacterBrowser() {
       if (unlinked.length > 0) {
         setPendingLorebooks(unlinked)
       }
+      for (const c of imported) maybeShowImportedLoraHint(c)
     },
     [addCharacters]
   )
@@ -338,10 +418,11 @@ export function useCharacterBrowser() {
         setBrowserTotal((t) => t + 1)
         setFetchVersion((v) => v + 1)
         toast.success(`${result.character.name} was imported`)
-        if (result.character.extensions?.character_book?.entries?.length > 0
+        if (getEmbeddedCharacterBookEntryCount(result.character.extensions) > 0
             && !(result.character.extensions?.world_book_ids?.length > 0)) {
           setPendingLorebookImport(result.character)
         }
+        maybeShowImportedLoraHint(result.character)
       } catch (err: any) {
         const msg = err?.body?.message || err?.message || 'Import failed'
         setImportError(msg)
@@ -438,10 +519,19 @@ export function useCharacterBrowser() {
   )
 
   const openModal = useStore((s) => s.openModal)
+  const showChatCreationToast = useCallback(
+    () => toast.info('Creating chat and preparing Memory Cortex in the background…', {
+      title: 'Starting Chat',
+      duration: 60_000,
+      dismissible: false,
+    }),
+    []
+  )
 
   // Open chat
   const openChat = useCallback(
     async (character: Character | CharacterSummary) => {
+      let creationToastId: string | null = null
       try {
         const chats = await get<any[]>('/chats/character-chats/' + character.id)
 
@@ -471,32 +561,42 @@ export function useCharacterBrowser() {
           openModal('greetingPicker', {
             character: fullChar,
             onSelect: async (greetingIndex: number) => {
+              const toastId = showChatCreationToast()
               try {
                 const chat = await chatsApi.create({
                   character_id: character.id,
                   greeting_index: greetingIndex,
                 })
+                toast.dismiss(toastId)
                 navigate(`/chat/${chat.id}`)
               } catch (err) {
+                toast.dismiss(toastId)
                 console.error('[CharacterBrowser] Failed to create chat:', err)
+                toast.error('Failed to create chat')
               }
             },
           })
           return
         }
 
+        creationToastId = showChatCreationToast()
         const chat = await chatsApi.create({ character_id: character.id })
+        toast.dismiss(creationToastId)
+        creationToastId = null
         navigate(`/chat/${chat.id}`)
       } catch (err) {
+        if (creationToastId) toast.dismiss(creationToastId)
         console.error('[CharacterBrowser] Failed to open chat:', err)
+        toast.error('Failed to open chat')
       }
     },
-    [navigate, openModal]
+    [navigate, openModal, showChatCreationToast]
   )
 
   // Start a new chat
   const startNewChat = useCallback(
     async (character: Character | CharacterSummary) => {
+      let creationToastId: string | null = null
       try {
         const hasAlternates = 'has_alternate_greetings' in character
           ? character.has_alternate_greetings
@@ -507,27 +607,36 @@ export function useCharacterBrowser() {
           openModal('greetingPicker', {
             character: fullChar,
             onSelect: async (greetingIndex: number) => {
+              const toastId = showChatCreationToast()
               try {
                 const chat = await chatsApi.create({
                   character_id: character.id,
                   greeting_index: greetingIndex,
                 })
+                toast.dismiss(toastId)
                 navigate(`/chat/${chat.id}`)
               } catch (err) {
+                toast.dismiss(toastId)
                 console.error('[CharacterBrowser] Failed to create chat:', err)
+                toast.error('Failed to create chat')
               }
             },
           })
           return
         }
 
+        creationToastId = showChatCreationToast()
         const chat = await chatsApi.create({ character_id: character.id })
+        toast.dismiss(creationToastId)
+        creationToastId = null
         navigate(`/chat/${chat.id}`)
       } catch (err) {
+        if (creationToastId) toast.dismiss(creationToastId)
         console.error('[CharacterBrowser] Failed to start new chat:', err)
+        toast.error('Failed to start new chat')
       }
     },
-    [navigate, openModal]
+    [navigate, openModal, showChatCreationToast]
   )
 
   // ─── Trigger a re-fetch of the current browser page ─────────────────────
@@ -535,13 +644,82 @@ export function useCharacterBrowser() {
     setFetchVersion((v) => v + 1)
   }, [])
 
+  const reloadAllCharacters = useCallback(async () => {
+    await loadAllCharacters()
+    setFetchVersion((v) => v + 1)
+  }, [loadAllCharacters])
+
+  const handleToggleFavorite = useCallback(
+    (id: string) => {
+      const wasFavorite = favorites.includes(id)
+      const nextFavorites = wasFavorite
+        ? favorites.filter((favoriteId) => favoriteId !== id)
+        : [...favorites, id].slice(0, 15)
+      const requestSeq = ++favoriteMutationSeqRef.current
+
+      toggleFavorite(id)
+
+      if (filterTab !== 'favorites' && filterTab !== 'characters') {
+        return
+      }
+
+      const shouldRemoveFromCurrentView =
+        (filterTab === 'favorites' && wasFavorite)
+        || (filterTab === 'characters' && !wasFavorite)
+
+      if (!shouldRemoveFromCurrentView) {
+        return
+      }
+
+      const nextTotal = Math.max(0, browserTotal - 1)
+      const nextTotalPages = Math.max(1, Math.ceil(nextTotal / charactersPerPage))
+      const nextItemsLength = Math.max(0, browserItems.length - 1)
+      const pageStart = (currentPage - 1) * charactersPerPage
+
+      setBrowserItems((items) => items.filter((item) => item.id !== id))
+      setBrowserTotal(nextTotal)
+
+      if (currentPage > nextTotalPages) {
+        setCurrentPage(nextTotalPages)
+        return
+      }
+
+      if (nextItemsLength >= charactersPerPage || nextTotal <= pageStart + nextItemsLength) {
+        return
+      }
+
+      const backfillOffset = pageStart + nextItemsLength
+
+      charactersApi
+        .listSummaries(buildSummaryParams({
+          favoritesOverride: nextFavorites,
+          limit: 1,
+          offset: backfillOffset,
+        }))
+        .then((result) => {
+          if (favoriteMutationSeqRef.current !== requestSeq || result.data.length === 0) return
+          const [replacement] = result.data
+          setBrowserItems((items) => {
+            if (items.some((item) => item.id === replacement.id) || items.length >= charactersPerPage) {
+              return items
+            }
+            return [...items, replacement]
+          })
+        })
+        .catch((err) => {
+          console.error('[CharacterBrowser] Failed to backfill summaries:', err)
+        })
+    },
+    [favorites, toggleFavorite, filterTab, browserTotal, browserItems.length, charactersPerPage, currentPage, buildSummaryParams]
+  )
+
   return {
     // State — browser items come from server-side pagination
     characters: browserItems,
     allCharacters: characters,
     totalFiltered: browserTotal,
     favoriteCharacters,
-    loading,
+    loading: loading || !settingsLoaded,
     importLoading,
     importProgress,
     importError,
@@ -579,7 +757,7 @@ export function useCharacterBrowser() {
     setViewMode,
     setSelectedTags,
     toggleSelectedTag,
-    toggleFavorite,
+    toggleFavorite: handleToggleFavorite,
     setBatchMode,
     toggleBatchSelect,
     selectAllBatch,
@@ -601,6 +779,7 @@ export function useCharacterBrowser() {
     openChat,
     startNewChat,
     refreshBrowser,
+    reloadAllCharacters,
     clearImportError: () => setImportError(null),
     clearPendingLorebookImport: () => setPendingLorebookImport(null),
   }

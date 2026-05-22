@@ -4,6 +4,7 @@ import { useStore } from '@/store'
 import { imagesApi } from '@/api/images'
 import { chatsApi } from '@/api/chats'
 import { FormField, Select, EditorSection } from '@/components/shared/FormComponents'
+import { flushSettingsNow } from '@/store/slices/settings'
 import type { WallpaperRef } from '@/types/store'
 import styles from './WallpaperPanel.module.css'
 
@@ -68,14 +69,17 @@ export default function WallpaperPanel() {
       }
 
       if (uploadTarget === 'chat' && activeChatId) {
+        const oldImageId = activeChatWallpaper?.image_id
         // Save to chat metadata
-        const chat = await chatsApi.get(activeChatId)
-        const metadata = { ...(chat.metadata || {}), wallpaper: ref }
-        await chatsApi.update(activeChatId, { metadata })
+        await chatsApi.patchMetadata(activeChatId, { wallpaper: ref })
         setActiveChatWallpaper(ref)
+        if (oldImageId && oldImageId !== ref.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
       } else {
+        const oldImageId = wallpaper.global?.image_id
         // Save as global wallpaper
         setWallpaper({ global: ref })
+        await flushSettingsNow()
+        if (oldImageId && oldImageId !== ref.image_id) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to upload wallpaper.')
@@ -84,18 +88,20 @@ export default function WallpaperPanel() {
     }
   }
 
-  const clearGlobal = () => {
+  const clearGlobal = async () => {
+    const oldImageId = wallpaper.global?.image_id
     setWallpaper({ global: null })
+    await flushSettingsNow()
+    if (oldImageId) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
   }
 
   const clearChat = async () => {
     if (!activeChatId) return
+    const oldImageId = activeChatWallpaper?.image_id
     try {
-      const chat = await chatsApi.get(activeChatId)
-      const metadata = { ...(chat.metadata || {}) }
-      delete metadata.wallpaper
-      await chatsApi.update(activeChatId, { metadata })
+      await chatsApi.patchMetadata(activeChatId, { wallpaper: null })
       setActiveChatWallpaper(null)
+      if (oldImageId) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
     } catch (err: any) {
       setError(err?.message || 'Failed to clear chat wallpaper.')
     }

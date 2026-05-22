@@ -61,7 +61,7 @@ app.post("/chats", async (c) => {
         created_at: chatInput.created_at,
       });
 
-      const msgCount = chatsSvc.bulkInsertMessages(chat.id, chatInput.messages || []);
+      const msgCount = chatsSvc.bulkInsertMessages(chat.id, chatInput.messages || [], userId);
 
       result.results.push({
         chat_name: chatName,

@@ -2,6 +2,11 @@
   position: fixed;
   inset: 0;
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  /* Compensate for `body > * { zoom: ui-scale }`: the backdrop is itself a
+     direct child of body via portal, so `zoom` scales its dimensions. Divide
+     by ui-scale so the post-zoom render equals one full viewport. */
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   display: flex;
   align-items: center;
   justify-content: center;

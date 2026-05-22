@@ -1,8 +1,9 @@
 import { decodeMulti } from "@msgpack/msgpack";
-import sharp from "sharp";
+import sharp from "../../utils/sharp-config";
 import type { ImageProvider } from "../provider";
 import type { ImageProviderCapabilities } from "../param-schema";
 import type { ImageGenRequest, ImageGenResponse } from "../types";
+import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 import { applyRawOverride } from "../types";
 
 const DIRECTOR_REF_CANVASES: Array<[number, number]> = [
@@ -232,9 +233,11 @@ export class NovelAIImageProvider implements ImageProvider {
       const res = await fetch("https://api.novelai.net/user/information", {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({ provider: this.displayName, operation: "authentication", detail: err instanceof Error ? err.message : "network request failed", retryable: true });
     }
   }
 

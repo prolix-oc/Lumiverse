@@ -1,6 +1,9 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
+import { fetchProviderJson, throwProviderResponseError } from "../../utils/provider-errors";
+import { sanitizeGeminiSchema } from "./google";
 
 // ── Service account JWT → OAuth2 access token ──────────────────────────────
 
@@ -122,8 +125,7 @@ export async function getAccessToken(sa: ServiceAccountCredentials): Promise<str
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Vertex AI token exchange failed (${res.status}): ${err}`);
+    await throwProviderResponseError("Vertex AI", "authentication", res);
   }
 
   const data = (await res.json()) as { access_token: string; expires_in: number };
@@ -186,14 +188,9 @@ export async function listVertexLocations(apiKey: string): Promise<string[]> {
     const params = new URLSearchParams();
     if (pageToken) params.set("pageToken", pageToken);
     const url = `https://aiplatform.googleapis.com/v1/projects/${sa.project_id}/locations${params.toString() ? `?${params}` : ""}`;
-    const res = await fetch(url, {
+    const data = await fetchProviderJson<any>("Vertex AI", "region listing", url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Failed to list Vertex AI locations (${res.status}): ${err}`);
-    }
-    const data = (await res.json()) as any;
     const locations: any[] = data.locations || [];
     for (const loc of locations) {
       const id: string = loc.locationId || loc.name?.split("/").pop() || "";
@@ -291,7 +288,7 @@ export class GoogleVertexProvider implements LlmProvider {
       if (p.thought) {
         reasoning += p.text || "";
       } else if (p.functionCall) {
-        fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID() });
+        fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID(), thought_signature: p.thoughtSignature });
       } else {
         content += p.text || "";
       }
@@ -326,15 +323,14 @@ export class GoogleVertexProvider implements LlmProvider {
     const url = `${base}/${model}:streamGenerateContent?alt=sse`;
     const body = this.buildBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) {
       const err = await res.text();
@@ -344,10 +340,11 @@ export class GoogleVertexProvider implements LlmProvider {
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    const maybeYield = createCooperativeYielder(64, request.signal);
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithAbort(reader, request.signal);
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -355,6 +352,7 @@ export class GoogleVertexProvider implements LlmProvider {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
+          await maybeYield();
           const trimmed = line.trim();
           if (!trimmed || !trimmed.startsWith("data: ")) continue;
 
@@ -371,7 +369,7 @@ export class GoogleVertexProvider implements LlmProvider {
               if (p.thought) {
                 reasoning += p.text || "";
               } else if (p.functionCall) {
-                fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID() });
+                fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID(), thought_signature: p.thoughtSignature });
               } else {
                 text += p.text || "";
               }
@@ -409,78 +407,58 @@ export class GoogleVertexProvider implements LlmProvider {
   }
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
-    try {
-      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
-      const accessToken = await getAccessToken(sa);
-      const host = vertexHostForLocation(location);
-      // See listModels() for URL rationale. The publisher-list endpoint is
-      // un-prefixed (no project/location in the path) and lives at v1beta1.
-      const url = `${host}/v1beta1/publishers/google/models?pageSize=1`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        console.error(`[Vertex AI] validateKey failed (${res.status}): ${err}`);
-      }
-      return res.ok;
-    } catch (e) {
-      console.error("[Vertex AI] validateKey error:", e);
-      return false;
-    }
+    const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
+    const accessToken = await getAccessToken(sa);
+    const host = vertexHostForLocation(location);
+    // See listModels() for URL rationale. The publisher-list endpoint is
+    // un-prefixed (no project/location in the path) and lives at v1beta1.
+    const url = `${host}/v1beta1/publishers/google/models?pageSize=1`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    return res.ok;
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
-    try {
-      const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
-      const accessToken = await getAccessToken(sa);
-      const host = vertexHostForLocation(location);
-      const allModels: string[] = [];
-      let pageToken: string | undefined;
+    const { sa, location } = this.resolveProjectConfig(apiKey, apiUrl);
+    const accessToken = await getAccessToken(sa);
+    const host = vertexHostForLocation(location);
+    const allModels: string[] = [];
+    let pageToken: string | undefined;
 
-      do {
-        const params = new URLSearchParams();
-        if (pageToken) params.set("pageToken", pageToken);
-        // List base (publisher) models. Per Google's @google/genai SDK
-        // (`_api_client.ts` → `shouldPrependVertexProjectPath`):
-        //   "For base models Vertex does not accept a project/location
-        //    prefix (for tuned models the prefix is required)."
-        // So the URL is un-prefixed and sits at v1beta1 (the SDK's default
-        // version for Vertex; the v1 surface does not expose this list).
-        //   →  {host}/v1beta1/publishers/google/models
-        const url = `${host}/v1beta1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!res.ok) {
-          const err = await res.text();
-          console.error(`[Vertex AI] listModels failed (${res.status}): ${err}`);
-          break;
-        }
-        const data = (await res.json()) as any;
-        // Response may use `publisherModels`, `models`, or `tunedModels`
-        // depending on the surface — mirrors tExtractModels() in the SDK.
-        const models: any[] = data.publisherModels || data.models || data.tunedModels || [];
-        for (const m of models) {
-          // Names are "publishers/google/models/{id}".
-          const name: string = m.name || "";
-          const shortName = name.replace(/^publishers\/google\/models\//, "");
-          const id = shortName || name;
-          if (id) allModels.push(id);
-        }
-        pageToken = data.nextPageToken;
-      } while (pageToken);
+    do {
+      const params = new URLSearchParams();
+      if (pageToken) params.set("pageToken", pageToken);
+      // List base (publisher) models. Per Google's @google/genai SDK
+      // (`_api_client.ts` → `shouldPrependVertexProjectPath`):
+      //   "For base models Vertex does not accept a project/location
+      //    prefix (for tuned models the prefix is required)."
+      // So the URL is un-prefixed and sits at v1beta1 (the SDK's default
+      // version for Vertex; the v1 surface does not expose this list).
+      //   →  {host}/v1beta1/publishers/google/models
+      const url = `${host}/v1beta1/publishers/google/models${params.toString() ? `?${params}` : ""}`;
+      const data = await fetchProviderJson<any>(this.displayName, "model listing", url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      // Response may use `publisherModels`, `models`, or `tunedModels`
+      // depending on the surface — mirrors tExtractModels() in the SDK.
+      const models: any[] = data.publisherModels || data.models || data.tunedModels || [];
+      for (const m of models) {
+        // Names are "publishers/google/models/{id}".
+        const name: string = m.name || "";
+        const shortName = name.replace(/^publishers\/google\/models\//, "");
+        const id = shortName || name;
+        if (id) allModels.push(id);
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
 
-      return allModels.sort();
-    } catch (e) {
-      console.error("[Vertex AI] listModels error:", e);
-      return [];
-    }
+    return allModels.sort();
   }
 
   // ── Body building (mirrors GoogleProvider.buildBody) ──────────────────
 
-  private formatParts(m: LlmMessage): any[] {
+  private formatParts(m: LlmMessage, toolNameById: Map<string, string>): any[] {
     if (typeof m.content === "string") return [{ text: m.content }];
     return m.content.map((part: LlmMessagePart) => {
       switch (part.type) {
@@ -489,10 +467,31 @@ export class GoogleVertexProvider implements LlmProvider {
         case "image":
         case "audio":
           return { inlineData: { mimeType: part.mime_type, data: part.data } };
+        case "tool_use":
+          return { functionCall: { name: part.name, args: part.input }, thoughtSignature: part.thought_signature || "context_engineering_is_the_way_to_go" };
+        case "tool_result": {
+          let payload: unknown = part.content;
+          try { payload = JSON.parse(part.content); } catch { /* keep as string */ }
+          const key = part.is_error ? "error" : "output";
+          const response: Record<string, unknown> = { [key]: payload };
+          const name = toolNameById.get(part.tool_use_id) ?? "tool";
+          return { functionResponse: { name, response } };
+        }
         default:
           return { text: "" };
       }
     });
+  }
+
+  private buildToolNameMap(messages: readonly LlmMessage[]): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const m of messages) {
+      if (typeof m.content === "string") continue;
+      for (const p of m.content) {
+        if (p.type === "tool_use") map.set(p.id, p.name);
+      }
+    }
+    return map;
   }
 
   private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming"]);
@@ -507,11 +506,12 @@ export class GoogleVertexProvider implements LlmProvider {
 
     const systemMessages = request.messages.filter((m) => m.role === "system");
     const otherMessages = request.messages.filter((m) => m.role !== "system");
+    const toolNameById = this.buildToolNameMap(request.messages);
 
     const body: any = {
       contents: otherMessages.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
-        parts: this.formatParts(m),
+        parts: this.formatParts(m, toolNameById),
       })),
     };
 
@@ -569,7 +569,7 @@ export class GoogleVertexProvider implements LlmProvider {
         functionDeclarations: request.tools.map((t) => ({
           name: t.name,
           description: t.description,
-          parameters: t.parameters,
+          parameters: sanitizeGeminiSchema(t.parameters),
         })),
       }];
     }

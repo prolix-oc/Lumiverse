@@ -36,14 +36,21 @@ let currentTone = 'neutral'
 spindle.registerInterceptor(async (messages, context) => {
   if (currentTone === 'neutral') return messages
 
-  // Prepend a system instruction about tone
-  return [
-    {
-      role: 'system' as const,
-      content: `[Tone directive] Respond in a ${currentTone} tone.`,
-    },
-    ...messages,
-  ]
+  const injected = {
+    role: 'system' as const,
+    content: `[Tone directive] Respond in a ${currentTone} tone.`,
+  }
+
+  // Prepend a system instruction about tone and expose it in Prompt Breakdown
+  return {
+    messages: [injected, ...messages],
+    breakdown: [
+      {
+        messageIndex: 0,
+        name: 'Tone Directive',
+      },
+    ],
+  }
 }, 10) // Low priority = runs early
 
 // Listen for tone changes from the frontend
@@ -64,8 +71,9 @@ spindle.log.info('Tone Adjuster loaded!')
 1. Loads the saved tone preference from storage on startup
 2. Registers an interceptor with priority `10` (runs early in the chain)
 3. If tone is not `neutral`, prepends a system message with the tone directive
-4. Listens for `set_tone` messages from the frontend to update the tone
-5. Persists the tone choice to storage so it survives restarts
+4. Marks that injected message as a Prompt Breakdown block so users can see it in dry-run and saved breakdown views
+5. Listens for `set_tone` messages from the frontend to update the tone
+6. Persists the tone choice to storage so it survives restarts
 
 ---
 

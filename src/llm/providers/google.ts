@@ -1,6 +1,26 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
+import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
+
+const GEMINI_SCHEMA_FIELDS = new Set(["type","format","title","description","nullable","enum","maxItems","minItems","properties","required","minProperties","maxProperties","minLength","maxLength","pattern","example","anyOf","propertyOrdering","default","items","minimum","maximum"]);
+
+export function sanitizeGeminiSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (!GEMINI_SCHEMA_FIELDS.has(k)) continue;
+    if (k === "items") out[k] = sanitizeGeminiSchema(v);
+    else if (k === "anyOf" && Array.isArray(v)) out[k] = v.map(sanitizeGeminiSchema);
+    else if (k === "properties" && v && typeof v === "object" && !Array.isArray(v)) {
+      const p: Record<string, unknown> = {};
+      for (const [pn, ps] of Object.entries(v as Record<string, unknown>)) p[pn] = sanitizeGeminiSchema(ps);
+      out[k] = p;
+    } else out[k] = v;
+  }
+  return out;
+}
 
 export class GoogleProvider implements LlmProvider {
   readonly name = "google";
@@ -58,7 +78,7 @@ export class GoogleProvider implements LlmProvider {
       if (p.thought) {
         reasoning += p.text || "";
       } else if (p.functionCall) {
-        fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID() });
+        fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID(), thought_signature: p.thoughtSignature });
       } else {
         content += p.text || "";
       }
@@ -89,12 +109,11 @@ export class GoogleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
     const body = this.buildBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) {
       const err = await res.text();
@@ -104,10 +123,11 @@ export class GoogleProvider implements LlmProvider {
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    const maybeYield = createCooperativeYielder(64, request.signal);
 
     try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithAbort(reader, request.signal);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -115,6 +135,7 @@ export class GoogleProvider implements LlmProvider {
       buffer = lines.pop() || "";
 
       for (const line of lines) {
+        await maybeYield();
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
 
@@ -132,7 +153,7 @@ export class GoogleProvider implements LlmProvider {
             if (p.thought) {
               reasoning += p.text || "";
             } else if (p.functionCall) {
-              fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID() });
+              fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID(), thought_signature: p.thoughtSignature });
             } else {
               text += p.text || "";
             }
@@ -175,30 +196,29 @@ export class GoogleProvider implements LlmProvider {
       const res = await fetch(
         `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`
       );
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "authentication",
+        detail: err instanceof Error ? err.message : "network request failed",
+        retryable: true,
+      });
     }
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
-    try {
-      const res = await fetch(
-        `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`
-      );
-      if (!res.ok) return [];
-      const data = await res.json() as any;
-      return (data.models || [])
-        .map((m: any) => m.name?.replace("models/", "") || m.name)
-        .filter((n: string) => n.includes("gemini"))
-        .sort();
-    } catch {
-      return [];
-    }
+    const data = await fetchProviderJson<any>(this.displayName, "model listing", `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`);
+    return (data.models || [])
+      .map((m: any) => m.name?.replace("models/", "") || m.name)
+      .filter((n: string) => n.includes("gemini"))
+      .sort();
   }
 
   /** Format message content into Google Gemini parts array, handling multipart (vision/audio) content. */
-  private formatParts(m: LlmMessage): any[] {
+  private formatParts(m: LlmMessage, toolNameById: Map<string, string>): any[] {
     if (typeof m.content === "string") return [{ text: m.content }];
     return m.content.map((part: LlmMessagePart) => {
       switch (part.type) {
@@ -207,10 +227,31 @@ export class GoogleProvider implements LlmProvider {
         case "image":
         case "audio":
           return { inlineData: { mimeType: part.mime_type, data: part.data } };
+        case "tool_use":
+          return { functionCall: { name: part.name, args: part.input }, thoughtSignature: part.thought_signature || "context_engineering_is_the_way_to_go" };
+        case "tool_result": {
+          let payload: unknown = part.content;
+          try { payload = JSON.parse(part.content); } catch { /* keep as string */ }
+          const key = part.is_error ? "error" : "output";
+          const response: Record<string, unknown> = { [key]: payload };
+          const name = toolNameById.get(part.tool_use_id) ?? "tool";
+          return { functionResponse: { name, response } };
+        }
         default:
           return { text: "" };
       }
     });
+  }
+
+  private buildToolNameMap(messages: readonly LlmMessage[]): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const m of messages) {
+      if (typeof m.content === "string") continue;
+      for (const p of m.content) {
+        if (p.type === "tool_use") map.set(p.id, p.name);
+      }
+    }
+    return map;
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
@@ -228,11 +269,12 @@ export class GoogleProvider implements LlmProvider {
     // Google uses a different message format
     const systemMessages = request.messages.filter((m) => m.role === "system");
     const otherMessages = request.messages.filter((m) => m.role !== "system");
+    const toolNameById = this.buildToolNameMap(request.messages);
 
     const body: any = {
       contents: otherMessages.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
-        parts: this.formatParts(m),
+        parts: this.formatParts(m, toolNameById),
       })),
     };
 
@@ -296,7 +338,7 @@ export class GoogleProvider implements LlmProvider {
         functionDeclarations: request.tools.map((t) => ({
           name: t.name,
           description: t.description,
-          parameters: t.parameters,
+          parameters: sanitizeGeminiSchema(t.parameters),
         })),
       }];
     } else {

@@ -2,6 +2,9 @@ import type { ImageProvider } from "../provider"
 import type { ImageProviderCapabilities, ImageParameterSchemaMap } from "../param-schema"
 import type { ImageGenRequest, ImageGenResponse } from "../types"
 import { applyRawOverride } from "../types"
+import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors"
+import { openWebSocket } from "./ws-helpers"
+import { executeComfyWorkflow, executeComfyWorkflowStream } from "./comfy-runner"
 
 const PARAMETERS: ImageParameterSchemaMap = {
   width: {
@@ -103,6 +106,17 @@ const PARAMETERS: ImageParameterSchemaMap = {
     group: "models",
     modelSubtype: "text_encoders",
   },
+  loras: {
+    type: "string",
+    description: "Comma-separated LoRA model names to apply",
+    group: "models",
+    modelSubtype: "loras",
+  },
+  loraWeights: {
+    type: "string",
+    description: "Comma-separated LoRA strengths matching the loras parameter (e.g. 0.8,0.6)",
+    group: "models",
+  },
   rawRequestOverride: {
     type: "string",
     description: "Raw JSON merged into the request body for advanced usage",
@@ -162,7 +176,7 @@ export class SwarmUIImageProvider implements ImageProvider {
     })
 
     if (!res.ok) {
-      throw new Error(`SwarmUI session request failed: ${res.status} ${await res.text().catch(() => "")}`)
+      await throwProviderResponseError("SwarmUI", "session request", res)
     }
 
     const data = (await res.json()) as Record<string, any>
@@ -228,6 +242,15 @@ export class SwarmUIImageProvider implements ImageProvider {
     if (p.gemmaModel) body.gemmamodel = String(p.gemmaModel)
     if (p.llamaModel) body.llamamodel = String(p.llamaModel)
 
+    // LoRAs. SwarmUI accepts `loras` + `loraweights` as comma-separated strings.
+    // Callers may supply either an array (we join it) or a pre-joined string.
+    if (p.loras) body.loras = Array.isArray(p.loras) ? p.loras.join(",") : String(p.loras)
+    if (p.loraWeights) {
+      body.loraweights = Array.isArray(p.loraWeights)
+        ? p.loraWeights.map((v: unknown) => String(v)).join(",")
+        : String(p.loraWeights)
+    }
+
     return applyRawOverride(body, p.rawRequestOverride)
   }
 
@@ -266,52 +289,84 @@ export class SwarmUIImageProvider implements ImageProvider {
     const base = this.baseUrl(apiUrl)
     const token = apiKey || undefined
 
+    // Workflow mode: route to ComfyUI via SwarmUI's /ComfyBackendDirect proxy.
+    const workflow = request.parameters?.workflow
+    if (workflow && typeof workflow === "object") {
+      const { imageDataUrl } = await executeComfyWorkflow(
+        `${base}/ComfyBackendDirect`,
+        workflow as Record<string, any>,
+        request.signal,
+        { label: "SwarmUI/ComfyBackendDirect", cookie: token ? `swarm_token=${token}` : undefined, wsTimeoutMs: 15_000 },
+      )
+      return {
+        imageDataUrl,
+        model: request.model || "comfyui-workflow",
+        provider: this.name,
+      }
+    }
+
     let sessionId = await this.getSession(base, token, request.signal)
     let body = this.buildBody(sessionId, request)
 
-    let res = await fetch(`${base}/API/GenerateText2Image`, {
-      method: "POST",
-      headers: this.buildHeaders(token),
-      body: JSON.stringify(body),
-      signal: request.signal,
-    })
+    // sessionId can change after an invalid_session_id retry, so the abort
+    // handler reads it through a closure that follows reassignment.
+    const abortHandler = () => {
+      fetch(`${base}/API/InterruptAll`, {
+        method: "POST",
+        headers: this.buildHeaders(token),
+        body: JSON.stringify({ session_id: sessionId }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {})
+    }
+    request.signal?.addEventListener("abort", abortHandler, { once: true })
 
-    // Retry once on invalid session
-    if (!res.ok) {
-      const text = await res.text().catch(() => "")
-      if (text.includes("invalid_session_id") || text.includes("Invalid session")) {
-        this.invalidateSession(base, token)
-        sessionId = await this.getSession(base, token, request.signal)
-        body = this.buildBody(sessionId, request)
-        res = await fetch(`${base}/API/GenerateText2Image`, {
-          method: "POST",
-          headers: this.buildHeaders(token),
-          body: JSON.stringify(body),
-          signal: request.signal,
-        })
-      }
+    try {
+      let res = await fetch(`${base}/API/GenerateText2Image`, {
+        method: "POST",
+        headers: this.buildHeaders(token),
+        body: JSON.stringify(body),
+        signal: request.signal,
+      })
+
+      // Retry once on invalid session
       if (!res.ok) {
-        throw new Error(`SwarmUI generation error ${res.status}: ${text || await res.text().catch(() => "Unknown")}`)
+        const text = await res.text().catch(() => "")
+        if (text.includes("invalid_session_id") || text.includes("Invalid session")) {
+          this.invalidateSession(base, token)
+          sessionId = await this.getSession(base, token, request.signal)
+          body = this.buildBody(sessionId, request)
+          res = await fetch(`${base}/API/GenerateText2Image`, {
+            method: "POST",
+            headers: this.buildHeaders(token),
+            body: JSON.stringify(body),
+            signal: request.signal,
+          })
+        }
+        if (!res.ok) {
+          throw new Error(`SwarmUI generation error ${res.status}: ${text || await res.text().catch(() => "Unknown")}`)
+        }
       }
-    }
 
-    const data = (await res.json()) as Record<string, any>
+      const data = (await res.json()) as Record<string, any>
 
-    if (data.error || data.error_id) {
-      throw new Error(`SwarmUI error: ${data.error || data.error_id}`)
-    }
+      if (data.error || data.error_id) {
+        throw new Error(`SwarmUI error: ${data.error || data.error_id}`)
+      }
 
-    const images: string[] = Array.isArray(data.images) ? data.images : []
-    if (images.length === 0) {
-      throw new Error("SwarmUI returned no images")
-    }
+      const images: string[] = Array.isArray(data.images) ? data.images : []
+      if (images.length === 0) {
+        throw new Error("SwarmUI returned no images")
+      }
 
-    const imageDataUrl = await this.fetchImage(base, images[0], token, request.signal)
+      const imageDataUrl = await this.fetchImage(base, images[0], token, request.signal)
 
-    return {
-      imageDataUrl,
-      model: request.model || "unknown",
-      provider: this.name,
+      return {
+        imageDataUrl,
+        model: request.model || "unknown",
+        provider: this.name,
+      }
+    } finally {
+      request.signal?.removeEventListener("abort", abortHandler)
     }
   }
 
@@ -326,20 +381,54 @@ export class SwarmUIImageProvider implements ImageProvider {
   > {
     const base = this.baseUrl(apiUrl)
     const token = apiKey || undefined
+
+    // Workflow mode: stream via /ComfyBackendDirect.
+    const workflow = request.parameters?.workflow
+    if (workflow && typeof workflow === "object") {
+      const stream = executeComfyWorkflowStream(
+        `${base}/ComfyBackendDirect`,
+        workflow as Record<string, any>,
+        request.signal,
+        { label: "SwarmUI/ComfyBackendDirect", cookie: token ? `swarm_token=${token}` : undefined, wsTimeoutMs: 15_000 },
+      )
+      while (true) {
+        const next = await stream.next()
+        if (next.done) {
+          return {
+            imageDataUrl: next.value.imageDataUrl,
+            model: request.model || "comfyui-workflow",
+            provider: this.name,
+          }
+        }
+        const event = next.value
+        if (event.type === "progress") {
+          yield { step: event.step, totalSteps: event.totalSteps }
+        } else if (event.type === "executing") {
+          yield { nodeId: event.nodeId }
+        } else if (event.type === "preview") {
+          yield { preview: event.imageBase64 }
+        }
+      }
+    }
+
     const sessionId = await this.getSession(base, token, request.signal)
 
     const wsUrl = base.replace(/^http/, "ws") + "/API/GenerateText2ImageWS"
-    const ws = new WebSocket(wsUrl)
-
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener("open", () => resolve())
-      ws.addEventListener("error", (e) => reject(new Error(`SwarmUI WebSocket error: ${e}`)))
-      setTimeout(() => reject(new Error("SwarmUI WebSocket connection timeout")), 15_000)
-    })
+    const ws = await openWebSocket(wsUrl, { label: "SwarmUI", timeoutMs: 15_000 })
 
     // Send the generation parameters as the initial message
     const body = this.buildBody(sessionId, request)
     ws.send(JSON.stringify(body))
+
+    const abortHandler = () => {
+      fetch(`${base}/API/InterruptAll`, {
+        method: "POST",
+        headers: this.buildHeaders(token),
+        body: JSON.stringify({ session_id: sessionId }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {})
+    }
+    request.signal?.addEventListener("abort", abortHandler, { once: true })
 
     let imagePath: string | null = null
 
@@ -360,6 +449,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         }
       }
     } finally {
+      request.signal?.removeEventListener("abort", abortHandler)
       ws.close()
     }
 
@@ -379,15 +469,27 @@ export class SwarmUIImageProvider implements ImageProvider {
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
       const base = this.baseUrl(apiUrl)
-      await this.getSession(base, apiKey || undefined)
+      const token = apiKey || undefined
+      const sessionId = await this.getSession(base, token)
+      const res = await fetch(`${base}/API/GetCurrentStatus`, {
+        method: "POST",
+        headers: this.buildHeaders(token),
+        body: JSON.stringify({ session_id: sessionId }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!res.ok) await throwProviderResponseError(this.displayName, "connection check", res)
       return true
-    } catch {
-      return false
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err
+      throw new ProviderRequestError({ provider: this.displayName, operation: "connection check", detail: err instanceof Error ? err.message : "network request failed", retryable: true })
     }
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
-    return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 2, subtype: "Stable-Diffusion" })
+    // depth=10 is generous enough to cover nested layouts like the HuggingFace
+    // Anima upload (`split_files/diffusion_models/anima-base-v10.safetensors`)
+    // without scanning unbounded user libraries.
+    return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "Stable-Diffusion" })
   }
 
   async listModelsBySubtype(
@@ -397,10 +499,13 @@ export class SwarmUIImageProvider implements ImageProvider {
   ): Promise<Array<{ id: string; label: string }>> {
     switch (subtype) {
       case "vae":
-        return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 2, subtype: "VAE" })
+        return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "VAE" })
       case "text_encoders":
         // Text encoders live in the text_encoders/ folder regardless of base model subtype
-        return this.fetchModelList(apiKey, apiUrl, { path: "text_encoders", depth: 1, subtype: "" })
+        return this.fetchModelList(apiKey, apiUrl, { path: "text_encoders", depth: 10, subtype: "" })
+      case "loras":
+      case "lora":
+        return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "LoRA" })
       default:
         return []
     }
@@ -411,42 +516,38 @@ export class SwarmUIImageProvider implements ImageProvider {
     apiUrl: string,
     query: { path: string; depth: number; subtype: string },
   ): Promise<Array<{ id: string; label: string }>> {
-    try {
-      const base = this.baseUrl(apiUrl)
-      const token = apiKey || undefined
-      const sessionId = await this.getSession(base, token)
+    const base = this.baseUrl(apiUrl)
+    const token = apiKey || undefined
+    const sessionId = await this.getSession(base, token)
 
-      const body: Record<string, any> = {
-        session_id: sessionId,
-        path: query.path,
-        depth: query.depth,
-      }
-      if (query.subtype) body.subtype = query.subtype
-
-      const res = await fetch(`${base}/API/ListModels`, {
-        method: "POST",
-        headers: this.buildHeaders(token),
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15_000),
-      })
-
-      if (!res.ok) return []
-
-      const data = (await res.json()) as Record<string, any>
-
-      // Response: { folders: [...], files: [{ name, title, ... }] }
-      const models: Array<{ id: string; label: string }> = []
-      const files: any[] = Array.isArray(data.files) ? data.files : []
-
-      for (const f of files) {
-        const id = typeof f === "string" ? f : String(f?.name ?? "")
-        if (id) models.push({ id, label: modelLabel(id) })
-      }
-
-      return models
-    } catch {
-      return []
+    const body: Record<string, any> = {
+      session_id: sessionId,
+      path: query.path,
+      depth: query.depth,
     }
+    if (query.subtype) body.subtype = query.subtype
+
+    const res = await fetch(`${base}/API/ListModels`, {
+      method: "POST",
+      headers: this.buildHeaders(token),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    })
+
+    if (!res.ok) await throwProviderResponseError(this.displayName, "model listing", res)
+
+    const data = (await res.json()) as Record<string, any>
+
+    // Response: { folders: [...], files: [{ name, title, ... }] }
+    const models: Array<{ id: string; label: string }> = []
+    const files: any[] = Array.isArray(data.files) ? data.files : []
+
+    for (const f of files) {
+      const id = typeof f === "string" ? f : String(f?.name ?? "")
+      if (id) models.push({ id, label: modelLabel(id) })
+    }
+
+    return models
   }
 
   // ── WebSocket event stream ────────────────────────────────────────────

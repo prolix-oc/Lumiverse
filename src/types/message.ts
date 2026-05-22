@@ -37,4 +37,19 @@ export interface UpdateMessageInput {
   content?: string;
   name?: string;
   extra?: Record<string, any>;
+  /** Replace the entire swipes array. Must be non-empty. */
+  swipes?: string[];
+  /** Navigate to a specific swipe slot. Must satisfy `0 <= swipe_id < swipes.length`. */
+  swipe_id?: number;
+  /** Replace the per-swipe date array. Must have the same length as `swipes`. */
+  swipe_dates?: number[];
+  /** Internal-only escape hatch for extension/system rewrites that should not invalidate chat chunks. */
+  skipChunkRebuild?: boolean;
+  /** Internal-only escape hatch when this update is the generation pipeline
+   * finalizing its own staged/continued message. The council deliberation
+   * cache was just written for this generation and is still valid for any
+   * follow-up regen/swipe — clearing it here would defeat "Retain Results
+   * for Regens/Swipes". The fingerprint hash in generate.service already
+   * invalidates stale cache on read when chat state actually diverges. */
+  skipCouncilCacheInvalidation?: boolean;
 }

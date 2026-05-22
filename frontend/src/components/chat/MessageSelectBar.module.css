@@ -49,7 +49,7 @@
 }
 
 .count {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   white-space: nowrap;
 }
@@ -69,7 +69,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: background var(--lumiverse-transition-fast);
 }

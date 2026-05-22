@@ -10,6 +10,12 @@ export interface PushSubscriptionRecord {
   updated_at: number
 }
 
+export interface PushTestResult {
+  success: boolean
+  sent: number
+  reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active'
+}
+
 export const pushApi = {
   getVapidPublicKey() {
     return get<{ publicKey: string }>('/push/vapid-public-key')
@@ -32,6 +38,6 @@ export const pushApi = {
   },
 
   test() {
-    return post<{ success: boolean; sent: number }>('/push/subscriptions/test')
+    return post<PushTestResult>('/push/subscriptions/test')
   },
 }

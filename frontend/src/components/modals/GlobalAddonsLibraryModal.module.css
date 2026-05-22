@@ -29,7 +29,7 @@
 }
 
 .title {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;

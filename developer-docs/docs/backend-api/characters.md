@@ -39,6 +39,17 @@ await spindle.characters.update(newChar.id, {
 // Detach all world books
 await spindle.characters.update(newChar.id, { world_book_ids: [] })
 
+// Store extension-specific data (shallow-merged into existing extensions)
+await spindle.characters.update(newChar.id, {
+  extensions: {
+    'my-extension': { questStage: 3, affinity: 72 },
+  },
+})
+
+// Read extension data back
+const char = await spindle.characters.get(newChar.id)
+const myData = char?.extensions['my-extension']
+
 // Delete a character
 const deleted = await spindle.characters.delete(newChar.id)
 ```
@@ -73,6 +84,8 @@ const deleted = await spindle.characters.delete(newChar.id)
   image_id: string | null
   /** IDs of world books attached directly to this character. */
   world_book_ids: string[]
+  /** Raw extensions object. Extensions should namespace their keys. */
+  extensions: Record<string, any>
   created_at: number   // unix epoch seconds
   updated_at: number
 }
@@ -95,16 +108,42 @@ const deleted = await spindle.characters.delete(newChar.id)
 | `alternate_greetings` | `string[]` | No | Alternative first messages |
 | `creator` | `string` | No | Creator name |
 | `world_book_ids` | `string[]` | No | World books to attach to the character on creation |
+| `extensions` | `Record<string, any>` | No | Initial extension data to store on the character |
 
 ## CharacterUpdateDTO
 
-Same fields as `CharacterCreateDTO`, but all are optional (including `name`). Passing `world_book_ids` **replaces** the entire attached-book set; pass `[]` to detach all books, or omit the field to leave the existing attachments unchanged.
+Same fields as `CharacterCreateDTO`, but all are optional (including `name`).
+
+- Passing `world_book_ids` **replaces** the entire attached-book set; pass `[]` to detach all books, or omit the field to leave the existing attachments unchanged.
+- Passing `extensions` **shallow-merges** the provided object into the character's existing extensions. Extension-provided keys overwrite existing ones; omitting a key leaves it untouched. Pass an empty object to make no changes, or omit the field entirely.
+
+## Extension Data
+
+The full `extensions` blob is exposed on `CharacterDTO` so extensions can read and write their own namespaced keys. This is the same object that stores Lumiverse-internal extension state (world books, alternate fields, expressions, etc.).
+
+**Best practices:**
+
+- **Namespace your keys.** Use your extension's identifier or a unique prefix to avoid collisions with other extensions or future Lumiverse features.
+- **Keep values JSON-serializable.** The object is stored as JSON in the database.
+- **Shallow-merge on update.** When you pass `extensions` to `update()`, only the top-level keys you provide are overwritten. Deeply nested objects are replaced wholesale at the top level, not recursively merged.
+
+```ts
+// Good: namespaced key
+await spindle.characters.update(char.id, {
+  extensions: { 'com.example.quest-mod': { stage: 2 } },
+})
+
+// Risky: generic key might collide
+await spindle.characters.update(char.id, {
+  extensions: { metadata: { stage: 2 } },
+})
+```
 
 ## World Book Attachments
 
 `world_book_ids` exposes the array of world books attached directly to a character — the same list the built-in world book selector edits inside Lumiverse. The legacy single-id form is auto-migrated, so consumers can rely on the array form unconditionally.
 
-This is the only structured field surfaced from the character's internal `extensions` blob; alternate fields, alternate avatars, expressions, and other extension-only state remain internal. Non-string and duplicate IDs in `world_book_ids` are silently filtered server-side.
+Non-string and duplicate IDs in `world_book_ids` are silently filtered server-side.
 
 Reading the attached world book *contents* still goes through the regular `spindle.world_books.*` API — `world_book_ids` is just the linkage layer.
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { KeyRound, Ban, Trash2, ShieldCheck } from 'lucide-react'
+import { Ban, Trash2, ShieldCheck } from 'lucide-react'
 import { useStore } from '@/store'
 import type { AuthUser } from '@/types/store'
 import { Button } from '@/components/shared/FormComponents'
@@ -8,7 +8,7 @@ import styles from './UserManagement.module.css'
 
 export default function UserManagement() {
   const {
-    createUser, listUsers, changePassword,
+    createUser, listUsers,
     resetUserPassword, banUser, unbanUser, deleteUser,
     user: currentUser,
   } = useStore()
@@ -23,14 +23,6 @@ export default function UserManagement() {
   const [success, setSuccess] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
 
-  // Self-service password state
-  const [showPasswordForm, setShowPasswordForm] = useState(false)
-  const [currentPw, setCurrentPw] = useState('')
-  const [newPw, setNewPw] = useState('')
-  const [confirmPw, setConfirmPw] = useState('')
-  const [changingPw, setChangingPw] = useState(false)
-
-  // Admin action state
   const [resetTarget, setResetTarget] = useState<AuthUser | null>(null)
   const [resetPw, setResetPw] = useState('')
   const [resetting, setResetting] = useState(false)
@@ -44,7 +36,7 @@ export default function UserManagement() {
       const data = await listUsers()
       setUsers(data)
     } catch {
-      // Non-admin users can't list users — that's fine
+      // Non-admin users can land here if a stale settings view is restored.
     } finally {
       setLoading(false)
     }
@@ -54,7 +46,10 @@ export default function UserManagement() {
     fetchUsers()
   }, [fetchUsers])
 
-  const clearMessages = () => { setError(null); setSuccess(null) }
+  const clearMessages = () => {
+    setError(null)
+    setSuccess(null)
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -62,7 +57,9 @@ export default function UserManagement() {
     setCreating(true)
     try {
       await createUser(username, password, role)
-      setUsername(''); setPassword(''); setRole('user')
+      setUsername('')
+      setPassword('')
+      setRole('user')
       setShowForm(false)
       setSuccess('User created successfully')
       await fetchUsers()
@@ -73,33 +70,14 @@ export default function UserManagement() {
     }
   }
 
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault()
-    clearMessages()
-    if (newPw !== confirmPw) {
-      setError('Passwords do not match')
-      return
-    }
-    setChangingPw(true)
-    try {
-      await changePassword(currentPw, newPw)
-      setCurrentPw(''); setNewPw(''); setConfirmPw('')
-      setShowPasswordForm(false)
-      setSuccess('Password changed successfully')
-    } catch (err: any) {
-      setError(err.body?.error || err.message || 'Failed to change password')
-    } finally {
-      setChangingPw(false)
-    }
-  }
-
   const handleResetPassword = async () => {
     if (!resetTarget || !resetPw) return
     clearMessages()
     setResetting(true)
     try {
       await resetUserPassword(resetTarget.id, resetPw)
-      setResetTarget(null); setResetPw('')
+      setResetTarget(null)
+      setResetPw('')
       setSuccess(`Password reset for ${resetTarget.username || resetTarget.name}`)
     } catch (err: any) {
       setError(err.body?.error || err.message || 'Failed to reset password')
@@ -147,215 +125,192 @@ export default function UserManagement() {
     return <div className={styles.container}>Loading...</div>
   }
 
+  if (!isAdmin) {
+    return <div className={styles.container}>User management requires admin access.</div>
+  }
+
   return (
     <div className={styles.container}>
-      {/* ── Your Account ── */}
       <section className={styles.section}>
         <div className={styles.header}>
-          <h3 className={styles.title}>Your Account</h3>
+          <h3 className={styles.title}>User Management</h3>
           <Button
             variant="ghost"
             size="sm"
-            icon={<KeyRound size={13} />}
-            onClick={() => { setShowPasswordForm(!showPasswordForm); clearMessages() }}
+            onClick={() => {
+              setShowForm(!showForm)
+              clearMessages()
+            }}
           >
-            {showPasswordForm ? 'Cancel' : 'Change Password'}
+            {showForm ? 'Cancel' : 'Add User'}
           </Button>
         </div>
 
-        {showPasswordForm && (
-          <form className={styles.form} onSubmit={handleChangePassword}>
+        {showForm && (
+          <form className={styles.form} onSubmit={handleCreate}>
             <div className={styles.formRow}>
               <input
                 className={styles.input}
-                type="password"
-                placeholder="Current password"
-                value={currentPw}
-                onChange={(e) => setCurrentPw(e.target.value)}
+                type="text"
+                placeholder="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 autoFocus
               />
               <input
                 className={styles.input}
                 type="password"
-                placeholder="New password"
-                value={newPw}
-                onChange={(e) => setNewPw(e.target.value)}
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
               />
-              <input
-                className={styles.input}
-                type="password"
-                placeholder="Confirm new password"
-                value={confirmPw}
-                onChange={(e) => setConfirmPw(e.target.value)}
-              />
+              <select
+                className={styles.select}
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+              >
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
               <Button
                 type="submit"
                 variant="primary"
                 size="sm"
-                disabled={changingPw || !currentPw || !newPw || !confirmPw}
-                loading={changingPw}
+                disabled={creating || !username || !password}
+                loading={creating}
               >
-                {changingPw ? 'Saving...' : 'Save'}
+                {creating ? 'Creating...' : 'Create'}
               </Button>
             </div>
           </form>
         )}
+
+        {resetTarget && (
+          <div className={styles.form}>
+            <div className={styles.resetHeader}>
+              Reset password for <strong>{resetTarget.username || resetTarget.name}</strong>
+            </div>
+            <div className={styles.formRow}>
+              <input
+                className={styles.input}
+                type="password"
+                placeholder="New password"
+                value={resetPw}
+                onChange={(e) => setResetPw(e.target.value)}
+                autoFocus
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={resetting || !resetPw}
+                loading={resetting}
+                onClick={handleResetPassword}
+              >
+                {resetting ? 'Resetting...' : 'Reset'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => { setResetTarget(null); setResetPw('') }}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {error && <div className={styles.error}>{error}</div>}
+        {success && <div className={styles.success}>{success}</div>}
+
+        <div className={styles.userList}>
+          {users.map((user) => {
+            const isSelf = user.id === currentUser?.id
+            const canDelete = !isSelf && user.role !== 'owner'
+            const canBan = !isSelf && user.role !== 'owner'
+            const isLoading = actionLoading === user.id
+
+            return (
+              <div key={user.id} className={`${styles.userRow} ${user.banned ? styles.userRowBanned : ''}`}>
+                <div className={styles.userInfo}>
+                  <div className={styles.userName}>
+                    {user.username || user.name}
+                    {isSelf && <span className={styles.youBadge}>You</span>}
+                    {!!user.banned && <span className={styles.bannedBadge}>Banned</span>}
+                  </div>
+                  <div className={styles.userEmail}>{user.email}</div>
+                </div>
+
+                <div className={styles.userActions}>
+                  <span className={styles.roleBadge} data-role={user.role || 'user'}>
+                    {user.role || 'user'}
+                  </span>
+
+                  {!isSelf && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setResetTarget(user)
+                        setResetPw('')
+                        clearMessages()
+                      }}
+                      title="Reset password"
+                    >
+                      Reset
+                    </Button>
+                  )}
+
+                  {canBan && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={user.banned ? styles.actionBtnSuccess : styles.actionBtnWarn}
+                      icon={user.banned ? <ShieldCheck size={13} /> : <Ban size={13} />}
+                      onClick={() => handleBan(user)}
+                      disabled={isLoading}
+                      loading={isLoading}
+                      title={user.banned ? 'Unban user' : 'Ban user'}
+                    >
+                      {user.banned ? 'Enable' : 'Disable'}
+                    </Button>
+                  )}
+
+                  {canDelete && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Trash2 size={13} />}
+                      onClick={() => {
+                        setConfirmDelete(user)
+                        clearMessages()
+                      }}
+                      disabled={isLoading}
+                      title="Delete user"
+                    >
+                      Delete
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </section>
 
-      {/* ── User Management (admin only) ── */}
-      {isAdmin && (
-        <section className={styles.section}>
-          <div className={styles.header}>
-            <h3 className={styles.title}>User Management</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => { setShowForm(!showForm); clearMessages() }}
-            >
-              {showForm ? 'Cancel' : 'Add User'}
-            </Button>
-          </div>
-
-          {showForm && (
-            <form className={styles.form} onSubmit={handleCreate}>
-              <div className={styles.formRow}>
-                <input
-                  className={styles.input}
-                  type="text"
-                  placeholder="Username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoFocus
-                />
-                <input
-                  className={styles.input}
-                  type="password"
-                  placeholder="Password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <select
-                  className={styles.select}
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                >
-                  <option value="user">User</option>
-                  <option value="admin">Admin</option>
-                </select>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  disabled={creating || !username || !password}
-                  loading={creating}
-                >
-                  {creating ? 'Creating...' : 'Create'}
-                </Button>
-              </div>
-            </form>
-          )}
-
-          {/* Reset password inline form */}
-          {resetTarget && (
-            <div className={styles.form}>
-              <div className={styles.resetHeader}>
-                Reset password for <strong>{resetTarget.username || resetTarget.name}</strong>
-              </div>
-              <div className={styles.formRow}>
-                <input
-                  className={styles.input}
-                  type="password"
-                  placeholder="New password"
-                  value={resetPw}
-                  onChange={(e) => setResetPw(e.target.value)}
-                  autoFocus
-                />
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={resetting || !resetPw}
-                  loading={resetting}
-                  onClick={handleResetPassword}
-                >
-                  {resetting ? 'Resetting...' : 'Reset'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { setResetTarget(null); setResetPw('') }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-
-          <div className={styles.userList}>
-            {users.map((u) => {
-              const isSelf = u.id === currentUser?.id
-              const isBanned = !!u.banned
-              return (
-                <div key={u.id} className={`${styles.userRow} ${isBanned ? styles.userRowBanned : ''}`}>
-                  <div className={styles.userInfo}>
-                    <span className={styles.userName}>
-                      {u.username || u.name}
-                      {isSelf && <span className={styles.youBadge}>you</span>}
-                      {isBanned && <span className={styles.bannedBadge}>disabled</span>}
-                    </span>
-                    <span className={styles.userEmail}>{u.email}</span>
-                  </div>
-                  <div className={styles.userActions}>
-                    <span className={styles.roleBadge} data-role={u.role}>
-                      {u.role || 'user'}
-                    </span>
-                    {!isSelf && (
-                      <>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          title="Reset password"
-                          onClick={() => { setResetTarget(u); setResetPw(''); clearMessages() }}
-                          icon={<KeyRound size={13} />}
-                        />
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className={isBanned ? styles.actionBtnSuccess : styles.actionBtnWarn}
-                          title={isBanned ? 'Enable login' : 'Disable login'}
-                          disabled={actionLoading === u.id}
-                          onClick={() => handleBan(u)}
-                          icon={isBanned ? <ShieldCheck size={13} /> : <Ban size={13} />}
-                        />
-                        <Button
-                          size="icon"
-                          variant="danger-ghost"
-                          title="Delete user"
-                          disabled={actionLoading === u.id}
-                          onClick={() => { setConfirmDelete(u); clearMessages() }}
-                          icon={<Trash2 size={13} />}
-                        />
-                      </>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </section>
+      {confirmDelete && (
+        <ConfirmationModal
+          isOpen
+          title="Delete User"
+          message={
+            actionLoading === confirmDelete.id
+              ? `Wiping data for ${confirmDelete.username || confirmDelete.name}. This can take a while if they have a lot of chats, vectors, or files.`
+              : `Are you sure you want to permanently delete ${confirmDelete.username || confirmDelete.name}? This cannot be undone.`
+          }
+          variant="danger"
+          confirmText="Delete"
+          cancelText="Cancel"
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(null)}
+          loading={actionLoading === confirmDelete.id}
+          loadingText="Deleting..."
+        />
       )}
-
-      {error && <div className={styles.error}>{error}</div>}
-      {success && <div className={styles.success}>{success}</div>}
-
-      <ConfirmationModal
-        isOpen={!!confirmDelete}
-        title="Delete User"
-        message={confirmDelete ? `Permanently delete "${confirmDelete.username || confirmDelete.name}" and all their data? This cannot be undone.` : ''}
-        confirmText="Delete"
-        variant="danger"
-        onConfirm={handleDelete}
-        onCancel={() => setConfirmDelete(null)}
-      />
     </div>
   )
 }

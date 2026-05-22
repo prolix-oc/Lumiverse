@@ -26,7 +26,7 @@ my-extension/
 Extensions can have a **backend module**, a **frontend module**, or both.
 
 - **Backend** (`dist/backend.js`) — runs in an isolated Bun worker thread. Has access to the `spindle` global API. Cannot access the DOM or Lumiverse internals directly.
-- **Frontend** (`dist/frontend.js`) — loaded in the browser via dynamic import. Receives a sandboxed context object with a DOM helper and event system. All HTML is sanitized through DOMPurify.
+- **Frontend** (`dist/frontend.js`) — loaded in the browser via dynamic import. Receives a context object for DOM rendering, events, and backend communication. Most extension UI should render directly into host DOM roots with `ctx.dom.*` or `ctx.ui.*`. For form atoms, model pickers, and searchable selects, mount Lumiverse's first-party components via `ctx.components.*` so your UI inherits the host theme automatically. When you need isolated scriptable HTML, use the host-managed `ctx.dom.createSandboxFrame()` or `ctx.messages.renderWidget()` APIs instead of creating raw iframes.
 
 If your `dist/` folder doesn't exist but `src/backend.ts` and/or `src/frontend.ts` do, Lumiverse will auto-build them with `bun build` on install.
 

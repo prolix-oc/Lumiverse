@@ -3,6 +3,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   background: var(--lumiverse-fill-deepest);
   display: flex;
@@ -24,9 +26,9 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: clamp(340px, 94vw, min(900px, var(--lumiverse-content-max-width, 900px)));
-  height: 80vh;
-  max-height: 80vh;
+  max-width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(900px, var(--lumiverse-content-max-width, 900px)));
+  height: calc(80vh / var(--lumiverse-ui-scale, 1));
+  max-height: calc(80vh / var(--lumiverse-ui-scale, 1));
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 1px var(--lumiverse-primary-020);
   overflow: hidden;
 }
@@ -67,7 +69,7 @@
 
 .title {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -84,7 +86,7 @@
   background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all 0.15s ease;
   align-self: flex-start;
@@ -146,7 +148,7 @@
   color: var(--lumiverse-text);
   caret-color: var(--lumiverse-text);
   font-family: inherit;
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -179,7 +181,7 @@
   margin: 0;
   padding: 16px;
   font-family: var(--lumiverse-font-mono, monospace);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -201,7 +203,7 @@
   color: transparent;
   caret-color: var(--lumiverse-text);
   font-family: var(--lumiverse-font-mono, monospace);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -294,7 +296,7 @@
   border: none;
   padding: 2px;
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   width: 100%;
   color: var(--lumiverse-text);
   outline: none;
@@ -305,7 +307,7 @@
 }
 
 .macroGroupTitle {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -320,7 +322,7 @@
   padding: 5px 12px;
   cursor: pointer;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   margin: 0 4px;
   transition: background 0.15s ease;
   min-width: 0;
@@ -333,7 +335,7 @@
 
 .macroSyntax {
   font-family: var(--lumiverse-font-mono, monospace);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -343,7 +345,7 @@
 }
 
 .macroDesc {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -411,12 +413,12 @@
   }
 
   .textarea {
-    font-size: 16px; /* Prevent iOS/Android auto-zoom on focus */
+    font-size: calc(16px * var(--lumiverse-font-scale, 1)); /* Prevent iOS/Android auto-zoom on focus */
   }
 
   .textareaHighlighted,
   .highlightPre {
-    font-size: 16px; /* Must match .textarea — prevents auto-zoom cursor misalignment */
+    font-size: calc(16px * var(--lumiverse-font-scale, 1)); /* Must match .textarea — prevents auto-zoom cursor misalignment */
   }
 
   .macroSidebar {

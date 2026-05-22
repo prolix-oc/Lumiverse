@@ -2,11 +2,15 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Plus, Upload, Image as ImageIcon, Ghost, Trash2, Users } from 'lucide-react'
 import { expressionsApi } from '@/api/expressions'
 import { characterGalleryApi } from '@/api/character-gallery'
+import { connectionsApi } from '@/api/connections'
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { useStore } from '@/store'
 import ExpressionSlotCard from './ExpressionSlotCard'
 import ImageLightbox from '@/components/shared/ImageLightbox'
+import NumericInput from '@/components/shared/NumericInput'
+import SearchableSelect from '@/components/shared/SearchableSelect'
+import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { Toggle } from '@/components/shared/Toggle'
 import type { ExpressionConfig, ExpressionSlot, ExpressionGroups } from '@/types/expressions'
 import type { CharacterGalleryItem } from '@/types/api'
@@ -18,12 +22,19 @@ type DetectionMode = 'auto' | 'council' | 'off'
 interface DetectionSettings {
   mode: DetectionMode
   contextWindow: number
+  connectionProfileId?: string
+  model?: string
 }
 
 const DETECTION_DEFAULTS: DetectionSettings = { mode: 'auto', contextWindow: 5 }
 
 interface Props {
   characterId: string
+}
+
+function toExpressionLabel(fileName: string) {
+  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9_\- ]/g, '').trim()
+  return baseName || 'expression'
 }
 
 export default function ExpressionEditorTab({ characterId }: Props) {
@@ -38,9 +49,17 @@ export default function ExpressionEditorTab({ characterId }: Props) {
   const [pickerLabel, setPickerLabel] = useState('')
   const [pickerImageId, setPickerImageId] = useState<string | null>(null)
   const [detection, setDetection] = useState<DetectionSettings>(DETECTION_DEFAULTS)
-  const [sidecarName, setSidecarName] = useState<string | null>(null)
+  const [exprModels, setExprModels] = useState<string[]>([])
+  const [exprModelLabels, setExprModelLabels] = useState<Record<string, string>>({})
+  const [exprModelsLoading, setExprModelsLoading] = useState(false)
+  const profiles = useStore((s) => s.profiles)
   const zipRef = useRef<HTMLInputElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
+
+  const profileOptions = useMemo(
+    () => profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` })),
+    [profiles],
+  )
 
   const fetchConfig = useCallback(() => {
     setLoading(true)
@@ -59,44 +78,42 @@ export default function ExpressionEditorTab({ characterId }: Props) {
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
 
-  // Load detection settings and sidecar connection name (global, not per-character)
+  // Load detection settings (global, not per-character)
   useEffect(() => {
     settingsApi.get('expressionDetection')
       .then((row) => {
         if (row?.value) setDetection({ ...DETECTION_DEFAULTS, ...(row.value as Partial<DetectionSettings>) })
       })
       .catch(() => {})
-    // Fetch sidecar config to display the connection name
-    // Try dedicated sidecarSettings first, fall back to legacy council sidecar
-    const resolveSidecarName = (profileId: string, model?: string) => {
-      const profile = useStore.getState().profiles.find((p) => p.id === profileId)
-      const modelName = model || profile?.model || ''
-      const label = profile ? `${profile.name} (${profile.provider})` : 'Configured'
-      setSidecarName(modelName ? `${label} — ${modelName}` : label)
-    }
-    settingsApi.get('sidecarSettings')
-      .then((row) => {
-        const profileId = (row?.value as any)?.connectionProfileId
-        if (profileId) {
-          resolveSidecarName(profileId, (row?.value as any)?.model)
-        } else {
-          // Fall back to legacy council sidecar config
-          return settingsApi.get('council_settings').then((cs) => {
-            const legacy = (cs?.value as any)?.toolsSettings?.sidecar
-            if (legacy?.connectionProfileId) resolveSidecarName(legacy.connectionProfileId, legacy.model)
-          })
-        }
-      })
-      .catch(() => {
-        // sidecarSettings key doesn't exist — try legacy
-        settingsApi.get('council_settings')
-          .then((cs) => {
-            const legacy = (cs?.value as any)?.toolsSettings?.sidecar
-            if (legacy?.connectionProfileId) resolveSidecarName(legacy.connectionProfileId, legacy.model)
-          })
-          .catch(() => {})
-      })
   }, [])
+
+  const fetchExprModels = useCallback(async () => {
+    if (!detection.connectionProfileId) {
+      setExprModels([])
+      setExprModelLabels({})
+      return
+    }
+    setExprModelsLoading(true)
+    try {
+      const result = await connectionsApi.models(detection.connectionProfileId)
+      setExprModels(result.models || [])
+      setExprModelLabels(result.model_labels || {})
+    } catch {
+      setExprModels([])
+      setExprModelLabels({})
+    } finally {
+      setExprModelsLoading(false)
+    }
+  }, [detection.connectionProfileId])
+
+  useEffect(() => {
+    if (!detection.connectionProfileId) {
+      setExprModels([])
+      setExprModelLabels({})
+      return
+    }
+    fetchExprModels()
+  }, [fetchExprModels, detection.connectionProfileId])
 
   const saveDetection = useCallback((updated: DetectionSettings) => {
     setDetection(updated)
@@ -169,22 +186,36 @@ export default function ExpressionEditorTab({ characterId }: Props) {
 
   const handleDirectUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (!file) return
+      const files = Array.from(e.target.files ?? [])
+      if (files.length === 0 || !config) return
       e.target.value = ''
-      const baseName = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9_\- ]/g, '').trim()
-      const label = baseName || 'expression'
       setUploading(true)
       try {
-        const image = await imagesApi.upload(file)
-        if (!config) return
-        const updated: ExpressionConfig = {
+        let updated: ExpressionConfig = {
           ...config,
-          enabled: true,
-          mappings: { ...config.mappings, [label]: image.id },
-          defaultExpression: config.defaultExpression || label,
+          mappings: { ...config.mappings },
         }
-        saveConfig(updated)
+        let hasChanges = false
+
+        for (const file of files) {
+          try {
+            const image = await imagesApi.upload(file)
+            const label = toExpressionLabel(file.name)
+            updated = {
+              ...updated,
+              enabled: true,
+              mappings: { ...updated.mappings, [label]: image.id },
+              defaultExpression: updated.defaultExpression || label,
+            }
+            hasChanges = true
+          } catch {
+            // Continue processing the rest of the selection.
+          }
+        }
+
+        if (hasChanges) {
+          saveConfig(updated)
+        }
       } catch {
         // silent
       } finally {
@@ -268,20 +299,42 @@ export default function ExpressionEditorTab({ characterId }: Props) {
 
   const handleGroupDirectUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (!file || !activeGroup) return
+      const files = Array.from(e.target.files ?? [])
+      if (files.length === 0 || !activeGroup || !groups || !groups[activeGroup]) return
       e.target.value = ''
-      const baseName = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9_\- ]/g, '').trim()
-      const label = baseName || 'expression'
       setUploading(true)
       try {
-        const image = await imagesApi.upload(file)
-        const updated = await expressionsApi.addGroupLabel(characterId, activeGroup, label, image.id)
-        setGroups(updated)
+        let updated: ExpressionGroups = {
+          ...groups,
+          [activeGroup]: { ...groups[activeGroup] },
+        }
+        let hasChanges = false
+
+        for (const file of files) {
+          try {
+            const image = await imagesApi.upload(file)
+            const label = toExpressionLabel(file.name)
+            updated = {
+              ...updated,
+              [activeGroup]: {
+                ...updated[activeGroup],
+                [label]: image.id,
+              },
+            }
+            hasChanges = true
+          } catch {
+            // Continue processing the rest of the selection.
+          }
+        }
+
+        if (hasChanges) {
+          setGroups(updated)
+          await expressionsApi.putGroups(characterId, updated)
+        }
       } catch { /* silent */ }
       finally { setUploading(false) }
     },
-    [characterId, activeGroup]
+    [characterId, activeGroup, groups]
   )
 
   const handleGroupGalleryPick = useCallback(() => {
@@ -397,11 +450,41 @@ export default function ExpressionEditorTab({ characterId }: Props) {
               </label>
             ))}
           </div>
-          {detection.mode === 'auto' && sidecarName && (
-            <div className={styles.contextRow}>
-              <label>Sidecar LLM:</label>
-              <span className={styles.modeDesc}>{sidecarName}</span>
-            </div>
+          {detection.mode === 'auto' && (
+            <>
+              <div className={styles.detectionField}>
+                <label className={styles.detectionFieldLabel}>Connection Profile</label>
+                <SearchableSelect
+                  value={detection.connectionProfileId || ''}
+                  onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: '' })}
+                  options={profileOptions}
+                  placeholder="Use sidecar default"
+                  searchPlaceholder="Search connections…"
+                  emptyMessage="No connection profiles configured"
+                  clearable
+                  clearLabel="Use sidecar default"
+                />
+              </div>
+              <div className={styles.detectionField}>
+                <label className={styles.detectionFieldLabel}>Model</label>
+                <ModelCombobox
+                  value={detection.model || ''}
+                  onChange={(val) => saveDetection({ ...detection, model: val })}
+                  placeholder={detection.connectionProfileId ? 'e.g. claude-3-haiku-20240307' : 'Select a connection first'}
+                  models={exprModels}
+                  modelLabels={exprModelLabels}
+                  loading={exprModelsLoading}
+                  onRefresh={fetchExprModels}
+                  autoRefreshOnFocus
+                  refreshKey={detection.connectionProfileId}
+                  disabled={!detection.connectionProfileId}
+                  emptyMessage={detection.connectionProfileId ? 'No models returned. Enter one manually.' : 'Select a connection profile first.'}
+                />
+                {!detection.connectionProfileId && (
+                  <span className={styles.detectionFieldHint}>Falls back to the sidecar LLM configured in the Council panel.</span>
+                )}
+              </div>
+            </>
           )}
         </div>
 
@@ -477,10 +560,10 @@ export default function ExpressionEditorTab({ characterId }: Props) {
                 <ImageIcon size={14} /> Add from Gallery
               </button>
               <button type="button" className={styles.controlBtn} onClick={() => groupUploadRef.current?.click()}>
-                <Plus size={14} /> Upload Image
+                <Plus size={14} /> Upload Images
               </button>
               <input ref={groupZipRef} type="file" accept=".zip" hidden onChange={handleGroupZipUpload} />
-              <input ref={groupUploadRef} type="file" accept="image/*" hidden onChange={handleGroupDirectUpload} />
+              <input ref={groupUploadRef} type="file" accept="image/*" multiple hidden onChange={handleGroupDirectUpload} />
             </div>
 
             {uploading && <div className={styles.uploading}>Uploading...</div>}
@@ -490,7 +573,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
                 <Ghost size={40} className={styles.emptyIcon} />
                 <div className={styles.emptyTitle}>No expressions yet</div>
                 <div className={styles.emptyHint}>
-                  Upload a ZIP of expression images, add from gallery, or upload one by one.
+                  Upload a ZIP of expression images, add from gallery, or upload one or many image files.
                 </div>
               </div>
             )}
@@ -628,24 +711,50 @@ export default function ExpressionEditorTab({ characterId }: Props) {
             <>
               <div className={styles.contextRow}>
                 <label htmlFor="expr-context-window">Messages to analyze:</label>
-                <input
+                <NumericInput
                   id="expr-context-window"
-                  type="number"
                   className={styles.contextInput}
                   value={detection.contextWindow}
                   min={1}
                   max={20}
-                  onChange={(e) => {
-                    const val = Math.max(1, Math.min(20, parseInt(e.target.value) || 5))
+                  integer
+                  onChange={(value) => {
+                    const val = Math.max(1, Math.min(20, value ?? 5))
                     saveDetection({ ...detection, contextWindow: val })
                   }}
                 />
               </div>
-              <div className={styles.contextRow}>
-                <label>Sidecar LLM:</label>
-                <span className={styles.modeDesc}>
-                  {sidecarName || 'Not configured — set up in the Council panel'}
-                </span>
+              <div className={styles.detectionField}>
+                <label className={styles.detectionFieldLabel}>Connection Profile</label>
+                <SearchableSelect
+                  value={detection.connectionProfileId || ''}
+                  onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: '' })}
+                  options={profileOptions}
+                  placeholder="Use sidecar default"
+                  searchPlaceholder="Search connections…"
+                  emptyMessage="No connection profiles configured"
+                  clearable
+                  clearLabel="Use sidecar default"
+                />
+              </div>
+              <div className={styles.detectionField}>
+                <label className={styles.detectionFieldLabel}>Model</label>
+                <ModelCombobox
+                  value={detection.model || ''}
+                  onChange={(val) => saveDetection({ ...detection, model: val })}
+                  placeholder={detection.connectionProfileId ? 'e.g. claude-3-haiku-20240307' : 'Select a connection first'}
+                  models={exprModels}
+                  modelLabels={exprModelLabels}
+                  loading={exprModelsLoading}
+                  onRefresh={fetchExprModels}
+                  autoRefreshOnFocus
+                  refreshKey={detection.connectionProfileId}
+                  disabled={!detection.connectionProfileId}
+                  emptyMessage={detection.connectionProfileId ? 'No models returned. Enter one manually.' : 'Select a connection profile first.'}
+                />
+                {!detection.connectionProfileId && (
+                  <span className={styles.detectionFieldHint}>Falls back to the sidecar LLM configured in the Council panel.</span>
+                )}
               </div>
             </>
           )}
@@ -678,13 +787,13 @@ export default function ExpressionEditorTab({ characterId }: Props) {
           <ImageIcon size={14} /> Add from Gallery
         </button>
         <button type="button" className={styles.controlBtn} onClick={() => uploadRef.current?.click()}>
-          <Plus size={14} /> Upload Image
+          <Plus size={14} /> Upload Images
         </button>
         <button type="button" className={styles.controlBtn} onClick={handleConvertToGroups}>
           <Users size={14} /> Multi-Character Mode
         </button>
         <input ref={zipRef} type="file" accept=".zip" hidden onChange={handleZipUpload} />
-        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleDirectUpload} />
+        <input ref={uploadRef} type="file" accept="image/*" multiple hidden onChange={handleDirectUpload} />
       </div>
 
       {uploading && <div className={styles.uploading}>Uploading...</div>}
@@ -695,14 +804,14 @@ export default function ExpressionEditorTab({ characterId }: Props) {
           <div className={styles.emptyTitle}>No expressions yet</div>
           <div className={styles.emptyHint}>
             Upload a ZIP of expression images (filenames become labels),<br />
-            add images from the gallery, or upload them one by one.
+            add images from the gallery, or upload one or many image files.
           </div>
           <div className={styles.emptyActions}>
             <button type="button" className={styles.controlBtn} onClick={() => zipRef.current?.click()}>
               <Upload size={14} /> Import ZIP
             </button>
             <button type="button" className={styles.controlBtn} onClick={() => uploadRef.current?.click()}>
-              <Plus size={14} /> Upload Image
+              <Plus size={14} /> Upload Images
             </button>
           </div>
         </div>

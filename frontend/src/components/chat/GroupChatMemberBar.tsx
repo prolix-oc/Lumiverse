@@ -4,10 +4,12 @@ import { chatsApi } from '@/api/chats'
 import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
-import { Plus, VolumeX, Volume2, UserMinus } from 'lucide-react'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
+import { Plus, VolumeX, Volume2, UserMinus, AudioLines } from 'lucide-react'
 import { IconBolt } from '@tabler/icons-react'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
+import useHorizontalScroll from '@/hooks/useHorizontalScroll'
 import styles from './GroupChatMemberBar.module.css'
 import clsx from 'clsx'
 
@@ -27,6 +29,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   const isStreaming = useStore((s) => s.isStreaming)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const startStreaming = useStore((s) => s.startStreaming)
   const setStreamingError = useStore((s) => s.setStreamingError)
@@ -36,17 +39,20 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   const openModal = useStore((s) => s.openModal)
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [barRef, { canScrollLeft, canScrollRight }] = useHorizontalScroll<HTMLDivElement>()
 
   const handleForceGenerate = useCallback(
     async (characterId: string) => {
       if (isStreaming || mutedCharacterIds.includes(characterId)) return
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const res = await generateApi.start({
           chat_id: chatId,
           target_character_id: characterId,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
           generation_type: 'normal',
         })
         startStreaming(res.generationId)
@@ -56,7 +62,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
         setStreamingError(msg)
       }
     },
-    [chatId, isStreaming, mutedCharacterIds, activeProfileId, activePersonaId, getActivePresetForGeneration, startStreaming, setStreamingError]
+    [chatId, isStreaming, mutedCharacterIds, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, startStreaming, setStreamingError]
   )
 
   const openContextMenu = useCallback((characterId: string, pos: ContextMenuPos) => {
@@ -125,6 +131,25 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
     [handleForceGenerate]
   )
 
+  const handleOpenVoiceModal = useCallback(
+    (characterId: string) => {
+      setContextMenu(null)
+      openModal('memberVoice', { chatId, characterId })
+    },
+    [chatId, openModal],
+  )
+
+  // Set of group member ids that have a per-chat voice override applied.
+  // Used to badge the avatars so an override is discoverable at a glance.
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const overrideIds = useMemo(() => {
+    const overrides = activeChatMetadata?.voiceOverrides
+    if (!overrides || typeof overrides !== 'object') return new Set<string>()
+    const chars = (overrides as any).characters
+    if (!chars || typeof chars !== 'object') return new Set<string>()
+    return new Set(Object.keys(chars).filter((id) => !!chars[id]))
+  }, [activeChatMetadata])
+
   if (groupCharacterIds.length === 0) return null
 
   const contextIsMuted = contextMenu ? mutedCharacterIds.includes(contextMenu.characterId) : false
@@ -146,6 +171,12 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
         icon: contextIsMuted ? <Volume2 size={13} /> : <VolumeX size={13} />,
         onClick: () => handleToggleMute(cid),
       },
+      {
+        key: 'voice',
+        label: overrideIds.has(cid) ? 'Voice (overridden)' : 'Voice…',
+        icon: <AudioLines size={13} />,
+        onClick: () => handleOpenVoiceModal(cid),
+      },
       { key: 'div', type: 'divider' as const },
       {
         key: 'remove',
@@ -155,38 +186,43 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
         danger: true,
       },
     ]
-  }, [contextMenu, contextIsMuted, isStreaming, handleForceGenerateFromMenu, handleToggleMute, handleRemoveMember])
+  }, [contextMenu, contextIsMuted, isStreaming, overrideIds, handleForceGenerateFromMenu, handleToggleMute, handleOpenVoiceModal, handleRemoveMember])
 
   return (
-    <div className={styles.bar}>
-      {groupCharacterIds.map((id) => (
-        <MemberButton
-          key={id}
-          id={id}
-          chatId={chatId}
-          characters={characters}
-          isActive={id === activeGroupCharacterId}
-          isMuted={mutedCharacterIds.includes(id)}
-          isStreaming={isStreaming}
-          onForceGenerate={handleForceGenerate}
-          onOpenContextMenu={openContextMenu}
+    <div className={styles.barWrapper}>
+      {canScrollLeft && <div className={clsx(styles.scrollFade, styles.scrollFadeLeft)} aria-hidden="true" />}
+      {canScrollRight && <div className={clsx(styles.scrollFade, styles.scrollFadeRight)} aria-hidden="true" />}
+      <div ref={barRef} className={styles.bar}>
+        {groupCharacterIds.map((id) => (
+          <MemberButton
+            key={id}
+            id={id}
+            chatId={chatId}
+            characters={characters}
+            isActive={id === activeGroupCharacterId}
+            isMuted={mutedCharacterIds.includes(id)}
+            isStreaming={isStreaming}
+            hasVoiceOverride={overrideIds.has(id)}
+            onForceGenerate={handleForceGenerate}
+            onOpenContextMenu={openContextMenu}
+          />
+        ))}
+
+        <button
+          type="button"
+          className={styles.addMemberBtn}
+          onClick={() => openModal('addGroupMember', { chatId })}
+          title="Add member to group"
+        >
+          <Plus size={16} />
+        </button>
+
+        <ContextMenu
+          position={contextMenu}
+          items={menuItems}
+          onClose={() => setContextMenu(null)}
         />
-      ))}
-
-      <button
-        type="button"
-        className={styles.addMemberBtn}
-        onClick={() => openModal('addGroupMember', { chatId })}
-        title="Add member to group"
-      >
-        <Plus size={16} />
-      </button>
-
-      <ContextMenu
-        position={contextMenu}
-        items={menuItems}
-        onClose={() => setContextMenu(null)}
-      />
+      </div>
     </div>
   )
 }
@@ -198,11 +234,12 @@ interface MemberButtonProps {
   isActive: boolean
   isMuted: boolean
   isStreaming: boolean
+  hasVoiceOverride: boolean
   onForceGenerate: (id: string) => void
   onOpenContextMenu: (id: string, pos: ContextMenuPos) => void
 }
 
-function MemberButton({ id, characters, isActive, isMuted, isStreaming, onForceGenerate, onOpenContextMenu }: MemberButtonProps) {
+function MemberButton({ id, characters, isActive, isMuted, isStreaming, hasVoiceOverride, onForceGenerate, onOpenContextMenu }: MemberButtonProps) {
   const char = characters.find((c: any) => c.id === id)
   const talk = char?.talkativeness ?? 0.5
   const avatarUrl = getCharacterAvatarThumbUrl(char)
@@ -240,6 +277,11 @@ function MemberButton({ id, characters, isActive, isMuted, isStreaming, onForceG
       )}
       <span className={styles.name}>{char?.name || 'Unknown'}</span>
       {isMuted && <span className={styles.mutedBadge} />}
+      {hasVoiceOverride && (
+        <span className={styles.voiceBadge} aria-hidden="true" title="Custom voice for this chat">
+          <AudioLines size={9} strokeWidth={2.5} />
+        </span>
+      )}
     </button>
   )
 }

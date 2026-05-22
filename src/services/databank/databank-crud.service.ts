@@ -314,6 +314,28 @@ export async function deleteDocument(userId: string, docId: string): Promise<boo
   return false;
 }
 
+/**
+ * Replace a document's file metadata after the underlying file has been
+ * rewritten on disk (used by the edit-content flow). Caller is responsible for
+ * deleting the old file and triggering reprocessing.
+ */
+export function updateDocumentFile(
+  userId: string,
+  docId: string,
+  filePath: string,
+  mimeType: string,
+  fileSize: number,
+  contentHash: string,
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  getDb().run(
+    `UPDATE databank_documents
+     SET file_path = ?, mime_type = ?, file_size = ?, content_hash = ?, error_message = NULL, updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+    [filePath, mimeType, fileSize, contentHash, now, docId, userId],
+  );
+}
+
 export function updateDocumentStatus(
   docId: string,
   status: string,

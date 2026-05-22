@@ -1,5 +1,6 @@
 import { getDb } from "../../db/connection";
-import type { CouncilToolDefinition, CouncilToolCategory } from "lumiverse-spindle-types";
+import type { CouncilToolCategory } from "lumiverse-spindle-types";
+import type { RuntimeCouncilToolDefinition } from "./tool-runtime";
 
 const EMPTY_SCHEMA = { type: "object", properties: {}, required: [] };
 
@@ -25,7 +26,7 @@ function parseSchemaSafe(raw: unknown): Record<string, unknown> {
  * Query the loom_tools table for tools flagged for deliberation,
  * converting them to CouncilToolDefinition format.
  */
-export function getDLCTools(userId: string): CouncilToolDefinition[] {
+export function getDLCTools(userId: string): RuntimeCouncilToolDefinition[] {
   const rows = getDb()
     .query(
       `SELECT lt.* FROM loom_tools lt
@@ -35,11 +36,12 @@ export function getDLCTools(userId: string): CouncilToolDefinition[] {
     )
     .all(userId) as any[];
 
-  return rows.map((row): CouncilToolDefinition => ({
+  return rows.map((row): RuntimeCouncilToolDefinition => ({
     name: row.tool_name,
     displayName: row.display_name || row.tool_name,
     description: row.description || "",
     category: "story_direction" as CouncilToolCategory,
+    execution: "llm",
     prompt: row.prompt || "",
     inputSchema: parseSchemaSafe(row.input_schema),
     resultVariable: row.result_variable || undefined,

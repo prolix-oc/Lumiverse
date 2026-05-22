@@ -1,12 +1,12 @@
 # Macros Reference
 
-Macros are template variables written as `{{macro_name}}` that get replaced with dynamic content when your preset is assembled into a prompt. This is the complete reference of every built-in macro in Lumiverse.
+Macros are template variables written as `{{macro_name}}` that get replaced with dynamic content when your preset is assembled into a prompt. This is the complete reference of the built-in macros available in Lumiverse.
 
 ---
 
 ## How to Use Macros
 
-Place macros anywhere in your preset blocks, world book entries, or other text fields:
+Place macros anywhere in preset blocks, chat-facing prompt fields, and other prompt content that goes through macro evaluation:
 
 ```
 You are {{char}}, a character described as: {{description}}
@@ -77,15 +77,19 @@ This is a private conversation.
 {{/if}}
 ```
 
-### Flags
+### Prefixes & Scoped Tags
 
-Macros support prefix flags for advanced control:
+Lumiverse parses SillyTavern-style macro prefixes. The currently user-relevant ones are:
 
-| Flag | Syntax | Effect |
-|------|--------|--------|
-| Immediate | `{{~immediate macro}}` | Resolve before other macros |
-| Delayed | `{{~delayed macro}}` | Resolve after recursion passes |
-| Preserve | `{{~preserve macro}}` | Keep surrounding whitespace |
+| Prefix | Syntax | Effect |
+|--------|--------|--------|
+| `!` | `{{!macro}}` | Parsed for immediate/compatibility-prefixed macros |
+| `?` | `{{?macro}}` | Parsed for delayed/compatibility-prefixed macros |
+| `~` | `{{~macro}}` | Parsed for reevaluate-style compatibility |
+| `>` | `{{>macro}}` | Parsed for filter-style compatibility |
+| `#` | `{{#trim}}...{{/trim}}` | Preserve whitespace for macros that support it (`trim` is the main built-in example) |
+
+Closing scoped macros use `/`, like `{{/if}}`, `{{/trim}}`, or `{{/numbered}}`.
 
 ---
 
@@ -100,10 +104,10 @@ Utility macros for text manipulation and flow control.
 | `{{noop}}` | — | No operation — resolves to nothing |
 | `{{trim}}...{{/trim}}` | — | Trims whitespace from the enclosed content |
 | `{{comment::...}}` | `{{note::...}}` | Comment — content is discarded, produces no output |
-| `{{//::...}}` | — | Inline comment shorthand |
+| `{{// comment text}}` | — | Inline comment shorthand |
 | `{{input}}` | — | The raw text of the last user message |
 | `{{reverse::text}}` | — | Reverses the given text |
-| `{{outlet}}` | — | Placeholder for extension injection points |
+| `{{outlet::name}}` | — | Resolves the content exported by an active world-info entry outlet |
 | `{{banned}}` | — | Placeholder for banned token lists |
 
 ### Conditional Logic
@@ -117,6 +121,8 @@ Utility macros for text manipulation and flow control.
 ```
 
 The condition can be any value — it's truthy unless it's empty, `"0"`, `"false"`, `"null"`, or `"undefined"`.
+
+Only the selected branch is resolved. Side-effect macros in the unselected branch do not run.
 
 **Negation** — prefix with `!` to invert:
 
@@ -132,12 +138,13 @@ The condition can be any value — it's truthy unless it's empty, `"0"`, `"false
 {{if::{{.score}} == 100}}perfect!{{/if}}
 ```
 
-**Variable shorthand** — `.var` and `$var` resolve automatically in conditions:
+**Variable shorthand** — `.var`, `$var`, and `@var` resolve automatically in conditions:
 
 ```
 {{if .myVar}}has a value{{/if}}
 {{if .x > .y}}x is bigger{{/if}}
 {{if !.gameOver}}still playing{{/if}}
+{{if @hp > 0}}still alive{{/if}}
 ```
 
 ---
@@ -171,6 +178,9 @@ Macros that pull from the character card fields. These respect [alternate field]
 | `{{personality}}` | `{{charPersonality}}` | Character's personality |
 | `{{scenario}}` | `{{charScenario}}` | Character's scenario |
 | `{{persona}}` | `{{userPersona}}` | Your persona's description (includes enabled add-ons) |
+| `{{sub}}` | `{{subjectivePronoun}}`, `{{personaSubjectivePronoun}}` | Your persona's subjective pronoun |
+| `{{obj}}` | `{{objectivePronoun}}`, `{{personaObjectivePronoun}}` | Your persona's objective pronoun |
+| `{{poss}}` | `{{possessivePronoun}}`, `{{personaPossessivePronoun}}` | Your persona's possessive pronoun |
 | `{{mesExamples}}` | `{{mes_examples}}`, `{{exampleMessages}}` | Character's example dialogue |
 | `{{mesExamplesRaw}}` | — | Raw example dialogue (unprocessed) |
 | `{{system}}` | `{{charPrompt}}`, `{{charSystem}}` | Character's system prompt |
@@ -565,6 +575,26 @@ Rolled {{.roll}} damage. {{char}}'s HP: {{@hp}}/{{@maxHp}}
 
 Here `.roll` is a temporary local variable (used for the current evaluation only), while `@hp` and `@maxHp` are chat-persisted and carry over to the next generation.
 
+### Prompt Variables (Preset Inputs)
+
+Prompt variables are preset-defined inputs that are seeded into local scope before block evaluation. That means `{{var::tone}}`, `{{getvar::tone}}`, and `{{.tone}}` can all resolve to the same runtime value.
+
+| Macro | Aliases | Description | Args |
+|-------|---------|-------------|------|
+| `{{var::name}}` | `{{promptVar}}`, `{{presetVar}}` | Read the runtime prompt-variable value, then the user override, then the creator default | Variable name |
+| `{{hasVar::name}}` | `{{hasPromptVar}}`, `{{hasPresetVar}}` | Check whether a prompt variable is resolvable | Variable name |
+| `{{varDefault::name}}` | `{{promptVarDefault}}`, `{{presetVarDefault}}` | Read the creator-declared default only | Variable name |
+
+**Examples:**
+
+```
+Tone: {{default::{{var::tone}}::neutral}}
+
+{{if::{{hasPromptVar::violence}}}}
+Violence level: {{var::violence}}
+{{/if}}
+```
+
 ---
 
 ## Runtime & State
@@ -605,7 +635,9 @@ Think step by step about what {{char}} would do next.
 
 ## Memory
 
-Long-term memory retrieval from the vector memory system.
+Long-term memory and retrieval macros from Lumiverse's memory systems.
+
+### Long-Term Memory
 
 | Macro | Aliases | Returns | Args |
 |-------|---------|---------|------|
@@ -614,16 +646,27 @@ Long-term memory retrieval from the vector memory system.
 | `{{memoriesCount}}` | — | Number of memory chunks retrieved | — |
 | `{{memoriesRaw}}` | — | Raw memory chunks without header formatting | Optional: `{{memoriesRaw::count}}` to override chunk count |
 
----
+### Databank Retrieval
 
-## Pipeline
+| Macro | Aliases | Returns | Args |
+|-------|---------|---------|------|
+| `{{databank}}` | `{{databankMemory}}`, `{{documents}}`, `{{knowledgeBank}}` | Formatted databank chunks with source headers | Optional: `{{databank::count}}` to override chunk count |
+| `{{databankActive}}` | — | `"yes"` / `"no"` — whether databank retrieval returned chunks | — |
+| `{{databankCount}}` | — | Number of databank chunks retrieved | — |
+| `{{databankRaw}}` | — | Raw databank chunks without the outer header | Optional: `{{databankRaw::count}}` to override chunk count |
 
-Results from Lumi Engine pipeline modules.
+### Memory Cortex
 
 | Macro | Returns | Args |
 |-------|---------|------|
-| `{{pipeline}}` | All enabled pipeline module results, formatted as labeled sections | — |
-| `{{pipe::module_key}}` | A specific pipeline module's result | Module key name |
+| `{{entities}}` | Formatted entity snapshots with facts and relationships | Optional: `{{entities::count}}` to limit the number of entities |
+| `{{entityFacts::name}}` | Facts for one named entity | Entity name |
+| `{{relationships}}` | Active relationship edges in the current scene | — |
+| `{{arc}}` | Current narrative arc summary | — |
+| `{{memorySalience}}` | Highest-salience retrieved memory | — |
+| `{{cortexActive}}` | `"yes"` / `"no"` — whether Memory Cortex returned results | — |
+| `{{entityCount}}` | Number of active entities in context | — |
+| `{{characterColors}}` | Character speech / thought / narration color instructions | — |
 
 ---
 
@@ -716,9 +759,12 @@ These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed fo
 | `{{lumiaCouncilToolsActive}}` | Council tools ran this generation |
 | `{{loomSovHandActive}}` | Sovereign Hand mode is on |
 | `{{memoriesActive}}` | Memories were retrieved |
+| `{{databankActive}}` | Databank retrieval returned chunks |
+| `{{cortexActive}}` | Memory Cortex returned results |
 | `{{hasvar::key}}` | Local variable exists |
 | `{{haschatvar::key}}` | Chat-persisted variable exists |
 | `{{hasgvar::key}}` | Global variable exists |
+| `{{hasPromptVar::name}}` | A prompt variable is available |
 | `{{charTag::tag}}` | Character has the specified tag |
 | `{{regexInstalled::id}}` | Regex script with that ID is installed and enabled |
 | `{{and::a::b}}` | All arguments are truthy |
@@ -774,4 +820,4 @@ The adventure is well underway.
     Lumiverse supports SillyTavern-style syntax: `{{.var}}` shorthand, space-delimited arguments, `{{if .var}}` conditions, and `!` negation. Your existing presets should work with minimal changes. See the [Execution Order](execution-order.md) guide for any differences.
 
 !!! tip "Mind the evaluation order"
-    Macros are evaluated iteratively (up to 5 passes) in strict left-to-right order. A macro inside another macro's output will be resolved in the next pass. See the [Execution Order](execution-order.md) guide for the complete breakdown.
+    Macros resolve primarily in one depth-first AST walk, with nested macro output expanded inline and a small outer retry loop for edge cases. State still flows left-to-right: a later setter will not retroactively change an earlier read in the same block. See the [Execution Order](execution-order.md) guide for the complete breakdown.

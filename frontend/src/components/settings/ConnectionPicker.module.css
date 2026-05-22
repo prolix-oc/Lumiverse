@@ -26,7 +26,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
@@ -86,7 +86,7 @@
 }
 
 .label {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-dim);
   letter-spacing: 0.01em;
@@ -98,7 +98,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   transition: border-color var(--lumiverse-transition-fast);
 }
@@ -115,7 +115,7 @@
 .inputMono {
   composes: input;
   font-family: var(--lumiverse-font-mono, monospace);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .textarea {
@@ -141,7 +141,7 @@
   border: none;
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -174,7 +174,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -192,7 +192,7 @@
 }
 
 .testResult {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   display: flex;
   align-items: center;
   gap: 5px;
@@ -225,7 +225,7 @@
   border: 1px dashed var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -237,7 +237,7 @@
 }
 
 .fileUploaded {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: rgb(16, 185, 129);
   display: flex;
   align-items: center;
@@ -250,7 +250,7 @@
   color: var(--lumiverse-text-dim);
   cursor: pointer;
   padding: 0 2px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   display: flex;
 }
 
@@ -261,7 +261,7 @@
 /* ─── Hint text ──────────────────────────────────────────────────────────── */
 
 .hint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
   line-height: 1.4;
 }

@@ -2,8 +2,9 @@
  * Component Override System
  *
  * Provides the infrastructure for users to replace built-in components
- * with custom TSX implementations.  Each override receives a stable,
- * flattened props contract with pre-processed data and action callbacks.
+ * with custom TSX implementations.  Each interpreted override receives a
+ * stable flattened props contract. Callback props may only be used as
+ * allowlisted symbolic event bindings such as onClick={actions.copy}.
  */
 
 export interface ComponentOverride {
@@ -84,6 +85,4 @@ export interface MessageOverrideProps {
   actions: OverrideActions
   /** CSS module class names from the original component */
   styles: Record<string, string>
-  /** Escape hatch — the raw Message object for power users */
-  _raw: any
 }

@@ -11,7 +11,6 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createInterface } from "readline";
 import { hashPassword } from "../src/crypto/password";
 import { createIdentityFile, bytesToHex } from "../src/crypto/identity";
 import { writeOwnerCredentials } from "../src/crypto/credentials";
@@ -21,26 +20,14 @@ import {
   printSummary,
   printDivider,
   printCompletionAnimation,
-  promptLabel,
-  inputHint,
   theme,
 } from "./ui";
-import { askSecret } from "./input";
+import { askSecret, askText, closeInput } from "./input";
 
-// ─── Input helpers ──────────────────────────────────────────────────────────
-
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-function ask(question: string, defaultValue?: string): Promise<string> {
-  const hint = defaultValue ? ` ${inputHint(`(${defaultValue})`)}` : "";
-  return new Promise((resolve) => {
-    rl.question(`${promptLabel(question)}${hint} `, (answer) => {
-      resolve(answer.trim() || defaultValue || "");
-    });
-  });
-}
-
-// askSecret imported from ./input — byte-level processing, NFC normalization
+// All input goes through askText / askSecret (scripts/input.ts) so that a
+// single raw-mode consumer owns stdin.  Mixing Node's readline with a raw
+// password prompt produces double-echoed characters on Windows ConPTY and
+// Termux and occasionally drops bytes between listeners.
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -90,7 +77,20 @@ async function main() {
 
   printStepHeader(1, 4, "Admin Account", "Create the owner account for your Lumiverse instance.");
 
-  const username = await ask("Username", "admin");
+  // BetterAuth rejects very short usernames and our macro/URL paths assume a
+  // non-trivial identifier.  Validate up-front so a fat-finger doesn't seed
+  // an unrecoverable owner account.
+  const username = await askText("Username", {
+    defaultValue: "admin",
+    validate: (v) => {
+      if (v.length < 3) return "Username must be at least 3 characters.";
+      if (v.length > 32) return "Username must be at most 32 characters.";
+      if (!/^[a-zA-Z0-9_.-]+$/.test(v)) {
+        return "Username may only contain letters, numbers, underscores, dots, and hyphens.";
+      }
+      return null;
+    },
+  });
 
   let password = "";
   while (!password) {
@@ -119,7 +119,7 @@ async function main() {
   printStepHeader(2, 4, "Server Port", "The port Lumiverse will listen on.");
 
   let port = 7860;
-  const portInput = await ask("Port", "7860");
+  const portInput = await askText("Port", { defaultValue: "7860" });
   const parsedPort = parseInt(portInput, 10);
   if (parsedPort > 0 && parsedPort <= 65535) {
     port = parsedPort;
@@ -135,7 +135,7 @@ async function main() {
   printStepHeader(3, 4, "Extension Storage", "Maximum disk budget for Spindle extension data pools.");
 
   const defaultStorage = 500 * 1024 * 1024; // 500MB
-  const storageInput = await ask("Max extension storage", "500MB");
+  const storageInput = await askText("Max extension storage", { defaultValue: "500MB" });
   let globalMax = defaultStorage;
   const parsed = parseStorageInput(storageInput);
   if (parsed && parsed > 0) {
@@ -235,11 +235,11 @@ async function main() {
       "To reset your password: bun run reset-password",
     ]
   );
-
-  rl.close();
 }
 
-main().catch((err) => {
-  console.error("Setup failed:", err);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error("Setup failed:", err);
+    process.exitCode = 1;
+  })
+  .finally(() => closeInput());

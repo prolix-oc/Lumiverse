@@ -84,6 +84,9 @@ export function putSetting(userId: string, key: string, value: any): Setting {
 
   const setting = { key, value, updated_at: now };
   eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
+  if (key === "activeChatId") {
+    eventBus.emit(EventType.CHAT_SWITCHED, { chatId: typeof value === "string" ? value : null }, userId);
+  }
   return setting;
 }
 
@@ -125,6 +128,10 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
   transaction();
 
   eventBus.emit(EventType.SETTINGS_UPDATED, { keys: prepared.map((p) => p.key) }, userId);
+  const activeChatEntry = prepared.find((p) => p.key === "activeChatId");
+  if (activeChatEntry) {
+    eventBus.emit(EventType.CHAT_SWITCHED, { chatId: typeof activeChatEntry.value === "string" ? activeChatEntry.value : null }, userId);
+  }
   return results;
 }
 

@@ -108,6 +108,27 @@ export function deletePack(userId: string, id: string): boolean {
   return getDb().query("DELETE FROM packs WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
 
+export function repairOldLumiverseGenderMapping(userId: string, id: string): PackWithItems | null {
+  const pack = getPack(userId, id);
+  if (!pack) return null;
+
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+
+  db.transaction(() => {
+    const items = db.query("SELECT id, gender_identity FROM lumia_items WHERE pack_id = ?").all(id) as Array<{ id: string; gender_identity: number }>;
+    const updateStmt = db.query("UPDATE lumia_items SET gender_identity = ?, updated_at = ? WHERE id = ?");
+
+    for (const item of items) {
+      updateStmt.run(remapLegacyLumiverseGenderIdentity(item.gender_identity), now, item.id);
+    }
+
+    db.query("UPDATE packs SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, id, userId);
+  })();
+
+  return getPackWithItems(userId, id);
+}
+
 // Prepared statements for pack item queries (avoid re-compiling on every call)
 let _stmtPackById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtLumiaByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
@@ -188,7 +209,7 @@ export function createLumiaItem(userId: string, packId: string, input: CreateLum
       input.definition || "",
       input.personality || "",
       input.behavior || "",
-      input.gender_identity ?? 0,
+      input.gender_identity ?? 3,
       input.version || "1.0.0",
       input.sort_order ?? 0,
       now, now
@@ -420,6 +441,20 @@ export function getAllLoomItems(userId: string, category?: string): LoomItem[] {
  * - snake_case tool fields (tool_name, display_name, input_schema, etc.)
  * - Category normalization (utility/utilities → loom_utility, etc.)
  */
+function normalizeImportedGenderIdentity(value: unknown): 0 | 1 | 2 | 3 {
+  const num = Number(value);
+  if (num === 0 || num === 1 || num === 2 || num === 3) return num;
+  return 3;
+}
+
+function remapLegacyLumiverseGenderIdentity(value: unknown): 0 | 1 | 2 | 3 {
+  const num = Number(value);
+  if (num === 0) return 3;
+  if (num === 1) return 0;
+  if (num === 2) return 1;
+  return 3;
+}
+
 function normalizePackPayload(raw: any): PackImportPayload {
   // Unwrap { pack: {...} } wrapper
   const data = raw.pack && typeof raw.pack === "object" && !Array.isArray(raw.pack) ? raw.pack : raw;
@@ -448,7 +483,7 @@ function normalizePackPayload(raw: any): PackImportPayload {
       definition: item.definition || item.lumiaDefinition || "",
       personality: item.personality || item.lumiaPersonality || "",
       behavior: item.behavior || item.lumiaBehavior || "",
-      genderIdentity: item.genderIdentity ?? item.gender_identity ?? 0,
+      genderIdentity: normalizeImportedGenderIdentity(item.genderIdentity ?? item.gender_identity),
       version: item.version != null ? String(item.version) : undefined,
       sortOrder: item.sortOrder ?? item.sort_order ?? undefined,
     })),
@@ -528,7 +563,7 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         item.definition || "",
         item.personality || "",
         item.behavior || "",
-        item.genderIdentity ?? 0,
+        item.genderIdentity ?? 3,
         item.version || "1.0.0",
         item.sortOrder ?? i,
         now, now

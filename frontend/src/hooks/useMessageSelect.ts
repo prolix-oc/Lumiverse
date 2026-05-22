@@ -12,7 +12,6 @@ export function useMessageSelect(chatId: string) {
   const selectAllMessages = useStore((s) => s.selectAllMessages)
   const clearMessageSelection = useStore((s) => s.clearMessageSelection)
   const selectMessageRange = useStore((s) => s.selectMessageRange)
-  const updateMessage = useStore((s) => s.updateMessage)
   const removeMessage = useStore((s) => s.removeMessage)
 
   const selectedCount = selectedMessageIds.length
@@ -46,16 +45,13 @@ export function useMessageSelect(chatId: string) {
     if (selectedMessageIds.length === 0) return
     try {
       const result = await messagesApi.bulkHide(chatId, selectedMessageIds, hidden)
-      for (const msg of result.messages) {
-        updateMessage(msg.id, msg)
-      }
       toast.success(`${result.updated} message${result.updated !== 1 ? 's' : ''} ${hidden ? 'hidden' : 'unhidden'}`)
       setMessageSelectMode(false)
     } catch (err) {
       console.error('[useMessageSelect] Bulk hide failed:', err)
       toast.error('Failed to update messages')
     }
-  }, [chatId, selectedMessageIds, updateMessage, setMessageSelectMode])
+  }, [chatId, selectedMessageIds, setMessageSelectMode])
 
   const bulkDelete = useCallback(async () => {
     if (selectedMessageIds.length === 0) return

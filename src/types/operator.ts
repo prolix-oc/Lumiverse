@@ -62,6 +62,11 @@ export interface IPCReady extends IPCMessage {
 
 // ─── Shared data shapes ─────────────────────────────────────────────────────
 
+export type OperatorIpcReason =
+  | "connected"
+  | "not_started_with_runner"
+  | "runner_env_without_process_send";
+
 export interface LogEntry {
   timestamp: number;
   source: "stdout" | "stderr";
@@ -77,6 +82,7 @@ export interface OperatorStatus {
   commit: string;
   remoteMode: boolean;
   ipcAvailable: boolean;
+  ipcReason: OperatorIpcReason;
   updateAvailable: boolean;
   commitsBehind: number;
   latestUpdateMessage: string;

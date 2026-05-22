@@ -12,6 +12,7 @@ import {
   LogOut,
 } from 'lucide-react'
 import { IconBrandGoogleDrive, IconBrandDropbox } from '@tabler/icons-react'
+import NumericInput from '@/components/shared/NumericInput'
 import { Spinner } from '@/components/shared/Spinner'
 import { stMigrationApi, googleDriveApi, dropboxApi } from '@/api/st-migration'
 import type { FileConnectionConfig, SFTPConnectionConfig, SMBConnectionConfig } from '@/api/st-migration'
@@ -405,13 +406,13 @@ export default function ConnectionPicker({ value, onChange, onConnected }: Conne
             </div>
             <div className={styles.fieldSmall}>
               <label className={styles.label}>Port</label>
-              <input
-                className={styles.input}
-                type="number"
-                placeholder="22"
-                value={sftp.port ?? 22}
-                onChange={(e) => updateField('port', parseInt(e.target.value) || 22)}
-              />
+                <NumericInput
+                  className={styles.input}
+                  placeholder="22"
+                  value={sftp.port ?? 22}
+                  integer
+                  onChange={(value) => updateField('port', value ?? 22)}
+                />
             </div>
           </div>
 
@@ -543,13 +544,13 @@ export default function ConnectionPicker({ value, onChange, onConnected }: Conne
             </div>
             <div className={styles.fieldSmall}>
               <label className={styles.label}>Port</label>
-              <input
-                className={styles.input}
-                type="number"
-                placeholder="445"
-                value={smb.port ?? 445}
-                onChange={(e) => updateField('port', parseInt(e.target.value) || 445)}
-              />
+                <NumericInput
+                  className={styles.input}
+                  placeholder="445"
+                  value={smb.port ?? 445}
+                  integer
+                  onChange={(value) => updateField('port', value ?? 445)}
+                />
             </div>
           </div>
 

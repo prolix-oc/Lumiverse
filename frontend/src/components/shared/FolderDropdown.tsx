@@ -50,6 +50,8 @@ export default function FolderDropdown({
   const handleConfirmCreate = () => {
     const trimmed = newName.trim()
     if (!trimmed) return
+    // Reserved: matches the "Uncategorized" bucket label used by grouped selectors.
+    if (trimmed.toLowerCase() === 'uncategorized') return
     onCreateFolder(trimmed)
     onSelect(trimmed)
     setCreating(false)
@@ -127,12 +129,13 @@ export default function FolderDropdown({
                   }
                 }}
                 placeholder="Folder name..."
+                maxLength={64}
               />
               <button
                 type="button"
                 className={styles.createBtn}
                 onClick={handleConfirmCreate}
-                disabled={!newName.trim()}
+                disabled={!newName.trim() || newName.trim().toLowerCase() === 'uncategorized'}
               >
                 <Check size={12} />
               </button>

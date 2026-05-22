@@ -1,4 +1,5 @@
-import { Check } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { Check, Image as ImageIcon } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { ModalShell } from '@/components/shared/ModalShell'
 import type { Character } from '@/types/api'
@@ -10,6 +11,10 @@ interface GreetingPickerModalProps {
   activeContent?: string
   onSelect: (greetingIndex: number) => void
   onCancel: () => void
+}
+
+function containsImageMarkup(content: string): boolean {
+  return /<img\b/i.test(content) || /!\[[^\]]*]\([^)]*\)/.test(content)
 }
 
 export default function GreetingPickerModal({
@@ -26,21 +31,41 @@ export default function GreetingPickerModal({
     })),
   ]
 
+  const activeIndex = activeContent !== undefined
+    ? greetings.findIndex((g) => g.content === activeContent)
+    : -1
+
+  const listRef = useRef<HTMLDivElement>(null)
+  const activeCardRef = useRef<HTMLButtonElement>(null)
+
+  // Snap the list to the active greeting on open. Uses direct scrollTop math
+  // (not scrollIntoView) so the modal overlay doesn't yank the page beneath it.
+  useEffect(() => {
+    if (activeIndex < 0) return
+    const list = listRef.current
+    const card = activeCardRef.current
+    if (!list || !card) return
+    const target = card.offsetTop - (list.clientHeight - card.clientHeight) / 2
+    list.scrollTop = Math.max(0, target)
+  }, [activeIndex])
+
   return (
     <ModalShell isOpen onClose={onCancel} maxWidth={620} maxHeight="80vh" className={styles.modal}>
-      <CloseButton onClick={onCancel} variant="solid" position="absolute" />
+      <CloseButton onClick={onCancel} variant="solid" position="absolute" className={styles.closeBtnPos} />
 
       <div className={styles.header}>
         <h3 className={styles.title}>Choose a Greeting</h3>
         <span className={styles.count}>{greetings.length} greetings</span>
       </div>
 
-      <div className={styles.list}>
+      <div ref={listRef} className={styles.list}>
         {greetings.map((g, i) => {
-          const isActive = activeContent !== undefined && g.content === activeContent
+          const isActive = i === activeIndex
+          const hasImage = containsImageMarkup(g.content)
           return (
             <button
               key={i}
+              ref={isActive ? activeCardRef : undefined}
               type="button"
               className={clsx(styles.card, isActive && styles.cardActive)}
               onClick={() => onSelect(i)}
@@ -48,10 +73,20 @@ export default function GreetingPickerModal({
             >
               <div className={styles.cardHeader}>
                 <span className={styles.cardLabel}>{g.label}</span>
-                {isActive && (
-                  <span className={styles.activeBadge}>
-                    <Check size={10} />
-                    Active
+                {(hasImage || isActive) && (
+                  <span className={styles.badgeRow}>
+                    {hasImage && (
+                      <span className={styles.mediaBadge}>
+                        <ImageIcon size={10} />
+                        Image
+                      </span>
+                    )}
+                    {isActive && (
+                      <span className={styles.activeBadge}>
+                        <Check size={10} />
+                        Active
+                      </span>
+                    )}
                   </span>
                 )}
               </div>

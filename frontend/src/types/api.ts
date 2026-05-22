@@ -133,6 +133,25 @@ export interface GroupChatMetadata {
   character_ids: string[];
   talkativeness_overrides?: Record<string, number>;
   concatenation_mode?: boolean;
+  /**
+   * Per-chat voice overrides. `narrator` overrides the global narration voice
+   * for this chat; `characters[characterId]` overrides that member's speech
+   * voice for this chat. Either field absent → fall back to character default
+   * → global default.
+   */
+  voiceOverrides?: {
+    narrator?: VoiceRef;
+    characters?: Record<string, VoiceRef>;
+  };
+}
+
+/**
+ * Documented shape for `Character.extensions.ttsVoice`. The extensions field
+ * is free-form JSON, so this is a soft contract — readers always null-check
+ * and validate at runtime.
+ */
+export interface CharacterTtsExtension {
+  ttsVoice?: VoiceRef;
 }
 
 // ---- Message Attachment ----
@@ -221,6 +240,9 @@ export interface ProviderInfo {
   id: string
   name: string
   default_url: string
+  capabilities?: {
+    parameters?: Record<string, unknown>
+  }
 }
 
 export interface ConnectionTestResult {
@@ -234,6 +256,43 @@ export interface ConnectionModelsResult {
   model_labels?: Record<string, string>
   provider: string
   error?: string
+}
+
+export interface EmbeddingModelsPreviewInput {
+  provider?: EmbeddingConfig['provider']
+  api_url?: string
+  api_key?: string
+}
+
+export interface NanoGptUsageWindow {
+  used: number
+  remaining: number
+  percentUsed: number
+  resetAt: number | null
+}
+
+export interface NanoGptSubscriptionUsage {
+  active: boolean
+  limits: {
+    weeklyInputTokens: number | null
+    dailyImages: number | null
+  }
+  weeklyInputTokens: NanoGptUsageWindow | null
+  dailyImages: NanoGptUsageWindow | null
+  period: {
+    currentPeriodEnd: string | null
+  }
+  state: string | null
+  graceUntil: string | null
+}
+
+export interface ConnectionModelsPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  metadata?: Record<string, any>;
+  api_key?: string;
+  output_modalities?: string;
 }
 
 export interface PollinationsAuthUrlRequest {
@@ -288,6 +347,13 @@ export interface ImageGenConnectionModelsResult {
   error?: string;
 }
 
+export interface ImageGenConnectionModelsPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
+}
+
 export interface ImageGenParameterSchema {
   type: 'number' | 'integer' | 'boolean' | 'string' | 'select' | 'image_array';
   default?: any;
@@ -314,6 +380,59 @@ export interface ImageGenProviderInfo {
   id: string;
   name: string;
   capabilities: ImageGenProviderCapabilities;
+}
+
+// ---- STT Connection ----
+export interface SttConnectionProfile {
+  id: string;
+  name: string;
+  provider: string;
+  api_url: string;
+  model: string;
+  is_default: boolean;
+  has_api_key: boolean;
+  default_parameters: Record<string, any>;
+  metadata: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateSttConnectionInput {
+  name: string;
+  provider: string;
+  api_url?: string;
+  model?: string;
+  is_default?: boolean;
+  default_parameters?: Record<string, any>;
+  metadata?: Record<string, any>;
+  api_key?: string;
+}
+
+export type UpdateSttConnectionInput = Partial<CreateSttConnectionInput>;
+
+export interface SttConnectionTestResult {
+  success: boolean;
+  message: string;
+  provider: string;
+}
+
+export interface SttConnectionModelsResult {
+  models: Array<{ id: string; label: string }>;
+  provider: string;
+  error?: string;
+}
+
+export interface SttProviderCapabilities {
+  apiKeyRequired: boolean;
+  modelListStyle: 'static' | 'dynamic';
+  staticModels?: Array<{ id: string; label: string }>;
+  defaultUrl: string;
+}
+
+export interface SttProviderInfo {
+  id: string;
+  name: string;
+  capabilities: SttProviderCapabilities;
 }
 
 // ---- TTS Connection ----
@@ -370,6 +489,37 @@ export interface TtsConnectionVoicesResult {
   voices: TtsVoice[];
   provider: string;
   error?: string;
+}
+
+export interface TtsConnectionVoicesPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
+}
+
+export interface TtsConnectionModelsPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
+}
+
+/**
+ * Reference to a specific TTS voice on a specific connection. Used wherever
+ * a "voice choice" needs to persist beyond the global default: a character's
+ * default voice (characters.extensions.ttsVoice), per-chat overrides
+ * (chat.metadata.voiceOverrides), and the global narrator voice
+ * (voiceSettings.narrationVoice).
+ *
+ * `voice` is the provider-side voice id (empty string falls back to the
+ * connection's default voice). `parameters.speed` is optional and overrides
+ * the global speed for this voice when set.
+ */
+export interface VoiceRef {
+  connectionId: string
+  voice: string
+  parameters?: { speed?: number }
 }
 
 export interface TtsParameterSchema {
@@ -465,6 +615,16 @@ export interface CreatePersonaInput {
 
 export type UpdatePersonaInput = Partial<CreatePersonaInput>;
 
+export interface RenamePersonaFolderResponse {
+  updated: Persona[];
+  count: number;
+}
+
+export interface DeletePersonaFolderResponse {
+  updated: Persona[];
+  count: number;
+}
+
 // ---- Preset ----
 export interface Preset {
   id: string;
@@ -509,6 +669,22 @@ export interface CharacterGalleryItem {
   mime_type: string;
 }
 
+export interface TagLibraryImportResult {
+  tagDefinitions: number;
+  characterMappings: number;
+  matchedCharacters: number;
+  updatedCharacters: number;
+  unchangedCharacters: number;
+  unmatchedMappings: number;
+  addedTags: number;
+  matchedBy: {
+    source_filename: number;
+    image_original_filename: number;
+    normalized_name: number;
+  };
+  unmatchedFilenames: string[];
+}
+
 // ---- Image ----
 export interface Image {
   id: string;
@@ -521,11 +697,28 @@ export interface Image {
   created_at: number;
 }
 
+export interface ThemeAsset {
+  id: string;
+  bundle_id: string;
+  slug: string;
+  storage_type: 'image' | 'file';
+  image_id: string | null;
+  file_name: string | null;
+  original_filename: string;
+  mime_type: string;
+  byte_size: number;
+  tags: string[];
+  metadata: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
 // ---- World Book ----
 export interface WorldBook {
   id: string;
   name: string;
   description: string;
+  folder: string;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
@@ -537,6 +730,7 @@ export interface WorldBookEntry {
   id: string;
   world_book_id: string;
   uid: string;
+  outlet_name: string | null;
   key: string[];
   keysecondary: string[];
   content: string;
@@ -629,6 +823,14 @@ export interface WorldBookDiagnostics {
     threshold_rejected: number;
     hits_after_rerank_cutoff: number;
     rerank_rejected: number;
+    timings_ms: {
+      query_build: number;
+      query_embed: number;
+      search: number;
+      ranking: number;
+      merge: number;
+      total: number;
+    };
   };
   keyword_hits: Array<{
     entry_id: string;
@@ -723,12 +925,14 @@ export interface WorldBookDiagnostics {
 export interface CreateWorldBookInput {
   name: string;
   description?: string;
+  folder?: string;
   metadata?: Record<string, any>;
 }
 
 export type UpdateWorldBookInput = Partial<CreateWorldBookInput>;
 
 export interface CreateWorldBookEntryInput {
+  outlet_name?: string | null;
   key?: string[];
   keysecondary?: string[];
   content?: string;
@@ -762,9 +966,55 @@ export interface CreateWorldBookEntryInput {
   extensions?: Record<string, any>;
 }
 
+export interface DuplicateWorldBookEntryInput {
+  target_book_id?: string | null;
+}
+
+export interface ReorderWorldBookEntriesInput {
+  ordered_ids: string[];
+}
+
+export interface WorldBookEntryBulkDeleteInput {
+  action: 'delete';
+  entry_ids: string[];
+}
+
+export interface WorldBookEntryBulkMoveInput {
+  action: 'move';
+  entry_ids: string[];
+  target_book_id: string;
+}
+
+export interface WorldBookEntryBulkRenumberInput {
+  action: 'renumber';
+  entry_ids: string[];
+  start?: number | null;
+  step?: number;
+  direction?: 'asc' | 'desc';
+}
+
+export interface WorldBookEntryBulkAddKeywordInput {
+  action: 'add_keyword';
+  entry_ids: string[];
+  keyword: string;
+  target?: 'primary' | 'secondary';
+}
+
+export type WorldBookEntryBulkActionInput =
+  | WorldBookEntryBulkDeleteInput
+  | WorldBookEntryBulkMoveInput
+  | WorldBookEntryBulkRenumberInput
+  | WorldBookEntryBulkAddKeywordInput;
+
+export interface WorldBookEntryBulkActionResult {
+  action: WorldBookEntryBulkActionInput['action'];
+  affected: number;
+  target_book_id?: string;
+}
+
 export interface EmbeddingConfig {
   enabled: boolean;
-  provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'nanogpt';
+  provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'bananabread' | 'nanogpt';
   api_url: string;
   model: string;
   dimensions: number | null;
@@ -788,6 +1038,7 @@ export interface EmbeddingConfig {
 }
 
 export interface ChatMemorySettings {
+  autoWarmup: boolean
   chunkTargetTokens: number
   chunkMaxTokens: number
   chunkOverlapTokens: number
@@ -864,7 +1115,7 @@ export interface LumiaItem {
   definition: string;
   personality: string;
   behavior: string;
-  gender_identity: 0 | 1 | 2;
+  gender_identity: 0 | 1 | 2 | 3;
   version: string;
   sort_order: number;
   created_at: number;
@@ -928,7 +1179,7 @@ export interface CreateLumiaItemInput {
   definition?: string;
   personality?: string;
   behavior?: string;
-  gender_identity?: 0 | 1 | 2;
+  gender_identity?: 0 | 1 | 2 | 3;
   version?: string;
   sort_order?: number;
 }

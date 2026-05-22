@@ -29,7 +29,7 @@ Lumiverse offers five visual styles for OOC comments:
 |-------|-------------|
 | **Social Card** | A styled card with the character's avatar, name, and a "weaving through the Loom" tagline. Centered layout, polished feel. |
 | **Margin Note** | A subtle side annotation with the character's initial/avatar. Alternates left and right positioning. Good for quiet, unobtrusive commentary. |
-| **Whisper Bubble** | A speech bubble headed with "[Name] whispers..." — intimate and soft-spoken. |
+| **Whisper Bubble** | A speech bubble headed with "\[Name\] whispers..." — intimate and soft-spoken. |
 | **Raw Text** | Plain inline text with minimal styling. For those who want OOC to blend in without decoration. |
 | **IRC Chat Room** | A collapsible retro IRC-style panel labeled `#LumiaCouncil`. Shows timestamps, `<usernames>`, alternating row backgrounds, and @mention highlighting. Optionally converts handles to **l33tspeak**. |
 

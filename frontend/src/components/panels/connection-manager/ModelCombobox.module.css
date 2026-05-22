@@ -1,33 +1,89 @@
 .combobox {
   position: relative;
+  width: 100%;
+}
+
+.comboboxCompact {
+  --model-combobox-radius: 6px;
+  --model-combobox-input-bg: var(--lumiverse-fill-subtle);
+  --model-combobox-input-border: var(--lumiverse-border);
+  --model-combobox-input-padding: 7px 10px;
+  --model-combobox-input-font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  --model-combobox-refresh-size: 32px;
+  --model-combobox-dropdown-bg: var(--lumiverse-bg);
+}
+
+.comboboxStandard {
+  --model-combobox-radius: 8px;
+  --model-combobox-input-bg: var(--lumiverse-bg);
+  --model-combobox-input-border: var(--lumiverse-border);
+  --model-combobox-input-padding: 10px 12px;
+  --model-combobox-input-font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  --model-combobox-refresh-size: 38px;
+  --model-combobox-dropdown-bg: var(--lumiverse-bg-elevated);
+}
+
+.comboboxEditor {
+  --model-combobox-radius: 12px;
+  --model-combobox-input-bg: var(--lumiverse-bg);
+  --model-combobox-input-border: var(--lumiverse-border);
+  --model-combobox-input-padding: 12px 13px;
+  --model-combobox-input-font-size: inherit;
+  --model-combobox-refresh-size: 44px;
+  --model-combobox-dropdown-bg: var(--lumiverse-bg);
 }
 
 .inputRow {
   display: flex;
-  gap: 4px;
+  gap: 6px;
+  align-items: stretch;
 }
 
-.inputRow input {
+.input {
   flex: 1;
+  min-width: 0;
+  padding: var(--model-combobox-input-padding);
+  border-radius: var(--model-combobox-radius);
+  background: var(--model-combobox-input-bg);
+  border-color: var(--model-combobox-input-border);
+  font-size: var(--model-combobox-input-font-size);
+}
+
+.inputEditor {
+  box-shadow: none;
+}
+
+.inputEditor:focus {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-bg);
+  box-shadow: 0 0 0 1px var(--lumiverse-primary-020);
 }
 
 .refreshBtn {
-  width: 32px;
-  height: 32px;
+  width: var(--model-combobox-refresh-size);
+  height: var(--model-combobox-refresh-size);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  background: transparent;
+  border-radius: var(--model-combobox-radius);
+  background: var(--model-combobox-input-bg);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
   cursor: pointer;
   flex-shrink: 0;
-  transition: all var(--lumiverse-transition-fast);
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast);
+}
+
+.refreshBtnEditor {
+  background: var(--lumiverse-bg);
 }
 
 .refreshBtn:hover {
-  background: var(--lumiverse-fill-subtle);
+  background: color-mix(in srgb, var(--model-combobox-input-bg) 84%, var(--lumiverse-fill-subtle));
+  border-color: var(--lumiverse-border-hover);
   color: var(--lumiverse-text);
 }
 
@@ -44,7 +100,7 @@
   margin-top: 4px;
   max-height: 200px;
   overflow-y: auto;
-  background: var(--lumiverse-bg-elevated);
+  background: var(--model-combobox-dropdown-bg);
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   z-index: 10;
@@ -66,25 +122,25 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   text-align: left;
   cursor: pointer;
   transition: background var(--lumiverse-transition-fast);
 }
 
 .dropdownItem:hover {
-  background: var(--lumiverse-primary-010);
+  background: var(--lumiverse-fill-subtle);
 }
 
 .modelLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   line-height: 1.3;
 }
 
 .modelId {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.2;
 }
@@ -92,6 +148,21 @@
 .dropdownEmpty {
   padding: 8px;
   text-align: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
+}
+
+.browseHint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  color: var(--lumiverse-text-dim);
+}
+
+.browseHintIcon {
+  flex-shrink: 0;
+  opacity: 0.8;
 }

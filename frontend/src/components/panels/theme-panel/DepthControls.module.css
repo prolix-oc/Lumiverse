@@ -11,7 +11,7 @@
 }
 
 .label {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
   width: 90px;
@@ -37,7 +37,7 @@
 }
 
 .value {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-dim);
   width: 36px;

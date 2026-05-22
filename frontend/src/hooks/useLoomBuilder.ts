@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '@/store'
 import { presetsApi } from '@/api/presets'
+import { connectionsApi } from '@/api/connections'
+import { ApiError, BASE_URL } from '@/api/client'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
+import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 import { getMacroCatalog } from '@/api/macros'
-import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup } from '@/lib/loom/types'
+import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
   DEFAULT_SAMPLER_OVERRIDES,
   DEFAULT_CUSTOM_BODY,
@@ -13,19 +16,62 @@ import {
   DEFAULT_ADVANCED_SETTINGS,
   SAMPLER_PARAMS,
 } from '@/lib/loom/constants'
-import { generateUUID } from '@/lib/uuid'
 import {
   createNewLoomPreset,
   marshalPreset,
   marshalUpdate,
   unmarshalPreset,
-  detectSupportedParams,
+  detectSupportedParamsFromProviders,
   getAvailableMacros,
-  importFromSTPreset,
   exportToSTPreset,
   normalizeCategoryBlockState,
   toggleBlockWithCategoryRules,
+  coerceImportedLoomPreset,
+  detectImportedPresetKind,
 } from '@/lib/loom/service'
+
+const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
+
+function readPendingLoomPresets(): Record<string, LoomPreset> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(PENDING_LOOM_PRESETS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writePendingLoomPresets(presets: Record<string, LoomPreset>) {
+  if (typeof window === 'undefined') return
+  try {
+    if (Object.keys(presets).length === 0) {
+      localStorage.removeItem(PENDING_LOOM_PRESETS_KEY)
+      return
+    }
+    localStorage.setItem(PENDING_LOOM_PRESETS_KEY, JSON.stringify(presets))
+  } catch {}
+}
+
+function getPendingLoomPreset(id: string): LoomPreset | null {
+  const pending = readPendingLoomPresets()[id]
+  return pending && typeof pending === 'object' ? pending : null
+}
+
+function setPendingLoomPreset(preset: LoomPreset) {
+  const pending = readPendingLoomPresets()
+  pending[preset.id] = preset
+  writePendingLoomPresets(pending)
+}
+
+function clearPendingLoomPreset(id: string) {
+  const pending = readPendingLoomPresets()
+  if (!(id in pending)) return
+  delete pending[id]
+  writePendingLoomPresets(pending)
+}
 
 export function useLoomBuilder() {
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
@@ -34,6 +80,7 @@ export function useLoomBuilder() {
   const setLoomRegistry = useStore((s) => s.setLoomRegistry)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
+  const providers = useStore((s) => s.providers)
 
   const [activePreset, setActivePreset] = useState<LoomPreset | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -52,18 +99,37 @@ export function useLoomBuilder() {
     setIsLoading(true)
     presetsApi.get(activeLoomPresetId).then((preset) => {
       if (!cancelled) {
-        setActivePreset(unmarshalPreset(preset))
+        const loadedPreset = unmarshalPreset(preset)
+        const pendingPreset = getPendingLoomPreset(activeLoomPresetId)
+
+        if (pendingPreset && JSON.stringify(marshalUpdate(pendingPreset)) !== JSON.stringify(marshalUpdate(loadedPreset))) {
+          setActivePreset(pendingPreset)
+          void presetsApi.update(pendingPreset.id, marshalUpdate(pendingPreset))
+            .then(() => clearPendingLoomPreset(pendingPreset.id))
+            .catch(() => {})
+        } else {
+          if (pendingPreset) clearPendingLoomPreset(activeLoomPresetId)
+          setActivePreset(loadedPreset)
+        }
         setIsLoading(false)
       }
     }).catch((err) => {
-      if (!cancelled) {
-        console.warn('[LoomBuilder] Failed to load preset:', err)
-        setError(err.message)
+      if (cancelled) return
+      // Retroactive cleanup: if the persisted active preset id points at a row
+      // that no longer exists (legacy deletions that didn't cascade), clear it
+      // so generation doesn't keep 400ing on a ghost id.
+      if (err instanceof ApiError && err.status === 404) {
+        setActiveLoomPreset(null)
+        setActivePreset(null)
         setIsLoading(false)
+        return
       }
+      console.warn('[LoomBuilder] Failed to load preset:', err)
+      setError(err.message)
+      setIsLoading(false)
     })
     return () => { cancelled = true }
-  }, [activeLoomPresetId, activePreset?.id])
+  }, [activeLoomPresetId, activePreset?.id, setActiveLoomPreset])
 
   // Refresh registry from API
   const refreshRegistry = useCallback(async () => {
@@ -86,10 +152,14 @@ export function useLoomBuilder() {
     }
   }, [setLoomRegistry])
 
-  // Load registry on mount
+  // Load registry on mount. The registry is kept in the store across panel
+  // open/close cycles, and every mutation path below (create/delete/rename/
+  // duplicate/save) already calls `refreshRegistry()` itself, so skip the
+  // redundant mount-time fetch when the cache is populated.
   useEffect(() => {
+    if (Object.keys(loomRegistry).length > 0) return
     refreshRegistry()
-  }, [refreshRegistry])
+  }, [loomRegistry, refreshRegistry])
 
   // Create a new preset
   const createPreset = useCallback(async (name: string, description?: string) => {
@@ -124,40 +194,117 @@ export function useLoomBuilder() {
   const pendingSaveRef = useRef<LoomPreset | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const persistPreset = useCallback(async (preset: LoomPreset) => {
+    await presetsApi.update(preset.id, marshalUpdate(preset))
+    clearPendingLoomPreset(preset.id)
+  }, [])
+
+  const persistPresetKeepalive = useCallback((preset: LoomPreset) => {
+    setPendingLoomPreset(preset)
+    fetch(`${BASE_URL}/presets/${encodeURIComponent(preset.id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify(marshalUpdate(preset)),
+      keepalive: true,
+    }).catch(() => {})
+  }, [])
+
   const debouncedSavePreset = useCallback((preset: LoomPreset) => {
     pendingSaveRef.current = preset
+    setPendingLoomPreset(preset)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(async () => {
       const toSave = pendingSaveRef.current
       if (toSave) {
         pendingSaveRef.current = null
         try {
-          await presetsApi.update(toSave.id, marshalUpdate(toSave))
+          await persistPreset(toSave)
         } catch (err) {
           console.warn('[LoomBuilder] Debounced save failed:', err)
         }
       }
     }, 400)
-  }, [])
+  }, [persistPreset])
+
+  const flushPendingPreset = useCallback((mode: 'default' | 'keepalive' = 'default') => {
+    const pending = pendingSaveRef.current
+    if (!pending) return
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    pendingSaveRef.current = null
+    if (mode === 'keepalive') {
+      persistPresetKeepalive(pending)
+      return
+    }
+    void persistPreset(pending).catch(() => {})
+  }, [persistPreset, persistPresetKeepalive])
 
   // Flush pending save on unmount
   useEffect(() => () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    if (pendingSaveRef.current) {
-      presetsApi.update(pendingSaveRef.current.id, marshalUpdate(pendingSaveRef.current)).catch(() => {})
+    flushPendingPreset()
+  }, [flushPendingPreset])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handlePageExit = () => flushPendingPreset('keepalive')
+    window.addEventListener('beforeunload', handlePageExit)
+    window.addEventListener('pagehide', handlePageExit)
+
+    return () => {
+      window.removeEventListener('beforeunload', handlePageExit)
+      window.removeEventListener('pagehide', handlePageExit)
     }
+  }, [flushPendingPreset])
+
+  const takePendingPreset = useCallback((presetId: string): LoomPreset | null => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+
+    const pending = pendingSaveRef.current?.id === presetId
+      ? pendingSaveRef.current
+      : null
+
+    pendingSaveRef.current = null
+    return pending
   }, [])
+
+  // Read activePreset through a ref so saveStructure stays reference-stable
+  // across renders. When saveBlocks is captured by downstream effects, a
+  // changing reference would either cause runaway effect loops or leak stale
+  // activePreset into the callback — the ref avoids both.
+  const activePresetRef = useRef(activePreset)
+  activePresetRef.current = activePreset
+
+  const updateActivePreset = useCallback((updater: (current: LoomPreset) => LoomPreset) => {
+    const current = activePresetRef.current
+    if (!current) return
+    const updated = updater(current)
+    activePresetRef.current = updated
+    setActivePreset(updated)
+    debouncedSavePreset(updated)
+  }, [debouncedSavePreset])
 
   const saveStructure = useCallback(async (
     blocks: PromptBlock[],
   ) => {
-    if (!activePreset) return
+    const current = activePresetRef.current
+    if (!current) return
     const normalizedBlocks = normalizeCategoryBlockState(blocks)
     const updated = {
-      ...activePreset,
+      ...current,
       blocks: normalizedBlocks,
       updatedAt: Date.now(),
     }
+    activePresetRef.current = updated
     setActivePreset(updated)
     try {
       await presetsApi.update(updated.id, marshalUpdate(updated))
@@ -165,7 +312,7 @@ export function useLoomBuilder() {
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save preset structure:', err)
     }
-  }, [activePreset, refreshRegistry])
+  }, [refreshRegistry])
 
   // Save blocks
   const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {
@@ -189,6 +336,14 @@ export function useLoomBuilder() {
       setActiveLoomPreset(null)
       setActivePreset(null)
     }
+    // Refresh connection profiles so any stale preset_id references (the
+    // backend's FK nulls them out on delete) drop from the store.
+    try {
+      const res = await connectionsApi.list({ limit: 100 })
+      useStore.getState().setProfiles(res.data)
+    } catch {
+      // non-fatal — store just keeps the previous profile list
+    }
   }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
 
   // Duplicate a preset
@@ -206,7 +361,9 @@ export function useLoomBuilder() {
       copy.completionSettings = { ...loom.completionSettings }
       copy.advancedSettings = { ...loom.advancedSettings }
       copy.modelProfiles = { ...loom.modelProfiles }
+      copy.promptVariables = JSON.parse(JSON.stringify(loom.promptVariables || {}))
       copy.source = loom.source ? { ...loom.source } : null
+      copy.coverUrl = loom.coverUrl
 
       const created = await presetsApi.create(marshalPreset(copy))
       const newLoom = unmarshalPreset(created)
@@ -264,69 +421,87 @@ export function useLoomBuilder() {
 
   // Save sampler overrides — immediate state update, debounced API save
   const saveSamplerOverrides = useCallback((overrides: any) => {
-    if (!activePreset) return
-    const updated = { ...activePreset, samplerOverrides: { ...overrides }, updatedAt: Date.now() }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    updateActivePreset((current) => ({
+      ...current,
+      samplerOverrides: { ...overrides },
+      updatedAt: Date.now(),
+    }))
+  }, [updateActivePreset])
 
   const saveCustomBody = useCallback((customBody: any) => {
-    if (!activePreset) return
-    const updated = { ...activePreset, customBody: { ...customBody }, updatedAt: Date.now() }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    updateActivePreset((current) => ({
+      ...current,
+      customBody: { ...customBody },
+      updatedAt: Date.now(),
+    }))
+  }, [updateActivePreset])
 
   const savePromptBehavior = useCallback((updates: Record<string, any>) => {
-    if (!activePreset) return
-    const updated = {
-      ...activePreset,
-      promptBehavior: { ...(activePreset.promptBehavior || DEFAULT_PROMPT_BEHAVIOR), ...updates },
+    updateActivePreset((current) => ({
+      ...current,
+      promptBehavior: { ...(current.promptBehavior || DEFAULT_PROMPT_BEHAVIOR), ...updates },
       updatedAt: Date.now(),
-    }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    }))
+  }, [updateActivePreset])
 
   const saveCompletionSettings = useCallback((updates: Record<string, any>) => {
-    if (!activePreset) return
-    const updated = {
-      ...activePreset,
-      completionSettings: { ...(activePreset.completionSettings || DEFAULT_COMPLETION_SETTINGS), ...updates },
+    updateActivePreset((current) => ({
+      ...current,
+      completionSettings: { ...(current.completionSettings || DEFAULT_COMPLETION_SETTINGS), ...updates },
       updatedAt: Date.now(),
-    }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    }))
+  }, [updateActivePreset])
 
   const saveAdvancedSettings = useCallback((updates: Record<string, any>) => {
-    if (!activePreset) return
-    const updated = {
-      ...activePreset,
-      advancedSettings: { ...(activePreset.advancedSettings || DEFAULT_ADVANCED_SETTINGS), ...updates },
+    updateActivePreset((current) => ({
+      ...current,
+      advancedSettings: { ...(current.advancedSettings || DEFAULT_ADVANCED_SETTINGS), ...updates },
       updatedAt: Date.now(),
-    }
-    setActivePreset(updated)
-    debouncedSavePreset(updated)
-  }, [activePreset, debouncedSavePreset])
+    }))
+  }, [updateActivePreset])
 
-  // Import from legacy preset JSON
-  const importFromST = useCallback(async (stData: any, fileName: string) => {
+  // Persist the full promptVariables map in one shot. Used by the end-user
+  // "Configure Prompt Variables" modal — saves are infrequent and user-driven
+  // so we bypass the debouncer and wait for the network round-trip so errors
+  // surface immediately.
+  const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
+    if (!activePreset) return
+    const base = takePendingPreset(activePreset.id) ?? activePreset
+    const updated = { ...base, promptVariables: values, updatedAt: Date.now() }
+    activePresetRef.current = updated
+    setActivePreset(updated)
+    try {
+      await persistPreset(updated)
+    } catch (err) {
+      console.warn('[LoomBuilder] Failed to save prompt variable values:', err)
+      throw err
+    }
+  }, [activePreset, persistPreset, takePendingPreset])
+
+  const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     setIsLoading(true)
     try {
-      const name = stData.name || fileName.replace(/\.json$/i, '') || 'Imported Preset'
-      const loom = importFromSTPreset(stData, name)
+      const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
+      const loom = coerceImportedLoomPreset(payload, fallbackName)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = unmarshalPreset(created)
       await refreshRegistry()
       setActiveLoomPreset(created.id)
       setActivePreset(newLoom)
 
-      // Import embedded regex scripts if present, filed under the preset name
-      const embeddedRegex = stData.extensions?.regex_scripts
+      const embeddedRegex = Array.isArray(payload?.extensions?.regex_scripts)
+        ? payload.extensions.regex_scripts
+        : Array.isArray(payload?.regex_scripts)
+          ? payload.regex_scripts
+          : null
       if (Array.isArray(embeddedRegex) && embeddedRegex.length > 0) {
         try {
-          const regexResult = await regexApi.importScripts({ scripts: embeddedRegex, folder: name, preset_id: created.id })
+          const regexResult = await enqueuePresetRegexOperation(() => regexApi.importScripts({
+            scripts: embeddedRegex,
+            folder: loom.name,
+            preset_id: created.id,
+            active_preset_id: created.id,
+          }))
           if (regexResult.imported > 0) {
             const { loadRegexScripts } = useStore.getState() as any
             if (loadRegexScripts) await loadRegexScripts()
@@ -347,33 +522,36 @@ export function useLoomBuilder() {
     }
   }, [refreshRegistry, setActiveLoomPreset])
 
-  // Import from file (internal JSON format)
-  const importFromFile = useCallback(async (jsonData: any) => {
-    setIsLoading(true)
-    try {
-      const loom: LoomPreset = {
-        ...jsonData,
-        id: generateUUID(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }
-      const created = await presetsApi.create(marshalPreset(loom))
-      const newLoom = unmarshalPreset(created)
-      await refreshRegistry()
-      setActiveLoomPreset(created.id)
-      setActivePreset(newLoom)
-      return newLoom
-    } catch (err: any) {
-      setError(err.message)
-      throw err
-    } finally {
-      setIsLoading(false)
+  // Import from legacy preset JSON
+  const importFromST = useCallback(async (stData: any, fileName: string) => {
+    if (detectImportedPresetKind(stData) === 'loom') {
+      toast.warning('This file is a Loom preset. Use "Import Loom JSON" instead.', { title: 'Preset Import' })
+      return null
     }
-  }, [refreshRegistry, setActiveLoomPreset])
+    return persistImportedPreset(stData, fileName)
+  }, [persistImportedPreset])
+
+  // Import from file (internal JSON format)
+  const importFromFile = useCallback(async (jsonData: any, fileName?: string) => {
+    if (detectImportedPresetKind(jsonData) === 'legacy') {
+      toast.warning('This file is a legacy preset. Use "Import Legacy Preset" instead.', { title: 'Preset Import' })
+      return null
+    }
+    return persistImportedPreset(jsonData, fileName)
+  }, [persistImportedPreset])
 
   // Export internal JSON
-  const exportInternal = useCallback(() => {
-    return activePreset
+  const exportInternal = useCallback(async () => {
+    if (!activePreset) return null
+    const regexExport = await regexApi.exportScripts(undefined, { preset_id: activePreset.id })
+    if (regexExport.scripts.length === 0) return activePreset
+    return {
+      ...activePreset,
+      extensions: {
+        ...((activePreset as any).extensions || {}),
+        regex_scripts: regexExport.scripts,
+      },
+    }
   }, [activePreset])
 
   // Export as legacy (SillyTavern) JSON
@@ -418,16 +596,16 @@ export function useLoomBuilder() {
         mainApi: 'openai',
         source: profile.provider,
         model: profile.model,
-        supportedParams: detectSupportedParams(profile.provider),
+        supportedParams: detectSupportedParamsFromProviders(profile.provider, providers),
       }
     }
     return {
       mainApi: 'unknown',
       source: null,
       model: null,
-      supportedParams: detectSupportedParams(null),
+      supportedParams: detectSupportedParamsFromProviders(null, providers),
     }
-  }, [activeProfileId, profiles])
+  }, [activeProfileId, profiles, providers])
 
   const refreshConnectionProfile = useCallback(() => {
     // Connection profile is derived from store, no manual refresh needed
@@ -479,6 +657,7 @@ export function useLoomBuilder() {
     savePromptBehavior,
     saveCompletionSettings,
     saveAdvancedSettings,
+    savePromptVariableValues,
 
     // Import/Export
     importFromFile,

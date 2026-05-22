@@ -1,5 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 export class PollinationsProvider extends OpenAICompatibleProvider {
   readonly name = "pollinations";
@@ -29,9 +30,16 @@ export class PollinationsProvider extends OpenAICompatibleProvider {
       const res = await fetch(`${base}/account/key`, {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "authentication",
+        detail: err instanceof Error ? err.message : "network request failed",
+        retryable: true,
+      });
     }
   }
 }

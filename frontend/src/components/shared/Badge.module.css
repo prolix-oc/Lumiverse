@@ -11,19 +11,19 @@
 
 .sm {
   padding: 2px 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   border-radius: 4px;
 }
 
 .md {
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   border-radius: 6px;
 }
 
 .pill {
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   border-radius: 10px;
 }
 

@@ -23,7 +23,11 @@ export interface SummarizationSettings {
   systemPromptOverride: string | null
   /** Custom user prompt template. When null/empty, backend default is used. */
   userPromptOverride: string | null
+  /** Client request timeout for summary generation. */
+  requestTimeoutMs: number
 }
+
+export const DEFAULT_SUMMARY_REQUEST_TIMEOUT_MS = 120_000
 
 export const DEFAULT_SUMMARIZATION_SETTINGS: SummarizationSettings = {
   mode: 'disabled',
@@ -36,6 +40,7 @@ export const DEFAULT_SUMMARIZATION_SETTINGS: SummarizationSettings = {
   messageLimitCount: 50,
   systemPromptOverride: null,
   userPromptOverride: null,
+  requestTimeoutMs: DEFAULT_SUMMARY_REQUEST_TIMEOUT_MS,
 }
 
 /** Metadata keys stored on chat.metadata */

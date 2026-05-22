@@ -43,4 +43,15 @@ export async function writeTrustAnyOrigin(enable: boolean): Promise<void> {
   }
 
   await Bun.write(ENV_FILE, content);
+
+  // The runner is long-lived and passes its own process.env to the child
+  // server on every restart. Bun's .env loader does NOT override an env
+  // var that already exists, so if we only rewrite the file, the restarted
+  // child inherits the runner's stale TRUST_ANY_ORIGIN and the toggle
+  // appears to do nothing. Sync the runner's env to the new file state.
+  if (enable) {
+    process.env.TRUST_ANY_ORIGIN = "true";
+  } else {
+    delete process.env.TRUST_ANY_ORIGIN;
+  }
 }

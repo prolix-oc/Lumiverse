@@ -9,9 +9,11 @@
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--lumiverse-border) 55%, transparent) transparent;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  position: relative;
+}
+
+.list[data-group-chat] {
+  padding-top: 0;
 }
 
 .list::-webkit-scrollbar {
@@ -31,15 +33,6 @@
   background: color-mix(in srgb, var(--lumiverse-text-muted) 65%, transparent);
 }
 
-.listHidden {
-  opacity: 0;
-}
-
-.listRevealed {
-  opacity: 1;
-  transition: opacity 0.2s ease-out;
-}
-
 .sentinel {
   height: 1px;
   flex-shrink: 0;
@@ -48,15 +41,14 @@
 .loadingOlder {
   text-align: center;
   padding: 12px 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
-  flex-shrink: 0;
 }
 
 .virtualSpace {
   position: relative;
   width: 100%;
-  flex-shrink: 0;
+  overflow-anchor: none;
 }
 
 .virtualRow {
@@ -64,6 +56,10 @@
   top: 0;
   left: 0;
   right: 0;
+  contain: layout style;
+}
+
+.virtualRow:not([data-item-type='messageFooter']):not([data-item-type='bottom']) {
   padding-bottom: 8px;
 }
 
@@ -87,6 +83,10 @@
     padding: 8px;
     padding-bottom: var(--lcs-input-safe-zone, 100px);
   }
+
+  .list[data-group-chat] {
+    padding-top: 0;
+  }
 }
 
 @media (max-width: 480px) {
@@ -94,12 +94,20 @@
     padding: 6px;
     padding-bottom: var(--lcs-input-safe-zone, 100px);
   }
+
+  .list[data-group-chat] {
+    padding-top: 0;
+  }
 }
 
 @media (hover: none) and (pointer: coarse) {
   .list {
     scrollbar-width: none;
     -ms-overflow-style: none;
+  }
+
+  .virtualRow {
+    will-change: auto;
   }
 
   .list::-webkit-scrollbar {

@@ -28,7 +28,7 @@
   align-items: center;
   padding: 0 8px;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   flex-shrink: 0;
 }

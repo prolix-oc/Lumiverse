@@ -15,8 +15,10 @@
     box-shadow var(--lcs-transition-fast);
 }
 
-/* Only apply backdrop-filter when glass is enabled AND there's a non-solid background */
-:global([data-glass][data-chat-bg]) .card[data-in-viewport] {
+/* Only apply backdrop-filter when glass is enabled AND there's a non-solid background.
+   Message rows are virtualized, so mounted cards are already near the viewport;
+   keeping this static avoids style/measurement feedback loops while scrolling. */
+:global([data-glass][data-chat-bg]) .card {
   backdrop-filter: blur(var(--lcs-glass-blur));
 }
 
@@ -86,6 +88,29 @@
   outline-offset: -1px;
   opacity: 1 !important;
   filter: none !important;
+}
+
+/* Transient navigation highlight — greeting switch, deep-link scroll-to, etc. */
+.highlight {
+  animation: minimalHighlightPulse 1600ms ease-out forwards;
+}
+
+@keyframes minimalHighlightPulse {
+  0% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 0 var(--lumiverse-primary-040, rgba(130, 100, 255, 0.4));
+  }
+  15% {
+    outline: 2px solid var(--lumiverse-primary);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px var(--lumiverse-primary-020, rgba(130, 100, 255, 0.2));
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* Streaming state — GPU optimization */
@@ -244,23 +269,51 @@
     padding: 8px;
     gap: 6px;
   }
-
-  .avatar {
-    width: 30px;
-    height: 30px;
-  }
 }
 
 /* ── Actions wrapper ── */
 .actionsWrap {
   flex-shrink: 0;
   align-self: flex-start;
+  opacity: 0;
+  transition: opacity var(--lumiverse-transition-fast);
+}
+
+.card:hover .actionsWrap {
+  opacity: 1;
+}
+
+/* Touch devices: keep actions visible for deliberate tapping */
+@media (hover: none) {
+  .actionsWrap {
+    opacity: 0.5;
+  }
 }
 
 /* ── Mobile: pull actions out of flex flow ── */
 @media (max-width: 768px) {
+  .card {
+    padding-top: 38px;
+  }
+
   .bubble {
     max-width: 100%;
+  }
+
+  .avatar {
+    width: 38px;
+    height: 38px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .name {
+    font-size: calc(13px * var(--lumiverse-font-scale, 1));
   }
 
   .actionsWrap {
@@ -273,5 +326,40 @@
   .user .actionsWrap {
     left: auto;
     right: 52px;
+  }
+}
+
+@media (max-width: 480px) {
+  .card {
+    padding-top: 34px;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .name {
+    font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .card,
+  .hidden {
+    transition: none;
+  }
+
+  .card,
+  .card:hover {
+    box-shadow: none;
+  }
+
+  :global([data-glass][data-chat-bg]) .card {
+    backdrop-filter: none;
+  }
+
+  .streaming {
+    will-change: auto;
   }
 }

@@ -17,7 +17,7 @@ export default defineConfig({
       includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
     }),
   ],
@@ -41,6 +41,14 @@ export default defineConfig({
     modules: {
       localsConvention: 'camelCaseOnly',
     },
+  },
+  build: {
+    // Vite 8 defaults build.cssMinify to 'lightningcss', which requires the
+    // lightningcss-<platform>-<arch> native binding to load at build time.
+    // On Termux/Android arm64 the binding install is unreliable, and when it
+    // fails the production build emits no CSS — pin to esbuild so the minify
+    // step uses a binding we ship and can rely on across platforms.
+    cssMinify: 'esbuild',
   },
   server: {
     host: '::',

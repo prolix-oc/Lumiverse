@@ -14,6 +14,7 @@ Chatting is the heart of Lumiverse. Once you have a character and a connection s
 | [Branching](branching.md) | Fork a conversation at any point to explore different paths |
 | [Author's Note](authors-note.md) | Inject hidden instructions into the conversation |
 | [Attachments](attachments.md) | Send images and audio alongside your messages |
+| [Speech-to-Text](speech-to-text.md) | Dictate messages with Web Speech or Whisper/STT connections |
 | [OOC Comments](ooc.md) | Out-of-character asides and meta-commentary |
 | [Loom Summary](loom-summary.md) | Automatic and manual story summarization |
 | [Long-Term Memory](memory.md) | Recall relevant past moments via vector search |

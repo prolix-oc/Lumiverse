@@ -1,4 +1,4 @@
-/* CSS Layer ordering — user overrides always win over base module styles */
+/* Reserved CSS layer ordering. User CSS is injected unlayered so it can override CSS modules. */
 @layer lumiverse-base, lumiverse-theme, lumiverse-user;
 
 /* Theme-aware color-scheme — tells the browser to render native form

@@ -23,6 +23,7 @@ New to Lumiverse? Start here:
 | Guide | What You'll Learn |
 |-------|-------------------|
 | [Characters](characters/index.md) | Import, create, and customize AI characters |
+| [Dream Weaver](dream-weaver/index.md) | Make character and scenario cards from your ideas |
 | [Chatting](chatting/index.md) | Send messages, use swipes, branch conversations |
 | [Personas](personas/index.md) | Create your own identity for roleplay |
 | [Connections](connections/index.md) | Connect to AI providers (OpenAI, Claude, etc.) |
@@ -58,6 +59,15 @@ New to Lumiverse? Start here:
 | [Push Notifications](settings/push-notifications.md) | Get notified when the AI responds |
 | [LumiHub](settings/lumihub.md) | Browse and install characters from the hub |
 | [Users & Auth](settings/users.md) | Manage users, roles, and passwords |
+
+### Data Portability
+
+| Guide | What You'll Learn |
+|-------|-------------------|
+| [Overview](data-portability/index.md) | What's in a Lumiverse data archive and when to use one |
+| [Exporting Your Data](data-portability/exporting.md) | Bundle your account into a portable `.lvbak` archive |
+| [Importing an Archive](data-portability/importing.md) | Restore an archive into your account (merge-by-ID, non-destructive) |
+| [API Keys & Tickets](data-portability/api-keys-and-tickets.md) | Optional encrypted-secrets flow with a separate decryption ticket |
 
 ### Reference
 

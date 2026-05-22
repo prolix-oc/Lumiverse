@@ -15,6 +15,7 @@ import CharacterBrowser from '@/components/panels/CharacterBrowser'
 import PersonaManager from '@/components/panels/PersonaManager'
 import ConnectionManager from '@/components/panels/ConnectionManager'
 import ImageGenConnectionManager from '@/components/panels/image-gen-connections/ImageGenConnectionManager'
+import STTConnectionManager from '@/components/panels/stt-connections/STTConnectionManager'
 import TTSConnectionManager from '@/components/panels/tts-connections/TTSConnectionManager'
 import PresetManager from '@/components/panels/PresetManager'
 import LoomBuilder from '@/components/panels/LoomBuilder'
@@ -57,6 +58,50 @@ export interface DrawerTabEntry {
   component: () => ReactNode
 }
 
+export const CORE_DRAWER_TAB_IDS = new Set([
+  'profile',
+  'presets',
+  'loom',
+  'characters',
+  'personas',
+  'branches',
+  'spindle',
+  'theme',
+  'lorebook',
+])
+
+export function isDrawerTabCore(tabId: string): boolean {
+  return CORE_DRAWER_TAB_IDS.has(tabId)
+}
+
+export function sanitizeHiddenDrawerTabIds(hiddenTabIds?: string[] | null): string[] {
+  if (!Array.isArray(hiddenTabIds)) return []
+  return [...new Set(hiddenTabIds.filter((tabId): tabId is string => typeof tabId === 'string' && !isDrawerTabCore(tabId)))]
+}
+
+export function sanitizeDrawerTabOrder(tabOrder?: string[] | null): string[] {
+  if (!Array.isArray(tabOrder)) return []
+  return [...new Set(tabOrder.filter((tabId): tabId is string => typeof tabId === 'string' && tabId.length > 0))]
+}
+
+/**
+ * Order a list of tabs (built-in or extension) by the user's saved tabOrder.
+ * Tabs not present in `order` are appended in their original registry order.
+ */
+export function applyDrawerTabOrder<T extends { id: string }>(items: T[], order: string[]): T[] {
+  if (!order.length || items.length <= 1) return items
+  const orderIndex = new Map<string, number>()
+  order.forEach((id, idx) => { if (!orderIndex.has(id)) orderIndex.set(id, idx) })
+  const indexed = items.map((item, idx) => ({ item, originalIdx: idx }))
+  indexed.sort((a, b) => {
+    const ai = orderIndex.has(a.item.id) ? orderIndex.get(a.item.id)! : Number.POSITIVE_INFINITY
+    const bi = orderIndex.has(b.item.id) ? orderIndex.get(b.item.id)! : Number.POSITIVE_INFINITY
+    if (ai !== bi) return ai - bi
+    return a.originalIdx - b.originalIdx
+  })
+  return indexed.map((entry) => entry.item)
+}
+
 export const DRAWER_TABS: DrawerTabEntry[] = [
   {
     id: 'profile',
@@ -69,12 +114,12 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   },
   {
     id: 'presets',
-    shortName: 'Presets',
+    shortName: 'Reason',
     tabName: 'Reasoning',
-    tabDescription: 'Manage generation presets and parameters',
+    tabDescription: 'Configure reasoning, chain-of-thought, and prompt behavior',
     tabIcon: Wand2,
     tabHeaderTitle: 'Reasoning',
-    keywords: ['presets', 'parameters', 'temperature', 'sampler', 'generation', 'reasoning', 'top_p', 'settings', 'max tokens', 'penalty', 'frequency', 'prompt order'],
+    keywords: ['reasoning', 'cot', 'chain of thought', 'thinking', 'reasoning effort', 'api reasoning', 'prompt bias', 'start reply with', 'prefix', 'suffix'],
     component: () => <PresetManager />,
   },
   {
@@ -109,6 +154,10 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
         <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
           <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>Image Generation</h3>
           <ImageGenConnectionManager />
+        </div>
+        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
+          <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>Speech-to-Text</h3>
+          <STTConnectionManager />
         </div>
         <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
           <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>Text-to-Speech</h3>
@@ -197,12 +246,12 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   },
   {
     id: 'prompt',
-    shortName: 'Prompt',
-    tabName: 'Prompt Inspector',
-    tabDescription: 'View the assembled prompt and token breakdown',
+    shortName: 'Compose',
+    tabName: 'Composition',
+    tabDescription: 'Pick Lumia and Loom content, Sovereign Hand, and context filters',
     tabIcon: FileText,
-    tabHeaderTitle: 'Prompt',
-    keywords: ['prompt', 'context', 'tokens', 'breakdown', 'inspect', 'debug', 'assembly', 'dry run', 'preview', 'system', 'blocks'],
+    tabHeaderTitle: 'Composition',
+    keywords: ['composition', 'compose', 'lumia', 'loom', 'sovereign hand', 'context filters', 'narrative', 'selection', 'modes'],
     component: () => <PromptPanel />,
   },
   {

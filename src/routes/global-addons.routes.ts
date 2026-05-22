@@ -13,11 +13,11 @@ app.get("/", (c) => {
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  // The previous check `!body.label && body.label !== ""` accepted falsy
-  // non-string values like `null`, `false`, and `0` because they fail the !==""
-  // half. Force a string + non-empty after trim.
-  if (typeof body.label !== "string" || body.label.trim() === "") {
-    return c.json({ error: "label is required" }, 400);
+  // Empty labels are allowed — the UI creates a blank row and lets the user
+  // type the name inline (same pattern as persona-specific add-ons). Reject
+  // only non-string types so falsy values like null/false/0 can't sneak in.
+  if (typeof body.label !== "string") {
+    return c.json({ error: "label must be a string" }, 400);
   }
   const addon = svc.createGlobalAddon(userId, body);
   return c.json(addon, 201);

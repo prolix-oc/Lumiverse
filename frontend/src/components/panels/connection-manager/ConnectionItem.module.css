@@ -57,7 +57,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -76,11 +76,29 @@
 }
 
 .itemMeta {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.itemReasoningMeta {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.itemCachingMeta {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: #d97757;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
 }
 
 .activeCheck {
@@ -104,7 +122,7 @@
 
 .testMessage {
   padding: 0 8px 8px 50px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   animation: fadeIn 0.2s ease-out;
 }
 
@@ -125,7 +143,7 @@
   border: none;
   border-radius: 0 0 10px 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-primary);
   transition: background var(--lumiverse-transition-fast);
@@ -164,7 +182,7 @@
 }
 
 .creditLabel {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -173,7 +191,7 @@
 }
 
 .creditValue {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   font-variant-numeric: tabular-nums;
@@ -197,6 +215,14 @@
 
 .creditsRefresh:hover {
   color: var(--lumiverse-text-muted);
+}
+
+.nanoGptUsageBar .creditCell:first-child {
+  flex: 1.2;
+}
+
+.nanoGptUsageBar .creditCell + .creditCell {
+  padding-left: 14px;
 }
 
 @keyframes fadeIn {

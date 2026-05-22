@@ -7,6 +7,10 @@ const SETTINGS_KEY = "sidecarSettings";
 
 export type SidecarSettings = SidecarConfig;
 
+function isObject(value: unknown): value is Partial<SidecarSettings> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
  * Resolve the shared sidecar settings for a user.
  *
@@ -18,11 +22,8 @@ export type SidecarSettings = SidecarConfig;
 export function getSidecarSettings(userId: string): SidecarSettings {
   // Try the new dedicated setting first
   const row = settingsSvc.getSetting(userId, SETTINGS_KEY);
-  if (row?.value) {
-    const val = row.value as Partial<SidecarSettings>;
-    if (val.connectionProfileId) {
-      return { ...SIDECAR_DEFAULTS, ...val };
-    }
+  if (isObject(row?.value)) {
+    return { ...SIDECAR_DEFAULTS, ...row.value };
   }
 
   // Fall back to legacy council sidecar config

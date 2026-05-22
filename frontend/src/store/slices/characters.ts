@@ -10,7 +10,7 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set) => ({
   selectedCharacterId: null,
   editingCharacterId: null,
   searchQuery: '',
-  filterTab: 'all',
+  filterTab: 'characters',
   sortField: 'name',
   sortDirection: 'asc',
   viewMode: typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'single' : 'grid',

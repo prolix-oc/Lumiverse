@@ -11,6 +11,10 @@ import LazyImage from '@/components/shared/LazyImage'
 import ToolSelector from './ToolSelector'
 import styles from '../CouncilManager.module.css'
 
+type CouncilMemberWithHistory = CouncilMember & {
+  toolHistoryRetention?: Record<string, number>
+}
+
 interface CouncilMemberItemProps {
   member: CouncilMember
   availableTools: CouncilToolDefinition[]
@@ -21,6 +25,7 @@ interface CouncilMemberItemProps {
 export default function CouncilMemberItem({ member, availableTools, onUpdate, onDelete }: CouncilMemberItemProps) {
   const [expanded, setExpanded] = useState(false)
   const [showToolPicker, setShowToolPicker] = useState(false)
+  const memberWithHistory = member as CouncilMemberWithHistory
   const packsWithItems = useStore((s) => s.packsWithItems)
   const setPackWithItems = useStore((s) => s.setPackWithItems)
 
@@ -46,6 +51,14 @@ export default function CouncilMemberItem({ member, availableTools, onUpdate, on
   const assignedTools = member.tools
     .map((name) => toolMap.get(name))
     .filter(Boolean) as CouncilToolDefinition[]
+
+  const updateToolHistoryRetention = (toolName: string, retain: number) => {
+    const current = memberWithHistory.toolHistoryRetention ?? {}
+    const next = { ...current }
+    if (retain <= 0) delete next[toolName]
+    else next[toolName] = retain
+    onUpdate(member.id, { toolHistoryRetention: next } as Partial<CouncilMember>)
+  }
 
   return (
     <div className={styles.memberCard}>
@@ -143,20 +156,39 @@ export default function CouncilMemberItem({ member, availableTools, onUpdate, on
 
             {/* Tool pills */}
             {assignedTools.length > 0 ? (
-              <div className={styles.toolPills}>
-                {assignedTools.map((tool) => (
-                  <span key={tool.name} className={tool.category === 'extension' ? styles.toolPillExtension : styles.toolPill}>
-                    {tool.displayName}
-                    <button
-                      type="button"
-                      className={styles.toolPillRemove}
-                      onClick={() => onUpdate(member.id, { tools: member.tools.filter((t) => t !== tool.name) })}
-                    >
-                      <X size={10} />
-                    </button>
-                  </span>
-                ))}
-              </div>
+              <>
+                <div className={styles.toolPills}>
+                  {assignedTools.map((tool) => (
+                    <span key={tool.name} className={tool.category === 'extension' ? styles.toolPillExtension : styles.toolPill}>
+                      {tool.displayName}
+                      <button
+                        type="button"
+                        className={styles.toolPillRemove}
+                        onClick={() => onUpdate(member.id, { tools: member.tools.filter((t) => t !== tool.name) })}
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className={styles.toolHistoryControls}>
+                  {assignedTools.map((tool) => (
+                    <div key={tool.name} className={styles.toolHistoryRow}>
+                      <div className={styles.toolHistoryInfo}>
+                        <span className={styles.toolHistoryName}>{tool.displayName}</span>
+                        <span className={styles.toolHistoryHint}>Historical deliberations retained</span>
+                      </div>
+                      <NumberStepper
+                        value={memberWithHistory.toolHistoryRetention?.[tool.name] ?? 0}
+                        onChange={(val) => updateToolHistoryRetention(tool.name, val)}
+                        min={0}
+                        max={10}
+                        step={1}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
             ) : (
               <div className={styles.noTools}>No tools assigned</div>
             )}

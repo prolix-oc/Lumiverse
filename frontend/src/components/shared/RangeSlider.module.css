@@ -1,0 +1,87 @@
+/* Shared range slider — track, fill, thumb. Mirrors the visual language
+   established by the Loom sampler sliders so both panels feel unified. */
+
+.trackArea {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  /* pan-y lets the browser scroll vertically when a touch starts on the
+     slider — the native touchstart/move/end listeners do horizontal-vs-
+     vertical direction detection in JS and only preventDefault on
+     confirmed horizontal drags. */
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.disabled {
+  cursor: not-allowed;
+}
+
+.track {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  background: rgba(128, 128, 128, 0.15);
+  border-radius: 3px;
+}
+
+.fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--lumiverse-primary);
+  border-radius: 3px;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  background: var(--lumiverse-primary);
+  border: 2px solid var(--lumiverse-bg);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--lumiverse-primary-020);
+}
+
+/* ── Labeled wrapper ── */
+
+.labeledRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.labeledHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.labeledLabel {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  font-weight: 500;
+}
+
+.labeledValue {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.labeledHint {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  line-height: 1.4;
+}

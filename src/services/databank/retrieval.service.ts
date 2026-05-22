@@ -20,8 +20,8 @@ interface CachedResult {
 
 const resultCache = new Map<string, CachedResult>();
 
-function cacheKey(userId: string, chatId: string): string {
-  return `${userId}:${chatId}`;
+function cacheKey(userId: string, chatId: string, limit: number): string {
+  return `${userId}:${chatId}:${limit}`;
 }
 
 /**
@@ -30,18 +30,22 @@ function cacheKey(userId: string, chatId: string): string {
  * any future test fixture re-using chat ids) can never serve another user's
  * results from the in-memory cache.
  */
-export function getCachedDatabankResult(userId: string, chatId: string): DatabankRetrievalResult | null {
-  const cached = resultCache.get(cacheKey(userId, chatId));
+export function getCachedDatabankResult(userId: string, chatId: string, limit: number): DatabankRetrievalResult | null {
+  const key = cacheKey(userId, chatId, limit);
+  const cached = resultCache.get(key);
   if (!cached) return null;
   if (Date.now() - cached.cachedAt > CACHE_TTL_MS) {
-    resultCache.delete(cacheKey(userId, chatId));
+    resultCache.delete(key);
     return null;
   }
   return cached.result;
 }
 
 export function clearCache(userId: string, chatId: string): void {
-  resultCache.delete(cacheKey(userId, chatId));
+  const prefix = `${userId}:${chatId}:`;
+  for (const key of resultCache.keys()) {
+    if (key.startsWith(prefix)) resultCache.delete(key);
+  }
 }
 
 // ─── Search ───────────────────────────────────────────────────
@@ -58,17 +62,21 @@ export async function searchDatabanks(
   databankIds: string[],
   queryText: string,
   limit = 4,
+  signal?: AbortSignal,
 ): Promise<DatabankRetrievalResult> {
   if (databankIds.length === 0) {
     return { chunks: [], formatted: "", count: 0 };
   }
 
   try {
+    if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
+
     // Embed the query
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
 
     // Search LanceDB
-    const raw = await embeddingsSvc.searchDatabankChunks(userId, databankIds, queryVector, limit, queryText);
+    const raw = await embeddingsSvc.searchDatabankChunks(userId, databankIds, queryVector, limit, queryText, signal);
 
     const chunks: DatabankSearchResult[] = raw.map((r) => ({
       chunkId: r.chunk_id,
@@ -83,11 +91,16 @@ export async function searchDatabanks(
     const formatted = formatResult(chunks);
     const result: DatabankRetrievalResult = { chunks, formatted, count: chunks.length };
 
-    // Cache for synchronous consumption
-    resultCache.set(cacheKey(userId, chatId), { result, cachedAt: Date.now() });
+    // Cache for synchronous consumption — but not when the caller aborted.
+    // A truncated or abort-interrupted result shouldn't poison the next
+    // generation's warm cache.
+    if (!signal?.aborted) {
+      resultCache.set(cacheKey(userId, chatId, limit), { result, cachedAt: Date.now() });
+    }
 
     return result;
   } catch (err) {
+    if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
     console.warn("[databank] Search failed:", err);
     return { chunks: [], formatted: "", count: 0 };
   }

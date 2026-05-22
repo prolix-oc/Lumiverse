@@ -48,6 +48,8 @@ export interface TokenCountBreakdownEntry {
   tokens: number;
   role?: string;
   blockId?: string;
+  extensionId?: string;
+  extensionName?: string;
 }
 
 export interface TokenCountResult {

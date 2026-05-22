@@ -86,7 +86,6 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
       swipeRight: () => {},
     }),
     styles,
-    _raw: message,
   }), [
     message, isUser, displayName, avatarUrl, isHidden, isActivelyStreaming,
     isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,

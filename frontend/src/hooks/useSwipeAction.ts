@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react'
 import { messagesApi } from '@/api/chats'
 import { generateApi, type GenerateRequest } from '@/api/generate'
 import { useStore } from '@/store'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import type { Message } from '@/types/api'
 
 export interface SwipeActionResult {
@@ -19,7 +20,6 @@ export interface SwipeActionResult {
  * Used by SwipeControls (buttons) and gesture/keyboard hooks.
  */
 export default function useSwipeAction(message: Message, chatId: string): SwipeActionResult {
-  const updateMessage = useStore((s) => s.updateMessage)
   const messages = useStore((s) => s.messages)
   const isStreaming = useStore((s) => s.isStreaming)
   const beginStreaming = useStore((s) => s.beginStreaming)
@@ -27,6 +27,7 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
   const setStreamingError = useStore((s) => s.setStreamingError)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const regenFeedback = useStore((s) => s.regenFeedback)
   const openModal = useStore((s) => s.openModal)
@@ -44,12 +45,14 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
     const nonce = ++regenerateNonceRef.current
     beginStreaming(message.id)
     try {
+      const presetId = getActivePresetForGeneration() || undefined
       const genOpts: GenerateRequest = {
         chat_id: chatId,
         message_id: message.id,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
-        preset_id: getActivePresetForGeneration() || undefined,
+        preset_id: presetId,
+        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
       }
       if (feedback) {
         genOpts.regen_feedback = feedback
@@ -69,6 +72,7 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
     message.id,
     activeProfileId,
     activePersonaId,
+    activeCharacterId,
     getActivePresetForGeneration,
     regenFeedback.position,
     beginStreaming,
@@ -98,13 +102,12 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
       if (direction === 'right' && atLast) return
 
       try {
-        const updated = await messagesApi.swipe(chatId, message.id, direction)
-        updateMessage(message.id, updated)
+        await messagesApi.swipe(chatId, message.id, direction)
       } catch (err) {
         console.error('[useSwipeAction] Failed to swipe:', err)
       }
     },
-    [chatId, message.id, atFirst, atLast, isLastAssistantMessage, handleRegenerate, updateMessage]
+    [chatId, message.id, atFirst, atLast, isLastAssistantMessage, handleRegenerate]
   )
 
   return { handleSwipe, handleRegenerate, atFirst, atLast, isLastAssistantMessage, disableLeft, disableRight }
@@ -126,17 +129,19 @@ export async function executeSwipe(message: Message, chatId: string, direction: 
   if (direction === 'right' && atLast && !isLastAssistant) return
 
   if (direction === 'right' && atLast && isLastAssistant) {
-    const { regenFeedback, openModal, beginStreaming, startStreaming, setStreamingError, activeProfileId, activePersonaId, getActivePresetForGeneration } = state
+    const { regenFeedback, openModal, beginStreaming, startStreaming, setStreamingError, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration } = state
 
     const doRegen = async (feedback?: string | null) => {
       beginStreaming(message.id)
       try {
+        const presetId = getActivePresetForGeneration() || undefined
         const genOpts: GenerateRequest = {
           chat_id: chatId,
           message_id: message.id,
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
-          preset_id: getActivePresetForGeneration() || undefined,
+          preset_id: presetId,
+          force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         }
         if (feedback) {
           genOpts.regen_feedback = feedback
@@ -162,8 +167,7 @@ export async function executeSwipe(message: Message, chatId: string, direction: 
   }
 
   try {
-    const updated = await messagesApi.swipe(chatId, message.id, direction)
-    state.updateMessage(message.id, updated)
+    await messagesApi.swipe(chatId, message.id, direction)
   } catch (err) {
     console.error('[executeSwipe] Failed to swipe:', err)
   }

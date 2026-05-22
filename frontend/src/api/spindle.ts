@@ -1,6 +1,9 @@
 import { get, post, del, put } from './client'
 import type { ExtensionInfo, SpindleManifest, ToolRegistration } from 'lumiverse-spindle-types'
 
+const manifestCache = new Map<string, SpindleManifest>()
+const manifestInFlight = new Map<string, Promise<SpindleManifest>>()
+
 export interface EphemeralPoolConfig {
   globalMaxBytes: number
   extensionDefaultMaxBytes: number
@@ -110,8 +113,38 @@ export const spindleApi = {
     return post<{ requested: string[]; granted: string[] }>(`/spindle/${id}/permissions`, grants)
   },
 
-  getManifest(id: string) {
-    return get<SpindleManifest>(`/spindle/${id}/manifest`)
+  getManifest(id: string, options?: { force?: boolean }) {
+    if (!options?.force) {
+      const cached = manifestCache.get(id)
+      if (cached) return Promise.resolve(cached)
+
+      const pending = manifestInFlight.get(id)
+      if (pending) return pending
+    }
+
+    const request = get<SpindleManifest>(`/spindle/${id}/manifest`)
+      .then((manifest) => {
+        manifestCache.set(id, manifest)
+        return manifest
+      })
+      .finally(() => {
+        if (manifestInFlight.get(id) === request) {
+          manifestInFlight.delete(id)
+        }
+      })
+
+    manifestInFlight.set(id, request)
+    return request
+  },
+
+  clearManifestCache(id?: string) {
+    if (id) {
+      manifestCache.delete(id)
+      manifestInFlight.delete(id)
+      return
+    }
+    manifestCache.clear()
+    manifestInFlight.clear()
   },
 
   getTools() {

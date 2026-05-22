@@ -35,7 +35,7 @@ export interface LumiaItem {
   definition: string;
   personality: string;
   behavior: string;
-  gender_identity: 0 | 1 | 2; // 0=unspecified, 1=feminine, 2=masculine
+  gender_identity: 0 | 1 | 2 | 3; // 0=feminine, 1=masculine, 2=neutral, 3=any
   version: string;
   sort_order: number;
   created_at: number;
@@ -49,7 +49,7 @@ export interface CreateLumiaItemInput {
   definition?: string;
   personality?: string;
   behavior?: string;
-  gender_identity?: 0 | 1 | 2;
+  gender_identity?: 0 | 1 | 2 | 3;
   version?: string;
   sort_order?: number;
 }
@@ -139,7 +139,7 @@ export interface PackImportPayload {
     definition?: string;
     personality?: string;
     behavior?: string;
-    genderIdentity?: 0 | 1 | 2;
+    genderIdentity?: 0 | 1 | 2 | 3;
     version?: string;
     sortOrder?: number;
   }>;

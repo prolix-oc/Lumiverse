@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { CloseButton } from '@/components/shared/CloseButton'
+import NumericInput from '@/components/shared/NumericInput'
 import { chatsApi } from '@/api/chats'
 import styles from './AuthorsNotePanel.module.css'
 
@@ -27,40 +28,48 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
   const [role, setRole] = useState<'system' | 'user' | 'assistant'>('system')
   const [enabled, setEnabled] = useState(false)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const chatMetadataRef = useRef<Record<string, any>>({})
+  const currentNoteRef = useRef<AuthorsNote>({ content: '', depth: 4, role: 'system' })
 
-  // Load from chat metadata on open
+  // Load from chat metadata on open. Cancel flag guards against a stale
+  // response landing after the panel closed or the chatId changed.
   useEffect(() => {
     if (!isOpen || !chatId) return
+    let cancelled = false
 
     chatsApi.get(chatId).then((chat) => {
-      chatMetadataRef.current = chat.metadata || {}
+      if (cancelled) return
       const an = chat.metadata?.authors_note as AuthorsNote | undefined
-      if (an) {
-        setNoteText(an.content || '')
-        setDepth(an.depth ?? 4)
-        setRole(an.role || 'system')
-        setEnabled(!!an.content)
-      } else {
-        setNoteText('')
-        setDepth(4)
-        setRole('system')
-        setEnabled(false)
-      }
+      const next: AuthorsNote = an
+        ? {
+            content: an.content || '',
+            depth: an.depth ?? 4,
+            role: an.role || 'system',
+          }
+        : { content: '', depth: 4, role: 'system' }
+      currentNoteRef.current = next
+      setNoteText(next.content)
+      setDepth(next.depth)
+      setRole(next.role)
+      setEnabled(!!next.content)
     }).catch(console.error)
+
+    return () => { cancelled = true }
   }, [isOpen, chatId])
 
   const scheduleSave = useCallback((updates: Partial<AuthorsNote>) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    // Update ref eagerly so the latest field values are always what get saved,
+    // even if multiple fields change before the debounce fires.
+    currentNoteRef.current = { ...currentNoteRef.current, ...updates }
     saveTimerRef.current = setTimeout(() => {
-      const meta = { ...chatMetadataRef.current }
-      const current = (meta.authors_note as AuthorsNote) || { content: '', depth: 4, role: 'system' }
-      meta.authors_note = { ...current, ...updates }
-      if (!meta.authors_note.content?.trim()) {
-        delete meta.authors_note
-      }
-      chatMetadataRef.current = meta
-      chatsApi.update(chatId, { metadata: meta }).catch(console.error)
+      const next = currentNoteRef.current
+      // Atomic merge via PATCH so concurrent server-side writers (expression
+      // detection, council caching, deferred WI/chat-var persistence) can't
+      // clobber the author's note, and vice versa. `null` deletes the key.
+      const payload: Record<string, any> = next.content?.trim()
+        ? { authors_note: next }
+        : { authors_note: null }
+      chatsApi.patchMetadata(chatId, payload).catch(console.error)
     }, 400)
   }, [chatId])
 
@@ -77,8 +86,8 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
     scheduleSave({ content: val })
   }, [scheduleSave])
 
-  const handleDepthChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Math.max(0, Math.min(9999, Number(e.target.value) || 0))
+  const handleDepthChange = useCallback((value: number | null) => {
+    const val = Math.max(0, Math.min(9999, value ?? 0))
     setDepth(val)
     scheduleSave({ depth: val })
   }, [scheduleSave])
@@ -113,6 +122,8 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
       <div className={styles.body}>
         <div className={styles.field}>
           <textarea
+            name="authors-note"
+            aria-label="Author's note"
             className={styles.textarea}
             rows={3}
             value={noteText}
@@ -124,18 +135,24 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
         <div className={styles.row}>
           <div className={styles.field}>
             <label className={styles.label}>Depth</label>
-            <input
-              type="number"
+            <NumericInput
               className={styles.input}
               min={0}
               max={9999}
               value={depth}
+              integer
               onChange={handleDepthChange}
             />
           </div>
           <div className={styles.field}>
             <label className={styles.label}>Role</label>
-            <select className={styles.select} value={role} onChange={handleRoleChange}>
+            <select
+              name="authors-note-role"
+              aria-label="Role"
+              className={styles.select}
+              value={role}
+              onChange={handleRoleChange}
+            >
               {ROLES.map((r) => (
                 <option key={r.value} value={r.value}>{r.label}</option>
               ))}

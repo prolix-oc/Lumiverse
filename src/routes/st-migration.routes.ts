@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { requireOwner } from "../auth/middleware";
 import { getDb } from "../db/connection";
 import { scanSTData } from "../migration/st-reader";
+import { importTagLibraryBackup } from "../services/tag-library-import.service";
 import {
   executeMigration,
   isMigrationRunning,
@@ -29,6 +30,33 @@ app.get("/connection-types", async (c) => {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const localFs = new LocalFileSystem();
+
+async function ensureMigrationTargetAccess(c: any, targetUserId: string): Promise<Response | null> {
+  const callerUserId = c.get("userId");
+  const callerRole = c.get("session")?.user?.role;
+
+  if (callerRole === "owner") {
+    if (targetUserId !== callerUserId) {
+      return c.json({ error: "Owner can only migrate to their own account" }, 403);
+    }
+    return null;
+  }
+
+  if (callerRole === "admin" && targetUserId !== callerUserId) {
+    const targetUser = getDb()
+      .query('SELECT id, role FROM "user" WHERE id = ?')
+      .get(targetUserId) as { id: string; role: string } | null;
+
+    if (!targetUser) {
+      return c.json({ error: "Target user not found" }, 404);
+    }
+    if (targetUser.role === "owner" || targetUser.role === "admin") {
+      return c.json({ error: "Admins can only migrate to their own account or user-role accounts" }, 403);
+    }
+  }
+
+  return null;
+}
 
 function parseConnectionConfig(body: any): FileConnectionConfig {
   if (!body.connection || body.connection.type === "local") {
@@ -246,6 +274,29 @@ app.post("/scan", async (c) => {
   }
 });
 
+app.post("/tag-library/import", async (c) => {
+  const formData = await c.req.formData();
+  const file = formData.get("file");
+  const targetUserId = formData.get("targetUserId");
+
+  if (!(file instanceof File) || file.size === 0) {
+    return c.json({ error: "TagLibrary backup file is required" }, 400);
+  }
+  if (typeof targetUserId !== "string" || !targetUserId.trim()) {
+    return c.json({ error: "targetUserId is required" }, 400);
+  }
+
+  const permissionError = await ensureMigrationTargetAccess(c, targetUserId);
+  if (permissionError) return permissionError;
+
+  try {
+    const result = await importTagLibraryBackup(targetUserId, file);
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Failed to import TagLibrary backup" }, 400);
+  }
+});
+
 // ─── POST /execute — start migration ────────────────────────────────────────
 
 app.post("/execute", async (c) => {
@@ -276,28 +327,8 @@ app.post("/execute", async (c) => {
 
   // Permission enforcement
   const callerUserId = c.get("userId");
-  const callerRole = c.get("session")?.user?.role;
-
-  if (callerRole === "owner") {
-    // Owner can only migrate to themselves
-    if (targetUserId !== callerUserId) {
-      return c.json({ error: "Owner can only migrate to their own account" }, 403);
-    }
-  } else if (callerRole === "admin") {
-    // Admin can migrate to self or user-role accounts
-    if (targetUserId !== callerUserId) {
-      const targetUser = getDb()
-        .query('SELECT id, role FROM "user" WHERE id = ?')
-        .get(targetUserId) as { id: string; role: string } | null;
-
-      if (!targetUser) {
-        return c.json({ error: "Target user not found" }, 404);
-      }
-      if (targetUser.role === "owner" || targetUser.role === "admin") {
-        return c.json({ error: "Admins can only migrate to their own account or user-role accounts" }, 403);
-      }
-    }
-  }
+  const permissionError = await ensureMigrationTargetAccess(c, targetUserId);
+  if (permissionError) return permissionError;
 
   const migrationId = crypto.randomUUID();
 
@@ -336,6 +367,8 @@ app.get("/status", (c) => {
       migrationId: active.migrationId,
       phase: active.phase,
       startedAt: active.startedAt,
+      progress: active.progress,
+      recentLogs: active.recentLogs,
     });
   }
 
@@ -346,6 +379,8 @@ app.get("/status", (c) => {
       migrationId: last.migrationId,
       phase: last.phase,
       startedAt: last.startedAt,
+      progress: last.progress,
+      recentLogs: last.recentLogs,
       results: last.results,
       error: last.error,
     });

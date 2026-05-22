@@ -1,0 +1,151 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lumiverse-primary) 20%, var(--lumiverse-border));
+  background: color-mix(in srgb, var(--lumiverse-primary) 7%, var(--lumiverse-bg-deep));
+}
+
+.bannerBody {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary-text);
+  margin-top: 1px;
+}
+
+.bannerText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bannerTitle {
+  color: var(--lumiverse-text);
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+}
+
+.bannerDesc {
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+}
+
+.bannerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.runBtn {
+  padding: 5px 12px;
+  border-radius: var(--lumiverse-radius);
+  border: 1px solid var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary-text);
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast);
+}
+
+.runBtn:hover {
+  background: var(--lumiverse-primary-030, var(--lumiverse-primary-020));
+  border-color: var(--lumiverse-primary);
+}
+
+.runBtn:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.dismissBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition:
+    background var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast);
+}
+
+.dismissBtn:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.dismissBtn:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.runningText {
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.doneText {
+  flex: 1;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.errorText {
+  flex: 1;
+  color: var(--lumiverse-danger);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.banner[data-done] {
+  background: color-mix(in srgb, var(--lumiverse-success, #4ade80) 6%, var(--lumiverse-bg-deep));
+  border-bottom-color: color-mix(in srgb, var(--lumiverse-success, #4ade80) 20%, var(--lumiverse-border));
+}
+
+.banner[data-error] {
+  background: color-mix(in srgb, var(--lumiverse-danger) 6%, var(--lumiverse-bg-deep));
+  border-bottom-color: color-mix(in srgb, var(--lumiverse-danger) 20%, var(--lumiverse-border));
+}
+
+@media (max-width: 640px) {
+  .banner {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .bannerActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .bannerDesc {
+    display: none;
+  }
+}

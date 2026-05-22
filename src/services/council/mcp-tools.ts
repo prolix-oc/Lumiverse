@@ -1,4 +1,4 @@
-import type { CouncilToolDefinition } from "lumiverse-spindle-types";
+import type { RuntimeCouncilToolDefinition } from "./tool-runtime";
 import { getMcpClientManager } from "../mcp-client-manager";
 
 /**
@@ -7,17 +7,19 @@ import { getMcpClientManager } from "../mcp-client-manager";
  *
  * Qualified name format: `mcp:{serverIdPrefix8}:{toolName}`
  */
-export function getMcpToolsAsCouncilTools(userId: string): CouncilToolDefinition[] {
+export function getMcpToolsAsCouncilTools(userId: string): RuntimeCouncilToolDefinition[] {
   const manager = getMcpClientManager();
   const discoveredTools = manager.getDiscoveredTools(userId);
 
-  return discoveredTools.map((tool): CouncilToolDefinition => ({
+  return discoveredTools.map((tool): RuntimeCouncilToolDefinition => ({
     name: `mcp:${tool.server_id.slice(0, 8)}:${tool.name}`,
     displayName: tool.name,
     description: tool.description,
     category: "extension",
+    execution: "mcp",
     prompt: tool.description,
     inputSchema: tool.input_schema,
+    argsSchema: tool.input_schema,
     storeInDeliberation: true,
     extensionName: `MCP: ${tool.server_name}`,
   }));

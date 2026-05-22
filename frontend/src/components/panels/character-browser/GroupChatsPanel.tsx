@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router'
 import { Users, Trash2, MessageSquarePlus } from 'lucide-react'
 import { chatsApi } from '@/api/chats'
@@ -6,7 +6,8 @@ import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { useStore } from '@/store'
 import LazyImage from '@/components/shared/LazyImage'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
-import type { RecentChat } from '@/types/api'
+import { useGroupChatBrowser } from '@/hooks/useGroupChatBrowser'
+import type { GroupedRecentChat } from '@/types/api'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import { Spinner } from '@/components/shared/Spinner'
 import type { CharacterViewMode } from '@/types/store'
@@ -70,37 +71,21 @@ interface GroupChatsPanelProps {
 export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
   const navigate = useNavigate()
   const openModal = useStore((s) => s.openModal)
-  const [groupChats, setGroupChats] = useState<RecentChat[]>([])
-  const [loading, setLoading] = useState(true)
-  const [deleteTarget, setDeleteTarget] = useState<RecentChat | null>(null)
-
-  const fetchGroupChats = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await chatsApi.listRecent({ limit: 200 })
-      setGroupChats(result.data.filter((c) => c.metadata?.group === true))
-    } catch (err) {
-      console.error('[GroupChatsPanel] Failed to load:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchGroupChats()
-  }, [fetchGroupChats])
+  const searchQuery = useStore((s) => s.searchQuery)
+  const { groupChats, loading, removeLocal } = useGroupChatBrowser()
+  const [deleteTarget, setDeleteTarget] = useState<GroupedRecentChat | null>(null)
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
-    const id = deleteTarget.id
+    const id = deleteTarget.latest_chat_id
     setDeleteTarget(null)
     try {
       await chatsApi.delete(id)
-      setGroupChats((prev) => prev.filter((c) => c.id !== id))
+      removeLocal(id)
     } catch (err) {
       console.error('[GroupChatsPanel] Failed to delete:', err)
     }
-  }, [deleteTarget])
+  }, [deleteTarget, removeLocal])
 
   if (loading) {
     return (
@@ -112,6 +97,14 @@ export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
   }
 
   if (groupChats.length === 0) {
+    if (searchQuery.trim()) {
+      return (
+        <div className={styles.empty}>
+          <Users size={32} strokeWidth={1} className={styles.emptyIcon} />
+          <p>No group chats match your search</p>
+        </div>
+      )
+    }
     return (
       <div className={styles.empty}>
         <Users size={32} strokeWidth={1} className={styles.emptyIcon} />
@@ -138,23 +131,24 @@ export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
         viewMode === 'single' && styles.gridColumns1,
       )}>
         {groupChats.map((chat) => {
-          const charIds: string[] = chat.metadata?.character_ids ?? []
+          const charIds: string[] = chat.group_character_ids ?? []
           const count = charIds.length
+          const displayName = chat.group_name || chat.latest_chat_name || 'Group Chat'
 
           if (isGrid) {
             return (
               <button
-                key={chat.id}
+                key={chat.latest_chat_id}
                 type="button"
                 className={styles.gridCard}
-                onClick={() => navigate(`/chat/${chat.id}`)}
+                onClick={() => navigate(`/chat/${chat.latest_chat_id}`)}
               >
                 <div className={styles.gridCardImage}>
                   <MosaicThumb charIds={charIds} size="large" />
                 </div>
                 <div className={styles.gridCardOverlay} />
                 <div className={styles.gridCardContent}>
-                  <span className={styles.gridCardName}>{chat.name || 'Group Chat'}</span>
+                  <span className={styles.gridCardName}>{displayName}</span>
                   <div className={styles.gridCardMeta}>
                     <span className={styles.memberBadge}>
                       <Users size={9} strokeWidth={2} />
@@ -180,14 +174,14 @@ export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
 
           return (
             <button
-              key={chat.id}
+              key={chat.latest_chat_id}
               type="button"
               className={styles.listCard}
-              onClick={() => navigate(`/chat/${chat.id}`)}
+              onClick={() => navigate(`/chat/${chat.latest_chat_id}`)}
             >
               <MosaicThumb charIds={charIds} size="small" />
               <div className={styles.listCardInfo}>
-                <span className={styles.listCardName}>{chat.name || 'Group Chat'}</span>
+                <span className={styles.listCardName}>{displayName}</span>
                 <span className={styles.listCardMeta}>
                   {count} members &middot; {formatRelativeTime(chat.updated_at)}
                 </span>
@@ -215,7 +209,7 @@ export default function GroupChatsPanel({ viewMode }: GroupChatsPanelProps) {
         title="Delete Group Chat"
         message={
           deleteTarget
-            ? <>Are you sure you want to delete <strong>&quot;{deleteTarget.name || 'Group Chat'}&quot;</strong>?</>
+            ? <>Are you sure you want to delete <strong>&quot;{deleteTarget.group_name || deleteTarget.latest_chat_name || 'Group Chat'}&quot;</strong>?</>
             : 'Are you sure?'
         }
         variant="danger"

@@ -38,6 +38,20 @@ export interface MigrationResults {
   group_chats?: { imported: number; failed: number; skipped: number; total_messages: number };
 }
 
+export interface MigrationProgressSnapshot {
+  phase: string;
+  label: string;
+  current: number;
+  total: number;
+  updatedAt: number;
+}
+
+export interface MigrationLogSnapshot {
+  level: "info" | "warn" | "error";
+  message: string;
+  timestamp: number;
+}
+
 interface MigrationState {
   migrationId: string;
   callerUserId: string;
@@ -47,7 +61,12 @@ interface MigrationState {
   results: MigrationResults | null;
   error: string | null;
   completed: boolean;
+  progress: MigrationProgressSnapshot | null;
+  recentLogs: MigrationLogSnapshot[];
 }
+
+const MAX_RECENT_LOGS = 200;
+const PROGRESS_EMIT_INTERVAL_MS = 150;
 
 // ─── In-memory lock ─────────────────────────────────────────────────────────
 
@@ -76,25 +95,64 @@ export function isMigrationRunning(): boolean {
 // ─── Logger factory ─────────────────────────────────────────────────────────
 
 function createWsLogger(migrationId: string, callerUserId: string): MigrationLogger {
+  let lastProgressEmit: MigrationProgressSnapshot | null = null;
+
+  const appendLog = (level: "info" | "warn" | "error", message: string) => {
+    const state = activeMigrations.get(migrationId);
+    if (!state) return;
+    state.recentLogs.push({ level, message, timestamp: Date.now() });
+    if (state.recentLogs.length > MAX_RECENT_LOGS) {
+      state.recentLogs.splice(0, state.recentLogs.length - MAX_RECENT_LOGS);
+    }
+  };
+
+  const updateProgress = (phase: string, label: string, current: number, total: number) => {
+    const progress: MigrationProgressSnapshot = {
+      phase,
+      label,
+      current,
+      total,
+      updatedAt: Date.now(),
+    };
+
+    const state = activeMigrations.get(migrationId);
+    if (state) state.progress = progress;
+
+    const shouldEmit = !lastProgressEmit
+      || progress.phase !== lastProgressEmit.phase
+      || progress.label !== lastProgressEmit.label
+      || progress.current <= 1
+      || progress.current >= progress.total
+      || progress.updatedAt - lastProgressEmit.updatedAt >= PROGRESS_EMIT_INTERVAL_MS;
+
+    if (!shouldEmit) return;
+
+    lastProgressEmit = progress;
+    eventBus.emit(EventType.MIGRATION_PROGRESS, {
+      migrationId,
+      phase: progress.phase,
+      label: progress.label,
+      current: progress.current,
+      total: progress.total,
+    }, callerUserId);
+  };
+
   return {
     info(message: string) {
+      appendLog("info", message);
       eventBus.emit(EventType.MIGRATION_LOG, { migrationId, level: "info", message }, callerUserId);
     },
     warn(message: string) {
+      appendLog("warn", message);
       eventBus.emit(EventType.MIGRATION_LOG, { migrationId, level: "warn", message }, callerUserId);
     },
     error(message: string) {
+      appendLog("error", message);
       eventBus.emit(EventType.MIGRATION_LOG, { migrationId, level: "error", message }, callerUserId);
     },
     progress(label: string, current: number, total: number) {
       const state = activeMigrations.get(migrationId);
-      eventBus.emit(EventType.MIGRATION_PROGRESS, {
-        migrationId,
-        phase: state?.phase ?? "unknown",
-        label,
-        current,
-        total,
-      }, callerUserId);
+      updateProgress(state?.phase ?? "unknown", label, current, total);
     },
   };
 }
@@ -124,6 +182,8 @@ export async function executeMigration(
     results: null,
     error: null,
     completed: false,
+    progress: null,
+    recentLogs: [],
   };
 
   activeMigrations.set(migrationId, state);
@@ -134,6 +194,13 @@ export async function executeMigration(
   // Helper to emit phase transitions so the frontend always tracks state
   const setPhase = (phase: string) => {
     state.phase = phase;
+    state.progress = {
+      phase,
+      label: phase,
+      current: 0,
+      total: 0,
+      updatedAt: Date.now(),
+    };
     eventBus.emit(EventType.MIGRATION_PROGRESS, {
       migrationId,
       phase,

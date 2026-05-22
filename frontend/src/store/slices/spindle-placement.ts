@@ -38,12 +38,19 @@ export interface FloatWidgetState {
   root: HTMLElement
   x: number
   y: number
+  defaultX: number
+  defaultY: number
+  defaultWidth: number
+  defaultHeight: number
   width: number
   height: number
   visible: boolean
   snapToEdge: boolean
   tooltip?: string
   chromeless?: boolean
+  fullscreen?: boolean
+  /** Saved x/y/w/h from before entering fullscreen. */
+  preFullscreen?: { x: number; y: number; width: number; height: number }
 }
 
 export interface DockPanelState {
@@ -65,7 +72,7 @@ export interface AppMountState {
   extensionId: string
   root: HTMLElement
   className?: string
-  position: 'start' | 'end'
+  position: 'start' | 'end' | 'app-overlay'
   visible: boolean
 }
 
@@ -74,6 +81,7 @@ export interface InputBarActionState {
   extensionId: string
   extensionName: string
   label: string
+  subtitle?: string
   iconSvg?: string
   iconUrl?: string
   enabled: boolean
@@ -168,7 +176,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     }))
   },
 
-  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'visible'>>) => {
+  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'fullscreen' | 'preFullscreen'>>) => {
     set((state) => ({
       floatWidgets: state.floatWidgets.map((w) =>
         w.id === widgetId ? { ...w, ...updates } : w
@@ -255,7 +263,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     }))
   },
 
-  updateInputBarAction: (actionId: string, updates: Partial<Pick<InputBarActionState, 'label' | 'enabled'>>) => {
+  updateInputBarAction: (actionId: string, updates: Partial<Pick<InputBarActionState, 'label' | 'subtitle' | 'enabled'>>) => {
     set((state) => ({
       inputBarActions: state.inputBarActions.map((a) =>
         a.id === actionId ? { ...a, ...updates } : a

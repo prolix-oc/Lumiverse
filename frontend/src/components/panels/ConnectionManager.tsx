@@ -12,6 +12,7 @@ const FALLBACK_PROVIDERS = [
   { id: 'openai', name: 'OpenAI', default_url: 'https://api.openai.com/v1' },
   { id: 'anthropic', name: 'Anthropic', default_url: 'https://api.anthropic.com' },
   { id: 'google', name: 'Google Gemini', default_url: 'https://generativelanguage.googleapis.com' },
+  { id: 'infermatic', name: 'Infermatic', default_url: 'https://api.totalgpt.ai/v1' },
   { id: 'pollinations_text', name: 'Pollinations (Text)', default_url: 'https://text.pollinations.ai/openai' },
   { id: 'pollinations', name: 'Pollinations', default_url: 'https://gen.pollinations.ai/v1' },
 ]
@@ -47,12 +48,23 @@ export default function ConnectionManager() {
     }
   }, [])
 
-  // Initialization: load profiles and providers in parallel
+  // Initialization: load profiles and providers in parallel.
+  //
+  // `useAppInit` preloads both right after auth, so by the time this panel
+  // mounts the store is usually already populated. We only show the loading
+  // placeholder when we're starting from an empty store (fresh tab / auth
+  // hand-off); otherwise we render from the store immediately and kick off
+  // a silent stale-while-revalidate refresh in the background.
   useEffect(() => {
     let cancelled = false
 
+    const storeState = useStore.getState()
+    const hasCachedProfiles = storeState.profiles.length > 0
+    const hasCachedProviders = storeState.providers.length > 0
+    const cacheHit = hasCachedProfiles && hasCachedProviders
+
     async function init() {
-      setLoading(true)
+      if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
           connectionsApi.list({ limit: 100 }),
@@ -65,14 +77,15 @@ export default function ConnectionManager() {
           setProfiles(profilesResult.value.data)
         }
 
-        const loadedProviders = providersResult.status === 'fulfilled'
-          ? providersResult.value.providers
-          : FALLBACK_PROVIDERS
-        setProviders(loadedProviders)
+        if (providersResult.status === 'fulfilled') {
+          setProviders(providersResult.value.providers)
+        } else if (!hasCachedProviders) {
+          setProviders(FALLBACK_PROVIDERS)
+        }
       } catch (err) {
         console.error('[ConnectionManager] Init failed:', err)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && !cacheHit) setLoading(false)
       }
     }
 

@@ -1,15 +1,20 @@
-import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, useSyncExternalStore } from 'react'
+import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, useSyncExternalStore, useDeferredValue } from 'react'
 import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
+import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
+import { healFormattingArtifacts } from '@/lib/formatHealing'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { sanitizeHtmlIsland, sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import {
-  stripAndDispatchMessageTags,
+  dispatchMessageTagIntercepts,
+  stripMessageTags,
   subscribeTagInterceptorRegistry,
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
+import { SpindleMessageWidgets } from '@/lib/spindle/message-widgets'
 import { useStore } from '@/store'
 import { useDisplayRegex } from '@/hooks/useDisplayRegex'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
@@ -23,6 +28,7 @@ interface MessageContentProps {
   isUser: boolean
   userName: string
   isStreaming?: boolean
+  lockStreamingHeight?: boolean
   messageId?: string
   chatId?: string
   depth?: number
@@ -104,6 +110,13 @@ const BLOCK_CLOSE_RE = /^<\/(p|div|li|blockquote|h[1-6]|pre|table|tr|td|th)\b/i
 const SKIP_OPEN_RE = /^<(pre|code)\b/i
 const SKIP_CLOSE_RE = /^<\/(pre|code)\b/i
 
+function isFeetInchesQuote(text: string, quoteIndex: number): boolean {
+  const beforeQuote = text.slice(0, quoteIndex)
+    .replace(/&#(?:0*39|x0*27);|&apos;/gi, "'")
+
+  return /\d'\d+$/.test(beforeQuote)
+}
+
 function colorizeDialogue(html: string): string {
   const parts = html.split(/(<[^>]*>)/)
   let result = ''
@@ -142,6 +155,12 @@ function colorizeDialogue(html: string): string {
         && part[j + 5] === ';'
 
       if (isLiteral || isEntity) {
+        if (isFeetInchesQuote(part, j)) {
+          output += '&quot;'
+          if (isEntity) j += 5
+          continue
+        }
+
         if (!inQuote) {
           output += `<span class="${styles.proseDialogue}">&quot;`
           inQuote = true
@@ -164,6 +183,39 @@ function colorizeDialogue(html: string): string {
 
 function addLazyLoadingToImages(html: string): string {
   return html.replace(/<img\b(?![^>]*\bloading=)/gi, '<img loading="lazy"')
+}
+
+function normalizeLegacyFontTags(html: string): string {
+  return html
+    .replace(/<font\b([^>]*)>/gi, (_match, attrs: string) => {
+      const color = attrs.match(/\bcolor\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i)?.slice(1).find(Boolean)
+      const safeColor = color && /^[#\w\s(),.%+-]+$/.test(color) ? color : null
+
+      return safeColor ? `<span style="color:${escapeHtml(safeColor)}">` : '<span>'
+    })
+    .replace(/<\/font\s*>/gi, '</span>')
+}
+
+interface MarkdownFence {
+  marker: '`' | '~'
+  length: number
+}
+
+function getMarkdownFence(line: string): MarkdownFence | null {
+  const match = line.match(/^\s*(`{3,}|~{3,})/)
+  if (!match) return null
+  return {
+    marker: match[1][0] as MarkdownFence['marker'],
+    length: match[1].length,
+  }
+}
+
+function isMarkdownFenceClose(line: string, fence: MarkdownFence): boolean {
+  const trimmed = line.trimStart()
+  const run = trimmed.match(/^(`+|~+)/)?.[0]
+  if (!run) return false
+  if (run[0] !== fence.marker || run.length < fence.length) return false
+  return trimmed.slice(run.length).trim().length === 0
 }
 
 /**
@@ -229,10 +281,12 @@ function escapeIsolatedOrderedListItems(text: string): string {
 
 function formatContent(raw: string): string {
   if (!raw) return ''
-  const normalized = normalizeQuotes(raw)
+  const healed = healFormattingArtifacts(raw)
+  const normalized = normalizeQuotes(healed)
   const listSafe = escapeIsolatedOrderedListItems(normalized)
   let html = marked.parse(listSafe, { async: false }) as string
   html = normalizeQuotesInHTML(html)
+  html = normalizeLegacyFontTags(html)
   html = colorizeDialogue(html)
   html = addLazyLoadingToImages(html)
   return html
@@ -244,6 +298,7 @@ marked.setOptions({
   gfm: true,
   silent: true,
   renderer,
+  tokenizer: createStrictTildeTokenizer(),
 })
 
 // ── HTML Island Isolation ──
@@ -253,9 +308,398 @@ marked.setOptions({
 // phone screens, etc.) and isolating their styles.
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
-const ISLAND_RE = new RegExp(`<!--${HTML_ISLAND_TOKEN}_(\\d+)-->`, 'g')
-const BLOCK_ELEMENT_RE = /^<(div|section|article|aside|nav|main|header|footer|form|fieldset|figure|details)\b/i
+const YOUTUBE_EMBED_TOKEN = 'LUMIVERSE_YOUTUBE_EMBED'
+const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
+const SPECIAL_PIECE_RE = new RegExp(`<!--(${HTML_ISLAND_TOKEN}|${YOUTUBE_EMBED_TOKEN})_(\\d+)-->`, 'g')
+const YOUTUBE_NOCOOKIE_ORIGIN = 'https://www.youtube-nocookie.com'
+const YOUTUBE_EMBED_PATH_RE = /^\/embed\/[A-Za-z0-9_-]{6,}$/
+const YOUTUBE_EMBED_BOOL_QUERY_PARAMS = new Set(['autoplay', 'controls', 'loop', 'mute', 'playsinline', 'rel'])
+const YOUTUBE_EMBED_NUMBER_QUERY_PARAMS = new Set(['end', 'start'])
+const YOUTUBE_EMBED_TOKEN_QUERY_PARAMS = new Set(['si'])
+const YOUTUBE_EMBED_ALLOWED_QUERY_PARAMS = new Set([
+  ...YOUTUBE_EMBED_BOOL_QUERY_PARAMS,
+  ...YOUTUBE_EMBED_NUMBER_QUERY_PARAMS,
+  ...YOUTUBE_EMBED_TOKEN_QUERY_PARAMS,
+])
+const SAFE_YOUTUBE_EMBED_TOKEN_RE = /^[A-Za-z0-9_-]{1,128}$/
 const INLINE_STYLE_ATTR_RE = /\bstyle\s*=/gi
+const NO_ISLAND_ATTR_RE = /\bdata-no-island(?=[\s=>"'/]|$)/i
+const ROOT_HTML_TAG_RE = /^<([a-z][\w:-]*)\b[^>]*>/i
+const VOID_HTML_TAGS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+])
+
+const ISLAND_BASE_CSS = `
+  :host {
+    display: flow-root;
+    position: relative;
+    max-width: 100%;
+    font-size: calc(14px * var(--lumiverse-font-scale, 1));
+    line-height: 1.65;
+    color: var(--lumiverse-text);
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  q {
+    quotes: none;
+  }
+
+  q::before,
+  q::after {
+    content: none;
+  }
+
+  p {
+    margin: 0 0 0.5em;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+
+  em,
+  .${styles.proseItalic} {
+    color: var(--lumiverse-prose-italic);
+    font-style: italic;
+  }
+
+  strong,
+  .${styles.proseBold} {
+    font-weight: 600;
+    color: var(--lumiverse-prose-bold);
+  }
+
+  .${styles.proseInlineEmphasis} {
+    font-weight: 600;
+    color: var(--lumiverse-prose-bold);
+  }
+
+  .${styles.proseDialogue} {
+    color: var(--lumiverse-prose-dialogue);
+  }
+
+  span[style*="color"] .${styles.proseDialogue},
+  span[style*="color"] em,
+  span[style*="color"] .${styles.proseItalic},
+  span[style*="color"] strong,
+  span[style*="color"] .${styles.proseBold},
+  span[style*="color"] .${styles.proseInlineEmphasis},
+  font .${styles.proseDialogue},
+  font em,
+  font .${styles.proseItalic},
+  font strong,
+  font .${styles.proseBold},
+  font .${styles.proseInlineEmphasis} {
+    color: inherit;
+  }
+
+  .${styles.proseDialogue} em,
+  .${styles.proseDialogue} .${styles.proseItalic},
+  .${styles.proseDialogue} strong,
+  .${styles.proseDialogue} .${styles.proseBold},
+  .${styles.proseDialogue} .${styles.proseInlineEmphasis} {
+    color: inherit;
+  }
+
+  code {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--lumiverse-fill-subtle);
+    border: 1px solid var(--lcs-glass-border);
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 0.88em;
+    color: var(--lumiverse-primary-text);
+  }
+
+  .${styles.codeBlock} {
+    position: relative;
+    margin: 10px 0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--lumiverse-fill-strong);
+    border: 1px solid var(--lumiverse-border);
+  }
+
+  .${styles.codeHeader} {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    background: var(--lumiverse-fill-subtle);
+    border-bottom: 1px solid var(--lumiverse-border);
+  }
+
+  .${styles.codeLang} {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 0.72em;
+    font-weight: 500;
+    color: var(--lumiverse-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    user-select: none;
+  }
+
+  .${styles.codeCopy} {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--lumiverse-text-dim);
+    font-family: inherit;
+    font-size: 0.72em;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 150ms ease, color 150ms ease, background 150ms ease;
+  }
+
+  .${styles.codeBlock}:hover .${styles.codeCopy} {
+    opacity: 1;
+  }
+
+  .${styles.codeCopy}:hover {
+    color: var(--lumiverse-text);
+    background: var(--lumiverse-fill-subtle);
+  }
+
+  .${styles.codeCopied} {
+    opacity: 1 !important;
+    color: var(--lumiverse-success, #4ade80) !important;
+  }
+
+  .${styles.codeBlock} pre {
+    margin: 0;
+    padding: 14px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .${styles.codeBlock} pre code {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 0.85em;
+    line-height: 1.6;
+    color: var(--lumiverse-text);
+    background: none;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    tab-size: 2;
+  }
+
+  pre {
+    padding: 14px;
+    border-radius: 10px;
+    background: var(--lumiverse-fill-strong);
+    border: 1px solid var(--lumiverse-border);
+    overflow-x: auto;
+    margin: 10px 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  pre code {
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: 0.85em;
+    line-height: 1.6;
+    color: var(--lumiverse-text);
+    white-space: pre-wrap;
+  }
+
+  blockquote {
+    border-left: 2px solid var(--lumiverse-primary-020);
+    padding-left: 12px;
+    margin: 8px 0;
+    background: var(--lumiverse-primary-010);
+    border-radius: 0 var(--lcs-radius-xs) var(--lcs-radius-xs) 0;
+    padding: 6px 12px;
+    color: var(--lumiverse-prose-blockquote);
+    font-style: italic;
+  }
+
+  h1 { font-size: 1.35em; font-weight: 600; margin: 0.7em 0 0.35em; }
+  h2 { font-size: 1.2em; font-weight: 600; margin: 0.7em 0 0.35em; }
+  h3 { font-size: 1.1em; font-weight: 600; margin: 0.7em 0 0.35em; }
+  h4 { font-size: 1em; font-weight: 600; margin: 0.7em 0 0.35em; }
+  h5 { font-size: 0.95em; font-weight: 600; margin: 0.7em 0 0.35em; }
+  h6 { font-size: 0.9em; font-weight: 600; margin: 0.7em 0 0.35em; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--lumiverse-border);
+    margin: 12px 0;
+  }
+
+  ul,
+  ol {
+    padding-left: 1.4em;
+    margin: 4px 0;
+    list-style-position: outside;
+  }
+
+  li {
+    margin: 2px 0;
+  }
+
+  ul li {
+    list-style: disc;
+  }
+
+  ol li {
+    list-style: decimal;
+  }
+
+  a,
+  .${styles.proseLink} {
+    color: var(--lumiverse-prose-link, var(--lumiverse-primary-text));
+    text-decoration: none;
+    transition: color var(--lumiverse-transition-fast), text-decoration var(--lumiverse-transition-fast);
+  }
+
+  a:hover,
+  .${styles.proseLink}:hover {
+    text-decoration: underline;
+    filter: brightness(1.15);
+  }
+
+  .${styles.proseImageWrap} {
+    display: inline-block;
+    margin: 8px 0;
+    max-width: var(--prose-image-max-width, 240px);
+    max-height: var(--prose-image-max-height, 240px);
+    overflow: hidden;
+    border-radius: var(--lcs-radius-sm);
+    border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
+    background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+    cursor: pointer;
+    transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast), transform var(--lumiverse-transition-fast);
+  }
+
+  .${styles.proseImageWrap}:hover {
+    border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+    transform: scale(1.02);
+  }
+
+  .${styles.proseImage},
+  img {
+    display: block;
+    max-width: 100%;
+    max-height: var(--prose-image-max-height, 240px);
+    object-fit: contain;
+    border-radius: var(--lcs-radius-sm);
+    cursor: pointer;
+  }
+
+  .${styles.proseTable},
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    border: 1px solid var(--lumiverse-border);
+    border-radius: var(--lcs-radius-xs);
+    overflow: hidden;
+  }
+
+  .${styles.proseTableHead},
+  th {
+    font-weight: 600;
+    background: var(--lumiverse-primary-010);
+    border: 1px solid var(--lumiverse-border);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  }
+
+  .${styles.proseTableCell},
+  td {
+    padding: 8px 12px;
+    border: 1px solid var(--lumiverse-border);
+    font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  }
+
+  .${styles.proseTableRow}:nth-child(even) td,
+  tr:nth-child(even) td {
+    background: var(--lumiverse-bg-dark);
+  }
+
+  video,
+  audio {
+    max-width: 100%;
+    border-radius: var(--lcs-radius-sm);
+    margin: 8px 0;
+  }
+
+  iframe {
+    max-width: 100%;
+    max-height: 400px;
+    border-radius: var(--lcs-radius-sm);
+    border: 1px solid var(--lumiverse-border);
+    margin: 8px 0;
+  }
+
+  .spindle-message-tag-pending {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    padding: 7px 10px;
+    border: 1px solid color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 22%, var(--lumiverse-border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 8%, transparent);
+    color: var(--lumiverse-text-muted);
+    font-size: calc(12px * var(--lumiverse-font-scale, 1));
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+  }
+
+  .spindle-message-tag-pending-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--lumiverse-primary, #8c82ff);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 45%, transparent);
+    animation: spindle-message-tag-pending-pulse 1.25s ease-in-out infinite;
+  }
+
+  @keyframes spindle-message-tag-pending-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+      transform: scale(0.9);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--lumiverse-primary, #8c82ff) 30%, transparent);
+    }
+
+    50% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 5px transparent;
+    }
+  }
+`
 
 /** Detect HTML blocks with enough inline styling to warrant island extraction. */
 function hasSignificantInlineStyles(html: string): boolean {
@@ -267,6 +711,191 @@ function hasSignificantInlineStyles(html: string): boolean {
   return false
 }
 
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+interface HtmlElementMatch {
+  openingTag: string
+  end: number
+}
+
+function findStyleBlockEnd(raw: string, start: number): number | null {
+  const open = raw.slice(start).match(/^<style(?=[\s>])[^>]*>/i)
+  if (!open) return null
+
+  const closeRe = /<\/style\s*>/gi
+  closeRe.lastIndex = start + open[0].length
+  const close = closeRe.exec(raw)
+  return close ? close.index + close[0].length : null
+}
+
+function parseHtmlElementAt(raw: string, start: number): HtmlElementMatch | null {
+  const open = raw.slice(start).match(ROOT_HTML_TAG_RE)
+  if (!open) return null
+
+  const tag = open[1].toLowerCase()
+  const openingTag = open[0]
+  const openingEnd = start + openingTag.length
+
+  if (tag === 'style') {
+    const end = findStyleBlockEnd(raw, start)
+    return end == null ? null : { openingTag, end }
+  }
+
+  if (VOID_HTML_TAGS.has(tag) || /\/\s*>$/.test(openingTag)) {
+    return { openingTag, end: openingEnd }
+  }
+
+  const tagRe = new RegExp(`</?${escapeRegexLiteral(tag)}(?=[\\s>/])[^>]*>`, 'gi')
+  tagRe.lastIndex = start
+
+  let depth = 0
+  let match: RegExpExecArray | null
+  while ((match = tagRe.exec(raw)) !== null) {
+    const token = match[0]
+    if (/^<\//.test(token)) {
+      depth -= 1
+    } else if (!/\/\s*>$/.test(token)) {
+      depth += 1
+    }
+
+    if (depth <= 0) {
+      return { openingTag, end: match.index + token.length }
+    }
+  }
+
+  return null
+}
+
+function skipWhitespace(raw: string, start: number): number {
+  let i = start
+  while (i < raw.length && /\s/.test(raw[i])) i++
+  return i
+}
+
+function extendThroughAdjacentHtmlSiblings(raw: string, start: number): number {
+  let end = start
+  let pos = start
+
+  while (pos < raw.length) {
+    const next = skipWhitespace(raw, pos)
+    const element = parseHtmlElementAt(raw, next)
+    if (!element || NO_ISLAND_ATTR_RE.test(element.openingTag)) break
+
+    end = element.end
+    pos = element.end
+  }
+
+  return end
+}
+
+function getMarkdownFenceRanges(raw: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  const lines = raw.match(/.*(?:\n|$)/g) || []
+  let offset = 0
+  let openFence: MarkdownFence | null = null
+  let openStart = 0
+
+  for (const line of lines) {
+    if (!line && offset >= raw.length) break
+
+    if (!openFence) {
+      const fence = getMarkdownFence(line)
+      if (fence) {
+        openFence = fence
+        openStart = offset
+      }
+    } else if (isMarkdownFenceClose(line, openFence)) {
+      ranges.push([openStart, offset + line.length])
+      openFence = null
+    }
+
+    offset += line.length
+  }
+
+  if (openFence) ranges.push([openStart, raw.length])
+  return ranges
+}
+
+function getFenceRangeContaining(ranges: Array<[number, number]>, pos: number, startIndex: number): number {
+  for (let i = startIndex; i < ranges.length; i++) {
+    const [start, end] = ranges[i]
+    if (pos < start) return -1
+    if (pos >= start && pos < end) return i
+  }
+  return -1
+}
+
+function getIslandEndAt(raw: string, start: number, isStreaming: boolean): number | null {
+  const styleEnd = findStyleBlockEnd(raw, start)
+  if (styleEnd != null) {
+    return extendThroughAdjacentHtmlSiblings(raw, styleEnd)
+  }
+
+  if (isStreaming && /^<style(?=[\s>])/i.test(raw.slice(start))) return null
+
+  const element = parseHtmlElementAt(raw, start)
+  if (!element || NO_ISLAND_ATTR_RE.test(element.openingTag)) return null
+
+  const fragment = raw.slice(start, element.end)
+  if (/<style[\s>]/i.test(fragment) || hasSignificantInlineStyles(fragment)) {
+    return element.end
+  }
+
+  let peekStart = skipWhitespace(raw, element.end)
+  while (raw.startsWith('</', peekStart)) {
+    const closeEnd = raw.indexOf('>', peekStart + 2)
+    if (closeEnd < 0) break
+    peekStart = skipWhitespace(raw, closeEnd + 1)
+  }
+  const trailingStyleEnd = findStyleBlockEnd(raw, peekStart)
+  if (trailingStyleEnd != null) return extendThroughAdjacentHtmlSiblings(raw, trailingStyleEnd)
+
+  return null
+}
+
+function renderIslandMarkdownText(markdown: string): string {
+  const leadingWhitespace = markdown.match(/^\s*/)?.[0] ?? ''
+  const trailingWhitespace = markdown.match(/\s*$/)?.[0] ?? ''
+  const core = markdown.trim()
+
+  if (!core) return markdown
+
+  let html = marked.parse(core, { async: false }) as string
+  html = normalizeQuotesInHTML(html)
+
+  const singleParagraphMatch = html.match(/^<p>([\s\S]*)<\/p>\s*$/)
+  if (singleParagraphMatch && !/<\/p>\s*<p\b/i.test(html)) {
+    html = singleParagraphMatch[1]
+  }
+
+  return `${leadingWhitespace}${html}${trailingWhitespace}`
+}
+
+function renderIslandInlineMarkdownText(markdown: string): string {
+  const leadingWhitespace = markdown.match(/^\s*/)?.[0] ?? ''
+  const trailingWhitespace = markdown.match(/\s*$/)?.[0] ?? ''
+  const core = markdown.trim()
+
+  if (!core) return markdown
+
+  let html = marked.parseInline(core, { async: false }) as string
+  html = normalizeQuotesInHTML(html)
+
+  return `${leadingWhitespace}${html}${trailingWhitespace}`
+}
+
+const INLINE_CONTEXT_TAGS = new Set([
+  'button',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'label',
+  'option',
+  'select',
+  'summary',
+  'textarea',
+])
+
 function extractHtmlIslands(
   raw: string,
   isStreaming: boolean,
@@ -274,114 +903,66 @@ function extractHtmlIslands(
   const hasStyleTag = /<style[\s>]/i.test(raw)
   if (!hasStyleTag && !/\bstyle\s*=/i.test(raw)) return { content: raw, islands: [] }
 
-  // Don't extract <style>-based islands during streaming if a <style> tag is still unclosed
-  if (isStreaming && hasStyleTag) {
-    const opens = (raw.match(/<style[\s>]/gi) || []).length
-    const closes = (raw.match(/<\/style\s*>/gi) || []).length
-    if (opens > closes) return { content: raw, islands: [] }
+  const trimmedRaw = raw.trim()
+  if (
+    /^(?:<!doctype\b|<html\b|<head\b)/i.test(trimmedRaw)
+    && /<\/(?:html|body|head)>$/i.test(trimmedRaw)
+  ) {
+    return { content: `<!--${HTML_ISLAND_TOKEN}_0-->`, islands: [raw] }
   }
 
   const islands: string[] = []
-  const lines = raw.split('\n')
-  const output: string[] = []
-  let i = 0
+  const fences = getMarkdownFenceRanges(raw)
+  let fenceIdx = 0
+  let content = ''
+  let pos = 0
 
-  while (i < lines.length) {
-    const trimmed = lines[i].trim()
-
-    // Strategy 1: Block-level element that might wrap a <style> block or
-    // contain significant inline styling (e.g. phone screens, UI mockups).
-    // Collect the entire balanced tag tree, then check for isolation criteria.
-    const blockMatch = trimmed.match(BLOCK_ELEMENT_RE)
-    if (blockMatch) {
-      const blockLines: string[] = []
-      const tag = blockMatch[1].toLowerCase()
-      const openRe = new RegExp(`<${tag}\\b`, 'gi')
-      const closeRe = new RegExp(`</${tag}\\b`, 'gi')
-      let depth = 0
-
-      while (i < lines.length) {
-        const line = lines[i]
-        blockLines.push(line)
-        depth += (line.match(openRe) || []).length - (line.match(closeRe) || []).length
-        i++
-        if (depth <= 0) break
-      }
-
-      const blockContent = blockLines.join('\n')
-
-      // Isolate if balanced and contains <style> or significant inline styling
-      if (depth <= 0 && (/<style[\s>]/i.test(blockContent) || hasSignificantInlineStyles(blockContent))) {
-        const idx = islands.length
-        islands.push(blockContent)
-        output.push('', `<!--${HTML_ISLAND_TOKEN}_${idx}-->`, '')
-      } else {
-        // Not an island — pass through for normal markdown processing
-        output.push(...blockLines)
-      }
+  while (pos < raw.length) {
+    const containingFence = getFenceRangeContaining(fences, pos, fenceIdx)
+    if (containingFence >= 0) {
+      const [, end] = fences[containingFence]
+      content += raw.slice(pos, end)
+      pos = end
+      fenceIdx = containingFence + 1
       continue
     }
 
-    // Strategy 2: Standalone <style> block not inside a wrapper element.
-    // Collect the style block + any subsequent sibling HTML.
-    if (/^\s*<style[\s>]/i.test(trimmed)) {
-      const buf: string[] = []
+    const nextTag = raw.indexOf('<', pos)
+    if (nextTag < 0) {
+      content += raw.slice(pos)
+      break
+    }
 
-      while (i < lines.length) {
-        buf.push(lines[i])
-        if (/<\/style\s*>/i.test(lines[i])) { i++; break }
-        i++
-      }
+    const nextFence = fences[fenceIdx]
+    if (nextFence && nextTag >= nextFence[0]) {
+      content += raw.slice(pos, nextFence[1])
+      pos = nextFence[1]
+      fenceIdx++
+      continue
+    }
 
-      let depth = 0
-      let blanks = 0
-      while (i < lines.length) {
-        const t = lines[i].trim()
-        if (!t) {
-          blanks++
-          if (depth <= 0 && blanks >= 2) break
-          buf.push(lines[i])
-          i++
-          continue
-        }
-        blanks = 0
+    content += raw.slice(pos, nextTag)
 
-        const oCount = (t.match(/<(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl)\b/gi) || []).length
-        const cCount = (t.match(/<\/(?:div|section|form|details|article|aside|nav|fieldset|figure|main|header|footer|table|ul|ol|dl)\b/gi) || []).length
-        depth += oCount - cCount
-
-        if (/^<[a-zA-Z\/!]/.test(t) || depth > 0) {
-          buf.push(lines[i])
-          i++
-          if (depth <= 0) {
-            let p = i
-            while (p < lines.length && !lines[p].trim()) p++
-            if (p >= lines.length || !/^<[a-zA-Z\/]/.test(lines[p].trim())) break
-          }
-        } else {
-          break
-        }
-      }
-
-      while (buf.length && !buf[buf.length - 1].trim()) buf.pop()
-
+    const islandEnd = getIslandEndAt(raw, nextTag, isStreaming)
+    if (islandEnd != null && islandEnd > nextTag) {
       const idx = islands.length
-      islands.push(buf.join('\n'))
-      output.push('', `<!--${HTML_ISLAND_TOKEN}_${idx}-->`, '')
-      continue
+      islands.push(raw.slice(nextTag, islandEnd))
+      content += `<!--${HTML_ISLAND_TOKEN}_${idx}-->`
+      pos = islandEnd
+    } else {
+      content += raw[nextTag]
+      pos = nextTag + 1
     }
-
-    output.push(lines[i])
-    i++
   }
 
-  return { content: output.join('\n'), islands }
+  return { content, islands }
 }
 
 /**
- * Convert markdown syntax within HTML island text content to rendered HTML.
- * Preserves <style> blocks and HTML tag structure while processing text nodes
- * through marked, so captured content ($1, $2 etc.) renders correctly in Shadow DOM.
+ * Convert markdown within HTML island text content to rendered HTML.
+ * Preserves <style> blocks and HTML tag structure while running text nodes
+ * through the full markdown parser, then unwraps single-paragraph results so
+ * inline content inside HTML tags stays inline in Shadow DOM.
  */
 function processMarkdownInIsland(html: string): string {
   // Protect <style> blocks — CSS selectors can contain '>' which breaks tag splitting
@@ -394,6 +975,7 @@ function processMarkdownInIsland(html: string): string {
   // Split into HTML tags (odd indices) and text content (even indices)
   const parts = shielded.split(/(<[^>]*>)/)
   let skipDepth = 0
+  const inlineCtxStack: string[] = []
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i]
@@ -402,15 +984,30 @@ function processMarkdownInIsland(html: string): string {
     if (i % 2 === 1) {
       if (/^<(pre|code|script)\b/i.test(part)) skipDepth++
       else if (/^<\/(pre|code|script)\b/i.test(part)) skipDepth = Math.max(0, skipDepth - 1)
+
+      const openMatch = part.match(/^<([a-z][\w:-]*)\b/i)
+      const closeMatch = part.match(/^<\/([a-z][\w:-]*)\b/i)
+      const isSelfClose = /\/\s*>$/.test(part)
+      if (openMatch && !closeMatch && !isSelfClose) {
+        const tag = openMatch[1].toLowerCase()
+        if (INLINE_CONTEXT_TAGS.has(tag)) inlineCtxStack.push(tag)
+      } else if (closeMatch) {
+        const tag = closeMatch[1].toLowerCase()
+        if (INLINE_CONTEXT_TAGS.has(tag)) {
+          const idx = inlineCtxStack.lastIndexOf(tag)
+          if (idx >= 0) inlineCtxStack.splice(idx, 1)
+        }
+      }
       continue
     }
 
-    // Text content — skip if empty, inside skip element, a style placeholder, or plain text
+    // Text content — skip if empty, inside skip element, or a style placeholder
     if (!part.trim() || skipDepth > 0) continue
     if (/^<!--ISLAND_STYLE_\d+-->$/.test(part.trim())) continue
-    if (!/[*_`~\[#\-]/.test(part)) continue
 
-    parts[i] = marked.parseInline(part, { async: false }) as string
+    parts[i] = inlineCtxStack.length > 0
+      ? renderIslandInlineMarkdownText(part)
+      : renderIslandMarkdownText(part)
   }
 
   let result = parts.join('')
@@ -420,39 +1017,191 @@ function processMarkdownInIsland(html: string): string {
     result = result.replace(`<!--ISLAND_STYLE_${i}-->`, styleBlocks[i])
   }
 
-  return result
+  return normalizeLegacyFontTags(result)
 }
 
-interface ContentPiece {
-  type: 'markup' | 'island'
-  content: string
+interface TrustedYouTubeEmbed {
+  src: string
+  title: string
+}
+
+type ContentPiece =
+  | { type: 'markup'; content: string }
+  | { type: 'island'; content: string }
+  | { type: 'youtubeEmbed'; embed: TrustedYouTubeEmbed }
+
+function sanitizeTrustedYouTubeEmbedSrc(rawSrc: string): string | null {
+  if (!rawSrc) return null
+
+  try {
+    const url = new URL(rawSrc, window.location.origin)
+    if (url.origin !== YOUTUBE_NOCOOKIE_ORIGIN) return null
+    if (!YOUTUBE_EMBED_PATH_RE.test(url.pathname)) return null
+    if (url.hash) return null
+
+    const params = new URLSearchParams()
+    for (const [key, value] of url.searchParams) {
+      if (!YOUTUBE_EMBED_ALLOWED_QUERY_PARAMS.has(key)) return null
+
+      if (YOUTUBE_EMBED_BOOL_QUERY_PARAMS.has(key)) {
+        if (value !== '0' && value !== '1') return null
+      } else if (YOUTUBE_EMBED_NUMBER_QUERY_PARAMS.has(key)) {
+        if (!/^\d{1,6}$/.test(value)) return null
+      } else if (YOUTUBE_EMBED_TOKEN_QUERY_PARAMS.has(key)) {
+        if (!SAFE_YOUTUBE_EMBED_TOKEN_RE.test(value)) return null
+      }
+
+      params.append(key, value)
+    }
+
+    const query = params.toString()
+    return `${YOUTUBE_NOCOOKIE_ORIGIN}${url.pathname}${query ? `?${query}` : ''}`
+  } catch {
+    return null
+  }
+}
+
+function extractTrustedYouTubeEmbed(iframeHtml: string): TrustedYouTubeEmbed | null {
+  const doc = new DOMParser().parseFromString(iframeHtml, 'text/html')
+  const iframe = doc.body.firstElementChild
+  if (!iframe || iframe.tagName.toLowerCase() !== 'iframe') return null
+  if (doc.body.childElementCount !== 1) return null
+  if (doc.body.textContent?.trim()) return null
+
+  const src = sanitizeTrustedYouTubeEmbedSrc(iframe.getAttribute('src') || '')
+  if (!src) return null
+
+  const rawTitle = (iframe.getAttribute('title') || '').trim()
+  const title = rawTitle.slice(0, 120) || 'YouTube video'
+  return { src, title }
+}
+
+function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: TrustedYouTubeEmbed[] } {
+  if (!/<iframe\b/i.test(raw)) return { content: raw, embeds: [] }
+
+  const embeds: TrustedYouTubeEmbed[] = []
+  const content = raw.replace(/<iframe\b[\s\S]*?<\/iframe\s*>/gi, (match) => {
+    const embed = extractTrustedYouTubeEmbed(match)
+    if (!embed) return match
+    const idx = embeds.length
+    embeds.push(embed)
+    return `<!--${YOUTUBE_EMBED_TOKEN}_${idx}-->`
+  })
+
+  return { content, embeds }
+}
+
+// While streaming, an unclosed <details>/<summary> tag makes the markdown +
+// sanitize pipeline emit a structure where the in-progress block briefly takes
+// up real vertical space. That spike gets locked in by the streamingMinHeight
+// ratchet below, so the bubble stays inflated until the stream ends and then
+// snaps back. Pre-closing any unbalanced tags keeps the rendered tree stable.
+const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*>/gi
+
+function balanceStreamingDetails(raw: string): string {
+  if (!raw.includes('<')) return raw
+  const fences = getMarkdownFenceRanges(raw)
+  let openDetails = 0
+  let openSummary = 0
+  let fenceIdx = 0
+  STREAMING_DETAILS_TAG_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = STREAMING_DETAILS_TAG_RE.exec(raw)) !== null) {
+    const pos = match.index
+    while (fenceIdx < fences.length && fences[fenceIdx][1] <= pos) fenceIdx++
+    if (fenceIdx < fences.length && pos >= fences[fenceIdx][0] && pos < fences[fenceIdx][1]) continue
+
+    const isClose = match[0].startsWith('</')
+    const tag = match[1].toLowerCase()
+    if (tag === 'details') openDetails += isClose ? -1 : 1
+    else openSummary += isClose ? -1 : 1
+  }
+
+  if (openDetails <= 0 && openSummary <= 0) return raw
+
+  let suffix = ''
+  if (openSummary > 0) suffix += '</summary>'.repeat(openSummary)
+  if (openDetails > 0) suffix += '</details>'.repeat(openDetails)
+  return raw + suffix
 }
 
 function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] {
   if (!raw) return []
 
-  const { content, islands } = extractHtmlIslands(raw, isStreaming)
+  const { content: rawWithoutEmbeds, embeds } = extractTrustedYouTubeEmbeds(raw)
+  const { content, islands } = extractHtmlIslands(rawWithoutEmbeds, isStreaming)
 
-  if (islands.length === 0) {
-    return [{ type: 'markup', content: formatContent(raw) }]
+  if (islands.length === 0 && embeds.length === 0) {
+    return [{ type: 'markup', content: sanitizeRichHtml(formatContent(rawWithoutEmbeds)) }]
   }
 
   const html = formatContent(content)
   const pieces: ContentPiece[] = []
   let lastIdx = 0
 
-  for (const m of html.matchAll(ISLAND_RE)) {
+  for (const m of html.matchAll(SPECIAL_PIECE_RE)) {
     const before = html.slice(lastIdx, m.index!)
-    if (before.trim()) pieces.push({ type: 'markup', content: before })
-    const idx = parseInt(m[1], 10)
-    if (islands[idx] != null) pieces.push({ type: 'island', content: processMarkdownInIsland(islands[idx]) })
+    if (before.trim()) pieces.push({ type: 'markup', content: sanitizeRichHtml(before) })
+
+    const idx = parseInt(m[2], 10)
+    if (m[1] === HTML_ISLAND_TOKEN && islands[idx] != null) {
+      pieces.push({ type: 'island', content: sanitizeHtmlIsland(processMarkdownInIsland(islands[idx])) })
+    }
+    if (m[1] === YOUTUBE_EMBED_TOKEN && embeds[idx] != null) {
+      pieces.push({ type: 'youtubeEmbed', embed: embeds[idx] })
+    }
+
     lastIdx = m.index! + m[0].length
   }
 
   const after = html.slice(lastIdx)
-  if (after.trim()) pieces.push({ type: 'markup', content: after })
+  if (after.trim()) pieces.push({ type: 'markup', content: sanitizeRichHtml(after) })
 
   return pieces
+}
+
+function attachCodeCopyHandler(root: HTMLElement | ShadowRoot): () => void {
+  const handleClick = (e: MouseEvent) => {
+    const target = e.target
+    if (!(target instanceof Element)) return
+
+    const btn = target.closest('[data-code-copy]') as HTMLButtonElement | null
+    if (!btn) return
+
+    const codeBlock = btn.closest(`.${styles.codeBlock}`)
+    const codeEl = codeBlock?.querySelector('code')
+    if (!codeEl) return
+
+    const text = codeEl.textContent || ''
+    copyTextToClipboard(text).then(() => {
+      const label = btn.querySelector('span')
+      if (label) {
+        label.textContent = 'Copied!'
+        btn.classList.add(styles.codeCopied)
+        setTimeout(() => {
+          label.textContent = 'Copy'
+          btn.classList.remove(styles.codeCopied)
+        }, 2000)
+      }
+    }).catch((err) => {
+      console.error('[MessageContent] Copy failed:', err)
+    })
+  }
+
+  root.addEventListener('click', handleClick)
+  return () => root.removeEventListener('click', handleClick)
+}
+
+function notifyMessageContentLayout(el: HTMLElement): void {
+  const dispatch = () => {
+    el.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
+  }
+
+  dispatch()
+  requestAnimationFrame(() => {
+    dispatch()
+    requestAnimationFrame(dispatch)
+  })
 }
 
 function IsolatedHtml({ html }: { html: string }) {
@@ -462,10 +1211,105 @@ function IsolatedHtml({ html }: { html: string }) {
     const el = ref.current
     if (!el) return
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
-    shadow.innerHTML = html
+    shadow.innerHTML = `<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`
+    if (
+      el.classList.contains('not-prose')
+      || el.classList.contains('not-island-prose')
+      || shadow.querySelector('.not-prose, .not-island-prose')
+    ) {
+      shadow.querySelector('style[data-lumi-island-base]')?.remove()
+    }
+    notifyMessageContentLayout(el)
+
+    let pendingRaf = 0
+    const scheduleLayoutNotify = () => {
+      if (pendingRaf) return
+      pendingRaf = requestAnimationFrame(() => {
+        pendingRaf = 0
+        notifyMessageContentLayout(el)
+      })
+    }
+
+    const resizeObserver = new ResizeObserver(scheduleLayoutNotify)
+    resizeObserver.observe(el)
+
+    const mutationObserver = new MutationObserver(scheduleLayoutNotify)
+    mutationObserver.observe(shadow, { childList: true, subtree: true, attributes: true, characterData: true })
+
+    shadow.addEventListener('load', scheduleLayoutNotify, true)
+    shadow.addEventListener('error', scheduleLayoutNotify, true)
+
+    const cleanupCodeCopy = attachCodeCopyHandler(shadow)
+    return () => {
+      cleanupCodeCopy()
+      resizeObserver.disconnect()
+      mutationObserver.disconnect()
+      shadow.removeEventListener('load', scheduleLayoutNotify, true)
+      shadow.removeEventListener('error', scheduleLayoutNotify, true)
+      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+    }
   }, [html])
 
   return <div ref={ref} className={styles.htmlIsland} />
+}
+
+/**
+ * dangerouslySetInnerHTML wrapper that preserves IMG element identity by
+ * src across innerHTML replacements, so images don't redo the cache lookup,
+ * decode, paint cycle on every chat re-render.
+ */
+function ProseHtml({ html, className }: { html: string; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const lastHtmlRef = useRef<string | null>(null)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (lastHtmlRef.current === html) return
+
+    const stableImgs = new Map<string, HTMLImageElement>()
+    if (lastHtmlRef.current !== null) {
+      for (const img of el.querySelectorAll<HTMLImageElement>('img[src]')) {
+        const src = img.getAttribute('src')
+        if (src && !stableImgs.has(src)) stableImgs.set(src, img)
+      }
+    }
+
+    el.innerHTML = html
+    lastHtmlRef.current = html
+
+    if (stableImgs.size > 0) {
+      for (const newImg of el.querySelectorAll<HTMLImageElement>('img[src]')) {
+        const src = newImg.getAttribute('src')
+        if (!src) continue
+        const preserved = stableImgs.get(src)
+        if (preserved && newImg.parentNode) {
+          newImg.replaceWith(preserved)
+          stableImgs.delete(src)
+        }
+      }
+    }
+
+    notifyMessageContentLayout(el)
+  }, [html])
+
+  return <div ref={ref} className={className} />
+}
+
+function TrustedYouTubeEmbed({ embed }: { embed: TrustedYouTubeEmbed }) {
+  return (
+    <div className={styles.youtubeEmbedWrap}>
+      <iframe
+        className={styles.youtubeEmbed}
+        src={embed.src}
+        title={embed.title}
+        loading="lazy"
+        referrerPolicy="strict-origin-when-cross-origin"
+        allow="fullscreen; accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowFullScreen
+      />
+    </div>
+  )
 }
 
 // Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
@@ -473,6 +1317,9 @@ const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
 
 // Standard <img src="AssetName"> where src is a relative asset reference (not a URL)
 const IMG_SRC_ASSET_RE = /<img\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>/gi
+
+// Markdown ![alt](src) where src is a relative asset reference (not a URL)
+const MARKDOWN_IMG_RE = /!\[([^\]]*)\]\(([^)]+)\)/g
 
 /** Strip path prefix and file extension to get the asset stem. */
 function assetStem(name: string): string {
@@ -517,11 +1364,30 @@ function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>):
   })
 }
 
+/** Resolve markdown ![alt](src) images where src is an unresolved asset reference.
+ *  Handles the common AI-generated pattern of referencing Risu assets by relative
+ *  filename (including extensions like .webp/.png/.jpg). Already-resolved URLs are
+ *  left as-is. Strips a trailing markdown title ("...") before lookup. */
+function resolveMarkdownImgTags(text: string, assetMap: Record<string, string>): string {
+  if (!text.includes('![')) return text
+  MARKDOWN_IMG_RE.lastIndex = 0
+  return text.replace(MARKDOWN_IMG_RE, (match, alt: string, rawSrc: string) => {
+    // Strip trailing markdown title: ![alt](src "title") → src
+    const src = rawSrc.trim().replace(/\s+["'][^"']*["']\s*$/, '').trim()
+    if (!src) return match
+    if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
+    const imageId = resolveAssetId(src, assetMap)
+    if (imageId) return `![${alt}](/api/v1/images/${imageId})`
+    return match
+  })
+}
+
 export default function MessageContent({
   content,
   isUser,
   userName,
   isStreaming = false,
+  lockStreamingHeight = true,
   messageId,
   chatId,
   depth = 0,
@@ -557,41 +1423,52 @@ export default function MessageContent({
     getTagInterceptorRegistryVersion,
     getTagInterceptorRegistryVersion,
   )
-  const interceptorCleanedContent = useMemo(
-    () => stripAndDispatchMessageTags(content, { messageId, chatId, isUser, isStreaming }),
+  const deliveredTagInterceptsRef = useRef(new Set<string>())
+  const interceptedMessageTags = useMemo(
+    () => stripMessageTags(content, { messageId, chatId, isUser, isStreaming }),
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
   )
 
-  // Resolve Risu asset tags before regex/macro processing:
-  // 1. <img="AssetName"> (Risu custom syntax) → markdown image
-  // 2. <img src="AssetName"> (standard HTML with relative asset ref) → resolved src URL
+  useLayoutEffect(() => {
+    dispatchMessageTagIntercepts(interceptedMessageTags.intercepts, deliveredTagInterceptsRef.current)
+  }, [interceptedMessageTags.intercepts])
+
+  const interceptorCleanedContent = interceptedMessageTags.content
+
+  const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
+  const preprocessOpts = useMemo(
+    () => (messageId
+      ? { messageId, role: (isUser ? 'user' : 'assistant') as 'user' | 'assistant' }
+      : undefined),
+    [messageId, isUser],
+  )
+  const regexAppliedContent = useDisplayRegex(interceptorCleanedContent, isUser, depth, macroCtx, preprocessOpts)
+
   const risuResolvedContent = useMemo(
     () => {
-      if (!risuAssetMap) return interceptorCleanedContent
-      let resolved = resolveRisuAssetTags(interceptorCleanedContent, risuAssetMap)
+      if (!risuAssetMap) return regexAppliedContent
+      let resolved = resolveRisuAssetTags(regexAppliedContent, risuAssetMap)
       resolved = resolveImgSrcAssetTags(resolved, risuAssetMap)
+      resolved = resolveMarkdownImgTags(resolved, risuAssetMap)
       return resolved
     },
-    [interceptorCleanedContent, risuAssetMap],
+    [regexAppliedContent, risuAssetMap],
   )
 
-  const applyRegex = useDisplayRegex()
-  const macroCtx = useMemo(() => ({ charName, userName }), [charName, userName])
-  const regexAppliedContent = useMemo(
-    () => applyRegex(risuResolvedContent, isUser, depth, macroCtx),
-    [applyRegex, risuResolvedContent, isUser, depth, macroCtx],
-  )
   const resolvedContent = useMemo(
-    () => resolveDisplayMacros(regexAppliedContent, { charName, userName }),
-    [regexAppliedContent, charName, userName],
+    () => resolveDisplayMacros(risuResolvedContent, { charName, userName }),
+    [risuResolvedContent, charName, userName],
   )
-
-  const blocks = useMemo(() => parseOOC(resolvedContent), [resolvedContent])
+  const deferredResolvedContent = useDeferredValue(resolvedContent)
+  const renderContent = isStreaming ? balanceStreamingDetails(deferredResolvedContent) : resolvedContent
+  const blocks = useMemo(() => parseOOC(renderContent), [renderContent])
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const containerRef = useRef<HTMLDivElement>(null)
   const prevTextLenRef = useRef(0)
+  const maxStreamingHeightRef = useRef(0)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [streamingMinHeight, setStreamingMinHeight] = useState<number | null>(null)
 
   const handleLightboxClose = useCallback(() => setLightboxSrc(null), [])
 
@@ -611,30 +1488,86 @@ export default function MessageContent({
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
-    const handleClick = (e: MouseEvent) => {
-      const btn = (e.target as HTMLElement).closest('[data-code-copy]') as HTMLButtonElement | null
-      if (!btn) return
-      const codeBlock = btn.closest(`.${styles.codeBlock}`)
-      const codeEl = codeBlock?.querySelector('code')
-      if (!codeEl) return
-      const text = codeEl.textContent || ''
-      copyTextToClipboard(text).then(() => {
-        const label = btn.querySelector('span')
-        if (label) {
-          label.textContent = 'Copied!'
-          btn.classList.add(styles.codeCopied)
-          setTimeout(() => {
-            label.textContent = 'Copy'
-            btn.classList.remove(styles.codeCopied)
-          }, 2000)
-        }
-      }).catch((err) => {
-        console.error('[MessageContent] Copy failed:', err)
+    return attachCodeCopyHandler(container)
+  }, [])
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    let cancelled = false
+    let pendingRaf = 0
+    const settleTimers: number[] = []
+
+    const scheduleLayoutNotify = () => {
+      if (cancelled || pendingRaf) return
+      pendingRaf = window.requestAnimationFrame(() => {
+        pendingRaf = 0
+        if (cancelled) return
+        notifyMessageContentLayout(container)
       })
     }
-    container.addEventListener('click', handleClick)
-    return () => container.removeEventListener('click', handleClick)
-  }, [])
+
+    const handleChildLayoutNotify = (event: Event) => {
+      if (event.target === container) return
+      scheduleLayoutNotify()
+    }
+
+    const observer = new ResizeObserver(scheduleLayoutNotify)
+    observer.observe(container)
+
+    const mutationObserver = new MutationObserver(scheduleLayoutNotify)
+    mutationObserver.observe(container, { childList: true, subtree: true, attributes: true, characterData: true })
+
+    container.addEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleChildLayoutNotify)
+    container.addEventListener('load', scheduleLayoutNotify, true)
+    container.addEventListener('error', scheduleLayoutNotify, true)
+
+    scheduleLayoutNotify()
+    for (const delay of [80, 180, 420, 900]) {
+      settleTimers.push(window.setTimeout(scheduleLayoutNotify, delay))
+    }
+    document.fonts?.ready.then(scheduleLayoutNotify).catch(() => {})
+
+    return () => {
+      cancelled = true
+      observer.disconnect()
+      mutationObserver.disconnect()
+      container.removeEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleChildLayoutNotify)
+      container.removeEventListener('load', scheduleLayoutNotify, true)
+      container.removeEventListener('error', scheduleLayoutNotify, true)
+      if (pendingRaf) window.cancelAnimationFrame(pendingRaf)
+      for (const timer of settleTimers) window.clearTimeout(timer)
+    }
+  }, [renderContent])
+
+  useLayoutEffect(() => {
+    if (!isStreaming || !lockStreamingHeight) {
+      maxStreamingHeightRef.current = 0
+      setStreamingMinHeight(null)
+      return
+    }
+
+    const container = containerRef.current
+    if (!container) return
+
+    const updateMinHeight = () => {
+      const nextHeight = Math.ceil(container.getBoundingClientRect().height)
+      if (nextHeight <= maxStreamingHeightRef.current) return
+      maxStreamingHeightRef.current = nextHeight
+      setStreamingMinHeight(nextHeight)
+    }
+
+    updateMinHeight()
+
+    const observer = new ResizeObserver(() => {
+      updateMinHeight()
+    })
+
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [isStreaming, lockStreamingHeight])
+
 
   const renderedBlocks = useMemo(() => {
     const elements: React.ReactNode[] = []
@@ -672,7 +1605,9 @@ export default function MessageContent({
             elements.push(
               piece.type === 'island'
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
-                : <div key={`${i}-${p}`} className={styles.prose} dangerouslySetInnerHTML={{ __html: piece.content }} />
+                : piece.type === 'youtubeEmbed'
+                  ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
+                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
             )
           }
         }
@@ -693,7 +1628,9 @@ export default function MessageContent({
             elements.push(
               piece.type === 'island'
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
-                : <div key={`${i}-${p}`} className={styles.prose} dangerouslySetInnerHTML={{ __html: piece.content }} />
+                : piece.type === 'youtubeEmbed'
+                  ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
+                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
             )
           }
         }
@@ -758,14 +1695,18 @@ export default function MessageContent({
     prevTextLenRef.current = currentLen
   }, [content, isStreaming])
 
+  const minHeight = streamingMinHeight ?? 0
+
   return (
     <>
       <div
         data-component="MessageContent"
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}
+        style={minHeight > 0 ? { minHeight: `${minHeight}px` } : undefined}
       >
         {renderedBlocks}
+        <SpindleMessageWidgets messageId={messageId} />
       </div>
       <ImageLightbox src={lightboxSrc} onClose={handleLightboxClose} />
     </>

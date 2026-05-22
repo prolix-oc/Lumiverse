@@ -60,9 +60,13 @@ function ipv4ToInt(ip: string): number {
 function isPrivateIPv4(ip: string): boolean {
   const addr = ipv4ToInt(ip);
   for (const [network, mask] of PRIVATE_V4_RANGES) {
-    if ((addr & mask) === network) return true;
+    if (((addr & mask) >>> 0) === network) return true;
   }
   return false;
+}
+
+function isLoopbackIPv4(ip: string): boolean {
+  return ((ipv4ToInt(ip) & 0xFF000000) >>> 0) === 0x7F000000;
 }
 
 function isPrivateIPv6(ip: string): boolean {
@@ -87,6 +91,14 @@ function isPrivateIPv6(ip: string): boolean {
   return false;
 }
 
+function isLoopbackIPv6(ip: string): boolean {
+  const normalized = ip.toLowerCase();
+  if (normalized === "::1") return true;
+
+  const v4Mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  return v4Mapped ? isLoopbackIPv4(v4Mapped[1]) : false;
+}
+
 export function isPrivateIp(ip: string): boolean {
   if (ip.includes(":")) return isPrivateIPv6(ip);
   return isPrivateIPv4(ip);
@@ -99,13 +111,20 @@ const BLOCKED_HOSTNAMES = new Set([
   "metadata.goog",
 ]);
 
-export async function validateHost(hostname: string): Promise<void> {
+export interface ValidateHostOptions {
+  allowLoopback?: boolean;
+  allowPrivate?: boolean;
+}
+
+export async function validateHost(hostname: string, options?: ValidateHostOptions): Promise<void> {
   if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
     throw new SSRFError(`Blocked hostname: ${hostname}`);
   }
 
   // If hostname is already an IP literal, check directly
   if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+    if (options?.allowLoopback && isLoopbackIPv4(hostname)) return;
+    if (options?.allowPrivate && isPrivateIPv4(hostname)) return;
     if (isPrivateIPv4(hostname)) {
       throw new SSRFError(`URL resolves to private IP: ${hostname}`);
     }
@@ -113,6 +132,8 @@ export async function validateHost(hostname: string): Promise<void> {
   }
   if (hostname.startsWith("[") || hostname.includes(":")) {
     const bare = hostname.replace(/^\[|\]$/g, "");
+    if (options?.allowLoopback && isLoopbackIPv6(bare)) return;
+    if (options?.allowPrivate && isPrivateIPv6(bare)) return;
     if (isPrivateIPv6(bare)) {
       throw new SSRFError(`URL resolves to private IP: ${bare}`);
     }
@@ -152,12 +173,16 @@ export async function validateHost(hostname: string): Promise<void> {
   }
 
   for (const ip of v4Addrs) {
+    if (options?.allowLoopback && isLoopbackIPv4(ip)) continue;
+    if (options?.allowPrivate && isPrivateIPv4(ip)) continue;
     if (isPrivateIPv4(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
     }
   }
 
   for (const ip of v6Addrs) {
+    if (options?.allowLoopback && isLoopbackIPv6(ip)) continue;
+    if (options?.allowPrivate && isPrivateIPv6(ip)) continue;
     if (isPrivateIPv6(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
     }
@@ -167,9 +192,13 @@ export async function validateHost(hostname: string): Promise<void> {
 // ─── safeFetch ────────────────────────────────────────────────────────────
 
 export interface SafeFetchOptions {
+  method?: string;
+  body?: BodyInit | null;
   maxBytes?: number;
   timeoutMs?: number;
-  headers?: Record<string, string>;
+  headers?: HeadersInit;
+  allowLoopback?: boolean;
+  allowPrivate?: boolean;
 }
 
 export async function safeFetch(
@@ -180,6 +209,8 @@ export async function safeFetch(
   const timeoutMs = options?.timeoutMs ?? 30_000;
 
   let currentUrl = url;
+  let method = options?.method ?? "GET";
+  let body = options?.body ?? null;
 
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
     let parsed: URL;
@@ -193,7 +224,10 @@ export async function safeFetch(
       throw new SSRFError(`Only http and https URLs are allowed, got: ${parsed.protocol}`);
     }
 
-    await validateHost(parsed.hostname);
+    await validateHost(parsed.hostname, { 
+      allowLoopback: options?.allowLoopback,
+      allowPrivate: options?.allowPrivate
+    });
     // Warm Bun's DNS cache with the validated answer so the connect() that
     // fetch performs immediately below does not re-resolve and potentially
     // hit a flipped record.
@@ -210,6 +244,8 @@ export async function safeFetch(
     let response: Response;
     try {
       response = await fetch(currentUrl, {
+        method,
+        body,
         redirect: "manual",
         signal: controller.signal,
         headers: options?.headers,
@@ -231,7 +267,20 @@ export async function safeFetch(
         throw new SSRFError(`Redirect with no Location header (status ${response.status})`);
       }
       // Resolve relative redirects
+      const previousUrl = currentUrl;
       currentUrl = new URL(location, currentUrl).toString();
+      const upperMethod = method.toUpperCase();
+      if (response.status === 303 || ((response.status === 301 || response.status === 302) && upperMethod === "POST")) {
+        method = "GET";
+        body = null;
+      }
+      if (new URL(previousUrl).origin !== new URL(currentUrl).origin && options?.headers) {
+        const redirectedHeaders = new Headers(options.headers);
+        redirectedHeaders.delete("authorization");
+        redirectedHeaders.delete("cookie");
+        redirectedHeaders.delete("proxy-authorization");
+        options = { ...options, headers: redirectedHeaders };
+      }
       continue;
     }
 

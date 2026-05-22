@@ -77,12 +77,41 @@ app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
 
+  databank.abortDatabankProcessing(id);
+
   // Delete vectors from LanceDB
   await databank.deleteDatabankVectors(userId, id);
 
   const deleted = await databank.deleteDatabank(userId, id);
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
+});
+
+// POST /:id/fuse — Fuse the source databank into :id (target).
+// Body: { source_id: string }. The source bank is consumed: matching-content
+// docs are dropped, the rest are re-pointed at the target, then the source
+// bank is deleted and any cross-refs are rewired.
+app.post("/:id/fuse", async (c) => {
+  const userId = c.get("userId");
+  const targetId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const sourceId = typeof body.source_id === "string" ? body.source_id : "";
+
+  if (!sourceId) {
+    return c.json({ error: "source_id is required" }, 400);
+  }
+
+  try {
+    const result = await databank.fuseDatabanks(userId, targetId, sourceId);
+    return c.json(result);
+  } catch (err: any) {
+    if (err instanceof databank.FuseError) {
+      const status = err.type === "not_found" ? 404 : 400;
+      return c.json({ error: err.message }, status);
+    }
+    console.error(`[databank] Failed to fuse ${sourceId} into ${targetId}:`, err);
+    return c.json({ error: "Failed to fuse databanks" }, 500);
+  }
 });
 
 // ─── Documents ────────────────────────────────────────────────
@@ -242,12 +271,68 @@ app.delete("/:id/documents/:docId", async (c) => {
   const userId = c.get("userId");
   const docId = c.req.param("docId");
 
+  databank.abortDocumentProcessing(docId);
+
   // Delete vectors from LanceDB
   await databank.deleteDocumentVectors(userId, docId);
 
   const deleted = await databank.deleteDocument(userId, docId);
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
+});
+
+// PUT /:id/documents/:docId/content — Save edited content + queue reprocess
+app.put("/:id/documents/:docId/content", async (c) => {
+  const userId = c.get("userId");
+  const docId = c.req.param("docId");
+
+  const doc = databank.getDocument(userId, docId);
+  if (!doc) return c.json({ error: "Not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const content = typeof body.content === "string" ? body.content : null;
+  if (content === null) return c.json({ error: "content is required" }, 400);
+
+  // Size limit mirrors upload cap so a paste can't sneak around it.
+  if (Buffer.byteLength(content) > 10 * 1024 * 1024) {
+    return c.json({ error: "Content too large. Maximum 10MB." }, 400);
+  }
+
+  // Abort any in-flight processing on this doc before touching its file.
+  databank.abortDocumentProcessing(docId);
+
+  // Drop old Lance vectors before SQLite chunk IDs are replaced.
+  await databank.deleteDocumentVectors(userId, docId);
+
+  // Write a new file. Use `.md` so the re-parser treats the edited text as raw
+  // text rather than running it back through e.g. HTML stripping (the GET
+  // content endpoint returns the parsed view, so edits are already plain text).
+  const dir = join(env.dataDir, "databank", userId);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const newFilename = `${crypto.randomUUID()}.md`;
+  const newFilepath = join(dir, newFilename);
+  await Bun.write(newFilepath, content);
+
+  const hash = createHash("sha256").update(content).digest("hex");
+  const size = Buffer.byteLength(content);
+
+  // Best-effort cleanup of the old file once the replacement is on disk.
+  try {
+    await filesSvc.deleteFile(userId, doc.filePath, "databank");
+  } catch {
+    // non-fatal — file may already be gone
+  }
+
+  databank.updateDocumentFile(userId, docId, newFilename, "text/markdown", size, hash);
+  databank.updateDocumentStatus(docId, "pending");
+
+  // Re-parse → re-chunk → re-embed in the background.
+  databank.processDocument(userId, docId).catch((err) => {
+    console.error(`[databank] Reprocess after edit failed for ${docId}:`, err);
+  });
+
+  const updated = databank.getDocument(userId, docId);
+  return c.json(updated);
 });
 
 // POST /:id/documents/:docId/reprocess — Re-parse and re-vectorize
@@ -326,7 +411,8 @@ app.post("/search", async (c) => {
     ? Array.isArray(characterId) ? characterId : [characterId]
     : [];
   const activeBankIds = databank.resolveActiveDatabankIds(userId, chatId || "", characterIds);
-  const results = await databank.searchDirect(userId, activeBankIds, query, limit || 8);
+  const defaultLimit = databank.loadDatabankSettings(userId).retrievalTopK;
+  const results = await databank.searchDirect(userId, activeBankIds, query, limit || defaultLimit);
   return c.json({ data: results });
 });
 

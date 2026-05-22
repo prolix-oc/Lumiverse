@@ -14,6 +14,14 @@ services:
         # Compose doesn't support shell command substitution in this file, so
         # the static default just invalidates once when you first adopt this.
         CA_REFRESH: ${CA_REFRESH:-local-build}
+        # Cache-busts the frontend Vite build layer so the bundle baked into the
+        # image is regenerated. Frontend source changes already invalidate the
+        # COPY layer (and therefore the build); bump this when you want a fresh
+        # bundle without source edits — e.g. after pulling new upstream deps or
+        # changing build-time env vars. Same export trick as CA_REFRESH:
+        #
+        #   FRONTEND_REFRESH=$(date -u +%s) docker compose -f docker-compose.build.yml build
+        FRONTEND_REFRESH: ${FRONTEND_REFRESH:-local-build}
     container_name: lumiverse
     ports:
       - "7860:7860"

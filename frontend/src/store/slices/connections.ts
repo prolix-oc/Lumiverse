@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, ConnectionsSlice } from '@/types/store'
 import { settingsApi } from '@/api/settings'
+import { areReasoningSettingsEqual, normalizeReasoningSettingsForProvider } from '@/lib/reasoning-binding'
 import { REASONING_DEFAULTS, clearDirtyKey } from './settings'
 
 export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsSlice> = (set, get) => ({
@@ -26,14 +27,37 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
 
     if (newBindings) {
       // Switching TO a bound profile: apply its reasoning settings
-      set({ reasoningSettings: { ...newBindings } } as any)
-      settingsApi.put('reasoningSettings', { ...newBindings }).catch(() => {})
+      const normalizedBindings = normalizeReasoningSettingsForProvider(newBindings, newProfile?.provider, newProfile?.model)
+      set({ reasoningSettings: normalizedBindings } as any)
+      settingsApi.put('reasoningSettings', normalizedBindings).catch(() => {})
       clearDirtyKey('reasoningSettings')
     } else if (oldBindings) {
       // Switching FROM a bound profile TO an unbound one: restore defaults
       set({ reasoningSettings: { ...REASONING_DEFAULTS } } as any)
       settingsApi.put('reasoningSettings', { ...REASONING_DEFAULTS }).catch(() => {})
       clearDirtyKey('reasoningSettings')
+    } else if (newProfile) {
+      // Switching between unbound profiles: keep the current settings, but map
+      // provider-specific effort tiers onto the new provider's supported scale.
+      const normalizedCurrent = normalizeReasoningSettingsForProvider(state.reasoningSettings, newProfile.provider, newProfile.model)
+      if (!areReasoningSettingsEqual(normalizedCurrent, state.reasoningSettings)) {
+        set({ reasoningSettings: normalizedCurrent } as any)
+        settingsApi.put('reasoningSettings', normalizedCurrent).catch(() => {})
+        clearDirtyKey('reasoningSettings')
+      }
+    }
+
+    // Apply or restore promptBias ("Start Reply With") when bound on the profile
+    const newBoundPromptBias = newProfile?.metadata?.reasoningBindings?.promptBias
+    const oldBoundPromptBias = oldProfile?.metadata?.reasoningBindings?.promptBias
+    if (typeof newBoundPromptBias === 'string') {
+      set({ promptBias: newBoundPromptBias } as any)
+      settingsApi.put('promptBias', newBoundPromptBias).catch(() => {})
+      clearDirtyKey('promptBias')
+    } else if (typeof oldBoundPromptBias === 'string') {
+      set({ promptBias: '' } as any)
+      settingsApi.put('promptBias', '').catch(() => {})
+      clearDirtyKey('promptBias')
     }
   },
 
@@ -57,6 +81,11 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       set({ reasoningSettings: { ...REASONING_DEFAULTS } } as any)
       settingsApi.put('reasoningSettings', { ...REASONING_DEFAULTS }).catch(() => {})
       clearDirtyKey('reasoningSettings')
+    }
+    if (wasActive && typeof removedProfile?.metadata?.reasoningBindings?.promptBias === 'string') {
+      set({ promptBias: '' } as any)
+      settingsApi.put('promptBias', '').catch(() => {})
+      clearDirtyKey('promptBias')
     }
   },
 

@@ -12,8 +12,12 @@ import {
   HardDrive,
   PackageCheck,
   Hammer,
+  Globe,
+  Plus,
+  X,
 } from 'lucide-react'
 import { Toggle } from '@/components/shared/Toggle'
+import NumericInput from '@/components/shared/NumericInput'
 import { spinClass } from '@/components/shared/Spinner'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { useStore } from '@/store'
@@ -22,7 +26,11 @@ import {
   operatorApi,
   type DatabaseTuningSettings,
   type OperatorDatabaseStatus,
+  type OperatorSharpStatus,
   type OperatorStatus,
+  type SharpSettings,
+  type TrustedHostEntry,
+  type TrustedHostsResponse,
 } from '@/api/operator'
 import { settingsApi } from '@/api/settings'
 import { embeddingsApi, type VectorStoreHealth } from '@/api/embeddings'
@@ -31,8 +39,48 @@ import { EventType } from '@/ws/events'
 import styles from './OperatorPanel.module.css'
 import clsx from 'clsx'
 
+const OPERATOR_OPERATION_LABELS: Record<string, string> = {
+  update: 'updating',
+  updating: 'updating',
+  'branch-switch': 'switching branch',
+  'switching branch': 'switching branch',
+  restart: 'restarting',
+  restarting: 'restarting',
+  'remote-toggle': 'toggling remote',
+  'toggling remote': 'toggling remote',
+  rebuild: 'rebuilding frontend',
+  'rebuilding frontend': 'rebuilding frontend',
+  'clear-cache': 'clearing cache',
+  'clearing cache': 'clearing cache',
+  'ensure-deps': 'installing dependencies',
+  'installing dependencies': 'installing dependencies',
+  'database-maintenance': 'database maintenance',
+  'database maintenance': 'database maintenance',
+}
+
 /** Operations that cause the server to restart and require reconnection handling. */
 const RESTART_OPERATIONS = new Set(['updating', 'switching branch', 'restarting', 'toggling remote', 'rebuilding frontend'])
+
+function normalizeOperatorOperation(operation: string | null | undefined): string | null {
+  if (!operation) return null
+  return OPERATOR_OPERATION_LABELS[operation] ?? operation
+}
+
+const TRUSTED_HOST_SOURCE_LABELS: Record<TrustedHostEntry['source'], string> = {
+  hostname: 'hostname',
+  mdns: 'mDNS',
+  'reverse-dns': 'reverse DNS',
+  tailscale: 'Tailscale',
+  'lan-ip': 'LAN IP',
+  env: 'env',
+  configured: 'configured',
+}
+
+const IPC_REASON_COPY: Record<OperatorStatus['ipcReason'], string> = {
+  connected: 'Runner IPC connected.',
+  not_started_with_runner: 'Runner IPC not available. This server was started without the runner. Start Lumiverse with ./start.sh in an interactive terminal, or use bun run runner.',
+  runner_env_without_process_send: 'Runner IPC was requested, but Bun did not expose process.send in this server process. This usually means the server was relaunched outside the runner IPC channel.',
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -105,6 +153,20 @@ function normalizeDatabaseMaintenance(input: DatabaseMaintenanceSettings): Datab
       ? 1024 * 1024 * 1024
       : Math.max(0, Math.floor(input.vacuumMinDbSizeBytes)),
     vacuumCheckpointMode: input.vacuumCheckpointMode ?? 'TRUNCATE',
+  }
+}
+
+function normalizeSharpSettings(input: SharpSettings): SharpSettings {
+  const normalizeInt = (value: number | null | undefined, min: number, max: number) => {
+    if (value == null || !Number.isFinite(value)) return null
+    return Math.max(min, Math.min(max, Math.floor(value)))
+  }
+
+  return {
+    concurrency: normalizeInt(input.concurrency, 1, 16),
+    cacheMemoryMb: normalizeInt(input.cacheMemoryMb, 8, 512),
+    cacheFiles: normalizeInt(input.cacheFiles, 0, 2048),
+    cacheItems: normalizeInt(input.cacheItems, 1, 4096),
   }
 }
 
@@ -209,9 +271,12 @@ function LogViewer() {
 
 export default function OperatorPanel() {
   const [status, setStatus] = useState<OperatorStatus | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
   const [dbStatus, setDbStatus] = useState<OperatorDatabaseStatus | null>(null)
   const [dbTuning, setDbTuning] = useState<DatabaseTuningSettings>({ cacheMemoryPercent: null, mmapSizeBytes: null })
   const [dbMaintenanceSettings, setDbMaintenanceSettings] = useState<DatabaseMaintenanceSettings>({})
+  const [sharpStatus, setSharpStatus] = useState<OperatorSharpStatus | null>(null)
+  const [sharpSettings, setSharpSettings] = useState<SharpSettings>({})
   const [uptime, setUptime] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -220,15 +285,26 @@ export default function OperatorPanel() {
   const [isShutdown, setIsShutdown] = useState(false)
   const [vectorHealth, setVectorHealth] = useState<VectorStoreHealth | null>(null)
   const [vectorBusy, setVectorBusy] = useState<string | null>(null)
+  const [trustedHosts, setTrustedHosts] = useState<TrustedHostsResponse | null>(null)
+  const [trustedHostsLoading, setTrustedHostsLoading] = useState(true)
+  const [trustedHostsError, setTrustedHostsError] = useState<string | null>(null)
+  const [hostDraft, setHostDraft] = useState('')
   const storeBusy = useStore((s) => s.operatorBusy)
+  const storeProgressMessage = useStore((s) => s.operatorProgressMessage)
   const addToast = useStore((s) => s.addToast)
 
   // Track the operation that triggered a server restart so we can
   // show "Reconnecting..." once the WS drops and recover on reconnect.
   const pendingRestartOp = useRef<string | null>(null)
+  const trustedHostsRequestId = useRef(0)
 
-  const effectiveBusy = reconnecting ? 'reconnecting' : (storeBusy || busy)
+  const normalizedStoreBusy = normalizeOperatorOperation(storeBusy)
+  const effectiveBusy = reconnecting ? 'reconnecting' : (normalizedStoreBusy || normalizeOperatorOperation(busy))
+  const effectiveBusyMessage = !reconnecting && normalizedStoreBusy && storeProgressMessage
+    ? storeProgressMessage
+    : null
   const ipcAvailable = status?.ipcAvailable ?? false
+  const ipcHint = status ? IPC_REASON_COPY[status.ipcReason] : null
 
   // ── Fetch status helper ─────────────────────────────────────────────────
 
@@ -236,9 +312,11 @@ export default function OperatorPanel() {
     try {
       const s = await operatorApi.getStatus()
       setStatus(s)
+      setStatusError(null)
       setUptime(s.uptime)
       return s
-    } catch {
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : 'Failed to load operator status.')
       return null
     }
   }, [])
@@ -257,6 +335,72 @@ export default function OperatorPanel() {
       return null
     }
   }, [])
+
+  const refreshTrustedHosts = useCallback(async (showLoader = false, forceRefresh = false) => {
+    const requestId = ++trustedHostsRequestId.current
+    if (showLoader) setTrustedHostsLoading(true)
+    try {
+      const res = await operatorApi.getTrustedHosts(forceRefresh)
+      if (requestId !== trustedHostsRequestId.current) return
+      setTrustedHosts(res)
+      setTrustedHostsError(null)
+    } catch (err) {
+      if (requestId !== trustedHostsRequestId.current) return
+      setTrustedHostsError(err instanceof Error ? err.message : 'Failed to load trusted hostnames.')
+    } finally {
+      if (requestId === trustedHostsRequestId.current) {
+        setTrustedHostsLoading(false)
+      }
+    }
+  }, [])
+
+  const refreshSharpSettings = useCallback(async () => {
+    try {
+      const next = await operatorApi.getSharp()
+      setSharpStatus(next)
+      setSharpSettings({
+        concurrency: next.configuredSettings.concurrency ?? null,
+        cacheMemoryMb: next.configuredSettings.cacheMemoryMb ?? null,
+        cacheFiles: next.configuredSettings.cacheFiles ?? null,
+        cacheItems: next.configuredSettings.cacheItems ?? null,
+      })
+      return next
+    } catch {
+      return null
+    }
+  }, [])
+
+  const saveTrustedHosts = useCallback(async (nextConfigured: string[]) => {
+    try {
+      trustedHostsRequestId.current += 1
+      const res = await operatorApi.putTrustedHosts(nextConfigured)
+      trustedHostsRequestId.current += 1
+      setTrustedHosts((prev) => prev ? { ...prev, configured: res.configured, baseline: res.baseline } : prev)
+      setTrustedHostsError(null)
+      addToast({ type: 'success', message: 'Trusted hosts updated.' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update trusted hosts.'
+      addToast({ type: 'error', message })
+      await refreshTrustedHosts()
+    }
+  }, [addToast, refreshTrustedHosts])
+
+  const handleAddHost = useCallback((value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    const current = trustedHosts?.configured ?? []
+    if (current.some((h) => h.toLowerCase() === trimmed.toLowerCase())) {
+      setHostDraft('')
+      return
+    }
+    setHostDraft('')
+    saveTrustedHosts([...current, trimmed])
+  }, [saveTrustedHosts, trustedHosts])
+
+  const handleRemoveHost = useCallback((host: string) => {
+    const current = trustedHosts?.configured ?? []
+    saveTrustedHosts(current.filter((h) => h !== host))
+  }, [saveTrustedHosts, trustedHosts])
 
   const refreshVectorHealth = useCallback(async () => {
     try {
@@ -297,14 +441,27 @@ export default function OperatorPanel() {
   useEffect(() => {
     let mounted = true
     const fetchStatus = async () => {
-      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth()])
+      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth(), refreshSharpSettings()])
       if (mounted && s) setLoading(false)
       else if (mounted) setLoading(false)
     }
     fetchStatus()
     const interval = setInterval(fetchStatus, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [refreshDatabase, refreshStatus, refreshVectorHealth])
+  }, [refreshDatabase, refreshSharpSettings, refreshStatus, refreshVectorHealth])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      refreshTrustedHosts()
+    }, 0)
+    const interval = window.setInterval(() => {
+      refreshTrustedHosts()
+    }, 30_000)
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [refreshTrustedHosts])
 
   // Tick uptime every second (paused while reconnecting or shut down)
   useEffect(() => {
@@ -314,6 +471,11 @@ export default function OperatorPanel() {
   }, [reconnecting, isShutdown])
 
   // ── WS disconnect / reconnect detection ─────────────────────────────────
+
+  useEffect(() => {
+    if (!normalizedStoreBusy || !RESTART_OPERATIONS.has(normalizedStoreBusy)) return
+    pendingRestartOp.current = normalizedStoreBusy
+  }, [normalizedStoreBusy])
 
   useEffect(() => {
     // Poll for WS disconnect when we're expecting a server restart.
@@ -334,10 +496,13 @@ export default function OperatorPanel() {
       setReconnecting(false)
       setBusy(null)
       useStore.getState().setOperatorBusy(null)
+      useStore.getState().setOperatorProgressMessage(null)
 
       // Re-fetch status (new PID, uptime reset, possibly new branch/version)
       refreshStatus()
       refreshDatabase()
+      refreshSharpSettings()
+      refreshTrustedHosts()
 
       // Re-subscribe to log streaming
       operatorApi.subscribeLogs().catch(() => {})
@@ -347,7 +512,7 @@ export default function OperatorPanel() {
       clearInterval(disconnectPoll)
       unsub()
     }
-  }, [reconnecting, refreshDatabase, refreshStatus])
+  }, [reconnecting, refreshDatabase, refreshSharpSettings, refreshStatus, refreshTrustedHosts])
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
@@ -550,6 +715,43 @@ export default function OperatorPanel() {
     setBusy(null)
   }, [dbMaintenanceSettings, refreshDatabase])
 
+  const handleSaveSharpSettings = useCallback(async () => {
+    setBusy('saving sharp settings')
+    try {
+      const normalized = normalizeSharpSettings(sharpSettings)
+      const next = await operatorApi.putSharp(normalized)
+      setSharpStatus(next)
+      setSharpSettings({
+        concurrency: next.configuredSettings.concurrency ?? null,
+        cacheMemoryMb: next.configuredSettings.cacheMemoryMb ?? null,
+        cacheFiles: next.configuredSettings.cacheFiles ?? null,
+        cacheItems: next.configuredSettings.cacheItems ?? null,
+      })
+      addToast({ type: 'success', message: 'Sharp runtime settings applied.' })
+    } catch (err) {
+      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to apply Sharp settings.' })
+    }
+    setBusy(null)
+  }, [addToast, sharpSettings])
+
+  const handleResetSharpSettings = useCallback(async () => {
+    setBusy('saving sharp settings')
+    try {
+      const next = await operatorApi.putSharp({})
+      setSharpStatus(next)
+      setSharpSettings({
+        concurrency: null,
+        cacheMemoryMb: null,
+        cacheFiles: null,
+        cacheItems: null,
+      })
+      addToast({ type: 'success', message: 'Sharp runtime settings reset to defaults.' })
+    } catch (err) {
+      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to reset Sharp settings.' })
+    }
+    setBusy(null)
+  }, [addToast])
+
   const handleRunVacuumNow = useCallback(() => {
     const normalizedTuning = normalizeDatabaseTuning(dbTuning)
     const normalizedMaintenance = normalizeDatabaseMaintenance(dbMaintenanceSettings)
@@ -653,6 +855,7 @@ export default function OperatorPanel() {
   const autoMaintenance = dbStatus?.automaticMaintenance
   const maintenanceState = dbStatus?.maintenanceState
   const vacuumDiskWarning = dbStats?.vacuumHasEnoughFreeBytes === false
+  const trustedHostsReady = !!trustedHosts
 
   return (
     <div className={styles.container}>
@@ -713,7 +916,7 @@ export default function OperatorPanel() {
       {effectiveBusy && effectiveBusy !== 'reconnecting' && (
         <div className={styles.busyOverlay}>
           <Loader2 size={16} className={spinClass} />
-          {effectiveBusy === 'checking' ? 'Checking for updates...' :
+          {effectiveBusyMessage ?? (effectiveBusy === 'checking' ? 'Checking for updates...' :
            effectiveBusy === 'updating' ? 'Applying update... Server will restart.' :
            effectiveBusy === 'switching branch' ? 'Switching branch... Server will restart.' :
            effectiveBusy === 'restarting' ? 'Restarting server...' :
@@ -722,12 +925,13 @@ export default function OperatorPanel() {
            effectiveBusy === 'clearing cache' ? 'Clearing package cache...' :
            effectiveBusy === 'installing dependencies' ? 'Installing dependencies...' :
            effectiveBusy === 'saving database tuning' ? 'Saving database tuning...' :
-           effectiveBusy === 'saving database maintenance' ? 'Saving database maintenance...' :
+            effectiveBusy === 'saving sharp settings' ? 'Applying Sharp runtime settings...' :
+            effectiveBusy === 'saving database maintenance' ? 'Saving database maintenance...' :
            effectiveBusy === 'refreshing database stats' ? 'Refreshing database stats...' :
             effectiveBusy === 'database maintenance' ? 'Running database maintenance...' :
            effectiveBusy === 'database vacuum' ? 'Running SQLite VACUUM...' :
-            effectiveBusy === 'rebuilding frontend' ? 'Rebuilding frontend... Server will restart.' :
-            `${effectiveBusy}...`}
+             effectiveBusy === 'rebuilding frontend' ? 'Rebuilding frontend... Server will restart.' :
+             `${effectiveBusy}...`)}
         </div>
       )}
 
@@ -737,9 +941,14 @@ export default function OperatorPanel() {
           <span className={styles.sectionTitle}>Server Controls</span>
         </div>
         <div className={styles.sectionBody}>
-          {!ipcAvailable && (
+          {statusError && (
             <div className={styles.disabledHint}>
-              Runner IPC not available. Start Lumiverse with ./start.sh or bun run runner to enable server controls.
+              Operator status unavailable: {statusError}
+            </div>
+          )}
+          {!statusError && !ipcAvailable && ipcHint && (
+            <div className={styles.disabledHint}>
+              {ipcHint}
             </div>
           )}
           <div className={styles.controls}>
@@ -795,9 +1004,14 @@ export default function OperatorPanel() {
           <span className={styles.sectionTitle}>Maintenance</span>
         </div>
         <div className={styles.sectionBody}>
-          {!ipcAvailable && (
+          {statusError && (
             <div className={styles.disabledHint}>
-              Runner IPC not available. Start Lumiverse with ./start.sh or bun run runner to enable maintenance tools.
+              Operator status unavailable: {statusError}
+            </div>
+          )}
+          {!statusError && !ipcAvailable && ipcHint && (
+            <div className={styles.disabledHint}>
+              {ipcHint}
             </div>
           )}
           <div className={styles.controls}>
@@ -852,6 +1066,147 @@ export default function OperatorPanel() {
               onChange={handleToggleRemote}
               disabled={!ipcAvailable || !!effectiveBusy}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Trusted Hostnames */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Trusted Hostnames</span>
+        </div>
+        <div className={styles.sectionBody}>
+          <span className={styles.remoteHint}>
+            Hostnames accepted in the HTTP <code>Host</code> header. Add the DNS or Tailscale name you use
+            to reach this device. Wildcards are not allowed — this guards against DNS-rebinding attacks.
+          </span>
+
+          {trustedHostsLoading && !trustedHosts && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--lumiverse-text-dim)', fontSize: 12 }}>
+              <Loader2 size={14} className={spinClass} /> Detecting trusted hostnames...
+            </div>
+          )}
+
+          {trustedHostsError && (
+            <div className={styles.disabledHint}>
+              {trustedHosts
+                ? `Trusted hostname refresh failed: ${trustedHostsError}. Showing the last successful snapshot.`
+                : `Trusted hostname detection is still unavailable: ${trustedHostsError}`}
+            </div>
+          )}
+
+          {trustedHosts && (
+            <>
+              <div className={styles.dbInfoBlock}>
+                <span className={styles.fieldLabel}>Always trusted</span>
+                <div className={styles.hostChipGroup}>
+                  {trustedHosts.baseline.map((entry) => (
+                    <span key={entry.host} className={styles.hostChipBaseline} title={`source: ${TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}`}>
+                      {entry.host}
+                      <span className={styles.hostChipSource}>{TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className={styles.dbInfoBlock}>
+                <span className={styles.fieldLabel}>Configured</span>
+                {trustedHosts.configured.length > 0 ? (
+                  <div className={styles.hostChipGroup}>
+                    {trustedHosts.configured.map((host) => (
+                      <span key={host} className={styles.hostChip}>
+                        {host}
+                        <button
+                          type="button"
+                          className={styles.hostChipRemove}
+                          onClick={() => handleRemoveHost(host)}
+                          aria-label={`Remove ${host}`}
+                          disabled={!trustedHostsReady}
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className={styles.hostEmpty}>No custom hostnames added yet.</span>
+                )}
+              </div>
+
+              {trustedHosts.suggestions.length > 0 && (
+                <div className={styles.dbInfoBlock}>
+                  <span className={styles.fieldLabel}>Detected on this device</span>
+                  <div className={styles.hostChipGroup}>
+                    {trustedHosts.suggestions.map((entry) => {
+                      const alreadyConfigured = trustedHosts.configured.includes(entry.host)
+                      return (
+                        <button
+                          key={entry.host}
+                          type="button"
+                          className={styles.hostChipSuggested}
+                          disabled={!trustedHostsReady || alreadyConfigured}
+                          onClick={() => handleAddHost(entry.host)}
+                          title={`source: ${TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}`}
+                        >
+                          <Plus size={11} />
+                          {entry.host}
+                          <span className={styles.hostChipSource}>{TRUSTED_HOST_SOURCE_LABELS[entry.source] ?? entry.source}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {!trustedHosts && !trustedHostsLoading && !trustedHostsError && (
+            <div className={styles.dbInfoBlock}>
+              <span className={styles.hostEmpty}>Trusted hostname data has not loaded yet.</span>
+            </div>
+          )}
+
+          <div className={styles.dbInfoBlock}>
+            <span className={styles.fieldLabel}>Add manually</span>
+            <form
+              className={styles.hostInputRow}
+              onSubmit={(e) => {
+                e.preventDefault()
+                handleAddHost(hostDraft)
+              }}
+            >
+              <input
+                type="text"
+                className={styles.hostInput}
+                placeholder="e.g. machine.tailnet-abcd.ts.net"
+                value={hostDraft}
+                onChange={(e) => setHostDraft(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={!trustedHostsReady}
+              />
+              <button
+                type="submit"
+                className={styles.controlBtnPrimary}
+                disabled={!trustedHostsReady || !hostDraft.trim()}
+              >
+                <Globe size={14} />
+                Add
+              </button>
+              <button
+                type="button"
+                className={styles.controlBtn}
+                onClick={() => refreshTrustedHosts(true, true)}
+                disabled={trustedHostsLoading}
+              >
+                <RefreshCw size={14} className={trustedHostsLoading ? spinClass : undefined} />
+                Rescan
+              </button>
+            </form>
+            <span className={styles.fieldHint}>
+              Port defaults to {status?.port ?? '7860'} when omitted. Full <code>https://*.ts.net</code> origins are preserved for Tailscale Serve.
+              {!trustedHostsReady ? ' Load the current snapshot before editing so existing trusted hosts are preserved.' : ''}
+            </span>
           </div>
         </div>
       </div>
@@ -937,17 +1292,17 @@ export default function OperatorPanel() {
           <div className={styles.tuningGrid}>
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Cache % of host RAM</span>
-              <input
-                type="number"
+              <NumericInput
                 min={0.1}
                 max={50}
                 step={0.1}
                 className={styles.fieldInput}
                 placeholder="Auto"
-                value={dbTuning.cacheMemoryPercent ?? ''}
-                onChange={(e) => setDbTuning((prev) => ({
+                value={dbTuning.cacheMemoryPercent ?? null}
+                allowEmpty
+                onChange={(value) => setDbTuning((prev) => ({
                   ...prev,
-                  cacheMemoryPercent: e.target.value === '' ? null : parseFloat(e.target.value),
+                  cacheMemoryPercent: value,
                 }))}
               />
               <span className={styles.fieldHint}>
@@ -957,17 +1312,18 @@ export default function OperatorPanel() {
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>mmap size (MiB)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={0}
                 step={16}
                 className={styles.fieldInput}
                 placeholder={mmapSupported ? 'Auto' : 'Disabled on Windows'}
                 disabled={!mmapSupported}
-                value={dbTuning.mmapSizeBytes == null ? '' : Math.round(dbTuning.mmapSizeBytes / (1024 * 1024))}
-                onChange={(e) => setDbTuning((prev) => ({
+                value={dbTuning.mmapSizeBytes == null ? null : Math.round(dbTuning.mmapSizeBytes / (1024 * 1024))}
+                integer
+                allowEmpty
+                onChange={(value) => setDbTuning((prev) => ({
                   ...prev,
-                  mmapSizeBytes: e.target.value === '' ? null : parseInt(e.target.value, 10) * 1024 * 1024,
+                  mmapSizeBytes: value == null ? null : value * 1024 * 1024,
                 }))}
               />
               <span className={styles.fieldHint}>
@@ -1010,109 +1366,112 @@ export default function OperatorPanel() {
           <div className={styles.tuningGrid}>
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Optimize interval (hours)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={1}
                 step={1}
                 className={styles.fieldInput}
                 placeholder="Disabled"
-                value={dbMaintenanceSettings.optimizeIntervalHours ?? ''}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                value={dbMaintenanceSettings.optimizeIntervalHours ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  optimizeIntervalHours: e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  optimizeIntervalHours: value,
                 }))}
               />
             </label>
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Analyze interval (hours)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={1}
                 step={1}
                 className={styles.fieldInput}
                 placeholder="Disabled"
-                value={dbMaintenanceSettings.analyzeIntervalHours ?? ''}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                value={dbMaintenanceSettings.analyzeIntervalHours ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  analyzeIntervalHours: e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  analyzeIntervalHours: value,
                 }))}
               />
             </label>
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Auto vacuum interval (hours)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={1}
                 step={1}
                 className={styles.fieldInput}
                 placeholder="Disabled"
-                value={dbMaintenanceSettings.vacuumIntervalHours ?? ''}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                value={dbMaintenanceSettings.vacuumIntervalHours ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  vacuumIntervalHours: e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  vacuumIntervalHours: value,
                 }))}
               />
             </label>
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Vacuum idle time (minutes)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={1}
                 step={1}
                 className={styles.fieldInput}
                 value={dbMaintenanceSettings.vacuumMinIdleMinutes ?? 15}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                integer
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  vacuumMinIdleMinutes: parseInt(e.target.value, 10),
+                  vacuumMinIdleMinutes: value ?? 15,
                 }))}
               />
             </label>
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Min reclaimable space (MiB)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={0}
                 step={64}
                 className={styles.fieldInput}
-                value={dbMaintenanceSettings.vacuumMinReclaimBytes == null ? '' : Math.round(dbMaintenanceSettings.vacuumMinReclaimBytes / (1024 * 1024))}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                value={dbMaintenanceSettings.vacuumMinReclaimBytes == null ? null : Math.round(dbMaintenanceSettings.vacuumMinReclaimBytes / (1024 * 1024))}
+                integer
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  vacuumMinReclaimBytes: e.target.value === '' ? 0 : parseInt(e.target.value, 10) * 1024 * 1024,
+                  vacuumMinReclaimBytes: (value ?? 0) * 1024 * 1024,
                 }))}
               />
             </label>
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Min reclaim percent</span>
-              <input
-                type="number"
+              <NumericInput
                 min={0}
                 max={100}
                 step={1}
                 className={styles.fieldInput}
                 value={dbMaintenanceSettings.vacuumMinReclaimPercent ?? 15}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                integer
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  vacuumMinReclaimPercent: parseInt(e.target.value, 10),
+                  vacuumMinReclaimPercent: value ?? 15,
                 }))}
               />
             </label>
 
             <label className={styles.fieldGroup}>
               <span className={styles.fieldLabel}>Min DB size (MiB)</span>
-              <input
-                type="number"
+              <NumericInput
                 min={0}
                 step={256}
                 className={styles.fieldInput}
-                value={dbMaintenanceSettings.vacuumMinDbSizeBytes == null ? '' : Math.round(dbMaintenanceSettings.vacuumMinDbSizeBytes / (1024 * 1024))}
-                onChange={(e) => setDbMaintenanceSettings((prev) => ({
+                value={dbMaintenanceSettings.vacuumMinDbSizeBytes == null ? null : Math.round(dbMaintenanceSettings.vacuumMinDbSizeBytes / (1024 * 1024))}
+                integer
+                onChange={(value) => setDbMaintenanceSettings((prev) => ({
                   ...prev,
-                  vacuumMinDbSizeBytes: e.target.value === '' ? 0 : parseInt(e.target.value, 10) * 1024 * 1024,
+                  vacuumMinDbSizeBytes: (value ?? 0) * 1024 * 1024,
                 }))}
               />
             </label>
@@ -1174,6 +1533,123 @@ export default function OperatorPanel() {
         </div>
       </div>
 
+      {/* Image Processing */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Image Processing</span>
+        </div>
+        <div className={styles.sectionBody}>
+          <div className={styles.dbInfoGrid}>
+            <div className={styles.dbInfoBlock}>
+              <span className={styles.statusLabel}>Effective Runtime</span>
+              <span className={styles.dbInlineText}>
+                concurrency {sharpStatus?.effectiveSettings.concurrency ?? '—'}
+                {' · '}
+                cache {sharpStatus ? `${sharpStatus.effectiveSettings.cacheMemoryMb} MiB / ${sharpStatus.effectiveSettings.cacheFiles} files / ${sharpStatus.effectiveSettings.cacheItems} items` : '—'}
+              </span>
+            </div>
+            <div className={styles.dbInfoBlock}>
+              <span className={styles.statusLabel}>Defaults</span>
+              <span className={styles.dbInlineText}>
+                concurrency {sharpStatus?.defaults.concurrency ?? '—'}
+                {' · '}
+                cache {sharpStatus ? `${sharpStatus.defaults.cacheMemoryMb} MiB / ${sharpStatus.defaults.cacheFiles} files / ${sharpStatus.defaults.cacheItems} items` : '—'}
+              </span>
+            </div>
+          </div>
+
+          <div className={styles.tuningGrid}>
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>Concurrency</span>
+              <NumericInput
+                min={1}
+                max={16}
+                step={1}
+                className={styles.fieldInput}
+                placeholder={`Default (${sharpStatus?.defaults.concurrency ?? 4})`}
+                value={sharpSettings.concurrency ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setSharpSettings((prev) => ({ ...prev, concurrency: value }))}
+              />
+              <span className={styles.fieldHint}>Blank uses the backend default. New image work picks up changes immediately.</span>
+            </label>
+
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>Cache memory (MiB)</span>
+              <NumericInput
+                min={8}
+                max={512}
+                step={8}
+                className={styles.fieldInput}
+                placeholder={`Default (${sharpStatus?.defaults.cacheMemoryMb ?? 64})`}
+                value={sharpSettings.cacheMemoryMb ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setSharpSettings((prev) => ({ ...prev, cacheMemoryMb: value }))}
+              />
+            </label>
+
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>Cache files</span>
+              <NumericInput
+                min={0}
+                max={2048}
+                step={16}
+                className={styles.fieldInput}
+                placeholder={`Default (${sharpStatus?.defaults.cacheFiles ?? 128})`}
+                value={sharpSettings.cacheFiles ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setSharpSettings((prev) => ({ ...prev, cacheFiles: value }))}
+              />
+            </label>
+
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>Cache items</span>
+              <NumericInput
+                min={1}
+                max={4096}
+                step={16}
+                className={styles.fieldInput}
+                placeholder={`Default (${sharpStatus?.defaults.cacheItems ?? 256})`}
+                value={sharpSettings.cacheItems ?? null}
+                integer
+                allowEmpty
+                onChange={(value) => setSharpSettings((prev) => ({ ...prev, cacheItems: value }))}
+              />
+            </label>
+          </div>
+
+          <div className={styles.controls}>
+            <button
+              className={styles.controlBtnPrimary}
+              disabled={!!effectiveBusy}
+              onClick={handleSaveSharpSettings}
+            >
+              <HardDrive size={14} />
+              Apply Sharp Settings
+            </button>
+            <button
+              className={styles.controlBtn}
+              disabled={!!effectiveBusy}
+              onClick={handleResetSharpSettings}
+            >
+              <RefreshCw size={14} />
+              Reset to Defaults
+            </button>
+            <button
+              className={styles.controlBtn}
+              disabled={!!effectiveBusy}
+              onClick={refreshSharpSettings}
+            >
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* LanceDB Vector Store */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
@@ -1183,53 +1659,72 @@ export default function OperatorPanel() {
           {vectorHealth ? (
             vectorHealth.exists ? (
               <>
-                <div className={styles.statusGrid}>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Rows</span>
-                    <span className={styles.statusValue}>{vectorHealth.rowCount.toLocaleString()}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Vector Index</span>
-                    <span className={styles.statusValue}>{vectorHealth.vectorIndexReady ? 'Active' : 'Pending'}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Scalar Indexes</span>
-                    <span className={styles.statusValue}>{vectorHealth.scalarIndexReady ? 'Active' : 'Pending'}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>FTS Index</span>
-                    <span className={styles.statusValue}>{vectorHealth.ftsIndexReady ? 'Active' : 'Pending'}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Unindexed Rows</span>
-                    <span className={styles.statusValue}>{vectorHealth.unindexedRowEstimate.toLocaleString()}</span>
-                  </div>
-                  <div className={styles.statusCard}>
-                    <span className={styles.statusLabel}>Indexes</span>
-                    <span className={styles.statusValue}>{vectorHealth.indexes.length}</span>
-                  </div>
-                </div>
-
-                {vectorHealth.indexes.length > 0 && (
-                  <div className={styles.dbInfoGrid}>
-                    <div className={styles.dbInfoBlock}>
-                      <span className={styles.statusLabel}>Index Details</span>
-                      <span className={styles.dbInlineText}>
-                        {vectorHealth.indexes.map((idx) =>
-                          idx.type ? `${idx.name} (${idx.type})` : idx.name
-                        ).join(' · ')}
-                      </span>
-                    </div>
-                    {vectorHealth.lastIndexRebuildAt > 0 && (
+                {Object.entries(vectorHealth.tables ?? { embeddings: vectorHealth }).map(([tableName, tableHealth]) => (
+                  <div key={tableName} style={{ marginBottom: 16 }}>
+                    <div className={styles.dbInfoGrid} style={{ marginBottom: 10 }}>
                       <div className={styles.dbInfoBlock}>
-                        <span className={styles.statusLabel}>Last Index Rebuild</span>
-                        <span className={styles.dbInlineText}>
-                          {new Date(vectorHealth.lastIndexRebuildAt).toLocaleString()}
-                        </span>
+                        <span className={styles.statusLabel}>Table</span>
+                        <span className={styles.dbInlineText}>{tableName}</span>
+                      </div>
+                    </div>
+
+                    {tableHealth.exists ? (
+                      <>
+                        <div className={styles.statusGrid}>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Rows</span>
+                            <span className={styles.statusValue}>{tableHealth.rowCount.toLocaleString()}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Vector Index</span>
+                            <span className={styles.statusValue}>{tableHealth.vectorIndexReady ? 'Active' : 'Pending'}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Scalar Indexes</span>
+                            <span className={styles.statusValue}>{tableHealth.scalarIndexReady ? 'Active' : 'Pending'}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>FTS Index</span>
+                            <span className={styles.statusValue}>{tableHealth.ftsIndexReady ? 'Active' : 'Pending'}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Unindexed Rows</span>
+                            <span className={styles.statusValue}>{tableHealth.unindexedRowEstimate.toLocaleString()}</span>
+                          </div>
+                          <div className={styles.statusCard}>
+                            <span className={styles.statusLabel}>Indexes</span>
+                            <span className={styles.statusValue}>{tableHealth.indexes.length}</span>
+                          </div>
+                        </div>
+
+                        {tableHealth.indexes.length > 0 && (
+                          <div className={styles.dbInfoGrid}>
+                            <div className={styles.dbInfoBlock}>
+                              <span className={styles.statusLabel}>Index Details</span>
+                              <span className={styles.dbInlineText}>
+                                {tableHealth.indexes.map((idx) =>
+                                  idx.type ? `${idx.name} (${idx.type})` : idx.name
+                                ).join(' · ')}
+                              </span>
+                            </div>
+                            {tableHealth.lastIndexRebuildAt > 0 && (
+                              <div className={styles.dbInfoBlock}>
+                                <span className={styles.statusLabel}>Last Index Rebuild</span>
+                                <span className={styles.dbInlineText}>
+                                  {new Date(tableHealth.lastIndexRebuildAt).toLocaleString()}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className={styles.disabledHint}>
+                        Table not initialized yet.
                       </div>
                     )}
                   </div>
-                )}
+                ))}
               </>
             ) : (
               <div className={styles.disabledHint}>

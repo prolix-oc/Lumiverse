@@ -1,6 +1,8 @@
 .overlay {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   z-index: 10002;
   display: flex;
@@ -18,7 +20,7 @@
   display: flex;
   flex-direction: column;
   width: 400px;
-  max-width: 90vw;
+  max-width: calc(90vw / var(--lumiverse-ui-scale, 1));
   background: var(--lumiverse-bg-elevated);
   border: 1px solid var(--lumiverse-border);
   border-radius: 14px;
@@ -42,7 +44,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   width: 100%;
 }
@@ -65,7 +67,7 @@
 .confirmBtn {
   padding: 7px 16px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   border: none;

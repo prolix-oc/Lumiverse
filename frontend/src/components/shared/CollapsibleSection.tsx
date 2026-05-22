@@ -8,6 +8,8 @@ interface CollapsibleSectionProps {
   title: string
   icon?: ReactNode
   defaultExpanded?: boolean
+  expanded?: boolean
+  onToggle?: (expanded: boolean) => void
   badge?: string | number
   children: ReactNode
   className?: string
@@ -17,18 +19,28 @@ export default function CollapsibleSection({
   title,
   icon,
   defaultExpanded = true,
+  expanded,
+  onToggle,
   badge,
   children,
   className,
 }: CollapsibleSectionProps) {
-  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
+  const [internalExpanded, setInternalExpanded] = useState(defaultExpanded)
+  const isControlled = expanded !== undefined
+  const isExpanded = isControlled ? expanded : internalExpanded
+
+  const handleToggle = () => {
+    const next = !isExpanded
+    if (!isControlled) setInternalExpanded(next)
+    onToggle?.(next)
+  }
 
   return (
     <div className={clsx(styles.section, className)}>
       <button
         type="button"
         className={styles.header}
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={handleToggle}
       >
         {icon && <span className={styles.icon}>{icon}</span>}
         <span className={styles.title}>{title}</span>

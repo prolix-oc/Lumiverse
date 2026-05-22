@@ -19,7 +19,7 @@
   border: none;
   background: transparent;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   color: var(--lumiverse-text);
   outline: none;

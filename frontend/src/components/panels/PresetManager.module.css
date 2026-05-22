@@ -4,6 +4,32 @@
   gap: 4px;
 }
 
+.bindingBanner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-primary-020);
+  background: var(--lumiverse-primary-light);
+}
+
+.bindingBannerTitle {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-primary);
+}
+
+.bindingBannerText {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+}
+
+.bindingBannerHint {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
 /* ── Quick preset buttons row ── */
 .presetRow {
   display: flex;
@@ -14,7 +40,7 @@
 .presetBtn {
   padding: 4px 10px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   border: 1px solid var(--lumiverse-border);
   background: transparent;
@@ -47,8 +73,12 @@
   gap: 4px;
 }
 
+.fieldGroupDisabled {
+  opacity: 0.6;
+}
+
 .label {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -61,7 +91,7 @@
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
   box-sizing: border-box;
@@ -80,12 +110,12 @@
 }
 
 .toggleLabel {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
 .toggleDesc {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-top: 1px;
 }
@@ -98,7 +128,7 @@
   border-radius: 8px;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   outline: none;
   cursor: pointer;
   transition: border-color var(--lumiverse-transition-fast);
@@ -116,7 +146,7 @@
 }
 
 .toggleOnlyHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-weight: 400;
 }
@@ -130,7 +160,7 @@
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   outline: none;
   resize: vertical;
@@ -154,7 +184,7 @@
 .quickBtn {
   padding: 3px 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   border: 1px solid var(--lumiverse-border);
   background: transparent;
@@ -182,7 +212,7 @@
 }
 
 .historyHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   white-space: nowrap;
 }

@@ -64,12 +64,14 @@ High-salience memories resist decay over time. Pivotal moments (score above 0.7 
 
 ### Entity Tracking
 
-The cortex extracts and tracks named entities from your chat:
+The cortex extracts and tracks named entities from your chat across six types:
 
 - **Characters** — detected by verb adjacency ("Melina sighed"), dialogue attribution, interaction patterns
 - **Locations** — detected by suffixes ("Sixth Street"), locative phrases ("arrived at Dustwell")
 - **Factions** — detected by collective nouns ("Sons of Calydon"), business suffixes ("PubSec")
 - **Items** — detected by weapon/vehicle verbs ("wielding the Starblade")
+- **Concepts** — proper-noun ideas, magic systems, doctrines, named phenomena
+- **Events** — named happenings (battles, ceremonies, festivals) that recur across the story
 
 Each entity accumulates facts, emotional associations, and a salience profile over time. The entity graph handles aliases automatically — if a character named "Pulchra Fellini" is sometimes called "Pulchra" or "Pul", those references are resolved to the same entity.
 
@@ -123,29 +125,47 @@ For maximum accuracy, you can assign a secondary LLM connection to assist the co
 2. Choose a **Model** (smaller, faster models work well here — the sidecar doesn't need to be creative)
 3. Adjust **Temperature** (0.1 recommended for factual extraction)
 4. Set **Parallel Requests** to control how many concurrent LLM calls run during a rebuild
+5. Set **Requests Per Minute** to throttle the sidecar against your provider's rate limits (0 = unlimited)
 
 !!! note "Sidecar Costs"
     The sidecar makes one LLM call per chunk during live chat, and one per chunk during rebuilds. A chat with 200 chunks would make 200 API calls on rebuild. Choose an inexpensive model for the sidecar to keep costs reasonable.
 
-The sidecar results are merged with heuristic results — the heuristic always runs as a baseline, and the LLM supplements it. If the sidecar call fails for any reason, the heuristic result is used as a fallback.
+### Reliability & Retries
+
+The sidecar is wrapped in a small reliability layer you can tune:
+
+| Setting | Description |
+|---------|-------------|
+| **Fallback** | `heuristic` writes the heuristic result if the sidecar fails; `skip` holds the chunk for reprocessing on the next pass. |
+| **Max Retries** | Additional attempts after the first failed call (exponential backoff). |
+| **Sidecar Timeout** | Per-call timeout in milliseconds before the call is abandoned. |
+
+### Arbitration
+
+When the sidecar is enabled, two optional behaviors give it authority over heuristic data:
+
+- **Arbitrates Heuristics** — the sidecar reviews each heuristic entity before it is persisted and can reject or rename misidentifications (e.g. discarding common words mistakenly extracted as characters).
+- **Grades Existing Records** — periodically re-evaluates already-saved entities and removes ones that have become noise. Useful after a long chat has accumulated mistakes.
+
+If the sidecar call fails and **Fallback** is set to `heuristic`, the heuristic result is used as a safe default.
 
 ---
 
 ## Memory Panel
 
-The sidebar's **Memory** tab gives you a live view of the cortex data for the current chat:
+The sidebar's **Memory** tab gives you a live view of the cortex data for the current chat. It has four tabs:
 
 ### Entities Tab
-Browse all tracked entities — characters, locations, items, factions. Each entity card shows:
+Browse all tracked entities — characters, locations, items, factions, concepts, events. Each entity card shows:
 
-- Type and status (active, inactive, deceased)
+- Type and status (active, inactive, deceased, destroyed, unknown)
 - Mention count and salience average
 - Description (auto-populated from first appearance)
 - Known facts
 - Emotional profile (top emotional associations)
 - Aliases
 
-You can delete incorrectly extracted entities directly from this panel.
+You can select multiple entities and delete them in bulk, or delete a single incorrectly extracted entity directly from this panel.
 
 ### Colors Tab
 Shows font color attributions — which hex color belongs to which character, with confidence scores. Useful for chats where characters use distinct colors for speech, thought, or narration.
@@ -157,9 +177,44 @@ Overview of the cortex data:
 - Entities (active and archived)
 - Relations between entities
 - Consolidations (scene summaries and arcs)
-- Salience records
+- Salience records (sourced from `heuristic` or `sidecar`)
 
 Click any stat card to drill down into the raw records.
+
+### Links Tab
+Manages cross-chat memory sharing — see [Vaults & Interlinks](#vaults-interlinks) below.
+
+---
+
+## Vaults & Interlinks
+
+Cortex memory can be shared between chats in two ways. Both are managed from the **Links** tab in the Memory panel.
+
+### Vaults
+
+A **vault** is a frozen snapshot of a chat's cortex state — its chunks, entities, and relationships — packaged into a reusable, read-only knowledge object. You can attach a vault to any number of other chats so the cortex on those chats can retrieve from it during generation.
+
+Typical uses:
+
+- Bottle a finished campaign into a vault, then start a sequel chat that "remembers" the prior arc
+- Build a "world bible" vault from a worldbuilding chat and attach it to every chat set in that universe
+- Share canonical character history across roleplay branches without re-pasting it
+
+Vault chunks are stored alongside chat chunks in the embeddings table (`source_type='vault_chunk'`) so semantic search continues to work seamlessly. You can also **rebuild** a vault's embeddings if you change your embedding provider.
+
+### Interlinks
+
+An **interlink** is a live, bidirectional connection between two chats. Each chat can see the other's entities, relationships, and (optionally) chunks in real time. Unlike a vault, an interlink stays in sync — new entities discovered in either chat become visible to the other on the next generation.
+
+Use interlinks when two chats are happening in the same continuity and should share evolving memory (e.g. one chat tracks Character A's POV while another tracks Character B's POV in the same scene).
+
+### Adding a Link
+
+1. Open the **Memory panel** and switch to the **Links** tab
+2. Click **Add Link** and choose **Vault** or **Interlink**
+3. Pick an existing vault / a target chat (interlinks can be flipped to bidirectional from the same dialog)
+
+The **Vault Library** at the bottom of the tab lists all your saved vaults and the chats currently consuming them. Delete a vault from there when you no longer need it.
 
 ---
 
@@ -176,6 +231,7 @@ Memory Cortex data is available in your presets through macros. Add these via **
 | `{{memorySalience}}` | The single highest-importance memory from retrieval |
 | `{{cortexActive}}` | `"yes"` or `"no"` for conditional blocks |
 | `{{entityCount}}` | Number of entities in the current context |
+| `{{characterColors}}` | Character speech / thought / narration color guidance derived from cortex state |
 
 The standard memory macros (`{{memories}}`, `{{memoriesRaw}}`, etc.) continue to work alongside cortex macros. When the cortex is enabled, `{{memories}}` returns cortex-enhanced results formatted in shadow-prompt style.
 

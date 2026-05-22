@@ -17,7 +17,7 @@
 
 .headerLabel {
   flex: 1;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -38,7 +38,7 @@
   background: var(--lumiverse-fill);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -79,7 +79,7 @@
 }
 
 .itemLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -88,7 +88,7 @@
 }
 
 .itemMeta {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 

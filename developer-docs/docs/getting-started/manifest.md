@@ -30,10 +30,31 @@ Every extension needs a `spindle.json` at the repository root.
 | `homepage` | Yes | Extension homepage or docs URL |
 | `description` | No | Short description shown in the Extensions panel |
 | `permissions` | Yes | Array of gated permissions this extension requires (can be `[]`) |
+| `requested_capabilities` | No | Array of declared backend capabilities that suppress specific install-time scanner blocks. See [Backend Capabilities](capabilities.md) |
 | `entry_backend` | No | Path to backend entry. Default: `"dist/backend.js"` |
 | `entry_frontend` | No | Path to frontend entry. Default: `"dist/frontend.js"` |
 | `minimum_lumiverse_version` | No | Minimum Lumiverse version required |
 | `storage_seed_files` | No | Files/directories to copy into extension storage on install (see below) |
+| `interceptorTimeoutMs` | No | Per-extension override (in milliseconds) for how long the host will wait for this extension's interceptor to return. See [Interceptor Timeout](#interceptor-timeout) below |
+
+## Requested Capabilities
+
+`requested_capabilities` is distinct from `permissions`. Permissions gate runtime API surfaces (`spindle.generate`, `spindle.chats`, etc.). Capabilities suppress install-time **scanner blocks** for code patterns the extension legitimately needs — usually because a bundled dependency (Zod, Handlebars) or your own helper trips a heuristic that's looking for malware-style obfuscation.
+
+```json
+{
+  "requested_capabilities": ["dynamic_code_execution", "base64_decode"]
+}
+```
+
+Available capabilities:
+
+| Capability | Suppresses |
+|---|---|
+| `"dynamic_code_execution"` | The `dynamic code execution` block. Required when the bundled backend contains `eval(` or `Function(` / `new Function(` — including inside vendored libraries (Zod feature-detect probes), inside `RegExp` literals whose source mentions `Function\s*\(`, or as part of a sandboxed in-extension script runner |
+| `"base64_decode"` | The `base64 decoding` block. Required when the bundled backend uses `Buffer.from(value, "base64")` — common for binary asset I/O and image helpers |
+
+Only declare capabilities you actually need. A full description of each, plus the list of patterns that **cannot** be opted out of, is in [Backend Capabilities](capabilities.md).
 
 ## Storage Seed Files
 
@@ -55,3 +76,25 @@ Seed files let you ship default data (config templates, databases, assets) that 
 | `to` | `string` | same as `from` | Destination path relative to extension storage root |
 | `overwrite` | `boolean` | `false` | If `true`, overwrite existing files on update |
 | `required` | `boolean` | `false` | If `true`, fail installation when the source file is missing |
+
+## Interceptor Timeout
+
+Extensions that register a pre-generation interceptor are bound by a wall-clock budget. The host resolves this budget **per run**, so both the manifest value and the user's Spindle setting take effect on the next generation without requiring the extension to re-register.
+
+Resolution order (highest priority first):
+
+1. `interceptorTimeoutMs` in your manifest
+2. The user's `spindleSettings.interceptorTimeoutMs` setting (configurable in the Spindle panel)
+3. Default: `10000` ms
+
+All values are clamped to `[1000, 300000]` ms (1 second to 5 minutes).
+
+```json
+{
+  "identifier": "my_retrieval_extension",
+  "permissions": ["interceptor"],
+  "interceptorTimeoutMs": 45000
+}
+```
+
+Use this when your interceptor performs real work before the LLM call — multi-step retrieval, graph traversal, external API lookups, or controller-driven context assembly — and needs a larger budget than the 10 second default. See [Interceptors → Timeout](../backend-api/interceptors.md#timeout) for the full behavior, including what happens when the budget is exceeded.

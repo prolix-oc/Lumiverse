@@ -139,6 +139,8 @@ function SpindleModal() {
       onClick={handleBackdrop}
       style={{
         position: 'fixed', inset: 0, zIndex: 10003,
+        width: 'var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)))',
+        height: 'var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)))',
         background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}

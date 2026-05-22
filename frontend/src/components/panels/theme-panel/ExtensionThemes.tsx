@@ -69,23 +69,24 @@ function ActiveThemeCard({ override }: { override: ExtensionThemeOverride }) {
   )
 }
 
-function MutedThemeCard({ extensionId }: { extensionId: string }) {
+function MutedThemeCard({ override }: { override: ExtensionThemeOverride }) {
   const unmuteTheme = useStore((s) => s.unmuteExtensionTheme)
-  const extensions = useStore((s) => s.extensions)
-  const name = extensions.find((e) => e.id === extensionId)?.name ?? extensionId
+  const swatches = useMemo(() => extractSwatchColors(override.variables), [override.variables])
 
   return (
     <div className={styles.card} style={{ opacity: 0.5 }}>
       <div className={styles.swatches}>
-        <div className={styles.swatch} style={{ background: 'var(--lumiverse-fill-medium)' }} />
+        {swatches.map((color, i) => (
+          <div key={i} className={styles.swatch} style={{ background: color }} />
+        ))}
       </div>
       <div className={styles.info}>
-        <span className={styles.name}>{name}</span>
+        <span className={styles.name}>{override.extensionName}</span>
         <span className={styles.attribution}>Theme disabled</span>
       </div>
       <Toggle.Switch
         checked={false}
-        onChange={() => unmuteTheme(extensionId)}
+        onChange={() => unmuteTheme(override.extensionId)}
       />
     </div>
   )
@@ -95,10 +96,9 @@ export default function ExtensionThemes() {
   const overrides = useStore((s) => s.extensionThemeOverrides)
   const muted = useStore((s) => s.mutedExtensionThemes)
 
-  const activeEntries = useMemo(() => Object.values(overrides), [overrides])
-  const mutedIds = useMemo(() => Object.keys(muted), [muted])
+  const entries = useMemo(() => Object.values(overrides), [overrides])
 
-  if (activeEntries.length === 0 && mutedIds.length === 0) return null
+  if (entries.length === 0) return null
 
   return (
     <div className={styles.section}>
@@ -107,12 +107,11 @@ export default function ExtensionThemes() {
         <h4 className={styles.headerLabel}>Extension Themes</h4>
       </div>
       <div className={styles.list}>
-        {activeEntries.map((override) => (
-          <ActiveThemeCard key={override.extensionId} override={override} />
-        ))}
-        {mutedIds.map((id) => (
-          <MutedThemeCard key={id} extensionId={id} />
-        ))}
+        {entries.map((override) =>
+          muted[override.extensionId]
+            ? <MutedThemeCard key={override.extensionId} override={override} />
+            : <ActiveThemeCard key={override.extensionId} override={override} />
+        )}
       </div>
     </div>
   )

@@ -15,8 +15,9 @@ import type { MigrationLogger } from "./st-reader";
 import {
   readWorldBooksFromDisk,
   readPersonasFromDisk,
-  readChatsForCharacter,
+  readCharacterChatFile,
   readGroupDefinitions,
+  readGroupChatFileEntries,
   readGroupChatFile,
   parseDateString,
 } from "./st-reader";
@@ -33,10 +34,16 @@ import { uploadImage } from "../services/images.service";
 import { createPersona, setPersonaAvatar, setPersonaImage } from "../services/personas.service";
 import { importWorldBookBulk } from "../services/world-books.service";
 import { createChatRaw, bulkInsertMessages } from "../services/chats.service";
+import { createCooperativeYielder } from "../llm/stream-utils";
 
 // ─── Default filesystem singleton ──────────────────────────────────────────
 
 const defaultFs = new LocalFileSystem();
+const yieldEveryCharacter = 4;
+const yieldEveryWorldBook = 2;
+const yieldEveryPersona = 4;
+const yieldEveryChat = 8;
+const yieldEveryGroupChat = 4;
 
 // ─── Result types ───────────────────────────────────────────────────────────
 
@@ -97,6 +104,7 @@ export async function importCharacters(
   );
 
   const total = pngFiles.length;
+  const maybeYield = createCooperativeYielder(yieldEveryCharacter);
 
   for (let i = 0; i < pngFiles.length; i++) {
     const filename = pngFiles[i].name;
@@ -111,6 +119,7 @@ export async function importCharacters(
       if (existing) {
         filenameToId.set(stem, existing.id);
         skipped++;
+        await maybeYield();
         continue;
       }
 
@@ -138,6 +147,8 @@ export async function importCharacters(
       logger.warn(`Failed to import ${filename}: ${err.message}`);
       failed++;
     }
+
+    await maybeYield();
   }
 
   return { imported, skipped, failed, filenameToId };
@@ -158,6 +169,7 @@ export async function importWorldBooks(
 
   const worldBooks = await readWorldBooksFromDisk(stDataDir, logger, fs);
   const total = worldBooks.length;
+  const maybeYield = createCooperativeYielder(yieldEveryWorldBook);
 
   for (let i = 0; i < worldBooks.length; i++) {
     const wb = worldBooks[i];
@@ -172,6 +184,8 @@ export async function importWorldBooks(
       logger.warn(`Failed to import world book "${wb.name}": ${err.message}`);
       failed++;
     }
+
+    await maybeYield();
   }
 
   return { imported, failed, totalEntries, nameToId };
@@ -193,6 +207,7 @@ export async function importPersonas(
 
   const personaPayloads = await readPersonasFromDisk(stDataDir, fs);
   const total = personaPayloads.length;
+  const maybeYield = createCooperativeYielder(yieldEveryPersona);
 
   for (let i = 0; i < personaPayloads.length; i++) {
     const p = personaPayloads[i];
@@ -233,6 +248,8 @@ export async function importPersonas(
       logger.warn(`Failed to import persona "${p.name}": ${err.message}`);
       failed++;
     }
+
+    await maybeYield();
   }
 
   return { imported, failed, avatarsUploaded, nameToId };
@@ -269,6 +286,7 @@ export async function importChats(
   }
 
   let processedChats = 0;
+  const maybeYield = createCooperativeYielder(yieldEveryChat);
 
   for (const charDirEntry of charDirs) {
     const charDirName = charDirEntry.name;
@@ -283,13 +301,31 @@ export async function importChats(
       processedChats += chatCount;
       logger.warn(`No character found for "${charDirName}", skipping ${chatCount} chat(s)`);
       logger.progress("Importing chats", processedChats, totalChats);
+      await maybeYield();
       continue;
     }
 
-    const chatPayloads = await readChatsForCharacter(stDataDir, charDirName, personaNameToId, logger, fs);
+    const chatEntries = await fs.readdir(fs.join(chatsDir, charDirName));
+    const jsonlFiles = chatEntries.filter(
+      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
+    );
 
-    for (const chatData of chatPayloads) {
+    for (const chatFile of jsonlFiles) {
       try {
+        const chatData = await readCharacterChatFile({
+          stDataDir,
+          charDirName,
+          chatFileName: chatFile.name,
+          personaNameToId,
+          filenameToId,
+          fs,
+        });
+
+        if (!chatData) {
+          logger.warn(`Could not read ${charDirName}/${chatFile.name}, skipping`);
+          continue;
+        }
+
         const chat = createChatRaw(userId, {
           character_id: characterId,
           name: chatData.name,
@@ -297,27 +333,17 @@ export async function importChats(
           created_at: chatData.created_at,
         });
 
-        const msgCount = bulkInsertMessages(chat.id, chatData.messages);
+        const msgCount = bulkInsertMessages(chat.id, chatData.messages, userId);
         imported++;
         totalMessages += msgCount;
       } catch (err: any) {
-        logger.warn(`Failed to import chat "${chatData.name}": ${err.message}`);
+        logger.warn(`Failed to import chat "${charDirName}/${chatFile.name}": ${err.message}`);
         failed++;
+      } finally {
+        processedChats++;
+        logger.progress("Importing chats", processedChats, totalChats);
+        await maybeYield();
       }
-
-      processedChats++;
-      logger.progress("Importing chats", processedChats, totalChats);
-    }
-
-    // Account for chat files that produced no payloads
-    const chatEntries = await fs.readdir(fs.join(chatsDir, charDirName));
-    const jsonlCount = chatEntries.filter(
-      (e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl"
-    ).length;
-    const remaining = jsonlCount - chatPayloads.length;
-    if (remaining > 0) {
-      processedChats += remaining;
-      logger.progress("Importing chats", processedChats, totalChats);
     }
   }
 
@@ -342,11 +368,30 @@ export async function importGroupChats(
   const groupDefs = await readGroupDefinitions(stDataDir, fs);
   if (groupDefs.length === 0) return { imported, failed, skipped, totalMessages };
 
+  const groupChatFiles = await readGroupChatFileEntries(stDataDir, fs);
+  const referencedChatIds = new Set<string>();
+  for (const group of groupDefs) {
+    for (const chatId of group.chatIds) {
+      referencedChatIds.add(
+        chatId.toLowerCase().endsWith(".jsonl") ? fs.basename(chatId, ".jsonl") : chatId
+      );
+    }
+  }
+
+  const unreferencedGroupChatFiles = groupChatFiles.filter((entry) => !referencedChatIds.has(entry.id));
+  if (unreferencedGroupChatFiles.length > 0) {
+    failed += unreferencedGroupChatFiles.length;
+    logger.warn(
+      `${unreferencedGroupChatFiles.length} group chat file(s) were not listed in any groups/*.json chats array and could not be matched to a group`
+    );
+  }
+
   // Count total chat files for progress
   let totalChatsToProcess = 0;
   for (const gd of groupDefs) totalChatsToProcess += gd.chatIds.length;
 
   let processedChats = 0;
+  const maybeYield = createCooperativeYielder(yieldEveryGroupChat);
 
   for (const group of groupDefs) {
     // Resolve member character IDs
@@ -362,15 +407,19 @@ export async function importGroupChats(
       processedChats += group.chatIds.length;
       logger.warn(`No members found for group "${group.name}", skipping`);
       logger.progress("Importing group chats", processedChats, totalChatsToProcess);
+      await maybeYield();
       continue;
     }
 
     for (const chatId of group.chatIds) {
-      const chatData = await readGroupChatFile(stDataDir, chatId, personaNameToId, fs);
+      const chatData = await readGroupChatFile(stDataDir, chatId, personaNameToId, filenameToId, fs);
 
       if (!chatData) {
+        logger.warn(`Could not read group chat "${group.name}/${chatId}", skipping`);
+        failed++;
         processedChats++;
         logger.progress("Importing group chats", processedChats, totalChatsToProcess);
+        await maybeYield();
         continue;
       }
 
@@ -388,7 +437,7 @@ export async function importGroupChats(
           created_at: chatCreatedAt,
         });
 
-        const msgCount = bulkInsertMessages(chat.id, chatData.messages);
+        const msgCount = bulkInsertMessages(chat.id, chatData.messages, userId);
         imported++;
         totalMessages += msgCount;
       } catch (err: any) {
@@ -398,6 +447,7 @@ export async function importGroupChats(
 
       processedChats++;
       logger.progress("Importing group chats", processedChats, totalChatsToProcess);
+      await maybeYield();
     }
   }
 

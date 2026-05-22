@@ -71,6 +71,48 @@
   overflow: hidden;
 }
 
+.bodyToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px 0;
+}
+
+.bodyHint {
+  min-width: 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.modeSwitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--lcs-glass-border);
+  border-radius: 999px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+  flex-shrink: 0;
+}
+
+.modeButton {
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font: inherit;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.modeButtonActive {
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text);
+}
+
 .body {
   padding: 10px 12px;
   max-height: 400px;
@@ -80,6 +122,14 @@
   color: var(--lumiverse-text-muted);
   line-height: 1.55;
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
+}
+
+.bodyPlainText {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
 }
 
 /* ── Prose styles (mirrors MessageContent prose) ── */
@@ -269,6 +319,11 @@
 }
 
 @media (max-width: 480px) {
+  .bodyToolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .bubble {
     margin: 8px 12px 0;
   }

@@ -58,7 +58,7 @@
   border-top: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   padding: 6px 8px;
   text-align: center;
   outline: none;

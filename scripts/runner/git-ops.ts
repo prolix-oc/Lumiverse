@@ -1,7 +1,16 @@
 import { join } from "path";
-import { existsSync, rmSync } from "fs";
+import { existsSync, rmSync, writeFileSync } from "fs";
 import { runGit, getUpstreamRef, getCurrentBranch } from "./lib/git.js";
-import { PROJECT_ROOT, AVAILABLE_BRANCHES } from "./lib/constants.js";
+import {
+  PROJECT_ROOT,
+  AVAILABLE_BRANCHES,
+  TIMEOUT_GIT_FETCH_MS,
+  TIMEOUT_GIT_PULL_MS,
+  TIMEOUT_GIT_CHECKOUT_MS,
+  TIMEOUT_BUN_INSTALL_MS,
+  TIMEOUT_BUN_BUILD_MS,
+} from "./lib/constants.js";
+import { spawnAsync } from "./lib/spawn-async.js";
 
 export interface UpdateState {
   available: boolean;
@@ -9,9 +18,103 @@ export interface UpdateState {
   latestMessage: string;
 }
 
+type ProgressReporter = (message: string) => void;
+
+const FRONTEND_BUILD_IGNORED_PATHS = [
+  "frontend/dist/",
+];
+
+const FRONTEND_BUILD_IGNORED_FILES = new Set([
+  "frontend/tsconfig.tsbuildinfo",
+]);
+
 function log(text: string): void {
   const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
   console.log(`[${ts}] [runner] ${text}`);
+}
+
+function getHeadRef(): string {
+  const head = runGit("rev-parse", "HEAD");
+  if (!head.ok || !head.out) {
+    throw new Error("Unable to resolve current git HEAD");
+  }
+  return head.out;
+}
+
+function getChangedFilesBetween(fromRef: string, toRef: string): string[] {
+  if (fromRef === toRef) return [];
+  const diff = runGit("diff", "--name-only", `${fromRef}..${toRef}`);
+  if (!diff.ok || !diff.out) return [];
+  return diff.out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isFrontendBuildInput(filePath: string): boolean {
+  if (!filePath.startsWith("frontend/")) return false;
+  if (FRONTEND_BUILD_IGNORED_FILES.has(filePath)) return false;
+  return !FRONTEND_BUILD_IGNORED_PATHS.some((prefix) => filePath.startsWith(prefix));
+}
+
+function shouldRebuildFrontend(changedFiles: string[]): boolean {
+  return changedFiles.some(isFrontendBuildInput);
+}
+
+// Termux/proot detection. start.sh exports LUMIVERSE_IS_TERMUX /
+// LUMIVERSE_IS_PROOT before launching the runner so we can mirror its
+// install-time workarounds (copyfile backend, pre-install cache flush) on
+// the operator-panel-driven update + branch-switch + rebuild paths.
+function isTermuxRuntime(): boolean {
+  return process.env.LUMIVERSE_IS_TERMUX === "true";
+}
+
+function isProotRuntime(): boolean {
+  return process.env.LUMIVERSE_IS_PROOT === "true";
+}
+
+function bunInstallCmd(): string[] {
+  if (isTermuxRuntime() || isProotRuntime()) {
+    // Android filesystem emulation can't hardlink — copyfile is the only
+    // backend that reliably installs without "Cannot find package" corruption.
+    // --ignore-scripts: proot's path translation makes getcwd() fail when bun
+    // forks lifecycle scripts (ssh2, cpu-features), producing spurious
+    // CouldntReadCurrentDirectory errors. Both packages fall back to pure-JS.
+    return ["bun", "install", "--backend=copyfile", "--ignore-scripts"];
+  }
+  return ["bun", "install"];
+}
+
+function clearBunInstallCacheIfTermux(): void {
+  if (!isTermuxRuntime() && !isProotRuntime()) return;
+  const cacheDir = join(process.env.HOME ?? "", ".bun/install/cache");
+  if (cacheDir && existsSync(cacheDir)) {
+    try { rmSync(cacheDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+function summarizeFrontendChanges(changedFiles: string[]): string {
+  const relevant = changedFiles.filter(isFrontendBuildInput);
+  if (relevant.length === 0) return "";
+  const preview = relevant.slice(0, 5).join(", ");
+  return relevant.length > 5 ? `${preview}, ...` : preview;
+}
+
+async function runCommandOrThrow(
+  cmd: string[],
+  opts: { cwd: string; timeoutMs: number; label: string }
+): Promise<void> {
+  const result = await spawnAsync(cmd, {
+    cwd: opts.cwd,
+    timeoutMs: opts.timeoutMs,
+  });
+
+  if (result.exitCode === 0) return;
+
+  const reason = result.timedOut
+    ? `${opts.label} timed out after ${opts.timeoutMs / 1000}s`
+    : result.stderr.trim() || result.stdout.trim() || `${opts.label} failed`;
+  throw new Error(reason);
 }
 
 /**
@@ -23,14 +126,14 @@ export async function checkForUpdates(): Promise<UpdateState> {
     return { available: false, commitsBehind: 0, latestMessage: "" };
   }
 
-  // Async git fetch
-  const fetchProc = Bun.spawn(["git", "fetch", "--quiet"], {
+  // Bounded fetch — a dead remote must not stall the periodic update check.
+  const fetch = await spawnAsync(["git", "fetch", "--quiet"], {
     cwd: PROJECT_ROOT,
-    stdout: "ignore",
-    stderr: "ignore",
+    timeoutMs: TIMEOUT_GIT_FETCH_MS,
+    ignoreStdout: true,
   });
-  const fetchCode = await fetchProc.exited;
-  if (fetchCode !== 0) {
+  if (fetch.exitCode !== 0) {
+    if (fetch.timedOut) log("Update check: git fetch timed out.");
     return { available: false, commitsBehind: 0, latestMessage: "" };
   }
 
@@ -55,13 +158,16 @@ export async function checkForUpdates(): Promise<UpdateState> {
 }
 
 /**
- * Apply update: stash → clear cache → delete dist → pull → install → build → restart
+ * Apply update: stash → clear cache → delete dist → pull → install deps →
+ * conditional frontend build → restart
  */
 export async function applyUpdate(
   stopServer: () => Promise<void>,
-  startServer: () => Promise<void>
+  startServer: () => Promise<void>,
+  reportProgress?: ProgressReporter,
 ): Promise<void> {
   log("Preparing update...");
+  const previousHead = getHeadRef();
 
   // Stash local changes
   const status = runGit("status", "--porcelain");
@@ -73,9 +179,9 @@ export async function applyUpdate(
   // Stop server before destructive operations
   await stopServer();
 
-  // Clear Bun transpiler cache
-  log("Clearing transpiler cache...");
-  Bun.spawnSync(["bun", "--clear-cache"], { cwd: PROJECT_ROOT, stdout: "ignore", stderr: "ignore" });
+  // Clear Bun install cache
+  log("Clearing install cache...");
+  Bun.spawnSync(["bun", "pm", "cache", "rm"], { cwd: PROJECT_ROOT, stdout: "ignore", stderr: "ignore" });
 
   // Delete frontend/dist to prevent git conflicts
   const frontendDir = join(PROJECT_ROOT, "frontend");
@@ -87,47 +193,54 @@ export async function applyUpdate(
 
   // Pull latest
   log("Pulling latest changes...");
-  const pullProc = Bun.spawn(["git", "pull", "--ff-only"], {
+  const pull = await spawnAsync(["git", "pull", "--ff-only"], {
     cwd: PROJECT_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
+    timeoutMs: TIMEOUT_GIT_PULL_MS,
   });
-  const pullOut = await new Response(pullProc.stdout).text();
-  const pullErr = await new Response(pullProc.stderr).text();
-  const pullCode = await pullProc.exited;
 
-  if (pullCode !== 0) {
-    log(`Update failed: ${pullErr.trim() || pullOut.trim()}`);
-    // Rebuild frontend to restore deleted dist
-    log("Rebuilding frontend to restore dist...");
-    const recoveryBuild = Bun.spawn(["bun", "run", "build"], {
-      cwd: frontendDir,
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    await recoveryBuild.exited;
-    await startServer();
-    throw new Error(`git pull failed: ${pullErr.trim() || pullOut.trim()}`);
+  if (pull.exitCode !== 0) {
+    const reason = pull.timedOut
+      ? `git pull timed out after ${TIMEOUT_GIT_PULL_MS / 1000}s`
+      : pull.stderr.trim() || pull.stdout.trim();
+    log(`Update failed: ${reason}`);
+    await recoverFrontendAndStart(frontendDir, startServer);
+    throw new Error(`git pull failed: ${reason}`);
   }
 
-  for (const line of pullOut.trim().split("\n")) {
+  for (const line of pull.stdout.trim().split("\n")) {
     if (line.trim()) log(`  ${line.trim()}`);
   }
 
-  // Install dependencies and rebuild
-  await installAndBuild(frontendDir);
+  const currentHead = getHeadRef();
+  const changedFiles = getChangedFilesBetween(previousHead, currentHead);
+
+  // Install dependencies and rebuild only if pulled files touched frontend inputs.
+  reportProgress?.("Installing backend and frontend dependencies...");
+  await ensureDependencies(frontendDir);
+  if (shouldRebuildFrontend(changedFiles)) {
+    const summary = summarizeFrontendChanges(changedFiles);
+    reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
+    log(`Frontend changes detected in update; waiting for Vite build (${summary}).`);
+    await rebuildFrontend(frontendDir);
+  } else {
+    reportProgress?.("No frontend changes detected; restarting server...");
+    log("No frontend source/config changes detected in pulled files; skipping local Vite rebuild.");
+  }
 
   log("Update complete. Restarting server...");
+  reportProgress?.("Starting server...");
   await startServer();
 }
 
 /**
- * Switch branch: stash → stop → clear cache → delete dist → checkout → pull → install → build → restart
+ * Switch branch: stash → stop → clear cache → delete dist → checkout → pull
+ * → install deps → conditional frontend build → restart
  */
 export async function switchBranch(
   target: string,
   stopServer: () => Promise<void>,
-  startServer: () => Promise<void>
+  startServer: () => Promise<void>,
+  reportProgress?: ProgressReporter,
 ): Promise<void> {
   if (!AVAILABLE_BRANCHES.includes(target as any)) {
     throw new Error(`Invalid branch: ${target}. Available: ${AVAILABLE_BRANCHES.join(", ")}`);
@@ -135,6 +248,7 @@ export async function switchBranch(
 
   const currentBranch = getCurrentBranch();
   log(`Switching from '${currentBranch}' to '${target}'...`);
+  const previousHead = getHeadRef();
 
   // Stash local changes
   const status = runGit("status", "--porcelain");
@@ -146,94 +260,137 @@ export async function switchBranch(
   // Stop server
   await stopServer();
 
-  // Clear transpiler cache
-  log("Clearing transpiler cache...");
-  Bun.spawnSync(["bun", "--clear-cache"], { cwd: PROJECT_ROOT, stdout: "ignore", stderr: "ignore" });
+  // Clear install cache
+  log("Clearing install cache...");
+  Bun.spawnSync(["bun", "pm", "cache", "rm"], { cwd: PROJECT_ROOT, stdout: "ignore", stderr: "ignore" });
 
   // Delete frontend/dist
-  const frontendDistDir = join(PROJECT_ROOT, "frontend", "dist");
+  const frontendDir = join(PROJECT_ROOT, "frontend");
+  const frontendDistDir = join(frontendDir, "dist");
   if (existsSync(frontendDistDir)) {
     log("Removing frontend/dist...");
     rmSync(frontendDistDir, { recursive: true, force: true });
   }
 
-  // Checkout
-  const checkout = runGit("checkout", target);
-  if (!checkout.ok) {
-    log(`Failed to checkout '${target}': ${checkout.out}`);
-    // Rebuild frontend to restore deleted dist
-    log("Rebuilding frontend to restore dist...");
-    const recoveryBuild = Bun.spawn(["bun", "run", "build"], {
-      cwd: join(PROJECT_ROOT, "frontend"),
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    await recoveryBuild.exited;
-    await startServer();
-    throw new Error(`git checkout failed: ${checkout.out}`);
+  // Checkout (bounded — a dirty working tree shouldn't have survived the
+  // stash above, but a stuck index lock or slow disk could still hang).
+  const checkout = await spawnAsync(["git", "checkout", target], {
+    cwd: PROJECT_ROOT,
+    timeoutMs: TIMEOUT_GIT_CHECKOUT_MS,
+  });
+  if (checkout.exitCode !== 0) {
+    const reason = checkout.timedOut
+      ? `git checkout timed out after ${TIMEOUT_GIT_CHECKOUT_MS / 1000}s`
+      : checkout.stderr.trim() || checkout.stdout.trim();
+    log(`Failed to checkout '${target}': ${reason}`);
+    await recoverFrontendAndStart(frontendDir, startServer);
+    throw new Error(`git checkout failed: ${reason}`);
   }
 
   log(`Checked out '${target}'.`);
 
-  // Pull latest
+  // Pull latest (non-fatal — checkout already succeeded)
   log("Pulling latest changes...");
-  const pullProc = Bun.spawn(["git", "pull", "--ff-only"], {
+  const pull = await spawnAsync(["git", "pull", "--ff-only"], {
     cwd: PROJECT_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
+    timeoutMs: TIMEOUT_GIT_PULL_MS,
   });
-  const pullOut = await new Response(pullProc.stdout).text();
-  const pullErr = await new Response(pullProc.stderr).text();
-  const pullCode = await pullProc.exited;
 
-  if (pullCode !== 0) {
-    log(`Pull failed (non-fatal): ${pullErr.trim() || pullOut.trim()}`);
+  if (pull.exitCode !== 0) {
+    const reason = pull.timedOut
+      ? `git pull timed out after ${TIMEOUT_GIT_PULL_MS / 1000}s`
+      : pull.stderr.trim() || pull.stdout.trim();
+    log(`Pull failed (non-fatal): ${reason}`);
   } else {
-    for (const line of pullOut.trim().split("\n").filter((l: string) => l.trim())) {
+    for (const line of pull.stdout.trim().split("\n").filter((l: string) => l.trim())) {
       log(`  ${line.trim()}`);
     }
   }
 
-  // Install and rebuild
-  const frontendDir = join(PROJECT_ROOT, "frontend");
-  await installAndBuild(frontendDir);
+  const currentHead = getHeadRef();
+  const changedFiles = getChangedFilesBetween(previousHead, currentHead);
+
+  reportProgress?.("Installing backend and frontend dependencies...");
+  await ensureDependencies(frontendDir);
+  if (shouldRebuildFrontend(changedFiles)) {
+    const summary = summarizeFrontendChanges(changedFiles);
+    reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
+    log(`Frontend changes detected after branch switch; waiting for Vite build (${summary}).`);
+    await rebuildFrontend(frontendDir);
+  } else {
+    reportProgress?.("No frontend changes detected; restarting server...");
+    log("No frontend source/config changes detected after branch switch; skipping local Vite rebuild.");
+  }
 
   log(`Branch switch complete. Now on '${target}'. Restarting server...`);
+  reportProgress?.("Starting server...");
   await startServer();
 }
 
-async function installAndBuild(frontendDir: string): Promise<void> {
+// Written into node_modules only after `bun install` exits 0. Its absence
+// alongside an existing node_modules means a previous install was interrupted
+// (crash, kill, OOM, proot path-translation error mid-stream) and the tree
+// can't be trusted — nuke and reinstall.
+const INSTALL_STAMP = "node_modules/.lumiverse-install-complete";
+
+function repairHalfInstall(dir: string, label: string): void {
+  const nodeModules = join(dir, "node_modules");
+  const stamp = join(dir, INSTALL_STAMP);
+  if (existsSync(nodeModules) && !existsSync(stamp)) {
+    log(`Detected interrupted ${label} install — removing node_modules and retrying...`);
+    try { rmSync(nodeModules, { recursive: true, force: true }); } catch {}
+  }
+}
+
+function writeInstallStamp(dir: string): void {
+  try { writeFileSync(join(dir, INSTALL_STAMP), `${Date.now()}\n`); } catch {}
+}
+
+export async function ensureDependencies(frontendDir: string): Promise<void> {
+  const installCmd = bunInstallCmd();
+  clearBunInstallCacheIfTermux();
+
+  repairHalfInstall(PROJECT_ROOT, "backend");
   log("Installing backend dependencies...");
-  const backendInstall = Bun.spawn(["bun", "install"], {
+  await runCommandOrThrow(installCmd, {
     cwd: PROJECT_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
+    timeoutMs: TIMEOUT_BUN_INSTALL_MS,
+    label: "backend install",
   });
-  await backendInstall.exited;
+  writeInstallStamp(PROJECT_ROOT);
   log("Backend dependencies updated.");
 
+  repairHalfInstall(frontendDir, "frontend");
   log("Installing frontend dependencies...");
-  const feInstall = Bun.spawn(["bun", "install"], {
+  await runCommandOrThrow(installCmd, {
     cwd: frontendDir,
-    stdout: "pipe",
-    stderr: "pipe",
+    timeoutMs: TIMEOUT_BUN_INSTALL_MS,
+    label: "frontend install",
   });
-  await feInstall.exited;
+  writeInstallStamp(frontendDir);
   log("Frontend dependencies updated.");
+}
 
+export async function rebuildFrontend(frontendDir: string): Promise<void> {
   log("Rebuilding frontend...");
-  const buildProc = Bun.spawn(["bun", "run", "build"], {
+  await runCommandOrThrow(["bun", "run", "build"], {
     cwd: frontendDir,
-    stdout: "pipe",
-    stderr: "pipe",
+    timeoutMs: TIMEOUT_BUN_BUILD_MS,
+    label: "frontend build",
   });
-  const buildOut = await new Response(buildProc.stdout).text();
-  const buildErr = await new Response(buildProc.stderr).text();
-  const buildCode = await buildProc.exited;
+  log("Frontend rebuilt successfully.");
+}
 
-  if (buildCode !== 0) {
-    log(`Frontend build failed: ${buildErr.trim() || buildOut.trim()}`);
-  } else {
-    log("Frontend rebuilt successfully.");
-  }
+/** Rebuild frontend (best-effort) and restart the server after a git failure. */
+async function recoverFrontendAndStart(
+  frontendDir: string,
+  startServer: () => Promise<void>
+): Promise<void> {
+  log("Rebuilding frontend to restore dist...");
+  await spawnAsync(["bun", "run", "build"], {
+    cwd: frontendDir,
+    timeoutMs: TIMEOUT_BUN_BUILD_MS,
+    ignoreStdout: true,
+  });
+  await startServer();
 }

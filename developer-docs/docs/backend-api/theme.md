@@ -59,10 +59,17 @@ Apply a safe palette-driven theme without letting the extension push raw CSS var
 
 This is the preferred API for live theming from avatars, album art, or other frequently changing color sources.
 
+Pass `null` when no valid color data is available. Lumiverse treats that as a clear operation for your extension's active palette override and immediately falls back to the user's currently selected base theme.
+
 ```ts
 await spindle.theme.applyPalette({
   accent: { h: 210, s: 60, l: 58 },
 }, userId)
+```
+
+```ts
+// No usable palette right now? Clear the extension-owned palette override.
+await spindle.theme.applyPalette(null, userId)
 ```
 
 ### ThemePaletteConfigDTO
@@ -70,6 +77,12 @@ await spindle.theme.applyPalette({
 | Field | Type | Description |
 |---|---|---|
 | `accent` | `{ h, s, l }` | Primary accent color in HSL. Lumiverse derives the final full palette and mode-aware CSS vars from this. |
+
+### Notes
+
+- `applyPalette()` never mutates the user's saved theme selection. It only layers an extension-scoped override on top.
+- `applyPalette(null, userId?)` is equivalent to clearing that extension-scoped palette override.
+- After a clear, the UI reverts to the user's current base theme and preferences (accent, glass, radius, font scale, UI scale, resolved mode).
 
 ### Available CSS Variables
 
@@ -95,12 +108,13 @@ Lumiverse generates 100+ CSS custom properties from the active theme. All are ov
 
 ---
 
-## `spindle.theme.clear()`
+## `spindle.theme.clear(userId?)`
 
 Remove all CSS variable overrides from your extension. The UI reverts to the user's base theme immediately.
 
 ```ts
 await spindle.theme.clear()
+await spindle.theme.clear(userId)
 ```
 
 ---

@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { RotateCcw } from 'lucide-react'
 import type { BaseColorKey, BaseColors } from '@/types/theme'
+import { useStore } from '@/store'
 import styles from './BaseColorPicker.module.css'
 import clsx from 'clsx'
+import { getSaturationValueFromPoint } from './colorPickerMath'
 
 // ── Color math helpers ──
 
@@ -70,6 +72,64 @@ const COLOR_KEYS: ColorDef[] = [
   { key: 'thoughts',   label: 'Thoughts',   defaultColor: '#c8c8d4' },
 ]
 
+// Each base color key maps to the CSS variable the theme engine actually
+// emits. Reading these from :root lets the swatches reflect whatever the
+// current preset / accent produces, not a stale hardcoded default.
+const CSS_VAR_BY_KEY: Record<BaseColorKey, string> = {
+  primary:    '--lumiverse-primary',
+  secondary:  '--lumiverse-secondary',
+  background: '--lumiverse-bg',
+  text:       '--lumiverse-text',
+  danger:     '--lumiverse-danger',
+  success:    '--lumiverse-success',
+  warning:    '--lumiverse-warning',
+  speech:     '--lumiverse-prose-dialogue',
+  thoughts:   '--lumiverse-prose-italic',
+}
+
+function parseCssColorToHex(value: string): string | null {
+  if (!value) return null
+  const v = value.trim()
+  if (v.startsWith('#')) {
+    const parsed = hexToRgb(v)
+    return parsed ? rgbToHex(parsed[0], parsed[1], parsed[2]) : null
+  }
+  const rgbMatch = v.match(/rgba?\(\s*([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:\s*,\s*|\s+)([\d.]+)/)
+  if (rgbMatch) {
+    return rgbToHex(
+      Math.round(parseFloat(rgbMatch[1])),
+      Math.round(parseFloat(rgbMatch[2])),
+      Math.round(parseFloat(rgbMatch[3])),
+    )
+  }
+  const hslMatch = v.match(/hsla?\(\s*([\d.]+)(?:deg)?(?:\s*,\s*|\s+)([\d.]+)%(?:\s*,\s*|\s+)([\d.]+)%/)
+  if (hslMatch) {
+    const hh = parseFloat(hslMatch[1]) / 360
+    const ss = parseFloat(hslMatch[2]) / 100
+    const ll = parseFloat(hslMatch[3]) / 100
+    if (ss === 0) {
+      const x = Math.round(ll * 255)
+      return rgbToHex(x, x, x)
+    }
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1
+      if (t > 1) t -= 1
+      if (t < 1 / 6) return p + (q - p) * 6 * t
+      if (t < 1 / 2) return q
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+      return p
+    }
+    const q = ll < 0.5 ? ll * (1 + ss) : ll + ss - ll * ss
+    const p = 2 * ll - q
+    return rgbToHex(
+      Math.round(hue2rgb(p, q, hh + 1 / 3) * 255),
+      Math.round(hue2rgb(p, q, hh) * 255),
+      Math.round(hue2rgb(p, q, hh - 1 / 3) * 255),
+    )
+  }
+  return null
+}
+
 // ── Component ──
 
 interface BaseColorPickerProps {
@@ -85,15 +145,43 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
   const draggingCanvas = useRef(false)
   const draggingHue = useRef(false)
 
+  // Track theme inputs so we re-read CSS vars whenever the applied theme could
+  // have changed (preset switch, accent edit, mode toggle, extension overlay).
+  const theme = useStore((s) => s.theme)
+  const characterThemeOverlay = useStore((s) => s.characterThemeOverlay)
+  const extensionThemeOverrides = useStore((s) => s.extensionThemeOverrides)
+  const [resolvedDefaults, setResolvedDefaults] = useState<Partial<Record<BaseColorKey, string>>>({})
+
+  useEffect(() => {
+    // Defer past the theme applicator's own effect (which writes :root vars)
+    // so we read the freshly-applied values, not the previous frame's.
+    const id = requestAnimationFrame(() => {
+      const styles = getComputedStyle(document.documentElement)
+      const next: Partial<Record<BaseColorKey, string>> = {}
+      for (const def of COLOR_KEYS) {
+        const hex = parseCssColorToHex(styles.getPropertyValue(CSS_VAR_BY_KEY[def.key]))
+        if (hex) next[def.key] = hex
+      }
+      setResolvedDefaults(next)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [theme, characterThemeOverlay, extensionThemeOverrides])
+
   const activeDef = COLOR_KEYS.find(c => c.key === activeKey)!
-  const currentHex = baseColors[activeKey] || activeDef.defaultColor
+  const currentHex = baseColors[activeKey] || resolvedDefaults[activeKey] || activeDef.defaultColor
   const rgb = hexToRgb(currentHex) || [147, 112, 219]
-  const [hue, sat, val] = rgbToHsv(rgb[0], rgb[1], rgb[2])
+  const [rawHue, sat, val] = rgbToHsv(rgb[0], rgb[1], rgb[2])
+  const [preservedHue, setPreservedHue] = useState(rawHue)
+  const hue = sat > 0 && val > 0 ? rawHue : preservedHue
 
   // Reset hex draft when active key changes or color is updated externally
   useEffect(() => {
     setHexDraft(null)
   }, [activeKey, currentHex])
+
+  useEffect(() => {
+    if (sat > 0 && val > 0) setPreservedHue(rawHue)
+  }, [rawHue, sat, val])
 
   // ── Canvas drawing ──
 
@@ -151,38 +239,29 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
-    const newSat = x * 100
-    const newVal = (1 - y) * 100
+    const { saturation: newSat, value: newVal } = getSaturationValueFromPoint(clientX, clientY, rect)
     const [r, g, b] = hsvToRgb(hue, newSat, newVal)
     setColor(rgbToHex(r, g, b))
   }, [hue, setColor])
 
-  const handleCanvasDown = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleCanvasDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
     draggingCanvas.current = true
-    const pos = 'touches' in e ? e.touches[0] : e
-    pickFromCanvas(pos.clientX, pos.clientY)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    pickFromCanvas(e.clientX, e.clientY)
   }, [pickFromCanvas])
 
-  useEffect(() => {
-    const handleMove = (e: MouseEvent | TouchEvent) => {
-      if (!draggingCanvas.current) return
-      const pos = 'touches' in e ? e.touches[0] : e
-      pickFromCanvas(pos.clientX, pos.clientY)
-    }
-    const handleUp = () => { draggingCanvas.current = false }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('touchmove', handleMove)
-    window.addEventListener('touchend', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('touchmove', handleMove)
-      window.removeEventListener('touchend', handleUp)
-    }
+  const handleCanvasMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingCanvas.current) return
+    pickFromCanvas(e.clientX, e.clientY)
   }, [pickFromCanvas])
+
+  const handleCanvasUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    draggingCanvas.current = false
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }, [])
 
   // ── Hue slider interaction ──
 
@@ -192,34 +271,29 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
     const rect = el.getBoundingClientRect()
     const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
     const newHue = x * 360
+    setPreservedHue(newHue)
     const [r, g, b] = hsvToRgb(newHue, sat, val)
     setColor(rgbToHex(r, g, b))
   }, [sat, val, setColor])
 
-  const handleHueDown = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleHueDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
     draggingHue.current = true
-    const pos = 'touches' in e ? e.touches[0] : e
-    pickHue(pos.clientX)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    pickHue(e.clientX)
   }, [pickHue])
 
-  useEffect(() => {
-    const handleMove = (e: MouseEvent | TouchEvent) => {
-      if (!draggingHue.current) return
-      const pos = 'touches' in e ? e.touches[0] : e
-      pickHue(pos.clientX)
-    }
-    const handleUp = () => { draggingHue.current = false }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    window.addEventListener('touchmove', handleMove)
-    window.addEventListener('touchend', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      window.removeEventListener('touchmove', handleMove)
-      window.removeEventListener('touchend', handleUp)
-    }
+  const handleHueMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingHue.current) return
+    pickHue(e.clientX)
   }, [pickHue])
+
+  const handleHueUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    draggingHue.current = false
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }, [])
 
   // ── Hex / RGB inputs ──
 
@@ -276,7 +350,7 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
           >
             <div
               className={styles.swatchCircle}
-              style={{ background: baseColors[key] || defaultColor }}
+              style={{ background: baseColors[key] || resolvedDefaults[key] || defaultColor }}
             />
             <span className={styles.swatchLabel}>{label}</span>
           </button>
@@ -291,8 +365,11 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
       {/* Saturation / brightness canvas */}
       <div
         className={styles.canvasWrap}
-        onMouseDown={handleCanvasDown}
-        onTouchStart={handleCanvasDown}
+        onPointerDown={handleCanvasDown}
+        onPointerMove={handleCanvasMove}
+        onPointerUp={handleCanvasUp}
+        onPointerCancel={handleCanvasUp}
+        onLostPointerCapture={() => { draggingCanvas.current = false }}
       >
         <canvas ref={canvasRef} className={styles.canvas} />
         <div
@@ -305,8 +382,11 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
       <div
         ref={hueRef}
         className={styles.hueSliderWrap}
-        onMouseDown={handleHueDown}
-        onTouchStart={handleHueDown}
+        onPointerDown={handleHueDown}
+        onPointerMove={handleHueMove}
+        onPointerUp={handleHueUp}
+        onPointerCancel={handleHueUp}
+        onLostPointerCapture={() => { draggingHue.current = false }}
       >
         <div className={styles.hueThumb} style={{ left: huePct }} />
       </div>

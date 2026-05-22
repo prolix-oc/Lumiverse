@@ -1,7 +1,7 @@
 import type { DreamWeaverVisualAsset } from "../../../../types/dream-weaver";
 import type { ImageGenConnectionProfile } from "../../../../types/image-gen-connection";
 import { normalizeComfyUIWorkflow } from "../../../../image-gen/comfyui-import";
-import { getComfyUIObjectInfo } from "../../../../image-gen/comfyui-discovery";
+import { getComfyUIObjectInfo, resolveComfyTarget } from "../../../../image-gen/comfyui-discovery";
 import type { VisualProviderAdapter } from "../provider-adapter";
 import { readComfyUIConfig } from "../comfyui-workflow-storage";
 import { patchWorkflow, type ComfyUIPatchValues } from "../comfyui-workflow-patch";
@@ -11,7 +11,9 @@ import { patchWorkflow, type ComfyUIPatchValues } from "../comfyui-workflow-patc
  *
  * The stored workflow lives in `connection.metadata.comfyui` and was uploaded by the user
  * earlier. This adapter never constructs workflows from scratch - it only substitutes
- * values at the node positions the user explicitly mapped.
+ * values at the node positions the user explicitly mapped. Works for both `comfyui` and
+ * `swarmui` connections; the SwarmUI provider routes the patched workflow through
+ * `/ComfyBackendDirect` at execution time.
  */
 export const comfyUIProviderAdapter: VisualProviderAdapter = {
   provider: "comfyui",
@@ -20,11 +22,6 @@ export const comfyUIProviderAdapter: VisualProviderAdapter = {
 
   async validate(asset: DreamWeaverVisualAsset, connection: ImageGenConnectionProfile) {
     const errors: string[] = [];
-
-    if (connection.provider !== "comfyui") {
-      errors.push("Connection provider must be comfyui.");
-      return errors;
-    }
 
     const config = readComfyUIConfig(connection.metadata);
     if (!config) {
@@ -46,10 +43,10 @@ export const comfyUIProviderAdapter: VisualProviderAdapter = {
     return errors;
   },
 
-  async build(asset: DreamWeaverVisualAsset, connection: ImageGenConnectionProfile) {
+  async build(asset: DreamWeaverVisualAsset, connection: ImageGenConnectionProfile, apiKey?: string) {
     const config = readComfyUIConfig(connection.metadata);
     if (!config) {
-      throw new Error("ComfyUI connection has no imported workflow.");
+      throw new Error("Connection has no imported workflow.");
     }
 
     const values: ComfyUIPatchValues = {
@@ -68,7 +65,8 @@ export const comfyUIProviderAdapter: VisualProviderAdapter = {
       Object.assign(values, assetExtras);
     }
 
-    const objectInfo = await getComfyUIObjectInfo(connection.api_url || "http://localhost:8188");
+    const target = resolveComfyTarget(connection, apiKey);
+    const objectInfo = await getComfyUIObjectInfo(target.baseUrl, false, { cookie: target.cookie });
     const normalizedWorkflow = normalizeComfyUIWorkflow(
       config.workflow_json,
       objectInfo ?? undefined,
@@ -93,7 +91,7 @@ export const comfyUIProviderAdapter: VisualProviderAdapter = {
         },
       },
       settingsSnapshot: {
-        provider: "comfyui",
+        provider: connection.provider,
         model: connection.model,
         workflow_format: normalizedWorkflow.format,
         mapped_fields: config.field_mappings.map((m) => ({

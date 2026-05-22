@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Brain,
   Sparkles,
@@ -16,18 +16,33 @@ import {
   Zap,
   BookOpen,
   Heart,
+  MessageSquareQuote,
 } from "lucide-react";
 import { Toggle } from "@/components/shared/Toggle";
-import { Select } from "@/components/shared/FormComponents";
+import NumericInput from "@/components/shared/NumericInput";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexConfig, type CortexUsageStats } from "@/api/memory-cortex";
 import { connectionsApi } from "@/api/connections";
+import ModelCombobox from "@/components/panels/connection-manager/ModelCombobox";
+import { getReasoningBindingSummary } from "@/lib/reasoning-binding";
 import { wsClient } from "@/ws/client";
 import { EventType } from "@/ws/events";
 import styles from "./MemoryCortexSettings.module.css";
 import clsx from "clsx";
 
 type PresetMode = "simple" | "standard" | "advanced";
+type EntityFilterType = "character" | "location" | "item" | "faction" | "concept" | "event";
+
+const ENTITY_FILTER_LABELS: Record<EntityFilterType, string> = {
+  character: "Characters",
+  location: "Locations",
+  item: "Items",
+  faction: "Factions",
+  concept: "Concepts",
+  event: "Events",
+};
+
+const ENTITY_FILTER_TYPES = Object.keys(ENTITY_FILTER_LABELS) as EntityFilterType[];
 
 const PRESET_DESCRIPTIONS: Record<PresetMode, { label: string; desc: string; icon: typeof Zap }> = {
   simple: {
@@ -54,6 +69,44 @@ const FORMATTER_OPTIONS = [
   { value: "minimal", label: "Minimal", desc: "Just memory chunks, no entity data" },
 ];
 
+const THOUGHT_MARKER_PRESETS = [
+  { label: "<think>", prefix: "<think>\n", suffix: "\n</think>" },
+  { label: "<thinking>", prefix: "<thinking>\n", suffix: "\n</thinking>" },
+  { label: "<reasoning>", prefix: "<reasoning>\n", suffix: "\n</reasoning>" },
+];
+
+const REBUILD_PHASE_LABEL: Record<string, string> = {
+  starting: "Starting…",
+  heuristic_only: "Running heuristics",
+  precompute: "Preparing arbiter input",
+  awaiting_provider: "Awaiting provider response",
+  ingesting: "Ingesting batch results",
+  idle_between_batches: "Between batches",
+};
+
+function formatRebuildStatusLine(progress: {
+  phase?: string;
+  inFlightBatches?: number;
+  lastProviderRequestAt?: number | null;
+  lastProviderResponseMs?: number | null;
+}): string {
+  const parts: string[] = [];
+  if (progress.phase) {
+    parts.push(REBUILD_PHASE_LABEL[progress.phase] ?? progress.phase);
+  }
+  if (typeof progress.inFlightBatches === "number" && progress.inFlightBatches > 0) {
+    parts.push(`${progress.inFlightBatches} batch${progress.inFlightBatches === 1 ? "" : "es"} in flight`);
+  }
+  if (progress.lastProviderRequestAt) {
+    const seconds = Math.max(0, Math.round((Date.now() - progress.lastProviderRequestAt) / 1000));
+    parts.push(`last request ${seconds}s ago`);
+  }
+  if (typeof progress.lastProviderResponseMs === "number") {
+    parts.push(`last response ${(progress.lastProviderResponseMs / 1000).toFixed(1)}s`);
+  }
+  return parts.join(" · ") || "Working…";
+}
+
 export default function MemoryCortexSettings() {
   const addToast = useStore((s) => s.addToast);
   const openModal = useStore((s) => s.openModal);
@@ -61,17 +114,41 @@ export default function MemoryCortexSettings() {
   const [stats, setStats] = useState<CortexUsageStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [rebuilding, setRebuilding] = useState(false);
-  const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number; percent: number } | null>(null);
+  const [rebuildProgress, setRebuildProgress] = useState<{
+    current: number;
+    total: number;
+    percent: number;
+    phase?: string;
+    inFlightBatches?: number;
+    lastProviderRequestAt?: number | null;
+    lastProviderResponseMs?: number | null;
+  } | null>(null);
+  // Wall-clock "now" tick driving the "X seconds ago" subtext so it updates
+  // while a long LLM call is mid-flight even without new WS events.
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!rebuilding) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [rebuilding]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [whitelistInput, setWhitelistInput] = useState("");
+  const [scaffoldInput, setScaffoldInput] = useState("");
 
   // Connection profiles for sidecar picker
   const profiles = useStore((s) => s.profiles);
   const [sidecarModels, setSidecarModels] = useState<string[]>([]);
+  const [sidecarModelLabels, setSidecarModelLabels] = useState<Record<string, string>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
 
   // Active chat for stats (if available)
   const activeChatId = useStore((s) => s.activeChatId);
+
+  const activeThoughtPreset = THOUGHT_MARKER_PRESETS.find(
+    (preset) => preset.prefix === config?.thoughtMarkers.prefix && preset.suffix === config?.thoughtMarkers.suffix,
+  );
+  const selectedSidecarProfile = profiles.find((p) => p.id === config?.sidecar?.connectionProfileId) || null;
+  const sidecarReasoningBinding = selectedSidecarProfile?.metadata?.reasoningBindings?.settings;
 
   const handleOpenDiagnostics = useCallback(() => {
     openModal("memoryCortexDiagnostics", { chatId: activeChatId || null });
@@ -79,13 +156,19 @@ export default function MemoryCortexSettings() {
 
   // Fetch models when sidecar connection changes
   const fetchModels = useCallback(async (connectionId: string | null) => {
-    if (!connectionId) { setSidecarModels([]); return; }
+    if (!connectionId) {
+      setSidecarModels([]);
+      setSidecarModelLabels({});
+      return;
+    }
     setModelsLoading(true);
     try {
       const result = await connectionsApi.models(connectionId);
       setSidecarModels(result.models || []);
+      setSidecarModelLabels(result.model_labels || {});
     } catch {
       setSidecarModels([]);
+      setSidecarModelLabels({});
     } finally {
       setModelsLoading(false);
     }
@@ -126,6 +209,10 @@ export default function MemoryCortexSettings() {
           current: status.current ?? 0,
           total: status.total ?? 0,
           percent: status.percent ?? 0,
+          phase: (status as any).phase,
+          inFlightBatches: (status as any).inFlightBatches,
+          lastProviderRequestAt: (status as any).lastProviderRequestAt,
+          lastProviderResponseMs: (status as any).lastProviderResponseMs,
         });
       } else if (status.status === "complete") {
         // Silently refresh stats — the WS event handles the live toast notification.
@@ -140,7 +227,15 @@ export default function MemoryCortexSettings() {
     const unsub = wsClient.on(EventType.CORTEX_REBUILD_PROGRESS, (payload: any) => {
       if (!payload || payload.chatId !== activeChatId) return;
       if (payload.status === "processing") {
-        setRebuildProgress({ current: payload.current, total: payload.total, percent: payload.percent });
+        setRebuildProgress({
+          current: payload.current,
+          total: payload.total,
+          percent: payload.percent,
+          phase: payload.phase,
+          inFlightBatches: payload.inFlightBatches,
+          lastProviderRequestAt: payload.lastProviderRequestAt,
+          lastProviderResponseMs: payload.lastProviderResponseMs,
+        });
       } else if (payload.status === "complete") {
         setRebuilding(false);
         setRebuildProgress(null);
@@ -175,6 +270,16 @@ export default function MemoryCortexSettings() {
       addToast({ type: "error", message: "Failed to save setting" });
     }
   };
+
+  const updateThoughtMarkers = useCallback((patch: Partial<CortexConfig["thoughtMarkers"]>) => {
+    if (!config) return;
+    updateConfig({
+      thoughtMarkers: {
+        ...config.thoughtMarkers,
+        ...patch,
+      },
+    });
+  }, [config]);
 
   const applyPreset = async (mode: PresetMode) => {
     try {
@@ -219,6 +324,49 @@ export default function MemoryCortexSettings() {
     updateConfig({ entityWhitelist: config.entityWhitelist.filter((t) => t !== term) });
   };
 
+  const addScaffoldTag = () => {
+    if (!config) return;
+    const tag = scaffoldInput.trim().toLowerCase().replace(/^<|>$|\//g, "");
+    if (!tag || !/^[a-z0-9_]+$/.test(tag)) {
+      addToast({ type: "warning", message: "Tag names must be lowercase letters, digits, or underscores only." });
+      return;
+    }
+    const existing = config.nonProseScaffoldTags ?? [];
+    if (existing.includes(tag)) {
+      addToast({ type: "warning", message: `"${tag}" is already in the scaffold list` });
+      return;
+    }
+    updateConfig({ nonProseScaffoldTags: [...existing, tag] });
+    setScaffoldInput("");
+  };
+
+  const removeScaffoldTag = (tag: string) => {
+    if (!config) return;
+    updateConfig({ nonProseScaffoldTags: (config.nonProseScaffoldTags ?? []).filter((t) => t !== tag) });
+  };
+
+  const parseFilterLines = (value: string) => value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const updateEntityFilter = (
+    type: EntityFilterType,
+    field: "protectedTerms" | "rejectedTerms" | "cleanupPatterns",
+    value: string,
+  ) => {
+    if (!config) return;
+    updateConfig({
+      entityExtractionFilters: {
+        ...config.entityExtractionFilters,
+        [type]: {
+          ...config.entityExtractionFilters[type],
+          [field]: parseFilterLines(value),
+        },
+      },
+    });
+  };
+
   if (loading || !config) {
     return <div className={styles.container}><div className={styles.loadingText}>Loading...</div></div>;
   }
@@ -247,6 +395,14 @@ export default function MemoryCortexSettings() {
             onChange={(v) => updateConfig({ enabled: v })}
             label  ="Enable Memory Cortex"
             hint   ='Adds entity tracking, importance scoring, and emotional recall on top of existing long-term memory. Your existing memory system continues working independently.'
+          />
+        </div>
+        <div className={styles.toggleRow}>
+          <Toggle.Checkbox
+            checked={config.autoWarmup}
+            onChange={(v) => updateConfig({ autoWarmup: v })}
+            label="Warm Memory Cortex when opening a chat"
+            hint="Opt-in automatic warmup. Manual rebuilds from the chat input bar still work even when this is off."
           />
         </div>
       </div>
@@ -289,6 +445,14 @@ export default function MemoryCortexSettings() {
               <Sparkles size={14} />
               <span>How memories appear in the story</span>
             </div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={config.useChatMemoryFormatting}
+                onChange={(v) => updateConfig({ useChatMemoryFormatting: v })}
+                label="Use Long-Term Chat Memory formatting"
+                hint="Preserves Settings > Advanced > Long-Term Chat Memory > Formatting templates for the injected Long-Term Memory block. Turn off to use Cortex formatter modes below."
+              />
+            </div>
             <div className={styles.formatterGrid}>
               {FORMATTER_OPTIONS.map((opt) => (
                 <button
@@ -303,6 +467,50 @@ export default function MemoryCortexSettings() {
             </div>
           </div>
 
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}>
+              <MessageSquareQuote size={14} />
+              <span>Thought Marker Detection</span>
+            </div>
+            <div className={styles.hintText}>
+              Memory Cortex uses these markers to classify colored text as thoughts instead of narration. Quoted dialogue is still detected automatically, and `*asterisk-wrapped thoughts*` remain supported.
+            </div>
+            <div className={styles.presetRow}>
+              {THOUGHT_MARKER_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className={clsx(styles.presetBtn, activeThoughtPreset?.label === preset.label && styles.presetBtnActive)}
+                  onClick={() => updateThoughtMarkers({ prefix: preset.prefix, suffix: preset.suffix })}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <div className={styles.markerGrid}>
+              <label className={styles.markerField}>
+                <span className={styles.markerLabel}>Thought prefix</span>
+                <textarea
+                  className={styles.textareaInput}
+                  value={config.thoughtMarkers.prefix}
+                  onChange={(e) => updateThoughtMarkers({ prefix: e.target.value })}
+                  placeholder="<think>"
+                  rows={3}
+                />
+              </label>
+              <label className={styles.markerField}>
+                <span className={styles.markerLabel}>Thought suffix</span>
+                <textarea
+                  className={styles.textareaInput}
+                  value={config.thoughtMarkers.suffix}
+                  onChange={(e) => updateThoughtMarkers({ suffix: e.target.value })}
+                  placeholder="</think>"
+                  rows={3}
+                />
+              </label>
+            </div>
+          </div>
+
           {/* ── Sidecar AI Connection (Tier 2) ── */}
           <div className={styles.section}>
             <div className={styles.sectionHeader}>
@@ -313,6 +521,13 @@ export default function MemoryCortexSettings() {
               Use a secondary LLM for deeper entity extraction, importance scoring, and memory consolidation.
               Without a connection, these features use fast heuristics (free, no API calls).
             </div>
+            {config.sidecar.connectionProfileId && (
+              <div className={styles.hintText}>
+                {sidecarReasoningBinding
+                  ? `This sidecar connection uses bound reasoning settings: ${getReasoningBindingSummary(sidecarReasoningBinding)}.`
+                  : "This sidecar connection uses the global Reasoning settings unless the connection profile has bound reasoning settings. Bind reasoning on that connection to force thinking on or off for Cortex extraction and summaries."}
+              </div>
+            )}
             <div className={styles.infoRow}>
               <span className={styles.infoLabel}>Connection</span>
               <select
@@ -341,37 +556,41 @@ export default function MemoryCortexSettings() {
               <>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Model override</span>
-                  {modelsLoading ? (
-                    <span className={styles.infoValue}>Loading models...</span>
-                  ) : sidecarModels.length > 0 ? (
-                    <select
-                      className={styles.selectInput}
+                  <div className={styles.modelPicker}>
+                    <ModelCombobox
                       value={config.sidecar.model || ""}
-                      onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, model: e.target.value || null } })}
-                    >
-                      <option value="">Use connection default</option>
-                      {sidecarModels.map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      className={styles.textInput}
-                      value={config.sidecar.model || ""}
-                      onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, model: e.target.value || null } })}
+                      onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, model: value || null } })}
+                      models={sidecarModels}
+                      modelLabels={sidecarModelLabels}
+                      loading={modelsLoading}
+                      onRefresh={() => fetchModels(config.sidecar.connectionProfileId)}
+                      autoRefreshOnFocus
+                      refreshKey={config.sidecar.connectionProfileId || ""}
                       placeholder="Leave empty to use connection default"
-                      style={{ width: 220 }}
+                      emptyMessage="No models returned for this connection. Enter one manually."
+                      browseHint="Click into the field to browse models for the selected sidecar connection, or leave it blank to use the connection default."
                     />
-                  )}
+                  </div>
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Temperature</span>
-                  <input type="number" className={styles.numberInput} value={config.sidecar.temperature} min={0} max={2} step={0.05} onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, temperature: parseFloat(e.target.value) || 0.1 } })} />
+                  <NumericInput className={styles.numberInput} value={config.sidecar.temperature} min={0} max={2} step={0.05} onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, temperature: value ?? 0.1 } })} />
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Top P</span>
-                  <input type="number" className={styles.numberInput} value={config.sidecar.topP} min={0} max={1} step={0.05} onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, topP: parseFloat(e.target.value) || 1.0 } })} />
+                  <NumericInput className={styles.numberInput} value={config.sidecar.topP} min={0} max={1} step={0.05} onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, topP: value ?? 1.0 } })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Max output tokens</span>
+                  <NumericInput
+                    className={styles.numberInput}
+                    value={config.sidecar.maxTokens ?? 4096}
+                    min={512}
+                    max={65536}
+                    step={256}
+                    integer
+                    onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, maxTokens: value ?? 4096 } })}
+                  />
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Entity extraction</span>
@@ -398,25 +617,97 @@ export default function MemoryCortexSettings() {
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Chunks per request</span>
-                  <input type="number" className={styles.numberInput} value={config.sidecar.chunkBatchSize ?? 5} min={1} max={20} step={1} onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, chunkBatchSize: parseInt(e.target.value) || 5 } })} />
+                  <NumericInput className={styles.numberInput} value={config.sidecar.chunkBatchSize ?? 5} min={1} max={20} step={1} integer onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, chunkBatchSize: value ?? 5 } })} />
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Parallel requests</span>
-                  <input type="number" className={styles.numberInput} value={config.sidecar.rebuildConcurrency ?? 3} min={1} max={10} step={1} onChange={(e) => updateConfig({ sidecar: { ...config.sidecar, rebuildConcurrency: parseInt(e.target.value) || 3 } })} />
+                  <NumericInput className={styles.numberInput} value={config.sidecar.rebuildConcurrency ?? 3} min={1} max={10} step={1} integer onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, rebuildConcurrency: value ?? 3 } })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>RPM limit</span>
+                  <NumericInput className={styles.numberInput} value={config.sidecar.requestsPerMinute ?? 0} min={0} max={600} step={1} integer onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, requestsPerMinute: value ?? 0 } })} />
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Sidecar timeout (seconds)</span>
-                  <input type="number" className={styles.numberInput} value={Math.round((config.sidecarTimeoutMs ?? 60000) / 1000)} min={0} max={300} step={5} onChange={(e) => updateConfig({ sidecarTimeoutMs: (parseInt(e.target.value) || 60) * 1000 })} />
+                  <NumericInput className={styles.numberInput} value={Math.round((config.sidecarTimeoutMs ?? 60000) / 1000)} min={0} max={300} step={5} integer onChange={(value) => updateConfig({ sidecarTimeoutMs: (value ?? 60) * 1000 })} />
                 </div>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Retrieval timeout (seconds)</span>
-                  <input type="number" className={styles.numberInput} value={Math.round((config.retrievalTimeoutMs ?? 60000) / 1000)} min={0} max={300} step={5} onChange={(e) => updateConfig({ retrievalTimeoutMs: (parseInt(e.target.value) || 60) * 1000 })} />
+                  <NumericInput className={styles.numberInput} value={Math.round((config.retrievalTimeoutMs ?? 60000) / 1000)} min={0} max={300} step={5} integer onChange={(value) => updateConfig({ retrievalTimeoutMs: (value ?? 60) * 1000 })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>On sidecar failure</span>
+                  <select
+                    className={styles.selectInput}
+                    value={config.sidecarReliability?.fallback ?? "heuristic"}
+                    onChange={(e) => updateConfig({
+                      sidecarReliability: {
+                        ...config.sidecarReliability,
+                        fallback: e.target.value as "heuristic" | "skip",
+                      },
+                    })}
+                  >
+                    <option value="heuristic">Fall back to heuristic</option>
+                    <option value="skip">AI Only — skip chunk, retry on warmup</option>
+                  </select>
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Retry attempts</span>
+                  <NumericInput
+                    className={styles.numberInput}
+                    value={config.sidecarReliability?.maxRetries ?? 0}
+                    min={0}
+                    max={10}
+                    step={1}
+                    integer
+                    onChange={(value) => updateConfig({
+                      sidecarReliability: { ...config.sidecarReliability, maxRetries: value ?? 0 },
+                    })}
+                  />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Retry delay (ms)</span>
+                  <NumericInput
+                    className={styles.numberInput}
+                    value={config.sidecarReliability?.retryDelayMs ?? 500}
+                    min={0}
+                    max={10000}
+                    step={100}
+                    integer
+                    onChange={(value) => updateConfig({
+                      sidecarReliability: { ...config.sidecarReliability, retryDelayMs: value ?? 500 },
+                    })}
+                  />
+                </div>
+                <div className={styles.toggleRow}>
+                  <Toggle.Checkbox
+                    checked={config.sidecarReliability?.arbitratesHeuristics ?? false}
+                    onChange={(v) => updateConfig({
+                      sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: v },
+                    })}
+                    label="Sidecar arbitrates heuristics"
+                    hint="When the sidecar succeeds, it sees the heuristic candidates for this chunk and can drop bad ones or rename them to a canonical form before merging."
+                  />
+                </div>
+                <div className={styles.toggleRow}>
+                  <Toggle.Checkbox
+                    checked={config.sidecarReliability?.gradesExistingRecords ?? false}
+                    onChange={(v) => updateConfig({
+                      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: v },
+                    })}
+                    label="Sidecar can prune existing graph entities"
+                    hint="The sidecar may flag entities already in the graph as invalid (e.g. a verb captured by an earlier heuristic pass). Flagged entities are deleted; user-edited entities are always preserved."
+                  />
                 </div>
                 <div className={styles.hintText}>
+                  Max output tokens: ceiling on what the sidecar can emit per call. Each chunk's result JSON is ~400-600 tokens with arbiter on, so a chunks-per-request value of N needs roughly N × 600 tokens of headroom. If responses get truncated mid-JSON the whole batch falls back to per-chunk extraction — much slower. Raise this if you increase chunks per request.
                   Chunks per request: how many memory chunks to analyze in a single LLM call. Higher = fewer API calls but larger prompts.
                   Parallel requests: how many LLM calls to run simultaneously during rebuild.
+                  RPM limit: cap Cortex sidecar requests per minute for this provider. 0 disables throttling.
                   Sidecar timeout: max wait per sidecar call. Increase for thinking/reasoning models that need more processing time. 0 = no limit.
                   Retrieval timeout: max wait for cortex retrieval during generation. If exceeded, falls back to plain vector search. 0 = no limit.
+                  On sidecar failure: "AI Only" mode skips writing anything for this chunk (heuristic noise stays out of the graph) — the next cortex warmup will retry it.
+                  Retry attempts/delay: extra sidecar tries with exponential backoff before falling back. 0 = no retry (legacy behavior).
                 </div>
               </>
             )}
@@ -426,7 +717,7 @@ export default function MemoryCortexSettings() {
           <div className={styles.section}>
             <div className={styles.sectionHeader}>
               <Shield size={14} />
-              <span>Protected terms</span>
+              <span>Whitelist</span>
             </div>
             <div className={styles.whitelistHint}>
               Words the entity extractor should never filter out. Use this for fantasy proper nouns that look like common words
@@ -451,6 +742,43 @@ export default function MemoryCortexSettings() {
                   <span key={term} className={styles.tag}>
                     {term}
                     <button onClick={() => removeWhitelistTerm(term)} className={styles.tagRemove}>&times;</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Non-prose Scaffold Tags ── */}
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}>
+              <Shield size={14} />
+              <span>Scaffold tags</span>
+            </div>
+            <div className={styles.whitelistHint}>
+              Tag names (XML/HTML-style, lowercase) whose inner content is structured scaffolding — HUD panels,
+              status lines, dice rolls, embeds — that should be removed wholesale before entity extraction. Common
+              ones (status, embed, hud, dice, tracker, ooc, tool_call, etc.) are stripped by default; add anything
+              custom your cards use here. Example: "rpgstats", "encounter", "questlog".
+            </div>
+            <div className={styles.whitelistInput}>
+              <input
+                type="text"
+                value={scaffoldInput}
+                onChange={(e) => setScaffoldInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addScaffoldTag()}
+                placeholder="e.g. encounter (no angle brackets)"
+                className={styles.textInput}
+              />
+              <button onClick={addScaffoldTag} className={styles.addBtn} disabled={!scaffoldInput.trim()}>
+                Add
+              </button>
+            </div>
+            {(config.nonProseScaffoldTags ?? []).length > 0 && (
+              <div className={styles.whitelistTags}>
+                {(config.nonProseScaffoldTags ?? []).map((tag) => (
+                  <span key={tag} className={styles.tag}>
+                    &lt;{tag}&gt;
+                    <button onClick={() => removeScaffoldTag(tag)} className={styles.tagRemove}>&times;</button>
                   </span>
                 ))}
               </div>
@@ -487,7 +815,7 @@ export default function MemoryCortexSettings() {
                     </div>
                     <div className={styles.infoRow}>
                       <span className={styles.infoLabel}>Context token budget</span>
-                      <input type="number" className={styles.numberInput} value={config.contextTokenBudget} min={100} max={2000} step={50} onChange={(e) => updateConfig({ contextTokenBudget: parseInt(e.target.value) || 600 })} />
+                      <NumericInput className={styles.numberInput} value={config.contextTokenBudget} min={100} max={2000} step={50} integer onChange={(value) => updateConfig({ contextTokenBudget: value ?? 600 })} />
                     </div>
                   </div>
 
@@ -499,11 +827,11 @@ export default function MemoryCortexSettings() {
                     </div>
                     <div className={styles.infoRow}>
                       <span className={styles.infoLabel}>Half-life (turns)</span>
-                      <input type="number" className={styles.numberInput} value={config.decay.halfLifeTurns} min={100} max={5000} step={50} onChange={(e) => updateConfig({ decay: { ...config.decay, halfLifeTurns: parseInt(e.target.value) || 500 } })} />
+                      <NumericInput className={styles.numberInput} value={config.decay.halfLifeTurns} min={100} max={5000} step={50} integer onChange={(value) => updateConfig({ decay: { ...config.decay, halfLifeTurns: value ?? 500 } })} />
                     </div>
                     <div className={styles.infoRow}>
                       <span className={styles.infoLabel}>Core memory threshold</span>
-                      <input type="number" className={styles.numberInput} value={config.decay.coreMemoryThreshold} min={0} max={1} step={0.05} onChange={(e) => updateConfig({ decay: { ...config.decay, coreMemoryThreshold: parseFloat(e.target.value) || 0.7 } })} />
+                      <NumericInput className={styles.numberInput} value={config.decay.coreMemoryThreshold} min={0} max={1} step={0.05} onChange={(value) => updateConfig({ decay: { ...config.decay, coreMemoryThreshold: value ?? 0.7 } })} />
                     </div>
                     <div className={styles.hintText}>
                       Memories scoring above the threshold are "core memories" — they resist decay and never fully fade.
@@ -519,6 +847,58 @@ export default function MemoryCortexSettings() {
                     <div className={styles.toggleRow}>
                       <Toggle.Checkbox checked={config.consolidation.enabled} onChange={(v) => updateConfig({ consolidation: { ...config.consolidation, enabled: v } })} label="Enable memory consolidation" hint="Compress older memories into summaries. Reduces token usage for long campaigns." />
                     </div>
+                  </div>
+
+                  <div className={styles.section}>
+                    <div className={styles.sectionHeader}>
+                      <Shield size={14} />
+                      <span>Entity extraction filters</span>
+                    </div>
+                    <div className={styles.whitelistHint}>
+                      Protected terms seed a specific memory type from matching lines. Rejected terms block that type from matching lines.
+                      Cleanup regexes run in order and remove matched text from protected lines before the entity is saved.
+                      Use JavaScript-style regex strings like <code>/^.*📍\s*/</code>.
+                    </div>
+                    {ENTITY_FILTER_TYPES.map((type) => {
+                      const rules = config.entityExtractionFilters[type];
+                      return (
+                        <div key={type} className={styles.filterGroup}>
+                          <div className={styles.filterGroupHeader}>{ENTITY_FILTER_LABELS[type]}</div>
+                          <div className={styles.filterGrid}>
+                            <label className={styles.filterField}>
+                              <span>Protected terms</span>
+                              <textarea
+                                key={`${type}-protected-${rules.protectedTerms.join("\n")}`}
+                                defaultValue={rules.protectedTerms.join("\n")}
+                                onBlur={(e) => updateEntityFilter(type, "protectedTerms", e.target.value)}
+                                className={styles.textareaInput}
+                                placeholder="One string or /regex/ per line"
+                              />
+                            </label>
+                            <label className={styles.filterField}>
+                              <span>Rejected terms</span>
+                              <textarea
+                                key={`${type}-rejected-${rules.rejectedTerms.join("\n")}`}
+                                defaultValue={rules.rejectedTerms.join("\n")}
+                                onBlur={(e) => updateEntityFilter(type, "rejectedTerms", e.target.value)}
+                                className={styles.textareaInput}
+                                placeholder="One string or /regex/ per line"
+                              />
+                            </label>
+                            <label className={styles.filterField}>
+                              <span>Cleanup regexes</span>
+                              <textarea
+                                key={`${type}-cleanup-${rules.cleanupPatterns.join("\n")}`}
+                                defaultValue={rules.cleanupPatterns.join("\n")}
+                                onBlur={(e) => updateEntityFilter(type, "cleanupPatterns", e.target.value)}
+                                className={styles.textareaInput}
+                                placeholder="Regex removals, one /pattern/flags per line"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </>
               )}
@@ -542,6 +922,11 @@ export default function MemoryCortexSettings() {
                   </button>
                 </div>
               </div>
+              {rebuilding && rebuildProgress && (
+                <div className={styles.hintText}>
+                  {formatRebuildStatusLine(rebuildProgress)}
+                </div>
+              )}
               <div className={styles.grid}>
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Memory chunks</span>
@@ -562,6 +947,22 @@ export default function MemoryCortexSettings() {
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>Est. embedding calls</span>
                   <span className={styles.infoValue}>{stats.estimatedEmbeddingCalls}</span>
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Last ingestion</span>
+                  <span className={styles.infoValue}>
+                    {stats.ingestionTelemetry.last
+                      ? `${Math.round(stats.ingestionTelemetry.last.totalMs)}ms total (${stats.ingestionTelemetry.last.mode})`
+                      : "No samples yet"}
+                  </span>
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>Avg. ingestion</span>
+                  <span className={styles.infoValue}>
+                    {stats.ingestionTelemetry.samples > 0
+                      ? `${Math.round(stats.ingestionTelemetry.averages.totalMs)}ms over ${stats.ingestionTelemetry.samples} run${stats.ingestionTelemetry.samples === 1 ? "" : "s"}`
+                      : "No samples yet"}
+                  </span>
                 </div>
               </div>
             </div>

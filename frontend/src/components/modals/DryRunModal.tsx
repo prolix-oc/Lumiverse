@@ -1,11 +1,15 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check, Code, Copy } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Badge } from '@/components/shared/Badge'
+import { Button } from '@/components/shared/FormComponents'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import type { DryRunResponse, DryRunMessage } from '@/api/generate'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
+import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import styles from './DryRunModal.module.css'
 import clsx from 'clsx'
 
@@ -17,42 +21,54 @@ const ROLE_COLOR: Record<string, 'warning' | 'info' | 'primary'> = {
 
 // Auto-collapse the messages section above this count to keep the modal snappy on open.
 const MESSAGES_AUTO_COLLAPSE_THRESHOLD = 50
-// Per-message expand button appears when content exceeds this length.
-const MESSAGE_EXPAND_THRESHOLD = 400
+// Fixed-height rows keep the list stable even when prompt content is huge.
+const MESSAGE_ROW_HEIGHT = 68
+const MESSAGE_PREVIEW_CAP = 220
 // Memory chunk previews are clipped to this many characters by default.
 const CHUNK_PREVIEW_CAP = 500
 
-interface MessageCardProps {
-  msg: DryRunMessage
-  index: number
-  expanded: boolean
-  onToggle: () => void
+function summarizeMessage(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '(empty message)'
+  return normalized.length > MESSAGE_PREVIEW_CAP
+    ? `${normalized.slice(0, MESSAGE_PREVIEW_CAP - 1)}…`
+    : normalized
 }
 
-function MessageCard({ msg, index, expanded, onToggle }: MessageCardProps) {
-  const needsToggle = msg.content.length > MESSAGE_EXPAND_THRESHOLD
+function countLines(content: string): number {
+  if (!content) return 0
+  return content.split(/\r\n|\r|\n/).length
+}
+
+interface MessageListItemProps {
+  msg: DryRunMessage
+  index: number
+  selected: boolean
+  onSelect: () => void
+}
+
+function MessageListItem({ msg, index, selected, onSelect }: MessageListItemProps) {
+  const preview = summarizeMessage(msg.content)
+  const lineCount = countLines(msg.content)
+
   return (
-    <div className={styles.messageCard}>
-      <div className={styles.messageHeader}>
+    <button
+      type="button"
+      className={clsx(styles.messageRow, selected && styles.messageRowActive)}
+      onClick={onSelect}
+    >
+      <div className={styles.messageRowHeader}>
         <Badge color={ROLE_COLOR[msg.role] ?? 'neutral'} size="sm" className={styles.roleBadge}>
           {msg.role}
         </Badge>
         <span className={styles.messageIndex}>#{index + 1}</span>
-        {needsToggle && (
-          <button type="button" className={styles.expandButton} onClick={onToggle}>
-            {expanded ? 'Show less' : 'Show full'}
-          </button>
-        )}
+        <span className={styles.messageMeta}>
+          {msg.content.length.toLocaleString()} chars
+          {lineCount > 0 && ` • ${lineCount.toLocaleString()} lines`}
+        </span>
       </div>
-      <div
-        className={clsx(
-          styles.messageContent,
-          needsToggle && !expanded && styles.messageContentClamped,
-        )}
-      >
-        {msg.content}
-      </div>
-    </div>
+      <div className={styles.messagePreview}>{preview}</div>
+    </button>
   )
 }
 
@@ -82,30 +98,19 @@ function ChunkPreview({ text }: ChunkPreviewProps) {
 
 interface VirtualizedMessagesProps {
   messages: DryRunMessage[]
+  selectedIndex: number
+  onSelect: (index: number) => void
 }
 
-function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
+function VirtualizedMessages({ messages, selectedIndex, onSelect }: VirtualizedMessagesProps) {
   const parentRef = useRef<HTMLDivElement>(null)
-  const [expandedSet, setExpandedSet] = useState<Set<number>>(() => new Set())
 
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 140,
-    overscan: 6,
+    estimateSize: () => MESSAGE_ROW_HEIGHT,
+    overscan: 10,
   })
-
-  const toggle = (idx: number) => {
-    setExpandedSet((prev) => {
-      const next = new Set(prev)
-      if (next.has(idx)) next.delete(idx)
-      else next.add(idx)
-      return next
-    })
-    // Expanded/collapsed cards have very different heights — kick the
-    // virtualizer to remeasure on the next frame after the DOM updates.
-    requestAnimationFrame(() => virtualizer.measure())
-  }
 
   return (
     <div ref={parentRef} className={styles.messagesScroll}>
@@ -121,8 +126,6 @@ function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
           return (
             <div
               key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={virtualizer.measureElement}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -132,11 +135,11 @@ function VirtualizedMessages({ messages }: VirtualizedMessagesProps) {
                 paddingBottom: 8,
               }}
             >
-              <MessageCard
+              <MessageListItem
                 msg={msg}
                 index={virtualRow.index}
-                expanded={expandedSet.has(virtualRow.index)}
-                onToggle={() => toggle(virtualRow.index)}
+                selected={selectedIndex === virtualRow.index}
+                onSelect={() => onSelect(virtualRow.index)}
               />
             </div>
           )
@@ -150,7 +153,7 @@ export default function DryRunModal() {
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats, databankStats, contextClipStats } = modalProps
 
   const [messagesOpen, setMessagesOpen] = useState(
     messages.length <= MESSAGES_AUTO_COLLAPSE_THRESHOLD,
@@ -159,21 +162,85 @@ export default function DryRunModal() {
   const [paramsOpen, setParamsOpen] = useState(false)
   const [wiStatsOpen, setWiStatsOpen] = useState(false)
   const [memStatsOpen, setMemStatsOpen] = useState(false)
+  const [databankStatsOpen, setDatabankStatsOpen] = useState(false)
+  // Auto-open the budget section when clipping is in a problem state so
+  // users discover why their chat history is missing without hunting.
+  const [budgetOpen, setBudgetOpen] = useState(
+    Boolean(contextClipStats?.budgetInvalid) || (contextClipStats?.messagesDropped ?? 0) > 0,
+  )
+  const [rawView, setRawView] = useState<'off' | RawPromptView>('off')
+  const [copied, setCopied] = useState(false)
+  const [selectedMessageIndex, setSelectedMessageIndex] = useState(0)
+  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
+
+  useEffect(() => {
+    setSelectedMessageIndex((prev) => {
+      if (messages.length === 0) return 0
+      return Math.min(prev, messages.length - 1)
+    })
+  }, [messages.length])
+
+  useEffect(() => {
+    if (!messagesOpen) setMobileInspectorOpen(false)
+  }, [messagesOpen])
+
+  const rawInput = useMemo(() => dryRunToRawPromptInput(modalProps), [modalProps])
+  const rawText = useMemo(
+    () => (rawView === 'off' ? '' : formatRawPrompt(rawInput, rawView)),
+    [rawInput, rawView],
+  )
+
+  const handleCopy = () => {
+    const text = formatRawPrompt(rawInput, rawView === 'json' ? 'json' : 'text')
+    copyTextToClipboard(text).catch(console.error)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  const cycleRawView = () => {
+    setRawView((v) => (v === 'off' ? 'text' : v === 'text' ? 'json' : 'off'))
+  }
+
+  const rawButtonLabel = rawView === 'off' ? 'Raw' : rawView === 'text' ? 'JSON' : 'Visual'
 
   // Memoise derived values so toggling a sibling section doesn't re-serialise
   // potentially large payloads on every render.
-  const tokensByName = useMemo(() => {
-    const map = new Map<string, number>()
-    if (tokenCount?.breakdown) {
-      for (const entry of tokenCount.breakdown) map.set(entry.name, entry.tokens)
-    }
-    return map
-  }, [tokenCount])
+  const tokenBreakdown = useMemo(
+    () => tokenCount?.breakdown || [],
+    [tokenCount],
+  )
+  const breakdownCacheHints = useMemo(
+    () => getAnthropicBreakdownCacheHints({ provider, parameters, breakdown }),
+    [provider, parameters, breakdown],
+  )
+  const anthropicCacheUsage = useMemo(
+    () => getAnthropicCacheUsageSummary(provider, modalProps.usage),
+    [provider, modalProps.usage],
+  )
 
   const parametersJson = useMemo(
     () => JSON.stringify(parameters, null, 2),
     [parameters],
   )
+
+  const databankRetrievalStateLabel = useMemo(() => {
+    switch (databankStats?.retrievalState) {
+      case 'cache_hit': return 'cache hit'
+      case 'awaited_prefetch': return 'awaited prefetch'
+      case 'awaited_direct': return 'direct fetch'
+      case 'skipped_embeddings_disabled': return 'embeddings disabled'
+      case 'skipped_no_active_banks': return 'no active banks'
+      default: return null
+    }
+  }, [databankStats?.retrievalState])
+
+  const selectedMessage = messages[selectedMessageIndex] ?? null
+  const selectedMessageLineCount = selectedMessage ? countLines(selectedMessage.content) : 0
+
+  const handleSelectMessage = (index: number) => {
+    setSelectedMessageIndex(index)
+    setMobileInspectorOpen(true)
+  }
 
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth="clamp(340px, 94vw, min(1100px, var(--lumiverse-content-max-width, 1100px)))" className={styles.modal}>
@@ -188,6 +255,10 @@ export default function DryRunModal() {
 
           {/* Scrollable body */}
           <div className={styles.body}>
+            {rawView !== 'off' ? (
+              <pre className={styles.rawView}>{rawText}</pre>
+            ) : (
+              <>
             {/* Messages — collapsible + virtualised so 600+ message chats stay responsive */}
             <div className={styles.collapsible}>
               <button
@@ -199,11 +270,53 @@ export default function DryRunModal() {
                   size={14}
                   className={clsx(styles.chevron, messagesOpen && styles.chevronOpen)}
                 />
-                Messages ({messages.length})
+                Messages ({messages.length}
+                {contextClipStats?.enabled && contextClipStats.messagesDropped > 0 && (
+                  <span style={{ color: '#ffab00', marginLeft: 6 }}>
+                    , {contextClipStats.messagesDropped} clipped
+                  </span>
+                )}
+                )
               </button>
               {messagesOpen && messages.length > 0 && (
-                <div className={styles.messagesCollapsibleBody}>
-                  <VirtualizedMessages messages={messages} />
+                <div
+                  className={clsx(
+                    styles.messagesCollapsibleBody,
+                    mobileInspectorOpen && styles.messagesMobileInspectorVisible,
+                  )}
+                >
+                  <VirtualizedMessages
+                    messages={messages}
+                    selectedIndex={selectedMessageIndex}
+                    onSelect={handleSelectMessage}
+                  />
+                  <div className={styles.messageInspector}>
+                    {selectedMessage && (
+                      <>
+                        <div className={styles.messageInspectorHeader}>
+                          <div className={styles.messageInspectorTitleRow}>
+                            <button
+                              type="button"
+                              className={styles.mobileBackButton}
+                              onClick={() => setMobileInspectorOpen(false)}
+                            >
+                              <ChevronLeft size={14} />
+                              Messages
+                            </button>
+                            <Badge color={ROLE_COLOR[selectedMessage.role] ?? 'neutral'} size="sm" className={styles.roleBadge}>
+                              {selectedMessage.role}
+                            </Badge>
+                            <span className={styles.messageIndex}>#{selectedMessageIndex + 1}</span>
+                          </div>
+                          <span className={styles.messageInspectorMeta}>
+                            {selectedMessage.content.length.toLocaleString()} chars
+                            {selectedMessageLineCount > 0 && ` • ${selectedMessageLineCount.toLocaleString()} lines`}
+                          </span>
+                        </div>
+                        <pre className={styles.messageInspectorContent}>{selectedMessage.content}</pre>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -238,22 +351,46 @@ export default function DryRunModal() {
                         {tokenCount.tokenizer_name && (
                           <span className={styles.breakdownSource}>via {tokenCount.tokenizer_name}</span>
                         )}
+                        {anthropicCacheUsage && (
+                          <span className={styles.breakdownSource}>
+                            read {anthropicCacheUsage.cacheReadInputTokens.toLocaleString()} • write {anthropicCacheUsage.cacheCreationInputTokens.toLocaleString()}
+                            {anthropicCacheUsage.cacheCreation5mInputTokens > 0 && ` • 5m ${anthropicCacheUsage.cacheCreation5mInputTokens.toLocaleString()}`}
+                            {anthropicCacheUsage.cacheCreation1hInputTokens > 0 && ` • 1h ${anthropicCacheUsage.cacheCreation1hInputTokens.toLocaleString()}`}
+                          </span>
+                        )}
                       </div>
                     )}
-                    <div className={styles.breakdownList}>
-                      {breakdown.map((entry, i) => {
-                        const tokens = tokensByName.get(entry.name)
-                        return (
-                          <div key={i} className={styles.breakdownEntry}>
-                            <span className={styles.breakdownLabel}>{entry.name}</span>
-                            <span className={styles.breakdownSource}>{entry.type}</span>
-                            {entry.role && (
-                              <span className={styles.breakdownRole}>{entry.role}</span>
-                            )}
-                            {tokens != null && (
-                              <span className={styles.breakdownTokens}>
-                                {tokens.toLocaleString()} tokens
-                              </span>
+                      <div className={styles.breakdownList}>
+                        {breakdown.map((entry, i) => {
+                          const tokens = tokenBreakdown[i]?.tokens
+                          const cacheHint = breakdownCacheHints[i]
+                          return (
+                            <div key={i} className={styles.breakdownEntry}>
+                              <span className={styles.breakdownLabel}>{entry.name}</span>
+                              {entry.extensionName && (
+                                <span className={styles.breakdownRole}>{entry.extensionName}</span>
+                              )}
+                              <span className={styles.breakdownSource}>{entry.type}</span>
+                              {entry.role && (
+                                <span className={styles.breakdownRole}>{entry.role}</span>
+                             )}
+                              {cacheHint && (
+                                <span
+                                  className={clsx(
+                                    styles.breakdownCacheHint,
+                                    cacheHint.kind === 'cached'
+                                      ? styles.breakdownCacheHintCached
+                                      : styles.breakdownCacheHintMiss,
+                                  )}
+                                  title={cacheHint.label}
+                                >
+                                  {cacheHint.kind === 'cached' ? 'cached' : 'uncached'}
+                                </span>
+                              )}
+                             {tokens != null && (
+                               <span className={styles.breakdownTokens}>
+                                 {tokens.toLocaleString()} tokens
+                               </span>
                             )}
                           </div>
                         )
@@ -409,6 +546,254 @@ export default function DryRunModal() {
               </div>
             )}
 
+            {/* Databank Stats */}
+            {databankStats && (
+              <div className={styles.collapsible}>
+                <button
+                  type="button"
+                  className={styles.collapsibleHeader}
+                  onClick={() => setDatabankStatsOpen((o) => !o)}
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(styles.chevron, databankStatsOpen && styles.chevronOpen)}
+                  />
+                  Databanks ({databankStats.activeBankCount} active, {databankStats.chunksRetrieved} retrieved)
+                </button>
+                {databankStatsOpen && (
+                  <div className={styles.collapsibleBody}>
+                    <div className={styles.breakdownList}>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Embeddings enabled</span>
+                        <span className={styles.breakdownTokens}>{databankStats.embeddingsEnabled ? 'Yes' : 'No'}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Injection method</span>
+                        <span className={styles.breakdownTokens}>{databankStats.injectionMethod}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Retrieval state</span>
+                        <span className={styles.breakdownTokens}>{databankRetrievalStateLabel ?? databankStats.retrievalState}</span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Active databanks</span>
+                        <span className={styles.breakdownTokens}>{databankStats.activeBankCount}</span>
+                      </div>
+                      {databankStats.activeDatabankIds.length > 0 && (
+                        <div className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <span className={styles.breakdownLabel}>Active databank IDs</span>
+                          <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'auto', fontSize: 11 }}>
+                            {databankStats.activeDatabankIds.join('\n')}
+                          </span>
+                        </div>
+                      )}
+                      {databankStats.queryPreview && (
+                        <div className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <span className={styles.breakdownLabel}>Query preview</span>
+                          <span className={styles.breakdownSource} style={{ whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'auto', fontSize: 11 }}>
+                            {databankStats.queryPreview}
+                          </span>
+                        </div>
+                      )}
+                      {databankStats.retrievedChunks.length > 0 && (
+                        <>
+                          <div className={styles.breakdownEntry} style={{ marginTop: 8 }}>
+                            <span className={styles.breakdownLabel} style={{ fontWeight: 600 }}>Retrieved Chunks</span>
+                          </div>
+                          {databankStats.retrievedChunks.map((chunk, i) => (
+                            <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4, paddingLeft: 8 }}>
+                              <span className={styles.breakdownLabel}>
+                                #{i + 1} — {chunk.documentName}, score: {chunk.score.toFixed(4)}, ~{chunk.tokenEstimate} tokens
+                              </span>
+                              <ChunkPreview text={chunk.preview} />
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Context Budget — surfaces history clipping so users understand
+                why their 600-message chat shrank to 240 in the prompt. */}
+            {contextClipStats && (
+              <div className={styles.collapsible}>
+                <button
+                  type="button"
+                  className={styles.collapsibleHeader}
+                  onClick={() => setBudgetOpen((o) => !o)}
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(styles.chevron, budgetOpen && styles.chevronOpen)}
+                  />
+                  Context Budget
+                  {!contextClipStats.enabled && (
+                    <span className={styles.breakdownSource} style={{ marginLeft: 6 }}>
+                      (no max_context_length set — clipping disabled)
+                    </span>
+                  )}
+                  {contextClipStats.enabled && contextClipStats.budgetInvalid && (
+                    <span style={{ color: '#ff5470', marginLeft: 6 }}>
+                      (budget invalid — context size ≤ reserved response tokens)
+                    </span>
+                  )}
+                  {contextClipStats.enabled && !contextClipStats.budgetInvalid && contextClipStats.messagesDropped > 0 && (
+                    <span style={{ color: '#ffab00', marginLeft: 6 }}>
+                      ({contextClipStats.messagesDropped} message{contextClipStats.messagesDropped === 1 ? '' : 's'} clipped, {contextClipStats.tokensDropped.toLocaleString()} tokens)
+                    </span>
+                  )}
+                  {contextClipStats.enabled && !contextClipStats.budgetInvalid && contextClipStats.messagesDropped === 0 && (
+                    <span className={styles.breakdownSource} style={{ marginLeft: 6 }}>
+                      (fits within budget)
+                    </span>
+                  )}
+                </button>
+                {budgetOpen && (
+                  <div className={styles.collapsibleBody}>
+                  {contextClipStats.enabled && contextClipStats.budgetInvalid && (
+                    <div
+                      className={styles.breakdownEntry}
+                        style={{
+                          marginBottom: 8,
+                          background: 'rgba(255, 84, 112, 0.08)',
+                          borderLeft: '3px solid #ff5470',
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
+                          gap: 4,
+                        }}
+                      >
+                        <span className={styles.breakdownLabel} style={{ color: '#ff5470' }}>
+                          Budget cannot fit any chat history
+                        </span>
+                        <span className={styles.breakdownSource}>
+                          input budget = max_context ({contextClipStats.maxContext.toLocaleString()})
+                          {' − '}max_tokens ({contextClipStats.maxResponseTokens.toLocaleString()})
+                          {' − '}safety ({contextClipStats.safetyMargin.toLocaleString()}) ={' '}
+                          {contextClipStats.inputBudget.toLocaleString()}. Raise Context Size or
+                          lower Max Tokens.
+                        </span>
+                      </div>
+                    )}
+                    {contextClipStats.enabled && !contextClipStats.budgetInvalid && contextClipStats.remainingHistoryBudget <= 0 && (
+                      <div
+                        className={styles.breakdownEntry}
+                        style={{
+                          marginBottom: 8,
+                          background: contextClipStats.fixedOverBudget ? 'rgba(255, 84, 112, 0.08)' : 'rgba(255, 171, 0, 0.08)',
+                          borderLeft: `3px solid ${contextClipStats.fixedOverBudget ? '#ff5470' : '#ffab00'}`,
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
+                          gap: 4,
+                        }}
+                      >
+                        <span
+                          className={styles.breakdownLabel}
+                          style={{ color: contextClipStats.fixedOverBudget ? '#ff5470' : '#ffab00' }}
+                        >
+                          {contextClipStats.fixedOverBudget
+                            ? 'Fixed prompt overhead already exceeds the budget'
+                            : 'Fixed prompt overhead leaves no room for chat history'}
+                        </span>
+                        <span className={styles.breakdownSource}>
+                          Chat history is the only clip-eligible section. System prompt, WI, persona, and other fixed blocks stay in the prompt, leaving{' '}
+                          {Math.max(0, contextClipStats.remainingHistoryBudget).toLocaleString()} tokens for history.
+                          {contextClipStats.fixedOverBudget && (
+                            <> Fixed overhead is over budget by {Math.abs(contextClipStats.remainingHistoryBudget).toLocaleString()} tokens.</>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    <div className={styles.breakdownList}>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Max context length</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.maxContext > 0
+                            ? `${contextClipStats.maxContext.toLocaleString()} tokens`
+                            : '— (unset)'}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Reserved for response</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.maxResponseTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Safety margin</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.safetyMargin.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Input budget before fixed overhead</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.budgetInvalid ? { color: '#ff5470' } : undefined}
+                        >
+                          {contextClipStats.inputBudget.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Fixed overhead (system / WI / persona / etc.)</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.fixedTokens.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Remaining room for chat history</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.remainingHistoryBudget < 0 ? { color: '#ff5470' } : contextClipStats.remainingHistoryBudget === 0 ? { color: '#ffab00' } : undefined}
+                        >
+                          {Math.max(0, contextClipStats.remainingHistoryBudget).toLocaleString()} tokens
+                          {contextClipStats.remainingHistoryBudget < 0
+                            ? ` (${Math.abs(contextClipStats.remainingHistoryBudget).toLocaleString()} over)`
+                            : ''}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Chat history before clip</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.chatHistoryTokensBefore.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Chat history after clip</span>
+                        <span className={styles.breakdownTokens}>
+                          {contextClipStats.chatHistoryTokensAfter.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Messages dropped</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.messagesDropped > 0 ? { color: '#ffab00' } : undefined}
+                        >
+                          {contextClipStats.messagesDropped.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Tokens dropped</span>
+                        <span
+                          className={styles.breakdownTokens}
+                          style={contextClipStats.tokensDropped > 0 ? { color: '#ffab00' } : undefined}
+                        >
+                          {contextClipStats.tokensDropped.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className={styles.breakdownEntry}>
+                        <span className={styles.breakdownLabel}>Tokenizer used</span>
+                        <span className={styles.breakdownSource}>{contextClipStats.tokenizerUsed}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Parameters */}
             {Object.keys(parameters).length > 0 && (
               <div className={styles.collapsible}>
@@ -432,6 +817,31 @@ export default function DryRunModal() {
                 )}
               </div>
             )}
+              </>
+            )}
+          </div>
+
+          <div className={styles.footer}>
+            <span className={styles.footerTotal}>
+              {messages.length} message{messages.length === 1 ? '' : 's'}
+            </span>
+            {tokenCount && (
+              <span className={styles.footerMax}>
+                {tokenCount.total_tokens.toLocaleString()} tokens
+              </span>
+            )}
+            <div className={styles.footerSpacer} />
+            <Button variant="ghost" size="sm" icon={<Code size={12} />} onClick={cycleRawView}>
+              {rawButtonLabel}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={copied ? <Check size={12} /> : <Copy size={12} />}
+              onClick={handleCopy}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
           </div>
     </ModalShell>
   )

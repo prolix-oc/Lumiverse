@@ -19,6 +19,12 @@ import type {
 /** Category marker character used in ST preset names */
 export const CATEGORY_MARKER = '\u2501' // ━
 
+/** NemoPresetExt wiki-style category pattern: ===Name=== */
+export const WIKI_CATEGORY_PATTERN = /^===(.+)===$/
+
+/** NemoPresetExt wiki-style subcategory pattern: <Name> */
+export const WIKI_SUBCATEGORY_PATTERN = /^<([^>]+)>$/
+
 /** Maps ST preset well-known identifiers → internal marker types */
 export const ST_IDENTIFIER_TO_MARKER: Record<string, string> = {
   chatHistory: 'chat_history',
@@ -103,6 +109,7 @@ export const DEFAULT_CUSTOM_BODY: CustomBody = {
 
 export const DEFAULT_PROMPT_BEHAVIOR: PromptBehavior = {
   continueNudge: '[Continue your last message without repeating its original content.]',
+  emptySendNudge: '[Write the next reply only as {{char}}.]',
   impersonationPrompt: '[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Don\'t write as {{char}} or system. Don\'t describe actions of {{char}}.]',
   groupNudge: '[Write the next reply only as {{char}}.]',
   newChatPrompt: '[Start a new Chat]',
@@ -140,7 +147,7 @@ export const SAMPLER_PARAMS: SamplerParam[] = [
   { key: 'temperature', label: 'Temperature', apiKey: 'temperature', type: 'float', min: 0, max: 2, step: 0.01, defaultHint: 1.0 },
   { key: 'topP', label: 'Top P', apiKey: 'top_p', type: 'float', min: 0, max: 1, step: 0.01, defaultHint: 0.95 },
   { key: 'minP', label: 'Min P', apiKey: 'min_p', type: 'float', min: 0, max: 1, step: 0.01, defaultHint: 0 },
-  { key: 'topK', label: 'Top K', apiKey: 'top_k', type: 'int', min: 0, max: 500, step: 1, defaultHint: 0 },
+  { key: 'topK', label: 'Top K', apiKey: 'top_k', type: 'int', min: 0, max: 500, step: 1, defaultHint: 0, includeToggle: true },
   { key: 'frequencyPenalty', label: 'Freq Penalty', apiKey: 'frequency_penalty', type: 'float', min: 0, max: 2, step: 0.01, defaultHint: 0, optIn: true },
   { key: 'presencePenalty', label: 'Pres Penalty', apiKey: 'presence_penalty', type: 'float', min: 0, max: 2, step: 0.01, defaultHint: 0, optIn: true },
   { key: 'repetitionPenalty', label: 'Rep Penalty', apiKey: 'repetition_penalty', type: 'float', min: 0, max: 2, step: 0.01, defaultHint: 0, optIn: true },
@@ -157,7 +164,7 @@ export const SAMPLER_PARAMS: SamplerParam[] = [
 // dropped silently before reaching the API, so surfacing them in the UI would
 // be misleading.
 export const PROVIDER_PARAMS: Record<string, Set<string>> = {
-  openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
+  openai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
   anthropic: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
   google: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
   google_vertex: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK']),
@@ -174,12 +181,13 @@ export const PROVIDER_PARAMS: Record<string, Set<string>> = {
   xai: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   electronhub: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
   fireworks: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty']),
+  infermatic: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
   pollinations: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   siliconflow: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
   custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
 }
 
-export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty'])
+export const DEFAULT_PROVIDER_PARAMS = new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty'])
 
 // ============================================================================
 // PROVIDER DISPLAY NAMES
@@ -204,6 +212,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   xai: 'xAI',
   electronhub: 'ElectronHub',
   fireworks: 'Fireworks',
+  infermatic: 'Infermatic',
   pollinations: 'Pollinations',
   siliconflow: 'SiliconFlow',
   custom: 'Custom',

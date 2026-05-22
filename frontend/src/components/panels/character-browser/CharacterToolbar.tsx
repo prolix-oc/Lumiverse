@@ -1,7 +1,6 @@
 import {
   Search,
   X,
-  Users,
   Star,
   LayoutGrid,
   RectangleVertical,
@@ -34,9 +33,11 @@ interface CharacterToolbarProps {
   batchMode: boolean
   onBatchModeChange: (enabled: boolean) => void
   onImportFile: (files: File[]) => void
+  onImportTagLibrary: (file: File) => void
   onImportUrl: () => void
   onCreateNew: () => void
   importLoading: boolean
+  tagLibraryImporting?: boolean
   onGroupChat?: () => void
 }
 
@@ -61,13 +62,24 @@ export default function CharacterToolbar({
   batchMode,
   onBatchModeChange,
   onImportFile,
+  onImportTagLibrary,
   onImportUrl,
   onCreateNew,
   importLoading,
+  tagLibraryImporting = false,
   onGroupChat,
 }: CharacterToolbarProps) {
   const [sortOpen, setSortOpen] = useState(false)
   const sortRef = useRef<HTMLDivElement>(null)
+
+  const isGroupsTab = filterTab === 'groups'
+  // shuffle is meaningless for group chats; the hook coerces it to 'recent'
+  // for fetching — mirror that visually so the active item highlights correctly.
+  const effectiveSortField: CharacterSortField =
+    isGroupsTab && sortField === 'shuffle' ? 'recent' : sortField
+  const visibleSortOptions = isGroupsTab
+    ? SORT_OPTIONS.filter((opt) => opt.value !== 'shuffle')
+    : SORT_OPTIONS
 
   useEffect(() => {
     if (!sortOpen) return
@@ -90,7 +102,7 @@ export default function CharacterToolbar({
           className={styles.searchInput}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search characters..."
+          placeholder={isGroupsTab ? 'Search group chats...' : 'Search characters...'}
         />
         {searchQuery && (
           <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')}>
@@ -99,9 +111,11 @@ export default function CharacterToolbar({
         )}
         <ImportMenu
           onImportFile={onImportFile}
+          onImportTagLibrary={onImportTagLibrary}
           onImportUrl={onImportUrl}
           onCreateNew={onCreateNew}
           importLoading={importLoading}
+          tagLibraryImporting={tagLibraryImporting}
         />
       </div>
 
@@ -110,19 +124,11 @@ export default function CharacterToolbar({
         <div className={styles.filterTabs}>
           <button
             type="button"
-            className={clsx(styles.tabBtn, filterTab === 'all' && styles.tabBtnActive)}
-            onClick={() => onFilterTabChange('all')}
-            title="All"
-          >
-            <Layers size={14} />
-          </button>
-          <button
-            type="button"
             className={clsx(styles.tabBtn, filterTab === 'characters' && styles.tabBtnActive)}
             onClick={() => onFilterTabChange('characters')}
             title="Characters"
           >
-            <Users size={14} />
+            <Layers size={14} />
           </button>
           <button
             type="button"
@@ -147,17 +153,17 @@ export default function CharacterToolbar({
             type="button"
             className={styles.iconBtn}
             onClick={() => setSortOpen(!sortOpen)}
-            title={`Sort by ${sortField}`}
+            title={`Sort by ${effectiveSortField}`}
           >
             <ArrowUpDown size={14} />
           </button>
           {sortOpen && (
             <div className={styles.sortDropdown}>
-              {SORT_OPTIONS.map((opt) => (
+              {visibleSortOptions.map((opt) => (
                 <button
                   key={opt.value}
                   type="button"
-                  className={clsx(styles.sortItem, sortField === opt.value && styles.sortItemActive)}
+                  className={clsx(styles.sortItem, effectiveSortField === opt.value && styles.sortItemActive)}
                   onClick={() => {
                     onSortFieldChange(opt.value)
                     setSortOpen(false)
@@ -168,7 +174,7 @@ export default function CharacterToolbar({
               ))}
             </div>
           )}
-          {sortField === 'shuffle' ? (
+          {effectiveSortField === 'shuffle' ? (
             <button
               type="button"
               className={styles.iconBtn}

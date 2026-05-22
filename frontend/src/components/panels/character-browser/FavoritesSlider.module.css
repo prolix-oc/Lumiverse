@@ -1,24 +1,28 @@
 .container {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .label {
-  font-size: 11px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   color: var(--lumiverse-text-dim);
-  padding: 0 4px;
+  padding: 0 6px;
 }
 
 .slider {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 2px 0 6px;
+  padding: 2px 6px 8px;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
   scrollbar-width: thin;
   scrollbar-color: var(--lumiverse-border) transparent;
 }
@@ -37,6 +41,8 @@
 }
 
 .slideItem {
-  flex-shrink: 0;
-  width: 160px;
+  flex: 0 0 auto;
+  width: auto;
+  max-width: min(240px, calc(100vw - 88px));
+  scroll-snap-align: start;
 }

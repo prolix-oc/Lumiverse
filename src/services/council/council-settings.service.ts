@@ -1,16 +1,35 @@
-import type { CouncilSettings, CouncilToolDefinition } from "lumiverse-spindle-types";
+import type { CouncilSettings } from "lumiverse-spindle-types";
 import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS, SIDECAR_DEFAULTS } from "lumiverse-spindle-types";
 import * as settingsSvc from "../settings.service";
-import { BUILTIN_COUNCIL_TOOLS, BUILTIN_TOOLS_MAP } from "./builtin-tools";
+import { BUILTIN_COUNCIL_TOOLS } from "./builtin-tools";
 import { getDLCTools } from "./dlc-tools";
 import { getMcpToolsAsCouncilTools } from "./mcp-tools";
+import type { RuntimeCouncilToolDefinition } from "./tool-runtime";
 import { toolRegistry } from "../../spindle/tool-registry";
 import * as managerSvc from "../../spindle/manager.service";
+import { getWebSearchSettings } from "../web-search-settings.service";
 
 const SETTINGS_KEY = "council_settings";
 const MIN_COUNCIL_TOOL_TIMEOUT_MS = 15_000;
 
-function normalizeCouncilSettings(settings: CouncilSettings): CouncilSettings {
+async function isToolGateEnabled(userId: string, tool: RuntimeCouncilToolDefinition): Promise<boolean> {
+  if (!tool.gatedBy) return true;
+
+  switch (tool.gatedBy) {
+    case "webSearch": {
+      const cfg = await getWebSearchSettings(userId);
+      return cfg.enabled && !!cfg.apiUrl;
+    }
+    case "imageGeneration": {
+      const imageSettings = settingsSvc.getSetting(userId, "imageGeneration")?.value as { enabled?: boolean } | undefined;
+      return imageSettings?.enabled === true;
+    }
+    default:
+      return true;
+  }
+}
+
+export function normalizeCouncilSettings(settings: CouncilSettings): CouncilSettings {
   return {
     ...settings,
     toolsSettings: {
@@ -68,7 +87,7 @@ export function putCouncilSettings(userId: string, partial: Partial<CouncilSetti
  * Return the full list of available council tools (extension + DLC + built-in).
  * Built-in tools take priority over DLC and extension tools with the same name.
  */
-export async function getAvailableTools(userId: string): Promise<CouncilToolDefinition[]> {
+export async function getAvailableTools(userId: string): Promise<RuntimeCouncilToolDefinition[]> {
   const dlc = getDLCTools(userId);
 
   // Build extension ID → display name lookup
@@ -80,13 +99,15 @@ export async function getAvailableTools(userId: string): Promise<CouncilToolDefi
   } catch { /* spindle DB may not be ready */ }
 
   const extensionTools = toolRegistry.getCouncilTools().map(
-    (reg): CouncilToolDefinition => ({
+    (reg): RuntimeCouncilToolDefinition => ({
       name: toolRegistry.getQualifiedName(reg),
       displayName: reg.display_name,
       description: reg.description,
       category: "extension",
+      execution: "extension",
       prompt: reg.description,
       inputSchema: reg.parameters,
+      argsSchema: reg.parameters,
       storeInDeliberation: true,
       extensionName: extNameMap.get(reg.extension_id) || reg.extension_id,
     })
@@ -94,7 +115,7 @@ export async function getAvailableTools(userId: string): Promise<CouncilToolDefi
   // MCP tools from connected servers
   const mcpTools = getMcpToolsAsCouncilTools(userId);
 
-  const merged = new Map<string, CouncilToolDefinition>();
+  const merged = new Map<string, RuntimeCouncilToolDefinition>();
 
   // MCP tools first (lowest priority)
   for (const tool of mcpTools) {
@@ -113,5 +134,12 @@ export async function getAvailableTools(userId: string): Promise<CouncilToolDefi
     merged.set(tool.name, tool);
   }
 
-  return Array.from(merged.values());
+  const gated: RuntimeCouncilToolDefinition[] = [];
+  for (const tool of merged.values()) {
+    if (await isToolGateEnabled(userId, tool)) {
+      gated.push(tool);
+    }
+  }
+
+  return gated;
 }

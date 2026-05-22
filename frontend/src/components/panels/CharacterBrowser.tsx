@@ -1,6 +1,9 @@
 import { useState, useCallback, useRef } from 'react'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
+import { charactersApi } from '@/api/characters'
 import { worldBooksApi } from '@/api/world-books'
+import { toast } from '@/lib/toast'
+import { formatTagLibraryImportToastMessage } from '@/lib/tagLibraryImportToast'
 import { useStore } from '@/store'
 import CharacterToolbar from './character-browser/CharacterToolbar'
 import TagFilter from './character-browser/TagFilter'
@@ -19,6 +22,7 @@ import ExpressionsImportModal from '@/components/modals/ExpressionsImportModal'
 import AlternateFieldsSummaryModal from '@/components/modals/AlternateFieldsSummaryModal'
 import Pagination from '@/components/shared/Pagination'
 import type { CharacterViewMode } from '@/types/store'
+import { getEmbeddedCharacterBookEntryCount } from '@/utils/character-world-books'
 import styles from './CharacterBrowser.module.css'
 
 function CharacterSkeletons({ viewMode }: { viewMode: CharacterViewMode }) {
@@ -76,6 +80,7 @@ export default function CharacterBrowser() {
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [tagLibraryImporting, setTagLibraryImporting] = useState(false)
   const dragCounterRef = useRef(0)
 
   // Drag and drop handlers
@@ -118,6 +123,22 @@ export default function CharacterBrowser() {
     setConfirmDelete(true)
   }, [])
 
+  const handleImportTagLibrary = useCallback(async (file: File) => {
+    setTagLibraryImporting(true)
+    try {
+      const result = await charactersApi.importTagLibrary(file)
+      await browser.reloadAllCharacters()
+      toast.success(formatTagLibraryImportToastMessage(result), {
+        title: 'TagLibrary import complete',
+        duration: 7000,
+      })
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || 'Failed to import TagLibrary backup')
+    } finally {
+      setTagLibraryImporting(false)
+    }
+  }, [browser])
+
   const handleConfirmDelete = useCallback(() => {
     browser.batchDelete()
     setConfirmDelete(false)
@@ -145,9 +166,11 @@ export default function CharacterBrowser() {
         batchMode={browser.batchMode}
         onBatchModeChange={browser.setBatchMode}
         onImportFile={browser.importFiles}
+        onImportTagLibrary={handleImportTagLibrary}
         onImportUrl={() => setImportUrlOpen(true)}
         onCreateNew={handleCreateNew}
         importLoading={browser.importLoading}
+        tagLibraryImporting={tagLibraryImporting}
         onGroupChat={() => openModal('groupChatCreator')}
       />
 
@@ -296,7 +319,7 @@ export default function CharacterBrowser() {
         title="Import Embedded Lorebook"
         message={
           browser.pendingLorebookImport
-            ? `"${browser.pendingLorebookImport.name}" contains an embedded lorebook with ${browser.pendingLorebookImport.extensions?.character_book?.entries?.length} entries. Import it as a World Book?`
+            ? `"${browser.pendingLorebookImport.name}" contains an embedded lorebook with ${getEmbeddedCharacterBookEntryCount(browser.pendingLorebookImport.extensions)} entries. Import it as a World Book?`
             : ''
         }
         confirmText="Import"

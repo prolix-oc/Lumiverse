@@ -86,6 +86,7 @@ const EXCLUDED_PATHS = [
   '/shared/ModalShell',
   '/shared/ErrorBoundary',
   // Settings/operator — could expose admin controls
+  '/settings/AccountSettings',
   '/settings/OperatorPanel',
   '/settings/UserManagement',
 ]

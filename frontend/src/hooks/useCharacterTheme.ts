@@ -29,7 +29,10 @@ const NAME_VAR_KEYS = ['--char-name-dark', '--char-name-light']
 
 export function useCharacterTheme() {
   const characterAware = useStore((s) => (s.theme as ThemeConfig | null)?.characterAware === true)
-  const hasExtensionOverrides = useStore((s) => Object.keys(s.extensionThemeOverrides).length > 0)
+  const setCharacterThemeOverlay = useStore((s) => s.setCharacterThemeOverlay)
+  const hasExtensionOverrides = useStore((s) =>
+    Object.keys(s.extensionThemeOverrides).some((id) => !s.mutedExtensionThemes[id])
+  )
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const characters = useStore((s) => s.characters)
@@ -47,6 +50,13 @@ export function useCharacterTheme() {
     : null
   const appliedAvatarKeyRef = useRef<string | null>(null)
   const nameAppliedAvatarKeyRef = useRef<string | null>(null)
+  // Monotonic request tokens. Every effect run bumps its counter; only the
+  // latest run is allowed to write to the palette cache or to the store.
+  // This protects against a slow extraction finishing after the user has
+  // already switched characters (which would otherwise stamp the previous
+  // character's palette onto the new one).
+  const overlayRequestIdRef = useRef(0)
+  const nameRequestIdRef = useRef(0)
 
   // ── 1. Character name colors (opt-in via characterAware) ──
   useEffect(() => {
@@ -63,17 +73,20 @@ export function useCharacterTheme() {
 
     if (nameAppliedAvatarKeyRef.current === avatarCacheKey) return
 
-    let cancelled = false
+    const myRequestId = ++nameRequestIdRef.current
+    const isStale = () => myRequestId !== nameRequestIdRef.current
 
     const apply = async () => {
       try {
         let palette = paletteCache.get(avatarCacheKey)
         if (!palette) {
-          palette = await extractPalette(avatarUrl)
-          paletteCache.set(avatarCacheKey, palette)
+          const extracted = await extractPalette(avatarUrl)
+          if (isStale()) return
+          paletteCache.set(avatarCacheKey, extracted)
+          palette = extracted
         }
 
-        if (cancelled) return
+        if (isStale()) return
 
         const vars = deriveCharacterNameVars(palette)
         for (const [key, value] of Object.entries(vars)) {
@@ -81,37 +94,49 @@ export function useCharacterTheme() {
         }
         nameAppliedAvatarKeyRef.current = avatarCacheKey
       } catch (err) {
+        if (isStale()) return
         console.warn('[useCharacterTheme] Name color extraction failed:', err)
       }
     }
 
     apply()
-    return () => { cancelled = true }
+    return () => { /* request id bump on next run supersedes this one */ }
   }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey])
 
   // ── 2. Character-aware theme overlay (opt-in) ──
   // Suppressed when extension theme overrides are active — extensions take full
   // control of the palette, so character-derived accent/baseColors must yield.
   useEffect(() => {
+    // Bump the request id for any state change. Synchronous early-return
+    // branches still need to invalidate in-flight extractions so they don't
+    // overwrite the freshly-cleared overlay.
+    const myRequestId = ++overlayRequestIdRef.current
+    const isStale = () => myRequestId !== overlayRequestIdRef.current
+
     if (!characterAware || hasExtensionOverrides) {
+      setCharacterThemeOverlay(null)
       appliedAvatarKeyRef.current = null
       return
     }
 
-    if (!activeCharacterId || !avatarUrl || !avatarCacheKey) return
+    if (!activeCharacterId || !avatarUrl || !avatarCacheKey) {
+      setCharacterThemeOverlay(null)
+      appliedAvatarKeyRef.current = null
+      return
+    }
     if (appliedAvatarKeyRef.current === avatarCacheKey) return
-
-    let cancelled = false
 
     const apply = async () => {
       try {
         let palette = paletteCache.get(avatarCacheKey)
         if (!palette) {
-          palette = await extractPalette(avatarUrl)
-          paletteCache.set(avatarCacheKey, palette)
+          const extracted = await extractPalette(avatarUrl)
+          if (isStale()) return
+          paletteCache.set(avatarCacheKey, extracted)
+          palette = extracted
         }
 
-        if (cancelled) return
+        if (isStale()) return
 
         const overlay = deriveCharacterOverlay(palette)
 
@@ -119,26 +144,19 @@ export function useCharacterTheme() {
         if (!current?.characterAware) return
 
         appliedAvatarKeyRef.current = avatarCacheKey
-
-        // Write mode-appropriate overlay colors: dark-tuned baseColors for
-        // dark mode, light-tuned baseColorsLight for light mode.
-        const existingByMode = current.baseColorsByMode ?? {}
-        useStore.getState().setTheme({
-          ...current,
-          accent: overlay.accent,
-          baseColorsByMode: {
-            dark: { ...existingByMode.dark, ...overlay.baseColors },
-            light: { ...existingByMode.light, ...overlay.baseColorsLight },
-          },
-        })
+        setCharacterThemeOverlay(overlay)
       } catch (err) {
+        // Only clear the overlay on a fresh failure — a stale failure must
+        // not stomp on whatever the current request has (or will) apply.
+        if (isStale()) return
         console.warn('[useCharacterTheme] Theme overlay failed:', err)
+        setCharacterThemeOverlay(null)
+        appliedAvatarKeyRef.current = null
       }
     }
 
     apply()
-    return () => { cancelled = true }
-  }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey])
+  }, [characterAware, hasExtensionOverrides, activeCharacterId, avatarUrl, avatarCacheKey, setCharacterThemeOverlay])
 
   // ── 3. React to CHARACTER_AVATAR_CHANGED — force resample ──
   useEffect(() => {
@@ -153,9 +171,10 @@ export function useCharacterTheme() {
       // Reset applied refs to force both effects to re-run
       nameAppliedAvatarKeyRef.current = null
       appliedAvatarKeyRef.current = null
+      setCharacterThemeOverlay(null)
 
       // Trigger store update so the avatar URL deps change and effects re-fire
       useStore.getState().setActiveChatAvatarId(payload.imageId)
     })
-  }, [activeCharacterId, activeCharacter?.image_id])
+  }, [activeCharacterId, activeCharacter?.image_id, setCharacterThemeOverlay])
 }

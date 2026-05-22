@@ -2,7 +2,7 @@
 
 !!! warning "Permission required: `interceptor`"
 
-Interceptors run after prompt assembly but before the messages reach the LLM provider. They can modify, add, or remove messages — and optionally inject generation parameters.
+Interceptors run after prompt assembly but before the messages reach the LLM provider. They can modify, add, or remove messages, optionally inject generation parameters, and mark injected messages as first-class Prompt Breakdown entries.
 
 ```ts
 spindle.registerInterceptor(async (messages, context) => {
@@ -49,6 +49,12 @@ Return an `InterceptorResultDTO` to modify both messages and generation paramete
 interface InterceptorResultDTO {
   messages: LlmMessageDTO[]
   parameters?: Record<string, unknown>
+  breakdown?: InterceptorBreakdownEntryDTO[]
+}
+
+interface InterceptorBreakdownEntryDTO {
+  messageIndex: number
+  name?: string
 }
 ```
 
@@ -71,6 +77,39 @@ spindle.registerInterceptor(async (messages, context) => {
 
 Without the `generation_parameters` permission, returned parameters are silently stripped. The extension still works as a message-only interceptor — just the parameters are ignored.
 
+### Prompt Breakdown entries
+
+If your interceptor injects one or more messages that users should be able to inspect in Prompt Breakdown, return them in `breakdown`.
+
+`messageIndex` points at the message inside the interceptor's returned `messages` array. The host resolves the message role/content from that index and automatically stamps the entry with the extension's manifest-based attribution (`extensionId`, `extensionName`).
+
+```ts
+spindle.registerInterceptor(async (messages) => {
+  const injected = {
+    role: 'system' as const,
+    content: '[Lore Recall] Relevant memory snippets...'
+  }
+
+  return {
+    messages: [injected, ...messages],
+    breakdown: [
+      {
+        messageIndex: 0,
+        name: 'Retrieved Lore',
+      },
+    ],
+  }
+})
+```
+
+Use `breakdown` when you want the injected content to appear in:
+
+- `spindle.generate.dryRun()` results
+- the live generation breakdown payload sent at generation start
+- saved `/generate/breakdown/:messageId` snapshots after the message is stored
+
+If you omit `breakdown`, the injected message still reaches the model normally — it just will not be represented as its own breakdown block.
+
 ### Parameter merge order
 
 Interceptor parameters are merged between the preset parameters and the user's request-level overrides:
@@ -88,10 +127,19 @@ When multiple interceptors inject parameters, they are merged in priority order 
 ```ts
 interface LlmMessageDTO {
   role: "system" | "user" | "assistant"
-  content: string
+  content: string | LlmMessagePartDTO[]
   name?: string
 }
+
+type LlmMessagePartDTO =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mime_type: string }
+  | { type: "audio"; data: string; mime_type: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
 ```
+
+`content` accepts a plain string or an array of typed parts. Tool calls and tool results are first-class parts — see [Generation › Tool calling](generation.md#tool-calling).
 
 ## Context Object
 
@@ -107,5 +155,41 @@ The `context` parameter is an object containing metadata about the current gener
 
 The context is read-only for informational purposes. To influence the generation, return modified messages or parameters.
 
-!!! note "Timeout"
-    Interceptors that take longer than 10 seconds are skipped, and the previous messages are passed through.
+## Timeout
+
+Interceptors run inside a wall-clock budget. When the budget is exceeded, the interceptor is skipped and the pre-interceptor messages are passed through unchanged — the generation still proceeds.
+
+The budget is resolved **per run**, immediately before each invocation, in this order:
+
+1. **`interceptorTimeoutMs` in your `spindle.json`** — a per-extension override shipped with the manifest
+2. **`spindleSettings.interceptorTimeoutMs`** — the user's setting (adjustable in the Spindle panel)
+3. **Default `10000` ms** — applied when neither of the above is set
+
+All values are clamped to **`[1000, 300000]` ms** (1 second to 5 minutes).
+
+Because resolution is per-run, users can change the Spindle timeout in the Spindle panel and the new value takes effect on the next generation — your extension does not need to re-register.
+
+### Picking a timeout
+
+The default 10 s covers simple prompt shaping. If your interceptor does real pre-generation work — multi-step retrieval, graph traversal, controller-driven context assembly, or external API calls — bump the manifest value to match your expected worst-case latency:
+
+```json
+{
+  "identifier": "my_retrieval_extension",
+  "permissions": ["interceptor"],
+  "interceptorTimeoutMs": 45000
+}
+```
+
+!!! warning "Users notice the wait"
+    The interceptor runs **before** the LLM call, so every millisecond of interceptor work is a millisecond of visible silence before the first streamed token. Ship the tightest timeout that still accommodates your worst case, not the largest value you can get away with.
+
+### What happens on timeout
+
+When your handler exceeds the budget, the host:
+
+1. Rejects the pending RPC with an `Interceptor timeout from <your_id> (Ns)` error
+2. Logs `[Spindle] Interceptor error from <your_id>:` with the rejection
+3. **Passes the last-known message list through** to the next interceptor (or to the LLM if you were last)
+
+This means a partial failure in your extension will never block the user's generation — it just means your modifications didn't land. Design your interceptor so that a timeout is a graceful no-op rather than a corrupted prompt.

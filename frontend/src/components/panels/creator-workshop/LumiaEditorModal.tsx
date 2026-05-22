@@ -9,9 +9,10 @@ import type { LumiaItem, CreateLumiaItemInput } from '@/types/api'
 import styles from './LumiaEditorModal.module.css'
 
 const GENDER_OPTIONS = [
-  { value: '0', label: 'Neutral' },
-  { value: '1', label: 'Feminine' },
-  { value: '2', label: 'Masculine' },
+  { value: '0', label: 'Feminine' },
+  { value: '1', label: 'Masculine' },
+  { value: '2', label: 'Neutral' },
+  { value: '3', label: 'Any' },
 ]
 
 export default function LumiaEditorModal() {
@@ -25,7 +26,7 @@ export default function LumiaEditorModal() {
   const [name, setName] = useState(editingItem?.name || '')
   const [avatarUrl, setAvatarUrl] = useState(editingItem?.avatar_url || '')
   const [authorName, setAuthorName] = useState(editingItem?.author_name || '')
-  const [genderIdentity, setGenderIdentity] = useState(String(editingItem?.gender_identity ?? 0))
+  const [genderIdentity, setGenderIdentity] = useState(String(editingItem?.gender_identity ?? 3))
   const [definition, setDefinition] = useState(editingItem?.definition || '')
   const [personality, setPersonality] = useState(editingItem?.personality || '')
   const [behavior, setBehavior] = useState(editingItem?.behavior || '')
@@ -36,7 +37,7 @@ export default function LumiaEditorModal() {
     name: editingItem?.name || '',
     avatarUrl: editingItem?.avatar_url || '',
     authorName: editingItem?.author_name || '',
-    genderIdentity: String(editingItem?.gender_identity ?? 0),
+    genderIdentity: String(editingItem?.gender_identity ?? 3),
     definition: editingItem?.definition || '',
     personality: editingItem?.personality || '',
     behavior: editingItem?.behavior || '',
@@ -79,7 +80,7 @@ export default function LumiaEditorModal() {
         name: name.trim(),
         avatar_url: avatarUrl.trim() || undefined,
         author_name: authorName.trim() || undefined,
-        gender_identity: Number(genderIdentity) as 0 | 1 | 2,
+        gender_identity: Number(genderIdentity) as 0 | 1 | 2 | 3,
         definition: definition.trim() || undefined,
         personality: personality.trim() || undefined,
         behavior: behavior.trim() || undefined,

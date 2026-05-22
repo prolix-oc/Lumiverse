@@ -48,6 +48,10 @@ export const packsApi = {
     return get<Record<string, any>>(`/packs/${id}/export`)
   },
 
+  repairOldLumiverseGenderMapping(id: string) {
+    return post<PackWithItems>(`/packs/${id}/repair-legacy-gender-mapping`, {})
+  },
+
   // Lucid Cards
   lucidCardsList() {
     return get<any>('/packs/lucid-cards')

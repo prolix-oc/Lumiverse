@@ -15,6 +15,7 @@
  */
 
 import { getDb } from "../../db/connection";
+import { stripNonProseTags } from "../../utils/content-sanitizer";
 import type {
   MemoryConsolidation,
   MemoryConsolidationRow,
@@ -99,6 +100,13 @@ export async function maybeConsolidate(
   }) => Promise<{ content: string }>,
   sidecarConnectionId?: string,
   sidecarTimeoutMs?: number,
+  /** Sampling parameters forwarded to the underlying LLM call. Caller supplies
+   *  the user-configured sidecar temperature/top_p; max_tokens is set per call
+   *  from config.maxTokensPerSummary. */
+  samplingParameters?: Record<string, unknown>,
+  /** Additional scaffold tag names to strip from raw chunk content before
+   *  feeding it to the consolidation LLM or extractive scorer. */
+  extraScaffoldTags?: string[],
 ): Promise<void> {
   if (!config.enabled) return;
 
@@ -149,7 +157,7 @@ export async function maybeConsolidate(
     let result: { summary: string; title: string | null } | null;
     try {
       result = await generateConsolidationSummary(
-        batch, boundGenFn, sidecarConnectionId, config.maxTokensPerSummary,
+        batch, boundGenFn, sidecarConnectionId, config.maxTokensPerSummary, samplingParameters, extraScaffoldTags,
       );
     } catch (err: any) {
       if (err?.name === "AbortError" || ac?.signal.aborted) {
@@ -166,11 +174,11 @@ export async function maybeConsolidate(
       summary = result.summary;
       title = result.title;
     } else {
-      summary = extractiveConsolidation(batch);
+      summary = extractiveConsolidation(batch, extraScaffoldTags);
       title = inferTitle(batch);
     }
   } else {
-    summary = extractiveConsolidation(batch);
+    summary = extractiveConsolidation(batch, extraScaffoldTags);
     title = inferTitle(batch);
   }
 
@@ -228,7 +236,7 @@ export async function maybeConsolidate(
   );
 
   // Check for arc-level consolidation
-  await maybeConsolidateArcs(userId, chatId, config, generateRawFn, sidecarConnectionId, sidecarTimeoutMs);
+  await maybeConsolidateArcs(userId, chatId, config, generateRawFn, sidecarConnectionId, sidecarTimeoutMs, samplingParameters, extraScaffoldTags);
 }
 
 /**
@@ -247,6 +255,8 @@ async function maybeConsolidateArcs(
   }) => Promise<{ content: string }>,
   sidecarConnectionId?: string,
   sidecarTimeoutMs?: number,
+  samplingParameters?: Record<string, unknown>,
+  extraScaffoldTags?: string[],
 ): Promise<void> {
   const db = getDb();
 
@@ -299,7 +309,7 @@ async function maybeConsolidateArcs(
     let result: { summary: string; title: string | null } | null;
     try {
       result = await generateArcSummary(
-        combined, boundGenFn, sidecarConnectionId, config.maxTokensPerSummary,
+        combined, boundGenFn, sidecarConnectionId, config.maxTokensPerSummary, samplingParameters,
       );
     } catch (err: any) {
       if (err?.name === "AbortError" || ac?.signal.aborted) {
@@ -370,11 +380,11 @@ async function maybeConsolidateArcs(
  * Selects the highest-salience sentences from source chunks,
  * preserving chronological order with diversity across chunks.
  */
-function extractiveConsolidation(chunks: any[]): string {
+function extractiveConsolidation(chunks: any[], extraScaffoldTags?: string[]): string {
   const sentences: Array<{ text: string; salience: number; chunkIdx: number; sentIdx: number }> = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    let content = chunks[i].content || "";
+    let content = stripNonProseTags(chunks[i].content || "", { extraScaffoldTags });
     // Strip chunk format prefix: [CHARACTER | Name]: or [USER | Name]:
     content = content.replace(/^\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/gi, "").trim();
     const chunkSalience = chunks[i].salience_score ?? 0.3;
@@ -434,47 +444,57 @@ function inferTitle(chunks: any[]): string | null {
 
 // ─── Generative Consolidation (Sidecar) ────────────────────────
 
-const CONSOLIDATION_PROMPT = `Compress these roleplay passages into a dense narrative summary for a memory system. This summary replaces the original text for long-term recall.
+const CONSOLIDATION_PROMPT = `Compress these roleplay passages into a factual long-term memory summary.
 
-RULES:
-- Past tense, third person
-- Preserve: character names, key actions, decisions, emotional shifts, locations visited, items gained/lost, promises made, status changes
-- Omit: atmospheric filler, redundant descriptions, routine greetings, scenery that doesn't matter later
-- Every sentence must carry a plot fact, character action, or relationship change
-- Do NOT add interpretation, meta-commentary, or analysis
+RULES
+- Use past tense and third person.
+- Use names instead of vague pronouns whenever possible.
+- Preserve only durable information: actions taken, decisions made, discoveries, promises, relationship changes, status changes, location moves, and important gains/losses.
+- Omit atmospheric filler, repeated banter, scenic description, and details that do not matter later.
+- Every sentence must contain a concrete event, state change, or decision supported by the source text.
+- Do NOT add interpretation, motives, symbolism, theme analysis, or likely implications.
+- Do NOT invent links between events that are not stated.
+- Keep chronology clear.
 
 <passages>
 {{CONTENT}}
 </passages>
 
-Respond in JSON only:
-{"title": "<3-6 word title capturing the key event or scene>", "summary": "<factual narrative summary>"}`;
+Return exactly one JSON object with this shape and no extra text:
+{"title":"<3-6 word concrete scene title>","summary":"<dense factual summary>"}`;
 
 async function generateConsolidationSummary(
   chunks: any[],
   generateRawFn: (opts: any) => Promise<{ content: string }>,
   connectionId: string,
   maxTokens: number,
+  samplingParameters?: Record<string, unknown>,
+  extraScaffoldTags?: string[],
 ): Promise<{ summary: string; title: string | null }> {
   try {
-    const content = chunks.map((c: any) => c.content || "").join("\n\n---\n\n");
+    const content = chunks
+      .map((c: any) => stripNonProseTags(c.content || "", { extraScaffoldTags }))
+      .join("\n\n---\n\n");
     const prompt = CONSOLIDATION_PROMPT
       .replace("{{CONTENT}}", content)
       .replace("{{MAX_TOKENS}}", String(maxTokens));
 
+    // Caller-supplied temperature/top_p are honored; max_tokens is always set
+    // here from config.maxTokensPerSummary regardless of what the caller passed.
+    const userParams = samplingParameters ?? { temperature: 0.1 };
     const response = await generateRawFn({
       connectionId,
       messages: [
-        { role: "system", content: "You are a narrative summarizer. Output valid JSON only." },
+        { role: "system", content: "You are a factual memory summarizer. Output one valid JSON object only. Omit anything not directly supported by the source passages." },
         { role: "user", content: prompt },
       ],
-      parameters: { temperature: 0.3, max_tokens: maxTokens + 100 },
+      parameters: { ...userParams, max_tokens: maxTokens + 100 },
     });
 
     const json = extractJson(response.content);
     if (json) {
       return {
-        summary: json.summary || extractiveConsolidation(chunks),
+        summary: json.summary || extractiveConsolidation(chunks, extraScaffoldTags),
         title: json.title || null,
       };
     }
@@ -482,43 +502,46 @@ async function generateConsolidationSummary(
     console.warn("[memory-cortex] Generative consolidation failed, using extractive:", err);
   }
 
-  return { summary: extractiveConsolidation(chunks), title: inferTitle(chunks) };
+  return { summary: extractiveConsolidation(chunks, extraScaffoldTags), title: inferTitle(chunks) };
 }
 
-const ARC_PROMPT = `These are sequential scene summaries from a long roleplay. Compress them into ONE arc-level summary that tracks what changed across the entire sequence.
+const ARC_PROMPT = `These are sequential scene summaries from a long roleplay. Compress them into ONE arc-level summary that tracks what changed across the sequence.
 
-RULES:
-- Past tense, third person
-- Track: who did what, how relationships shifted, what was gained/lost/discovered, where the story moved
-- Focus on CHANGE: what was different at the end vs the beginning of this arc
-- Omit details that don't affect anything later
-- Dense and factual — this single summary replaces all the individual scene summaries
+RULES
+- Use past tense and third person.
+- Focus on durable change across the arc: decisions, discoveries, relationship shifts, status changes, movement, gains/losses, and turning points.
+- Preserve chronology and causal clarity when the source supports it.
+- Omit scenic filler and details that do not matter later.
+- Do NOT add interpretation, motives, themes, or unsupported links.
+- Dense and factual: this summary replaces the individual scene summaries.
 
 <summaries>
 {{CONTENT}}
 </summaries>
 
-Respond in JSON only:
-{"title": "<3-8 word arc title>", "summary": "<arc-level summary tracking key changes>"}`;
+Return exactly one JSON object with this shape and no extra text:
+{"title":"<3-8 word concrete arc title>","summary":"<arc-level factual summary>"}`;
 
 async function generateArcSummary(
   combinedSummaries: string,
   generateRawFn: (opts: any) => Promise<{ content: string }>,
   connectionId: string,
   maxTokens: number,
+  samplingParameters?: Record<string, unknown>,
 ): Promise<{ summary: string; title: string | null }> {
   try {
     const prompt = ARC_PROMPT
       .replace("{{CONTENT}}", combinedSummaries)
       .replace("{{MAX_TOKENS}}", String(maxTokens));
 
+    const userParams = samplingParameters ?? { temperature: 0.1 };
     const response = await generateRawFn({
       connectionId,
       messages: [
-        { role: "system", content: "You are a narrative summarizer. Output valid JSON only." },
+        { role: "system", content: "You are a factual memory summarizer. Output one valid JSON object only. Omit anything not directly supported by the supplied summaries." },
         { role: "user", content: prompt },
       ],
-      parameters: { temperature: 0.3, max_tokens: maxTokens + 100 },
+      parameters: { ...userParams, max_tokens: maxTokens + 100 },
     });
 
     const json = extractJson(response.content);

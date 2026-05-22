@@ -7,6 +7,7 @@
 
 import { getDb } from "../../db/connection";
 import { extractMentionExcerpt } from "./entity-extractor";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 import type {
   MemoryEntity,
   MemoryEntityRow,
@@ -56,6 +57,7 @@ function rowToEntity(row: MemoryEntityRow): MemoryEntity {
     lastMentionTimestamp: row.last_mention_timestamp ?? null,
     recentMentionCount: row.recent_mention_count ?? 0,
     confidence: (row.confidence ?? "confirmed") as EntityConfidence,
+    userEditedAt: row.user_edited_at ?? null,
   };
 }
 
@@ -102,6 +104,7 @@ function rowToRelation(row: MemoryRelationRow): MemoryRelation {
     labelAliases: safeJsonArray(row.label_aliases),
     canonicalEdgeId: row.canonical_edge_id ?? null,
     mergedInto: row.merged_into ?? null,
+    userEditedAt: row.user_edited_at ?? null,
   };
 }
 
@@ -113,6 +116,139 @@ function safeJsonArray(raw: string | null | undefined): string[] {
 function safeJsonObject(raw: string | null | undefined): Record<string, any> {
   if (!raw) return {};
   try { return JSON.parse(raw); } catch { return {}; }
+}
+
+interface EntityTypeEvidenceState {
+  scores: Partial<Record<EntityType, number>>;
+  counts: Partial<Record<EntityType, number>>;
+  lastObservedType?: EntityType;
+  lastObservedAt?: number;
+  lastResolvedType?: EntityType;
+  lastResolvedAt?: number;
+}
+
+interface EntityMetadataState extends Record<string, any> {
+  typeEvidence?: EntityTypeEvidenceState;
+}
+
+const ADAPTIVE_ENTITY_TYPES = new Set<EntityType>(["concept", "faction", "event"]);
+const CROSS_CHUNK_PROMOTION_TARGETS: EntityType[] = ["faction", "event"];
+
+function clampTypeEvidenceWeight(value: number): number {
+  if (!Number.isFinite(value)) return 0.35;
+  return Math.max(0.2, Math.min(1, value));
+}
+
+function normalizeTypeEvidenceState(raw: unknown): EntityTypeEvidenceState {
+  const record = raw && typeof raw === "object" ? raw as Record<string, any> : {};
+  const scores: Partial<Record<EntityType, number>> = {};
+  const counts: Partial<Record<EntityType, number>> = {};
+
+  for (const type of ["character", "location", "item", "faction", "concept", "event"] as EntityType[]) {
+    const rawScore = Number(record.scores?.[type]);
+    const rawCount = Number(record.counts?.[type]);
+    if (Number.isFinite(rawScore) && rawScore > 0) scores[type] = rawScore;
+    if (Number.isFinite(rawCount) && rawCount > 0) counts[type] = Math.floor(rawCount);
+  }
+
+  return {
+    scores,
+    counts,
+    lastObservedType: record.lastObservedType,
+    lastObservedAt: Number.isFinite(Number(record.lastObservedAt)) ? Number(record.lastObservedAt) : undefined,
+    lastResolvedType: record.lastResolvedType,
+    lastResolvedAt: Number.isFinite(Number(record.lastResolvedAt)) ? Number(record.lastResolvedAt) : undefined,
+  };
+}
+
+function normalizeEntityMetadata(raw: unknown): EntityMetadataState {
+  const record = raw && typeof raw === "object" ? { ...(raw as Record<string, any>) } : {};
+  record.typeEvidence = normalizeTypeEvidenceState(record.typeEvidence);
+  return record as EntityMetadataState;
+}
+
+function accumulateTypeEvidence(
+  metadata: EntityMetadataState,
+  extracted: ExtractedEntity,
+  observedAt: number,
+): EntityMetadataState {
+  const next = normalizeEntityMetadata(metadata);
+  const evidence = next.typeEvidence ?? normalizeTypeEvidenceState(null);
+  const weight = clampTypeEvidenceWeight(extracted.confidence);
+  evidence.scores[extracted.type] = (evidence.scores[extracted.type] ?? 0) + weight;
+  evidence.counts[extracted.type] = (evidence.counts[extracted.type] ?? 0) + 1;
+  evidence.lastObservedType = extracted.type;
+  evidence.lastObservedAt = observedAt;
+  next.typeEvidence = evidence;
+  return next;
+}
+
+function resolveEntityTypeFromEvidence(
+  currentType: EntityType,
+  metadata: EntityMetadataState,
+  mentionCount: number,
+): EntityType {
+  if (!ADAPTIVE_ENTITY_TYPES.has(currentType)) return currentType;
+
+  const evidence = normalizeTypeEvidenceState(metadata.typeEvidence);
+  const conceptScore = evidence.scores.concept ?? 0;
+  const conceptCount = evidence.counts.concept ?? 0;
+
+  let bestTarget: { type: EntityType; score: number; count: number } | null = null;
+  for (const type of CROSS_CHUNK_PROMOTION_TARGETS) {
+    const score = evidence.scores[type] ?? 0;
+    const count = evidence.counts[type] ?? 0;
+    if (!bestTarget || score > bestTarget.score || (score === bestTarget.score && count > bestTarget.count)) {
+      bestTarget = { type, score, count };
+    }
+  }
+
+  if (
+    bestTarget
+    && bestTarget.count >= 2
+    && bestTarget.score >= 1.3
+    && bestTarget.score >= conceptScore + 0.35
+  ) {
+    return bestTarget.type;
+  }
+
+  if (currentType !== "concept") {
+    const currentScore = evidence.scores[currentType] ?? 0;
+    const currentCount = evidence.counts[currentType] ?? 0;
+    if (
+      mentionCount <= 4
+      && conceptCount >= 2
+      && conceptScore >= currentScore + 0.45
+      && currentCount <= 1
+    ) {
+      return "concept";
+    }
+  }
+
+  return currentType;
+}
+
+function resolveEntityConfidence(
+  currentConfidence: EntityConfidence,
+  extracted: ExtractedEntity,
+  mentionCount: number,
+  resolvedType: EntityType,
+  metadata: EntityMetadataState,
+): EntityConfidence {
+  if (currentConfidence === "confirmed" || !extracted.provisional) return "confirmed";
+  void mentionCount;
+  void resolvedType;
+  void metadata;
+  return "provisional";
+}
+
+function markResolvedType(metadata: EntityMetadataState, resolvedType: EntityType, resolvedAt: number): EntityMetadataState {
+  const next = normalizeEntityMetadata(metadata);
+  const evidence = next.typeEvidence ?? normalizeTypeEvidenceState(null);
+  evidence.lastResolvedType = resolvedType;
+  evidence.lastResolvedAt = resolvedAt;
+  next.typeEvidence = evidence;
+  return next;
 }
 
 // ─── Canonical Resolution (BUG 1 fix) ─────────────────────────
@@ -524,39 +660,141 @@ export function upsertEntity(
   const existing = findEntityByName(chatId, extracted.name);
 
   if (existing) {
-    // Update existing entity
-    const newAliases = mergeAliases(existing.aliases, extracted.aliases);
+    // User-edited rows: never overwrite curated fields (name, entity_type,
+    // aliases, confidence). Still bump derived counters so salience tracks
+    // recent activity.
+    if (existing.userEditedAt !== null) {
+      db.query(
+        `UPDATE memory_entities SET
+          last_seen_chunk_id = ?,
+          last_seen_at = ?,
+          mention_count = mention_count + 1,
+          updated_at = ?
+         WHERE id = ?`,
+      ).run(chunkId, chunkTimestamp, now, existing.id);
+      return existing.id;
+    }
+
+    // Update existing entity, including cross-chunk type evidence.
+    const newAliases = mergeAliases(existing.aliases, extracted.aliases, existing.name);
+    const nextMentionCount = existing.mentionCount + 1;
+    const nextMetadata = accumulateTypeEvidence(existing.metadata as EntityMetadataState, extracted, chunkTimestamp);
+    const resolvedType = resolveEntityTypeFromEvidence(existing.entityType, nextMetadata, nextMentionCount);
+    const resolvedConfidence = resolveEntityConfidence(existing.confidence, extracted, nextMentionCount, resolvedType, nextMetadata);
+    const persistedMetadata = markResolvedType(nextMetadata, resolvedType, chunkTimestamp);
     db.query(
       `UPDATE memory_entities SET
         last_seen_chunk_id = ?,
         last_seen_at = ?,
         mention_count = mention_count + 1,
         aliases = ?,
+        entity_type = ?,
+        confidence = ?,
+        metadata = ?,
         updated_at = ?
        WHERE id = ?`,
-    ).run(chunkId, chunkTimestamp, JSON.stringify(newAliases), now, existing.id);
+    ).run(
+      chunkId,
+      chunkTimestamp,
+      JSON.stringify(newAliases),
+      resolvedType,
+      resolvedConfidence,
+      JSON.stringify(persistedMetadata),
+      now,
+      existing.id,
+    );
 
     return existing.id;
   }
 
   // Create new entity
   const id = crypto.randomUUID();
-  const confidence = extracted.provisional ? "provisional" : "confirmed";
+  const initialAliases = extracted.aliases
+    .map((alias) => sanitizeAlias(alias))
+    .filter((alias): alias is string => !!alias && isPlausibleAlias(alias, extracted.name));
+  const initialMetadata = accumulateTypeEvidence(normalizeEntityMetadata(null), extracted, chunkTimestamp);
+  const resolvedType = resolveEntityTypeFromEvidence(extracted.type, initialMetadata, 1);
+  const confidence = resolveEntityConfidence(
+    extracted.provisional ? "provisional" : "confirmed",
+    extracted,
+    1,
+    resolvedType,
+    initialMetadata,
+  );
+  const persistedMetadata = markResolvedType(initialMetadata, resolvedType, chunkTimestamp);
   db.query(
     `INSERT INTO memory_entities
       (id, chat_id, name, entity_type, aliases, first_seen_chunk_id, last_seen_chunk_id,
-       first_seen_at, last_seen_at, mention_count, last_mention_timestamp,
+       first_seen_at, last_seen_at, mention_count, last_mention_timestamp, metadata,
        confidence, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
   ).run(
-    id, chatId, extracted.name, extracted.type,
-    JSON.stringify(extracted.aliases),
+    id, chatId, extracted.name, resolvedType,
+    JSON.stringify(initialAliases),
     chunkId, chunkId, chunkTimestamp, chunkTimestamp,
-    chunkTimestamp, confidence,
+    chunkTimestamp, JSON.stringify(persistedMetadata), confidence,
     now, now,
   );
 
   return id;
+}
+
+/**
+ * Append a learned alias to an entity's `aliases` JSON column.
+ *
+ * Used when the sidecar or heuristic detects a recurring nickname/short-form
+ * for a known entity. Persisting it means the alias survives rebuilds and
+ * gets re-fed into the sidecar's `<canonical_aliases>` block on subsequent
+ * extractions, compounding extraction quality over time.
+ *
+ * Skips if:
+ *   - The alias fails plausibility/sanitization checks.
+ *   - The entity row is user-edited — manual alias curation wins; learning
+ *     can't add or remove user-curated aliases.
+ *   - The alias is already present (case-insensitive).
+ *
+ * @returns true if a new alias was persisted, false otherwise.
+ */
+export function persistLearnedAlias(entityId: string, alias: string): boolean {
+  const cleaned = sanitizeAlias(alias);
+  if (!cleaned) return false;
+  const db = getDb();
+  const row = db.query(
+    "SELECT name, aliases, user_edited_at FROM memory_entities WHERE id = ?",
+  ).get(entityId) as { name: string; aliases: string; user_edited_at: number | null } | null;
+  if (!row) return false;
+  if (row.user_edited_at !== null) return false;
+  if (!isPlausibleAlias(cleaned, row.name)) return false;
+
+  const existing = safeJsonArray(row.aliases);
+  const lowerSet = new Set(existing.map((a) => a.toLowerCase()));
+  if (lowerSet.has(cleaned.toLowerCase())) return false;
+  if (cleaned.toLowerCase() === row.name.toLowerCase()) return false;
+
+  existing.push(cleaned);
+  const now = Math.floor(Date.now() / 1000);
+  db.query(
+    "UPDATE memory_entities SET aliases = ?, updated_at = ? WHERE id = ?",
+  ).run(JSON.stringify(existing), now, entityId);
+  return true;
+}
+
+/** Flip user_edited_at on an entity so rebuilds preserve its curated fields. */
+export function markEntityUserEdited(entityId: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const result = getDb()
+    .query("UPDATE memory_entities SET user_edited_at = ?, updated_at = ? WHERE id = ?")
+    .run(now, now, entityId) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+/** Flip user_edited_at on a relation so rebuilds preserve its curated fields. */
+export function markRelationUserEdited(relationId: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const result = getDb()
+    .query("UPDATE memory_relations SET user_edited_at = ?, updated_at = ? WHERE id = ?")
+    .run(now, now, relationId) as { changes?: number };
+  return (result.changes ?? 0) > 0;
 }
 
 /**
@@ -910,9 +1148,71 @@ export function consolidateEdgeTypes(chatId: string): number {
   return mergeCount;
 }
 
-/** Delete all entities for a chat (used in rebuild) */
-export function deleteEntitiesForChat(chatId: string): void {
-  getDb().query("DELETE FROM memory_entities WHERE chat_id = ?").run(chatId);
+/** Delete all entities for a chat (used in rebuild).
+ *
+ *  With `preserveUserEdited`, rows that the user has manually edited keep
+ *  their curated fields but have derived stats (mention counts, salience,
+ *  recency, type-evidence metadata) reset to zero so live ingestion can
+ *  rebuild those without double-counting against the prior pre-rebuild run.
+ */
+/**
+ * Hard-delete an entity and all its mentions and relations. Skips
+ * user-edited entities (user_edited_at IS NOT NULL) to preserve manual work.
+ *
+ * Used by the sidecar arbiter to remove graph records the sidecar judged as
+ * invalid (e.g., a verb that was incorrectly captured as an entity in a prior
+ * heuristic pass).
+ *
+ * @returns true if the entity was deleted; false if not found or preserved.
+ */
+export function deleteEntityIfNotUserEdited(entityId: string): boolean {
+  const db = getDb();
+  const row = db.query("SELECT user_edited_at FROM memory_entities WHERE id = ?").get(entityId) as
+    | { user_edited_at: number | null }
+    | null;
+  if (!row) return false;
+  if (row.user_edited_at !== null) return false;
+
+  db.transaction(() => {
+    db.query("DELETE FROM memory_mentions WHERE entity_id = ?").run(entityId);
+    db.query(
+      "DELETE FROM memory_relations WHERE source_entity_id = ? OR target_entity_id = ?",
+    ).run(entityId, entityId);
+    db.query("DELETE FROM memory_entities WHERE id = ?").run(entityId);
+  })();
+  return true;
+}
+
+export function deleteEntitiesForChat(
+  chatId: string,
+  opts: { preserveUserEdited?: boolean } = {},
+): void {
+  const db = getDb();
+  if (!opts.preserveUserEdited) {
+    db.query("DELETE FROM memory_entities WHERE chat_id = ?").run(chatId);
+    return;
+  }
+
+  db.transaction(() => {
+    db.query(
+      `UPDATE memory_entities SET
+        mention_count = 0,
+        salience_avg = 0,
+        last_seen_chunk_id = NULL,
+        last_seen_at = NULL,
+        first_seen_chunk_id = NULL,
+        first_seen_at = NULL,
+        last_mention_timestamp = NULL,
+        recent_mention_count = 0,
+        salience_breakdown = '{"mentionComponent":0,"arcComponent":0,"graphComponent":0,"total":0}',
+        metadata = '{}',
+        updated_at = ?
+       WHERE chat_id = ? AND user_edited_at IS NOT NULL`,
+    ).run(Math.floor(Date.now() / 1000), chatId);
+    db.query(
+      "DELETE FROM memory_entities WHERE chat_id = ? AND user_edited_at IS NULL",
+    ).run(chatId);
+  })();
 }
 
 // ─── Mention CRUD ──────────────────────────────────────────────
@@ -1014,15 +1314,42 @@ export function upsertRelation(
       evidenceIds.push(chunkId);
     }
 
-    // ── BUG 2: Logarithmic strength from evidence count ──
-    const newStrength = computeStrength(evidenceIds.length);
-    const newSentiment = existing.sentiment + (rel.sentiment - existing.sentiment) * 0.3;
-
     // Track arc provenance
     const existingArcIds = safeJsonArray(existing.arc_ids);
     if (arcId && !existingArcIds.includes(arcId)) {
       existingArcIds.push(arcId);
     }
+
+    // User-edited relations: never overwrite curated fields (label,
+    // strength, sentiment). Still track evidence + recompute edge salience
+    // so time-decay continues to age the user's strength override.
+    if (existing.user_edited_at !== null) {
+      const curatedDecayRate = computeEdgeDecayRate(existing.strength);
+      const curatedEdgeSalience = computeEdgeSalience(existing.strength, curatedDecayRate, now);
+      db.query(
+        `UPDATE memory_relations SET
+          evidence_chunk_ids = ?,
+          last_reinforced_at = ?,
+          last_evidence_timestamp = ?,
+          arc_ids = ?,
+          last_seen_arc_id = COALESCE(?, last_seen_arc_id),
+          decay_rate = ?,
+          edge_salience = ?,
+          updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        JSON.stringify(evidenceIds), now, now,
+        JSON.stringify(existingArcIds),
+        arcId || null,
+        curatedDecayRate, curatedEdgeSalience,
+        now, existing.id,
+      );
+      return;
+    }
+
+    // ── BUG 2: Logarithmic strength from evidence count ──
+    const newStrength = computeStrength(evidenceIds.length);
+    const newSentiment = existing.sentiment + (rel.sentiment - existing.sentiment) * 0.3;
 
     // ── IMP 1: Recompute decay rate ──
     const newDecayRate = computeEdgeDecayRate(newStrength);
@@ -1207,9 +1534,60 @@ export function getActiveEdgesForEntity(chatId: string, entityId: string): Memor
   return rows.map(rowToRelation);
 }
 
-/** Delete all relations for a chat (used in rebuild) */
-export function deleteRelationsForChat(chatId: string): void {
-  getDb().query("DELETE FROM memory_relations WHERE chat_id = ?").run(chatId);
+/** Delete all relations for a chat (used in rebuild).
+ *
+ *  With `preserveUserEdited`, rows that the user has manually edited
+ *  (user_edited_at IS NOT NULL) are kept with their curated fields
+ *  intact and derived stats reset. If either endpoint entity no longer
+ *  exists (because the user deleted it outside this relation's lifecycle),
+ *  the relation is downgraded to status='superseded' rather than preserved
+ *  with a dangling reference — the user can re-link it explicitly.
+ */
+export function deleteRelationsForChat(
+  chatId: string,
+  opts: { preserveUserEdited?: boolean } = {},
+): void {
+  const db = getDb();
+  if (!opts.preserveUserEdited) {
+    db.query("DELETE FROM memory_relations WHERE chat_id = ?").run(chatId);
+    return;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  db.transaction(() => {
+    // Endpoint-safety workaround: a user-edited relation whose source or target
+    // entity no longer exists is downgraded to status='broken' rather than
+    // preserved with a dangling reference. The user can re-link it from the UI.
+    db.query(
+      `UPDATE memory_relations
+       SET status = 'broken', updated_at = ?
+       WHERE chat_id = ?
+         AND user_edited_at IS NOT NULL
+         AND (
+           source_entity_id NOT IN (SELECT id FROM memory_entities WHERE chat_id = ?)
+           OR target_entity_id NOT IN (SELECT id FROM memory_entities WHERE chat_id = ?)
+         )`,
+    ).run(now, chatId, chatId, chatId);
+
+    // Reset derived counters on surviving user-edited relations so live
+    // ingestion can rebuild evidence/strength/decay cleanly.
+    db.query(
+      `UPDATE memory_relations SET
+        evidence_chunk_ids = '[]',
+        edge_salience = 0,
+        last_reinforced_at = NULL,
+        last_evidence_timestamp = NULL,
+        contradiction_flag = 'none',
+        contradiction_peer_id = NULL,
+        updated_at = ?
+       WHERE chat_id = ? AND user_edited_at IS NOT NULL AND status != 'broken'`,
+    ).run(now, chatId);
+
+    // Delete everything else.
+    db.query(
+      "DELETE FROM memory_relations WHERE chat_id = ? AND user_edited_at IS NULL",
+    ).run(chatId);
+  })();
 }
 
 // ─── Batch Ingestion ───────────────────────────────────────────
@@ -1276,12 +1654,17 @@ export function ingestChunkEntities(
 
     // Pre-seed discovered aliases into the local map so relationship writes
     // using a new nickname resolve to the canonical entity in this same chunk.
+    // Also persist them onto the entity row so they survive rebuilds and feed
+    // back into the sidecar's <canonical_aliases> block on future extractions.
     if (discoveredAliases?.length) {
       for (const da of discoveredAliases) {
         const canonicalId = resolveCanonicalId(da.canonicalName, chatId)
           ?? entityIdMap.get(da.canonicalName.toLowerCase());
         if (canonicalId && !entityIdMap.has(da.alias.toLowerCase())) {
           entityIdMap.set(da.alias.toLowerCase(), canonicalId);
+        }
+        if (canonicalId) {
+          persistLearnedAlias(canonicalId, da.alias);
         }
       }
     }
@@ -1446,6 +1829,18 @@ export function pruneStaleEntities(
 }
 
 /**
+ * Get all provisional (unconfirmed) entity names for a chat. Used to ensure
+ * the arbiter batch always sees provisionals for grading, regardless of the
+ * mention-count-based cap on getActiveEntities.
+ */
+export function getProvisionalEntityNames(chatId: string): string[] {
+  const rows = getDb()
+    .query("SELECT name FROM memory_entities WHERE chat_id = ? AND confidence = 'provisional'")
+    .all(chatId) as Array<{ name: string }>;
+  return rows.map((r) => r.name);
+}
+
+/**
  * Get active (non-archived) entities only. Used by retrieval to skip noise.
  */
 export function getActiveEntities(chatId: string, limit = 500): MemoryEntity[] {
@@ -1494,13 +1889,14 @@ export function populateEntityDescription(entityId: string, excerpt: string): vo
 
 // ─── Helpers ───────────────────────────────────────────────────
 
-function mergeAliases(existing: string[], incoming: string[]): string[] {
+function mergeAliases(existing: string[], incoming: string[], canonicalName?: string): string[] {
   const set = new Set(existing.map((a) => a.toLowerCase()));
   const merged = [...existing];
   for (const alias of incoming) {
-    if (alias && !set.has(alias.toLowerCase())) {
-      merged.push(alias);
-      set.add(alias.toLowerCase());
+    const cleaned = sanitizeAlias(alias);
+    if (cleaned && isPlausibleAlias(cleaned, canonicalName) && !set.has(cleaned.toLowerCase())) {
+      merged.push(cleaned);
+      set.add(cleaned.toLowerCase());
     }
   }
   return merged;
@@ -1704,14 +2100,24 @@ export function processProvisionalEntities(
   let promoted = 0;
   let decayed = 0;
 
-  // Promote provisional entities with enough mentions
-  const toPromote = db
-    .query(
-      `UPDATE memory_entities SET confidence = 'confirmed', updated_at = ?
-       WHERE chat_id = ? AND confidence = 'provisional' AND mention_count >= ?`,
-    )
-    .run(now, chatId, corroborationThreshold);
-  promoted = toPromote.changes;
+  const provisionalRows = db
+    .query("SELECT * FROM memory_entities WHERE chat_id = ? AND confidence = 'provisional'")
+    .all(chatId) as MemoryEntityRow[];
+
+  for (const row of provisionalRows) {
+    const entity = rowToEntity(row);
+    const metadata = normalizeEntityMetadata(entity.metadata);
+    const resolvedType = resolveEntityTypeFromEvidence(entity.entityType, metadata, entity.mentionCount);
+    const shouldConfirm = entity.mentionCount >= corroborationThreshold || (normalizeTypeEvidenceState(metadata.typeEvidence).counts[resolvedType] ?? 0) >= corroborationThreshold;
+    if (!shouldConfirm) continue;
+
+    const persistedMetadata = markResolvedType(metadata, resolvedType, now);
+    db.query(
+      `UPDATE memory_entities SET confidence = 'confirmed', entity_type = ?, metadata = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(resolvedType, JSON.stringify(persistedMetadata), now, entity.id);
+    promoted += 1;
+  }
 
   // Decay old provisional entities that were never corroborated
   const totalChunks = db

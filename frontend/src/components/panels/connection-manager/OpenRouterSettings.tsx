@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { ExternalLink, RefreshCw, LogIn, Zap, Settings2, ChevronRight } from 'lucide-react'
 import { FormField, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
-import { openrouterApi, type OpenRouterCreditsInfo, type OpenRouterConnectionSettings, type OpenRouterProviderEntry } from '@/api/openrouter'
+import { buildOpenRouterOAuthCallbackUrl, openrouterApi, type OpenRouterCreditsInfo, type OpenRouterConnectionSettings, type OpenRouterProviderEntry } from '@/api/openrouter'
 import { Spinner } from '@/components/shared/Spinner'
 import type { ConnectionProfile } from '@/types/api'
 import MultiChipSelect from './MultiChipSelect'
@@ -111,9 +111,7 @@ export default function OpenRouterSettings({ connectionId, connectionName, hasAp
     if (!connectionId && !connectionName?.trim()) return
     setOauthLoading(true)
     try {
-      const baseUrl = import.meta.env.VITE_API_BASE || '/api/v1'
-      const apiOrigin = baseUrl.startsWith('http') ? new URL(baseUrl).origin : window.location.origin
-      const callbackUrl = `${apiOrigin}/api/v1/openrouter/oauth-landing`
+      const callbackUrl = buildOpenRouterOAuthCallbackUrl()
       const { auth_url, session_token } = await openrouterApi.initiateAuth(callbackUrl, connectionId
         ? { connectionId }
         : { connectionName: connectionName!.trim() }

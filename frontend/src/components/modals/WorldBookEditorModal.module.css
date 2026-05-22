@@ -1,5 +1,5 @@
 .modal {
-  max-height: 85vh;
+  max-height: calc(85vh / var(--lumiverse-ui-scale, 1));
 }
 
 .header {
@@ -12,7 +12,7 @@
 }
 
 .title {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -50,7 +50,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   min-width: 0;
@@ -97,7 +97,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text-muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   text-align: left;
   width: 100%;
@@ -170,7 +170,7 @@
   background: var(--lumiverse-gradient-modal, linear-gradient(135deg, rgba(35, 30, 48, 0.98), rgba(20, 17, 28, 0.98)));
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   white-space: nowrap;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
   z-index: 200;
@@ -202,7 +202,7 @@
   align-items: center;
   justify-content: center;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-style: italic;
 }
 
@@ -222,7 +222,7 @@
 }
 
 .fieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
@@ -232,7 +232,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -250,9 +250,52 @@
 }
 
 .entryListTitle {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
+}
+
+.entrySortRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.entrySortSelect {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.entrySortSelect:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary);
+}
+
+.entrySortDirBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.entrySortDirBtn:hover {
+  border-color: var(--lumiverse-primary-050);
+  color: var(--lumiverse-primary);
 }
 
 .entrySearch {
@@ -281,7 +324,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -298,7 +341,7 @@
   background: var(--lumiverse-primary);
   border: none;
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
 }
@@ -316,7 +359,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: border-color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), opacity var(--lumiverse-transition-fast);
 }
@@ -335,7 +378,7 @@
   border: 1px solid transparent;
   background: var(--lumiverse-primary);
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
 }
@@ -362,7 +405,7 @@
 }
 
 .vectorSummaryTitle {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-muted);
   text-transform: uppercase;
@@ -373,7 +416,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
 }
 
@@ -415,7 +458,7 @@
 }
 
 .bulkSemanticTitle {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   line-height: 1.4;
@@ -423,7 +466,7 @@
 
 .bulkSemanticMeta,
 .bulkSemanticHint {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   line-height: 1.45;
 }
@@ -437,7 +480,7 @@
 }
 
 .vectorStatusText {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -484,7 +527,7 @@
 
 .entryComment {
   flex: 1;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 550;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -501,7 +544,7 @@
 }
 
 .entryBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   padding: 1px 7px;
   border-radius: 4px;
@@ -525,7 +568,7 @@
 }
 
 .entryMetaItem {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   padding: 1px 6px;
   border-radius: 4px;
@@ -566,15 +609,15 @@
   padding: 24px 12px;
   text-align: center;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-style: italic;
 }
 
 @media (max-width: 640px) {
   .modal {
-    width: 100vw;
-    height: calc(var(--app-viewport-height, 100dvh) + var(--ios-viewport-offset, 0px));
-    max-height: calc(var(--app-viewport-height, 100dvh) + var(--ios-viewport-offset, 0px));
+    width: calc(100vw / var(--lumiverse-ui-scale, 1));
+    height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) + var(--ios-viewport-offset, 0px));
+    max-height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) + var(--ios-viewport-offset, 0px));
     border-radius: 0;
   }
 

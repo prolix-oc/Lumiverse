@@ -1,16 +1,29 @@
 import type { StateCreator } from 'zustand'
-import type { GenerationSlice } from '@/types/store'
+import type { AppStore, GenerationSlice } from '@/types/store'
 import { persistKey } from './settings'
 
-export const createGenerationSlice: StateCreator<GenerationSlice> = (set) => ({
+export const createGenerationSlice: StateCreator<AppStore, [], [], GenerationSlice> = (set) => ({
   imageGeneration: {
     enabled: false,
     activeImageGenConnectionId: null,
     includeCharacters: false,
+    promptMode: 'scene',
+    customPrompt: '',
+    customNegativePrompt: '',
+    activePromptPresetId: null,
+    promptPresets: [],
+    promptParserConnectionId: null,
+    promptParserModel: '',
+    promptParserParameters: {},
+    outputTarget: 'background',
     parameters: {},
+    promptGenerationTimeoutSeconds: 60,
+    generationTimeoutSeconds: 300,
     sceneChangeThreshold: 2,
     autoGenerate: true,
     forceGeneration: false,
+    recycleGeneratedImages: false,
+    recycledImageLimit: 1,
     backgroundOpacity: 0.35,
     fadeTransitionMs: 800,
   },
@@ -21,7 +34,11 @@ export const createGenerationSlice: StateCreator<GenerationSlice> = (set) => ({
     set((state) => {
       const imageGeneration = { ...state.imageGeneration, ...settings }
       persistKey('imageGeneration', imageGeneration)
-      return { imageGeneration }
+      const patch: Partial<AppStore> = { imageGeneration }
+      if (Object.prototype.hasOwnProperty.call(settings, 'activeImageGenConnectionId')) {
+        patch.activeImageGenConnectionId = settings.activeImageGenConnectionId ?? null
+      }
+      return patch
     }),
   setSceneBackground: (url) => set({ sceneBackground: url }),
   setSceneGenerating: (generating) => set({ sceneGenerating: generating }),

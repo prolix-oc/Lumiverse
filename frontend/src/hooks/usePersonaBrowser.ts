@@ -64,11 +64,21 @@ export function usePersonaBrowser() {
   }, [personas.length, loadPersonas])
 
   // Fuse.js instance
+  //
+  // ignoreLocation + minMatchCharLength=2 are required for CJK / Unicode
+  // substring search. Fuse's default Bitap scoring anchors matches near
+  // `location: 0` and penalises anything further away — which shreds
+  // relevance for unspaced scripts (Chinese, Japanese, Korean, Thai) where
+  // the entire phrase is one unbroken run. ignoreLocation makes Fuse score
+  // by match quality regardless of position; minMatchCharLength: 2 lets
+  // short CJK names like 魔王 / 勇者 match without being filtered out.
   const fuse = useMemo(
     () =>
       new Fuse(personas, {
         keys: ['name', 'title', 'description'],
         threshold: 0.3,
+        ignoreLocation: true,
+        minMatchCharLength: 2,
       }),
     [personas]
   )
@@ -168,6 +178,32 @@ export function usePersonaBrowser() {
       return persona
     },
     [updatePersonaInStore]
+  )
+
+  const renameFolder = useCallback(
+    async (oldName: string, newName: string) => {
+      const result = await personasApi.renameFolder(oldName, newName)
+      if (result.updated.length === 0) return result
+
+      const updatedById = new Map(result.updated.map((persona) => [persona.id, persona]))
+      const currentPersonas = useStore.getState().personas
+      setPersonas(currentPersonas.map((persona) => updatedById.get(persona.id) ?? persona))
+      return result
+    },
+    [setPersonas]
+  )
+
+  const deleteFolder = useCallback(
+    async (name: string) => {
+      const result = await personasApi.deleteFolder(name)
+      if (result.updated.length === 0) return result
+
+      const updatedById = new Map(result.updated.map((persona) => [persona.id, persona]))
+      const currentPersonas = useStore.getState().personas
+      setPersonas(currentPersonas.map((persona) => updatedById.get(persona.id) ?? persona))
+      return result
+    },
+    [setPersonas]
   )
 
   const deletePersona = useCallback(
@@ -299,6 +335,8 @@ export function usePersonaBrowser() {
     setSelectedPersonaId,
     createPersona,
     updatePersona,
+    renameFolder,
+    deleteFolder,
     deletePersona,
     duplicatePersona,
     uploadAvatar,

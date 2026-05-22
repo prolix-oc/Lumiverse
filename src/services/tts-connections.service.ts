@@ -11,10 +11,25 @@ import type {
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import type { TtsVoice } from "../tts/types";
+import { describeProviderError } from "../utils/provider-errors";
 
 /** Secret key for a TTS connection's API key. */
 export function ttsConnectionSecretKey(id: string): string {
   return `tts_connection_${id}_api_key`;
+}
+
+export interface TtsConnectionVoicesPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
+}
+
+export interface TtsConnectionModelsPreviewInput {
+  connection_id?: string;
+  provider: string;
+  api_url?: string;
+  api_key?: string;
 }
 
 function rowToProfile(row: any): TtsConnectionProfile {
@@ -243,7 +258,7 @@ export async function testConnection(
       provider: profile.provider,
     };
   } catch (err: any) {
-    return { success: false, message: err.message || "Connection test failed", provider: profile.provider };
+    return { success: false, message: describeProviderError(err, "Connection test failed"), provider: profile.provider };
   }
 }
 
@@ -254,21 +269,44 @@ export async function listConnectionModels(
   const profile = getConnection(userId, id);
   if (!profile) return { models: [], provider: "", error: "Connection not found" };
 
-  const provider = getTtsProvider(profile.provider);
-  if (!provider) {
-    return { models: [], provider: profile.provider, error: `Unknown provider: ${profile.provider}` };
+  const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
+  return listConnectionModelsPreview(userId, {
+    connection_id: id,
+    provider: profile.provider,
+    api_url: profile.api_url,
+    api_key: apiKey || undefined,
+  });
+}
+
+export async function listConnectionModelsPreview(
+  userId: string,
+  input: TtsConnectionModelsPreviewInput
+): Promise<{ models: Array<{ id: string; label: string }>; provider: string; error?: string }> {
+  const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  const providerId = input.provider;
+
+  let apiKey = input.api_key;
+  if (apiKey === undefined && existing && existing.provider === providerId) {
+    apiKey = (await secretsSvc.getSecret(userId, ttsConnectionSecretKey(existing.id))) || undefined;
   }
 
-  const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
+  const provider = getTtsProvider(providerId);
+  if (!provider) {
+    return { models: [], provider: providerId, error: `Unknown provider: ${providerId}` };
+  }
+
   if (!apiKey && provider.capabilities.apiKeyRequired) {
-    return { models: [], provider: profile.provider, error: "No API key" };
+    return { models: [], provider: providerId, error: "No API key" };
   }
 
   try {
-    const models = await provider.listModels(apiKey || "", profile.api_url || "");
-    return { models, provider: profile.provider };
+    const models = await provider.listModels(apiKey || "", input.api_url ?? existing?.api_url ?? "");
+    const error = models.length === 0 && provider.capabilities.modelListStyle === "dynamic"
+      ? "Provider model listing did not include any obvious TTS models"
+      : undefined;
+    return { models, provider: providerId, error };
   } catch (err: any) {
-    return { models: [], provider: profile.provider, error: err.message || "Failed to fetch models" };
+    return { models: [], provider: providerId, error: describeProviderError(err, "Failed to fetch models") };
   }
 }
 
@@ -279,20 +317,36 @@ export async function listConnectionVoices(
   const profile = getConnection(userId, id);
   if (!profile) return { voices: [], provider: "", error: "Connection not found" };
 
-  const provider = getTtsProvider(profile.provider);
-  if (!provider) {
-    return { voices: [], provider: profile.provider, error: `Unknown provider: ${profile.provider}` };
+  const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
+  return listConnectionVoicesPreview(userId, {
+    connection_id: id,
+    provider: profile.provider,
+    api_url: profile.api_url,
+    api_key: apiKey || undefined,
+  });
+}
+
+export async function listConnectionVoicesPreview(
+  userId: string,
+  input: TtsConnectionVoicesPreviewInput
+): Promise<{ voices: TtsVoice[]; provider: string; error?: string }> {
+  const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  const providerId = input.provider;
+
+  let apiKey = input.api_key;
+  if (apiKey === undefined && existing && existing.provider === providerId) {
+    apiKey = (await secretsSvc.getSecret(userId, ttsConnectionSecretKey(existing.id))) || undefined;
   }
 
-  const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
-  if (!apiKey && provider.capabilities.apiKeyRequired) {
-    return { voices: [], provider: profile.provider, error: "No API key" };
+  const provider = getTtsProvider(providerId);
+  if (!provider) {
+    return { voices: [], provider: providerId, error: `Unknown provider: ${providerId}` };
   }
 
   try {
-    const voices = await provider.listVoices(apiKey || "", profile.api_url || "");
-    return { voices, provider: profile.provider };
+    const voices = await provider.listVoices(apiKey || "", input.api_url ?? existing?.api_url ?? "");
+    return { voices, provider: providerId };
   } catch (err: any) {
-    return { voices: [], provider: profile.provider, error: err.message || "Failed to fetch voices" };
+    return { voices: [], provider: providerId, error: describeProviderError(err, "Failed to fetch voices") };
   }
 }

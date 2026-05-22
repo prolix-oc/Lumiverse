@@ -1,0 +1,44 @@
+.note {
+  align-self: center;
+  padding: 4px 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel {
+  width: min(760px, 100%);
+  align-self: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--lumiverse-primary-020);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 5%, transparent);
+  color: var(--lumiverse-text-muted);
+}
+
+.title {
+  color: var(--lumiverse-primary-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.body {
+  margin-top: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.body p {
+  margin: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.body p[data-empty] {
+  min-height: 6px;
+}

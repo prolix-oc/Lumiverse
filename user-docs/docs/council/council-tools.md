@@ -6,7 +6,7 @@ Council tools are specialized analysis functions that members can run during del
 
 ## Built-In Tools
 
-Lumiverse ships with **16 built-in tools** across 5 categories.
+Lumiverse ships with **17 built-in tools** across 5 categories.
 
 ### Story Direction (6 tools)
 
@@ -34,12 +34,13 @@ Lumiverse ships with **16 built-in tools** across 5 categories.
 | `pov_enforcer` | **POV Enforcer** | Enforces point-of-view consistency and narrative perspective continuity based on active POV rules |
 | `flame_kindler` | **Flame Kindler** | Analyzes relationships between characters and guides their logical progression based on established history and character details |
 
-### Context (2 tools)
+### Context (3 tools)
 
 | Tool | Display Name | What It Does |
 |------|-------------|-------------|
 | `historical_accuracy` | **Historical Accuracy** | Checks the roleplay's direction against real historical facts, events, and canon to ensure accuracy |
 | `style_adherence` | **Narrative Style Adherence** | Analyzes the story for adherence to the selected narrative style and enforces stylistic consistency |
+| `web_search` | **Web Search** | Runs a real-world web search via your configured SearXNG instance and returns a condensed context block from the top pages. Requires [Web Search](../settings/web-search.md) to be enabled. |
 
 ### Content (3 tools)
 
@@ -50,7 +51,7 @@ Lumiverse ships with **16 built-in tools** across 5 categories.
 | `detect_expression` | **Expression Detector** | Analyzes scene sentiment and selects the character's facial expression from configured [expression](../characters/expressions.md) labels |
 
 !!! note "Gated tools"
-    **Scene Generator** and **Expression Detector** only appear when the relevant feature is configured. Expression Detector requires the character to have expressions set up. Scene Generator requires an image generation connection.
+    **Scene Generator**, **Expression Detector**, and **Web Search** only appear when the relevant feature is configured. Expression Detector requires the character to have expressions set up. Scene Generator requires an image generation connection. Web Search requires [Web Search](../settings/web-search.md) to be enabled with an API URL.
 
 ---
 
@@ -63,7 +64,7 @@ Each Loom Tool has:
 - **Display Name** — What you see in the UI
 - **Description** — What the tool does
 - **Prompt** — The instruction sent to the sidecar
-- **Input Schema** — Expected output format
+- **Structured Fields / Input Schema** — The response shape you want back from the tool. In the editor, add fields for the named pieces of information you want the council member to return, then mention those fields in the prompt so the model knows to fill them.
 - **Result Variable** — Where the result is stored (accessible via `{{loomCouncilResult::variable_name}}`)
 - **Store in Deliberation** — Whether results appear in the deliberation block
 
@@ -79,6 +80,34 @@ A member can have multiple tools. During deliberation, all assigned tools are ru
 
 !!! tip "Specialize your members"
     Instead of giving every tool to one member, spread them across specialists. A "Plot Advisor" gets story direction tools. A "Style Coach" gets writing quality tools. A "Canon Expert" gets character accuracy tools. This keeps the deliberation organized and each member's output focused.
+
+---
+
+## Historical Deliberations
+
+Each assigned member/tool pair can retain a small number of prior successful deliberations for the same chat. This lets a council member build on threads it previously planted, such as long-term plot plans, relationship beats, unresolved warnings, or recurring worldbuilding ideas.
+
+To enable it:
+
+1. Open the **Council** panel
+2. Expand a council member
+3. Assign one or more tools
+4. Under the assigned tool list, set **Historical deliberations retained** above `0`
+
+The number is per member and per tool:
+
+| Value | Behavior |
+|-------|----------|
+| `0` | Do not retain history for this member/tool assignment |
+| `1` | Include only the last successful deliberation from this member/tool |
+| `2-10` | Include up to that many prior successful deliberations |
+
+Historical deliberations are chat-scoped. They do not carry across different chats, and they are matched to the exact council member plus tool assignment.
+
+When history is enabled, Lumiverse sends it as a clearly labeled **historical baseline only** block. The prompt explicitly tells the model that prior deliberations are not a template, not binding instructions, and do not override current chat history, active world info, or the latest user message.
+
+!!! note "Successful tool outputs only"
+    Failed tool runs are not stored. If a tool is removed from a member or its retention is set back to `0`, old retained entries for that assignment are pruned the next time council history is updated.
 
 ---
 

@@ -1,21 +1,30 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw, X } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
 import { worldBooksApi } from '@/api/world-books'
 import { chatsApi } from '@/api/chats'
+import { charactersApi } from '@/api/characters'
 import { useStore } from '@/store'
 import useImageCropFlow from '@/hooks/useImageCropFlow'
 import ImageCropModal from '@/components/shared/ImageCropModal'
 import LazyImage from '@/components/shared/LazyImage'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
 import FolderDropdown from '@/components/shared/FolderDropdown'
+import SearchableSelect from '@/components/shared/SearchableSelect'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { useFolders } from '@/hooks/useFolders'
-import { resolveBinding } from '@/store/slices/personas'
-import type { Persona, WorldBook } from '@/types/api'
+import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPrompt'
+import {
+  characterMatchesPersonaTagBinding,
+  getMatchingPersonaTagBindingIds,
+  resolveBinding,
+  resolvePersonaTagBinding,
+} from '@/store/slices/personas'
+import type { Persona, TagCount, WorldBook } from '@/types/api'
 import styles from './PersonaEditor.module.css'
 import clsx from 'clsx'
 
@@ -84,15 +93,19 @@ export default function PersonaEditor({
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
+  const personaTagBindings = useStore((s) => s.personaTagBindings)
   const setCharacterPersonaBinding = useStore((s) => s.setCharacterPersonaBinding)
+  const setPersonaTagBinding = useStore((s) => s.setPersonaTagBinding)
   const messages = useStore((s) => s.messages)
   const setMessages = useStore((s) => s.setMessages)
   const allPersonas = useStore((s) => s.personas)
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([])
+  const [availableTags, setAvailableTags] = useState<TagCount[]>([])
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReattributeConfirm, setShowReattributeConfirm] = useState(false)
   const [reattributing, setReattributing] = useState(false)
   const [avatarKey, setAvatarKey] = useState(0)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const nameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const titleTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const descTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -125,6 +138,10 @@ export default function PersonaEditor({
       .list({ limit: 200 })
       .then((res) => setWorldBooks(res.data))
       .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    charactersApi.listTags().then(setAvailableTags).catch(() => {})
   }, [])
 
   // Debounced name save
@@ -216,17 +233,31 @@ export default function PersonaEditor({
   )
 
   const handleLorebookChange = useCallback(
-    (value: string) => {
-      onSetLorebook(persona.id, value || null)
+    async (value: string) => {
+      const nextId = value || null
+      if (!nextId || !activeChatId || !isActive) {
+        await onSetLorebook(persona.id, nextId)
+        return
+      }
+
+      const approvedIds = await filterWorldBooksForChatContextAttachment(
+        worldBooks.filter((book) => book.id === nextId),
+      )
+      await onSetLorebook(persona.id, approvedIds[0] || null)
     },
-    [persona.id, onSetLorebook]
+    [activeChatId, isActive, onSetLorebook, persona.id, worldBooks]
   )
 
   // Avatar crop flow — upload both cropped (for avatar display) and original (for full viewing)
   const handleCropComplete = useCallback(
     async (croppedFile: File, originalFile: File) => {
-      await onUploadAvatar(persona.id, croppedFile, originalFile)
-      setAvatarKey((k) => k + 1)
+      setUploadingAvatar(true)
+      try {
+        await onUploadAvatar(persona.id, croppedFile, originalFile)
+        setAvatarKey((k) => k + 1)
+      } finally {
+        setUploadingAvatar(false)
+      }
     },
     [persona.id, onUploadAvatar]
   )
@@ -234,8 +265,9 @@ export default function PersonaEditor({
   const { cropModalProps, openCropFlow } = useImageCropFlow(handleCropComplete)
 
   const handleAvatarClick = useCallback(() => {
+    if (uploadingAvatar) return
     fileRef.current?.click()
-  }, [])
+  }, [uploadingAvatar])
 
   const handleFileSelected = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -250,10 +282,11 @@ export default function PersonaEditor({
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
+      if (uploadingAvatar) return
       const file = e.dataTransfer.files?.[0]
       if (file && file.type.startsWith('image/')) openCropFlow(file)
     },
-    [openCropFlow]
+    [openCropFlow, uploadingAvatar]
   )
 
   const handleReattributeChat = useCallback(async () => {
@@ -277,13 +310,39 @@ export default function PersonaEditor({
 
   // Character-persona binding
   const activeCharName = activeCharacterId ? characters.find((c) => c.id === activeCharacterId)?.name : null
+  const activeCharacter = activeCharacterId ? characters.find((c) => c.id === activeCharacterId) ?? null : null
+  const activeCharacterTags = activeCharacter?.tags ?? []
   const rawBinding = activeCharacterId ? characterPersonaBindings[activeCharacterId] : undefined
   const boundPersonaId = rawBinding ? resolveBinding(rawBinding).personaId : undefined
   const isBoundToActiveChar = boundPersonaId === persona.id
   const boundAddonStates = isBoundToActiveChar && rawBinding ? resolveBinding(rawBinding).addonStates : undefined
+  const tagBinding = resolvePersonaTagBinding(personaTagBindings[persona.id])
+  const tagBindingTagCount = tagBinding?.tags.length ?? 0
+  const tagBindingHasAddonStates = !!tagBinding?.addonStates && Object.keys(tagBinding.addonStates).length > 0
   const personaAddonCount = Array.isArray(persona.metadata?.addons) ? persona.metadata.addons.length : 0
   const globalAddonCount = Array.isArray(persona.metadata?.attached_global_addons) ? persona.metadata.attached_global_addons.length : 0
   const addonCount = personaAddonCount + globalAddonCount
+  const tagOptions = useMemo(
+    () => availableTags.map(({ tag, count }) => ({ value: tag, label: tag, sublabel: `${count} character${count === 1 ? '' : 's'}` })),
+    [availableTags],
+  )
+  const matchingCharacterCount = useMemo(
+    () => tagBinding ? characters.filter((character) => characterMatchesPersonaTagBinding(character.tags || [], tagBinding)).length : 0,
+    [characters, tagBinding],
+  )
+  const matchingActivePersonaIds = useMemo(
+    () => activeCharacter ? getMatchingPersonaTagBindingIds(allPersonas, personaTagBindings, activeCharacter.tags || []) : [],
+    [activeCharacter, allPersonas, personaTagBindings],
+  )
+  const matchesActiveCharacterByTag = activeCharacter ? characterMatchesPersonaTagBinding(activeCharacterTags, tagBinding) : false
+  const activeCharacterConflictCount = matchesActiveCharacterByTag
+    ? matchingActivePersonaIds.filter((personaId) => personaId !== persona.id).length
+    : 0
+  const activeCharacterTagSuggestions = useMemo(() => {
+    if (!activeCharacter) return []
+    const selected = new Set((tagBinding?.tags ?? []).map((tag) => tag.trim().toLowerCase()))
+    return activeCharacter.tags.filter((tag) => !selected.has(tag.trim().toLowerCase())).slice(0, 8)
+  }, [activeCharacter, tagBinding])
 
   /** Build a snapshot of current addon enabled states. */
   const snapshotAddonStates = useCallback((): Record<string, boolean> => {
@@ -313,16 +372,58 @@ export default function PersonaEditor({
     setCharacterPersonaBinding(activeCharacterId, persona.id, snapshotAddonStates())
   }, [activeCharacterId, isBoundToActiveChar, persona.id, snapshotAddonStates, setCharacterPersonaBinding])
 
+  const handleTagBindingTagsChange = useCallback((tags: string[]) => {
+    const current = resolvePersonaTagBinding(useStore.getState().personaTagBindings[persona.id])
+    setPersonaTagBinding(persona.id, tags.length > 0
+      ? { tags, mode: current?.mode ?? 'any', addonStates: current?.addonStates }
+      : null)
+  }, [persona.id, setPersonaTagBinding])
+
+  const handleTagBindingModeChange = useCallback((value: string) => {
+    const current = resolvePersonaTagBinding(useStore.getState().personaTagBindings[persona.id])
+    if (!current) return
+    setPersonaTagBinding(persona.id, { ...current, mode: value === 'all' ? 'all' : 'any' })
+  }, [persona.id, setPersonaTagBinding])
+
+  const handleClearTagBinding = useCallback(() => {
+    setPersonaTagBinding(persona.id, null)
+  }, [persona.id, setPersonaTagBinding])
+
+  const handleSnapshotTagBindingAddons = useCallback(() => {
+    const current = resolvePersonaTagBinding(useStore.getState().personaTagBindings[persona.id])
+    if (!current) return
+    setPersonaTagBinding(persona.id, { ...current, addonStates: snapshotAddonStates() })
+  }, [persona.id, setPersonaTagBinding, snapshotAddonStates])
+
+  const handleRemoveTagBindingTag = useCallback((tagToRemove: string) => {
+    const current = resolvePersonaTagBinding(useStore.getState().personaTagBindings[persona.id])
+    if (!current) return
+    const nextTags = current.tags.filter((tag) => tag !== tagToRemove)
+    setPersonaTagBinding(persona.id, nextTags.length > 0 ? { ...current, tags: nextTags } : null)
+  }, [persona.id, setPersonaTagBinding])
+
+  const handleAddSuggestedTag = useCallback((tag: string) => {
+    const current = resolvePersonaTagBinding(useStore.getState().personaTagBindings[persona.id])
+    const nextTags = current?.tags ?? []
+    if (nextTags.some((candidate) => candidate.trim().toLowerCase() === tag.trim().toLowerCase())) return
+    setPersonaTagBinding(persona.id, {
+      tags: [...nextTags, tag],
+      mode: current?.mode ?? 'any',
+      addonStates: current?.addonStates,
+    })
+  }, [persona.id, setPersonaTagBinding])
+
   return (
     <div className={styles.editor}>
       {/* Avatar zone */}
       <div className={styles.topRow}>
         <div
-          className={styles.avatarZone}
+          className={clsx(styles.avatarZone, uploadingAvatar && styles.avatarZoneUploading)}
           onClick={handleAvatarClick}
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
-          title="Click or drop to change avatar"
+          title={uploadingAvatar ? 'Uploading avatar...' : 'Click or drop to change avatar'}
+          aria-busy={uploadingAvatar}
         >
           <LazyImage
             key={avatarKey}
@@ -335,8 +436,8 @@ export default function PersonaEditor({
               </div>
             }
           />
-          <div className={styles.avatarOverlay}>
-            <Upload size={16} />
+          <div className={clsx(styles.avatarOverlay, uploadingAvatar && styles.avatarOverlayActive)}>
+            {uploadingAvatar ? <Spinner size={20} /> : <Upload size={16} />}
           </div>
           <input
             ref={fileRef}
@@ -468,18 +569,17 @@ export default function PersonaEditor({
           <span>Default</span>
         </button>
         <div className={styles.lorebookRow}>
-          <select
-            className={styles.lorebookSelect}
+          <SearchableSelect
             value={persona.attached_world_book_id || ''}
-            onChange={(e) => handleLorebookChange(e.target.value)}
-          >
-            <option value="">No lorebook</option>
-            {worldBooks.map((wb) => (
-              <option key={wb.id} value={wb.id}>
-                {wb.name}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => { void handleLorebookChange(value) }}
+            options={worldBooks.map((wb) => ({ value: wb.id, label: wb.name, group: wb.folder || undefined }))}
+            placeholder="No lorebook"
+            searchPlaceholder="Search world books…"
+            emptyMessage="No world books available"
+            clearable
+            clearLabel="No lorebook"
+            className={styles.lorebookSelectWrapper}
+          />
           <Button
             size="icon-sm" variant="ghost"
             onClick={() =>
@@ -546,6 +646,114 @@ export default function PersonaEditor({
           )}
         </div>
       )}
+
+      <div className={styles.tagBindingSection}>
+        <div className={styles.tagBindingHeader}>
+          <span className={styles.tagBindingTitle}>Tag Auto-Bind</span>
+          <span className={styles.tagBindingHint}>
+            Exact character bindings override these rules. Any/All only differs once 2+ tags are selected.
+          </span>
+        </div>
+        <div className={styles.tagBindingControls}>
+          <SearchableSelect
+            multi
+            value={tagBinding?.tags ?? []}
+            onChange={handleTagBindingTagsChange}
+            options={tagOptions}
+            placeholder="Choose character tags"
+            searchPlaceholder="Search character tags…"
+            emptyMessage="No character tags found"
+            noResultsMessage="No matching tags"
+            className={styles.tagBindingSelect}
+            portal
+          />
+          <select
+            className={clsx(styles.select, styles.tagModeSelect)}
+            value={tagBinding?.mode ?? 'any'}
+            onChange={(e) => handleTagBindingModeChange(e.target.value)}
+            disabled={!tagBinding || tagBindingTagCount < 2}
+            title={tagBindingTagCount < 2 ? 'Choose at least two tags to use Any vs All matching.' : undefined}
+          >
+            <option value="any">Any tag</option>
+            <option value="all">All tags</option>
+          </select>
+          {tagBinding && addonCount > 0 && (
+            <button
+              type="button"
+              className={styles.rebindBtn}
+              onClick={handleSnapshotTagBindingAddons}
+              title="Snapshot current add-on states into this tag binding"
+            >
+              <RefreshCw size={10} />
+              <span>{tagBindingHasAddonStates ? 'Rebind' : 'Bind'} Add-Ons</span>
+            </button>
+          )}
+          {tagBinding && (
+            <button
+              type="button"
+              className={styles.clearBindingBtn}
+              onClick={handleClearTagBinding}
+              title="Remove tag auto-bind"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {tagBinding?.tags.length ? (
+          <div className={styles.tagChipList}>
+            {tagBinding.tags.map((tag) => (
+              <span key={tag} className={styles.tagChip}>
+                {tag}
+                <button
+                  type="button"
+                  className={styles.tagChipRemove}
+                  onClick={() => handleRemoveTagBindingTag(tag)}
+                  title={`Remove ${tag}`}
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {activeCharacterTagSuggestions.length > 0 && (
+          <div className={styles.tagSuggestionRow}>
+            <span className={styles.tagSuggestionLabel}>Add from {activeCharName || 'active character'}:</span>
+            <div className={styles.tagSuggestionList}>
+              {activeCharacterTagSuggestions.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className={styles.tagSuggestionBtn}
+                  onClick={() => handleAddSuggestedTag(tag)}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className={styles.tagBindingMeta}>
+          {tagBinding
+            ? <span>Matches {matchingCharacterCount} character{matchingCharacterCount === 1 ? '' : 's'}.</span>
+            : <span>Select tags to auto-switch this persona for matching characters.</span>}
+          {activeCharacter && tagBinding && (
+            <span>
+              {matchesActiveCharacterByTag
+                ? activeCharacterConflictCount > 0
+                  ? `${activeCharName || 'Active character'} matches, but ${activeCharacterConflictCount} other persona${activeCharacterConflictCount === 1 ? '' : 's'} also match.`
+                  : `${activeCharName || 'Active character'} matches this rule.`
+                : `${activeCharName || 'Active character'} does not match this rule.`}
+            </span>
+          )}
+          {activeCharacter && tagBinding && rawBinding && boundPersonaId !== persona.id && matchesActiveCharacterByTag && (
+            <span>Current chat still prefers its exact character binding.</span>
+          )}
+        </div>
+      </div>
 
       {/* Action buttons */}
       <div className={styles.actions}>

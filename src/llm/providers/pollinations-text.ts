@@ -1,5 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
 
 export class PollinationsTextProvider extends OpenAICompatibleProvider {
   readonly name = "pollinations_text";
@@ -50,9 +51,14 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
 
     const data = (await res.json()) as any;
     const choice = data.choices?.[0];
+    const normalized = this.splitMirroredReasoning(
+      choice?.message?.content,
+      choice?.message?.reasoning || choice?.message?.reasoning_content,
+    );
+
     return {
-      content: choice?.message?.content || "",
-      reasoning: choice?.message?.reasoning || choice?.message?.reasoning_content || undefined,
+      content: normalized.content,
+      reasoning: normalized.reasoning,
       finish_reason: choice?.finish_reason || "stop",
       usage: data.usage
         ? {
@@ -74,12 +80,11 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) {
       const err = await res.text();
@@ -90,10 +95,11 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     let reasoningKey: "reasoning" | "reasoning_content" | null = null;
+    const maybeYield = createCooperativeYielder(64, request.signal);
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithAbort(reader, request.signal);
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -101,6 +107,7 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
+          await maybeYield();
           const trimmed = line.trim();
           if (!trimmed || !trimmed.startsWith("data: ")) continue;
           const data = trimmed.slice(6);
@@ -121,10 +128,12 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
               reasoningKey = "reasoning_content";
               reasoning = delta.reasoning_content;
             }
-            const content = delta?.content;
+            const normalized = this.splitMirroredReasoning(delta?.content, reasoning);
+            const content = normalized.content;
+            reasoning = normalized.reasoning;
 
             if (reasoning || content) {
-              yield { token: content || "", reasoning: reasoning || undefined, finish_reason: finishReason || undefined };
+              yield { token: content || "", reasoning, finish_reason: finishReason || undefined };
             } else if (finishReason) {
               yield { token: "", finish_reason: finishReason };
             }

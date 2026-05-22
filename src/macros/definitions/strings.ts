@@ -7,6 +7,7 @@ import {
 export function registerStringMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "len",
     category: "String",
     description: "Length of a string (character count)",
@@ -21,6 +22,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "upper",
     category: "String",
     description: "Convert text to uppercase",
@@ -35,6 +37,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "lower",
     category: "String",
     description: "Convert text to lowercase",
@@ -49,6 +52,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "capitalize",
     category: "String",
     description: "Capitalize the first letter of each sentence",
@@ -64,6 +68,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "replace",
     category: "String",
     description: "Replace occurrences of a substring. Scoped: {{replace::find::with}}text{{/replace}}",
@@ -84,6 +89,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "substr",
     category: "String",
     description: "Extract a substring by start and optional end index",
@@ -104,6 +110,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "split",
     category: "String",
     description: "Split text by delimiter and return the Nth item (0-based)",
@@ -125,6 +132,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "join",
     category: "String",
     description: "Join multiple values with a separator",
@@ -143,6 +151,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "repeat",
     category: "String",
     description: "Repeat text N times. Scoped: {{repeat::3}}text{{/repeat}}",
@@ -160,6 +169,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "wrap",
     category: "String",
     description: "Wrap text with prefix and suffix. Only wraps if text is non-empty.",
@@ -180,6 +190,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "regex",
     category: "String",
     description: "Regex replacement. {{regex::pattern::replacement::text}} or scoped.",
@@ -213,6 +224,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "tokenCount",
     category: "String",
     description: "Approximate token count of text (~4 chars per token)",
@@ -227,6 +239,7 @@ export function registerStringMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "truncate",
     category: "String",
     description: "Truncate text to approximately N tokens (word-boundary aware)",

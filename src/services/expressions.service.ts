@@ -98,7 +98,7 @@ export async function importFromZip(
       type: mimeMap[ext] || "application/octet-stream",
     });
 
-    const image = await uploadImage(userId, file);
+    const image = await uploadImage(userId, file, { owner_character_id: characterId });
     newMappings[label] = image.id;
   }
 
@@ -152,7 +152,7 @@ export async function importFromAssets(
   const newMappings: Record<string, string> = { ...existing.mappings };
 
   for (const { label, file } of assets) {
-    const image = await uploadImage(userId, file);
+    const image = await uploadImage(userId, file, { owner_character_id: characterId });
     newMappings[label] = image.id;
   }
 
@@ -292,7 +292,7 @@ export async function importGroupFromZip(
     const file = new File([new Uint8Array(data).buffer as ArrayBuffer], filename, {
       type: mimeMap[ext] || "application/octet-stream",
     });
-    const image = await uploadImage(userId, file);
+    const image = await uploadImage(userId, file, { owner_character_id: characterId });
     newMappings[label] = image.id;
   }
 

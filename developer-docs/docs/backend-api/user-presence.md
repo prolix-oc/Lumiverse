@@ -1,6 +1,6 @@
-# User Presence
+# User Context
 
-Check whether a user currently has the Lumiverse app visible and focused. This is useful for extensions that want to avoid interrupting the user while they're actively using the app, or to defer background tasks until the user is away.
+Read lightweight user context from backend extensions, including app visibility and account role. This is useful for extensions that want to avoid interrupting active users, defer background tasks until a user is away, or target operator/admin-only notices.
 
 No permission is required. This is a free-tier utility.
 
@@ -8,10 +8,11 @@ No permission is required. This is a free-tier utility.
 
 ```ts
 const visible = await spindle.users.isVisible()
+const role = await spindle.users.getRole()
 
 if (visible) {
   spindle.log.info('User is actively viewing the app')
-} else {
+} else if (role === 'operator') {
   spindle.log.info('User is away — safe to send a push notification')
 }
 ```
@@ -27,6 +28,18 @@ Returns `true` if the user has the app visible in at least one browser tab or PW
 | `userId` | `string?` | Target user (operator-scoped extensions only; user-scoped infers from owner) |
 
 **Returns:** `Promise<boolean>`
+
+### `spindle.users.getRole(userId?)`
+
+Returns the target user's Lumiverse role as exposed to extensions.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `userId` | `string?` | Target user (operator-scoped extensions only; user-scoped infers from owner) |
+
+**Returns:** `Promise<'operator' | 'admin' | 'user'>`
+
+Lumiverse's internal owner account is reported as `operator`. Admin accounts are reported as `admin`, and standard accounts are reported as `user`.
 
 ## How It Works
 
@@ -71,6 +84,22 @@ async function runMaintenanceTask() {
 
   // Safe to do expensive background work
   await performMaintenance()
+}
+```
+
+## Example: Operator-Only Update Toast
+
+```ts
+async function notifyIfOperator(userId: string, hasUpdate: boolean) {
+  if (!hasUpdate) return
+
+  const role = await spindle.users.getRole(userId)
+  if (role !== 'operator') return
+
+  spindle.toast.info('A new extension update is available.', {
+    title: 'Update available',
+    userId,
+  })
 }
 ```
 

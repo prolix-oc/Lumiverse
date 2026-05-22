@@ -7,6 +7,7 @@ import { systemApi, type SystemInfo } from '@/api/system'
 import { pushApi } from '@/api/push'
 import { chatsApi } from '@/api/chats'
 import { BASE_URL } from '@/api/client'
+import { usePushSubscription } from '@/hooks/usePushSubscription'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import styles from './Diagnostics.module.css'
 import clsx from 'clsx'
@@ -342,8 +343,22 @@ function DataMaintenanceSection() {
 function PwaCapabilitiesSection() {
   const addToast = useStore((s) => s.addToast)
   const pwaFeatures = checkPwaFeatures()
+  const {
+    isSupported,
+    supportChecked,
+    unsupportedReason,
+    registrationStatus,
+    registrationReason,
+  } = usePushSubscription()
   const [countdown, setCountdown] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
+
+  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active') => {
+    if (reason === 'disabled') return 'Push notifications are disabled in settings.'
+    if (reason === 'event_disabled') return 'Generation completed notifications are disabled in settings.'
+    if (reason === 'user_active') return 'Push notifications are suppressed while you are actively viewing Lumiverse.'
+    return 'No push subscriptions found. Subscribe in Notifications settings first.'
+  }
 
   const handleDelayedPush = useCallback(async () => {
     setSending(true)
@@ -365,7 +380,7 @@ function PwaCapabilitiesSection() {
       try {
         const result = await pushApi.test()
         if (!result.success) {
-          addToast({ type: 'warning', message: 'No push subscriptions found. Subscribe in Notifications settings first.' })
+          addToast({ type: 'warning', message: describeTestFailure(result.reason) })
         }
       } catch (err: any) {
         addToast({ type: 'error', message: err.message || 'Push test failed' })
@@ -399,6 +414,32 @@ function PwaCapabilitiesSection() {
           </span>
         </div>
         <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>Push Registration</span>
+          <span className={styles.infoValue}>
+            {supportChecked
+              ? (isSupported ? 'Available' : (unsupportedReason || 'Unavailable'))
+              : 'Checking...'}
+          </span>
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>SW Registration State</span>
+          <span className={styles.infoValue}>{describePushRegistrationState(registrationStatus)}</span>
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>Secure Context</span>
+          <span className={styles.infoValue}>{window.isSecureContext ? 'Yes' : 'No'}</span>
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>SW Controller</span>
+          <span className={styles.infoValue}>{navigator.serviceWorker?.controller ? 'Present' : 'Missing'}</span>
+        </div>
+        {registrationReason && registrationStatus !== 'ready' && (
+          <div className={styles.infoRow}>
+            <span className={styles.infoLabel}>SW Detail</span>
+            <span className={styles.infoValue}>{registrationReason}</span>
+          </div>
+        )}
+        <div className={styles.infoRow}>
           <span className={styles.infoLabel}>Delayed Push Test</span>
           <span className={styles.infoValue}>
             <button
@@ -408,7 +449,7 @@ function PwaCapabilitiesSection() {
               disabled={sending}
             >
               <Send size={12} />
-              {countdown !== null ? `Sending in ${countdown}s...` : 'Send in 10s'}
+              {countdown !== null ? `Sending in ${countdown}s...` : 'Auto push in 10s'}
             </button>
           </span>
         </div>
@@ -424,4 +465,11 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <span className={styles.infoValue}>{value}</span>
     </div>
   )
+}
+
+function describePushRegistrationState(status: 'ready' | 'pending' | 'missing' | 'error'): string {
+  if (status === 'ready') return 'Ready'
+  if (status === 'pending') return 'Activating'
+  if (status === 'missing') return 'Missing'
+  return 'Error'
 }

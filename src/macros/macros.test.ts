@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
+import { parse } from "./MacroParser";
 import { registry } from "./MacroRegistry";
 import { initMacros } from "./index";
 import type { MacroEnv } from "./types";
@@ -15,8 +16,10 @@ function makeEnv(opts: {
   messages?: { content: string; name: string; is_user: boolean }[];
   characterTags?: string[];
   chatCreatedAt?: number;
+  worldInfoOutlets?: Record<string, string>;
 } = {}): MacroEnv {
   const env: MacroEnv = {
+    commit: true,
     names: {
       user: "Alice",
       char: "Bob",
@@ -84,6 +87,7 @@ function makeEnv(opts: {
       ],
       chatCreatedAt: opts.chatCreatedAt ?? Math.floor(Date.now() / 1000) - 3600,
       characterTags: opts.characterTags ?? ["fantasy", "warrior", "male"],
+      worldInfoOutlets: opts.worldInfoOutlets ?? {},
     },
   };
   return env;
@@ -100,6 +104,30 @@ async function ev(template: string, env?: MacroEnv): Promise<string> {
 
 beforeAll(() => {
   initMacros();
+});
+
+describe("Chat transcript examples", () => {
+  test("parser and evaluator handle setvar/getvar across chat-style lines", async () => {
+    const transcript = [
+      "User: {{setvar::scene::lantern-lit alley}}",
+      "Assistant: Stored.",
+      "User: Recall it: {{getvar::scene}}",
+      "Assistant: I remember {{getvar::scene}}.",
+    ].join("\n");
+
+    const ast = parse(transcript);
+    const macroNames = ast.flatMap((node) =>
+      node.type === "macro" ? [node.name] : [],
+    );
+
+    expect(macroNames).toEqual(["setvar", "getvar", "getvar"]);
+    expect(await ev(transcript, makeEnv())).toBe([
+      "User: ",
+      "Assistant: Stored.",
+      "User: Recall it: lantern-lit alley",
+      "Assistant: I remember lantern-lit alley.",
+    ].join("\n"));
+  });
 });
 
 // ===========================================================================
@@ -146,6 +174,16 @@ describe("Core primitives", () => {
 
   test("input", async () => {
     expect(await ev("{{input}}")).toBe("I draw my sword.");
+  });
+
+  test("outlet resolves world-info outlet content", async () => {
+    const env = makeEnv({ worldInfoOutlets: { dossier: "Known as {{char}}" } });
+    expect(await ev("{{outlet::dossier}}", env)).toBe("Known as Bob");
+  });
+
+  test("outlet lookup is case-insensitive", async () => {
+    const env = makeEnv({ worldInfoOutlets: { dossier: "Hello {{user}}" } });
+    expect(await ev("{{outlet::DOSSIER}}", env)).toBe("Hello Alice");
   });
 });
 
@@ -224,6 +262,38 @@ describe("if / else", () => {
   test("if with !.var negation", async () => {
     const env = makeEnv({ localVars: { flag: "0" } });
     expect(await ev("{{if::!.flag}}is falsy{{/if}}", env)).toBe("is falsy");
+  });
+
+  test("scoped if does not execute false branch side effects", async () => {
+    const env = makeEnv({ localVars: { diceroll_setup: "true" }, chatVars: { runs: "0" } });
+    await ev("{{if !.diceroll_setup}}{{addchatvar::runs::1}}{{/if}}", env);
+    expect(env.variables.chat.get("runs")).toBe("0");
+  });
+
+  test("single-pass if guard with local flag only runs setup once", async () => {
+    const env = makeEnv({ chatVars: { runs: "0" } });
+    const template = `{{if !.diceroll_setup}}
+{{setchatvar::pov::1stW}}
+{{setchatvar::prose::ClinicW}}
+{{setchatvar::lens::HedonismW}}
+{{setchatvar::tone::SultryW}}
+{{setchatvar::sex::CrashW}}
+{{addchatvar::runs::1}}
+
+{{.diceroll_setup = true}}
+{{/if}}`;
+
+    await ev(template, env);
+    expect(env.variables.chat.get("pov")).toBe("1stW");
+    expect(env.variables.chat.get("prose")).toBe("ClinicW");
+    expect(env.variables.chat.get("lens")).toBe("HedonismW");
+    expect(env.variables.chat.get("tone")).toBe("SultryW");
+    expect(env.variables.chat.get("sex")).toBe("CrashW");
+    expect(env.variables.chat.get("runs")).toBe("1");
+    expect(env.variables.local.get("diceroll_setup")).toBe("true");
+
+    await ev(template, env);
+    expect(env.variables.chat.get("runs")).toBe("1");
   });
 
   test("if with $gvar shorthand", async () => {
@@ -375,6 +445,44 @@ describe("Chat-scoped persisted variables", () => {
     const env = makeEnv({ chatVars: { x: "1" } });
     await ev("{{@x}}", env);
     expect(env._chatVarsDirty).toBeUndefined();
+  });
+});
+
+describe("Macro execution mode", () => {
+  test("custom macro sees committing execution by default", async () => {
+    const name = `test_commit_${crypto.randomUUID()}`;
+    registry.registerMacro({
+      name,
+      category: "Test",
+      description: "Returns current commit mode",
+      returnType: "string",
+      handler: (ctx) => (ctx.commit ? "commit" : "dry"),
+    });
+
+    try {
+      expect(await ev(`{{${name}}}`)).toBe("commit");
+    } finally {
+      registry.unregisterMacro(name);
+    }
+  });
+
+  test("custom macro sees dry execution when env.commit is false", async () => {
+    const name = `test_dry_${crypto.randomUUID()}`;
+    registry.registerMacro({
+      name,
+      category: "Test",
+      description: "Returns current commit mode",
+      returnType: "string",
+      handler: (ctx) => (ctx.commit ? "commit" : "dry"),
+    });
+
+    try {
+      const env = makeEnv();
+      env.commit = false;
+      expect(await ev(`{{${name}}}`, env)).toBe("dry");
+    } finally {
+      registry.unregisterMacro(name);
+    }
   });
 });
 
@@ -698,6 +806,30 @@ describe("Logic macros", () => {
     expect(await ev("{{switch::{{.mode}}::light::Sun::dark::Moon::Star}}", env)).toBe("Moon");
   });
 
+  test("switch only resolves matched branch result", async () => {
+    const env = makeEnv();
+    const result = await ev(
+      "{{switch::b::a::{{setchatvar::bad::1}}Alpha::b::{{setchatvar::good::1}}Beta::{{setchatvar::defaulted::1}}Default}}",
+      env,
+    );
+    expect(result).toBe("Beta");
+    expect(env.variables.chat.get("good")).toBe("1");
+    expect(env.variables.chat.has("bad")).toBe(false);
+    expect(env.variables.chat.has("defaulted")).toBe(false);
+  });
+
+  test("switch only resolves default when no case matches", async () => {
+    const env = makeEnv();
+    const result = await ev(
+      "{{switch::z::a::{{setchatvar::bad::1}}Alpha::b::{{setchatvar::also_bad::1}}Beta::{{setchatvar::defaulted::1}}Default}}",
+      env,
+    );
+    expect(result).toBe("Default");
+    expect(env.variables.chat.get("defaulted")).toBe("1");
+    expect(env.variables.chat.has("bad")).toBe(false);
+    expect(env.variables.chat.has("also_bad")).toBe(false);
+  });
+
   test("default truthy", async () => {
     expect(await ev("{{default::hello::fallback}}")).toBe("hello");
   });
@@ -718,6 +850,20 @@ describe("Logic macros", () => {
     expect(await ev("{{coalesce::hello::world}}")).toBe("hello");
   });
 
+  test("default does not resolve fallback when value is truthy", async () => {
+    const env = makeEnv();
+    const result = await ev("{{default::value::{{setchatvar::fallback_ran::1}}fallback}}", env);
+    expect(result).toBe("value");
+    expect(env.variables.chat.has("fallback_ran")).toBe(false);
+  });
+
+  test("default resolves fallback when value is falsy", async () => {
+    const env = makeEnv();
+    const result = await ev("{{default::::{{setchatvar::fallback_ran::1}}fallback}}", env);
+    expect(result).toBe("fallback");
+    expect(env.variables.chat.get("fallback_ran")).toBe("1");
+  });
+
   test("and all truthy", async () => {
     expect(await ev("{{and::1::yes::true}}")).toBe("true");
   });
@@ -732,6 +878,20 @@ describe("Logic macros", () => {
 
   test("or all falsy", async () => {
     expect(await ev("{{or::0::false::}}")).toBe("");
+  });
+
+  test("and short-circuits after first falsy arg", async () => {
+    const env = makeEnv();
+    const result = await ev("{{and::0::{{setchatvar::and_ran::1}}yes}}", env);
+    expect(result).toBe("");
+    expect(env.variables.chat.has("and_ran")).toBe(false);
+  });
+
+  test("or short-circuits after first truthy arg", async () => {
+    const env = makeEnv();
+    const result = await ev("{{or::yes::{{setchatvar::or_ran::1}}later}}", env);
+    expect(result).toBe("true");
+    expect(env.variables.chat.has("or_ran")).toBe(false);
   });
 
   test("not truthy", async () => {
@@ -998,6 +1158,403 @@ describe("Regex Reference macros", () => {
     const env = makeEnv();
     delete env.extra.userId;
     expect(await ev("{{regexInstalled::some-script}}hello world{{/regexInstalled}}", env)).toBe("hello world");
+  });
+});
+
+describe("Lumia and council macros", () => {
+  test("lumiaCouncilInst matches the extension council prompt verbatim", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: [],
+          chance: 100,
+        },
+        {
+          id: "member-2",
+          itemId: "lumia-2",
+          itemName: "Kael",
+          packName: "Core",
+          role: "Strategist",
+          tools: [],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaCouncilInst}}", env);
+    expect(result).toContain("COUNCIL MODE ACTIVATED! We Lumias gather in the Loom's planning room to weave the next story beat TOGETHER.");
+    expect(result).toContain("- Address each other BY NAME—no speaking into the void");
+    expect(result).toContain("This is a conversation, not a list of separate opinions. Every voice responds to what came before.");
+    expect(result).toContain("The current sitting members of the council are: **Mira**, **Kael**");
+  });
+
+  test("lumiaStateSynthesis matches the extension council sound-off prompt", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: [],
+          chance: 100,
+        },
+        {
+          id: "member-2",
+          itemId: "lumia-2",
+          itemName: "Kael",
+          packName: "Core",
+          role: "Strategist",
+          tools: [],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaStateSynthesis}}", env);
+    expect(result).toContain("**Council Sound-Off**");
+    expect(result).toContain("- Each member maintains their UNIQUE personality—do not blend or homogenize voices");
+    expect(result).not.toContain("Members kick off in first person as named individuals");
+  });
+
+  test("lumiaOOC matches the extension council social prompt", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: [],
+          chance: 100,
+        },
+        {
+          id: "member-2",
+          itemId: "lumia-2",
+          itemName: "Kael",
+          packName: "Core",
+          role: "Strategist",
+          tools: [],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+    env.extra.ooc = { enabled: true, interval: 5, style: "social" };
+
+    const result = await ev("{{lumiaOOC}}", env);
+    expect(result).toContain("### Loom Utility: Council OOC Commentary");
+    expect(result).toContain("**Status:** **OOC: ACTIVE** -- Include OOC commentary in this response.");
+    expect(result).toContain("When OOC is ACTIVE, council members speak TOGETHER—this is a conversation, not separate monologues.");
+    expect(result).toContain("- React to each other: \"I agree with [Name]...\" / \"[Name], you're wrong about...\" / \"Oh please, [Name]...\"");
+  });
+
+  test("lumiaOOC matches the extension council IRC prompt", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: [],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+    env.extra.ooc = { enabled: true, interval: 5, style: "irc" };
+
+    const result = await ev("{{lumiaOOC}}", env);
+    expect(result).toContain("### Loom Utility: Council IRC Link");
+    expect(result).toContain("**STATUS: CONNECTED** via #LumiaCouncil");
+    expect(result).toContain("**Timing:** **OOC: ACTIVE** -- Include OOC commentary in this response.");
+    expect(result).toContain("Use these handles EXACTLY as shown. Place all IRC chat after narrative content.");
+  });
+
+  test("lumiaOOCErotic matches the extension council protocol prompt", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: [],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaOOCErotic}}", env);
+    expect(result).toContain("### Loom Utility: Mirror & Synapse (Council Protocol)");
+    expect(result).toContain("Each Council Weaver must physically mirror the story's erotic voltage in real-time.");
+    expect(result).toContain("Council members should react to EACH OTHER's arousal—acknowledge when another member edges, tease when one struggles, encourage when one breaks.");
+  });
+
+  test("lumiaOOCEroticBleed matches the extension council rupture prompt", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: [],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaOOCEroticBleed}}", env);
+    expect(result).toContain("### Loom Utility: Narrative Rupture (Council Protocol)");
+    expect(result).toContain("<lumia_ooc name=\"[Member]\">");
+    expect(result).toContain("Council members may react to EACH OTHER's bleeds—commenting on another's loss of composure, teasing their arousal, or confessing their own state in response.");
+  });
+
+  test("lumiaCouncilDeliberation resolves pre-generation council results without toolsSettings.enabled", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: ["detect_scene"],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [
+        {
+          memberId: "member-1",
+          memberName: "Mira",
+          toolName: "detect_scene",
+          toolDisplayName: "Scene Analysis",
+          success: true,
+          content: "Moonlight, rain, and a tense confrontation in the alley.",
+        },
+      ],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaCouncilDeliberation}}", env);
+    expect(result).toContain("## Council Deliberation");
+    expect(result).toContain("Mira");
+    expect(result).toContain("Moonlight, rain, and a tense confrontation in the alley.");
+    expect(result).toContain("2. Debate which suggestions have the most merit");
+    expect(result).not.toContain("2. Debate which suggestions have the most merit in first person as named council members responding to each other");
+  });
+
+  test("lumiaCouncilToolsActive reflects actual tool output", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [],
+      toolsSettings: { mode: "sidecar" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    expect(await ev("{{lumiaCouncilToolsActive}}", env)).toBe("no");
+
+    env.extra.council.toolResults = [
+      {
+        memberId: "member-1",
+        memberName: "Mira",
+        toolName: "detect_scene",
+        toolDisplayName: "Scene Analysis",
+        success: true,
+        content: "A storm is closing in.",
+      },
+    ];
+
+    expect(await ev("{{lumiaCouncilToolsActive}}", env)).toBe("yes");
+  });
+
+  test("lumiaCouncilToolsList resolves from configured member tools", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: true,
+      members: [
+        {
+          id: "member-1",
+          itemId: "lumia-1",
+          itemName: "Mira",
+          packName: "Core",
+          role: "Scout",
+          tools: ["detect_scene", "detect_expression"],
+          chance: 100,
+        },
+      ],
+      toolsSettings: { mode: "inline" },
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const result = await ev("{{lumiaCouncilToolsList}}", env);
+    expect(result).toContain("detect_scene");
+    expect(result).toContain("Mira");
+  });
+
+  test("loomStyle resolves from loom context", async () => {
+    const env = makeEnv();
+    env.extra.loom = {
+      selectedStyles: [
+        { id: "style-1", name: "Noir", content: "Lean into clipped, rain-soaked noir prose.", category: "style" },
+      ],
+      selectedUtils: [],
+      selectedRetrofits: [],
+      summary: "",
+    };
+
+    expect(await ev("{{loomStyle}}", env)).toBe("Lean into clipped, rain-soaked noir prose.");
+  });
+
+  test("Lumia selection macros resolve legacy camelCase item payloads", async () => {
+    const env = makeEnv();
+    env.extra.lumia = {
+      selectedDefinition: {
+        id: "lumia-1",
+        lumiaName: "Astra",
+        lumiaDefinition: "A halo-crowned archivist woven from starlight.",
+      },
+      selectedBehaviors: [
+        {
+          id: "lumia-2",
+          lumiaName: "Vel",
+          lumiaBehavior: "She circles tense scenes before committing to a single sharp move.",
+        },
+      ],
+      selectedPersonalities: [
+        {
+          id: "lumia-3",
+          lumiaName: "Morrow",
+          lumiaPersonality: "Patient, curious, and slightly cruel when she smells weakness.",
+        },
+      ],
+      chimeraMode: false,
+      quirks: "",
+      quirksEnabled: true,
+      allItems: [],
+    };
+
+    expect(await ev("{{lumiaDef}}", env)).toBe("A halo-crowned archivist woven from starlight.");
+    expect(await ev("{{lumiaBehavior}}", env)).toBe("She circles tense scenes before committing to a single sharp move.");
+    expect(await ev("{{lumiaPersonality}}", env)).toBe("Patient, curious, and slightly cruel when she smells weakness.");
+  });
+
+  test("Chimera definition macro uses dedicated chimera selections", async () => {
+    const env = makeEnv();
+    env.extra.lumia = {
+      selectedDefinition: {
+        id: "lumia-1",
+        name: "Astra",
+        definition: "A halo-crowned archivist woven from starlight.",
+      },
+      selectedChimeraDefinitions: [
+        {
+          id: "lumia-1",
+          name: "Astra",
+          definition: "A halo-crowned archivist woven from starlight.",
+        },
+        {
+          id: "lumia-2",
+          name: "Vel",
+          definition: "A silver-fanged huntress with mirrored bones.",
+        },
+      ],
+      selectedBehaviors: [
+        {
+          id: "lumia-3",
+          name: "Morrow",
+          behavior: "She circles tense scenes before committing to a single sharp move.",
+        },
+      ],
+      selectedPersonalities: [],
+      chimeraMode: true,
+      quirks: "",
+      quirksEnabled: true,
+      allItems: [],
+    };
+
+    expect(await ev("{{lumiaDef::len}}", env)).toBe("2");
+    expect(await ev("{{lumiaDef}}", env)).toContain("# CHIMERA FORM: Astra + Vel");
+    expect(await ev("{{lumiaDef}}", env)).toContain("A silver-fanged huntress with mirrored bones.");
+    expect(await ev("{{lumiaDef}}", env)).not.toContain("She circles tense scenes before committing to a single sharp move.");
+  });
+
+  test("Loom selection macros resolve legacy camelCase item payloads", async () => {
+    const env = makeEnv();
+    env.extra.loom = {
+      selectedStyles: [
+        { id: "style-1", loomName: "Noir", loomContent: "Write with rain-slick fatalism.", loomCategory: "narrative_style" },
+      ],
+      selectedUtils: [
+        { id: "util-1", loomName: "Cadence", loomContent: "Vary sentence length for controlled momentum.", loomCategory: "loom_utility" },
+      ],
+      selectedRetrofits: [
+        { id: "retro-1", loomName: "Pressure", loomContent: "Keep the character's old wound active in every confrontation.", loomCategory: "retrofit" },
+      ],
+      summary: "",
+    };
+
+    expect(await ev("{{loomStyle}}", env)).toBe("Write with rain-slick fatalism.");
+    expect(await ev("{{loomUtils}}", env)).toBe("Vary sentence length for controlled momentum.");
+    expect(await ev("{{loomRetrofits}}", env)).toBe("Keep the character's old wound active in every confrontation.");
+    expect(await ev("{{loomStyle::len}}", env)).toBe("1");
+    expect(await ev("{{loomUtils::len}}", env)).toBe("1");
+    expect(await ev("{{loomRetrofits::len}}", env)).toBe("1");
   });
 });
 

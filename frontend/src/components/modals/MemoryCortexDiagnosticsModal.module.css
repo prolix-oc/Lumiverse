@@ -1,5 +1,5 @@
 .modal {
-  width: min(1100px, calc(100vw - 40px));
+  width: min(1100px, calc(calc(100vw / var(--lumiverse-ui-scale, 1)) - 40px));
   min-height: 0;
 }
 
@@ -30,7 +30,7 @@
 }
 
 .eyebrow {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--lumiverse-text-dim);
@@ -38,7 +38,7 @@
 
 .title {
   margin: 0;
-  font-size: 24px;
+  font-size: calc(24px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
@@ -46,7 +46,7 @@
 .subtitle {
   margin: 0;
   max-width: 760px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
 }
@@ -104,7 +104,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -171,13 +171,13 @@
 }
 
 .overviewTitle {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
 }
 
 .overviewMeta {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -199,13 +199,13 @@
 }
 
 .summaryValue {
-  font-size: 18px;
+  font-size: calc(18px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
 
 .summaryLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -221,7 +221,7 @@
   padding: 11px 14px;
   border-bottom: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
 }
@@ -252,14 +252,14 @@
 }
 
 .checkLabel {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .checkMessage {
   margin-top: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
 }
@@ -272,7 +272,7 @@
   padding: 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--lumiverse-border);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -325,7 +325,7 @@
   gap: 12px;
   padding: 10px 14px;
   border-top: 1px solid var(--lumiverse-border);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .metaRow:first-child {
@@ -345,7 +345,7 @@
 .loadingRow,
 .emptyRow {
   padding: 16px 14px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -368,7 +368,7 @@
 }
 
 .errorTitle {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: #ff8c8c;
 }
@@ -377,7 +377,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: rgba(255, 214, 214, 0.95);
 }
@@ -399,7 +399,7 @@
 
 @media (max-width: 720px) {
   .modal {
-    width: min(100vw - 24px, 1100px);
+    width: min(calc(100vw / var(--lumiverse-ui-scale, 1)) - 24px, 1100px);
   }
 
   .header {

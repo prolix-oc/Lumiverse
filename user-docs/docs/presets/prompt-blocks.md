@@ -114,6 +114,16 @@ Leave the trigger list empty to include the block in all generation types.
 
 ---
 
+## Prompt Variables
+
+Blocks can define **Prompt Variables**—typed inputs that allow users to customize the preset's behavior without editing the raw block text.
+
+For example, you might create a `tone` variable (text) or a `verbosity` variable (slider). When a user selects your preset, they are presented with a clean UI to fill out these variables, and the values are automatically injected into your macros.
+
+Read the [Prompt Variables guide](prompt-variables.md) for full instructions on how to define them as a creator, and how users interact with them via the Prompt Variables Modal.
+
+---
+
 ## Block Groups
 
 Blocks can be assigned to **groups** for collective behavior. Groups support two modes:

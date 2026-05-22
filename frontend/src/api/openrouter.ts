@@ -76,6 +76,12 @@ export interface OpenRouterCompleteAuthResult {
   profile?: import('@/types/api').ConnectionProfile
 }
 
+export function buildOpenRouterOAuthCallbackUrl(): string {
+  const url = new URL('/api/v1/openrouter/oauth-landing', window.location.origin)
+  url.searchParams.set('opener_origin', window.location.origin)
+  return url.toString()
+}
+
 export const openrouterApi = {
   /** Initiate PKCE OAuth flow. Pass `connectionId` for existing profiles, or `connectionName` to auto-create on success. */
   initiateAuth(callbackUrl: string, opts: { connectionId?: string; connectionName?: string }) {

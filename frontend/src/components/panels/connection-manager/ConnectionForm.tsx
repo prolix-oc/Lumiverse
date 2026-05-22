@@ -3,10 +3,27 @@ import { FormField, TextInput, Select, Button } from '@/components/shared/FormCo
 import { Toggle } from '@/components/shared/Toggle'
 import { connectionsApi } from '@/api/connections'
 import { useStore } from '@/store'
+import {
+  areReasoningSettingsEqual,
+  getReasoningBindingSummary,
+  normalizeReasoningSettingsForProvider,
+} from '@/lib/reasoning-binding'
+import {
+  buildAnthropicPromptCachingMetadata,
+  DEFAULT_ANTHROPIC_PROMPT_CACHING,
+  parseAnthropicPromptCachingSettings,
+  type AnthropicPromptCachingSettings,
+} from '@/lib/anthropic-prompt-caching'
+import {
+  buildNanoGptCachingMetadata,
+  parseNanoGptCachingSettings,
+  type NanoGptCachingSettings,
+} from '@/lib/nanogpt-prompt-caching'
 import ModelCombobox from './ModelCombobox'
 import OpenRouterSettings from './OpenRouterSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import type { OpenRouterConnectionSettings } from '@/api/openrouter'
+import type { ReasoningSettings } from '@/types/store'
 import styles from '../ConnectionManager.module.css'
 
 interface ConnectionFormProps {
@@ -21,6 +38,7 @@ interface ConnectionFormProps {
 const FALLBACK_PROVIDERS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'infermatic', label: 'Infermatic' },
   { value: 'pollinations_text', label: 'Pollinations (Text)' },
   { value: 'pollinations', label: 'Pollinations (Gen)' },
   { value: 'openrouter', label: 'OpenRouter' },
@@ -34,6 +52,16 @@ const VERTEX_REGIONS = [
   'northamerica-northeast1', 'australia-southeast1', 'global',
 ]
 
+const ANTHROPIC_CACHE_TTL_OPTIONS = [
+  { value: '5m', label: '5 minutes' },
+  { value: '1h', label: '1 hour' },
+]
+
+const NANOGPT_CACHE_TTL_OPTIONS = [
+  { value: '5m', label: '5 minutes' },
+  { value: '1h', label: '1 hour' },
+]
+
 export default function ConnectionForm({ providers, profile, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || 'openai')
@@ -43,8 +71,25 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
   const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
   const [useSubscriptionApi, setUseSubscriptionApi] = useState(profile?.metadata?.use_subscription_api || false)
+  const [useZaiCodingPlanEndpoint, setUseZaiCodingPlanEndpoint] = useState(profile?.metadata?.use_coding_plan_endpoint || false)
+  const [anthropicPromptCachingSettings, setAnthropicPromptCachingSettings] = useState<AnthropicPromptCachingSettings>(
+    () => parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching)
+  )
+  const [nanogptCachingSettings, setNanogptCachingSettings] = useState<NanoGptCachingSettings>(
+    () => parseNanoGptCachingSettings(profile?.metadata?.nanogpt_caching)
+  )
   const [bindReasoning, setBindReasoning] = useState(!!profile?.metadata?.reasoningBindings)
   const reasoningSettings = useStore((s) => s.reasoningSettings)
+  const promptBias = useStore((s) => s.promptBias)
+  const [boundReasoningSettings, setBoundReasoningSettings] = useState<ReasoningSettings>(
+    () => ({ ...(profile?.metadata?.reasoningBindings?.settings || reasoningSettings) })
+  )
+  const [boundPromptBias, setBoundPromptBias] = useState<string>(
+    () => {
+      const stored = profile?.metadata?.reasoningBindings?.promptBias
+      return typeof stored === 'string' ? stored : promptBias
+    }
+  )
   const [models, setModels] = useState<string[]>([])
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
@@ -71,10 +116,30 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const isPollinations = provider === 'pollinations'
 
   const fetchModels = useCallback(async () => {
-    if (!profile?.id) return
     setModelsLoading(true)
     try {
-      const result = await connectionsApi.models(profile.id)
+      const metadata: Record<string, any> = { ...profile?.metadata }
+      if (provider === 'nanogpt') {
+        metadata.use_subscription_api = useSubscriptionApi
+      } else {
+        delete metadata.use_subscription_api
+      }
+      if (provider === 'zai') {
+        metadata.use_coding_plan_endpoint = useZaiCodingPlanEndpoint
+      } else {
+        delete metadata.use_coding_plan_endpoint
+      }
+      if (isVertexAI) {
+        metadata.vertex_region = vertexRegion
+      }
+
+      const result = await connectionsApi.previewModels({
+        connection_id: profile?.id,
+        provider,
+        api_url: isVertexAI ? undefined : (apiUrl.trim() || undefined),
+        metadata,
+        api_key: apiKey.trim() || undefined,
+      })
       setModels(result.models)
       setModelLabels(result.model_labels || {})
     } catch {
@@ -83,7 +148,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } finally {
       setModelsLoading(false)
     }
-  }, [profile?.id])
+  }, [apiKey, apiUrl, isVertexAI, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion])
 
   useEffect(() => {
     if (profile?.id) fetchModels()
@@ -175,10 +240,26 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
 
   const showResponsesApiToggle = provider === 'openai'
   const showSubscriptionApiToggle = provider === 'nanogpt'
+  const showZaiCodingPlanToggle = provider === 'zai'
+  const showAnthropicPromptCachingToggle = provider === 'anthropic'
+  const showNanoGptCachingToggle = provider === 'nanogpt'
   const isOpenRouter = provider === 'openrouter'
   // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
   // field has no purpose and we don't display it.
   const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI
+  const normalizedBoundReasoningSettings = normalizeReasoningSettingsForProvider(boundReasoningSettings, provider, model)
+  const normalizedCurrentReasoningSettings = normalizeReasoningSettingsForProvider(reasoningSettings, provider, model)
+  const bindingMatchesCurrent = areReasoningSettingsEqual(normalizedBoundReasoningSettings, normalizedCurrentReasoningSettings)
+    && boundPromptBias === promptBias
+
+  useEffect(() => {
+    setBindReasoning(!!profile?.metadata?.reasoningBindings)
+    setBoundReasoningSettings({ ...(profile?.metadata?.reasoningBindings?.settings || reasoningSettings) })
+    const storedPromptBias = profile?.metadata?.reasoningBindings?.promptBias
+    setBoundPromptBias(typeof storedPromptBias === 'string' ? storedPromptBias : promptBias)
+    setAnthropicPromptCachingSettings(parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching))
+    setNanogptCachingSettings(parseNanoGptCachingSettings(profile?.metadata?.nanogpt_caching))
+  }, [profile?.id])
 
   const handlePollinationsSignIn = useCallback(async () => {
     setByopStatus(null)
@@ -242,8 +323,26 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } else {
       delete metadata.use_subscription_api
     }
+    if (showZaiCodingPlanToggle) {
+      metadata.use_coding_plan_endpoint = useZaiCodingPlanEndpoint
+    } else {
+      delete metadata.use_coding_plan_endpoint
+    }
+    if (showAnthropicPromptCachingToggle) {
+      metadata.prompt_caching = buildAnthropicPromptCachingMetadata(anthropicPromptCachingSettings)
+    } else {
+      delete metadata.prompt_caching
+    }
+    if (showNanoGptCachingToggle) {
+      metadata.nanogpt_caching = buildNanoGptCachingMetadata(nanogptCachingSettings)
+    } else {
+      delete metadata.nanogpt_caching
+    }
     if (bindReasoning) {
-      metadata.reasoningBindings = { settings: { ...reasoningSettings } }
+      metadata.reasoningBindings = {
+        settings: normalizedBoundReasoningSettings,
+        promptBias: boundPromptBias,
+      }
     } else {
       delete metadata.reasoningBindings
     }
@@ -279,7 +378,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, bindReasoning, reasoningSettings, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
 
   return (
     <div className={styles.form}>
@@ -358,7 +457,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
         </FormField>
       )}
-      <FormField label="Model" hint={!profile?.id ? 'Save connection first to fetch model list' : undefined}>
+      <FormField label="Model" hint="Refresh uses the current form values, even before the connection is saved.">
         <ModelCombobox
           value={model}
           onChange={setModel}
@@ -366,7 +465,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           modelLabels={modelLabels}
           loading={modelsLoading}
           onRefresh={fetchModels}
-          disabled={!profile?.id}
+          appearance="standard"
           placeholder={isVertexAI ? 'gemini-2.5-flash' : 'gpt-4o'}
         />
       </FormField>
@@ -383,6 +482,105 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           <Toggle.Checkbox checked={useSubscriptionApi} onChange={setUseSubscriptionApi} label="Use Subscription API" hint="Use /api/subscription/v1 to only use models from your NanoGPT subscription" />
         </FormField>
       )}
+      {showNanoGptCachingToggle && (
+        <>
+          <FormField label="">
+            <Toggle.Checkbox
+              checked={nanogptCachingSettings.enabled}
+              onChange={(checked) => setNanogptCachingSettings((current) => ({ ...current, enabled: checked }))}
+              label="Enable Prompt Caching"
+              hint="Route to cache-capable providers and pass NanoGPT's prompt_caching helper. Avoids stale responses when upstream caches collide."
+            />
+          </FormField>
+          {nanogptCachingSettings.enabled && (
+            <>
+              <FormField label="Prompt Cache TTL" hint="How long NanoGPT should retain the cached prefix. Use 1 hour for slower flows at higher write cost.">
+                <Select
+                  value={nanogptCachingSettings.ttl}
+                  onChange={(ttl) => setNanogptCachingSettings((current) => ({ ...current, ttl: ttl as '5m' | '1h' }))}
+                  options={NANOGPT_CACHE_TTL_OPTIONS}
+                />
+              </FormField>
+              <FormField label="">
+                <Toggle.Checkbox
+                  checked={nanogptCachingSettings.stickyProvider}
+                  onChange={(checked) => setNanogptCachingSettings((current) => ({ ...current, stickyProvider: checked }))}
+                  label="Sticky Provider"
+                  hint="Prefer the previously recorded upstream provider for cache hits. NanoGPT returns 503 on failover instead of switching providers, preserving cache integrity."
+                />
+              </FormField>
+            </>
+          )}
+        </>
+      )}
+      {showZaiCodingPlanToggle && (
+        <FormField label="">
+          <Toggle.Checkbox checked={useZaiCodingPlanEndpoint} onChange={setUseZaiCodingPlanEndpoint} label="Use Coding Plan Endpoint" hint="Use /api/coding/paas/v4 for Z.AI Coding Plan access instead of the general /api/paas/v4 endpoint" />
+        </FormField>
+      )}
+      {showAnthropicPromptCachingToggle && (
+        <>
+          <FormField label="">
+            <Toggle.Checkbox
+              checked={anthropicPromptCachingSettings.enabled}
+              onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                ...current,
+                enabled: checked,
+                automatic: checked ? current.automatic : DEFAULT_ANTHROPIC_PROMPT_CACHING.automatic,
+              }))}
+              label="Enable Prompt Caching"
+              hint="Automatically cache prompts to reduce cost and latency for repetitive prefixes"
+            />
+          </FormField>
+          {anthropicPromptCachingSettings.enabled && (
+            <>
+              <FormField label="Prompt Cache TTL" hint="Anthropic defaults to a 5-minute cache. Use 1 hour for slower follow-up flows at higher write cost.">
+                <Select
+                  value={anthropicPromptCachingSettings.ttl}
+                  onChange={(ttl) => setAnthropicPromptCachingSettings((current) => ({ ...current, ttl: ttl as '5m' | '1h' }))}
+                  options={ANTHROPIC_CACHE_TTL_OPTIONS}
+                />
+              </FormField>
+              <FormField label="">
+                <Toggle.Checkbox
+                  checked={anthropicPromptCachingSettings.automatic}
+                  onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({ ...current, automatic: checked }))}
+                  label="Use Automatic Caching"
+                  hint="Apply Anthropic's top-level automatic cache breakpoint to the last eligible block."
+                />
+              </FormField>
+              <FormField label="Explicit Cache Breakpoints" hint="Add Anthropic block-level breakpoints on request sections that stay stable across calls.">
+                <div className={styles.toggleStack}>
+                  <Toggle.Checkbox
+                    checked={anthropicPromptCachingSettings.breakpoints.tools}
+                    onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                      ...current,
+                      breakpoints: { ...current.breakpoints, tools: checked },
+                    }))}
+                    label="Cache Tools"
+                  />
+                  <Toggle.Checkbox
+                    checked={anthropicPromptCachingSettings.breakpoints.system}
+                    onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                      ...current,
+                      breakpoints: { ...current.breakpoints, system: checked },
+                    }))}
+                    label="Cache System Prompt"
+                  />
+                  <Toggle.Checkbox
+                    checked={anthropicPromptCachingSettings.breakpoints.messages}
+                    onChange={(checked) => setAnthropicPromptCachingSettings((current) => ({
+                      ...current,
+                      breakpoints: { ...current.breakpoints, messages: checked },
+                    }))}
+                    label="Cache Conversation Prefix"
+                  />
+                </div>
+              </FormField>
+            </>
+          )}
+        </>
+      )}
       {isOpenRouter && (
         <OpenRouterSettings
           connectionId={profile?.id}
@@ -398,8 +596,34 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
         />
       )}
       <FormField label="">
-        <Toggle.Checkbox checked={bindReasoning} onChange={setBindReasoning} label="Bind reasoning settings" hint="Save current reasoning settings and auto-apply when this connection is selected" />
+        <Toggle.Checkbox checked={bindReasoning} onChange={setBindReasoning} label="Bind reasoning settings" hint='Save current reasoning settings (including "Start Reply With") and auto-apply when this connection is selected' />
       </FormField>
+      {bindReasoning && (
+        <div className={styles.bindingCard}>
+          <div className={styles.bindingCardHeader}>
+            <div>
+              <div className={styles.bindingCardTitle}>Saved reasoning snapshot</div>
+              <div className={styles.bindingCardSummary}>{getReasoningBindingSummary(normalizedBoundReasoningSettings, boundPromptBias)}</div>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setBoundReasoningSettings({ ...reasoningSettings })
+                setBoundPromptBias(promptBias)
+              }}
+              title={bindingMatchesCurrent ? 'Snapshot already matches the current reasoning settings' : 'Replace the saved snapshot with the current reasoning settings'}
+            >
+              {bindingMatchesCurrent ? 'Captured' : 'Capture Current'}
+            </Button>
+          </div>
+          {!bindingMatchesCurrent && (
+            <div className={styles.bindingCardHint}>
+              Current panel values differ from this connection's saved snapshot.
+            </div>
+          )}
+        </div>
+      )}
       <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim()}>

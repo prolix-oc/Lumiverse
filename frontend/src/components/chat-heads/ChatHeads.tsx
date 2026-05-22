@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
-import { X, EyeOff, Columns2, Rows2, Wrench, AlertTriangle } from 'lucide-react'
+import { X, EyeOff, Columns2, Rows2, Wrench, AlertTriangle, Volume2, VolumeX } from 'lucide-react'
 import { useStore } from '@/store'
+import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import type { ChatHeadEntry } from '@/types/store'
@@ -35,6 +36,7 @@ export default function ChatHeads() {
   const headSize = useStore((s) => s.chatHeadsSize)
   const direction = useStore((s) => s.chatHeadsDirection)
   const opacity = useStore((s) => s.chatHeadsOpacity)
+  const completionSoundEnabled = useStore((s) => s.chatHeadsCompletionSoundEnabled)
   const setSetting = useStore((s) => s.setSetting)
   const navigate = useNavigate()
 
@@ -51,6 +53,7 @@ export default function ChatHeads() {
   const headOffsetsRef = useRef<{ x: number; y: number }[]>([])
   const gravityLastPosRef = useRef({ x: 0, y: 0 })
   const gravityRafRef = useRef(0)
+  const leaderIndexRef = useRef(0)
 
   const reconcileChatHeads = useStore((s) => s.reconcileChatHeads)
 
@@ -199,30 +202,39 @@ export default function ChatHeads() {
 
       const SPRING = 0.25
       const EPSILON = 0.5
+      const L = leaderIndexRef.current
 
-      offsets[0] = { x: 0, y: 0 }
+      if (offsets[L]) offsets[L] = { x: 0, y: 0 }
 
       let moving = false
-      for (let i = 1; i < offsets.length; i++) {
-        // Counteract container movement — this head hasn't caught up yet
+      
+      // Heads after leader follow the one before them
+      for (let i = L + 1; i < offsets.length; i++) {
         offsets[i].x -= delta.x
         offsets[i].y -= delta.y
-
-        // Chain spring: each head follows the one before it
         const target = offsets[i - 1]
         offsets[i].x += (target.x - offsets[i].x) * SPRING
         offsets[i].y += (target.y - offsets[i].y) * SPRING
+        if (Math.abs(offsets[i].x) > EPSILON || Math.abs(offsets[i].y) > EPSILON) moving = true
+      }
 
-        if (Math.abs(offsets[i].x) > EPSILON || Math.abs(offsets[i].y) > EPSILON) {
-          moving = true
-        }
+      // Heads before leader follow the one after them
+      for (let i = L - 1; i >= 0; i--) {
+        offsets[i].x -= delta.x
+        offsets[i].y -= delta.y
+        const target = offsets[i + 1]
+        offsets[i].x += (target.x - offsets[i].x) * SPRING
+        offsets[i].y += (target.y - offsets[i].y) * SPRING
+        if (Math.abs(offsets[i].x) > EPSILON || Math.abs(offsets[i].y) > EPSILON) moving = true
       }
 
       // Apply CSS transforms directly to DOM
       heads.forEach((el) => {
         const idx = parseInt(el.dataset.headIdx || '0', 10)
-        if (idx > 0 && offsets[idx]) {
+        if (idx !== L && offsets[idx]) {
           el.style.transform = `translate(${offsets[idx].x}px, ${offsets[idx].y}px)`
+        } else {
+          el.style.transform = ''
         }
       })
 
@@ -248,6 +260,19 @@ export default function ChatHeads() {
       dragging.current = true
       dragStartPos.current = { x: e.clientX, y: e.clientY }
       offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+      
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      if (el) {
+        const headEl = (el as HTMLElement).closest?.('[data-head-idx]') as HTMLElement | null
+        if (headEl?.dataset.headIdx) {
+          leaderIndexRef.current = parseInt(headEl.dataset.headIdx, 10)
+        } else {
+          leaderIndexRef.current = 0
+        }
+      } else {
+        leaderIndexRef.current = 0
+      }
+
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       e.preventDefault()
 
@@ -305,7 +330,13 @@ export default function ChatHeads() {
         if (el) {
           const headEl = (el as HTMLElement).closest?.('[data-chat-id]') as HTMLElement | null
           if (headEl?.dataset.chatId) {
-            navigate(`/chat/${headEl.dataset.chatId}`)
+            const chatId = headEl.dataset.chatId
+            const clickedHead = useStore.getState().chatHeads.find((h) => h.chatId === chatId)
+            if (clickedHead && (clickedHead.status === 'completed' || clickedHead.status === 'stopped' || clickedHead.status === 'error')) {
+              useStore.getState().deleteChatHead(chatId)
+              generateApi.acknowledge(chatId).catch(() => {})
+            }
+            navigate(`/chat/${chatId}`)
           }
         }
       }
@@ -376,12 +407,20 @@ export default function ChatHeads() {
     },
     { key: 'div-3', type: 'divider' as const },
     {
+      key: 'completion-sound',
+      label: 'Completion sound',
+      icon: completionSoundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />,
+      active: completionSoundEnabled,
+      onClick: () => setSetting('chatHeadsCompletionSoundEnabled', !completionSoundEnabled),
+    },
+    { key: 'div-4', type: 'divider' as const },
+    {
       key: 'hide',
       label: 'Hide chat heads',
       icon: <EyeOff size={14} />,
       onClick: () => setSetting('chatHeadsEnabled', false),
     },
-  ], [direction, headSize, opacity, setSetting])
+  ], [direction, headSize, opacity, completionSoundEnabled, setSetting])
 
   if (!enabled || displayed.length === 0) return null
 
@@ -428,6 +467,7 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
   const isActive =
     head.status === 'assembling' ||
     head.status === 'council' ||
+    head.status === 'waiting' ||
     head.status === 'reasoning' ||
     head.status === 'streaming'
   const isCompleted = head.status === 'completed' || head.status === 'stopped'
@@ -463,6 +503,11 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
         <div className={styles.assemblyRing} />
       )}
 
+      {/* Waiting (TTFT): pulsing ring around avatar border */}
+      {head.status === 'waiting' && (
+        <div className={styles.waitingRing} />
+      )}
+
       {/* Council: wrench inside speech bubble (top-left) */}
       {(head.status === 'council' || head.status === 'council_failed') && (
         <div className={styles.speechBubble}>
@@ -492,7 +537,7 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
       )}
 
       {/* Completed: red unread notification badge */}
-      {isCompleted && (
+      {isCompleted && !head.attentionCleared && (
         <div className={`${styles.notifPip} ${styles.notifPipUnread}`} />
       )}
 
@@ -524,6 +569,7 @@ function StatusBadge({ status }: { status: ChatHeadEntry['status'] }) {
   switch (status) {
     case 'assembling':
     case 'council':
+    case 'waiting':
       return <div className={`${styles.badge} ${styles.badgeAssembling}`} />
     case 'council_failed':
       return <div className={`${styles.badge} ${styles.badgeError}`} />

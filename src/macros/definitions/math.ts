@@ -3,6 +3,7 @@ import { registry } from "../MacroRegistry";
 export function registerMathMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "calc",
     category: "Math",
     description: "Evaluate a math expression (+ - * / % with parentheses)",
@@ -17,6 +18,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "min",
     category: "Math",
     description: "Return the smallest of two or more numbers",
@@ -30,6 +32,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "max",
     category: "Math",
     description: "Return the largest of two or more numbers",
@@ -43,6 +46,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "clamp",
     category: "Math",
     description: "Clamp a value between min and max",
@@ -62,6 +66,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "abs",
     category: "Math",
     description: "Absolute value of a number",
@@ -72,6 +77,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "floor",
     category: "Math",
     description: "Round down to nearest integer",
@@ -82,6 +88,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "ceil",
     category: "Math",
     description: "Round up to nearest integer",
@@ -92,6 +99,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "mod",
     category: "Math",
     description: "Modulo (remainder of division)",
@@ -109,6 +117,7 @@ export function registerMathMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "round",
     category: "Math",
     description: "Round a number to N decimal places (default 0)",

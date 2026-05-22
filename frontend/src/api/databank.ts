@@ -75,6 +75,13 @@ export const databankApi = {
   delete(id: string) {
     return del<void>(`/databanks/${id}`)
   },
+  fuse(targetId: string, sourceId: string) {
+    return post<{ databank: Databank; moved: number; skipped: number }>(
+      `/databanks/${targetId}/fuse`,
+      { source_id: sourceId },
+      LONG,
+    )
+  },
 
   // Documents
   listDocuments(bankId: string, params?: { limit?: number; offset?: number }) {
@@ -99,6 +106,9 @@ export const databankApi = {
   },
   reprocessDocument(bankId: string, docId: string) {
     return post<{ success: boolean }>(`/databanks/${bankId}/documents/${docId}/reprocess`)
+  },
+  updateDocumentContent(bankId: string, docId: string, content: string) {
+    return put<DatabankDocument>(`/databanks/${bankId}/documents/${docId}/content`, { content }, LONG)
   },
 
   // Scrape URL

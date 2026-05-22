@@ -1,6 +1,7 @@
-import type { Preset, CreatePresetInput, UpdatePresetInput } from '@/types/api'
+import type { Preset, CreatePresetInput, UpdatePresetInput, ProviderInfo } from '@/types/api'
 import type {
   PromptBlock,
+  PromptVariableValue,
   LoomPreset,
   LoomRegistryEntry,
   LoomConnectionProfile,
@@ -20,6 +21,8 @@ import {
   PROVIDER_PARAMS,
   DEFAULT_PROVIDER_PARAMS,
   CATEGORY_MARKER,
+  WIKI_CATEGORY_PATTERN,
+  WIKI_SUBCATEGORY_PATTERN,
   ST_IDENTIFIER_TO_MARKER,
   MARKER_TO_ST_IDENTIFIER,
 } from './constants'
@@ -70,6 +73,9 @@ function migratePreset(preset: LoomPreset): LoomPreset {
   preset.advancedSettings = { ...DEFAULT_ADVANCED_SETTINGS, ...(preset.advancedSettings || {}) }
   if (!preset.modelProfiles) preset.modelProfiles = {}
   if (!preset.lastProfileKey) preset.lastProfileKey = null
+  preset.coverUrl = typeof preset.coverUrl === 'string' && preset.coverUrl.trim()
+    ? preset.coverUrl.trim()
+    : null
   if (Array.isArray(preset.blocks)) {
     for (const block of preset.blocks) {
       if (!Array.isArray(block.injectionTrigger)) {
@@ -82,6 +88,83 @@ function migratePreset(preset: LoomPreset): LoomPreset {
   }
   preset.blocks = normalizeCategoryBlockState(preset.blocks || [])
   return preset
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
+  if (Array.isArray(promptOrder)) {
+    return promptOrder.some((entry) => isRecord(entry) && Array.isArray(entry.order))
+  }
+  if (isRecord(promptOrder)) {
+    return Object.values(promptOrder).some((entry) => isRecord(entry) && Array.isArray(entry.order))
+  }
+  return false
+}
+
+export function looksLikeLegacyPresetData(data: unknown): data is STPresetData {
+  return isRecord(data)
+    && (Array.isArray(data.prompts) || hasLegacyPromptOrderShape(data.prompt_order))
+}
+
+export function looksLikeBackendLoomPresetData(data: unknown): data is Preset {
+  return isRecord(data)
+    && Array.isArray(data.prompt_order)
+    && isRecord(data.parameters)
+    && isRecord(data.prompts)
+    && isRecord(data.metadata)
+}
+
+export function looksLikeLoomPresetData(data: unknown): data is LoomPreset {
+  return isRecord(data) && Array.isArray(data.blocks)
+}
+
+export function detectImportedPresetKind(data: unknown): 'loom' | 'legacy' | null {
+  if (looksLikeWrappedLumiHubPresetData(data) || looksLikeLoomPresetData(data) || looksLikeBackendLoomPresetData(data)) {
+    return 'loom'
+  }
+
+  if (looksLikeLegacyPresetData(data)) {
+    return 'legacy'
+  }
+
+  return null
+}
+
+export function coerceImportedLoomPreset(data: unknown, fallbackName: string): LoomPreset {
+  if (looksLikeWrappedLumiHubPresetData(data)) {
+    return migratePreset({
+      ...data.preset,
+      name: data.preset.name || fallbackName,
+      coverUrl: typeof data.cover_url === 'string' ? data.cover_url : null,
+    } as LoomPreset)
+  }
+
+  if (looksLikeLoomPresetData(data)) {
+    return migratePreset({
+      ...data,
+      name: data.name || fallbackName,
+    })
+  }
+
+  if (looksLikeBackendLoomPresetData(data)) {
+    return unmarshalPreset(data)
+  }
+
+  if (looksLikeLegacyPresetData(data)) {
+    return importFromSTPreset(data, fallbackName)
+  }
+
+  throw new Error('Unrecognized preset JSON format')
+}
+
+function looksLikeWrappedLumiHubPresetData(data: unknown): data is { preset: LoomPreset; cover_url?: unknown } {
+  return isRecord(data)
+    && data.type === 'lumiverse_preset'
+    && isRecord(data.preset)
+    && Array.isArray(data.preset.blocks)
 }
 
 function coerceCategoryMode(mode: unknown): PromptBlock['categoryMode'] {
@@ -173,8 +256,10 @@ export function marshalPreset(loom: LoomPreset): CreatePresetInput {
       modelProfiles: loom.modelProfiles,
       schemaVersion: loom.schemaVersion,
       description: loom.description,
+      coverUrl: loom.coverUrl ?? null,
       isDefault: loom.isDefault,
       lastProfileKey: loom.lastProfileKey,
+      promptVariables: pruneOrphanPromptVariables(loom.promptVariables, blocks),
     },
   }
 }
@@ -188,6 +273,7 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
     id: preset.id,
     name: preset.name,
     description: meta.description || '',
+    coverUrl: typeof meta.coverUrl === 'string' ? meta.coverUrl : (typeof meta.cover_url === 'string' ? meta.cover_url : null),
     schemaVersion: meta.schemaVersion || 1,
     createdAt: preset.created_at,
     updatedAt: preset.updated_at,
@@ -201,6 +287,9 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
     advancedSettings: prompts.advancedSettings || { ...DEFAULT_ADVANCED_SETTINGS },
     modelProfiles: meta.modelProfiles || {},
     lastProfileKey: meta.lastProfileKey || null,
+    promptVariables: meta.promptVariables && typeof meta.promptVariables === 'object'
+      ? meta.promptVariables
+      : {},
   }
 
   return migratePreset(loom)
@@ -225,10 +314,32 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
       modelProfiles: loom.modelProfiles,
       schemaVersion: loom.schemaVersion,
       description: loom.description,
+      coverUrl: loom.coverUrl ?? null,
       isDefault: loom.isDefault,
       lastProfileKey: loom.lastProfileKey,
+      promptVariables: pruneOrphanPromptVariables(loom.promptVariables, blocks),
     },
   }
+}
+
+function pruneOrphanPromptVariables(
+  values: LoomPreset['promptVariables'] | undefined,
+  blocks: PromptBlock[],
+): LoomPreset['promptVariables'] {
+  if (!values || typeof values !== 'object') return {}
+  const out: LoomPreset['promptVariables'] = {}
+  const blockById = new Map(blocks.map((b) => [b.id, b]))
+  for (const [blockId, bucket] of Object.entries(values)) {
+    const block = blockById.get(blockId)
+    if (!block || !block.variables?.length) continue
+    const validNames = new Set(block.variables.map((v) => v.name))
+    const kept: Record<string, PromptVariableValue> = {}
+    for (const [name, value] of Object.entries(bucket || {})) {
+      if (validNames.has(name)) kept[name] = value
+    }
+    if (Object.keys(kept).length) out[blockId] = kept
+  }
+  return out
 }
 
 // ============================================================================
@@ -285,6 +396,38 @@ export function computeGroups(blocks: PromptBlock[] | undefined): CategoryGroup[
 export function detectSupportedParams(provider: string | null): Set<string> {
   if (!provider) return DEFAULT_PROVIDER_PARAMS
   return PROVIDER_PARAMS[provider] || DEFAULT_PROVIDER_PARAMS
+}
+
+const PROVIDER_PARAM_KEY_TO_SAMPLER_KEY: Record<string, string> = {
+  max_tokens: 'maxTokens',
+  temperature: 'temperature',
+  top_p: 'topP',
+  min_p: 'minP',
+  top_k: 'topK',
+  frequency_penalty: 'frequencyPenalty',
+  presence_penalty: 'presencePenalty',
+  repetition_penalty: 'repetitionPenalty',
+}
+
+export function detectSupportedParamsFromProviders(
+  provider: string | null,
+  providers: ProviderInfo[] | null | undefined,
+): Set<string> {
+  if (!provider) return DEFAULT_PROVIDER_PARAMS
+
+  const providerInfo = providers?.find((entry) => entry.id === provider)
+  const capabilityKeys = providerInfo?.capabilities?.parameters
+
+  if (capabilityKeys && typeof capabilityKeys === 'object') {
+    const supported = new Set<string>(['contextSize'])
+    for (const apiKey of Object.keys(capabilityKeys)) {
+      const samplerKey = PROVIDER_PARAM_KEY_TO_SAMPLER_KEY[apiKey]
+      if (samplerKey) supported.add(samplerKey)
+    }
+    return supported
+  }
+
+  return detectSupportedParams(provider)
 }
 
 // ============================================================================
@@ -403,6 +546,9 @@ interface STPresetData {
   name?: string
   prompts?: STPrompt[]
   prompt_order?: Record<string, { order?: Array<{ identifier: string; enabled?: boolean }> }>
+  extensions?: {
+    regex_scripts?: unknown[]
+  }
   // Root-level behavior prompts (ST stores these outside the prompts array)
   continue_nudge_prompt?: string
   impersonation_prompt?: string
@@ -427,7 +573,21 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
     return block
   }
 
-  const isCategory = p.name?.startsWith(CATEGORY_MARKER)
+  // NemoPresetExt wiki subcategories (<Name>) flatten to category blocks —
+  // Lumiverse has only one level of category nesting.
+  const rawName = p.name || 'Untitled'
+  const wikiCategoryMatch = rawName.match(WIKI_CATEGORY_PATTERN)
+  const wikiSubCategoryMatch = !wikiCategoryMatch ? rawName.match(WIKI_SUBCATEGORY_PATTERN) : null
+  const isLegacyCategory = rawName.startsWith(CATEGORY_MARKER)
+  // Only treat wiki-style tags as categories when the prompt is acting like a
+  // heading. Ordinary prompts can legitimately use angle brackets or ===title===
+  // names, and those must round-trip as normal blocks.
+  const isWikiHeading = (!p.content || !p.content.trim()) && (!!wikiCategoryMatch || !!wikiSubCategoryMatch)
+  const isCategory = isLegacyCategory || isWikiHeading
+
+  let displayName = rawName
+  if (wikiCategoryMatch) displayName = wikiCategoryMatch[1].trim()
+  else if (wikiSubCategoryMatch) displayName = wikiSubCategoryMatch[1].trim()
 
   let position: PromptBlock['position'] = 'pre_history'
   let depth = 0
@@ -437,7 +597,7 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
   }
 
   return createBlock({
-    name: p.name || 'Untitled',
+    name: displayName,
     content: p.content || '',
     role: (p.role as PromptBlock['role']) || 'system',
     enabled,
@@ -532,6 +692,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     id: generateUUID(),
     name,
     description: `Imported from legacy preset "${stPresetData.name || name}"`,
+    coverUrl: null,
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
@@ -559,6 +720,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     advancedSettings: { ...DEFAULT_ADVANCED_SETTINGS },
     modelProfiles: {},
     lastProfileKey: null,
+    promptVariables: {},
   }
 }
 
@@ -696,6 +858,7 @@ export function createNewLoomPreset(name: string, description = ''): LoomPreset 
     id: generateUUID(),
     name,
     description,
+    coverUrl: null,
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
@@ -712,5 +875,6 @@ export function createNewLoomPreset(name: string, description = ''): LoomPreset 
     advancedSettings: { ...DEFAULT_ADVANCED_SETTINGS },
     modelProfiles: {},
     lastProfileKey: null,
+    promptVariables: {},
   }
 }

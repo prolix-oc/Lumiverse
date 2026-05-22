@@ -10,6 +10,7 @@ import type {
   ImportResult,
   BulkImportResult,
   BatchDeleteResult,
+  TagLibraryImportResult,
 } from '@/types/api'
 
 export interface SummaryParams {
@@ -57,9 +58,10 @@ export const charactersApi = {
     return post<Character>(`/characters/${id}/duplicate`)
   },
 
-  uploadAvatar(id: string, file: File, onProgress?: (percent: number) => void) {
+  uploadAvatar(id: string, file: File, onProgress?: (percent: number) => void, originalFile?: File) {
     const form = new FormData()
     form.append('avatar', file)
+    if (originalFile) form.append('original_avatar', originalFile)
     if (onProgress) {
       return uploadWithProgress<Character>(`/characters/${id}/avatar`, form, onProgress)
     }
@@ -99,6 +101,12 @@ export const charactersApi = {
     return upload<BulkImportResult>('/characters/import-bulk', form)
   },
 
+  importTagLibrary(file: File) {
+    const form = new FormData()
+    form.append('file', file)
+    return upload<TagLibraryImportResult>('/characters/import-tag-library', form, { timeout: 0 })
+  },
+
   batchDelete(ids: string[], keepChats = false) {
     return post<BatchDeleteResult>('/characters/batch-delete', { ids, keep_chats: keepChats })
   },
@@ -117,4 +125,33 @@ export const charactersApi = {
       `/characters/${id}/resolved-fields`, params
     )
   },
+
+  getImageGenLora(id: string) {
+    return get<{ binding: CharacterLoraBinding | null }>(`/characters/${id}/image-gen-lora`)
+  },
+
+  setImageGenLora(id: string, input: SetCharacterLoraInput) {
+    return put<{ binding: CharacterLoraBinding }>(`/characters/${id}/image-gen-lora`, input)
+  },
+
+  deleteImageGenLora(id: string) {
+    return del<{ success: boolean }>(`/characters/${id}/image-gen-lora`)
+  },
+}
+
+export interface CharacterLoraBinding {
+  lora_name: string
+  weight_model: number
+  weight_clip: number
+  base_tags?: string
+  source_url?: string
+  bound_at: number
+}
+
+export interface SetCharacterLoraInput {
+  lora_name: string
+  weight_model?: number
+  weight_clip?: number
+  base_tags?: string
+  source_url?: string
 }

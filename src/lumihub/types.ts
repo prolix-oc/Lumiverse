@@ -54,10 +54,42 @@ export interface InstallWorldbookResultPayload {
   error?: string;
 }
 
+export interface InstallThemePayload {
+  source: "lumihub";
+  themeId: string;
+  themeName: string;
+  /** Export shape returned by LumiHub's /themes/:id/export endpoint. */
+  themeData: Record<string, any>;
+}
+
+export interface InstallThemeResultPayload {
+  requestId: string;
+  success: boolean;
+  themeId?: string;
+  themeName?: string;
+  error?: string;
+}
+
+export interface InstallPresetPayload {
+  source: "lumihub";
+  presetId: string;
+  presetName: string;
+  /** Export shape returned by LumiHub's /presets/:id/export endpoint. */
+  presetData: Record<string, any>;
+}
+
+export interface InstallPresetResultPayload {
+  requestId: string;
+  success: boolean;
+  presetId?: string;
+  presetName?: string;
+  error?: string;
+}
+
 export interface ManifestSyncPayload {
   entries: Array<{
     slug: string;
-    type: "character" | "worldbook";
+    type: "character" | "worldbook" | "theme" | "preset";
     name: string;
     creator: string;
     source: "local" | "chub" | "lumihub";

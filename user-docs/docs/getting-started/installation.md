@@ -48,8 +48,6 @@ cd Lumiverse
     .\start.ps1
     ```
 
-    Alternatively, double-click `lumiverse.bat` — it launches `start.ps1` automatically.
-
 === "Termux (Android)"
 
     ```bash
@@ -107,7 +105,15 @@ The start scripts accept flags to control behavior:
     | `--setup` | Run the setup wizard |
     | `--reset-password` | Reset the owner account password |
     | `-m`, `--migrate-st` | Run the [SillyTavern migration](#migrating-from-sillytavern) tool |
-    | `--no-runner` | Start without the visual terminal runner |
+    | `--no-runner` | Start without the runner (disables Operator Panel update/restart/branch-switch controls) |
+    | `--upgrade-bun` | Upgrade Bun to the latest stable release, then continue |
+    | `--upgrade-bun-canary` | Upgrade Bun to the latest canary build, then continue |
+
+    !!! note "Termux behavior"
+        Bun's built-in `bun upgrade` command does not work on native Termux — it aborts with `'bun upgrade' is unsupported on systems without ld` because Termux uses Android's bionic libc, not glibc. On Termux:
+
+        * `--upgrade-bun` rebuilds the [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux) wrapper at `$HOME/.bun-termux` (`git pull && make && make install`), which is the actual source of Bun on Termux.
+        * `--upgrade-bun-canary` is **not supported** — bun-termux only packages stable releases. The start script will skip the upgrade and continue with the existing binary. If you specifically need canary, run Lumiverse inside a [proot-distro Linux](https://github.com/termux/proot-distro) environment, where standard `bun upgrade --canary` works normally.
 
 === "Windows (`start.ps1`)"
 
@@ -121,13 +127,30 @@ The start scripts accept flags to control behavior:
     | `-Mode setup` | Run the setup wizard |
     | `-Mode reset-password` | Reset the owner account password |
     | `-MigrateST` or `-m` | Run the SillyTavern migration tool |
-    | `-NoRunner` | Start without the visual runner |
+    | `-NoRunner` | Start without the runner (disables Operator Panel update/restart/branch-switch controls) |
+    | `-UpgradeBun` | Upgrade Bun to the latest stable release, then continue |
+    | `-UpgradeBunCanary` | Upgrade Bun to the latest canary build, then continue |
 
 ---
 
 ## Docker
 
 Lumiverse provides pre-built Docker images for the simplest possible deployment.
+
+### Available Image Tags
+
+Pre-built images are published to GitHub Container Registry under `ghcr.io/prolix-oc/lumiverse`:
+
+| Tag | Built From | Cadence | Audience |
+|-----|------------|---------|----------|
+| `latest` | `main` branch | Tagged releases | Default for everyone. Most stable. |
+| `staging` | `staging` branch | **Daily at 05:00 UTC** | Users who want a daily preview of upcoming work. May ship rough edges. |
+| `staging-<sha>` | `staging` branch | Daily | Specific commit pins of the staging branch — useful for rolling back if a fresh staging build regresses. |
+
+Switching between tags is just a matter of editing the `image:` line in `docker-compose.yml` and running `docker-compose pull && docker-compose up -d`. Your `lumiverse-data` volume is untouched, so your database and settings carry over between tags.
+
+!!! tip "Tracking staging without rebuilding"
+    Before the daily-build workflow existed, the only way to follow `staging` in Docker was to rebuild from source with `docker-compose.build.yml`. That still works, but if you just want the latest staging changes once a day, swap the image to `ghcr.io/prolix-oc/lumiverse:staging` and run `docker-compose pull` — no local build required.
 
 ### Quick Start (Pre-Built Image)
 
@@ -181,6 +204,39 @@ If you want to build the image locally:
 ```bash
 docker-compose -f docker-compose.build.yml up -d
 ```
+
+#### Forcing a fresh frontend bundle
+
+The build pipeline uses Docker's layer cache, so if Docker doesn't see a meaningful change in the frontend inputs it will reuse the previously baked Vite bundle. This is normally what you want — but if you're tracking the `staging` branch (or anywhere else fast-moving), you may want to guarantee the bundle was rebuilt from your current checkout before it gets packaged into the image.
+
+The build accepts a `FRONTEND_REFRESH` build arg that cache-busts the Vite build layer without invalidating apt, the CA refresh, or backend dependencies:
+
+=== "macOS / Linux"
+
+    ```bash
+    FRONTEND_REFRESH=$(date -u +%s) docker compose -f docker-compose.build.yml build
+    docker compose -f docker-compose.build.yml up -d
+    ```
+
+=== "Windows (PowerShell)"
+
+    ```powershell
+    $env:FRONTEND_REFRESH = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    docker compose -f docker-compose.build.yml build
+    docker compose -f docker-compose.build.yml up -d
+    ```
+
+Any value different from the last build will do — the timestamp examples above are just an easy way to guarantee uniqueness.
+
+!!! tip "Staging users"
+    `staging` ships frontend changes more frequently than `main`. If you build the image right after a `git pull` and don't see your latest UI work in the running container, run the `FRONTEND_REFRESH` invocation above to force the Vite stage to rerun. A sibling `CA_REFRESH` arg works the same way for the CA trust store — useful if you hit "unable to verify the first certificate" errors talking to providers:
+
+    ```bash
+    CA_REFRESH=$(date -u +%G-W%V) FRONTEND_REFRESH=$(date -u +%s) \
+      docker compose -f docker-compose.build.yml build
+    ```
+
+If you'd rather throw away the cache entirely (slower, but belt-and-braces), pass `--no-cache` to `docker compose build` instead.
 
 ### Docker Environment Variables
 
@@ -266,22 +322,30 @@ API keys and account passwords are stored encrypted in the `data/` directory rat
 
 ## Updating
 
-=== "Visual Runner"
+The easiest way to update Lumiverse is from the **Operator Panel** in the running app — no terminal interaction needed.
 
-    If you're using the visual terminal runner (the default), press **U** twice to trigger an update. The runner pulls the latest code, reinstalls dependencies, and restarts automatically.
+### From the Operator Panel (recommended)
+
+1. Open **Settings → Operator Panel**.
+2. Click **Check for Updates**. The panel reports how many commits behind you are and previews the latest commit message.
+3. If an update is available, click **Apply Update**. Lumiverse pulls the latest code, reinstalls dependencies, rebuilds the frontend, and restarts the server. Your browser reconnects automatically when the new build is ready.
+
+The runner that the start scripts launch is what carries out the update on your behalf. It needs to be attached for the Operator Panel buttons to work — the panel shows **Runner IPC: Connected** when it is. If the badge reads _Unavailable_ (e.g. you launched with `--no-runner` / `-NoRunner`, or restarted the backend outside the runner), use the command-line flow below instead.
+
+### From the Command Line
 
 === "macOS / Linux"
 
     ```bash
     git pull
-    ./start.sh
+    ./start.sh --build
     ```
 
 === "Windows"
 
     ```powershell
     git pull
-    .\start.ps1
+    .\start.ps1 -Build
     ```
 
 === "Docker"
@@ -291,7 +355,67 @@ API keys and account passwords are stored encrypted in the `data/` directory rat
     docker-compose up -d
     ```
 
+The `--build` / `-Build` flag rebuilds the frontend before launching — important on a fresh pull because the precompiled assets won't match the new source.
+
 Database migrations run automatically on startup — your data is preserved across updates.
+
+---
+
+## Switching Branches
+
+Lumiverse ships two long-lived branches:
+
+| Branch | Cadence | Audience |
+|--------|---------|----------|
+| **`main`** | Tagged releases. Most stable. | Default for everyone. |
+| **`staging`** | Receives merged work earlier than `main`. May ship rough edges or in-progress features. | Users who want a preview of upcoming changes and don't mind the occasional regression. |
+
+You can move between branches at any time. Your `data/` folder is unaffected.
+
+### From the Operator Panel (recommended)
+
+If you launched Lumiverse with one of the start scripts, the runner is attached by default and you can switch branches without leaving the app:
+
+1. Open **Settings → Operator Panel**.
+2. Look at the **Branch** card — it shows the branch you're on (`main` or `staging`).
+3. Click **Switch to staging** (or **Switch to main** if you're already on staging).
+4. Confirm the prompt. Lumiverse will checkout, pull, reinstall, rebuild the frontend, and restart the server. Your browser will reconnect automatically when the new build is up.
+
+!!! note "Runner IPC must be connected"
+    The button is disabled when the **Runner IPC** badge in the Operator Panel reads _Unavailable_. The runner is what executes the checkout/pull/rebuild on your behalf. If you launched without the runner (`--no-runner` / `-NoRunner`), restart with it enabled or use the git command flow below.
+
+### From the Command Line
+
+=== "macOS / Linux"
+
+    ```bash
+    git fetch origin
+    git checkout staging      # or: git checkout main
+    git pull
+    ./start.sh --build
+    ```
+
+=== "Windows"
+
+    ```powershell
+    git fetch origin
+    git checkout staging      # or: git checkout main
+    git pull
+    .\start.ps1 -Build
+    ```
+
+The `--build` / `-Build` flag rebuilds the frontend before launching — important when switching branches because the precompiled assets differ.
+
+!!! warning "Docker users"
+    The Operator Panel's branch switch and the `git checkout` flow both assume Lumiverse is running from a git checkout. If you're using a pre-built Docker image, there is no working tree to switch — instead, change the `image:` line in `docker-compose.yml`:
+
+    * `ghcr.io/prolix-oc/lumiverse:latest` → `main` branch (tagged releases)
+    * `ghcr.io/prolix-oc/lumiverse:staging` → `staging` branch (rebuilt daily at 05:00 UTC)
+
+    Then `docker-compose pull && docker-compose up -d`. If you need staging changes published *between* daily builds, fall back to rebuilding from source with `docker-compose -f docker-compose.build.yml up -d` after `git checkout staging` — and pass `FRONTEND_REFRESH=$(date -u +%s)` so the Vite bundle is regenerated from your fresh checkout (see [Forcing a fresh frontend bundle](#forcing-a-fresh-frontend-bundle)).
+
+!!! tip "Roll back to main if staging breaks"
+    Staging can occasionally ship a regression. Switching back to `main` from the Operator Panel (or `git checkout main && ./start.sh --build`) returns you to the last stable release without touching your `data/` folder.
 
 ---
 
@@ -411,8 +535,22 @@ The web UI wizard walks you through these steps:
     - Everything (recommended)
     - Custom selection
 5. **Select target** — Choose which Lumiverse account receives the data.
-6. **Confirm & import** — Review the summary and start the migration. Progress and logs stream in real time.
-7. **Results** — See counts of imported, skipped, and failed items.
+6. **(Optional) TagLibrary Backup** — If you used the [SillyTavern-TagLibrary](https://github.com/Inkbottle007/SillyTavern-TagLibrary) extension and exported a JSON backup, upload it here. Lumiverse will re-apply your tags to the imported characters once the main migration finishes. See [TagLibrary Re-Apply](#taglibrary-re-apply) below.
+7. **Confirm & import** — Review the summary and start the migration. Progress and logs stream in real time.
+8. **Results** — See counts of imported, skipped, and failed items.
+
+### TagLibrary Re-Apply
+
+The standalone **TagLibrary** extension for SillyTavern stores its character tags outside the character card itself, so they are *not* part of a normal SillyTavern export. Lumiverse can pull them back in:
+
+1. In SillyTavern, open the TagLibrary extension and export your backup as JSON
+2. On the **Confirm** step of the Migration wizard, expand **Optional: TagLibrary Backup** and upload the JSON file
+3. After the main migration completes, Lumiverse automatically runs the TagLibrary import and matches tags to imported characters using their source filenames and original image filenames
+
+A toast reports the results — how many tags were applied, how many were skipped because no matching character was found, and how many failed to parse. Existing character tags are preserved; the import only *adds* tags, it never removes them.
+
+!!! tip "When to use this"
+    Only relevant if you ran the SillyTavern-TagLibrary extension. Tags stored directly on character cards via SillyTavern's built-in tag system come across automatically with the character import and don't need this step.
 
 ### What Gets Imported
 

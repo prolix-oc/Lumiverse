@@ -29,6 +29,10 @@ export const imagesApi = {
     return del<void>(`/images/${id}`)
   },
 
+  deleteIfUnused(id: string) {
+    return del<{ success: boolean; deleted: boolean }>(`/images/${id}?unused=true`)
+  },
+
   /** Full-size original */
   url(id: string) {
     return `${BASE_URL}/images/${id}`

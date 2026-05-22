@@ -82,6 +82,19 @@ Switch between connections by setting a different one as **default**, or select 
 
 ---
 
+## Binding Reasoning Settings
+
+Reasoning-capable models (Claude with extended thinking, OpenAI o-series, DeepSeek R1, Gemini thinking models) often want different reasoning depth on different connections — heavy thinking for your hero model, light thinking for a sidecar.
+
+Each connection form has a **Bind reasoning settings** toggle. Turn it on, configure the reasoning options the way you want them for this connection, and Lumiverse stores a snapshot on the connection's metadata. Whenever you switch to that connection, the bound reasoning settings are restored automatically — even if your global reasoning settings were set differently.
+
+Bindings are per-connection and survive across sessions. Switching to a connection with no binding leaves your current reasoning settings unchanged, so you don't lose tuning work on connections that aren't bound.
+
+!!! tip "Bind a sidecar to low reasoning"
+    Sidecar tasks (scene parsing, expression detection, council tools) usually don't need deep thinking. Bind your sidecar connection to a minimal reasoning level and your main connection to whatever you prefer for prose — Lumiverse switches automatically as features call the right connection.
+
+---
+
 ## Sidecar Connection
 
 Some features (expression detection, council tools, image gen scene analysis) use a separate **sidecar connection** — a lightweight model for background tasks. Configure the sidecar in **Settings > Advanced** or in the **Sidecar Settings** section.

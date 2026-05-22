@@ -1,4 +1,5 @@
-import { get, post, put, del } from './client'
+import { get, post, put, del, upload } from './client'
+import type { TagLibraryImportResult } from '@/types/api'
 
 // ─── Connection config types ────────────────────────────────────────────────
 
@@ -86,6 +87,18 @@ export interface MigrationStatus {
   migrationId?: string
   phase?: string
   startedAt?: number
+  progress?: {
+    phase: string
+    label: string
+    current: number
+    total: number
+    updatedAt: number
+  }
+  recentLogs?: Array<{
+    level: 'info' | 'warn' | 'error'
+    message: string
+    timestamp: number
+  }>
   results?: Record<string, any>
   error?: string
 }
@@ -141,6 +154,13 @@ export const stMigrationApi = {
 
   status() {
     return get<MigrationStatus>('/st-migration/status')
+  },
+
+  importTagLibrary(file: File, targetUserId: string) {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('targetUserId', targetUserId)
+    return upload<TagLibraryImportResult>('/st-migration/tag-library/import', form, { timeout: 0 })
   },
 
   connectionTypes() {

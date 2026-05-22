@@ -22,7 +22,7 @@ function chatKey(chatId: string): string {
 // ---------------------------------------------------------------------------
 
 const SNAPSHOT_SETTINGS_KEYS = [
-  "selectedDefinition", "selectedBehaviors", "selectedPersonalities",
+  "selectedDefinition", "selectedChimeraDefinitions", "selectedBehaviors", "selectedPersonalities",
   "chimeraMode", "lumiaQuirks", "lumiaQuirksEnabled",
   "selectedLoomStyles", "selectedLoomUtils", "selectedLoomRetrofits",
   "oocEnabled", "lumiaOOCStyle", "lumiaOOCInterval",
@@ -101,6 +101,7 @@ export function captureSnapshot(userId: string): LoadoutSnapshot {
 
   return {
     selectedDefinition: settingsMap.get("selectedDefinition") ?? null,
+    selectedChimeraDefinitions: settingsMap.get("selectedChimeraDefinitions") ?? [],
     selectedBehaviors: settingsMap.get("selectedBehaviors") ?? [],
     selectedPersonalities: settingsMap.get("selectedPersonalities") ?? [],
     chimeraMode: settingsMap.get("chimeraMode") ?? false,
@@ -125,6 +126,7 @@ export function captureSnapshot(userId: string): LoadoutSnapshot {
 export function applySnapshot(userId: string, snapshot: LoadoutSnapshot): void {
   const batch: Record<string, any> = {
     selectedDefinition: snapshot.selectedDefinition,
+    selectedChimeraDefinitions: snapshot.selectedChimeraDefinitions ?? [],
     selectedBehaviors: snapshot.selectedBehaviors,
     selectedPersonalities: snapshot.selectedPersonalities,
     chimeraMode: snapshot.chimeraMode,

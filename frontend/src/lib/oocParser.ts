@@ -37,6 +37,16 @@ function extractName(attrs: string): string | undefined {
   return match[1] ?? match[2] ?? match[3] ?? match[4]
 }
 
+/** Strip trailing whitespace that contains vertical breaks (newlines or <br>). */
+function stripTrailingVerticalSpace(str: string): string {
+  return str.replace(/(?:[ \t]*(?:<br\s*\/?>|[\r\n])[ \t]*)+$/, '')
+}
+
+/** Strip leading whitespace that contains vertical breaks (newlines or <br>). */
+function stripLeadingVerticalSpace(str: string): string {
+  return str.replace(/^(?:[ \t]*(?:<br\s*\/?>|[\r\n])[ \t]*)+/, '')
+}
+
 export function parseOOC(content: string): OOCBlock[] {
   if (!content) return []
 
@@ -53,9 +63,12 @@ export function parseOOC(content: string): OOCBlock[] {
     const attrs = match[2]
     const rawContent = match[3]
 
-    // Add preceding text block
+    // Add preceding text block, stripping vertical spacing that was adjacent to the tag
     if (start > lastIndex) {
-      blocks.push({ type: 'text', content: content.slice(lastIndex, start) })
+      const text = stripTrailingVerticalSpace(content.slice(lastIndex, start))
+      if (text) {
+        blocks.push({ type: 'text', content: text })
+      }
     }
 
     const cleaned = cleanOOCContent(rawContent)
@@ -70,9 +83,12 @@ export function parseOOC(content: string): OOCBlock[] {
     lastIndex = end
   }
 
-  // Add trailing text
+  // Add trailing text, stripping vertical spacing that was adjacent to the last tag
   if (lastIndex < content.length) {
-    blocks.push({ type: 'text', content: content.slice(lastIndex) })
+    const text = stripLeadingVerticalSpace(content.slice(lastIndex))
+    if (text) {
+      blocks.push({ type: 'text', content: text })
+    }
   }
 
   if (blocks.length === 0) {

@@ -57,6 +57,8 @@ export default function RegexEditorModal() {
   const closeModal = useStore((s) => s.closeModal)
   const regexScripts = useStore((s) => s.regexScripts)
   const updateRegexScript = useStore((s) => s.updateRegexScript)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeChatId = useStore((s) => s.activeChatId)
 
   const scriptId = modalProps?.scriptId as string
   const script = useMemo(() => regexScripts.find((s) => s.id === scriptId), [regexScripts, scriptId])
@@ -127,6 +129,21 @@ export default function RegexEditorModal() {
   const handleSave = useCallback(async () => {
     if (!scriptId) return
     try {
+      let scopeId: string | null = null
+      if (scope === 'character') {
+        scopeId = script?.scope === 'character' && script.scope_id ? script.scope_id : activeCharacterId
+        if (!scopeId) {
+          toast.error('Open a character chat before saving a character-scoped regex')
+          return
+        }
+      } else if (scope === 'chat') {
+        scopeId = script?.scope === 'chat' && script.scope_id ? script.scope_id : activeChatId
+        if (!scopeId) {
+          toast.error('Open a chat before saving a chat-scoped regex')
+          return
+        }
+      }
+
       await updateRegexScript(scriptId, {
         name: name.trim(),
         script_id: userScriptId,
@@ -136,6 +153,7 @@ export default function RegexEditorModal() {
         placement,
         target,
         scope,
+        scope_id: scopeId,
         min_depth: minDepth ? parseInt(minDepth) : null,
         max_depth: maxDepth ? parseInt(maxDepth) : null,
         substitute_macros: substituteMacros,
@@ -148,7 +166,7 @@ export default function RegexEditorModal() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message)
     }
-  }, [scriptId, name, userScriptId, findRegex, replaceString, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal])
+  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal])
 
   if (!script) return null
 
@@ -166,7 +184,14 @@ export default function RegexEditorModal() {
   }
 
   return (
-    <ModalShell isOpen={true} onClose={closeModal} maxWidth={720} zIndex={10001} className={styles.modal}>
+    <ModalShell
+      isOpen={true}
+      onClose={closeModal}
+      maxWidth={720}
+      maxHeight="calc(88vh / var(--lumiverse-ui-scale, 1))"
+      zIndex={10001}
+      className={styles.modal}
+    >
         <div className={styles.header}>
           <h2 className={styles.title}>Edit Regex Script</h2>
           <CloseButton onClick={closeModal} size="sm" />
@@ -243,6 +268,10 @@ export default function RegexEditorModal() {
                     { f: 'i', hint: 'Case insensitive' },
                     { f: 'm', hint: 'Multiline' },
                     { f: 's', hint: 'Dotall' },
+                    { f: 'u', hint: 'Unicode' },
+                    { f: 'v', hint: 'Unicode sets (ES2024)' },
+                    { f: 'd', hint: 'Has indices' },
+                    { f: 'y', hint: 'Sticky' },
                   ].map(({ f, hint }) => (
                     <button
                       key={f}
@@ -395,6 +424,7 @@ export default function RegexEditorModal() {
                         { m: 'none' as const, label: 'None' },
                         { m: 'raw' as const, label: 'Raw' },
                         { m: 'escaped' as const, label: 'Escaped' },
+                        { m: 'after' as const, label: 'After' },
                       ]).map(({ m, label }) => (
                         <button
                           key={m}

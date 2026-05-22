@@ -38,7 +38,7 @@
   border-radius: 6px;
   background: none;
   color: var(--lumiverse-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   cursor: pointer;
   transition: background 120ms ease;

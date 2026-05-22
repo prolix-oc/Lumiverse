@@ -24,15 +24,268 @@ import {
 } from "../utils/regex-sandbox";
 
 const REGEX_SCRIPT_TIMEOUT_MS = 500;
+const REGEX_SLOW_WARNING_MS = 5_000;
+
+type RegexPerformanceSource = "prompt_backend" | "response_backend" | "display_backend" | "display_client";
+
+interface RegexPerformanceMetadata {
+  slow: boolean;
+  timed_out: boolean;
+  elapsed_ms: number;
+  threshold_ms: number;
+  detected_at: number;
+  source: RegexPerformanceSource;
+  version: number;
+}
+
+export interface RegexPerformanceIssue {
+  scriptId: string;
+  name: string;
+  elapsedMs: number;
+  thresholdMs: number;
+  timedOut: boolean;
+  source: RegexPerformanceSource;
+  newlyFlagged: boolean;
+}
+
+interface RegexPerformanceReportResult {
+  script: RegexScript | null;
+  newlyFlagged: boolean;
+}
+
+interface ApplyRegexScriptOptions {
+  source?: RegexPerformanceSource;
+  onPerformanceIssue?: (issue: RegexPerformanceIssue) => void;
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean };
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const VALID_PLACEMENTS = new Set(["user_input", "ai_output", "world_info", "reasoning"]);
 const VALID_SCOPES = new Set(["global", "character", "chat"]);
 const VALID_TARGETS = new Set(["prompt", "response", "display"]);
-const VALID_FLAGS = new Set(["g", "i", "m", "s", "u"]);
-const VALID_MACRO_MODES = new Set(["none", "raw", "escaped"]);
+const VALID_FLAGS = new Set(["d", "g", "i", "m", "s", "u", "v", "y"]);
+const VALID_MACRO_MODES = new Set(["none", "raw", "escaped", "after"]);
 const MAX_PATTERN_LENGTH = 10_000;
+const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
+
+interface RegexMutationContext {
+  activePresetId?: string | null;
+}
+
+function normalizeOptionalId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getPresetRegexSettingKey(presetId: string): string {
+  return `${PRESET_REGEX_ENABLED_SETTING_PREFIX}${presetId}`;
+}
+
+function normalizeStoredPresetRegexIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
+function readStoredPresetRegexIdsRecord(userId: string, presetId: string): { exists: boolean; ids: string[] } {
+  const row = getDb()
+    .query("SELECT value FROM settings WHERE key = ? AND user_id = ?")
+    .get(getPresetRegexSettingKey(presetId), userId) as { value?: string } | undefined;
+  if (!row) return { exists: false, ids: [] };
+
+  try {
+    return { exists: true, ids: normalizeStoredPresetRegexIds(JSON.parse(row.value ?? "[]")) };
+  } catch {
+    return { exists: true, ids: [] };
+  }
+}
+
+function writeStoredPresetRegexIdsWithDb(db: ReturnType<typeof getDb>, userId: string, presetId: string, ids: string[]): void {
+  const now = Math.floor(Date.now() / 1000);
+  db
+    .query(
+      `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    )
+    .run(getPresetRegexSettingKey(presetId), JSON.stringify(normalizeStoredPresetRegexIds(ids)), userId, now);
+}
+
+function updateStoredPresetRegexIds(
+  userId: string,
+  presetId: string,
+  updater: (ids: string[]) => string[],
+): void {
+  const db = getDb();
+  const current = readStoredPresetRegexIdsRecord(userId, presetId).ids;
+  writeStoredPresetRegexIdsWithDb(db, userId, presetId, updater(current));
+}
+
+function deleteStoredPresetRegexIds(userId: string, presetId: string): void {
+  getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(getPresetRegexSettingKey(presetId), userId);
+}
+
+function setPresetBoundScriptEnabledInRestoreList(
+  userId: string,
+  presetId: string,
+  scriptId: string,
+  enabled: boolean,
+): void {
+  updateStoredPresetRegexIds(userId, presetId, (current) => {
+    const next = new Set(current);
+    if (enabled) next.add(scriptId);
+    else next.delete(scriptId);
+    return [...next];
+  });
+}
+
+function emitRegexChanged(userId: string, id: string): void {
+  const script = getRegexScript(userId, id);
+  if (!script) return;
+  eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
+}
+
+function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
+  const raw = script.metadata?.regex_performance;
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<RegexPerformanceMetadata>;
+  if (value.slow !== true) return null;
+  if (typeof value.version !== "number") return null;
+  return {
+    slow: true,
+    timed_out: value.timed_out === true,
+    elapsed_ms: typeof value.elapsed_ms === "number" ? value.elapsed_ms : 0,
+    threshold_ms: typeof value.threshold_ms === "number" ? value.threshold_ms : REGEX_SLOW_WARNING_MS,
+    detected_at: typeof value.detected_at === "number" ? value.detected_at : 0,
+    source: (value.source as RegexPerformanceSource) || "display_backend",
+    version: value.version,
+  };
+}
+
+function withoutRegexPerformanceMetadata(metadata: Record<string, any> | null | undefined): Record<string, any> {
+  if (!metadata || typeof metadata !== "object") return {};
+  const next = { ...metadata };
+  delete next.regex_performance;
+  return next;
+}
+
+function shouldResetRegexPerformance(input: UpdateRegexScriptInput): boolean {
+  return [
+    "find_regex",
+    "replace_string",
+    "flags",
+    "placement",
+    "target",
+    "min_depth",
+    "max_depth",
+    "trim_strings",
+    "substitute_macros",
+  ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
+}
+
+export function reportRegexScriptPerformance(
+  userId: string,
+  id: string,
+  issue: { elapsedMs: number; timedOut?: boolean; thresholdMs?: number; source?: RegexPerformanceSource },
+): RegexPerformanceReportResult {
+  const script = getRegexScript(userId, id);
+  if (!script) return { script: null, newlyFlagged: false };
+
+  const thresholdMs = issue.thresholdMs ?? REGEX_SLOW_WARNING_MS;
+  const timedOut = issue.timedOut === true;
+  if (!timedOut && issue.elapsedMs < thresholdMs) return { script, newlyFlagged: false };
+
+  const existing = getRegexPerformanceMetadata(script);
+  if (
+    existing &&
+    existing.version === script.updated_at &&
+    existing.timed_out === timedOut &&
+    existing.threshold_ms === thresholdMs
+  ) {
+    return { script, newlyFlagged: false };
+  }
+
+  const nextMetadata = {
+    ...withoutRegexPerformanceMetadata(script.metadata),
+    regex_performance: {
+      slow: true,
+      timed_out: timedOut,
+      elapsed_ms: Math.max(0, Math.round(issue.elapsedMs)),
+      threshold_ms: thresholdMs,
+      detected_at: Math.floor(Date.now() / 1000),
+      source: issue.source ?? "display_backend",
+      version: script.updated_at,
+    } satisfies RegexPerformanceMetadata,
+  };
+
+  getDb().query("UPDATE regex_scripts SET metadata = ? WHERE id = ? AND user_id = ?").run(
+    JSON.stringify(nextMetadata),
+    id,
+    userId,
+  );
+  emitRegexChanged(userId, id);
+  return { script: getRegexScript(userId, id), newlyFlagged: true };
+}
+
+function resolveCreateDisabledState(input: CreateRegexScriptInput, activePresetId: string | null): boolean {
+  const requestedDisabled = !!input.disabled;
+  const presetId = normalizeOptionalId(input.preset_id);
+  if (!presetId) return requestedDisabled;
+  if (presetId !== activePresetId) return true;
+  return requestedDisabled;
+}
+
+type PresetBoundRowState = {
+  id: string;
+  preset_id: string;
+  disabled: number;
+};
+
+function applyPresetBoundActivationWithDb(
+  db: ReturnType<typeof getDb>,
+  userId: string,
+  targetPresetId: string | null,
+): { changedIds: string[]; restoredIds: string[] } {
+  const rows = db
+    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND preset_id IS NOT NULL ORDER BY sort_order ASC, created_at ASC")
+    .all(userId) as PresetBoundRowState[];
+  if (rows.length === 0) return { changedIds: [], restoredIds: [] };
+
+  let restoreIds = new Set<string>();
+  if (targetPresetId) {
+    const stored = readStoredPresetRegexIdsRecord(userId, targetPresetId);
+    if (stored.exists) {
+      restoreIds = new Set(stored.ids);
+    } else {
+      restoreIds = new Set(
+        rows
+          .filter((row) => row.preset_id === targetPresetId && !row.disabled)
+          .map((row) => row.id),
+      );
+    }
+  }
+
+  const changedIds: string[] = [];
+  const restoredIds: string[] = [];
+  const updateDisabled = db.query("UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+  const now = Math.floor(Date.now() / 1000);
+
+  for (const row of rows) {
+    const shouldEnable = !!targetPresetId && row.preset_id === targetPresetId && restoreIds.has(row.id);
+    const nextDisabled = shouldEnable ? 0 : 1;
+    if (row.disabled !== nextDisabled) {
+      updateDisabled.run(nextDisabled, now, row.id, userId);
+      changedIds.push(row.id);
+    }
+    if (shouldEnable) restoredIds.push(row.id);
+  }
+
+  return { changedIds, restoredIds };
+}
 
 export function rowToRegexScript(row: any): RegexScript {
   return {
@@ -43,6 +296,7 @@ export function rowToRegexScript(row: any): RegexScript {
     folder: row.folder || "",
     pack_id: row.pack_id || null,
     preset_id: row.preset_id || null,
+    character_id: row.character_id || null,
     metadata: JSON.parse(row.metadata),
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
@@ -57,11 +311,28 @@ function validateFlags(flags: string): boolean {
   return new Set(flags).size === flags.length;
 }
 
-function validateRegex(pattern: string, flags: string): string | null {
+function hasMacroSyntax(pattern: string): boolean {
+  return pattern.includes("{{") || pattern.includes("<USER>") || pattern.includes("<BOT>") || pattern.includes("<CHAR>");
+}
+
+function sanitizeRegexPatternForValidation(pattern: string): string {
+  return pattern
+    .replace(/\{\{[\s\S]*?\}\}/g, "x")
+    .replace(/<USER>|<BOT>|<CHAR>/g, "x");
+}
+
+function validateRegex(
+  pattern: string,
+  flags: string,
+  substituteMacros: RegexScript["substitute_macros"] = "none",
+): string | null {
   if (pattern.length > MAX_PATTERN_LENGTH) return "find_regex exceeds maximum length";
-  if (!validateFlags(flags)) return "Invalid flags — allowed: g, i, m, s, u";
+  if (!validateFlags(flags)) return "Invalid flags — allowed: d, g, i, m, s, u, v, y";
   try {
-    new RegExp(pattern, flags);
+    const compilePattern = substituteMacros !== "none" && hasMacroSyntax(pattern)
+      ? sanitizeRegexPatternForValidation(pattern)
+      : pattern;
+    new RegExp(compilePattern, flags);
     return null;
   } catch (e: any) {
     return `Invalid regex: ${e.message}`;
@@ -79,13 +350,7 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
     return "find_regex exceeds maximum length";
   }
   if (input.flags !== undefined && !validateFlags(input.flags)) {
-    return "Invalid flags — allowed: g, i, m, s, u";
-  }
-  if (input.find_regex !== undefined || input.flags !== undefined) {
-    const pattern = input.find_regex ?? "";
-    const flags = input.flags ?? "gi";
-    const err = validateRegex(pattern, flags);
-    if (err) return err;
+    return "Invalid flags — allowed: d, g, i, m, s, u, v, y";
   }
   if (input.placement !== undefined) {
     if (!Array.isArray(input.placement)) return "placement must be an array";
@@ -96,8 +361,19 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
   if (input.scope !== undefined && !VALID_SCOPES.has(input.scope)) {
     return `Invalid scope: ${input.scope}`;
   }
-  if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
-    return "scope_id is required for non-global scope";
+  if (isCreate) {
+    if (input.scope !== undefined && input.scope !== "global" && !input.scope_id) {
+      return "scope_id is required for non-global scope";
+    }
+  } else {
+    if (
+      input.scope !== undefined &&
+      input.scope !== "global" &&
+      input.scope_id !== undefined &&
+      !input.scope_id
+    ) {
+      return "scope_id is required for non-global scope";
+    }
   }
   if (input.target !== undefined && !VALID_TARGETS.has(input.target)) {
     return `Invalid target: ${input.target}`;
@@ -131,7 +407,7 @@ function normalizeScriptId(raw: string): string {
 export function listRegexScripts(
   userId: string,
   pagination: PaginationParams,
-  filters?: { scope?: RegexScope; target?: RegexTarget; character_id?: string; chat_id?: string }
+  filters?: { scope?: RegexScope; scope_id?: string; target?: RegexTarget; character_id?: string; chat_id?: string }
 ) {
   const conditions = ["user_id = ?"];
   const params: any[] = [userId];
@@ -139,6 +415,10 @@ export function listRegexScripts(
   if (filters?.scope) {
     conditions.push("scope = ?");
     params.push(filters.scope);
+  }
+  if (filters?.scope_id) {
+    conditions.push("scope_id = ?");
+    params.push(filters.scope_id);
   }
   if (filters?.target) {
     conditions.push("target = ?");
@@ -172,17 +452,26 @@ export function getRegexScript(userId: string, id: string): RegexScript | null {
   return row ? rowToRegexScript(row) : null;
 }
 
-export function createRegexScript(userId: string, input: CreateRegexScriptInput): RegexScript | string {
+export function createRegexScript(
+  userId: string,
+  input: CreateRegexScriptInput,
+  context?: RegexMutationContext,
+): RegexScript | string {
   const err = validateInput(input, true);
   if (err) return err;
 
+  const regexErr = validateRegex(input.find_regex, input.flags ?? "gi", input.substitute_macros ?? "none");
+  if (regexErr) return regexErr;
+
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const disabled = resolveCreateDisabledState(input, activePresetId);
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -200,60 +489,95 @@ export function createRegexScript(userId: string, input: CreateRegexScriptInput)
       input.max_depth ?? null,
       JSON.stringify(input.trim_strings ?? []),
       input.run_on_edit ? 1 : 0,
-      input.substitute_macros ?? "none",
-      input.disabled ? 1 : 0,
-      input.sort_order ?? 0,
+       input.substitute_macros ?? "none",
+       disabled ? 1 : 0,
+       input.sort_order ?? 0,
       input.description ?? "",
       input.folder ?? "",
       input.pack_id ?? null,
       input.preset_id ?? null,
+      input.character_id ?? null,
       JSON.stringify(input.metadata ?? {}),
       now,
       now
     );
 
   const script = getRegexScript(userId, id)!;
+  if (script.preset_id && script.preset_id === activePresetId) {
+    setPresetBoundScriptEnabledInRestoreList(userId, script.preset_id, script.id, !script.disabled);
+  }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script }, userId);
   return script;
 }
 
-export function updateRegexScript(userId: string, id: string, input: UpdateRegexScriptInput): RegexScript | string | null {
+export function updateRegexScript(
+  userId: string,
+  id: string,
+  input: UpdateRegexScriptInput,
+  context?: RegexMutationContext,
+): RegexScript | string | null {
   const existing = getRegexScript(userId, id);
   if (!existing) return null;
 
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const isPresetBound = !!existing.preset_id;
+  const nextInput: UpdateRegexScriptInput = { ...input };
+  if (nextInput.scope !== undefined) {
+    if (nextInput.scope === "global") {
+      nextInput.scope_id = null;
+    } else if (nextInput.scope_id === undefined) {
+      nextInput.scope_id = existing.scope === nextInput.scope ? existing.scope_id : null;
+    }
+  }
+  if (shouldResetRegexPerformance(nextInput)) {
+    nextInput.metadata = withoutRegexPerformanceMetadata(nextInput.metadata ?? existing.metadata);
+  }
+  const hasPresetIdUpdate = Object.prototype.hasOwnProperty.call(nextInput, "preset_id");
+  const nextPresetId = hasPresetIdUpdate ? normalizeOptionalId(nextInput.preset_id) : existing.preset_id;
+  const mayPersistPresetEnablement = !!nextPresetId && nextPresetId === activePresetId;
+
+  if (isPresetBound && nextInput.disabled !== undefined && nextPresetId && !mayPersistPresetEnablement) {
+    delete nextInput.disabled;
+  }
+  if (nextPresetId && nextPresetId !== activePresetId && hasPresetIdUpdate) {
+    nextInput.disabled = true;
+  }
+
   // If updating regex or flags, validate together
-  if (input.find_regex !== undefined || input.flags !== undefined) {
-    const pattern = input.find_regex ?? existing.find_regex;
-    const flags = input.flags ?? existing.flags;
-    const regexErr = validateRegex(pattern, flags);
+  if (nextInput.find_regex !== undefined || nextInput.flags !== undefined || nextInput.substitute_macros !== undefined) {
+    const pattern = nextInput.find_regex ?? existing.find_regex;
+    const flags = nextInput.flags ?? existing.flags;
+    const substituteMacros = nextInput.substitute_macros ?? existing.substitute_macros;
+    const regexErr = validateRegex(pattern, flags, substituteMacros);
     if (regexErr) return regexErr;
   }
 
-  const err = validateInput(input, false);
+  const err = validateInput(nextInput, false);
   if (err) return err;
 
   const fields: string[] = [];
   const values: any[] = [];
 
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name.trim()); }
-  if (input.script_id !== undefined) { fields.push("script_id = ?"); values.push(input.script_id); }
-  if (input.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(input.find_regex); }
-  if (input.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(input.replace_string); }
-  if (input.flags !== undefined) { fields.push("flags = ?"); values.push(input.flags); }
-  if (input.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(input.placement)); }
-  if (input.scope !== undefined) { fields.push("scope = ?"); values.push(input.scope); }
-  if (input.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(input.scope_id); }
-  if (input.target !== undefined) { fields.push("target = ?"); values.push(input.target); }
-  if (input.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(input.min_depth); }
-  if (input.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(input.max_depth); }
-  if (input.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(input.trim_strings)); }
-  if (input.run_on_edit !== undefined) { fields.push("run_on_edit = ?"); values.push(input.run_on_edit ? 1 : 0); }
-  if (input.substitute_macros !== undefined) { fields.push("substitute_macros = ?"); values.push(input.substitute_macros); }
-  if (input.disabled !== undefined) { fields.push("disabled = ?"); values.push(input.disabled ? 1 : 0); }
-  if (input.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(input.sort_order); }
-  if (input.description !== undefined) { fields.push("description = ?"); values.push(input.description); }
-  if (input.folder !== undefined) { fields.push("folder = ?"); values.push(input.folder); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
+  if (nextInput.name !== undefined) { fields.push("name = ?"); values.push(nextInput.name.trim()); }
+  if (nextInput.script_id !== undefined) { fields.push("script_id = ?"); values.push(nextInput.script_id); }
+  if (nextInput.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(nextInput.find_regex); }
+  if (nextInput.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(nextInput.replace_string); }
+  if (nextInput.flags !== undefined) { fields.push("flags = ?"); values.push(nextInput.flags); }
+  if (nextInput.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(nextInput.placement)); }
+  if (nextInput.scope !== undefined) { fields.push("scope = ?"); values.push(nextInput.scope); }
+  if (nextInput.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(nextInput.scope_id); }
+  if (nextInput.target !== undefined) { fields.push("target = ?"); values.push(nextInput.target); }
+  if (nextInput.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(nextInput.min_depth); }
+  if (nextInput.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(nextInput.max_depth); }
+  if (nextInput.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(nextInput.trim_strings)); }
+  if (nextInput.run_on_edit !== undefined) { fields.push("run_on_edit = ?"); values.push(nextInput.run_on_edit ? 1 : 0); }
+  if (nextInput.substitute_macros !== undefined) { fields.push("substitute_macros = ?"); values.push(nextInput.substitute_macros); }
+  if (nextInput.disabled !== undefined) { fields.push("disabled = ?"); values.push(nextInput.disabled ? 1 : 0); }
+  if (nextInput.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(nextInput.sort_order); }
+  if (nextInput.description !== undefined) { fields.push("description = ?"); values.push(nextInput.description); }
+  if (nextInput.folder !== undefined) { fields.push("folder = ?"); values.push(nextInput.folder); }
+  if (hasPresetIdUpdate) { fields.push("preset_id = ?"); values.push(nextPresetId); }
+  if (nextInput.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(nextInput.metadata)); }
 
   if (fields.length === 0) return existing;
 
@@ -265,15 +589,25 @@ export function updateRegexScript(userId: string, id: string, input: UpdateRegex
   getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
 
   const updated = getRegexScript(userId, id)!;
+  if (existing.preset_id && existing.preset_id !== updated.preset_id) {
+    setPresetBoundScriptEnabledInRestoreList(userId, existing.preset_id, updated.id, false);
+  }
+  if (updated.preset_id && (hasPresetIdUpdate || (mayPersistPresetEnablement && nextInput.disabled !== undefined))) {
+    setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
+  }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
   return updated;
 }
 
 export function deleteRegexScript(userId: string, id: string): boolean {
+  const existing = getRegexScript(userId, id);
   const result = getDb()
     .query("DELETE FROM regex_scripts WHERE id = ? AND user_id = ?")
     .run(id, userId);
   if (result.changes > 0) {
+    if (existing?.preset_id) {
+      setPresetBoundScriptEnabledInRestoreList(userId, existing.preset_id, existing.id, false);
+    }
     eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
     return true;
   }
@@ -291,8 +625,8 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
   const db = getDb();
   const placeholders = ids.map(() => "?").join(", ");
   const existingRows = db
-    .query(`SELECT id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
-    .all(userId, ...ids) as Array<{ id: string }>;
+    .query(`SELECT id, preset_id FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...ids) as Array<{ id: string; preset_id?: string | null }>;
   if (existingRows.length === 0) return [];
 
   const existingIds = existingRows.map((r) => r.id);
@@ -303,6 +637,12 @@ export function deleteRegexScripts(userId: string, ids: string[]): string[] {
       .query(`DELETE FROM regex_scripts WHERE user_id = ? AND id IN (${existingPlaceholders})`)
       .run(userId, ...existingIds);
   })();
+
+  for (const row of existingRows) {
+    if (row.preset_id) {
+      setPresetBoundScriptEnabledInRestoreList(userId, row.preset_id, row.id, false);
+    }
+  }
 
   for (const id of existingIds) {
     eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
@@ -366,15 +706,28 @@ export function reorderRegexScripts(userId: string, orderedIds: string[]): boole
   return true;
 }
 
-export function toggleRegexScript(userId: string, id: string, disabled: boolean): RegexScript | null {
+export function toggleRegexScript(
+  userId: string,
+  id: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): RegexScript | null {
   const existing = getRegexScript(userId, id);
   if (!existing) return null;
+
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  if (existing.preset_id && existing.preset_id !== activePresetId) {
+    return existing;
+  }
 
   getDb()
     .query("UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id = ? AND user_id = ?")
     .run(disabled ? 1 : 0, Math.floor(Date.now() / 1000), id, userId);
 
   const updated = getRegexScript(userId, id)!;
+  if (updated.preset_id) {
+    setPresetBoundScriptEnabledInRestoreList(userId, updated.preset_id, updated.id, !updated.disabled);
+  }
   eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id, script: updated }, userId);
   return updated;
 }
@@ -531,6 +884,31 @@ function rebuildFromMatches(
 }
 
 /**
+ * Resolve macros in a regex find pattern based on the substitute_macros mode.
+ * The result stays as plain regex source, so `$` is not escaped here.
+ */
+function foldFingerprint(
+  acc: { touchedVars: Set<string>; cacheable: boolean } | undefined,
+  result: { touchedVars: ReadonlySet<string>; cacheable: boolean },
+): void {
+  if (!acc) return;
+  for (const v of result.touchedVars) acc.touchedVars.add(v);
+  if (!result.cacheable) acc.cacheable = false;
+}
+
+async function resolveFindMacros(
+  findRegex: string,
+  mode: RegexScript["substitute_macros"],
+  macroEnv: MacroEnv,
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
+): Promise<string> {
+  if (mode === "none") return findRegex;
+  const result = await evaluate(findRegex, macroEnv, registry);
+  foldFingerprint(outFingerprint, result);
+  return result.text;
+}
+
+/**
  * Resolve macros in a regex replacement string based on the substitute_macros mode.
  * - "none": return as-is
  * - "raw": resolve macros, result may contain regex back-references ($1, etc.)
@@ -540,10 +918,13 @@ async function resolveReplacementMacros(
   replaceString: string,
   mode: RegexScript["substitute_macros"],
   macroEnv: MacroEnv,
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
 ): Promise<string> {
   if (mode === "none") return replaceString;
 
-  const resolved = (await evaluate(replaceString, macroEnv, registry)).text;
+  const result = await evaluate(replaceString, macroEnv, registry);
+  foldFingerprint(outFingerprint, result);
+  const resolved = result.text;
 
   if (mode === "escaped") {
     // Escape $ so regex replacement doesn't interpret $1, $&, etc.
@@ -557,9 +938,8 @@ async function resolveReplacementMacros(
  * Apply regex scripts to content string.
  * Returns the transformed content.
  *
- * When `macroEnv` is provided, scripts with `substitute_macros` set to "raw" or
- * "escaped" will have their replacement strings resolved through the macro engine
- * before being applied.
+ * When `macroEnv` is provided, scripts with `substitute_macros` enabled resolve
+ * both their `find_regex` and `replace_string` through the macro engine.
  *
  * For "raw" mode, capture groups ($1, $2, etc.) are substituted into the
  * replacement template BEFORE macro resolution, so macros can reference
@@ -571,6 +951,11 @@ export async function applyRegexScripts(
   placement: RegexPlacement,
   depth?: number,
   macroEnv?: MacroEnv,
+  resolvedTemplates?: {
+    resolvedFindPatterns?: Map<string, string>;
+    resolvedReplacements?: Map<string, string>;
+  },
+  options?: ApplyRegexScriptOptions,
 ): Promise<string> {
   let result = content;
 
@@ -584,14 +969,23 @@ export async function applyRegexScripts(
       if (script.max_depth !== null && depth > script.max_depth) continue;
     }
 
+    const startedAt = Date.now();
     try {
+      let findRegex = script.find_regex;
+      const preResolvedFind = resolvedTemplates?.resolvedFindPatterns?.get(script.id);
+      if (preResolvedFind !== undefined) {
+        findRegex = preResolvedFind;
+      } else if (macroEnv && script.substitute_macros !== "none") {
+        findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv, options?.outFingerprint);
+      }
+
       if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
         // BEFORE macro resolution so $1, $2, etc. are available inside macros.
         // Match collection runs in the regex sandbox so a pathological
         // user-authored pattern can't freeze the event loop here.
         const matches: SandboxMatch[] = await regexCollectSandboxed(
-          script.find_regex,
+          findRegex,
           script.flags,
           result,
           REGEX_SCRIPT_TIMEOUT_MS,
@@ -602,20 +996,38 @@ export async function applyRegexScripts(
               const withCaptures = substituteRegexCaptures(
                 script.replace_string, fullMatch, groups, index, result, namedGroups,
               );
-              return (await evaluate(withCaptures, macroEnv, registry)).text;
+              const evalResult = await evaluate(withCaptures, macroEnv, registry);
+              foldFingerprint(options?.outFingerprint, evalResult);
+              return evalResult.text;
             }),
           );
           result = rebuildFromMatches(result, matches, replacements);
         }
+      } else if (macroEnv && script.substitute_macros === "after") {
+        const substituted = await regexReplaceSandboxed(
+          findRegex,
+          script.flags,
+          result,
+          script.replace_string,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
+        const evalResult = await evaluate(substituted, macroEnv, registry);
+        foldFingerprint(options?.outFingerprint, evalResult);
+        result = evalResult.text;
       } else {
         // "none" or "escaped" mode: resolve macros first (if applicable), then
         // run the actual replace inside the sandbox.
         let replaceString = script.replace_string;
-        if (macroEnv && script.substitute_macros !== "none") {
-          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv);
+        const preResolvedReplacement = resolvedTemplates?.resolvedReplacements?.get(script.id);
+        if (preResolvedReplacement !== undefined) {
+          replaceString = script.substitute_macros === "escaped"
+            ? preResolvedReplacement.replace(/\$/g, "$$$$")
+            : preResolvedReplacement;
+        } else if (macroEnv && script.substitute_macros !== "none") {
+          replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv, options?.outFingerprint);
         }
         result = await regexReplaceSandboxed(
-          script.find_regex,
+          findRegex,
           script.flags,
           result,
           replaceString,
@@ -631,8 +1043,42 @@ export async function applyRegexScripts(
           }
         }
       }
+
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= REGEX_SLOW_WARNING_MS) {
+        const flagged = reportRegexScriptPerformance(script.user_id, script.id, {
+          elapsedMs,
+          thresholdMs: REGEX_SLOW_WARNING_MS,
+          source: options?.source,
+        });
+        options?.onPerformanceIssue?.({
+          scriptId: script.id,
+          name: script.name,
+          elapsedMs,
+          thresholdMs: REGEX_SLOW_WARNING_MS,
+          timedOut: false,
+          source: options?.source ?? "display_backend",
+          newlyFlagged: flagged.newlyFlagged,
+        });
+      }
     } catch (e) {
       if (e instanceof RegexTimeoutError) {
+        const elapsedMs = Date.now() - startedAt;
+        const flagged = reportRegexScriptPerformance(script.user_id, script.id, {
+          elapsedMs,
+          timedOut: true,
+          thresholdMs: REGEX_SCRIPT_TIMEOUT_MS,
+          source: options?.source,
+        });
+        options?.onPerformanceIssue?.({
+          scriptId: script.id,
+          name: script.name,
+          elapsedMs,
+          thresholdMs: REGEX_SCRIPT_TIMEOUT_MS,
+          timedOut: true,
+          source: options?.source ?? "display_backend",
+          newlyFlagged: flagged.newlyFlagged,
+        });
         console.warn(
           `[RegexScripts] Script "${script.name}" (${script.id}) exceeded ${REGEX_SCRIPT_TIMEOUT_MS}ms, skipping`,
         );
@@ -677,9 +1123,17 @@ export async function testRegex(
 
 // ── Import / Export ──────────────────────────────────────────────────────────
 
-export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptExport {
+export interface RegexScriptExportOptions {
+  ids?: string[];
+  presetId?: string | null;
+  folder?: string | null;
+}
+
+export function exportRegexScripts(userId: string, options?: string[] | RegexScriptExportOptions): RegexScriptExport {
   const db = getDb();
   let rows: any[];
+  const ids = Array.isArray(options) ? options : options?.ids;
+  const presetIdFilter = !Array.isArray(options) ? normalizeOptionalId(options?.presetId) : null;
 
   if (ids && ids.length > 0) {
     const placeholders = ids.map(() => "?").join(", ");
@@ -687,13 +1141,34 @@ export function exportRegexScripts(userId: string, ids?: string[]): RegexScriptE
       .query(`SELECT * FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders}) ORDER BY sort_order ASC, created_at ASC`)
       .all(userId, ...ids) as any[];
   } else {
+    const conditions = ["user_id = ?"];
+    const params: any[] = [userId];
+    if (!Array.isArray(options)) {
+      if (presetIdFilter) {
+        conditions.push("preset_id = ?");
+        params.push(presetIdFilter);
+      }
+      if (typeof options?.folder === "string") {
+        conditions.push("folder = ?");
+        params.push(options.folder.trim());
+      }
+    }
     rows = db
-      .query("SELECT * FROM regex_scripts WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC")
-      .all(userId) as any[];
+      .query(`SELECT * FROM regex_scripts WHERE ${conditions.join(" AND ")} ORDER BY sort_order ASC, created_at ASC`)
+      .all(...params) as any[];
   }
 
-  const scripts = rows.map(rowToRegexScript).map((s) => {
-    const { id, user_id, created_at, updated_at, pack_id, preset_id, ...rest } = s;
+  let normalizedRows = rows.map(rowToRegexScript);
+  if (presetIdFilter) {
+    const stored = readStoredPresetRegexIdsRecord(userId, presetIdFilter);
+    if (stored.exists) {
+      const enabledIds = new Set(stored.ids);
+      normalizedRows = normalizedRows.map((s) => ({ ...s, disabled: !enabledIds.has(s.id) }));
+    }
+  }
+
+  const scripts = normalizedRows.map((s) => {
+    const { id, user_id, created_at, updated_at, pack_id, preset_id, character_id, ...rest } = s;
     return rest;
   });
 
@@ -719,6 +1194,53 @@ export function getRegexScriptsByPresetId(userId: string, presetId: string): Reg
   return rows.map(rowToRegexScript);
 }
 
+export function activatePresetBoundRegexScripts(userId: string, presetId?: string | null): { changedIds: string[]; restoredIds: string[] } {
+  const targetPresetId = normalizeOptionalId(presetId);
+  const db = getDb();
+  const result = db.transaction(() => applyPresetBoundActivationWithDb(db, userId, targetPresetId))();
+
+  for (const id of result.changedIds) {
+    emitRegexChanged(userId, id);
+  }
+
+  return result;
+}
+
+export function switchPresetBoundRegexScripts(
+  userId: string,
+  opts: { previousPresetId?: string | null; presetId?: string | null },
+): { changedIds: string[]; restoredIds: string[] } {
+  const previousPresetId = normalizeOptionalId(opts.previousPresetId);
+  const targetPresetId = normalizeOptionalId(opts.presetId);
+  const db = getDb();
+
+  const result = db.transaction(() => {
+    if (previousPresetId) {
+      const enabledRows = db
+        .query(
+          "SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ? AND disabled = 0 ORDER BY sort_order ASC, created_at ASC",
+        )
+        .all(userId, previousPresetId) as Array<{ id: string }>;
+      writeStoredPresetRegexIdsWithDb(db, userId, previousPresetId, enabledRows.map((row) => row.id));
+    }
+
+    return applyPresetBoundActivationWithDb(db, userId, targetPresetId);
+  })();
+
+  for (const id of result.changedIds) {
+    emitRegexChanged(userId, id);
+  }
+
+  return result;
+}
+
+export function getRegexScriptsByCharacterId(userId: string, characterId: string): RegexScript[] {
+  const rows = getDb()
+    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND character_id = ? ORDER BY sort_order ASC, created_at ASC")
+    .all(userId, characterId) as any[];
+  return rows.map(rowToRegexScript);
+}
+
 /**
  * Delete every regex script owned by a preset. Emits REGEX_SCRIPT_DELETED per
  * removed script so subscribed clients update their lists.
@@ -728,11 +1250,39 @@ export function deleteRegexScriptsByPresetId(userId: string, presetId: string): 
   const rows = db
     .query("SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
     .all(userId, presetId) as Array<{ id: string }>;
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) {
+    deleteStoredPresetRegexIds(userId, presetId);
+    return 0;
+  }
 
   const result = db
     .query("DELETE FROM regex_scripts WHERE user_id = ? AND preset_id = ?")
     .run(userId, presetId);
+  const changes = Number(result.changes ?? 0);
+
+  for (const { id } of rows) {
+    eventBus.emit(EventType.REGEX_SCRIPT_DELETED, { id }, userId);
+  }
+
+  deleteStoredPresetRegexIds(userId, presetId);
+
+  return changes;
+}
+
+/**
+ * Delete every regex script owned by a character import/generation flow. Emits
+ * REGEX_SCRIPT_DELETED per removed script so subscribed clients update their lists.
+ */
+export function deleteRegexScriptsByCharacterId(userId: string, characterId: string): number {
+  const db = getDb();
+  const rows = db
+    .query("SELECT id FROM regex_scripts WHERE user_id = ? AND character_id = ?")
+    .all(userId, characterId) as Array<{ id: string }>;
+  if (rows.length === 0) return 0;
+
+  const result = db
+    .query("DELETE FROM regex_scripts WHERE user_id = ? AND character_id = ?")
+    .run(userId, characterId);
   const changes = Number(result.changes ?? 0);
 
   for (const { id } of rows) {
@@ -766,7 +1316,7 @@ const ST_SUBSTITUTE_MAP: Record<number, "none" | "raw" | "escaped"> = {
  * Falls back to treating the whole string as the pattern if it's not in literal form.
  */
 function parseRegexLiteral(findRegex: string): { pattern: string; flags: string } {
-  const match = findRegex.match(/^\/(.+)\/([gimsuy]*)$/s);
+  const match = findRegex.match(/^\/(.+)\/([dgimsuvy]*)$/s);
   if (match) {
     return { pattern: match[1], flags: match[2] || "gi" };
   }
@@ -794,7 +1344,8 @@ function convertStTarget(item: any): RegexTarget {
 
 export function importRegexScripts(
   userId: string,
-  payload: any
+  payload: any,
+  context?: RegexMutationContext,
 ): { imported: number; skipped: number; errors: string[] } {
   const errors: string[] = [];
   let imported = 0;
@@ -810,6 +1361,12 @@ export function importRegexScripts(
   const presetIdOverride: string | undefined =
     typeof payload?.preset_id === "string" && payload.preset_id.trim()
       ? payload.preset_id.trim()
+      : undefined;
+
+  // Extract top-level character_id ownership link so character deletion can cascade
+  const characterIdOverride: string | undefined =
+    typeof payload?.character_id === "string" && payload.character_id.trim()
+      ? payload.character_id.trim()
       : undefined;
 
   // Normalize input: accept array, { scripts: [] }, or single object
@@ -885,7 +1442,12 @@ export function importRegexScripts(
       item.preset_id = presetIdOverride;
     }
 
-    const result = createRegexScript(userId, item);
+    // Stamp character ownership if provided
+    if (characterIdOverride && !item.character_id) {
+      item.character_id = characterIdOverride;
+    }
+
+    const result = createRegexScript(userId, item, context);
     if (typeof result === "string") {
       errors.push(`Script "${item.name}": ${result}`);
       skipped++;

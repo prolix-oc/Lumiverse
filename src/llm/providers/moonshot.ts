@@ -4,7 +4,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 export class MoonshotProvider extends OpenAICompatibleProvider {
   readonly name = "moonshot";
   readonly displayName = "Moonshot";
-  readonly defaultUrl = "https://api.moonshot.cn/v1";
+  readonly defaultUrl = "https://api.moonshot.ai/v1";
 
   readonly capabilities: ProviderCapabilities = {
     parameters: {

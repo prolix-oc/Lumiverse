@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react"
 import { imageGenConnectionsApi } from "@/api/image-gen-connections"
+import NumericInput from "@/components/shared/NumericInput"
 import styles from "./ProviderParamRenderer.module.css"
 
 interface ParamSchema {
@@ -272,19 +273,15 @@ function ParamControl({
       return (
         <div className={styles.paramField}>
           <label className={styles.paramLabel}>{label}</label>
-          <input
-            type="number"
+          <NumericInput
             className={styles.paramInput}
-            value={value ?? schema.default ?? ""}
+            value={typeof value === "number" ? value : (typeof schema.default === "number" ? schema.default : null)}
             min={schema.min}
             max={schema.max}
             step={schema.step ?? (schema.type === "integer" ? 1 : 0.1)}
-            onChange={(e) => {
-              const v = schema.type === "integer"
-                ? parseInt(e.target.value, 10)
-                : parseFloat(e.target.value)
-              if (!isNaN(v)) onChange(paramKey, v)
-            }}
+            integer={schema.type === "integer"}
+            allowEmpty={!schema.required}
+            onChange={(value) => onChange(paramKey, value == null ? undefined : value)}
           />
         </div>
       )

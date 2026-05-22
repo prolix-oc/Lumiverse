@@ -2,6 +2,8 @@
   position: fixed;
   inset: 0;
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   z-index: 10003;
   display: flex;
   align-items: center;
@@ -16,8 +18,8 @@
 }
 
 .image {
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: calc(90vw / var(--lumiverse-ui-scale, 1));
+  max-height: calc(90vh / var(--lumiverse-ui-scale, 1));
   object-fit: contain;
   border-radius: var(--lcs-radius-sm, 8px);
   cursor: default;
@@ -38,6 +40,6 @@
 
 .error {
   color: var(--lumiverse-text-dim, rgba(255, 255, 255, 0.4));
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   cursor: default;
 }

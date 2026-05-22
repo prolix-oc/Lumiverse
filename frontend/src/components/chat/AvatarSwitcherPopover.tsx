@@ -68,14 +68,7 @@ export default function AvatarSwitcherPopover({ chatId, children }: Props) {
       setActiveChatAvatarId(imageId)
       setExpanded(false)
       try {
-        const chat = await chatsApi.get(chatId, { messages: false })
-        const metadata = { ...(chat.metadata || {}) }
-        if (imageId) {
-          metadata.active_avatar_id = imageId
-        } else {
-          delete metadata.active_avatar_id
-        }
-        await chatsApi.update(chatId, { metadata })
+        await chatsApi.patchMetadata(chatId, { active_avatar_id: imageId ?? null })
       } catch (err) {
         console.error('[AvatarSwitcher] Failed to save:', err)
       }

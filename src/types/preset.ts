@@ -25,6 +25,51 @@ export type UpdatePresetInput = Partial<CreatePresetInput>;
 
 // --- Loom Preset Assembly Types ---
 
+export type PromptVariableDef =
+  | {
+      id: string;
+      name: string;
+      label: string;
+      type: 'text';
+      defaultValue: string;
+      description?: string;
+    }
+  | {
+      id: string;
+      name: string;
+      label: string;
+      type: 'textarea';
+      defaultValue: string;
+      rows?: number;
+      description?: string;
+    }
+  | {
+      id: string;
+      name: string;
+      label: string;
+      type: 'number';
+      defaultValue: number;
+      min?: number;
+      max?: number;
+      step?: number;
+      description?: string;
+    }
+  | {
+      id: string;
+      name: string;
+      label: string;
+      type: 'slider';
+      defaultValue: number;
+      min: number;
+      max: number;
+      step?: number;
+      description?: string;
+    };
+
+export type PromptVariableType = PromptVariableDef['type'];
+export type PromptVariableValue = string | number;
+export type PromptVariableValues = Record<string /* blockId */, Record<string /* varName */, PromptVariableValue>>;
+
 export interface PromptBlock {
   id: string;
   name: string;
@@ -39,10 +84,12 @@ export interface PromptBlock {
   injectionTrigger: string[];
   group: string | null;
   categoryMode?: 'radio' | 'checkbox' | null;
+  variables?: PromptVariableDef[];
 }
 
 export interface PromptBehavior {
   continueNudge: string;
+  emptySendNudge: string;
   impersonationPrompt: string;
   groupNudge: string;
   newChatPrompt: string;

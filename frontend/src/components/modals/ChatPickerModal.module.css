@@ -23,7 +23,7 @@
 
 .title {
   margin: 0;
-  font-size: 18px;
+  font-size: calc(18px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.01em;
@@ -31,7 +31,7 @@
 
 .count {
   margin-left: 0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-variant-numeric: tabular-nums;
   padding: 2px 8px;
@@ -47,7 +47,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 60vh;
+  max-height: calc(60vh / var(--lumiverse-ui-scale, 1));
   scrollbar-width: thin;
   scrollbar-color: var(--lumiverse-fill-subtle) transparent;
 }
@@ -101,6 +101,11 @@
   border-color: var(--lumiverse-border);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   transform: translateX(2px);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050);
+  outline-offset: 2px;
 }
 
 .card:hover::before {
@@ -175,6 +180,61 @@
   color: var(--lumiverse-primary-text);
 }
 
+/* ── Fresh Chat Card (memory-isolated) ── */
+.freshChatCard {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  border-style: dashed;
+  border-color: var(--lumiverse-border-hover, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  margin-bottom: 12px;
+}
+
+.freshChatCard::before {
+  display: none;
+}
+
+.freshChatCard:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  border-color: var(--lumiverse-text-dim);
+  transform: translateY(-1px);
+}
+
+.freshChatIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--lumiverse-btn-icon-sm, 28px);
+  height: var(--lumiverse-btn-icon-sm, 28px);
+  border-radius: 6px;
+  background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
+  color: var(--lumiverse-text-dim);
+  flex-shrink: 0;
+}
+
+.freshChatCard:hover .freshChatIcon {
+  color: var(--lumiverse-text);
+}
+
+.freshChatHeader {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.freshChatCard .cardLabel {
+  color: var(--lumiverse-text-muted, var(--lumiverse-text));
+  font-weight: 600;
+}
+
+.freshChatSubtitle {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
 
 /* ── Card innards ── */
 .cardHeader {
@@ -183,13 +243,26 @@
   justify-content: space-between;
   gap: 8px;
   flex: 1;
+  min-width: 0;
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .cardLabel {
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   letter-spacing: 0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activeBadge {
@@ -200,9 +273,10 @@
   border-radius: 10px;
   background: var(--lumiverse-primary-015);
   color: var(--lumiverse-primary-text);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
 .cardPreview {
@@ -213,7 +287,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -239,55 +313,23 @@
 }
 
 .card:hover .menuBtn,
+.card:focus-within .menuBtn,
 .cardActive .menuBtn {
   opacity: 1;
 }
 
 .menuBtn:hover,
+.menuBtn:focus-visible,
 .menuBtnActive {
   background: var(--lumiverse-fill);
   color: var(--lumiverse-text);
   opacity: 1 !important;
 }
 
-.dropdown {
-  position: absolute;
-  top: 36px;
-  right: 12px;
-  z-index: 50;
-  width: 140px;
-  background: var(--lumiverse-bg-elevated);
-  border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius-sm);
-  padding: 4px;
-  box-shadow: var(--lumiverse-shadow-md);
-  animation: greetingEnter 150ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.dropdownItem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--lumiverse-text-muted);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 150ms ease;
-  text-align: left;
-}
-
-.dropdownItem:hover {
-  background: var(--lumiverse-fill-hover);
-  color: var(--lumiverse-text);
-}
-
-.dropdownItemDanger:hover {
-  background: var(--lumiverse-danger-015);
-  color: var(--lumiverse-danger);
+@media (hover: none) {
+  .menuBtn {
+    opacity: 1;
+  }
 }
 
 .editInput {
@@ -295,7 +337,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border-hover);
   color: var(--lumiverse-text);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;

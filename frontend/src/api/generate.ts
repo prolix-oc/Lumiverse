@@ -1,4 +1,5 @@
 import { get, post, type RequestOptions } from './client'
+import { flushSettingsNow } from '@/store/slices/settings'
 
 /** Generation requests go through prompt assembly + council + embedding calls
  *  which can legitimately take longer than the default 30s client timeout. */
@@ -12,16 +13,24 @@ export interface GenerateRequest {
   chat_id: string
   connection_id?: string
   persona_id?: string
+  persona_addon_states?: Record<string, boolean>
   preset_id?: string
+  force_preset_id?: boolean
   message_id?: string
   continue_from?: string
   force_name?: string
   generation_type?: GenerationType
   impersonate_mode?: ImpersonateMode
+  /** For impersonate: free-form text from the input box, appended to the impersonation prompt. */
+  impersonate_input?: string
+  /** For impersonate: stream to input box instead of creating a message. */
+  impersonate_draft?: boolean
   target_character_id?: string
   regen_feedback?: string
   regen_feedback_position?: 'system' | 'user'
   retain_council?: boolean
+  /** Dry-run only: reassemble as if this message were absent from history. */
+  exclude_message_id?: string
 }
 
 export interface GenerateResponse {
@@ -32,15 +41,30 @@ export interface QuietGenerateRequest {
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
   connection_id?: string
   parameters?: Record<string, any>
+  /**
+   * Optional chat id. When passed to the `/generate/summarize` endpoint, the
+   * server registers the job in its summarize-pool so frontends can recover
+   * in-flight state via `getSummarizeStatus` and the `SUMMARIZATION_*` WS
+   * events.
+   */
+  chat_id?: string
+}
+
+export interface SummarizeStatusResponse {
+  active: boolean
+  generationId?: string
+  startedAt?: number
 }
 
 export interface QuietGenerateResponse {
   content: string
+  reasoning?: string
   finish_reason: string
   usage?: {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
+    provider_raw?: Record<string, unknown>
   }
 }
 
@@ -60,6 +84,10 @@ export interface AssemblyBreakdownEntry {
   role?: string
   content?: string
   blockId?: string
+  extensionId?: string
+  extensionName?: string
+  messageCount?: number
+  firstMessageIndex?: number
 }
 
 export interface DryRunResponse {
@@ -69,9 +97,22 @@ export interface DryRunResponse {
   assistantPrefill?: string
   model: string
   provider: string
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    provider_raw?: Record<string, unknown>
+  }
   tokenCount?: {
     total_tokens: number
-    breakdown: { name: string; type: string; tokens: number; role?: string }[]
+    breakdown: {
+      name: string
+      type: string
+      tokens: number
+      role?: string
+      extensionId?: string
+      extensionName?: string
+    }[]
     tokenizer_id: string | null
     tokenizer_name: string | null
   }
@@ -87,6 +128,24 @@ export interface DryRunResponse {
     vectorActivated: number
     totalActivated: number
     queryPreview: string
+    vectorRetrieval?: {
+      eligibleCount: number
+      hitsBeforeThreshold: number
+      hitsAfterThreshold: number
+      thresholdRejected: number
+      hitsAfterRerankCutoff: number
+      rerankRejected: number
+      topK: number
+      blockerMessages: string[]
+      timingsMs?: {
+        queryBuild: number
+        queryEmbed: number
+        search: number
+        ranking: number
+        merge: number
+        total: number
+      }
+    }
   }
   memoryStats?: {
     enabled: boolean
@@ -103,14 +162,56 @@ export interface DryRunResponse {
     queryPreview: string
     settingsSource: 'global' | 'per_chat'
   }
+  databankStats?: {
+    enabled: boolean
+    embeddingsEnabled: boolean
+    activeBankCount: number
+    activeDatabankIds: string[]
+    chunksRetrieved: number
+    injectionMethod: 'macro' | 'fallback' | 'none' | 'disabled'
+    retrievalState:
+      | 'cache_hit'
+      | 'awaited_prefetch'
+      | 'awaited_direct'
+      | 'skipped_no_active_banks'
+      | 'skipped_embeddings_disabled'
+    retrievedChunks: Array<{
+      score: number
+      tokenEstimate: number
+      documentName: string
+      databankId: string
+      preview: string
+    }>
+    queryPreview: string
+  }
+  contextClipStats?: import('@/types/ws-events').ContextClipStats
 }
 
 export interface BreakdownResponse {
-  entries: { name: string; type: string; tokens: number; role?: string; blockId?: string }[]
+  entries: {
+    name: string
+    type: string
+    tokens: number
+    role?: string
+    content?: string
+    blockId?: string
+    extensionId?: string
+    extensionName?: string
+    messageCount?: number
+    firstMessageIndex?: number
+  }[]
+  messages?: DryRunMessage[]
   totalTokens: number
   maxContext: number
   model: string
   provider: string
+  parameters?: Record<string, unknown>
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    provider_raw?: Record<string, unknown>
+  }
   presetName?: string
   tokenizer_name: string | null
 }
@@ -118,7 +219,21 @@ export interface BreakdownResponse {
 export interface GenerationStatusResponse {
   active: boolean
   generationId?: string
-  status?: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  status?: 'assembling' | 'council' | 'waiting' | 'streaming' | 'completed' | 'stopped' | 'error' | 'reasoning'
+  councilRetryPending?: boolean
+  councilToolsFailure?: {
+    generationId: string
+    chatId: string
+    failedTools: {
+      memberId: string
+      memberName: string
+      toolName: string
+      toolDisplayName: string
+      error?: string
+    }[]
+    successCount: number
+    failedCount: number
+  }
   content?: string
   reasoning?: string
   tokenSeq?: number
@@ -138,7 +253,7 @@ export interface GenerationStatusResponse {
 export interface ActiveGenerationEntry {
   generationId: string
   chatId: string
-  status: 'assembling' | 'council' | 'streaming' | 'completed' | 'stopped' | 'error'
+  status: 'assembling' | 'council' | 'waiting' | 'streaming' | 'completed' | 'stopped' | 'error' | 'reasoning'
   generationType: string
   characterName: string
   characterId?: string
@@ -148,7 +263,8 @@ export interface ActiveGenerationEntry {
 }
 
 export const generateApi = {
-  start(request: GenerateRequest) {
+  async start(request: GenerateRequest) {
+    await flushSettingsNow()
     return post<GenerateResponse>('/generate', request, LONG)
   },
 
@@ -156,11 +272,13 @@ export const generateApi = {
     return post<void>('/generate/stop', generationId ? { generation_id: generationId } : {})
   },
 
-  regenerate(request: GenerateRequest) {
+  async regenerate(request: GenerateRequest) {
+    await flushSettingsNow()
     return post<GenerateResponse>('/generate/regenerate', request, LONG)
   },
 
-  continueGeneration(request: GenerateRequest) {
+  async continueGeneration(request: GenerateRequest) {
+    await flushSettingsNow()
     return post<GenerateResponse>('/generate/continue', request, LONG)
   },
 
@@ -168,15 +286,20 @@ export const generateApi = {
     return post<QuietGenerateResponse>('/generate/quiet', request, LONG)
   },
 
-  summarize(request: QuietGenerateRequest) {
-    return post<QuietGenerateResponse>('/generate/summarize', request, LONG)
+  summarize(request: QuietGenerateRequest, options: RequestOptions = LONG) {
+    return post<QuietGenerateResponse>('/generate/summarize', request, options)
   },
 
   getSummarizationDefaults() {
     return get<SummarizationPromptDefaults>('/generate/summarize/prompt-defaults')
   },
 
-  dryRun(request: GenerateRequest) {
+  getSummarizeStatus(chatId: string) {
+    return get<SummarizeStatusResponse>(`/generate/summarize/status/${chatId}`)
+  },
+
+  async dryRun(request: GenerateRequest) {
+    await flushSettingsNow()
     return post<DryRunResponse>('/generate/dry-run', request, LONG)
   },
 
@@ -193,7 +316,7 @@ export const generateApi = {
   },
 
   acknowledge(chatId: string) {
-    return post<{ acknowledged: boolean }>('/generate/acknowledge', { chatId })
+    return post<{ acknowledged: boolean; removed: number; generationIds: string[] }>('/generate/acknowledge', { chatId })
   },
 
   councilRetry(generationId: string, decision: 'continue' | 'retry') {

@@ -2,6 +2,7 @@ import type { ImageProvider } from "../provider";
 import type { ImageProviderCapabilities } from "../param-schema";
 import type { ImageGenRequest, ImageGenResponse } from "../types";
 import { applyRawOverride } from "../types";
+import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 export class PollinationsImageProvider implements ImageProvider {
   readonly name = "pollinations";
@@ -155,41 +156,36 @@ export class PollinationsImageProvider implements ImageProvider {
       const res = await fetch(`${base}/account/key`, {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({ provider: this.displayName, operation: "authentication", detail: err instanceof Error ? err.message : "network request failed", retryable: true });
     }
   }
 
   async listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
-    try {
-      const base = this.baseUrl(apiUrl).replace(/\/v1\/?$/, "");
-      const headers: Record<string, string> = {};
-      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-      const res = await fetch(`${base}/image/models`, { headers });
-      if (!res.ok) return this.capabilities.staticModels || [];
+    const base = this.baseUrl(apiUrl).replace(/\/v1\/?$/, "");
+    const headers: Record<string, string> = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const data = await fetchProviderJson<any>(this.displayName, "model listing", `${base}/image/models`, { headers });
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.models)
+        ? data.models
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
 
-      const data = (await res.json()) as any;
-      const list = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.models)
-          ? data.models
-          : Array.isArray(data?.data)
-            ? data.data
-            : [];
+    const models = list
+      .map((m: any) => ({
+        id: String(m?.id || m?.model || m?.name || "").trim(),
+        label: String(m?.name || m?.label || m?.id || m?.model || "").trim(),
+      }))
+      .filter((m: { id: string; label: string }) => !!m.id)
+      .map((m: { id: string; label: string }) => ({ id: m.id, label: m.label || m.id }));
 
-      const models = list
-        .map((m: any) => ({
-          id: String(m?.id || m?.model || m?.name || "").trim(),
-          label: String(m?.name || m?.label || m?.id || m?.model || "").trim(),
-        }))
-        .filter((m: { id: string; label: string }) => !!m.id)
-        .map((m: { id: string; label: string }) => ({ id: m.id, label: m.label || m.id }));
-
-      return models.length > 0 ? models : this.capabilities.staticModels || [];
-    } catch {
-      return this.capabilities.staticModels || [];
-    }
+    return models.length > 0 ? models : this.capabilities.staticModels || [];
   }
 
   private baseUrl(apiUrl: string): string {

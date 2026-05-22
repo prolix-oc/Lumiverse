@@ -27,6 +27,8 @@
 .bg {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   pointer-events: none;
   overflow: hidden;
 }
@@ -71,6 +73,8 @@
 .grid {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   pointer-events: none;
   background-image:
     linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
@@ -97,6 +101,8 @@
 .header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 16px 0;
   margin-bottom: 24px;
 }
@@ -105,6 +111,57 @@
   display: flex;
   align-items: center;
   gap: 14px;
+}
+
+.accountBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    color var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    background var(--lumiverse-transition-fast);
+}
+
+.accountBtn svg {
+  opacity: 0.7;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.accountBtn:hover {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-015);
+}
+
+.accountBtn:hover svg {
+  opacity: 1;
+  color: var(--lumiverse-primary);
+}
+
+.accountName {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .accountName {
+    display: none;
+  }
+  .accountBtn {
+    padding: 7px 9px;
+  }
 }
 
 .logoIcon {
@@ -129,7 +186,7 @@
 }
 
 .logoText h1 {
-  font-size: 24px;
+  font-size: calc(24px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-text);
   letter-spacing: -0.02em;
@@ -142,7 +199,7 @@
   background: none;
   border: none;
   padding: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   cursor: pointer;
   transition: color 0.2s ease;
@@ -174,6 +231,13 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 20px;
+}
+
+.compactList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  align-items: start;
 }
 
 /* Card tilt wrapper — handles 3D tilt separately from framer-motion entry */
@@ -244,13 +308,58 @@
 
 /* Image zoom on card hover */
 .cardImage img,
-.cardImage picture img {
+.cardImage picture img,
+.listAvatar img,
+.listAvatar picture img,
+.mosaicCell img,
+.mosaicCell picture img {
   transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .card:hover .cardImage img,
-.card:hover .cardImage picture img {
+.card:hover .cardImage picture img,
+.listItem:hover .listAvatar img,
+.listItem:hover .listAvatar picture img {
   transform: scale(1.06);
+}
+
+/* Parallax — the image participates in the card's tilt but sits on a
+   nearer depth layer. We fake that in 2D by (a) translating in the
+   direction of the tilt so it follows the rotation's screen-space
+   shift, and (b) counter-rotating a fraction of the card's rotation.
+   A plane that rotates less than its container reads as closer to
+   the viewer, which is the "shifts perspective with the tilt" feel.
+   --tilt-x / --tilt-y (-1..1) are set on .cardTilt by the mouse
+   handlers and drive both effects from the same source.
+
+   The scale during tilt has to exceed (translate + rotation edge offset)
+   / half-container-width on every side, or the corner of the image
+   uncovers its container and the card/cell background bleeds through.
+   Mosaic cells are ~half the width of a single-card image, so their
+   translate is scaled down to keep relative intensity in line with
+   single cards (otherwise the same 8px shift reads twice as strong
+   in a collage). */
+.cardTilt.tilting .cardImage img,
+.cardTilt.tilting .cardImage picture img,
+.cardTilt.tilting .cardAvatarFallback {
+  transition: transform 120ms ease-out;
+  transform:
+    translate3d(calc(var(--tilt-x, 0) * 8px), calc(var(--tilt-y, 0) * 8px), 0)
+    rotateX(calc(var(--tilt-y, 0) * 1.5deg))
+    rotateY(calc(var(--tilt-x, 0) * -1.5deg))
+    scale(1.14);
+  will-change: transform;
+}
+
+.cardTilt.tilting .mosaicCell img,
+.cardTilt.tilting .mosaicCell picture img {
+  transition: transform 120ms ease-out;
+  transform:
+    translate3d(calc(var(--tilt-x, 0) * 4px), calc(var(--tilt-y, 0) * 4px), 0)
+    rotateX(calc(var(--tilt-y, 0) * 1deg))
+    rotateY(calc(var(--tilt-x, 0) * -1deg))
+    scale(1.14);
+  will-change: transform;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -259,11 +368,22 @@
     transform: none !important;
   }
   .cardImage img,
-  .cardImage picture img {
+  .cardImage picture img,
+  .listAvatar img,
+  .listAvatar picture img,
+  .mosaicCell img,
+  .mosaicCell picture img {
     transition: none;
   }
   .card:hover .cardImage img,
-  .card:hover .cardImage picture img {
+  .card:hover .cardImage picture img,
+  .listItem:hover .listAvatar img,
+  .listItem:hover .listAvatar picture img,
+  .cardTilt.tilting .cardImage img,
+  .cardTilt.tilting .cardImage picture img,
+  .cardTilt.tilting .mosaicCell img,
+  .cardTilt.tilting .mosaicCell picture img,
+  .cardTilt.tilting .cardAvatarFallback {
     transform: none;
   }
   .card::after {
@@ -309,7 +429,7 @@
 }
 
 .cardName {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   overflow: hidden;
@@ -328,7 +448,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-015);
@@ -340,7 +460,7 @@
 }
 
 .cardTime {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -350,7 +470,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 48px;
+  font-size: calc(48px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-010);
@@ -359,6 +479,10 @@
 
 .card:hover .cardAvatarFallback {
   transform: scale(1.06);
+}
+
+.listAvatarFallback {
+  font-size: calc(20px * var(--lumiverse-font-scale, 1));
 }
 
 .deleteBtn {
@@ -478,7 +602,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-primary-muted);
   background: var(--lumiverse-primary-015);
@@ -487,6 +611,206 @@
   border-radius: 20px;
   letter-spacing: 0.02em;
   white-space: nowrap;
+}
+
+.listItem {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lumiverse-primary) 4%, transparent), transparent 45%),
+    var(--lumiverse-card-bg);
+  border: 1px solid var(--lumiverse-border);
+  box-shadow: var(--lumiverse-shadow-sm);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast),
+    transform var(--lumiverse-transition-fast);
+  animation: cardEntry 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.listItem:hover {
+  transform: translateY(-1px);
+  border-color: var(--lumiverse-primary-020);
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.22),
+    0 0 22px var(--lumiverse-primary-010);
+}
+
+.listItemGroup {
+  border-color: var(--lumiverse-primary-020);
+}
+
+.listBtn {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.listAvatar {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.listAvatar img,
+.listAvatar picture img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.listBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.listTopRow,
+.listBottomRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.listName {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.listTime {
+  flex-shrink: 0;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.listSubtitle {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.listMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.listStatusPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--lumiverse-text-dim);
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border) 85%, transparent);
+  white-space: nowrap;
+}
+
+.listDeleteBtn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 74%, transparent);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast);
+}
+
+.listItem:hover .listDeleteBtn,
+.listItem:focus-within .listDeleteBtn {
+  opacity: 1;
+}
+
+.listDeleteBtn:hover {
+  color: var(--lumiverse-danger);
+  border-color: var(--lumiverse-danger-020);
+}
+
+.listSkeleton {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  background: var(--lumiverse-card-bg);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.listSkeletonAvatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.02) 25%, rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0.02) 75%);
+  background-size: 200% 100%;
+  animation: lumiverseShimmer 1.5s ease-in-out infinite;
+}
+
+.listSkeletonBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.listSkeletonTitle,
+.listSkeletonMeta {
+  border-radius: 4px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.listSkeletonTitle {
+  width: 72%;
+  height: 14px;
+}
+
+.listSkeletonMeta {
+  width: 46%;
+  height: 10px;
 }
 
 /* Skeleton */
@@ -540,14 +864,14 @@
 }
 
 .emptyState h3 {
-  font-size: 20px;
+  font-size: calc(20px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin-bottom: 8px;
 }
 
 .emptyState p {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -568,7 +892,7 @@
   border: 1px solid var(--lumiverse-primary-050);
   color: var(--lumiverse-primary-contrast, #fff);
   font-weight: 600;
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
 }
 
@@ -584,7 +908,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -593,7 +917,7 @@
   text-align: center;
   padding: 24px 0;
   color: var(--lumiverse-text-hint);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 @media (max-width: 600px) {
@@ -603,5 +927,27 @@
   .gridCards {
     grid-template-columns: repeat(2, 1fr);
     gap: 12px;
+  }
+  .compactList {
+    grid-template-columns: 1fr;
+  }
+  .listBtn {
+    gap: 12px;
+    padding: 12px;
+  }
+  .listAvatar,
+  .listSkeletonAvatar {
+    width: 52px;
+    height: 52px;
+    min-width: 52px;
+  }
+  .listTopRow,
+  .listBottomRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .listTime,
+  .listMeta {
+    flex-shrink: 1;
   }
 }

@@ -56,12 +56,23 @@ app.post("/synthesize/stream", async (c) => {
 
     const stream = new ReadableStream({
       async pull(controller) {
-        const { value, done } = await generator.next();
-        if (done || value.done) {
-          controller.close();
-          return;
+        try {
+          const { value, done } = await generator.next();
+          if (done || value.done) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(value.data);
+        } catch {
+          // Client disconnected mid-stream; abandon the generator quietly so
+          // the AbortError doesn't bubble to app.onError as an opaque dump.
+          generator.return(undefined as any).catch(() => {});
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
         }
-        controller.enqueue(value.data);
       },
       cancel() {
         generator.return(undefined as any);

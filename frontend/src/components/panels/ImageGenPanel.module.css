@@ -15,6 +15,33 @@
   width: 100%;
 }
 
+/* Matches the FormComponents .textarea so ExpandableTextarea inherits the standard look. */
+.promptTextarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--lumiverse-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
+}
+
+.promptTextarea:focus {
+  border-color: var(--lumiverse-primary-muted);
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010);
+  outline: none;
+}
+
+.editorTargetBanner {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  margin-top: 4px;
+}
+
 .preview {
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
@@ -36,7 +63,7 @@
   border-radius: 10px;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   display: grid;
   gap: 4px;
 }
@@ -67,7 +94,49 @@
   border: 1px solid rgba(255, 94, 94, 0.35);
   background: rgba(255, 94, 94, 0.14);
   color: #ffd0d0;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.workflowCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.workflowInfo {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.workflowTitle {
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+}
+
+.workflowMeta {
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+}
+
+.workflowActions {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.workflowCustomFields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .refGrid {
@@ -108,4 +177,3 @@
   justify-content: center;
   cursor: pointer;
 }
-

@@ -3,7 +3,13 @@
 .wrapper {
   position: fixed;
   top: env(safe-area-inset-top, 0px);
-  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  /* The `bottom: calc(0 - var(--ios-viewport-offset))` pattern used on pure
+     backdrops (ModalShell, PackBrowser overlay, etc.) is defensive viewport
+     overhang — harmless when the element is just a dimmed layer, but the
+     drawer's wrapper IS the scrollable content container, so extending past
+     the visible viewport puts the last ~safe-area-inset-top of .panelContent
+     off-screen and makes the bottom of tab content unreachable on iPhone. */
+  bottom: 0;
   z-index: 9992;
   display: flex;
   align-items: stretch;
@@ -95,6 +101,8 @@
 .backdrop {
   position: fixed;
   inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
   bottom: calc(0px - var(--ios-viewport-offset, 0px));
   z-index: 9991;
   background: var(--lumiverse-fill-heavy);
@@ -231,7 +239,7 @@
 /* ── Tab label ── */
 
 .tabLabel {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   line-height: 1;
   color: var(--lumiverse-text-dim);
@@ -303,7 +311,7 @@
   border-radius: 7px;
   background: var(--lumiverse-accent);
   color: var(--lumiverse-accent-fg);
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -340,7 +348,7 @@
 }
 
 .panelTitle {
-  font-size: 15px;
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -352,16 +360,20 @@
   overflow-x: hidden;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 12px;
+  /* Bottom buffer keeps the last list item reachable even when something
+     overlays the bottom of the panel (mobile browser chrome, the Spindle
+     dock, iOS home indicator). Mirrors LoomBuilder.scrollArea's pattern. */
+  padding: 12px 12px calc(40px + env(safe-area-inset-bottom, 0px));
   position: relative;
 }
 
 /* iOS PWA: the drawer doesn't resize when the keyboard opens (layout viewport
    stays full-screen). Keyboard-height padding at the bottom creates scroll room
    so the focusin handler can scroll inputs above the keyboard even when the
-   panel's actual content is shorter than the container. */
+   panel's actual content is shorter than the container. Keep the safe-area
+   buffer so the last item is still reachable when no keyboard is open. */
 :global(html[data-ios-pwa]) .panelContent {
-  padding-bottom: calc(12px + var(--app-keyboard-inset-bottom, 0px));
+  padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px) + var(--app-keyboard-inset-bottom, 0px));
 }
 
 .panelContentFull {
@@ -381,12 +393,12 @@
 }
 
 .stubPanel p {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
 }
 
 .stubPanel span {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -394,7 +406,7 @@
 
 @media (max-width: 600px) {
   .wrapper {
-    --drawer-panel-w: 100vw !important;
+    --drawer-panel-w: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
   }
 
   .drawerTab {
@@ -409,7 +421,7 @@
   }
 
   .drawer {
-    width: 100vw !important;
+    width: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
     flex-direction: column !important;
   }
 

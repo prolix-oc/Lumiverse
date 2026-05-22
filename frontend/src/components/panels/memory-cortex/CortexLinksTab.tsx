@@ -3,9 +3,11 @@ import {
   Archive, Link2, Plus, Trash2, AlertTriangle, ChevronDown,
   ChevronRight, Pencil, Check, X, Unlink, ArrowLeftRight,
 } from "lucide-react";
+import { ApiError } from "@/api/client";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexVault, type CortexChatLink } from "@/api/memory-cortex";
 import { chatsApi } from "@/api/chats";
+import type { RecentChat } from "@/types/api";
 import styles from "./MemoryCortexPanel.module.css";
 import clsx from "clsx";
 
@@ -15,6 +17,14 @@ interface CortexLinksTabProps {
 }
 
 type AddLinkStep = "idle" | "pick-type" | "pick-vault" | "pick-chat";
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError && typeof err.body?.error === "string" && err.body.error.trim()) {
+    return err.body.error;
+  }
+  if (err instanceof Error && err.message.trim()) return err.message;
+  return fallback;
+}
 
 export default function CortexLinksTab({ activeChatId, activeChatName }: CortexLinksTabProps) {
   const addToast = useStore((s) => s.addToast);
@@ -82,7 +92,7 @@ export default function CortexLinksTab({ activeChatId, activeChatName }: CortexL
       setVaultDesc("");
       await loadLinks();
     } catch (err: any) {
-      addToast({ type: "error", message: err.message || "Failed to create vault" });
+      addToast({ type: "error", message: getErrorMessage(err, "Failed to create vault") });
     } finally {
       setCreating(false);
     }
@@ -130,8 +140,8 @@ export default function CortexLinksTab({ activeChatId, activeChatName }: CortexL
       addToast({ type: "success", message: "Vault linked to this chat" });
       setAddLinkStep("idle");
       await loadLinks();
-    } catch (err: any) {
-      addToast({ type: "error", message: err.message || "Failed to attach vault" });
+    } catch (err) {
+      addToast({ type: "error", message: getErrorMessage(err, "Failed to attach vault") });
     }
   };
 
@@ -145,8 +155,8 @@ export default function CortexLinksTab({ activeChatId, activeChatName }: CortexL
       addToast({ type: "success", message: bidirectional ? "Chats interlinked (bidirectional)" : "Interlink created" });
       setAddLinkStep("idle");
       await loadLinks();
-    } catch (err: any) {
-      addToast({ type: "error", message: err.message || "Failed to create interlink" });
+    } catch (err) {
+      addToast({ type: "error", message: getErrorMessage(err, "Failed to create interlink") });
     }
   };
 
@@ -157,12 +167,12 @@ export default function CortexLinksTab({ activeChatId, activeChatName }: CortexL
       const res = await chatsApi.listRecent({ limit: 50 });
       setAvailableChats(
         res.data
-          .filter((c: any) => c.chatId !== activeChatId)
-          .map((c: any) => ({
-            id: c.chatId,
-            name: c.chatName || c.characterName || "Unnamed chat",
-            characterName: c.characterName,
-            updatedAt: c.lastMessageAt,
+          .filter((chat: RecentChat) => chat.id !== activeChatId)
+          .map((chat: RecentChat) => ({
+            id: chat.id,
+            name: chat.name || chat.character_name || "Unnamed chat",
+            characterName: chat.character_name || undefined,
+            updatedAt: chat.updated_at,
           })),
       );
     } catch {

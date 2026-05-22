@@ -1,3 +1,4 @@
+import type { AstNode, MacroNode } from "../types";
 import { registry } from "../MacroRegistry";
 
 const ELSE_MARKER = "\x00ELSE_MARKER\x00";
@@ -5,6 +6,7 @@ const ELSE_MARKER = "\x00ELSE_MARKER\x00";
 export function registerCoreMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "space",
     category: "Core",
     description: "Inserts a literal space character",
@@ -14,6 +16,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "newline",
     category: "Core",
     description: "Inserts a literal newline character",
@@ -24,6 +27,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "noop",
     category: "Core",
     description: "No operation — resolves to empty string",
@@ -33,6 +37,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "trim",
     category: "Core",
     description: "Trim whitespace from scoped content or surrounding whitespace in post mode",
@@ -51,6 +56,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "comment",
     category: "Core",
     description: "Comment — resolves to empty string, content is ignored",
@@ -61,6 +67,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "//",
     category: "Core",
     description: "Inline comment shorthand — resolves to empty string",
@@ -79,6 +86,7 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "reverse",
     category: "Core",
     description: "Reverse a string",
@@ -94,13 +102,21 @@ export function registerCoreMacros(): void {
     builtIn: true,
     name: "outlet",
     category: "Core",
-    description: "Placeholder for extension outlet injection — resolves to empty",
+    description: "Resolve an activated world-info outlet by name",
     returnType: "string",
-    handler: () => "",
+    args: [{ name: "name", description: "Outlet name configured on a world-info entry" }],
+    handler: (ctx) => {
+      const name = (ctx.args[0] || "").trim().toLowerCase();
+      if (!name) return "";
+      const outlets = ctx.env.extra?.worldInfoOutlets as Record<string, unknown> | undefined;
+      const value = outlets?.[name];
+      return typeof value === "string" ? value : "";
+    },
   });
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "banned",
     category: "Core",
     description: "Placeholder for banned tokens — resolves to empty",
@@ -130,19 +146,13 @@ export function registerCoreMacros(): void {
       }
       let conditionStr = (await ctx.resolveNodes(conditionNodes)).trim();
 
-      // Iteratively re-resolve the condition string. A single resolve pass only
-      // walks the AST one level deep — if the resolved value itself contains
-      // macro markers (e.g. a character description that embeds {{user}} or
-      // {{char}}), those need additional passes to resolve. This mirrors the
-      // top-level evaluate() loop. Stops when nothing changes (genuinely
-      // unresolvable, e.g. an unknown macro reconstructed as {{name}}) or when
-      // no markers remain.
-      const MAX_CONDITION_PASSES = 5;
-      for (let i = 0; i < MAX_CONDITION_PASSES; i++) {
-        if (!conditionStr.includes("{{")) break;
+      // With recursive inline expansion, resolveNodes already fully expands
+      // nested macros. One safety re-resolve covers the rare edge case where
+      // a macro result depends on state mutated by a later macro in the same
+      // template that hasn't been evaluated yet.
+      if (conditionStr.includes("{{")) {
         const next = (await ctx.resolve(conditionStr)).trim();
-        if (next === conditionStr) break;
-        conditionStr = next;
+        if (next !== conditionStr) conditionStr = next;
       }
 
       // Handle ! prefix negation (ST compat: {{if !condition}})
@@ -160,8 +170,8 @@ export function registerCoreMacros(): void {
       const result = negate ? !isTruthy : isTruthy;
 
       if (ctx.isScoped) {
-        const parts = splitOnElse(ctx.body);
-        return result ? parts.truthy : parts.falsy;
+        const parts = splitOnElseNodes(ctx.bodyRaw);
+        return await ctx.resolveNodes(result ? parts.truthy : parts.falsy);
       }
 
       return result ? "true" : "";
@@ -248,13 +258,17 @@ function evaluateCondition(value: string): boolean {
   return true;
 }
 
-function splitOnElse(body: string): { truthy: string; falsy: string } {
-  const idx = body.indexOf(ELSE_MARKER);
-  if (idx < 0) return { truthy: body, falsy: "" };
+function splitOnElseNodes(body: AstNode[]): { truthy: AstNode[]; falsy: AstNode[] } {
+  const idx = body.findIndex((node) => isElseNode(node));
+  if (idx < 0) return { truthy: body, falsy: [] };
   return {
-    truthy: body.substring(0, idx),
-    falsy: body.substring(idx + ELSE_MARKER.length),
+    truthy: body.slice(0, idx),
+    falsy: body.slice(idx + 1),
   };
+}
+
+function isElseNode(node: AstNode): node is MacroNode {
+  return node.type === "macro" && !node.flags.close && node.name.toLowerCase() === "else";
 }
 
 /** Strip leading/trailing blank lines, then remove common indentation. */

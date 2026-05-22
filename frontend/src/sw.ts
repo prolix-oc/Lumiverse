@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching'
 import { registerRoute, NavigationRoute } from 'workbox-routing'
 import { CacheFirst, NetworkOnly } from 'workbox-strategies'
@@ -105,7 +106,8 @@ self.addEventListener('push', (event) => {
     image?: string
   }
 
-  // Suppress if user is actively looking at the app (WS handles in-app)
+  // Backend suppression is user-wide, but keep this device-local check as a
+  // last line of defense in case a push arrives while this client is active.
   const showNotification = self.clients
     .matchAll({ type: 'window', includeUncontrolled: true })
     .then(async (clients) => {
@@ -150,7 +152,7 @@ self.addEventListener('notificationclick', (event) => {
     (self.navigator as any).clearAppBadge?.()
   }
 
-  const url = event.notification.data?.url || '/'
+  const url = getSafeInAppNavigationUrl(event.notification.data?.url)
 
   const focusOrOpen = self.clients
     .matchAll({ type: 'window', includeUncontrolled: true })

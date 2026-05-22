@@ -17,7 +17,7 @@ export default function LumiaEditorModal({ packId, initialData, onSave, onClose 
   const [name, setName] = useState(initialData?.name || '')
   const [authorName, setAuthorName] = useState(initialData?.author_name || '')
   const [avatarUrl, setAvatarUrl] = useState(initialData?.avatar_url || '')
-  const [genderIdentity, setGenderIdentity] = useState<0 | 1 | 2>(initialData?.gender_identity ?? 0)
+  const [genderIdentity, setGenderIdentity] = useState<0 | 1 | 2 | 3>(initialData?.gender_identity ?? 3)
   const [definition, setDefinition] = useState(initialData?.definition || '')
   const [personality, setPersonality] = useState(initialData?.personality || '')
   const [behavior, setBehavior] = useState(initialData?.behavior || '')
@@ -72,11 +72,12 @@ export default function LumiaEditorModal({ packId, initialData, onSave, onClose 
           <select
             className={styles.fieldSelect}
             value={genderIdentity}
-            onChange={(e) => setGenderIdentity(Number(e.target.value) as 0 | 1 | 2)}
+            onChange={(e) => setGenderIdentity(Number(e.target.value) as 0 | 1 | 2 | 3)}
           >
-            <option value={0}>Unspecified</option>
-            <option value={1}>Feminine</option>
-            <option value={2}>Masculine</option>
+            <option value={0}>Feminine</option>
+            <option value={1}>Masculine</option>
+            <option value={2}>Neutral</option>
+            <option value={3}>Any</option>
           </select>
         </div>
         <div className={styles.fieldGroup}>

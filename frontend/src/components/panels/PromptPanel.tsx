@@ -1,12 +1,10 @@
 import { useState, useCallback, type ReactNode } from 'react'
-import { Hand, Filter, Info, Edit2, Check, X, User, Sparkles, ChevronRight } from 'lucide-react'
-import { IconAdjustments, IconAdjustmentsHorizontal, IconScript, IconTool, IconTransform } from '@tabler/icons-react'
-import LoadoutSelector from './LoadoutSelector'
+import { Hand, Filter, Info, ChevronRight } from 'lucide-react'
+import { IconScript, IconTool, IconTransform } from '@tabler/icons-react'
 import { useStore } from '@/store'
-import { Button, EditorSection } from '@/components/shared/FormComponents'
+import { EditorSection } from '@/components/shared/FormComponents'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { Toggle } from '@/components/shared/Toggle'
-import LumiaSelector from '@/components/modals/LumiaSelector'
 import LoomSelector from '@/components/modals/LoomSelector'
 import type { SovereignHandSettings, ContextFilters } from '@/types/store'
 import type { LoomItemCategory } from '@/types/api'
@@ -106,7 +104,7 @@ function SelectionBtn({
   onClick,
   disabled = false,
 }: {
-  icon: typeof User
+  icon: any
   label: string
   count: number
   onClick: () => void
@@ -114,6 +112,7 @@ function SelectionBtn({
 }) {
   return (
     <button
+      type="button"
       className={clsx(styles.selectionBtn, disabled && styles.selectionBtnDisabled)}
       onClick={onClick}
       disabled={disabled}
@@ -146,65 +145,18 @@ function FilterKeepOnlyToggle({
   )
 }
 
-/* ── Main Panel ── */
-
-type LumiaSelectorMode = 'definition' | 'behavior' | 'personality'
-
 export default function PromptPanel() {
-  const chimeraMode = useStore((s) => s.chimeraMode)
-  const councilSettings = useStore((s) => s.councilSettings)
-  const lumiaQuirks = useStore((s) => s.lumiaQuirks)
-  const lumiaQuirksEnabled = useStore((s) => s.lumiaQuirksEnabled)
   const sovereignHand = useStore((s) => s.sovereignHand)
   const contextFilters = useStore((s) => s.contextFilters)
-  const selectedDefinition = useStore((s) => s.selectedDefinition)
-  const selectedBehaviors = useStore((s) => s.selectedBehaviors)
-  const selectedPersonalities = useStore((s) => s.selectedPersonalities)
   const selectedLoomStyles = useStore((s) => s.selectedLoomStyles)
   const selectedLoomUtils = useStore((s) => s.selectedLoomUtils)
   const selectedLoomRetrofits = useStore((s) => s.selectedLoomRetrofits)
   const setSetting = useStore((s) => s.setSetting)
-  const saveCouncilSettings = useStore((s) => s.saveCouncilSettings)
-
-  const councilMode = councilSettings.councilMode
-  const councilMembersCount = councilSettings.members.length
-
-  // Quirks editing state
-  const [quirksValue, setQuirksValue] = useState(lumiaQuirks)
-  const [isEditingQuirks, setIsEditingQuirks] = useState(false)
 
   // Modal state
-  const [lumiaModal, setLumiaModal] = useState<LumiaSelectorMode | null>(null)
   const [loomModal, setLoomModal] = useState<LoomItemCategory | null>(null)
 
   // Handlers
-  const handleChimeraModeChange = useCallback(
-    (enabled: boolean) => setSetting('chimeraMode', enabled),
-    [setSetting]
-  )
-
-  const handleCouncilModeChange = useCallback(
-    (enabled: boolean) => {
-      saveCouncilSettings({ councilMode: enabled })
-    },
-    [saveCouncilSettings]
-  )
-
-  const handleQuirksSave = useCallback(() => {
-    setSetting('lumiaQuirks', quirksValue)
-    setIsEditingQuirks(false)
-  }, [setSetting, quirksValue])
-
-  const handleQuirksCancel = useCallback(() => {
-    setQuirksValue(lumiaQuirks)
-    setIsEditingQuirks(false)
-  }, [lumiaQuirks])
-
-  const handleQuirksEnabledChange = useCallback(
-    (enabled: boolean) => setSetting('lumiaQuirksEnabled', enabled),
-    [setSetting]
-  )
-
   const updateSovereignHand = useCallback(
     (patch: Partial<SovereignHandSettings>) => {
       setSetting('sovereignHand', { ...sovereignHand, ...patch })
@@ -226,167 +178,12 @@ export default function PromptPanel() {
   )
 
   const sovereignEnabled = sovereignHand.enabled
-  const isCouncilActive = councilMode && councilMembersCount > 0
-
-  const definitionCount = selectedDefinition ? 1 : 0
-  const behaviorCount = selectedBehaviors.length
-  const personalityCount = selectedPersonalities.length
   const styleCount = selectedLoomStyles.length
   const utilCount = selectedLoomUtils.length
   const retrofitCount = selectedLoomRetrofits.length
 
   return (
     <div className={styles.panel}>
-      <LoadoutSelector />
-
-      {/* ── Lumia Selection ── */}
-      <EditorSection Icon={User} title="Lumia Selection" defaultExpanded>
-        <p className={styles.desc}>
-          Select Lumia definitions, behaviors, and personalities from your loaded packs.
-        </p>
-
-        <div className={clsx(styles.selectionGroup, isCouncilActive && styles.selectionGroupDisabled)}>
-          <SelectionBtn
-            icon={User}
-            label={chimeraMode ? 'Chimera Definitions' : 'Definition'}
-            count={definitionCount}
-            onClick={() => setLumiaModal('definition')}
-            disabled={isCouncilActive}
-          />
-          <SelectionBtn
-            icon={IconAdjustments}
-            label="Behaviors"
-            count={behaviorCount}
-            onClick={() => setLumiaModal('behavior')}
-            disabled={isCouncilActive}
-          />
-          <SelectionBtn
-            icon={Sparkles}
-            label="Personalities"
-            count={personalityCount}
-            onClick={() => setLumiaModal('personality')}
-            disabled={isCouncilActive}
-          />
-        </div>
-
-        {isCouncilActive && (
-          <p className={styles.modeNote}>
-            Individual Lumia selections are disabled while Council Mode is active. Configure members in the Council tab.
-          </p>
-        )}
-      </EditorSection>
-
-      {/* ── Lumia Modes ── */}
-      <EditorSection Icon={IconAdjustmentsHorizontal} title="Lumia Modes" defaultExpanded>
-        <p className={styles.desc}>
-          Configure special Lumia modes for unique character setups. These modes are mutually exclusive.
-        </p>
-
-        {/* Chimera Mode */}
-        <div className={styles.modeOption}>
-          <ToggleRow
-            id="chimera-mode"
-            checked={chimeraMode}
-            onChange={handleChimeraModeChange}
-            label="Chimera Mode"
-            hint="Fuse multiple physical definitions into one hybrid form"
-          />
-          <Collapsible isOpen={chimeraMode}>
-            <InfoBox
-              items={[
-                'Select multiple definitions in the Definition modal',
-                'All selected forms will be fused into one Chimera',
-                `Currently ${definitionCount} definition${definitionCount !== 1 ? 's' : ''} selected`,
-              ]}
-            />
-          </Collapsible>
-        </div>
-
-        {/* Council Mode */}
-        <div className={styles.modeOption}>
-          <ToggleRow
-            id="council-mode"
-            checked={councilMode}
-            onChange={handleCouncilModeChange}
-            label="Council Mode"
-            hint="Multiple independent Lumias that collaborate"
-          />
-          <Collapsible isOpen={councilMode}>
-            <InfoBox
-              items={[
-                'Each council member has independent traits',
-                'Members can converse and collaborate',
-                `Currently ${councilMembersCount} council member${councilMembersCount !== 1 ? 's' : ''}`,
-              ]}
-            />
-            <p className={styles.modeNote}>Configure council members in the Council tab.</p>
-          </Collapsible>
-        </div>
-
-        {/* Behavioral Quirks */}
-        <div className={clsx(styles.quirksSection, !lumiaQuirksEnabled && styles.quirksSectionDisabled)}>
-          <div className={styles.quirksHeader}>
-            <div className={styles.quirksHeaderLeft}>
-              <span className={styles.quirksLabel}>Behavioral Quirks</span>
-              <ToggleRow
-                id="quirks-toggle"
-                checked={lumiaQuirksEnabled}
-                onChange={handleQuirksEnabledChange}
-                label=""
-              />
-            </div>
-            {!isEditingQuirks && lumiaQuirksEnabled && (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                onClick={() => {
-                  setQuirksValue(lumiaQuirks)
-                  setIsEditingQuirks(true)
-                }}
-                title="Edit quirks"
-                icon={<Edit2 size={12} strokeWidth={1.5} />}
-              />
-            )}
-          </div>
-          <p className={styles.quirksHint}>
-            Extra behavioral modifications. Use <code>{'{{lumiaQuirks}}'}</code>
-          </p>
-
-          {isEditingQuirks && lumiaQuirksEnabled ? (
-            <div className={styles.quirksEdit}>
-              <textarea
-                className={styles.quirksTextarea}
-                placeholder="Enter behavioral quirks..."
-                value={quirksValue}
-                onChange={(e) => setQuirksValue(e.target.value)}
-                rows={3}
-              />
-              <div className={styles.quirksActions}>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  icon={<Check size={12} strokeWidth={2} />}
-                  onClick={handleQuirksSave}
-                >
-                  Save
-                </Button>
-                <Button size="sm" icon={<X size={12} strokeWidth={2} />} onClick={handleQuirksCancel}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className={styles.quirksPreview}>
-              {lumiaQuirks?.trim() ? (
-                <span>{lumiaQuirks}</span>
-              ) : (
-                <span className={styles.quirksEmpty}>No quirks set</span>
-              )}
-            </div>
-          )}
-        </div>
-      </EditorSection>
-
       {/* ── Loom Content ── */}
       <EditorSection Icon={IconScript} title="Loom Content" defaultExpanded={false}>
         <p className={styles.desc}>
@@ -535,10 +332,6 @@ export default function PromptPanel() {
         </Collapsible>
       </EditorSection>
 
-      {/* ── Selector Modals ── */}
-      {lumiaModal && (
-        <LumiaSelector mode={lumiaModal} onClose={() => setLumiaModal(null)} />
-      )}
       {loomModal && (
         <LoomSelector category={loomModal} onClose={() => setLoomModal(null)} />
       )}

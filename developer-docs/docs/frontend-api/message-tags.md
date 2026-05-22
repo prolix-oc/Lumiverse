@@ -25,7 +25,7 @@ unsub()
 |---|---|---|
 | `tagName` | `string` | The tag name to match (e.g. `'my-action'` matches `<my-action>`) |
 | `attrs` | `Record<string, string>` | Optional. Only match tags that have these exact attribute values |
-| `removeFromMessage` | `boolean` | Optional. If `true`, the matched tag is stripped from the rendered message output |
+| `removeFromMessage` | `boolean` | Optional. If `true`, the matched tag is stripped from the rendered message output. During streaming, content is hidden as soon as the matching opening tag appears and replaced with a subtle inline "extension is processing" indicator. Normal rendering resumes after the closing tag arrives. |
 
 ## SpindleMessageTagIntercept (handler payload)
 

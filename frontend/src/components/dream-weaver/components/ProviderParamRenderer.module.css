@@ -22,7 +22,7 @@
 }
 
 .groupLabel {
-  font-size: 0.6875rem;
+  font-size: calc(0.6875rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -30,7 +30,7 @@
 }
 
 .groupChevron {
-  font-size: 0.625rem;
+  font-size: calc(0.625rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   transition: transform var(--lumiverse-transition-fast);
 }
@@ -59,7 +59,7 @@
 }
 
 .paramLabel {
-  font-size: 0.625rem;
+  font-size: calc(0.625rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -73,7 +73,7 @@
   background: color-mix(in srgb, var(--lumiverse-bg) 50%, var(--lumiverse-bg-elevated));
   color: var(--lumiverse-text);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   outline: none;
   appearance: none;
   cursor: pointer;
@@ -91,7 +91,7 @@
   background: color-mix(in srgb, var(--lumiverse-bg) 50%, var(--lumiverse-bg-elevated));
   color: var(--lumiverse-text);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
 }
@@ -137,12 +137,12 @@
 }
 
 .toggleLabel {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
 .paramDescription {
-  font-size: 0.625rem;
+  font-size: calc(0.625rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.4;
 }

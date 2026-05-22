@@ -5,11 +5,15 @@ import { generateApi } from '@/api/generate'
 // ── localStorage persistence ──
 
 const HEADS_KEY = 'lumiverse:chatHeads'
+const CLEARED_KEY = 'lumiverse:chatHeadsAttentionCleared'
 const POS_KEY = 'lumiverse:chatHeadsPos'
 
-const ACTIVE_STATUSES: Set<ChatHeadEntry['status']> = new Set([
-  'assembling', 'council', 'council_failed', 'reasoning', 'streaming',
-])
+export function clearChatHeadsPersistence() {
+  try {
+    localStorage.removeItem(HEADS_KEY)
+    localStorage.removeItem(CLEARED_KEY)
+  } catch {}
+}
 
 function loadHeads(): ChatHeadEntry[] {
   try {
@@ -20,6 +24,22 @@ function loadHeads(): ChatHeadEntry[] {
 
 function saveHeads(heads: ChatHeadEntry[]) {
   try { localStorage.setItem(HEADS_KEY, JSON.stringify(heads)) } catch {}
+}
+
+function loadClearedAttention(): Set<string> {
+  try {
+    const raw = localStorage.getItem(CLEARED_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : [])
+  } catch { return new Set() }
+}
+
+function saveClearedAttention(keys: Set<string>) {
+  try { localStorage.setItem(CLEARED_KEY, JSON.stringify([...keys])) } catch {}
+}
+
+function attentionKey(chatId: string, generationId: string): string {
+  return `${chatId}:${generationId}`
 }
 
 function loadPos(): { xPct: number; yPct: number } {
@@ -42,12 +62,15 @@ export const createChatHeadsSlice: StateCreator<ChatHeadsSlice> = (set, get) => 
   addChatHead: (head: ChatHeadEntry) =>
     set((state) => {
       const idx = state.chatHeads.findIndex((h) => h.chatId === head.chatId)
+      const existing = idx >= 0 ? state.chatHeads[idx] : undefined
+      const cleared = existing?.generationId === head.generationId ? existing.attentionCleared : false
+      const nextHead = { ...head, attentionCleared: cleared }
       let next
       if (idx >= 0) {
         next = [...state.chatHeads]
-        next[idx] = head
+        next[idx] = nextHead
       } else {
-        next = [...state.chatHeads, head]
+        next = [...state.chatHeads, nextHead]
       }
       saveHeads(next)
       return { chatHeads: next }
@@ -58,21 +81,32 @@ export const createChatHeadsSlice: StateCreator<ChatHeadsSlice> = (set, get) => 
       const next = state.chatHeads.map((h) =>
         h.generationId === generationId ? { ...h, ...updates } : h
       )
-      // Persist only on terminal transitions — not during high-frequency streaming
-      if (updates.status === 'completed' || updates.status === 'stopped' || updates.status === 'error') {
+      // Persist terminal/attention transitions, not high-frequency streaming changes.
+      if (updates.status === 'completed' || updates.status === 'stopped' || updates.status === 'error' || updates.attentionCleared != null) {
         saveHeads(next)
       }
       return { chatHeads: next }
     }),
 
-  removeChatHead: (chatId) => {
+  deleteChatHead: (chatId) =>
     set((state) => {
       const next = state.chatHeads.filter((h) => h.chatId !== chatId)
       saveHeads(next)
       return { chatHeads: next }
+    }),
+
+  removeChatHead: (chatId) => {
+    set((state) => {
+      const clearedKeys = loadClearedAttention()
+      const next = state.chatHeads.map((h) => {
+        if (h.chatId !== chatId) return h
+        clearedKeys.add(attentionKey(h.chatId, h.generationId))
+        return { ...h, attentionCleared: true }
+      })
+      saveClearedAttention(clearedKeys)
+      saveHeads(next)
+      return { chatHeads: next }
     })
-    // Tell the backend this chat's generation has been acknowledged
-    generateApi.acknowledge(chatId).catch(() => {})
   },
 
   setChatHeadsPosition: (pos) => {
@@ -84,11 +118,13 @@ export const createChatHeadsSlice: StateCreator<ChatHeadsSlice> = (set, get) => 
     try {
       const entries = await generateApi.getActive()
       const heads = get().chatHeads
-      const next = [...heads]
+      const clearedKeys = loadClearedAttention()
+      const next: ChatHeadEntry[] = []
 
-      // Merge backend entries (active + unacknowledged terminal)
+      // Backend entries are authoritative for status. Local state only tracks
+      // whether this client already cleared the terminal attention pip.
       for (const entry of entries) {
-        const existing = next.findIndex((h) => h.chatId === entry.chatId)
+        const existing = heads.find((h) => h.chatId === entry.chatId && h.generationId === entry.generationId)
         const head: ChatHeadEntry = {
           generationId: entry.generationId,
           chatId: entry.chatId,
@@ -98,21 +134,9 @@ export const createChatHeadsSlice: StateCreator<ChatHeadsSlice> = (set, get) => 
           status: entry.councilRetryPending ? 'council_failed' : entry.status as ChatHeadEntry['status'],
           model: entry.model || '',
           startedAt: entry.startedAt || Date.now(),
+          attentionCleared: existing?.attentionCleared || clearedKeys.has(attentionKey(entry.chatId, entry.generationId)),
         }
-        if (existing >= 0) {
-          next[existing] = head
-        } else {
-          next.push(head)
-        }
-      }
-
-      // Local heads that were streaming but aren't in the backend anymore
-      // (server restarted or generation finished while tab was closed) → mark completed
-      const backendChatIds = new Set(entries.map((e) => e.chatId))
-      for (let i = 0; i < next.length; i++) {
-        if (!backendChatIds.has(next[i].chatId) && ACTIVE_STATUSES.has(next[i].status)) {
-          next[i] = { ...next[i], status: 'completed' }
-        }
+        next.push(head)
       }
 
       saveHeads(next)

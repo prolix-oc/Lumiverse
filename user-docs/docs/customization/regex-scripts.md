@@ -88,7 +88,7 @@ You can select multiple placements for the same script.
 | **Min/Max Depth** | Only apply to messages within a depth range |
 | **Trim Strings** | Additional strings to strip from matches |
 | **Run on Edit** | Re-run when you edit a message |
-| **Substitute Macros** | Replace macros in the replacement string (`none`, `raw`, `escaped`) |
+| **Substitute Macros** | Replace macros in the **find** and **replace** strings. Modes: `none` (no substitution), `raw` (substitute before matching, capture groups see the raw output), `escaped` (substitute and regex-escape the result so special characters in macro output don't break the pattern), `after` (substitute *after* the match runs — useful when you want capture groups to feed into a macro in the replacement string) |
 | **Folder** | Organizational grouping |
 
 ---

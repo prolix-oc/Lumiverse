@@ -1,10 +1,14 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square } from 'lucide-react'
+import { IconGitFork } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { useMessageCard } from '@/hooks/useMessageCard'
 import { useMessagePlayback } from '@/hooks/useMessagePlayback'
+import { useLongPress } from '@/hooks/useLongPress'
 import useSwipeAction from '@/hooks/useSwipeAction'
 import useSwipeGesture from '@/hooks/useSwipeGesture'
+import { copyTextToClipboard, getSelectionTextWithin } from '@/lib/clipboard'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
@@ -14,6 +18,7 @@ import GreetingNav from './GreetingNav'
 import ReasoningBlock from './ReasoningBlock'
 import StreamingIndicator from './StreamingIndicator'
 import LazyImage from '@/components/shared/LazyImage'
+import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
 import styles from './MinimalMessage.module.css'
@@ -43,13 +48,18 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
 }) {
   const pillRef = useRef<HTMLSpanElement>(null)
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
-  const hasStreamingDetails = !isUser && generationMetrics?.wasStreaming && (generationMetrics.ttft != null || generationMetrics.tps != null)
+  const hasGenerationDetails = !isUser && !!generationMetrics && (
+    generationMetrics.ttft != null
+    || generationMetrics.tps != null
+    || !!generationMetrics.model
+    || !!generationMetrics.provider
+  )
 
   const handleMouseEnter = useCallback(() => {
-    if (!hasStreamingDetails || !pillRef.current) return
+    if (!hasGenerationDetails || !pillRef.current) return
     const rect = pillRef.current.getBoundingClientRect()
     setTooltipPos({ x: rect.left, y: rect.top })
-  }, [hasStreamingDetails])
+  }, [hasGenerationDetails])
 
   const handleMouseLeave = useCallback(() => {
     setTooltipPos(null)
@@ -59,8 +69,8 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
     <span
       ref={pillRef}
       className={styles.metaPill}
-      onMouseEnter={hasStreamingDetails ? handleMouseEnter : undefined}
-      onMouseLeave={hasStreamingDetails ? handleMouseLeave : undefined}
+      onMouseEnter={hasGenerationDetails ? handleMouseEnter : undefined}
+      onMouseLeave={hasGenerationDetails ? handleMouseLeave : undefined}
     >
       <span className={styles.metaSegment}>#{index}</span>
       <span className={styles.metaSegment}>
@@ -79,11 +89,23 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
           <span className={styles.hiddenBadge}>Hidden</span>
         </span>
       )}
-      {tooltipPos && hasStreamingDetails && createPortal(
+      {tooltipPos && hasGenerationDetails && createPortal(
         <span
           className={styles.metaPillTooltip}
           style={{ position: 'fixed', left: tooltipPos.x, top: tooltipPos.y - 6, transform: 'translateY(-100%)' }}
         >
+          {generationMetrics!.model && (
+            <span className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>Model</span>
+              <span className={styles.tooltipValue}>{generationMetrics!.model}</span>
+            </span>
+          )}
+          {generationMetrics!.provider && (
+            <span className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>Provider</span>
+              <span className={styles.tooltipValue}>{generationMetrics!.provider}</span>
+            </span>
+          )}
           {generationMetrics!.ttft != null && (
             <span className={styles.tooltipRow}>
               <span className={styles.tooltipLabel}>First token</span>
@@ -145,15 +167,94 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
+  const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
+  const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
 
   const cardRef = useRef<HTMLDivElement>(null)
+  const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
   const { handleSwipe } = useSwipeAction(message, chatId)
   const onSwipeLeft = useCallback(() => handleSwipe('left'), [handleSwipe])
   const onSwipeRight = useCallback(() => handleSwipe('right'), [handleSwipe])
-  const { canPlay, isPlaying, toggle: togglePlayback } = useMessagePlayback(message.id, message.content)
+  const { canPlay, isPlaying, toggle: togglePlayback } = useMessagePlayback(message.id, message.content, message.name, message.is_user)
+  const canOpenContextMenu = !isEditing && !isSelectMode && messageContextMenuEnabled
+
+  const closeContextMenu = useCallback(() => setContextMenuPos(null), [])
+
+  const contextAction = useCallback((action: () => void) => {
+    closeContextMenu()
+    action()
+  }, [closeContextMenu])
+
+  const handleCopy = useCallback(() => {
+    const selected = getSelectionTextWithin(cardRef.current)
+    copyTextToClipboard(selected || message.content).catch(console.error)
+  }, [message.content])
+
+  const longPress = useLongPress({
+    onLongPress: (pos) => {
+      if (canOpenContextMenu) setContextMenuPos(pos)
+    },
+  })
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (!canOpenContextMenu) return
+    longPress.onContextMenu(e)
+  }, [canOpenContextMenu, longPress])
+
+  const contextMenuItems: ContextMenuEntry[] = useMemo(() => [
+    {
+      key: 'copy',
+      label: 'Copy',
+      icon: <Copy size={14} />,
+      onClick: () => contextAction(handleCopy),
+    },
+    {
+      key: 'edit',
+      label: 'Edit',
+      icon: <Pencil size={14} />,
+      onClick: () => contextAction(handleEdit),
+    },
+    ...(canPlay ? [{
+      key: 'play',
+      label: isPlaying ? 'Stop playback' : 'Play with TTS',
+      icon: isPlaying ? <Square size={14} /> : <Volume2 size={14} />,
+      onClick: () => contextAction(togglePlayback),
+    }] satisfies ContextMenuEntry[] : []),
+    {
+      key: 'toggle-hidden',
+      label: isHidden ? 'Unhide from AI context' : 'Hide from AI context',
+      icon: isHidden ? <Eye size={14} /> : <EyeOff size={14} />,
+      active: isHidden,
+      onClick: () => contextAction(handleToggleHidden),
+    },
+    {
+      key: 'fork',
+      label: 'Fork chat here',
+      icon: <IconGitFork size={14} />,
+      onClick: () => contextAction(handleFork),
+    },
+    ...(!isUser ? [{
+      key: 'prompt-breakdown',
+      label: 'Prompt breakdown',
+      icon: <BarChart3 size={14} />,
+      onClick: () => contextAction(handlePromptBreakdown),
+    }] satisfies ContextMenuEntry[] : []),
+    { key: 'delete-divider', type: 'divider' },
+    {
+      key: 'delete',
+      label: 'Delete',
+      icon: <Trash2 size={14} />,
+      danger: true,
+      onClick: () => contextAction(handleDelete),
+    },
+  ], [
+    canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
+    handlePromptBreakdown, handleToggleHidden, isHidden, isPlaying, isUser,
+    togglePlayback,
+  ])
 
   useSwipeGesture(cardRef, {
     enabled: swipeGesturesEnabled && !isUser && !isEditing && !isSelectMode,
@@ -173,9 +274,14 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
         isHidden && styles.hidden,
         isSelectMode && isSelected && styles.selected,
         isSelectMode && styles.selectMode,
+        isHighlighted && styles.highlight,
       )}
       data-message-id={message.id}
       onClick={isSelectMode ? onToggleSelect : undefined}
+      onContextMenu={handleContextMenu}
+      onTouchStart={canOpenContextMenu ? longPress.onTouchStart : undefined}
+      onTouchMove={canOpenContextMenu ? longPress.onTouchMove : undefined}
+      onTouchEnd={canOpenContextMenu ? longPress.onTouchEnd : undefined}
     >
       {/* Avatar */}
       <div
@@ -223,7 +329,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
 
         {/* Inline attachments — before content for assistant */}
         {!isUser && message.extra?.attachments && message.extra.attachments.length > 0 && !isEditing && (
-          <MessageAttachments attachments={message.extra.attachments} isUser={false} />
+          <MessageAttachments attachments={message.extra.attachments} isUser={false} chatId={chatId} messageId={message.id} />
         )}
 
         {/* Content */}
@@ -252,7 +358,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
 
         {/* User attachments render after content */}
         {isUser && message.extra?.attachments && message.extra.attachments.length > 0 && !isEditing && (
-          <MessageAttachments attachments={message.extra.attachments} isUser={true} />
+          <MessageAttachments attachments={message.extra.attachments} isUser={true} chatId={chatId} messageId={message.id} />
         )}
 
         {/* Swipe controls — assistant messages only, except the greeting (index 0),
@@ -284,6 +390,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
           />
         </div>
       )}
+
+      <ContextMenu position={contextMenuPos} items={contextMenuItems} onClose={closeContextMenu} />
     </div>
   )
 }

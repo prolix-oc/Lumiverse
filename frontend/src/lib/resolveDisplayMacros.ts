@@ -12,9 +12,16 @@ const LEGACY_MAP: Record<string, string> = {
   '<CHAR>': '{{char}}',
 }
 
+const DISPLAY_SETTER_RE = /\{\{\s*(?:setvar|setgvar|setchatvar)\b(?:(?!\}\}).)*\}\}/gis
+
 export interface DisplayMacroContext {
   charName: string
   userName: string
+}
+
+export function stripDisplaySetterMacros(text: string): string {
+  if (!text || !text.includes('{{')) return text
+  return text.replace(DISPLAY_SETTER_RE, '')
 }
 
 export function resolveDisplayMacros(text: string, ctx: DisplayMacroContext): string {
@@ -43,5 +50,5 @@ export function resolveDisplayMacros(text: string, ctx: DisplayMacroContext): st
   return result.replace(/\{\{([a-zA-Z_]+)\}\}/g, (match, name) => {
     if (name in macros) return macros[name]
     return match
-  })
+  }).replace(DISPLAY_SETTER_RE, '')
 }

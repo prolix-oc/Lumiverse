@@ -4,6 +4,8 @@ import type {
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
   PaginatedResult, WorldBookDiagnostics, WorldBookReindexProgress,
   WorldBookReindexResult, WorldBookVectorSummary,
+  DuplicateWorldBookEntryInput, ReorderWorldBookEntriesInput,
+  WorldBookEntryBulkActionInput, WorldBookEntryBulkActionResult,
 } from '@/types/api'
 
 export const worldBooksApi = {
@@ -28,7 +30,16 @@ export const worldBooksApi = {
   },
 
   // Entries
-  listEntries(bookId: string, params?: { limit?: number; offset?: number }) {
+  listEntries(
+    bookId: string,
+    params?: {
+      limit?: number
+      offset?: number
+      sort_by?: 'order' | 'priority' | 'created' | 'updated' | 'name'
+      sort_dir?: 'asc' | 'desc'
+      search?: string
+    }
+  ) {
     return get<PaginatedResult<WorldBookEntry>>(`/world-books/${bookId}/entries`, params)
   },
 
@@ -38,6 +49,18 @@ export const worldBooksApi = {
 
   createEntry(bookId: string, input: CreateWorldBookEntryInput) {
     return post<WorldBookEntry>(`/world-books/${bookId}/entries`, input)
+  },
+
+  duplicateEntry(bookId: string, entryId: string, input: DuplicateWorldBookEntryInput = {}) {
+    return post<WorldBookEntry>(`/world-books/${bookId}/entries/${entryId}/duplicate`, input)
+  },
+
+  reorderEntries(bookId: string, input: ReorderWorldBookEntriesInput) {
+    return post<{ success: boolean; count: number }>(`/world-books/${bookId}/entries/reorder`, input)
+  },
+
+  bulkEntryAction(bookId: string, input: WorldBookEntryBulkActionInput) {
+    return post<WorldBookEntryBulkActionResult>(`/world-books/${bookId}/entries/bulk`, input)
   },
 
   updateEntry(bookId: string, entryId: string, input: UpdateWorldBookEntryInput) {
@@ -79,6 +102,7 @@ export const worldBooksApi = {
     return get<{
       total: number
       eligible: number
+      keys_to_clear: number
       constant_skipped: number
       already_vectorized: number
       empty_skipped: number

@@ -13,6 +13,13 @@
  */
 
 import type { EntityType, ExtractedEntity, MentionRole, MemoryEntity } from "./types";
+import {
+  buildProtectedLineEntities,
+  filterEntitiesByExtractionFilters,
+  getDefaultEntityExtractionFilters,
+  type MemoryEntityExtractionFilters,
+} from "./entity-extraction-filters";
+import { isPlausibleAlias, sanitizeAlias } from "./alias-validation";
 
 // ─── Common Words Filter ───────────────────────────────────────
 // Words that appear capitalized at sentence starts but aren't entities
@@ -435,6 +442,7 @@ export function extractEntitiesHeuristic(
   characterNames: string[],
   whitelist: string[] = [],
   minConfidence: number = 0,
+  filters: MemoryEntityExtractionFilters = getDefaultEntityExtractionFilters(),
 ): Array<ExtractedEntity & { mentionRole: MentionRole }> {
   // Build effective common words set (subtract whitelist entries)
   const effectiveCommon = new Set(COMMON_WORDS);
@@ -442,9 +450,21 @@ export function extractEntitiesHeuristic(
     effectiveCommon.delete(w.toLowerCase());
   }
   const found = new Map<string, ExtractedEntity & { mentionRole: MentionRole }>();
+  const protectedLineEntities = buildProtectedLineEntities(content, filters);
 
   // Build alias → canonical name lookup for deduplication across all stages
   const aliasLookup = buildAliasLookup(knownEntities, characterNames);
+
+  // 0. Explicitly protected lines can seed a typed entity directly.
+  for (const entity of protectedLineEntities) {
+    found.set(entity.name.toLowerCase(), {
+      name: entity.name,
+      type: entity.type,
+      aliases: [],
+      confidence: entity.confidence,
+      mentionRole: entity.mentionRole,
+    });
+  }
 
   // 1. Match known character names from chat participants (highest confidence)
   for (const name of characterNames) {
@@ -680,7 +700,7 @@ export function extractEntitiesHeuristic(
   }
 
   // Apply minimum confidence filter
-  const results = [...resolved.values()];
+  const results = filterEntitiesByExtractionFilters([...resolved.values()], content, filters, protectedLineEntities);
   if (minConfidence > 0) {
     return results.filter((e) => e.confidence >= minConfidence);
   }
@@ -731,35 +751,44 @@ const NICKNAME_PATTERNS: Array<{
 }> = [
   // "Call me X" / "You can call me X" / "Just call me X"
   {
-    pattern: /\b(?:(?:you\s+can\s+|just\s+|please\s+)?call\s+(?:me|her|him|them)\s+)(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/i,
+    pattern: /\b(?:(?:you\s+can\s+|just\s+|please\s+)?call\s+(?:me|her|him|them)\s+)(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
   },
   // "People call me X" / "Friends call me X" / "Everyone calls her X"
   {
-    pattern: /\b(?:\w+\s+)?call(?:s|ed)?\s+(?:me|her|him|them)\s+(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/i,
+    pattern: /\b(?:\w+\s+)?call(?:s|ed)?\s+(?:me|her|him|them)\s+(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
   },
   // "Known as X" / "Also known as X" / "Better known as X"
   {
-    pattern: /\b(?:also\s+|better\s+)?known\s+as\s+(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/i,
+    pattern: /\b(?:also\s+|better\s+)?known\s+as\s+(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
   },
   // "Goes by X" / "She goes by X"
   {
-    pattern: /\bgoes?\s+by\s+(?:the\s+(?:name|alias|moniker)\s+(?:of\s+)?)?(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/i,
+    pattern: /\bgoes?\s+by\s+(?:the\s+(?:name|alias|moniker)\s+(?:of\s+)?)?(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
   },
   // "Nicknamed X" / "She was nicknamed X"
   {
-    pattern: /\bnicknamed?\s+(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/i,
+    pattern: /\bnicknamed?\s+(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
   },
   // "[Name] — or [Alias] as she preferred" / "[Name], or [Alias] to her friends"
   {
-    pattern: /(?<canonical>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[—–,]\s*(?:or\s+)?(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:as\s+(?:she|he|they)|to\s+(?:her|his|their|most|those))\b/i,
+    pattern: /(?<canonical>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[-—–,]\s*(?:or\s+)?(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?:,\s*)?\s*(?:as\s+(?:she|he|they)|to\s+(?:her|his|their|most|those))\b/gi,
   },
   // "My name is X but everyone calls me Y"
   {
-    pattern: /\bname\s+is\s+(?<canonical>[A-Z][a-z]+)\s+but\s+(?:everyone|they|people)\s+call(?:s)?\s+(?:me|her|him)\s+(?<alias>[A-Z][a-z]+)\b/i,
+    pattern: /\bname\s+is\s+(?<canonical>[A-Z][a-z]+)\s+but\s+(?:everyone|they|people)\s+call(?:s)?\s+(?:me|her|him)\s+(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+)\b/gi,
   },
   // "Prefer to be called X"
   {
-    pattern: /\bprefer(?:s|red)?\s+(?:to\s+be\s+)?called\s+(?<alias>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/i,
+    pattern: /\bprefer(?:s|red)?\s+(?:to\s+be\s+)?called\s+(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
+  },
+  {
+    pattern: /\bunder\s+the\s+alias\s+(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
+  },
+  {
+    pattern: /\b(?:to\s+(?:friends|the\s+crew|her\s+friends|his\s+friends|their\s+friends),\s*)(?<alias>(?:[Tt]he\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
+  },
+  {
+    pattern: /\b(?<alias>[A-Z][a-z]+)\s+was\s+short\s+for\s+(?<canonical>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi,
   },
 ];
 
@@ -782,56 +811,68 @@ export function detectNicknameIntroductions(
   // Build lookup for known names (canonical + aliases)
   const knownNameSet = new Set<string>();
   const nameToCanonical = new Map<string, string>();
+  const registerCanonicalVariant = (variant: string, canonical: string) => {
+    const trimmed = variant.trim();
+    if (trimmed.length < 3) return;
+    knownNameSet.add(trimmed.toLowerCase());
+    if (!nameToCanonical.has(trimmed.toLowerCase())) {
+      nameToCanonical.set(trimmed.toLowerCase(), canonical);
+    }
+  };
+
   for (const entity of knownEntities) {
-    knownNameSet.add(entity.name.toLowerCase());
-    nameToCanonical.set(entity.name.toLowerCase(), entity.name);
+    registerCanonicalVariant(entity.name, entity.name);
+    const entityParts = entity.name.split(/\s+/).filter(Boolean);
+    if (entityParts.length > 1) {
+      registerCanonicalVariant(entityParts[0], entity.name);
+      registerCanonicalVariant(entityParts[entityParts.length - 1], entity.name);
+    }
     for (const alias of entity.aliases) {
-      knownNameSet.add(alias.toLowerCase());
-      nameToCanonical.set(alias.toLowerCase(), entity.name);
+      registerCanonicalVariant(alias, entity.name);
     }
   }
   for (const name of characterNames) {
     if (!knownNameSet.has(name.toLowerCase())) {
-      knownNameSet.add(name.toLowerCase());
-      nameToCanonical.set(name.toLowerCase(), name);
+      registerCanonicalVariant(name, name);
+      const parts = name.split(/\s+/).filter(Boolean);
+      if (parts.length > 1) {
+        registerCanonicalVariant(parts[0], name);
+        registerCanonicalVariant(parts[parts.length - 1], name);
+      }
     }
   }
 
   for (const { pattern } of NICKNAME_PATTERNS) {
-    const match = pattern.exec(content);
-    if (!match?.groups) continue;
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(content)) !== null) {
+      if (!match.groups) continue;
 
-    const aliasRaw = match.groups.alias?.trim();
-    if (!aliasRaw || aliasRaw.length < 2) continue;
+      const aliasRaw = match.groups.alias ? sanitizeAlias(match.groups.alias) : null;
+      if (!aliasRaw || aliasRaw.length < 2) continue;
 
-    // Skip if alias is already a known name (not a new discovery)
-    if (knownNameSet.has(aliasRaw.toLowerCase())) continue;
-    // Skip common words
-    if (COMMON_WORDS.has(aliasRaw.toLowerCase())) continue;
+      if (knownNameSet.has(aliasRaw.toLowerCase())) continue;
+      if (COMMON_WORDS.has(aliasRaw.toLowerCase())) continue;
 
-    // Determine canonical name: either from the pattern's canonical group or from
-    // context (the closest known character name mentioned nearby in the text)
-    let canonical: string | null = match.groups.canonical?.trim() ?? null;
-    if (canonical) {
-      // The pattern captured a canonical name directly — verify it's a known entity
-      const resolved = nameToCanonical.get(canonical.toLowerCase());
-      if (resolved) canonical = resolved;
-      else continue; // Captured name isn't a known entity, skip
-    } else {
-      // Find the nearest known character name within ±200 chars of the match
-      canonical = findNearestKnownName(content, match.index, knownEntities, characterNames);
-      if (!canonical) continue;
+      let canonical: string | null = match.groups.canonical?.trim() ?? null;
+      if (canonical) {
+        const resolved = nameToCanonical.get(canonical.toLowerCase());
+        if (resolved) canonical = resolved;
+        else continue;
+      } else {
+        canonical = findNearestKnownName(content, match.index, knownEntities, characterNames);
+        if (!canonical) continue;
+      }
+
+      const key = `${canonical.toLowerCase()}:${aliasRaw.toLowerCase()}`;
+      if (seenAliases.has(key)) continue;
+      seenAliases.add(key);
+
+      if (canonical.toLowerCase() === aliasRaw.toLowerCase()) continue;
+      if (!isPlausibleAlias(aliasRaw, canonical)) continue;
+
+      results.push({ canonicalName: canonical, alias: aliasRaw });
     }
-
-    // Don't add duplicate alias discoveries
-    const key = `${canonical.toLowerCase()}:${aliasRaw.toLowerCase()}`;
-    if (seenAliases.has(key)) continue;
-    seenAliases.add(key);
-
-    // Don't register alias that matches the canonical name
-    if (canonical.toLowerCase() === aliasRaw.toLowerCase()) continue;
-
-    results.push({ canonicalName: canonical, alias: aliasRaw });
   }
 
   return results;
@@ -852,26 +893,35 @@ function findNearestKnownName(
   const window = content.slice(searchStart, searchEnd);
 
   let bestMatch: { name: string; distance: number } | null = null;
+  const candidateNames = new Map<string, string>();
 
-  // Check character names first (higher priority)
   for (const name of characterNames) {
-    const idx = window.toLowerCase().indexOf(name.toLowerCase());
-    if (idx !== -1) {
-      const distance = Math.abs((searchStart + idx) - position);
-      if (!bestMatch || distance < bestMatch.distance) {
-        bestMatch = { name, distance };
-      }
+    candidateNames.set(name, name);
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length > 1) {
+      if (!candidateNames.has(parts[0])) candidateNames.set(parts[0], name);
+      const last = parts[parts.length - 1];
+      if (!candidateNames.has(last)) candidateNames.set(last, name);
     }
   }
 
-  // Check known entity names
   for (const entity of knownEntities) {
     if (entity.entityType !== "character") continue;
-    const idx = window.toLowerCase().indexOf(entity.name.toLowerCase());
+    candidateNames.set(entity.name, entity.name);
+    const parts = entity.name.split(/\s+/).filter(Boolean);
+    if (parts.length > 1) {
+      if (!candidateNames.has(parts[0])) candidateNames.set(parts[0], entity.name);
+      const last = parts[parts.length - 1];
+      if (!candidateNames.has(last)) candidateNames.set(last, entity.name);
+    }
+  }
+
+  for (const [variant, canonical] of candidateNames) {
+    const idx = window.toLowerCase().indexOf(variant.toLowerCase());
     if (idx !== -1) {
       const distance = Math.abs((searchStart + idx) - position);
       if (!bestMatch || distance < bestMatch.distance) {
-        bestMatch = { name: entity.name, distance };
+        bestMatch = { name: canonical, distance };
       }
     }
   }

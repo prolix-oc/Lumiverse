@@ -2,6 +2,9 @@
 node_modules/
 bun.lock
 .claude/
+vendor/lancedb-android/upstream/
+vendor/lancedb-android/build/
+vendor/lancedb-android/out/
 
 # =============================================================================
 # User instance data — NEVER commit these
@@ -42,6 +45,13 @@ Thumbs.db
 .idea/
 
 # =============================================================================
+# Generated
+# =============================================================================
+frontend/src/lib/generatedComponentProps.ts
+frontend/src/lib/generatedCssVariables.ts
+frontend/src/lib/generatedComponentCss.ts
+
+# =============================================================================
 # Zensical docs build output
 # =============================================================================
 
@@ -51,8 +61,11 @@ Thumbs.db
 
 !LICENSE.md
 !README.md
+!SECURITY.md
 scripts/release.sh
 scripts/release-main.sh
 scripts/release-rc.sh
 scripts/push-staging.sh
 src/macros/macros.test.ts
+vendor/
+scripts/build-lancedb-android.sh

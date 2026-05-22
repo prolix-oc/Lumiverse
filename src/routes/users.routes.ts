@@ -2,12 +2,28 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import { auth, allowCreation, CREATION_NONCE_HEADER } from "../auth";
 import { getDb } from "../db/connection";
-import { getUserBaseDir } from "../auth/provision";
 import { hashPassword, verifyPassword } from "../crypto/password";
 import { rateLimit } from "../middleware/rate-limit";
-import { rmSync, existsSync } from "fs";
+import { purgeUser } from "../services/user-data/purge.service";
 
 const app = new Hono();
+
+type UserRole = "user" | "admin" | "owner";
+
+function getTargetUser(id: string): { id: string; role: UserRole } | null {
+  return getDb()
+    .query('SELECT id, role FROM "user" WHERE id = ?')
+    .get(id) as { id: string; role: UserRole } | null;
+}
+
+function isOwnerSession(c: any): boolean {
+  return c.get("session")?.user?.role === "owner";
+}
+
+function canManageTarget(c: any, targetRole: UserRole): boolean {
+  if (isOwnerSession(c)) return true;
+  return targetRole === "user";
+}
 
 // scrypt-backed endpoints: bound how often a single client can request work
 // from the libuv thread pool. 5 attempts per 5 minutes per IP is generous for
@@ -30,8 +46,8 @@ app.post("/me/password", passwordLimiter, async (c) => {
     return c.json({ error: "currentPassword and newPassword are required" }, 400);
   }
 
-  if (body.newPassword.length < 8) {
-    return c.json({ error: "Password must be at least 8 characters" }, 400);
+  if (body.newPassword.length < 8 || body.newPassword.length > 128) {
+    return c.json({ error: "Password must be between 8 and 128 characters" }, 400);
   }
 
   const account = getDb()
@@ -83,8 +99,13 @@ const VALID_ROLES = new Set(["user", "admin", "owner"]);
 
 admin.post("/", async (c) => {
   const body = await c.req.json();
+  const callerIsOwner = isOwnerSession(c);
   if (!body.username || !body.password) {
     return c.json({ error: "username and password are required" }, 400);
+  }
+
+  if (body.password.length < 8 || body.password.length > 128) {
+    return c.json({ error: "Password must be between 8 and 128 characters" }, 400);
   }
 
   // Reject arbitrary role strings up front — only the roles registered with
@@ -122,13 +143,22 @@ admin.post("/", async (c) => {
 admin.post("/:id/reset-password", passwordLimiter, async (c) => {
   const { id } = c.req.param();
   const body = await c.req.json();
+  const targetUser = getTargetUser(id);
 
   if (!body.newPassword) {
     return c.json({ error: "newPassword is required" }, 400);
   }
 
-  if (body.newPassword.length < 8) {
-    return c.json({ error: "Password must be at least 8 characters" }, 400);
+  if (body.newPassword.length < 8 || body.newPassword.length > 128) {
+    return c.json({ error: "Password must be between 8 and 128 characters" }, 400);
+  }
+
+  if (!targetUser) {
+    return c.json({ error: "User not found" }, 404);
+  }
+
+  if (!canManageTarget(c, targetUser.role)) {
+    return c.json({ error: "Admins can only reset passwords for user-role accounts" }, 403);
   }
 
   const hashed = await hashPassword(body.newPassword);
@@ -151,9 +181,18 @@ admin.post("/:id/reset-password", passwordLimiter, async (c) => {
 admin.post("/:id/ban", async (c) => {
   const { id } = c.req.param();
   const session = c.get("session");
+  const targetUser = getTargetUser(id);
 
   if (session.user.id === id) {
     return c.json({ error: "Cannot ban yourself" }, 400);
+  }
+
+  if (!targetUser) {
+    return c.json({ error: "User not found" }, 404);
+  }
+
+  if (!canManageTarget(c, targetUser.role)) {
+    return c.json({ error: "Admins can only ban user-role accounts" }, 403);
   }
 
   const result = getDb().run('UPDATE "user" SET banned = 1 WHERE id = ?', [id]);
@@ -182,32 +221,32 @@ admin.post("/:id/unban", async (c) => {
   return c.json({ success: true });
 });
 
-// DELETE /:id — delete user and all associated data
+// DELETE /:id — delete user and every artifact they own (SQLite rows,
+// LanceDB vectors, on-disk files, running extensions, MCP clients).
 admin.delete("/:id", async (c) => {
   const { id } = c.req.param();
   const session = c.get("session");
+  const targetUser = getTargetUser(id);
 
   if (session.user.id === id) {
     return c.json({ error: "Cannot delete yourself" }, 400);
   }
 
-  const user = getDb().query('SELECT id FROM "user" WHERE id = ?').get(id);
-  if (!user) {
+  if (!targetUser) {
     return c.json({ error: "User not found" }, 404);
   }
 
-  // Delete auth records (content tables cascade via user_id FK)
-  getDb().run("DELETE FROM session WHERE userId = ?", [id]);
-  getDb().run("DELETE FROM account WHERE userId = ?", [id]);
-  getDb().run('DELETE FROM "user" WHERE id = ?', [id]);
-
-  // Clean up file system
-  const userDir = getUserBaseDir(id);
-  if (existsSync(userDir)) {
-    rmSync(userDir, { recursive: true, force: true });
+  if (!canManageTarget(c, targetUser.role)) {
+    return c.json({ error: "Admins can only delete user-role accounts" }, 403);
   }
 
-  return c.json({ success: true });
+  try {
+    const report = await purgeUser(id);
+    return c.json({ success: true, report });
+  } catch (err: any) {
+    console.error(`[users] purge failed for ${id}:`, err);
+    return c.json({ error: err?.message || "Failed to delete user" }, 500);
+  }
 });
 
 // Mount admin routes at the root of this router

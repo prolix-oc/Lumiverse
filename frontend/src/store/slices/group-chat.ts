@@ -10,6 +10,7 @@ export const createGroupChatSlice: StateCreator<GroupChatSlice> = (set, get) => 
   currentRound: 0,
   isNudgeLoopActive: false,
   activeGroupCharacterId: null,
+  mentionQueue: null,
 
   setGroupChat: (isGroup, characterIds, mutedIds) =>
     set({
@@ -21,6 +22,7 @@ export const createGroupChatSlice: StateCreator<GroupChatSlice> = (set, get) => 
       currentRound: 0,
       isNudgeLoopActive: false,
       activeGroupCharacterId: null,
+      mentionQueue: null,
     }),
 
   clearGroupChat: () =>
@@ -33,6 +35,7 @@ export const createGroupChatSlice: StateCreator<GroupChatSlice> = (set, get) => 
       currentRound: 0,
       isNudgeLoopActive: false,
       activeGroupCharacterId: null,
+      mentionQueue: null,
     }),
 
   markCharacterSpoken: (characterId) =>
@@ -64,5 +67,15 @@ export const createGroupChatSlice: StateCreator<GroupChatSlice> = (set, get) => 
       : [...current, characterId]
     set({ mutedCharacterIds: newMuted })
     return newMuted
+  },
+
+  setMentionQueue: (queue) => set({ mentionQueue: queue }),
+
+  shiftMentionQueue: () => {
+    const q = get().mentionQueue
+    if (!q || q.ids.length === 0) return null
+    const [head, ...rest] = q.ids
+    set({ mentionQueue: rest.length > 0 ? { ...q, ids: rest } : null })
+    return head
   },
 })

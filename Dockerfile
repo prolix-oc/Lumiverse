@@ -15,9 +15,17 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/bun.lock* ./
 RUN bun install --frozen-lockfile 2>/dev/null || bun install
 
+# FRONTEND_REFRESH: cache-busting marker for the Vite build layer below. Mirrors
+# the CA_REFRESH pattern in the runtime stage — bump (or pass via --build-arg)
+# to force a fresh Vite bundle without invalidating the rest of the image.
+# Source-file changes already invalidate the COPY layer below, so you only need
+# to bump this when external inputs (e.g. environment-driven build behavior or
+# upstream dependency hot-fixes pulled via `bun install`) demand a rebuild.
+ARG FRONTEND_REFRESH=unset
+
 # Build frontend
 COPY frontend/ ./
-RUN bun run build
+RUN echo "frontend-refresh: ${FRONTEND_REFRESH}" && bun run build
 
 # ---------------------------------------------------------------------------
 # Stage 2: Install backend production dependencies

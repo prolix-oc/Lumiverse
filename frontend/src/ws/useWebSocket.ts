@@ -3,19 +3,33 @@ import { wsClient } from './client'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { hasUnsavedSettings } from '@/store/slices/settings'
-import { routeBackendMessage } from '@/lib/spindle/loader'
+import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
+import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
 import { imageGenApi } from '@/api/image-gen'
+import { generateApi } from '@/api/generate'
+import { operatorApi } from '@/api/operator'
+import { presetsApi } from '@/api/presets'
 import { toast } from '@/lib/toast'
+import {
+  invalidateDisplayRegexCache,
+  invalidateDisplayRegexCacheForMessage,
+  invalidateDisplayRegexCacheForVars,
+} from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
+import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
+  GenerationInProgressPayload,
+  GenerationPhaseChangedPayload,
   GenerationEndedPayload,
+  GenerationAcknowledgedPayload,
   MessageSentPayload,
   MessageEditedPayload,
   MessageDeletedPayload,
   MessageSwipedPayload,
+  ChatChangedPayload,
   LumiPipelineStartedPayload,
   LumiModuleDonePayload,
   LumiPipelineCompletedPayload,
@@ -26,6 +40,45 @@ import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
 
+const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
+const LOCAL_REGEN_PLACEHOLDER_PREFIX = '__regen_placeholder_'
+
+function isLocalStreamPlaceholderId(id: string | null | undefined) {
+  return !!id && (
+    id.startsWith(LOCAL_STREAM_PLACEHOLDER_PREFIX)
+    || id.startsWith(LOCAL_REGEN_PLACEHOLDER_PREFIX)
+  )
+}
+
+const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
+const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
+
+interface VarChangeSummary {
+  bagWideVarChange: boolean
+  changedVars: ReadonlySet<string>
+}
+
+function summarizeVarChanges(changedFields: readonly string[]): VarChangeSummary {
+  const changedVars = new Set<string>()
+  let sawBareBag = false
+  for (const f of changedFields) {
+    if (f === 'metadata.macro_variables' || f === 'metadata.chat_variables') {
+      sawBareBag = true
+      continue
+    }
+    if (f.startsWith(MACRO_VARS_PREFIX)) {
+      const tail = f.slice(MACRO_VARS_PREFIX.length)
+      const dot = tail.indexOf('.')
+      if (dot > 0) changedVars.add(`${tail.slice(0, dot)}:${tail.slice(dot + 1)}`)
+    } else if (f.startsWith(CHAT_VARS_PREFIX)) {
+      changedVars.add(`chat:${f.slice(CHAT_VARS_PREFIX.length)}`)
+    }
+  }
+  // Bare bag path is bag-wide only when no leaves describe the change (BE emits both).
+  const bagWideVarChange = sawBareBag && changedVars.size === 0
+  return { bagWideVarChange, changedVars }
+}
+
 /**
  * Fetch the latest messages using the tail endpoint (single request).
  * Returns the last N messages from the chat, where N is the user's messagesPerPage setting.
@@ -35,10 +88,75 @@ function fetchLatestMessages(chatId: string) {
   return messagesApi.list(chatId, { limit: pageSize, tail: true })
 }
 
+async function refreshLoomRegistry() {
+  const result = await presetsApi.listRegistry({ provider: 'loom', limit: 200 })
+  useStore.getState().setLoomRegistry(Object.fromEntries(
+    result.data.map((preset) => [
+      preset.id,
+      {
+        name: preset.name,
+        blockCount: preset.block_count,
+        updatedAt: preset.updated_at,
+        isDefault: false,
+      },
+    ]),
+  ))
+}
+
 export function useWebSocket() {
   const store = useStore
   const isAuthenticated = useStore((s) => s.isAuthenticated)
+  const userRole = useStore((s) => s.user?.role)
+  const activeChatId = useStore((s) => s.activeChatId)
   const lastExtensionSyncAtRef = useRef(0)
+  const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      lastOperatorUpdateToastKeyRef.current = null
+      return
+    }
+
+    if (userRole !== 'owner' && userRole !== 'admin') {
+      lastOperatorUpdateToastKeyRef.current = null
+      return
+    }
+
+    let cancelled = false
+
+    const syncOperatorStatus = async () => {
+      try {
+        const status = await operatorApi.getStatus()
+        if (cancelled) return
+
+        store.getState().setOperatorStatus(status)
+
+        if (!status.updateAvailable) {
+          lastOperatorUpdateToastKeyRef.current = null
+          return
+        }
+
+        const toastKey = `${status.commitsBehind}:${status.latestUpdateMessage}`
+        if (lastOperatorUpdateToastKeyRef.current === toastKey) return
+
+        lastOperatorUpdateToastKeyRef.current = toastKey
+        toast.info(
+          `${status.commitsBehind} update${status.commitsBehind === 1 ? '' : 's'} available${status.latestUpdateMessage ? ` - ${status.latestUpdateMessage}` : ''}`,
+          { title: 'Update Available', duration: 7000 },
+        )
+      } catch {
+        // Ignore transient operator status errors outside the Operator panel.
+      }
+    }
+
+    syncOperatorStatus()
+    const interval = window.setInterval(syncOperatorStatus, 30_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [isAuthenticated, store, userRole])
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -58,6 +176,8 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_SENT, (payload: MessageSentPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
+          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+
           // Suppress completed assistant messages while streaming — the streaming
           // card already displays the content. GENERATION_ENDED will reconcile
           // the full message list, preventing a duplicate bubble flash.
@@ -67,7 +187,7 @@ export function useWebSocket() {
           // real staged message from the backend instead of adding a duplicate.
           if (
             state.isStreaming &&
-            state.regeneratingMessageId?.startsWith('__regen_placeholder_') &&
+            isLocalStreamPlaceholderId(state.regeneratingMessageId) &&
             !payload.message.is_user &&
             !payload.message.content
           ) {
@@ -98,6 +218,8 @@ export function useWebSocket() {
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
+          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+
           // During a continue, the backend updates the target message with combined
           // content right before GENERATION_ENDED. Skip the update while streaming
           // to avoid a brief content duplication frame — reconciliation after
@@ -117,6 +239,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.removeMessage(payload.messageId)
+          if (payload.messageId) invalidateDisplayRegexCacheForMessage(payload.messageId)
         }
       }),
 
@@ -124,6 +247,27 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.updateMessage(payload.message.id, payload.message)
+          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+        }
+      }),
+
+      wsClient.on(EventType.CHAT_CHANGED, (payload: ChatChangedPayload) => {
+        const state = store.getState()
+        const changedChatId = payload.chat?.id ?? payload.chatId
+        if (changedChatId !== state.activeChatId) return
+
+        const changedFields = payload.changedFields
+        if (changedFields === undefined) {
+          invalidateDisplayRegexCache()
+          return
+        }
+        const { bagWideVarChange, changedVars } = summarizeVarChanges(changedFields)
+        if (changedVars.size > 0 && !bagWideVarChange) {
+          invalidateDisplayRegexCacheForVars(changedVars)
+          return
+        }
+        if (bagWideVarChange) {
+          invalidateDisplayRegexCache()
         }
       }),
 
@@ -156,11 +300,59 @@ export function useWebSocket() {
         })
       }),
 
+      wsClient.on(EventType.GENERATION_IN_PROGRESS, (payload: GenerationInProgressPayload) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          if (state.activeGenerationId !== payload.generationId) {
+            state.startStreaming(payload.generationId, payload.targetMessageId)
+          } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
+            state.setRegeneratingMessageId(payload.targetMessageId)
+          }
+
+          // Surface context clipping once the final assembly metadata is ready.
+          const clip = payload.contextClipStats
+          if (clip?.enabled && clip.budgetInvalid) {
+            toast.error(
+              `Context size (${clip.maxContext.toLocaleString()}) is smaller than reserved response tokens — no history can fit. Raise Context Size or lower Max Tokens.`,
+            )
+          } else if (clip?.enabled && clip.fixedOverBudget) {
+            toast.error(
+              `Fixed prompt overhead (${clip.fixedTokens.toLocaleString()} tokens) already exceeds the input budget by ${Math.abs(clip.remainingHistoryBudget).toLocaleString()} tokens. Chat history is the only clip-eligible section, so reduce system/WI/preset content, raise Context Size, or lower Max Tokens.`,
+            )
+          } else if (clip?.enabled && clip.remainingHistoryBudget <= 0 && clip.messagesDropped > 0) {
+            toast.warning(
+              `Fixed prompt overhead leaves no room for chat history. System prompt and other fixed blocks are not clipped; raise Context Size, lower Max Tokens, or shorten fixed prompt content.`,
+            )
+          } else if (clip?.enabled && clip.messagesDropped > 0) {
+            toast.warning(
+              `Clipped ${clip.messagesDropped} chat history message${clip.messagesDropped === 1 ? '' : 's'} to fit the remaining history budget (${clip.tokensDropped.toLocaleString()} tokens dropped).`,
+            )
+          }
+        }
+
+        state.updateChatHead(payload.generationId, {
+          status: 'waiting',
+          ...(payload.model ? { model: payload.model } : {}),
+          ...(payload.characterName ? { characterName: payload.characterName } : {}),
+          ...(payload.characterId ? { characterId: payload.characterId } : {}),
+        })
+      }),
+
+      wsClient.on(EventType.GENERATION_PHASE_CHANGED, (payload: GenerationPhaseChangedPayload) => {
+        const state = store.getState()
+        if (payload.generationId) {
+          const head = state.chatHeads.find((h) => h.generationId === payload.generationId)
+          if (head && head.status !== payload.phase) {
+            state.updateChatHead(payload.generationId, { status: payload.phase })
+          }
+        }
+      }),
+
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
           // Skip tokens already included in the pooled recovery content
-          if (state.lastPooledSeq != null && (payload as any).seq != null && (payload as any).seq <= state.lastPooledSeq) return
+          if (state.lastPooledSeq != null && payload.seq != null && payload.seq <= state.lastPooledSeq) return
           // Clear the watermark after the first new token arrives
           if (state.lastPooledSeq != null) state.setLastPooledSeq(null as any)
           if (payload.type === 'reasoning') {
@@ -169,14 +361,9 @@ export function useWebSocket() {
             state.appendStreamToken(payload.token)
           }
         }
-        // Update chat head status only on actual transitions (not every token)
-        if (payload.generationId) {
-          const newStatus = payload.type === 'reasoning' ? 'reasoning' as const : 'streaming' as const
-          const head = state.chatHeads.find((h) => h.generationId === payload.generationId)
-          if (head && head.status !== newStatus) {
-            state.updateChatHead(payload.generationId, { status: newStatus })
-          }
-        }
+        // Phase transitions are now handled explicitly by GENERATION_PHASE_CHANGED
+        // to ensure immediate updates globally across tabs without polling, instead
+        // of relying on the stream token receiver to infer phase changes.
       }),
 
       wsClient.on(EventType.GENERATION_ENDED, (payload: GenerationEndedPayload) => {
@@ -193,10 +380,14 @@ export function useWebSocket() {
           if (payload.error) {
             // Remove client-side placeholder if regeneration failed before backend saved a real message
             const regenId = state.regeneratingMessageId
-            if (regenId?.startsWith('__regen_placeholder_')) {
+            if (isLocalStreamPlaceholderId(regenId)) {
               state.removeMessage(regenId)
             }
             state.setStreamingError(payload.error)
+            // Drop any pending @mention chain so we don't spam-fire through failures
+            if (state.mentionQueue && state.mentionQueue.chatId === payload.chatId) {
+              state.setMentionQueue(null)
+            }
             // Backend preserves any content that streamed before the failure
             // (socket drop, upstream 5xx, etc.) and returns its messageId.
             // Surface that in the toast so users know their partial response
@@ -226,6 +417,8 @@ export function useWebSocket() {
                 maxContext: bd.maxContext || 0,
                 model: bd.model || '',
                 provider: bd.provider || '',
+                parameters: bd.parameters,
+                usage: bd.usage,
                 presetName: bd.presetName,
                 tokenizer_name: bd.tokenizer_name || null,
                 chatId: payload.chatId,
@@ -259,37 +452,143 @@ export function useWebSocket() {
             }
 
             if (payload.messageId && typeof payload.content === 'string') {
-              triggerTTSAutoPlay(payload.messageId, payload.content)
+              // Resolve speaker name for voice routing: in group chats the
+              // active group character is who just spoke; in single-char
+              // chats it's the chat's owning character. AI generation is
+              // always is_user=false.
+              const characters = state.characters
+              const speakerId = state.isGroupChat
+                ? state.activeGroupCharacterId
+                : state.activeCharacterId
+              const speakerName = speakerId
+                ? (characters.find((c) => c.id === speakerId)?.name ?? '')
+                : ''
+              triggerTTSAutoPlay({
+                messageId: payload.messageId,
+                content: payload.content,
+                name: speakerName,
+                isUser: false,
+              })
             }
 
-            // End streaming immediately, then reconcile the full message list
-            // from backend source-of-truth to avoid id/index race conditions.
+            // Impersonate draft: stash the streamed content for the input box
+            // instead of reconciling messages (no message was created on the backend).
+            if ((payload as any).impersonateDraft) {
+              const draftContent = typeof payload.content === 'string' ? payload.content : state.streamingContent
+              state.endStreaming()
+              state.setImpersonateDraftContent(draftContent)
+              state.deleteChatHead(payload.chatId)
+              generateApi.acknowledge(payload.chatId).catch(() => {})
+              return
+            }
+
+            const optimisticMessageId = state.regeneratingMessageId
+
+            // Reconcile before clearing streaming. Clearing first collapses long
+            // streamed rows back to their blank/original content for a frame; on
+            // mobile, if the user is reading inside a multi-viewport final row,
+            // the browser clamps scrollTop toward the bottom and creates a
+            // visible snapdown before the saved message arrives.
             // Image gen is deferred until AFTER reconciliation completes so its
             // backend work (sidecar LLM scene analysis, DB reads) cannot delay
             // message delivery and cause a perceived UI stall.
-            state.endStreaming()
             fetchLatestMessages(payload.chatId).then((res) => {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
+                s.endStreaming()
               }
-            }).catch(() => { /* ignore */ }).finally(() => {
+            }).catch(() => {
+              store.getState().endStreaming()
+              if (isLocalStreamPlaceholderId(optimisticMessageId)) {
+                store.getState().removeMessage(optimisticMessageId)
+              }
+            }).finally(() => {
               const latest = store.getState()
+              // Drain the @mention queue — kick off the next mentioned member's
+              // turn. Skips if the active chat no longer matches, the queue is
+              // for a different chat, or a new generation has already started.
+              const queue = latest.mentionQueue
+              if (
+                queue &&
+                queue.chatId === payload.chatId &&
+                queue.ids.length > 0 &&
+                !latest.isStreaming &&
+                latest.activeChatId === payload.chatId
+              ) {
+                const nextId = latest.shiftMentionQueue()
+                if (nextId) {
+                  latest.beginStreaming()
+                  generateApi.start({
+                    chat_id: queue.chatId,
+                    connection_id: queue.opts.connection_id,
+                    persona_id: queue.opts.persona_id,
+                    persona_addon_states: queue.opts.persona_addon_states,
+                    preset_id: queue.opts.preset_id,
+                    force_preset_id: queue.opts.force_preset_id,
+                    target_character_id: nextId,
+                    generation_type: 'normal',
+                  }).then((res) => {
+                    const s = store.getState()
+                    if (s.activeChatId === queue.chatId) {
+                      s.startStreaming(res.generationId)
+                    }
+                  }).catch((err) => {
+                    console.error('[MentionQueue] Failed to start next generation:', err)
+                    const s = store.getState()
+                    s.setStreamingError(err?.body?.error || err?.message || 'Failed to continue @mention chain')
+                    s.setMentionQueue(null)
+                    s.stopStreaming()
+                  })
+                  return
+                }
+              }
+
               // Don't trigger image gen if a new generation already started,
-              // or if we're in the middle of a group nudge loop.
+              // we're in a group nudge loop, or the user has navigated away
+              // from the chat that just finished generating (the backend would
+              // still create the attachment message, but the local store would
+              // silently drop it because the active chat no longer matches).
               if (
                 !latest.isStreaming &&
                 !latest.isNudgeLoopActive &&
+                latest.activeChatId === payload.chatId &&
                 latest.imageGeneration.enabled &&
                 latest.imageGeneration.autoGenerate !== false &&
                 !latest.sceneGenerating
               ) {
+                const ig = latest.imageGeneration
+                const outputTarget = ig.outputTarget || 'background'
+                // attach_to_message needs the just-finalized AI message as its
+                // target; fall back to the last message in the store if the
+                // event didn't carry one. Skip the auto-gen entirely when we
+                // can't resolve a target so the backend's required-id check
+                // doesn't surface as a user-facing error.
+                let attachToMessageId: string | undefined
+                if (outputTarget === 'attach_to_message') {
+                  attachToMessageId =
+                    payload.messageId ||
+                    (latest.messages.length > 0 ? latest.messages[latest.messages.length - 1].id : undefined)
+                  if (!attachToMessageId) return
+                }
+                // Pass settings from the live store rather than relying on the
+                // backend's persisted row — settings flushes are debounced
+                // ~1.5s, so without this a reply sent right after a toggle
+                // would auto-gen with the previous values.
                 latest.setSceneGenerating(true)
                 imageGenApi.generate({
                   chatId: payload.chatId,
-                  forceGeneration: !!latest.imageGeneration.forceGeneration,
+                  forceGeneration: !!ig.forceGeneration,
+                  outputTarget,
+                  attachToMessageId,
+                  promptMode: ig.promptMode,
+                  prompt: ig.customPrompt,
+                  negativePrompt: ig.customNegativePrompt,
+                  promptPresetId: ig.activePromptPresetId ?? null,
+                  promptGenerationTimeoutSeconds: ig.promptGenerationTimeoutSeconds,
+                  generationTimeoutSeconds: ig.generationTimeoutSeconds,
                 }).then((res) => {
-                  if (res.generated && res.imageDataUrl) {
+                  if (outputTarget === 'background' && res.generated && res.imageDataUrl) {
                     store.getState().setSceneBackground(res.imageDataUrl)
                   }
                 }).catch((err) => {
@@ -306,14 +605,15 @@ export function useWebSocket() {
         // otherwise the persisted 'completed' head would spawn the moment they navigate away.
         if (payload.chatId && payload.generationId) {
           if (payload.chatId === state.activeChatId) {
-            state.removeChatHead(payload.chatId)
+            state.deleteChatHead(payload.chatId)
+            generateApi.acknowledge(payload.chatId).catch(() => {})
           } else {
             state.updateChatHead(payload.generationId, {
               status: payload.error ? 'error' : 'completed',
             })
             // Ping when a backgrounded chat finishes successfully
-            if (!payload.error) {
-              playNotificationPing()
+            if (!payload.error && state.chatHeadsEnabled && state.chatHeadsCompletionSoundEnabled) {
+              playNotificationPing(state.chatHeadsCustomCompletionSound?.uploadedAt ?? null)
             }
           }
         }
@@ -324,6 +624,10 @@ export function useWebSocket() {
         // Guard: only stop streaming if this event matches the active generation
         // (a newer generation may have already replaced it)
         if (state.activeGenerationId && payload.generationId && payload.generationId !== state.activeGenerationId) return
+        // User stop also cancels any pending @mention chain for this chat
+        if (state.mentionQueue && payload.chatId && state.mentionQueue.chatId === payload.chatId) {
+          state.setMentionQueue(null)
+        }
         // Mark as ended to prevent zombie resurrection from late HTTP responses
         if (payload.generationId) {
           state.markGenerationEnded(payload.generationId)
@@ -357,17 +661,23 @@ export function useWebSocket() {
         // doesn't reappear when they navigate away.
         if (payload.chatId && payload.generationId) {
           if (payload.chatId === state.activeChatId) {
-            state.removeChatHead(payload.chatId)
+            state.deleteChatHead(payload.chatId)
+            generateApi.acknowledge(payload.chatId).catch(() => {})
           } else {
             state.updateChatHead(payload.generationId, { status: 'stopped' })
           }
         }
       }),
 
+      wsClient.on(EventType.GENERATION_ACKNOWLEDGED, (payload: GenerationAcknowledgedPayload) => {
+        if (!payload.chatId) return
+        store.getState().deleteChatHead(payload.chatId)
+      }),
+
       wsClient.on(EventType.GENERATION_ERROR, () => {
         const state = store.getState()
         const regenId = state.regeneratingMessageId
-        if (regenId?.startsWith('__regen_placeholder_')) {
+        if (isLocalStreamPlaceholderId(regenId)) {
           state.removeMessage(regenId)
         }
         state.stopStreaming()
@@ -418,6 +728,16 @@ export function useWebSocket() {
         if (!hasUnsavedSettings()) {
           store.getState().loadSettings()
         }
+
+        // Re-sync any pooled generation for the active chat. Covers sockets
+        // that were killed during backgrounding (mobile OS suspend, long tab
+        // switch) — tokens streamed while we were offline are pulled from the
+        // server pool and the seq watermark de-dupes the live WS replay.
+        const activeChatId = store.getState().activeChatId
+        if (activeChatId) {
+          recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+        }
+        store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
       }),
 
       // Re-sync settings when another tab (or the old page's keepalive flush)
@@ -429,10 +749,20 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.CHARACTER_CREATED, (payload: { id: string; character?: import('@/types/api').Character }) => {
+        if (payload?.character) {
+          store.getState().updateCharacter(payload.id, payload.character)
+        }
+      }),
+
       wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string; character?: import('@/types/api').Character }) => {
         if (payload?.character) {
           store.getState().updateCharacter(payload.id, payload.character)
         }
+      }),
+
+      wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
+        store.getState().removeCharacter(payload.id)
       }),
 
       wsClient.on(EventType.PERSONA_CHANGED, (payload: { id: string; persona?: import('@/types/api').Persona; deleted?: boolean }) => {
@@ -513,7 +843,10 @@ export function useWebSocket() {
         useStore.getState().loadAvailableTools()
       }),
 
-      wsClient.on(EventType.SPINDLE_EXTENSION_UNLOADED, () => {
+      wsClient.on(EventType.SPINDLE_EXTENSION_UNLOADED, (payload: { extensionId?: string }) => {
+        if (payload.extensionId) {
+          store.getState().clearExtensionThemeOverride(payload.extensionId)
+        }
         syncExtensions()
         // Extension tools may have been removed — refresh council tool list
         useStore.getState().loadAvailableTools()
@@ -531,6 +864,17 @@ export function useWebSocket() {
           payload.operation,
           payload.name ?? null
         )
+        if (payload.operation === 'updated' && payload.extensionId) {
+          // Force a list refresh so the status dot reflects the post-restart state
+          syncExtensions(true)
+          const ext = useStore.getState().extensions.find((e) => e.id === payload.extensionId)
+          if (ext?.enabled && ext?.has_frontend) {
+            spindleApi.clearManifestCache(payload.extensionId)
+            spindleApi.getManifest(payload.extensionId, { force: true })
+              .then((manifest) => loadFrontendExtension(payload.extensionId!, manifest, true))
+              .catch((err) => console.error('[Spindle] Failed to reload frontend after update:', err))
+          }
+        }
       }),
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_PROGRESS, (payload: { total: number; completed: number; failed: number; currentExtensionId?: string; currentName?: string; phase?: string }) => {
@@ -541,6 +885,19 @@ export function useWebSocket() {
           currentExtensionId: payload.currentExtensionId,
           currentName: payload.currentName,
         })
+      }),
+
+      wsClient.on(EventType.SPINDLE_RUNTIME_STATS, (payload: {
+        extensionId: string
+        identifier: string
+        name: string
+        runtimeMode: 'worker' | 'process' | 'sandbox'
+        phase: 'startup' | 'sample' | 'shutdown'
+        pid: number | null
+        rssKb: number | null
+        startupMs?: number
+      }) => {
+        console.info('[Spindle] Runtime stats:', payload)
       }),
 
       wsClient.on(EventType.SPINDLE_BULK_UPDATE_COMPLETE, (payload: { total: number; updated: number; failed: number; errors: Array<{ id: string; name: string; error: string }> }) => {
@@ -576,6 +933,36 @@ export function useWebSocket() {
         routeBackendMessage(payload.extensionId, payload.data)
       }),
 
+      wsClient.on(EventType.SPINDLE_FRONTEND_PROCESS, (payload: { extensionId: string } & Record<string, unknown>) => {
+        if (!payload?.extensionId || typeof payload.action !== 'string' || typeof payload.processId !== 'string') return
+        if (payload.action === 'spawn' && typeof payload.kind === 'string') {
+          routeFrontendProcessEvent(payload.extensionId, {
+            action: 'spawn',
+            processId: payload.processId,
+            kind: payload.kind,
+            key: typeof payload.key === 'string' ? payload.key : undefined,
+            payload: payload.payload,
+            metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata as Record<string, unknown> : undefined,
+          })
+          return
+        }
+        if (payload.action === 'message') {
+          routeFrontendProcessEvent(payload.extensionId, {
+            action: 'message',
+            processId: payload.processId,
+            payload: payload.payload,
+          })
+          return
+        }
+        if (payload.action === 'stop') {
+          routeFrontendProcessEvent(payload.extensionId, {
+            action: 'stop',
+            processId: payload.processId,
+            reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+          })
+        }
+      }),
+
       wsClient.on(EventType.SPINDLE_TEXT_EDITOR_OPEN, (payload: { requestId: string; extensionId: string; title: string; value: string; placeholder: string }) => {
         store.getState().openTextEditor(payload)
       }),
@@ -608,9 +995,10 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.SPINDLE_THEME_OVERRIDES, (payload: { extensionId: string; extensionName: string; overrides: { paletteAccent?: { h: number; s: number; l: number }; variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } } | null }) => {
-        // If the user has muted this extension's theme, silently drop the update
-        if (store.getState().mutedExtensionThemes[payload.extensionId]) return
-
+        // Always record the latest payload so re-enabling a muted theme applies
+        // immediately without waiting for the extension to re-fire. The theme
+        // applicator skips overrides whose extensionId is in mutedExtensionThemes,
+        // so muted entries stay invisible until the user re-enables them.
         const hasVars = payload.overrides?.variables && Object.keys(payload.overrides.variables).length > 0
         const hasModeVars = payload.overrides?.variablesByMode && (
           Object.keys(payload.overrides.variablesByMode.dark ?? {}).length > 0 ||
@@ -649,7 +1037,7 @@ export function useWebSocket() {
       // Chat deletion — remove lingering chat head so it doesn't navigate to a dead chat
       wsClient.on(EventType.CHAT_DELETED, (payload: { id: string }) => {
         if (payload?.id) {
-          store.getState().removeChatHead(payload.id)
+          store.getState().deleteChatHead(payload.id)
         }
       }),
 
@@ -676,8 +1064,29 @@ export function useWebSocket() {
       wsClient.on(EventType.LUMIHUB_INSTALL_STARTED, (payload: { characterName: string; source: string }) => {
         toast.info(`Installing "${payload.characterName}" from LumiHub...`, { title: 'LumiHub' })
       }),
-      wsClient.on(EventType.LUMIHUB_INSTALL_COMPLETED, (payload: { characterId: string; characterName: string }) => {
+      wsClient.on(EventType.LUMIHUB_INSTALL_COMPLETED, (payload: { characterId: string; characterName: string; type?: string }) => {
         toast.success(`"${payload.characterName}" installed successfully`, { title: 'LumiHub' })
+        if (payload.type === 'preset') {
+          const state = store.getState()
+          state.setLoomRegistry({
+            ...state.loomRegistry,
+            [payload.characterId]: {
+              name: payload.characterName,
+              blockCount: 0,
+              updatedAt: Math.floor(Date.now() / 1000),
+              isDefault: false,
+            },
+          })
+          refreshLoomRegistry().catch((err) => {
+            console.warn('[LumiHub] Failed to refresh Loom preset registry:', err)
+          })
+        } else if (payload.type === 'theme') {
+          if (!hasUnsavedSettings()) {
+            store.getState().loadSettings().catch((err) => {
+              console.warn('[LumiHub] Failed to refresh theme settings:', err)
+            })
+          }
+        }
       }),
       wsClient.on(EventType.LUMIHUB_INSTALL_FAILED, (payload: { characterName: string; error: string }) => {
         toast.error(`Failed to install "${payload.characterName}": ${payload.error}`, { title: 'LumiHub' })
@@ -709,9 +1118,9 @@ export function useWebSocket() {
       wsClient.on(EventType.OPERATOR_PROGRESS, (payload: any) => {
         if (payload) {
           const status = payload.status
-          store.getState().setOperatorBusy(
-            status === 'complete' || status === 'error' ? null : payload.operation
-          )
+          const inProgress = status !== 'complete' && status !== 'error'
+          store.getState().setOperatorBusy(inProgress ? payload.operation : null)
+          store.getState().setOperatorProgressMessage(inProgress ? (payload.message ?? null) : null)
         }
       }),
 
@@ -750,11 +1159,73 @@ export function useWebSocket() {
           store.getState().updateMcpServer(payload.id, payload.profile)
         }
       }),
+
+      // Loom summary auto-summarization — backend summarize-pool signals so
+      // the Summary UI flag stays in sync across tabs / chat switches.
+      wsClient.on(EventType.SUMMARIZATION_STARTED, (payload: { chatId: string; generationId: string; startedAt: number }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(true)
+        }
+      }),
+      wsClient.on(EventType.SUMMARIZATION_COMPLETED, (payload: { chatId: string; generationId: string }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(false)
+        }
+      }),
+      wsClient.on(EventType.SUMMARIZATION_FAILED, (payload: { chatId: string; generationId: string; error: string }) => {
+        const state = store.getState()
+        if (payload.chatId === state.activeChatId) {
+          state.setIsSummarizing(false)
+        }
+        console.warn(`[Summary] Generation failed for chat ${payload.chatId}:`, payload.error)
+      }),
     ]
 
+    // Re-sync pooled tokens whenever the tab becomes visible. Mobile PWAs and
+    // background tabs may miss live STREAM_TOKEN_RECEIVED events while hidden
+    // even when the WS stays open; the server pool is authoritative, so a
+    // status poll on every visible transition restores all accumulated content
+    // (and the tokenSeq watermark drops tokens the client already rendered).
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      const activeChatId = store.getState().activeChatId
+      if (activeChatId) {
+        recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+      }
+      store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    // Mobile browsers occasionally deliver the full token stream but miss or
+    // delay the terminal WS event. While a chat is streaming, poll the pooled
+    // status endpoint at a low frequency so a dropped GENERATION_ENDED/STOPPED
+    // cannot leave the stop button stuck indefinitely.
+    const recoveryWatchdog = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      const state = store.getState()
+      if (!state.isStreaming || !state.activeChatId) return
+      recoverPooledGeneration(state.activeChatId).catch(() => { /* best-effort */ })
+    }, 4000)
+
+    const chatHeadReconcile = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      const heads = store.getState().chatHeads
+      if (!heads.some((h) => h.status === 'assembling' || h.status === 'council' || h.status === 'council_failed' || h.status === 'reasoning' || h.status === 'streaming')) return
+      store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
+    }, 4000)
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      clearInterval(recoveryWatchdog)
+      clearInterval(chatHeadReconcile)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }
   }, [isAuthenticated])
+
+  useEffect(() => {
+    wsClient.setFocusedChat(activeChatId)
+  }, [activeChatId])
 }

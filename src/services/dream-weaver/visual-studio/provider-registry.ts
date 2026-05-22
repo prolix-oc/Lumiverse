@@ -2,12 +2,13 @@ import type { DreamWeaverVisualProvider } from "../../../types/dream-weaver";
 import type { VisualProviderAdapter } from "./provider-adapter";
 import { comfyUIProviderAdapter } from "./providers/comfyui-provider-adapter";
 import { createSimpleProviderAdapter } from "./providers/simple-provider-adapter";
+import { swarmUIProviderAdapter } from "./providers/swarmui-provider-adapter";
 
 const adapters = new Map<DreamWeaverVisualProvider, VisualProviderAdapter>([
   ["novelai", createSimpleProviderAdapter("novelai")],
   ["nanogpt", createSimpleProviderAdapter("nanogpt")],
   ["google_gemini", createSimpleProviderAdapter("google_gemini")],
-  ["swarmui", createSimpleProviderAdapter("swarmui")],
+  ["swarmui", swarmUIProviderAdapter],
   ["comfyui", comfyUIProviderAdapter],
 ]);
 

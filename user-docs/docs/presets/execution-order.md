@@ -32,33 +32,30 @@ The critical thing to understand: **macro evaluation happens at step 5**, during
 
 ## How Macro Evaluation Works
 
-### Multi-Pass, Not Single-Pass
+### Depth-First With a Small Safety Retry Loop
 
-Lumiverse evaluates macros **iteratively**, up to 5 passes per block:
+Lumiverse evaluates macros primarily in a single AST walk, resolving nested macros depth-first and expanding returned macro text inline. A small outer retry loop (up to 2 passes per block) remains as a safety net for edge cases where earlier output depends on state mutated later in the same template:
 
 ```
-Pass 1: "Hello {{user}}, you said {{getvar::mood_{{user}}}}"
-         → resolves {{user}} → "Alice"
-         → output still contains {{getvar::mood_Alice}}
+Pass 1: parse the block into an AST
+        resolve nested macros depth-first
+        expand any macro output that still contains {{...}} inline
 
-Pass 2: "Hello Alice, you said {{getvar::mood_Alice}}"
-         → resolves {{getvar::mood_Alice}} → "happy"
-
-Pass 3: "Hello Alice, you said happy"
-         → no more {{ found → done
+Pass 2: only runs if the overall block changed in a way that might expose
+        newly-resolvable macros due to state mutations elsewhere in the block
 ```
 
 Each pass:
 
 1. **Parse** the text into an AST (abstract syntax tree)
 2. **Evaluate** every macro left-to-right, depth-first
-3. **Check for convergence** — if the output is unchanged or contains no more `{{`, stop
-4. Otherwise, **loop** with the new text
+3. **Expand nested/returned macro text inline** where possible
+4. **Retry once** only if the block still changed in a way that could matter
 
-This means macros can produce output that contains *other* macros, and those will be resolved automatically. The loop exits when nothing changes or when 5 passes are reached.
+This means most nested macro chains collapse in one pass, while still preserving deterministic left-to-right state flow.
 
 !!! warning "Coming from SillyTavern"
-    SillyTavern uses a single-pass model with post-processing and cached results that smooth over ordering issues. In Lumiverse, if you put `{{getvar::key}}` before `{{setvar::key::value}}` in the same block, the getvar runs first and gets the *previous* value (or empty). There's no behind-the-scenes reordering.
+    Lumiverse does not reorder macros to make later side effects visible earlier in the same block. If you put `{{getvar::key}}` before `{{setvar::key::value}}`, the read still happens first and gets the previous value (or empty). Branching macros like `{{if}}` and `{{switch}}` now resolve only the selected branch, so side effects in unchosen branches do not run.
 
 ### Left-to-Right, Depth-First
 
@@ -113,7 +110,7 @@ The `chat_history` block inserts all chat messages. **Each message is independen
 
 ### World Info Markers
 
-The `world_info_before` and `world_info_after` markers inject activated World Info entries. These entries are **not macro-evaluated** — they're inserted as final text.
+The `world_info_before` and `world_info_after` markers inject activated World Info entries. Activated entry content is macro-evaluated before injection, just like other prompt content.
 
 ### Disabled Blocks
 
@@ -142,6 +139,7 @@ A snapshot of all data is taken and stored in the macro environment. This is the
 - `{{persona}}` — Persona description with enabled add-ons appended
 - `{{lastMessage}}`, `{{messageCount}}` — Chat state at this moment
 - `{{model}}`, `{{maxContext}}` — Connection/model info
+- Prompt Variables — End-user configured inputs are seeded into the local variable scope
 - Variables — Local and global variable maps are loaded
 
 !!! info "Snapshot semantics"
@@ -161,7 +159,7 @@ All world book entries (character-attached, persona-attached, global) are collec
 
 **This happens before any blocks are processed.** The activated entries are bucketed by position (before, after, depth, etc.) and held ready for injection.
 
-World info content is **not macro-evaluated**. Whatever text is in the entry is what gets injected. If you want dynamic content in world info, use the entry content as-is — don't expect `{{char}}` inside an entry to resolve.
+World info content is macro-evaluated before injection. That means `{{char}}`, `{{if}}`, variables, and outlet references can resolve inside activated entries.
 
 ### Step 5: Block Walk
 
@@ -255,16 +253,16 @@ Comparison operators work inside conditions:
 
 ### Branch Evaluation
 
-**Both branches are resolved before the condition is checked.** The `{{if}}` handler then picks which one to return. This means macros in the discarded branch still run — including any side effects like `{{setvar}}`.
-
-If you need to avoid side effects in a branch, restructure your logic:
+**Only the selected branch is resolved.** The `{{if}}` macro delays evaluation of its body, checks the condition, and then resolves only the matching branch. This means side-effect macros (like `{{setvar}}`) in the discarded branch **do not run**.
 
 ```
-— Don't do this (both setvar calls execute):
-{{if::condition}}{{setvar::x::1}}{{else}}{{setvar::x::2}}{{/if}}
+{{if::{{isGroupChat}}}}
+{{.greeting = Welcome everyone!}}
+{{else}}
+{{.greeting = Hello {{char}}!}}
+{{/if}}
 
-— Do this instead (only one setvar based on condition result):
-{{setvar::x::{{if::condition}}1{{else}}2{{/if}}}}
+{{.greeting}} // Safely outputs the correct greeting without side-effect collisions
 ```
 
 ---
@@ -287,10 +285,10 @@ If you're porting presets from SillyTavern, here are the behaviors that will tri
 
 | Behavior | SillyTavern | Lumiverse |
 |----------|-------------|-----------|
-| **Evaluation passes** | Single pass + post-processing cleanup | Multi-pass (up to 5), iterative until stable |
+| **Evaluation passes** | Single pass + post-processing cleanup | Depth-first AST evaluation with inline expansion and a small retry loop |
 | **Result caching** | Macro results can be cached within a pass | No caching — every call re-evaluates |
 | **Execution order** | Post-processing can reorder/fix issues | Strict left-to-right, top-to-bottom |
-| **World info macros** | Entries are macro-evaluated | Entries are **not** macro-evaluated |
+| **World info macros** | Entries are macro-evaluated | Entries are macro-evaluated before injection |
 | **`{{random}}`** | May return same value if cached | Always returns a fresh value per call |
 | **Side effects** | May be smoothed by caching | Immediate and visible to subsequent macros |
 | **Error handling** | Varies | Unknown macros pass through as literal `{{name}}` text |
@@ -302,10 +300,10 @@ If you're porting presets from SillyTavern, here are the behaviors that will tri
 
 2. **Store random values.** If you use `{{random}}` and need the same value in multiple places, `{{setvar}}` it first.
 
-3. **World info is static.** If your SillyTavern lorebook entries contain `{{char}}` or `{{user}}`, those won't resolve in Lumiverse. Write the actual names or use a different approach.
+3. **World info is dynamic.** Activated world book entries are macro-evaluated in Lumiverse, so `{{char}}`, variables, and conditional logic can resolve inside entry content.
 
 4. **Test with Dry Run.** Lumiverse's Dry Run shows you the fully assembled prompt with every macro resolved. Use it obsessively when porting presets.
 
-5. **Both `{{if}}` branches execute.** Don't put side-effect macros (`{{setvar}}`, `{{incvar}}`) inside conditional branches expecting only one to run. Both run; only one's *text output* is kept.
+5. **Only the selected conditional branch runs.** Side-effect macros inside the unchosen branch of `{{if}}` or `{{switch}}` do not execute.
 
-6. **Multi-pass is your friend.** You can build macro names dynamically (`{{getvar::note_{{user}}}}`), and they'll resolve in the next pass. SillyTavern can't do this without workarounds.
+6. **Nested expansion still works.** You can build macro names dynamically (`{{getvar::note_{{user}}}}`), and Lumiverse will usually collapse the chain inline during the same evaluation, with one retry pass available for edge cases.

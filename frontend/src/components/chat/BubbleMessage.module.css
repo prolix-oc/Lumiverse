@@ -61,8 +61,10 @@
   flex-direction: row;
 }
 
-/* Viewport-gated expensive effects — only rendered for visible cards */
-.card[data-in-viewport] {
+/* Virtualized rows only mount near the viewport, so avoid scroll-time DOM
+   attribute toggles here. Toggling a public attribute let custom CSS change
+   row size during measurement, which could feed back into virtualization. */
+.card {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border),
     0 2px 6px rgba(0, 0, 0, 0.2),
@@ -71,11 +73,11 @@
 
 /* Only apply backdrop-filter when glass is enabled AND there's a non-solid
    background (image/video/scene). Blurring a solid color is pure GPU waste. */
-:global([data-glass][data-chat-bg]) .card[data-in-viewport] {
+:global([data-glass][data-chat-bg]) .card {
   backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2);
 }
 
-.card[data-in-viewport]:hover {
+.card:hover {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1)),
     0 1px 2px rgba(0, 0, 0, 0.28),
@@ -87,7 +89,7 @@
     var(--lcs-glass-bg-hover, rgba(24, 22, 36, 0.65));
 }
 
-:global([data-theme-mode='light']) .card[data-in-viewport]:hover {
+:global([data-theme-mode='light']) .card:hover {
   box-shadow:
     0 0 0 0.5px rgba(0, 0, 0, 0.06),
     0 1px 2px rgba(0, 0, 0, 0.04),
@@ -104,7 +106,7 @@
 }
 
 /* Disable bubble hover effects when user opts out */
-:global([data-no-bubble-hover]) .card[data-in-viewport]:hover {
+:global([data-no-bubble-hover]) .card:hover {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border),
     0 1px 2px rgba(0, 0, 0, 0.2),
@@ -156,6 +158,29 @@
   outline-offset: -1px;
   opacity: 1 !important;
   filter: none !important;
+}
+
+/* Transient navigation highlight — greeting switch, deep-link scroll-to, etc. */
+.highlight {
+  animation: bubbleHighlightPulse 1600ms ease-out forwards;
+}
+
+@keyframes bubbleHighlightPulse {
+  0% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 0 var(--lumiverse-primary-040, rgba(130, 100, 255, 0.4));
+  }
+  15% {
+    outline: 2px solid var(--lumiverse-primary);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px var(--lumiverse-primary-020, rgba(130, 100, 255, 0.2));
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* Streaming state — GPU optimization */
@@ -504,6 +529,7 @@
 @media (max-width: 768px) {
   .card {
     border-radius: var(--lcs-radius, 14px);
+    padding-top: 34px;
   }
 
   .header {
@@ -511,22 +537,31 @@
     gap: 8px;
   }
 
+  .headerLeft {
+    align-items: flex-start;
+    max-width: 100%;
+  }
+
   .content {
     padding: 10px 12px 14px;
   }
 
   .avatar {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
     border-radius: 10px;
   }
 
   .name {
-    font-size: calc(17px * var(--lumiverse-font-scale, 1));
+    font-size: calc(18px * var(--lumiverse-font-scale, 1));
+  }
+
+  .metaPill {
+    margin-top: 10px;
   }
 
   .actionsPill {
-    top: 12px;
+    top: 8px;
     right: 12px;
   }
 
@@ -541,6 +576,10 @@
 }
 
 @media (max-width: 480px) {
+  .card {
+    padding-top: 30px;
+  }
+
   .header {
     padding: 10px 10px 0;
     gap: 6px;
@@ -555,13 +594,13 @@
   }
 
   .avatar {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     border-radius: 8px;
   }
 
   .name {
-    font-size: calc(15px * var(--lumiverse-font-scale, 1));
+    font-size: calc(16px * var(--lumiverse-font-scale, 1));
   }
 
   .metaDot {
@@ -569,11 +608,12 @@
   }
 
   .metaPill {
+    margin-top: 9px;
     padding: 3px 8px;
   }
 
   .actionsPill {
-    top: 10px;
+    top: 6px;
     right: 10px;
   }
 
@@ -584,5 +624,33 @@
   .userLeft.user .actionsPill {
     right: 10px;
     left: auto;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .card,
+  .hidden {
+    transition: none;
+  }
+
+  .card,
+  .card:hover,
+  :global([data-no-bubble-hover]) .card:hover {
+    box-shadow:
+      0 0 0 0.5px var(--lcs-glass-border),
+      0 1px 4px rgba(0, 0, 0, 0.18),
+      0 6px 14px rgba(0, 0, 0, 0.08);
+  }
+
+  :global([data-glass][data-chat-bg]) .card {
+    backdrop-filter: none;
+  }
+
+  .avatarBg {
+    display: none;
+  }
+
+  .streaming {
+    will-change: auto;
   }
 }

@@ -18,6 +18,7 @@ import { FireworksProvider } from "./providers/fireworks";
 import { PollinationsProvider } from "./providers/pollinations";
 import { PollinationsTextProvider } from "./providers/pollinations-text";
 import { SiliconFlowProvider } from "./providers/siliconflow";
+import { InfermaticProvider } from "./providers/infermatic";
 import { CustomProvider } from "./providers/custom";
 import { GoogleVertexProvider } from "./providers/google-vertex";
 
@@ -60,4 +61,5 @@ registerProvider(new FireworksProvider());
 registerProvider(new PollinationsTextProvider());
 registerProvider(new PollinationsProvider());
 registerProvider(new SiliconFlowProvider());
+registerProvider(new InfermaticProvider());
 registerProvider(new CustomProvider());

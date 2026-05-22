@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-rea
 import type { DockPanelState } from '@/store/slices/spindle-placement'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
+import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import styles from './SpindleDockPanel.module.css'
 import clsx from 'clsx'
 
@@ -13,6 +14,7 @@ interface Props {
 export default function SpindleDockPanel({ panel }: Props) {
   const updateDockPanel = useStore((s) => s.updateDockPanel)
   const unregisterDockPanel = useStore((s) => s.unregisterDockPanel)
+  const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
   const isMobile = useIsMobile()
 
   const [currentSize, setCurrentSize] = useState(panel.size)
@@ -20,10 +22,7 @@ export default function SpindleDockPanel({ panel }: Props) {
   const startPos = useRef(0)
   const startSize = useRef(panel.size)
 
-  const isHorizontal = panel.edge === 'left' || panel.edge === 'right'
-
-  // On mobile, left/right panels become top sheets (bottom conflicts with input area)
-  const effectiveEdge = isMobile && isHorizontal ? 'top' : panel.edge
+  const effectiveEdge = resolveDockPanelEdge(panel.edge, dockPanelDesktopSide, isMobile)
   const effectiveHorizontal = effectiveEdge === 'left' || effectiveEdge === 'right'
 
   const handleToggle = useCallback(() => {

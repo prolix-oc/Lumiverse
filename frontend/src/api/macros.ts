@@ -1,4 +1,5 @@
 import { get, post } from './client'
+import { flushSettingsNow } from '@/store/slices/settings'
 
 export interface MacroResolveRequest {
   template: string
@@ -39,11 +40,13 @@ export interface MacroBatchResolveResponse {
   resolved: Record<string, string>
 }
 
-export function resolveMacros(req: MacroResolveRequest): Promise<MacroResolveResponse> {
+export async function resolveMacros(req: MacroResolveRequest): Promise<MacroResolveResponse> {
+  await flushSettingsNow()
   return post('/macros/resolve', req)
 }
 
-export function resolveMacrosBatch(req: MacroBatchResolveRequest): Promise<MacroBatchResolveResponse> {
+export async function resolveMacrosBatch(req: MacroBatchResolveRequest): Promise<MacroBatchResolveResponse> {
+  await flushSettingsNow()
   return post('/macros/resolve-batch', req)
 }
 

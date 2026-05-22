@@ -52,7 +52,10 @@ export default function InputBarExtensionActions({ onClose }: InputBarExtensionA
                     dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(action.iconSvg) }}
                   />
                 )}
-                <span>{action.label}</span>
+                <span className={styles.personaNameGroup}>
+                  <span>{action.label}</span>
+                  {action.subtitle && <span className={styles.personaTitle}>{action.subtitle}</span>}
+                </span>
               </span>
             </button>
           ))}

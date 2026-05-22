@@ -1,6 +1,9 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from 'react'
 import { Marked } from 'marked'
+import { healFormattingArtifacts } from '@/lib/formatHealing'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
+import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
+import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import { ChevronRight, Brain } from 'lucide-react'
 import styles from './ReasoningBlock.module.css'
 import clsx from 'clsx'
@@ -15,10 +18,17 @@ interface ReasoningBlockProps {
   align?: 'left' | 'right'
 }
 
+type ReasoningRenderMode = 'markdown' | 'text'
+
+// Approximate cutoff where full markdown rendering starts to create enough DOM
+// churn during long CoT streams that switching to plain text is noticeably smoother.
+const LARGE_REASONING_RENDER_THRESHOLD = 40_000
+
 const md = new Marked({
   gfm: true,
   breaks: true,
   renderer: createEmphasisAwareRenderer(),
+  tokenizer: createStrictTildeTokenizer(),
   silent: true,
 })
 
@@ -37,11 +47,24 @@ function formatDuration(ms: number) {
 export default function ReasoningBlock({ reasoning, reasoningDuration, reasoningStartedAt, isStreaming, variant = 'default', align }: ReasoningBlockProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [liveElapsed, setLiveElapsed] = useState(0)
+  const [renderMode, setRenderMode] = useState<ReasoningRenderMode>(() => (
+    reasoning.length >= LARGE_REASONING_RENDER_THRESHOLD ? 'text' : 'markdown'
+  ))
   const timerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number | null>(null)
+  const shouldPreferPlainText = reasoning.length >= LARGE_REASONING_RENDER_THRESHOLD
+  const deferredReasoning = useDeferredValue(reasoning)
 
   const toggle = useCallback(() => {
     setIsOpen((o) => !o)
+  }, [])
+
+  const setMarkdownMode = useCallback(() => {
+    setRenderMode('markdown')
+  }, [])
+
+  const setTextMode = useCallback(() => {
+    setRenderMode('text')
   }, [])
 
   // Live timer during streaming when no final duration exists yet
@@ -78,18 +101,26 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
     }
   }, [isStreaming, reasoningDuration, reasoningStartedAt])
 
+  useEffect(() => {
+    if (shouldPreferPlainText && isStreaming && renderMode === 'markdown') {
+      setRenderMode('text')
+    }
+  }, [shouldPreferPlainText, isStreaming, renderMode])
+
   const label = reasoningDuration
     ? `Thought for ${formatDuration(reasoningDuration)}`
     : isStreaming && liveElapsed > 0
       ? `Thinking for ${formatDuration(liveElapsed)}`
       : 'Thinking'
 
-  // Skip markdown parsing when the block is collapsed during streaming —
-  // the rendered HTML isn't visible so parsing is pure waste. Parse once
-  // the user expands or when streaming ends (final content).
+  // Skip markdown parsing whenever the block is collapsed — the rendered HTML
+  // is not visible, so building it eagerly is pure waste for long reasoning.
   const html = useMemo(
-    () => (isStreaming && !isOpen) ? '' : md.parse(reasoning) as string,
-    [reasoning, isStreaming, isOpen]
+    () => {
+      if (!isOpen || renderMode !== 'markdown') return ''
+      return sanitizeRichHtml(md.parse(healFormattingArtifacts(deferredReasoning)) as string)
+    },
+    [deferredReasoning, isOpen, renderMode]
   )
 
   return (
@@ -106,10 +137,37 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
       </button>
       <div className={clsx(styles.bodyWrapper, isOpen && styles.bodyWrapperOpen)}>
         <div className={styles.bodyInner}>
-          <div
-            className={styles.body}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
+          {shouldPreferPlainText && (
+            <div className={styles.bodyToolbar}>
+              <span className={styles.bodyHint}>Large reasoning blocks open in text mode first.</span>
+              <div className={styles.modeSwitch} aria-label="Reasoning render mode">
+                <button
+                  type="button"
+                  className={clsx(styles.modeButton, renderMode === 'text' && styles.modeButtonActive)}
+                  onClick={setTextMode}
+                  aria-pressed={renderMode === 'text'}
+                >
+                  Text
+                </button>
+                <button
+                  type="button"
+                  className={clsx(styles.modeButton, renderMode === 'markdown' && styles.modeButtonActive)}
+                  onClick={setMarkdownMode}
+                  aria-pressed={renderMode === 'markdown'}
+                >
+                  Markdown
+                </button>
+              </div>
+            </div>
+          )}
+          {renderMode === 'markdown' ? (
+            <div
+              className={styles.body}
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          ) : (
+            <pre className={clsx(styles.body, styles.bodyPlainText)}>{reasoning}</pre>
+          )}
         </div>
       </div>
     </div>

@@ -2,7 +2,8 @@ import type { ComponentType, ReactNode } from 'react'
 import {
   Sliders, MessageSquare, Users, PanelRight,
   Compass, Reply, HardDrive, Puzzle, Database, Hash, Activity,
-  Globe, Bell, Import, Brain, Terminal, Volume2, Plug,
+  Globe, Bell, Import, Brain, Terminal, Volume2, Plug, Search, UserRound,
+  PackageOpen,
 } from 'lucide-react'
 import { useStore } from '@/store'
 import type { Command, CommandScope } from '@/lib/commands'
@@ -34,6 +35,15 @@ export interface SettingsTabEntry {
 const INLINE_SENTINEL = () => null
 
 export const SETTINGS_TABS: SettingsTabEntry[] = [
+  {
+    id: 'account',
+    shortName: 'Account',
+    tabName: 'Account Settings',
+    tabDescription: 'Manage your account details and password',
+    tabIcon: UserRound,
+    keywords: ['account', 'profile', 'password', 'credentials', 'security', 'me'],
+    component: INLINE_SENTINEL,
+  },
   {
     id: 'display',
     shortName: 'Display',
@@ -86,6 +96,15 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure extension resource pool limits',
     tabIcon: HardDrive,
     keywords: ['extension', 'pools', 'resources', 'limits', 'storage'],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'webSearch',
+    shortName: 'Web Search',
+    tabName: 'Web Search',
+    tabDescription: 'Configure SearXNG-backed web search for council tools',
+    tabIcon: Search,
+    keywords: ['web search', 'searxng', 'search', 'browse', 'internet', 'web', 'council tool'],
     component: INLINE_SENTINEL,
   },
   {
@@ -149,6 +168,15 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'LumiHub cloud sync and sharing settings',
     tabIcon: Globe,
     keywords: ['lumihub', 'cloud', 'sync', 'sharing', 'online', 'hub'],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'dataPortability',
+    shortName: 'Data',
+    tabName: 'Data Portability',
+    tabDescription: 'Export your data or import a previously exported archive',
+    tabIcon: PackageOpen,
+    keywords: ['data', 'portability', 'export', 'import', 'backup', 'restore', 'archive', 'lvbak', 'migrate'],
     component: INLINE_SENTINEL,
   },
   {

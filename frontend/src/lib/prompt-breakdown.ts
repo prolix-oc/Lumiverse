@@ -18,7 +18,12 @@ export interface BreakdownEntry {
   type: string
   tokens: number
   role?: string
+  content?: string
   blockId?: string
+  extensionId?: string
+  extensionName?: string
+  messageCount?: number
+  firstMessageIndex?: number
 }
 
 export interface BreakdownGroup {
@@ -34,6 +39,7 @@ const TYPE_TO_GROUP: Record<string, string> = {
   long_term_memory: 'longTermMemory',
   world_info: 'worldInfo',
   sidecar: 'sidecar',
+  extension: 'extensions',
   authors_note: 'extensions',
   separator: 'system',
   utility: 'system',

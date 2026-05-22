@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from '@/lib/toast'
 import {
   dreamWeaverApi,
   normalizeDraftVisualAssets,
@@ -65,6 +66,20 @@ export interface VisualStudioModel {
 
 function createRandomSeed(): number {
   return Math.floor(Math.random() * 2_147_483_647)
+}
+
+function getPublicTagSuggestionError(error: unknown): string {
+  if (error instanceof ApiError && typeof error.body?.error === 'string') {
+    const message = error.body.error
+    if (
+      message === 'Generate or accept card fields first.' ||
+      message === 'Tag generation timed out.' ||
+      message.startsWith('Choose a ')
+    ) {
+      return message
+    }
+  }
+  return 'Failed to suggest tags. Check the text connection and try again.'
 }
 
 export function useVisualStudio(
@@ -248,8 +263,8 @@ export function useVisualStudio(
       try {
         const job = await dreamWeaverApi.startVisualJob(sessionId, preparedAsset, selectedConnectionId)
         setActiveJobId(job.id)
-      } catch (error) {
-        console.error('Failed to start visual job', error)
+      } catch {
+        toast.error('Failed to start generation. Check the image connection and try again.', { title: 'Dream Weaver' })
       } finally {
         setGenerating(false)
       }
@@ -273,17 +288,11 @@ export function useVisualStudio(
         const value = row?.value as { timeoutMs?: number | null } | null | undefined
         timeoutMs = value?.timeoutMs
       } catch {}
-      const result = await dreamWeaverApi.suggestVisualTags(sessionId, draft, { timeoutMs })
+      const result = await dreamWeaverApi.suggestVisualTags(sessionId, { timeoutMs })
       setPendingTagSuggestion(result.suggestedTags)
       setPendingNegativeTagSuggestion(result.suggestedNegativeTags || null)
     } catch (error) {
-      let message = 'Failed to suggest tags.'
-      if (error instanceof ApiError && error.body?.error) {
-        message = error.body.error
-      } else if (error instanceof Error) {
-        message = error.message
-      }
-      setTagSuggestionError(message)
+      setTagSuggestionError(getPublicTagSuggestionError(error))
     } finally {
       setTagSuggestionLoading(false)
     }

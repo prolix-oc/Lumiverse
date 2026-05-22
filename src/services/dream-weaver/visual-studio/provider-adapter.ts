@@ -14,12 +14,17 @@ export interface VisualProviderAdapter {
   provider: DreamWeaverVisualProvider;
   supportsWorkflowImport: boolean;
   supportsAdvancedMode: boolean;
+  // apiKey is forwarded so adapters that talk to auth-gated backends
+  // (e.g. SwarmUI's /ComfyBackendDirect for object_info discovery) can sign
+  // the request. Adapters that don't need auth simply ignore it.
   validate(
     asset: DreamWeaverVisualAsset,
     connection: ImageGenConnectionProfile,
+    apiKey?: string,
   ): Promise<string[]>;
   build(
     asset: DreamWeaverVisualAsset,
     connection: ImageGenConnectionProfile,
+    apiKey?: string,
   ): Promise<VisualAdapterBuildResult>;
 }

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2 } from 'lucide-react'
+import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2, Sparkles } from 'lucide-react'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { CloseButton } from '@/components/shared/CloseButton'
+import ContextMenu, { type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { Spinner } from '@/components/shared/Spinner'
 import { get } from '@/api/client'
@@ -52,11 +53,28 @@ export default function ChatPickerModal({
   const [items, setItems] = useState<ChatSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
+  const [activeMenuPos, setActiveMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatSummary | null>(null)
 
   const renameInputRef = useRef<HTMLInputElement>(null)
+
+  const closeActiveMenu = useCallback(() => {
+    setActiveMenuId(null)
+    setActiveMenuPos(null)
+  }, [])
+
+  const openActiveMenu = useCallback((chatId: string, trigger: HTMLElement) => {
+    const rect = trigger.getBoundingClientRect()
+    const viewportPadding = 8
+    const estimatedMenuWidth = 180
+    setActiveMenuId(chatId)
+    setActiveMenuPos({
+      x: Math.max(viewportPadding, rect.right - estimatedMenuWidth),
+      y: Math.max(viewportPadding, rect.bottom + 6),
+    })
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -90,7 +108,7 @@ export default function ChatPickerModal({
           return
         }
         if (activeMenuId) {
-          setActiveMenuId(null)
+          closeActiveMenu()
           return
         }
         if (deleteTarget) {
@@ -100,16 +118,11 @@ export default function ChatPickerModal({
         onDismiss()
       }
     }
-    const handleClickOutside = () => {
-      if (activeMenuId) setActiveMenuId(null)
-    }
     document.addEventListener('keydown', handleEscape)
-    document.addEventListener('click', handleClickOutside)
     return () => {
       document.removeEventListener('keydown', handleEscape)
-      document.removeEventListener('click', handleClickOutside)
     }
-  }, [onDismiss, renamingId, activeMenuId, deleteTarget])
+  }, [onDismiss, renamingId, activeMenuId, deleteTarget, closeActiveMenu])
 
   const handleConfirmRename = async (chatId: string) => {
     const trimmed = renameValue.trim()
@@ -159,16 +172,55 @@ export default function ChatPickerModal({
     setDeleteTarget(null)
   }
 
-  const handleNewChat = async () => {
+  const handleNewChat = async (options?: { memoryIsolation?: boolean }) => {
     try {
       setLoading(true)
-      const chat = await chatsApi.create({ character_id: characterId })
+      const metadata = options?.memoryIsolation ? { memory_isolation: true } : undefined
+      const chat = await chatsApi.create({ character_id: characterId, metadata })
       onSelect(chat.id)
     } catch (err) {
       console.error('[Lumiverse] Failed to create new chat:', err)
       setLoading(false)
     }
   }
+
+  const activeMenuItems: ContextMenuEntry[] = activeMenuId ? [
+    {
+      key: 'rename',
+      label: 'Rename',
+      icon: <Pencil size={14} />,
+      onClick: () => {
+        const item = items.find((chat) => chat.id === activeMenuId)
+        if (!item) return
+        setRenamingId(item.id)
+        setRenameValue(item.name || '')
+        closeActiveMenu()
+      },
+    },
+    {
+      key: 'export',
+      label: 'Export',
+      icon: <Download size={14} />,
+      onClick: () => {
+        const item = items.find((chat) => chat.id === activeMenuId)
+        if (!item) return
+        handleExport(item.id, formatChatName(item))
+        closeActiveMenu()
+      },
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      icon: <Trash2 size={14} />,
+      danger: true,
+      onClick: () => {
+        const item = items.find((chat) => chat.id === activeMenuId)
+        if (!item) return
+        setDeleteTarget(item)
+        closeActiveMenu()
+      },
+    },
+  ] : []
 
   return (
     <>
@@ -193,7 +245,7 @@ export default function ChatPickerModal({
           <button
             type="button"
             className={clsx(styles.card, styles.newChatCard)}
-            onClick={handleNewChat}
+            onClick={() => handleNewChat()}
             disabled={loading}
           >
             <div className={styles.newChatIcon}>
@@ -201,6 +253,23 @@ export default function ChatPickerModal({
             </div>
             <div className={styles.cardHeader}>
               <span className={styles.cardLabel}>Start New Chat</span>
+            </div>
+          </button>
+
+          {/* Action Card: Fresh Chat — no character-scoped long-term memory */}
+          <button
+            type="button"
+            className={clsx(styles.card, styles.freshChatCard)}
+            onClick={() => handleNewChat({ memoryIsolation: true })}
+            disabled={loading}
+            title="Starts a new chat that does not pull in documents or memory from this character's other chats. World books and personality still apply."
+          >
+            <div className={styles.freshChatIcon}>
+              <Sparkles size={14} strokeWidth={2.5} />
+            </div>
+            <div className={clsx(styles.cardHeader, styles.freshChatHeader)}>
+              <span className={styles.cardLabel}>Start Fresh Chat</span>
+              <span className={styles.freshChatSubtitle}>No long-term memories from prior chats</span>
             </div>
           </button>
 
@@ -212,107 +281,74 @@ export default function ChatPickerModal({
             const isMenuOpen = activeMenuId === item.id
 
             return (
-              <motion.button
+              <motion.div
                 key={item.id}
                 className={clsx(styles.card, isActive && styles.cardActive)}
                 style={{ animationDelay: `${Math.min(i * 40, 200)}ms`, zIndex: isMenuOpen ? 10 : undefined }}
+                role="button"
+                tabIndex={isRenaming ? -1 : 0}
+                aria-disabled={isRenaming || isMenuOpen}
                 onClick={() => {
                   if (!isRenaming && !isMenuOpen) onSelect(item.id)
+                }}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return
+                  if (isRenaming || isMenuOpen) return
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(item.id)
+                  }
                 }}
                 exit={{ opacity: 0, x: -16, transition: { duration: 0.18 } }}
                 whileHover={{ scale: isMenuOpen ? 1 : 1.01 }}
                 whileTap={{ scale: isMenuOpen ? 1 : 0.99 }}
               >
                 <div className={styles.cardHeader}>
-                  {isRenaming ? (
-                    <input
-                      ref={renameInputRef}
-                      type="text"
-                      className={styles.editInput}
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleConfirmRename(item.id)
-                        if (e.key === 'Escape') setRenamingId(null)
-                      }}
-                      onBlur={() => handleConfirmRename(item.id)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span className={styles.cardLabel}>
-                      {formatChatName(item)}
-                    </span>
-                  )}
+                  <div className={styles.cardTitleRow}>
+                    {isRenaming ? (
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        className={styles.editInput}
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleConfirmRename(item.id)
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                        onBlur={() => handleConfirmRename(item.id)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <span className={styles.cardLabel}>
+                        {formatChatName(item)}
+                      </span>
+                    )}
 
-                  {isActive && !isRenaming && (
-                    <span className={styles.activeBadge}>
-                      <Check size={10} />
-                      Most Recent
-                    </span>
-                  )}
+                    {isActive && !isRenaming && (
+                      <span className={styles.activeBadge}>
+                        <Check size={10} />
+                        Most Recent
+                      </span>
+                    )}
+                  </div>
 
                   <button
                     type="button"
                     className={clsx(styles.menuBtn, isMenuOpen && styles.menuBtnActive)}
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation()
-                      setActiveMenuId(isMenuOpen ? null : item.id)
+                      if (isMenuOpen) {
+                        closeActiveMenu()
+                        return
+                      }
+                      openActiveMenu(item.id, e.currentTarget)
                     }}
                     title="More options"
                   >
                     <MoreHorizontal size={14} />
                   </button>
-
-                  <AnimatePresence>
-                    {isMenuOpen && (
-                      <motion.div
-                        className={styles.dropdown}
-                        initial={{ opacity: 0, scale: 0.95, y: -5 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: -5 }}
-                        transition={{ duration: 0.15 }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          type="button"
-                          className={styles.dropdownItem}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setRenamingId(item.id)
-                            setRenameValue(item.name || '')
-                            setActiveMenuId(null)
-                          }}
-                        >
-                          <Pencil size={14} />
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.dropdownItem}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleExport(item.id, formatChatName(item))
-                            setActiveMenuId(null)
-                          }}
-                        >
-                          <Download size={14} />
-                          Export
-                        </button>
-                        <button
-                          type="button"
-                          className={clsx(styles.dropdownItem, styles.dropdownItemDanger)}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDeleteTarget(item)
-                            setActiveMenuId(null)
-                          }}
-                        >
-                          <Trash2 size={14} />
-                          Delete
-                        </button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
                 </div>
 
                 <div className={styles.cardPreview}>
@@ -326,12 +362,14 @@ export default function ChatPickerModal({
                     </span>
                   </div>
                 </div>
-              </motion.button>
+              </motion.div>
             )
           })}
           </AnimatePresence>
         </div>
       </ModalShell>
+
+      <ContextMenu position={activeMenuPos} items={activeMenuItems} onClose={closeActiveMenu} />
 
       <ConfirmationModal
         isOpen={deleteTarget !== null}

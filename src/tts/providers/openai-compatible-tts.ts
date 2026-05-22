@@ -1,6 +1,7 @@
 import type { TtsProvider } from "../provider";
 import type { TtsProviderCapabilities } from "../param-schema";
 import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice } from "../types";
+import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 /**
  * Abstract base class for providers that use the OpenAI-compatible
@@ -19,6 +20,15 @@ export abstract class OpenAICompatibleTtsProvider implements TtsProvider {
     let url = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
     url = url.replace(/\/audio\/speech$/, "");
     return url;
+  }
+
+  protected filterModels(data: any): Array<{ id: string; label: string }> {
+    const models: any[] = Array.isArray(data?.data) ? data.data : [];
+    return models
+      .map((model: any) => typeof model === "string" ? model : model?.id)
+      .filter((id: unknown): id is string => typeof id === "string" && /(?:^|[-_.:/])(tts|speech)(?:$|[-_.:/])/i.test(id))
+      .map((id) => ({ id, label: id }))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   /** Override to add provider-specific headers. */
@@ -119,14 +129,21 @@ export abstract class OpenAICompatibleTtsProvider implements TtsProvider {
       const res = await fetch(`${this.baseUrl(apiUrl)}/models`, {
         headers: this.headers(apiKey),
       });
+      if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err instanceof ProviderRequestError) throw err;
+      throw new ProviderRequestError({ provider: this.displayName, operation: "authentication", detail: err instanceof Error ? err.message : "network request failed", retryable: true });
     }
   }
 
-  async listModels(_apiKey: string, _apiUrl: string): Promise<Array<{ id: string; label: string }>> {
-    return this.capabilities.staticModels || [];
+  async listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
+    if (this.capabilities.modelListStyle === "static") return this.capabilities.staticModels || [];
+
+    const data = await fetchProviderJson<any>(this.displayName, "model listing", `${this.baseUrl(apiUrl)}/models`, {
+      headers: this.headers(apiKey),
+    });
+    return this.filterModels(data);
   }
 
   async listVoices(_apiKey: string, _apiUrl: string): Promise<TtsVoice[]> {

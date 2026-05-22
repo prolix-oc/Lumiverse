@@ -63,6 +63,11 @@ class ToolRegistry {
     return this.getTools().filter((t) => t.council_eligible);
   }
 
+  /** Get tools marked for inline availability with the primary model. */
+  getInlineAvailableTools(): ToolRegistration[] {
+    return this.getTools().filter((t) => t.inline_available);
+  }
+
   getToolsByExtension(extensionId: string): ToolRegistration[] {
     return this.getTools().filter((t) => t.extension_id === extensionId);
   }

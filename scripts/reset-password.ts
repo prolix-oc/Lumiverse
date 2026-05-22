@@ -27,7 +27,7 @@ import {
   printDivider,
   theme,
 } from "./ui";
-import { askSecret } from "./input";
+import { askSecret, closeInput } from "./input";
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
@@ -173,7 +173,9 @@ async function main() {
 
 }
 
-main().catch((err) => {
-  console.error("Password reset failed:", err);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error("Password reset failed:", err);
+    process.exitCode = 1;
+  })
+  .finally(() => closeInput());

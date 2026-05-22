@@ -1,11 +1,13 @@
 import { Hono } from "hono";
-import { evaluate, buildEnv, resolveGroupCharacterNames, registry, initMacros } from "../macros";
+import { evaluate, buildEnv, resolveGroupCharacterNames, resolvePersonaPronouns, registry, initMacros } from "../macros";
 import { getEffectiveCharacterName } from "../types/character";
-import type { MacroEnv, MacroHandler, MacroDefinition } from "../macros";
+import type { Chat } from "../types/chat";
+import type { MacroEnv } from "../macros";
 import * as chatsSvc from "../services/chats.service";
 import * as charactersSvc from "../services/characters.service";
 import * as personasSvc from "../services/personas.service";
 import * as connectionsSvc from "../services/connections.service";
+import { populateLumiaLoomContext } from "../services/prompt-assembly.service";
 
 // Ensure macros are initialized
 initMacros();
@@ -35,7 +37,12 @@ app.post("/resolve", async (c) => {
   const env = buildEnvFromIds(userId, body);
 
   const result = await evaluate(body.template, env, registry);
-  return c.json({ text: result.text, diagnostics: result.diagnostics });
+  return c.json({
+    text: result.text,
+    diagnostics: result.diagnostics,
+    touched_vars: Array.from(result.touchedVars),
+    cacheable: result.cacheable,
+  });
 });
 
 /**
@@ -72,17 +79,23 @@ app.post("/resolve-batch", async (c) => {
   // Build environment once and reuse for all templates
   const env = buildEnvFromIds(userId, body);
   const resolved: Record<string, string> = {};
+  const touchedVars: Record<string, string[]> = {};
+  const cacheable: Record<string, boolean> = {};
 
   for (const [key, template] of entries) {
     if (!template) {
       resolved[key] = "";
+      touchedVars[key] = [];
+      cacheable[key] = true;
       continue;
     }
     const result = await evaluate(template, env, registry);
     resolved[key] = result.text;
+    touchedVars[key] = Array.from(result.touchedVars);
+    cacheable[key] = result.cacheable;
   }
 
-  return c.json({ resolved });
+  return c.json({ resolved, touched_vars: touchedVars, cacheable });
 });
 
 /**
@@ -141,7 +154,7 @@ function buildEnvFromIds(userId: string, body: {
           return c ? getEffectiveCharacterName(c) : undefined;
         });
         const isGroup = !!chat.metadata?.group;
-        return buildEnv({
+        const env = buildEnv({
           character,
           persona,
           chat,
@@ -152,6 +165,8 @@ function buildEnvFromIds(userId: string, body: {
           groupCharacterNames,
           targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
+        populateLumiaLoomContext(env, userId, chat);
+        return env;
       }
     }
   }
@@ -166,32 +181,43 @@ function buildEnvFromIds(userId: string, body: {
         ? connectionsSvc.getConnection(userId, body.connection_id)
         : connectionsSvc.getDefaultConnection(userId);
 
-      return buildEnv({
+      const chat: Chat = {
+        id: "",
+        character_id: character.id,
+        name: "",
+        metadata: {},
+        created_at: 0,
+        updated_at: 0,
+      };
+      const env = buildEnv({
         character,
         persona,
-        chat: { id: "", character_id: character.id, name: "", metadata: {}, created_at: 0, updated_at: 0 },
+        chat,
         messages: [],
         generationType: "normal",
         connection,
         dynamicMacros: body.dynamic_macros,
       });
+      populateLumiaLoomContext(env, userId, chat);
+      return env;
     }
   }
 
-  // Minimal fallback env
-  const persona = personasSvc.getDefaultPersona(userId);
+  const persona = personasSvc.resolvePersonaOrDefault(userId, body.persona_id);
+  const personaPronouns = resolvePersonaPronouns(persona);
   const connection = connectionsSvc.getDefaultConnection(userId);
 
   return {
+    commit: true,
     names: {
       user: persona?.name || "User", char: "", group: "", groupNotMuted: "", notChar: persona?.name || "User",
       charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", groupLastSpeaker: "",
     },
     character: {
       name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",
-      personaSubjectivePronoun: persona?.subjective_pronoun || "",
-      personaObjectivePronoun: persona?.objective_pronoun || "",
-      personaPossessivePronoun: persona?.possessive_pronoun || "",
+      personaSubjectivePronoun: personaPronouns.subjective,
+      personaObjectivePronoun: personaPronouns.objective,
+      personaPossessivePronoun: personaPronouns.possessive,
       mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "",
       depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "",
     },

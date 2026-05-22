@@ -3,6 +3,7 @@ import { registry } from "../MacroRegistry";
 export function registerFormattingMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "bullets",
     category: "Formatting",
     description:
@@ -20,6 +21,7 @@ export function registerFormattingMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    terminal: true,
     name: "numbered",
     category: "Formatting",
     description:

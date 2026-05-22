@@ -1,42 +1,74 @@
 /* ── Group Chat Member Bar ── */
-.bar {
+.barWrapper {
   position: sticky;
-  top: -16px;
+  top: 0;
   z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
-  margin: -16px -20px 4px;
+  margin: 0 -20px 4px;
   border-radius: 0 0 var(--lcs-radius-sm, 8px) var(--lcs-radius-sm, 8px);
   background: var(--lumiverse-bg, rgba(18, 18, 24, 0.95));
   border: 1px solid var(--lcs-glass-border, rgba(255, 255, 255, 0.06));
   border-top: none;
   flex-shrink: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: hidden;
 }
 
-:global([data-glass]) .bar {
+:global([data-glass]) .barWrapper {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 @media (max-width: 768px) {
-  .bar {
-    top: -8px;
-    margin: -8px -8px 4px;
+  .barWrapper {
+    margin: 0 -8px 4px;
   }
 }
 
 @media (max-width: 480px) {
-  .bar {
-    top: -6px;
-    margin: -6px -6px 4px;
+  .barWrapper {
+    margin: 0 -6px 4px;
   }
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
 
 .bar::-webkit-scrollbar {
   display: none;
+}
+
+/* Scroll fade indicators */
+.scrollFade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  z-index: 11;
+  transition: opacity 200ms ease;
+}
+
+.scrollFadeLeft {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    var(--lumiverse-bg, rgba(18, 18, 24, 0.95)) 0%,
+    transparent 100%
+  );
+}
+
+.scrollFadeRight {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    var(--lumiverse-bg, rgba(18, 18, 24, 0.95)) 0%,
+    transparent 100%
+  );
 }
 
 .member {
@@ -88,7 +120,7 @@
   align-items: center;
   justify-content: center;
   background: var(--lumiverse-bg-dark);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   border: 2px solid transparent;
@@ -100,7 +132,7 @@
 }
 
 .name {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   max-width: 56px;
   overflow: hidden;
@@ -133,6 +165,21 @@
   border-radius: 50%;
   background: var(--lumiverse-error, #e54545);
   border: 1.5px solid var(--lumiverse-bg, rgba(18, 18, 24, 0.95));
+}
+
+.voiceBadge {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--lumiverse-primary-050, rgba(106, 163, 255, 0.3));
+  border: 1.5px solid var(--lumiverse-bg, rgba(18, 18, 24, 0.95));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-primary, #6aa3ff);
 }
 
 /* Talkativeness indicator as border opacity */
@@ -169,4 +216,3 @@
   border-color: var(--lumiverse-primary-050);
   color: var(--lumiverse-primary);
 }
-

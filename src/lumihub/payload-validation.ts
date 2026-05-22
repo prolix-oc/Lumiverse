@@ -7,13 +7,15 @@
  * `importUrl` schemes that would reach the installer.
  */
 
-import type { InstallCharacterPayload, InstallWorldbookPayload } from "./types";
+import type { InstallCharacterPayload, InstallPresetPayload, InstallThemePayload, InstallWorldbookPayload } from "./types";
 
 const MAX_STRING_LEN = 64 * 1024; // 64 KB per string field
 const MAX_CARD_DATA_BYTES = 4 * 1024 * 1024; // 4 MB JSON-blob ceiling
 const MAX_AVATAR_BASE64_BYTES = 12 * 1024 * 1024; // base64 expands ~33% — caps raw at ~9 MB
 const MAX_GALLERY_URLS = 50;
 const MAX_WORLDBOOK_ENTRIES = 5_000;
+const MAX_THEME_DATA_BYTES = 64 * 1024 * 1024;
+const MAX_PRESET_DATA_BYTES = 2 * 1024 * 1024;
 const ALLOWED_SOURCES = new Set(["lumihub", "chub"] as const);
 
 export type ValidationResult<T> =
@@ -131,4 +133,52 @@ export function validateInstallWorldbookPayload(
   }
 
   return { ok: true, value: raw as unknown as InstallWorldbookPayload };
+}
+
+export function validateInstallThemePayload(
+  raw: unknown,
+): ValidationResult<InstallThemePayload> {
+  if (!isPlainObject(raw)) return { ok: false, error: "payload must be an object" };
+
+  if (raw.source !== "lumihub") {
+    return { ok: false, error: "source must be 'lumihub'" };
+  }
+  if (!isString(raw.themeId, 256)) {
+    return { ok: false, error: "themeId must be a string ≤256 chars" };
+  }
+  if (!isString(raw.themeName, 512)) {
+    return { ok: false, error: "themeName must be a string ≤512 chars" };
+  }
+  if (!isPlainObject(raw.themeData)) {
+    return { ok: false, error: "themeData must be an object" };
+  }
+  if (JSON.stringify(raw.themeData).length > MAX_THEME_DATA_BYTES) {
+    return { ok: false, error: `themeData exceeds ${MAX_THEME_DATA_BYTES} bytes` };
+  }
+
+  return { ok: true, value: raw as unknown as InstallThemePayload };
+}
+
+export function validateInstallPresetPayload(
+  raw: unknown,
+): ValidationResult<InstallPresetPayload> {
+  if (!isPlainObject(raw)) return { ok: false, error: "payload must be an object" };
+
+  if (raw.source !== "lumihub") {
+    return { ok: false, error: "source must be 'lumihub'" };
+  }
+  if (!isString(raw.presetId, 256)) {
+    return { ok: false, error: "presetId must be a string ≤256 chars" };
+  }
+  if (!isString(raw.presetName, 512)) {
+    return { ok: false, error: "presetName must be a string ≤512 chars" };
+  }
+  if (!isPlainObject(raw.presetData)) {
+    return { ok: false, error: "presetData must be an object" };
+  }
+  if (JSON.stringify(raw.presetData).length > MAX_PRESET_DATA_BYTES) {
+    return { ok: false, error: `presetData exceeds ${MAX_PRESET_DATA_BYTES} bytes` };
+  }
+
+  return { ok: true, value: raw as unknown as InstallPresetPayload };
 }

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { ChevronUp, ChevronDown } from 'lucide-react'
+import NumericInput from '@/components/shared/NumericInput'
 import styles from './NumberStepper.module.css'
 
 export interface NumberStepperProps {
@@ -39,22 +40,16 @@ export default function NumberStepper({
 
   return (
     <div className={`${styles.stepper} ${className || ''}`}>
-      <input
-        type="number"
+      <NumericInput
         className={styles.input}
-        value={value ?? ''}
+        value={value}
         min={min}
         max={max}
         step={step}
+        integer={Number.isInteger(step)}
         placeholder={placeholder}
-        onChange={(e) => {
-          if (allowEmpty && e.target.value === '') {
-            onChange(null)
-          } else {
-            const parsed = parseFloat(e.target.value)
-            onChange(Number.isNaN(parsed) ? 0 : parsed)
-          }
-        }}
+        allowEmpty={allowEmpty}
+        onChange={onChange}
       />
       <div className={styles.controls}>
         <button type="button" className={styles.btn} onClick={increment} tabIndex={-1}>

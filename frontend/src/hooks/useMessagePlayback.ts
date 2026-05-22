@@ -1,16 +1,11 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import { useStore } from '@/store'
-import { ttsApi } from '@/api/tts'
 import {
-  speak,
   stop,
-  setTTSVolume,
-  setTTSSpeed,
   getActiveMessageId,
   subscribeActiveMessage,
-  unlockTTSAudio,
 } from '@/lib/ttsAudio'
-import { getSpokenText } from '@/lib/speechDetection'
+import { startMessageTtsPlayback } from '@/lib/ttsMessagePlayback'
 
 /**
  * Subscribes to the shared TTS pipeline's "active message id" so a component
@@ -37,12 +32,21 @@ export interface UseMessagePlaybackResult {
 /**
  * Per-message playback controller. Reuses the same singleton audio pipeline
  * as the auto-play hook so starting a manual playback cancels any in-flight
- * audio and vice versa.
+ * audio and vice versa. Routes through the shared multi-voice pipeline so
+ * narration and per-character voices play gaplessly in segment order.
  */
-export function useMessagePlayback(messageId: string, content: string): UseMessagePlaybackResult {
+export function useMessagePlayback(
+  messageId: string,
+  content: string,
+  name: string,
+  isUser: boolean,
+): UseMessagePlaybackResult {
   const ttsEnabled = useStore((s) => s.voiceSettings.ttsEnabled)
   const connectionId = useStore((s) => s.voiceSettings.ttsConnectionId)
   const isPlaying = useIsMessagePlaying(messageId)
+  // canPlay is permissive — a character or chat-level override can supply a
+  // voice even when no global default is configured. The actual decision
+  // lives in the resolver; the button just stays enabled when TTS is on.
   const canPlay = Boolean(ttsEnabled && connectionId)
 
   const toggle = useCallback(async () => {
@@ -50,33 +54,13 @@ export function useMessagePlayback(messageId: string, content: string): UseMessa
       stop()
       return
     }
-    const { voiceSettings } = useStore.getState()
-    if (!voiceSettings.ttsEnabled || !voiceSettings.ttsConnectionId) return
-
-    const text = getSpokenText(content, voiceSettings.speechDetectionRules)
-    if (!text) return
-
-    // Stop any in-flight playback (auto-play for another message, etc.) before
-    // starting this one so the queue doesn't stack.
-    stop()
-    unlockTTSAudio()
-    setTTSVolume(voiceSettings.ttsVolume)
-    setTTSSpeed(voiceSettings.ttsSpeed)
-
-    try {
-      const response = await ttsApi.synthesize(voiceSettings.ttsConnectionId, text, {
-        speed: voiceSettings.ttsSpeed,
-      })
-      if (!response.ok) {
-        console.error('[TTS Playback] Synthesis failed:', response.status, await response.text().catch(() => ''))
-        return
-      }
-      const buffer = await response.arrayBuffer()
-      speak(buffer, messageId)
-    } catch (err) {
-      console.error('[TTS Playback] Synthesis failed:', err)
-    }
-  }, [isPlaying, content, messageId])
+    startMessageTtsPlayback({
+      messageId,
+      messageName: name,
+      messageContent: content,
+      messageIsUser: isUser,
+    })
+  }, [isPlaying, content, messageId, name, isUser])
 
   return { canPlay, isPlaying, toggle }
 }

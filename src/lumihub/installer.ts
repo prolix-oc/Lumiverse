@@ -12,8 +12,20 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getFirstUserId } from "../auth/seed";
 import * as wbSvc from "../services/world-books.service";
+import * as presetsSvc from "../services/presets.service";
+import * as settingsSvc from "../services/settings.service";
+import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
-import type { InstallCharacterPayload, InstallResultPayload, InstallWorldbookPayload, InstallWorldbookResultPayload } from "./types";
+import type {
+  InstallCharacterPayload,
+  InstallPresetPayload,
+  InstallPresetResultPayload,
+  InstallResultPayload,
+  InstallThemePayload,
+  InstallThemeResultPayload,
+  InstallWorldbookPayload,
+  InstallWorldbookResultPayload,
+} from "./types";
 
 /**
  * Install a character from a LumiHub remote command.
@@ -158,7 +170,9 @@ function maybeExtractWorldbook(
   if (!charBook || !charBook.entries || charBook.entries.length === 0) return;
 
   try {
-    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, characterName, charBook);
+    const { worldBook } = wbSvc.importCharacterBook(userId, characterId, characterName, charBook, {
+      autoManagedByCharacter: true,
+    });
     // Associate the worldbook with the character (append to array)
     const currentIds = getCharacterWorldBookIds(character.extensions);
     const nextExtensions = setCharacterWorldBookIds(
@@ -342,6 +356,7 @@ async function installFromUrl(
               ...(bundled as import("../types/regex-script").CreateRegexScriptInput),
               scope: "character",
               scope_id: character.id,
+              character_id: character.id,
               metadata: { ...bundled.metadata, source: "charx_bundle" },
             });
           } catch { /* skip individual failures */ }
@@ -627,5 +642,210 @@ export async function installWorldbook(
   } catch (err: any) {
     console.error("[LumiHub Installer] Worldbook install error:", err);
     return { requestId, success: false, error: err.message || "Unknown error during worldbook install" };
+  }
+}
+
+/** Install a theme export from LumiHub into the owner's active theme settings. */
+export async function installTheme(
+  requestId: string,
+  payload: InstallThemePayload,
+): Promise<InstallThemeResultPayload> {
+  const userId = getFirstUserId();
+  if (!userId) {
+    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+  }
+
+  try {
+    const themeData = payload.themeData;
+    const theme = normalizeThemeConfig(themeData.theme);
+    const components = normalizeThemeComponents(themeData.components);
+    const globalCSS = typeof themeData.globalCSS === "string" ? themeData.globalCSS.slice(0, 2_000_000) : "";
+    const bundleId = crypto.randomUUID();
+    const hasEnabledComponentCSS = Object.values(components).some((component) => component.enabled && component.css.trim());
+
+    await importThemeAssets(userId, bundleId, themeData.assets);
+
+    settingsSvc.putMany(userId, {
+      theme: {
+        ...theme,
+        id: typeof theme.id === "string" && theme.id.trim() ? theme.id : payload.themeId,
+        name: typeof theme.name === "string" && theme.name.trim() ? theme.name : payload.themeName,
+      },
+      customCSS: {
+        css: globalCSS,
+        enabled: !!globalCSS.trim() || hasEnabledComponentCSS,
+        revision: Date.now(),
+        bundleId,
+      },
+      componentOverrides: components,
+    });
+
+    eventBus.emit(EventType.LUMIHUB_INSTALL_COMPLETED, {
+      characterId: payload.themeId,
+      characterName: payload.themeName,
+      source: "lumihub",
+      type: "theme",
+    }, userId);
+
+    return {
+      requestId,
+      success: true,
+      themeId: payload.themeId,
+      themeName: payload.themeName,
+    };
+  } catch (err: any) {
+    console.error("[LumiHub Installer] Theme install error:", err);
+    return { requestId, success: false, error: err.message || "Unknown error during theme install" };
+  }
+}
+
+/** Install a Loom preset export from LumiHub into the owner's preset library. */
+export async function installPreset(
+  requestId: string,
+  payload: InstallPresetPayload,
+): Promise<InstallPresetResultPayload> {
+  const userId = getFirstUserId();
+  if (!userId) {
+    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+  }
+
+  try {
+    const exported = payload.presetData;
+    const preset = exported.preset;
+    if (!preset || typeof preset !== "object" || Array.isArray(preset)) {
+      return { requestId, success: false, error: "Preset export is missing preset data" };
+    }
+    const p = preset as Record<string, any>;
+    const name = typeof p.name === "string" && p.name.trim() ? p.name : payload.presetName;
+    const blocks = Array.isArray(p.blocks) ? p.blocks : [];
+
+    const created = presetsSvc.createPreset(userId, {
+      name,
+      provider: "loom",
+      parameters: {
+        samplerOverrides: isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {},
+        customBody: isPlainObject(p.customBody) ? p.customBody : {},
+      },
+      prompt_order: blocks,
+      prompts: {
+        promptBehavior: isPlainObject(p.promptBehavior) ? p.promptBehavior : {},
+        completionSettings: isPlainObject(p.completionSettings) ? p.completionSettings : {},
+        advancedSettings: isPlainObject(p.advancedSettings) ? p.advancedSettings : {},
+      },
+      metadata: {
+        source: isPlainObject(p.source) ? p.source : null,
+        modelProfiles: isPlainObject(p.modelProfiles) ? p.modelProfiles : {},
+        schemaVersion: typeof p.schemaVersion === "number" ? p.schemaVersion : exported.schemaVersion ?? 1,
+        description: typeof p.description === "string" ? p.description : "",
+        isDefault: !!p.isDefault,
+        lastProfileKey: typeof p.lastProfileKey === "string" ? p.lastProfileKey : null,
+        promptVariables: isPlainObject(p.promptVariables) ? p.promptVariables : {},
+        compatibility: isPlainObject(exported.compatibility) ? exported.compatibility : {},
+        coverUrl: typeof exported.cover_url === "string" ? exported.cover_url : null,
+        _lumiverse_install_source: "lumihub",
+        _lumiverse_lumihub_id: payload.presetId,
+      },
+    });
+
+    eventBus.emit(EventType.PRESET_CHANGED, { id: created.id, preset: created }, userId);
+    eventBus.emit(EventType.LUMIHUB_INSTALL_COMPLETED, {
+      characterId: created.id,
+      characterName: created.name,
+      source: "lumihub",
+      type: "preset",
+    }, userId);
+
+    return {
+      requestId,
+      success: true,
+      presetId: created.id,
+      presetName: created.name,
+    };
+  } catch (err: any) {
+    console.error("[LumiHub Installer] Preset install error:", err);
+    return { requestId, success: false, error: err.message || "Unknown error during preset install" };
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeThemeConfig(value: unknown): Record<string, any> {
+  if (!isPlainObject(value)) throw new Error("Theme export is missing theme data");
+  if (typeof value.name !== "string" || !value.name.trim()) throw new Error("Theme export is missing a theme name");
+  if (value.mode !== "light" && value.mode !== "dark" && value.mode !== "system") {
+    throw new Error("Theme export has an invalid mode");
+  }
+  const accent = value.accent;
+  if (!isPlainObject(accent)
+    || typeof accent.h !== "number"
+    || typeof accent.s !== "number"
+    || typeof accent.l !== "number") {
+    throw new Error("Theme export has an invalid accent");
+  }
+  return {
+    ...value,
+    radiusScale: typeof value.radiusScale === "number" ? value.radiusScale : 1,
+    enableGlass: typeof value.enableGlass === "boolean" ? value.enableGlass : false,
+    fontScale: typeof value.fontScale === "number" ? value.fontScale : 1,
+  };
+}
+
+function normalizeThemeComponents(value: unknown): Record<string, { css: string; tsx: string; enabled: boolean }> {
+  if (!isPlainObject(value)) return {};
+  const out: Record<string, { css: string; tsx: string; enabled: boolean }> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!isPlainObject(raw) || typeof name !== "string" || !name.trim()) continue;
+    const tsx = typeof raw.tsx === "string" ? raw.tsx.slice(0, 50_000) : "";
+    out[name.slice(0, 128)] = {
+      css: typeof raw.css === "string" ? raw.css.slice(0, 2_000_000) : "",
+      tsx,
+      // Match local theme-bundle imports: TSX overrides are imported disabled
+      // until the owner reviews them manually.
+      enabled: tsx.trim() ? false : raw.enabled !== false,
+    };
+  }
+  return out;
+}
+
+async function importThemeAssets(userId: string, bundleId: string, assets: unknown): Promise<void> {
+  if (!Array.isArray(assets) || assets.length === 0) return;
+  if (assets.length > 500) throw new Error("Theme export contains too many assets");
+
+  for (const raw of assets) {
+    if (!isPlainObject(raw)) continue;
+    const slug = typeof raw.slug === "string" ? raw.slug.slice(0, 255) : "";
+    const dataBase64 = typeof raw.dataBase64 === "string" ? raw.dataBase64 : "";
+    if (!slug || !dataBase64) continue;
+
+    const originalFilename = typeof raw.originalFilename === "string" && raw.originalFilename.trim()
+      ? raw.originalFilename.slice(0, 180)
+      : slug.split("/").pop() || "asset";
+    const mimeType = typeof raw.mimeType === "string" && raw.mimeType.trim()
+      ? raw.mimeType.slice(0, 255)
+      : "application/octet-stream";
+    const tags = Array.isArray(raw.tags)
+      ? raw.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 32)
+      : [];
+    const metadata = isPlainObject(raw.metadata) ? raw.metadata : {};
+
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(dataBase64, "base64");
+    } catch {
+      throw new Error(`Theme asset "${slug}" is not valid base64`);
+    }
+    if (bytes.byteLength > 50 * 1024 * 1024) {
+      throw new Error(`Theme asset "${slug}" exceeds 50 MB`);
+    }
+
+    await themeAssetsSvc.createThemeAsset(userId, {
+      bundleId,
+      file: new File([new Uint8Array(bytes)], originalFilename, { type: mimeType }),
+      slug,
+      tags,
+      metadata,
+    });
   }
 }

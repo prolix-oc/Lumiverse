@@ -1,6 +1,10 @@
 import { getDb } from "../db/connection";
 import * as embeddingsSvc from "./embeddings.service";
-import { sanitizeForVectorization } from "../utils/content-sanitizer";
+import { type SanitizeOptions } from "../utils/content-sanitizer";
+import { getReasoningStripOptions } from "../utils/reasoning-strip";
+import { type MacroEnv } from "../macros";
+import { resolveAndSanitizeForVectorization } from "./vectorization-content.service";
+import { buildMacroEnvForChat } from "./chats.service";
 
 const MAX_STALE_VISIBLE_MESSAGES = 2;
 const REFRESH_DEBOUNCE_MS = 100;
@@ -104,10 +108,12 @@ function truncateToContextSize(text: string, maxTokens: number): string {
   return text.slice(-maxChars);
 }
 
-function buildQueryText(
+async function buildQueryText(
   messages: MemoryMessageView[],
   settings: embeddingsSvc.ChatMemorySettings,
-): string {
+  env: MacroEnv | null,
+  reasoningStrip?: SanitizeOptions,
+): Promise<string> {
   const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
   const contextSize = Math.max(1, settings.queryContextSize);
 
@@ -115,29 +121,29 @@ function buildQueryText(
     case "last_user_message": {
       const lastUser = [...visibleMessages].reverse().find(m => m.is_user);
       if (!lastUser) return "";
+      const sanitized = await resolveAndSanitizeForVectorization(lastUser.content, env, reasoningStrip);
       return truncateToContextSize(
-        `[USER | ${lastUser.name}]: ${sanitizeForVectorization(lastUser.content)}`,
+        `[USER | ${lastUser.name}]: ${sanitized}`,
         settings.queryMaxTokens,
       );
     }
     case "weighted_recent": {
       const queryMessages = visibleMessages.slice(-contextSize);
-      const parts = queryMessages.map(m =>
-        `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`,
-      );
+      const parts = await Promise.all(queryMessages.map(async m => {
+        const sanitized = await resolveAndSanitizeForVectorization(m.content, env, reasoningStrip);
+        return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+      }));
       if (parts.length > 0) parts.push(parts[parts.length - 1]);
       return truncateToContextSize(parts.join("\n").trim(), settings.queryMaxTokens);
     }
     case "recent_messages":
     default: {
       const queryMessages = visibleMessages.slice(-contextSize);
-      return truncateToContextSize(
-        queryMessages
-          .map(m => `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizeForVectorization(m.content)}`)
-          .join("\n")
-          .trim(),
-        settings.queryMaxTokens,
-      );
+      const parts = await Promise.all(queryMessages.map(async m => {
+        const sanitized = await resolveAndSanitizeForVectorization(m.content, env, reasoningStrip);
+        return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
+      }));
+      return truncateToContextSize(parts.join("\n").trim(), settings.queryMaxTokens);
     }
   }
 }
@@ -337,7 +343,9 @@ async function computeFreshMemoryResult(
   const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings, cfg);
   const settingsSource: "global" | "per_chat" = perChatOverrides ? "per_chat" : "global";
   const sourceMessageCount = getVisibleMessageCount(messages);
-  const queryText = buildQueryText(messages, settings);
+  const reasoningStrip = getReasoningStripOptions(userId);
+  const env = buildMacroEnvForChat(userId, chatId);
+  const queryText = await buildQueryText(messages, settings, env, reasoningStrip);
   const settingsKey = computeSettingsKey(settings, perChatOverrides, cfg.hybrid_weight_mode);
 
   const chunkStats = getDb()
@@ -387,7 +395,11 @@ async function computeFreshMemoryResult(
   }
 
   const effectiveTopK = perChatOverrides?.retrievalTopK ?? settings.retrievalTopK;
-  const effectiveExclusionWindow = perChatOverrides?.exclusionWindow ?? settings.exclusionWindow;
+  // Per-chat overrides aren't run through normalizeChatMemorySettings, so a
+  // legacy or hand-crafted override could exceed the clamp. Cap defensively
+  // — extreme values stress chunk-retrieval payloads without improving recall.
+  const rawExclusionWindow = perChatOverrides?.exclusionWindow ?? settings.exclusionWindow;
+  const effectiveExclusionWindow = Math.max(5, Math.min(50, rawExclusionWindow));
   const effectiveThreshold = settings.similarityThreshold;
 
   if (chunksPending > 0) {
@@ -442,6 +454,14 @@ async function computeFreshMemoryResult(
       effectiveTopK,
       queryText,
       cfg.hybrid_weight_mode,
+      undefined,
+      undefined,
+      // Skip the vector column in chat-memory retrievals. MMR degrades to
+      // distance-ordered top-K — diversity is nice-to-have, but pulling 4 MB
+      // of Float32 vectors per query through Lance/Arrow has been Bun-fragile
+      // in 1.3.12+ and the exclusion filter above already prevents most
+      // duplicate-content hits.
+      { skipVectorFetch: true },
     );
 
     const filteredHits = effectiveThreshold > 0
@@ -565,7 +585,9 @@ export async function readCachedChatMemory(
   }));
   const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings, cfg);
   const settingsSource: "global" | "per_chat" = perChatOverrides ? "per_chat" : "global";
-  const queryText = buildQueryText(messageViews, settings);
+  const reasoningStrip = getReasoningStripOptions(userId);
+  const env = buildMacroEnvForChat(userId, chatId);
+  const queryText = await buildQueryText(messageViews, settings, env, reasoningStrip);
   if (!queryText) {
     return { ...EMPTY_RESULT, enabled: true, settingsSource };
   }

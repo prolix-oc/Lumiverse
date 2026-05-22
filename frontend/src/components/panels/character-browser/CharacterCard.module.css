@@ -54,7 +54,7 @@
   left: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   transition: transform 0.3s ease;
 }
 
@@ -63,7 +63,7 @@
 }
 
 .avatarFallback {
-  font-size: 48px;
+  font-size: calc(48px * var(--lumiverse-font-scale, 1));
   font-weight: 300;
   color: var(--lumiverse-primary-muted);
   user-select: none;
@@ -176,7 +176,7 @@
 }
 
 .name {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   letter-spacing: -0.2px;
@@ -187,7 +187,7 @@
 }
 
 .creator {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -204,7 +204,7 @@
 }
 
 .tag {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 2px 8px;
   border-radius: 6px;
   border: 1px solid;
@@ -216,7 +216,7 @@
 }
 
 .tagOverflow {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 2px 6px;
   border-radius: 6px;
   color: var(--lumiverse-text-dim);
@@ -229,45 +229,66 @@
 /* Compact variant (used in FavoritesSlider) */
 .compact {
   flex-direction: row;
-  padding: 6px 8px;
-  gap: 8px;
-  border-radius: 10px;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
-  box-shadow: none;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 12px;
+  gap: 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--lumiverse-fill-subtle) 0%, var(--lumiverse-fill) 100%);
+  border: 1px solid var(--lumiverse-border-neutral);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .compact:hover {
-  transform: none;
-  background: var(--lumiverse-fill-hover);
-  box-shadow: none;
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, var(--lumiverse-fill-hover) 0%, var(--lumiverse-fill) 100%);
+  border-color: var(--lumiverse-border-hover);
+  box-shadow: var(--lumiverse-shadow-sm);
 }
 
 .compact .imageWrap {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   aspect-ratio: 1;
-  border-radius: 50%;
+  border-radius: 12px;
   flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .compact .coverImg {
-  border-radius: 50%;
+  border-radius: 12px;
 }
 
 .compact .avatarFallback {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
 }
 
 .compact .info {
-  padding: 0;
+  padding: 0 22px 0 0;
   align-items: flex-start;
+  justify-content: center;
   flex: 1;
   min-width: 0;
+  gap: 2px;
 }
 
 .compact .name {
-  font-size: 12px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.25;
+}
+
+.compact .favBtn {
+  top: 50%;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border-color: transparent;
+  transform: translateY(-50%);
+}
+
+.compact .favBtn:hover {
+  transform: translateY(-50%) scale(1.06);
 }
 
 .compact .tags,

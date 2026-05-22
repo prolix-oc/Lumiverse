@@ -1,6 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plus, Check, Trash2, Globe, Link2, Unlink } from 'lucide-react'
+import { Plus, Check, Trash2, Globe, Link2, Unlink, GripVertical } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
+import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { uiScaledTransform } from '@/lib/dndUiScale'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
@@ -118,6 +136,26 @@ export default function PersonaAddonsModal() {
     persistAddons(next)
   }, [addons, persistAddons])
 
+  // Drag-to-reorder for persona-specific addons. `sort_order` is also re-stamped
+  // so the backend MacroEnv resolves them in the visual order.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = addons.findIndex((a) => a.id === active.id)
+    const newIndex = addons.findIndex((a) => a.id === over.id)
+    if (oldIndex < 0 || newIndex < 0) return
+    const moved = arrayMove(addons, oldIndex, newIndex)
+    const next = moved.map((a, i) => ({ ...a, sort_order: i }))
+    setAddons(next)
+    persistAddons(next)
+  }, [addons, persistAddons])
+
   // Global addon handlers
   const handleAttachGlobal = useCallback((globalAddonId: string) => {
     const next = [...attachedRefs, { id: globalAddonId, enabled: true }]
@@ -174,7 +212,10 @@ export default function PersonaAddonsModal() {
             {/* ── Section 1: Persona-Specific Add-Ons ── */}
             <div className={styles.sectionHeader}>
               <IconPlaylistAdd size={13} className={styles.sectionIconPersona} />
-              <span>Persona Add-Ons</span>
+              <span>Default Persona Add-Ons</span>
+            </div>
+            <div className={styles.sectionHint}>
+              These defaults are used when a chat has no binding or chat-specific override.
             </div>
 
             {addons.length === 0 && (
@@ -183,43 +224,20 @@ export default function PersonaAddonsModal() {
               </div>
             )}
 
-            {addons.map((addon) => (
-              <div key={addon.id} className={clsx(styles.addonCard, !addon.enabled && styles.addonCardDisabled)}>
-                <div className={styles.addonTopRow}>
-                  <button
-                    type="button"
-                    className={clsx(styles.addonToggle, addon.enabled && styles.addonToggleActive)}
-                    onClick={() => handleToggle(addon.id)}
-                    title={addon.enabled ? 'Disable add-on' : 'Enable add-on'}
-                  >
-                    <Check size={13} />
-                  </button>
-                  <input
-                    type="text"
-                    className={styles.addonLabelInput}
-                    value={addon.label}
-                    onChange={(e) => handleLabelChange(addon.id, e.target.value)}
-                    placeholder="Add-on name..."
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={addons.map((a) => a.id)} strategy={verticalListSortingStrategy}>
+                {addons.map((addon) => (
+                  <SortableAddonRow
+                    key={addon.id}
+                    addon={addon}
+                    onToggle={handleToggle}
+                    onDelete={handleDelete}
+                    onLabelChange={handleLabelChange}
+                    onContentChange={handleContentChange}
                   />
-                  <button
-                    type="button"
-                    className={styles.addonDeleteBtn}
-                    onClick={() => handleDelete(addon.id)}
-                    title="Delete add-on"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                <ExpandableTextarea
-                  className={styles.addonContent}
-                  value={addon.content}
-                  onChange={(v) => handleContentChange(addon.id, v)}
-                  title={addon.label || 'Add-On Content'}
-                  placeholder="Add-on content (appended to persona description when enabled)..."
-                  rows={2}
-                />
-              </div>
-            ))}
+                ))}
+              </SortableContext>
+            </DndContext>
 
             <div className={styles.sectionAddRow}>
               <Button variant="ghost" icon={<Plus size={13} />} onClick={handleAdd} className={styles.sectionAddBtn}>
@@ -323,5 +341,77 @@ export default function PersonaAddonsModal() {
         </span>
       </div>
     </ModalShell>
+  )
+}
+
+interface SortableAddonRowProps {
+  addon: PersonaAddon
+  onToggle: (id: string) => void
+  onDelete: (id: string) => void
+  onLabelChange: (id: string, label: string) => void
+  onContentChange: (id: string, content: string) => void
+}
+
+function SortableAddonRow({ addon, onToggle, onDelete, onLabelChange, onContentChange }: SortableAddonRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: addon.id })
+  const style = {
+    transform: uiScaledTransform(transform),
+    transition,
+    opacity: isDragging ? 0.6 : undefined,
+    zIndex: isDragging ? 1 : undefined,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={clsx(styles.addonCard, !addon.enabled && styles.addonCardDisabled)}
+    >
+      <div className={styles.addonTopRow}>
+        <button
+          type="button"
+          className={styles.addonDragHandle}
+          title="Drag to reorder"
+          aria-label="Drag to reorder add-on"
+          tabIndex={-1}
+          onContextMenu={(e) => e.preventDefault()}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={13} />
+        </button>
+        <button
+          type="button"
+          className={clsx(styles.addonToggle, addon.enabled && styles.addonToggleActive)}
+          onClick={() => onToggle(addon.id)}
+          title={addon.enabled ? 'Disable add-on' : 'Enable add-on'}
+        >
+          <Check size={13} />
+        </button>
+        <input
+          type="text"
+          className={styles.addonLabelInput}
+          value={addon.label}
+          onChange={(e) => onLabelChange(addon.id, e.target.value)}
+          placeholder="Add-on name..."
+        />
+        <button
+          type="button"
+          className={styles.addonDeleteBtn}
+          onClick={() => onDelete(addon.id)}
+          title="Delete add-on"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+      <ExpandableTextarea
+        className={styles.addonContent}
+        value={addon.content}
+        onChange={(v) => onContentChange(addon.id, v)}
+        title={addon.label || 'Add-On Content'}
+        placeholder="Add-on content (appended to persona description when enabled)..."
+        rows={2}
+      />
+    </div>
   )
 }

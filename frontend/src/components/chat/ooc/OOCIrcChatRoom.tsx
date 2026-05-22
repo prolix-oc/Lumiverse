@@ -12,8 +12,16 @@ interface OOCIrcChatRoomProps {
 }
 
 /** Wrap @Handle mentions in styled spans */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
 function highlightMentions(text: string): string {
-  return text.replace(
+  return escapeHtml(text).replace(
     /@(\w+)/g,
     `<span class="${styles.ircMention}">@$1</span>`,
   )
@@ -57,7 +65,7 @@ export default function OOCIrcChatRoom({ entries }: OOCIrcChatRoomProps) {
               dangerouslySetInnerHTML={{
                 __html:
                   `<span class="${styles.ircTimestamp}">[${timestamps[i]}]</span>` +
-                  `<span class="${styles.ircNick}">&lt;${entry.name || 'Lumia'}&gt;</span>` +
+                  `<span class="${styles.ircNick}">&lt;${escapeHtml(entry.name || 'Lumia')}&gt;</span>` +
                   `<span class="${styles.ircText}">${highlightMentions(entry.content)}</span>`,
               }}
             />

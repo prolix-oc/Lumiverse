@@ -2,7 +2,7 @@ import { RingBuffer } from "../utils/ring-buffer";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { env } from "../env";
-import type { LogEntry, OperatorStatus, IPCMessage } from "../types/operator";
+import type { LogEntry, OperatorStatus, IPCMessage, OperatorIpcReason } from "../types/operator";
 import { getDatabasePath, getDb } from "../db/connection";
 import {
   collectDatabaseStats,
@@ -50,6 +50,7 @@ interface PendingRequest {
 
 class OperatorService {
   readonly ipcAvailable: boolean;
+  readonly ipcReason: OperatorIpcReason;
   private logBuffer: RingBuffer<LogEntry>;
   private pendingRequests = new Map<string, PendingRequest>();
   private readonly startedAt = Date.now();
@@ -62,9 +63,14 @@ class OperatorService {
   private readonly version = readVersion();
 
   constructor() {
-    this.ipcAvailable =
-      process.env.LUMIVERSE_RUNNER_IPC === "1" &&
-      typeof process.send === "function";
+    const hasRunnerEnv = process.env.LUMIVERSE_RUNNER_IPC === "1";
+    const hasProcessSend = typeof process.send === "function";
+    this.ipcAvailable = hasRunnerEnv && hasProcessSend;
+    this.ipcReason = this.ipcAvailable
+      ? "connected"
+      : hasRunnerEnv
+        ? "runner_env_without_process_send"
+        : "not_started_with_runner";
 
     this.logBuffer = new RingBuffer(150);
 
@@ -154,6 +160,7 @@ class OperatorService {
       commit: gitSync("rev-parse", "--short", "HEAD") || "unknown",
       remoteMode: env.trustAnyOrigin,
       ipcAvailable: this.ipcAvailable,
+      ipcReason: this.ipcReason,
     };
   }
 

@@ -50,7 +50,7 @@
   align-items: center;
   padding: 0 8px;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -64,7 +64,7 @@
   align-items: center;
   padding: 0 8px;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.3), transparent);
   opacity: 0;
@@ -129,7 +129,7 @@
   border-radius: 12px;
   background: var(--lumiverse-fill-deepest);
   color: var(--lumiverse-text);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   text-transform: capitalize;
   pointer-events: none;
@@ -167,7 +167,7 @@
 }
 
 .minimizedIcon {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   color: var(--lumiverse-primary);
 }
@@ -205,7 +205,7 @@
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
 }
 
@@ -259,7 +259,7 @@
   border-radius: 12px;
   background: var(--lumiverse-fill-deepest);
   color: var(--lumiverse-text);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   white-space: nowrap;
   pointer-events: none;
@@ -300,12 +300,12 @@
   }
 
   .labelBadge {
-    font-size: 9px;
+    font-size: calc(9px * var(--lumiverse-font-scale, 1));
     padding: 1px 8px;
   }
 
   .groupNameTag {
-    font-size: 9px;
+    font-size: calc(9px * var(--lumiverse-font-scale, 1));
     padding: 1px 8px;
   }
 }

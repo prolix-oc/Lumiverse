@@ -43,6 +43,43 @@ export const DEFAULT_WORLD_INFO_SETTINGS: WorldInfoSettings = {
   minPriority: 0,
 };
 
+function nonNegativeInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+export function normalizeWorldInfoSettings(
+  settingsInput?: Partial<WorldInfoSettings>,
+): WorldInfoSettings {
+  const input = settingsInput ?? {};
+  const defaultScanDepth = DEFAULT_WORLD_INFO_SETTINGS.globalScanDepth;
+  const rawScanDepth = input.globalScanDepth;
+  const globalScanDepth =
+    typeof rawScanDepth === "number" && Number.isFinite(rawScanDepth) && rawScanDepth > 0
+      ? Math.floor(rawScanDepth)
+      : defaultScanDepth;
+
+  return {
+    globalScanDepth,
+    maxRecursionPasses: nonNegativeInteger(
+      input.maxRecursionPasses,
+      DEFAULT_WORLD_INFO_SETTINGS.maxRecursionPasses,
+    ),
+    maxActivatedEntries: nonNegativeInteger(
+      input.maxActivatedEntries,
+      DEFAULT_WORLD_INFO_SETTINGS.maxActivatedEntries,
+    ),
+    maxTokenBudget: nonNegativeInteger(
+      input.maxTokenBudget,
+      DEFAULT_WORLD_INFO_SETTINGS.maxTokenBudget,
+    ),
+    minPriority: nonNegativeInteger(
+      input.minPriority,
+      DEFAULT_WORLD_INFO_SETTINGS.minPriority,
+    ),
+  };
+}
+
 export interface ActivationInput {
   entries: WorldBookEntry[];
   messages: Message[];
@@ -88,6 +125,77 @@ export interface FinalizeWorldInfoOptions {
   preserveOrder?: boolean;
 }
 
+// ─── Activation cache (short-TTL for rapid dry-run optimization) ───
+
+const WI_ACTIVATION_CACHE_TTL_MS = 30_000;
+const WI_ACTIVATION_CACHE_MAX_ENTRIES = 256;
+
+interface CachedActivationResult {
+  result: ActivationResult;
+  cachedAt: number;
+}
+
+const wiActivationCache = new Map<string, CachedActivationResult>();
+
+function pruneWiActivationCache(now = Date.now()): void {
+  for (const [key, cached] of wiActivationCache) {
+    if (now - cached.cachedAt > WI_ACTIVATION_CACHE_TTL_MS) {
+      wiActivationCache.delete(key);
+    }
+  }
+
+  while (wiActivationCache.size >= WI_ACTIVATION_CACHE_MAX_ENTRIES) {
+    const oldest = wiActivationCache.keys().next();
+    if (oldest.done) break;
+    wiActivationCache.delete(oldest.value);
+  }
+}
+
+function computeWiActivationCacheKey(input: ActivationInput): string {
+  const entries = input.entries;
+  const messages = input.messages;
+  const wiState = input.wiState;
+  const settings = input.settings ?? {};
+  const entrySig = entries
+    .map(
+      (e) =>
+        `${e.uid}:${e.disabled ? 1 : 0}:${e.constant ? 1 : 0}:${e.priority}:${e.key?.length ?? 0}:${e.keysecondary?.length ?? 0}:${e.content?.length ?? 0}`
+    )
+    .join("|");
+  const msgSig = messages.map((m) => `${m.id}:${m.content?.length ?? 0}`).join("|");
+  const stateSig = JSON.stringify(wiState);
+  const settingsSig = JSON.stringify(settings);
+  return `${entrySig}::${msgSig}::${stateSig}::${settingsSig}`;
+}
+
+function deepCloneWiState(state: WiState): WiState {
+  return JSON.parse(JSON.stringify(state));
+}
+
+function getCachedActivationResult(cacheKey: string): ActivationResult | null {
+  const cached = wiActivationCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > WI_ACTIVATION_CACHE_TTL_MS) {
+    wiActivationCache.delete(cacheKey);
+    return null;
+  }
+  return {
+    ...cached.result,
+    wiState: deepCloneWiState(cached.result.wiState),
+  };
+}
+
+function setCachedActivationResult(cacheKey: string, result: ActivationResult): void {
+  pruneWiActivationCache();
+  wiActivationCache.set(cacheKey, {
+    result: {
+      ...result,
+      wiState: deepCloneWiState(result.wiState),
+    },
+    cachedAt: Date.now(),
+  });
+}
+
 /**
  * Run full World Info activation pipeline.
  *
@@ -97,8 +205,12 @@ export interface FinalizeWorldInfoOptions {
  * budget enforcement → bucket by position.
  */
 export function activateWorldInfo(input: ActivationInput): ActivationResult {
+  const cacheKey = computeWiActivationCacheKey(input);
+  const cached = getCachedActivationResult(cacheKey);
+  if (cached) return cached;
+
   const { entries, messages, wiState } = input;
-  const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...input.settings };
+  const settings = normalizeWorldInfoSettings(input.settings);
 
   // 0. Cleanup wiState: Remove any keys that are no longer in the candidates list.
   // This prevents hidden sticky/active entries from persisting after a lorebook is removed.
@@ -150,7 +262,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     activatedUids.add(entry.uid);
   }
 
-  const maxPasses = Math.max(0, settings.maxRecursionPasses);
+  const maxPasses = settings.maxRecursionPasses;
   const recursionPassesUsed = runAhoCorasickPasses({
     conditional, constants, messages, settings, wiState,
     activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
@@ -198,7 +310,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     queryPreview: "",
   };
 
-  return { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
+  const result: ActivationResult = { cache: finalized.cache, activatedEntries: finalized.activatedEntries, wiState, stats };
+  setCachedActivationResult(cacheKey, result);
+  return result;
 }
 
 export function finalizeActivatedWorldInfoEntries(
@@ -206,21 +320,22 @@ export function finalizeActivatedWorldInfoEntries(
   settingsInput?: Partial<WorldInfoSettings>,
   options: FinalizeWorldInfoOptions = {},
 ): FinalizedWorldInfoEntries {
-  const settings: WorldInfoSettings = { ...DEFAULT_WORLD_INFO_SETTINGS, ...settingsInput };
+  const settings = normalizeWorldInfoSettings(settingsInput);
 
   const afterGroups = options.skipGroupLogic
     ? [...entries]
     : applyGroupLogic([...entries]);
+  const insertableEntries = afterGroups.filter(hasMeaningfulWorldInfoContent);
 
   if (!options.preserveOrder) {
-    afterGroups.sort((a, b) => {
+    insertableEntries.sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
       return a.order_value - b.order_value;
     });
   }
 
-  const activatedBeforeBudget = afterGroups.length;
-  const activatedEntries = enforceBudget(afterGroups, settings);
+  const activatedBeforeBudget = insertableEntries.length;
+  const activatedEntries = enforceBudget(insertableEntries, settings);
   const evictedByBudget = activatedBeforeBudget - activatedEntries.length;
 
   return {
@@ -326,6 +441,8 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
   const state: ScanState = makeScanState();
 
   // Pass 0 base: scan messages once per unique effective scan_depth.
+  // Pre-compute scan text per depth key and memoize so entries sharing the
+  // same effective depth don't rebuild the same concatenated string.
   const depthBuckets = new Map<string, Set<string>>();
   const depthKey = (d: number | null) => (d === null ? "all" : String(d));
   for (const e of conditional) {
@@ -336,21 +453,21 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
     if (!set) { set = new Set(); depthBuckets.set(k, set); }
     set.add(e.uid);
   }
+  const scanTextCache = new Map<string, string>();
   for (const [k, scope] of depthBuckets) {
     const d = k === "all" ? null : Number(k);
-    const text = buildScanText(messages, d, "");
+    let text = scanTextCache.get(k);
+    if (text === undefined) {
+      text = buildScanText(messages, d, "");
+      scanTextCache.set(k, text);
+    }
     matcher.scanChunk(text, state, scope);
   }
 
-  // Constants' content is visible to all entries on pass 0, unless the
-  // constant is marked "Prevent Further Recursion" — that flag means the
-  // entry's content should not be scanned as a source for activating others.
-  for (const c of constants) {
-    if (c.content && !c.prevent_recursion) matcher.scanChunk(c.content, state);
-  }
-
   let recursionPassesUsed = 0;
-  let newContent: string[] = [];
+  let newContent = constants
+    .filter((entry) => entry.content && !entry.prevent_recursion && !entry.vectorized)
+    .map((entry) => entry.content);
 
   for (let pass = 0; pass <= maxPasses; pass++) {
     if (pass > 0) {
@@ -369,6 +486,7 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
       // activated by a recursion pass (pass > 0). It can still activate on
       // pass 0 from the raw chat messages.
       if (pass > 0 && entry.exclude_recursion) continue;
+      if (pass > 0 && entry.vectorized) continue;
       if (entry.key.length === 0) continue;
 
       if (!matcher.shouldActivate(entry, state)) continue;
@@ -395,11 +513,11 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
       activatedThisPass = true;
       // "Prevent Further Recursion" — activated entry's content is not fed
       // back into the scanner for subsequent recursion passes.
-      if (entry.content && !entry.prevent_recursion) newContent.push(entry.content);
+      if (entry.content && !entry.prevent_recursion && !entry.vectorized) newContent.push(entry.content);
     }
 
-    if (!activatedThisPass) break;
-    recursionPassesUsed = pass + 1;
+    if (activatedThisPass && pass > 0) recursionPassesUsed = pass;
+    if (!activatedThisPass && (pass > 0 || newContent.length === 0 || pass >= maxPasses)) break;
   }
 
   return recursionPassesUsed;
@@ -425,17 +543,29 @@ function handleNoMatch(state: WiEntryState, entry: WorldBookEntry): void {
 }
 
 function buildScanText(messages: Message[], scanDepth: number | null, recursionText = ""): string {
-  const base = (() => {
-    if (scanDepth === null || scanDepth <= 0) {
-      return messages.map(m => m.content).join("\n");
-    }
-    const slice = messages.slice(-scanDepth);
-    return slice.map(m => m.content).join("\n");
-  })();
+  const base = scanDepth === null || scanDepth <= 0 || scanDepth >= messages.length
+    ? joinMessageContents(messages)
+    : joinMessageContents(messages.slice(-scanDepth));
 
   if (!recursionText) return base;
   if (!base) return recursionText;
   return `${base}\n${recursionText}`;
+}
+
+/**
+ * Join message content strings with newline separator. Avoids the intermediate
+ * array allocation that `messages.map(m => m.content).join("\n")` would create
+ * by building the result string directly in a single pass.
+ */
+function joinMessageContents(messages: Message[]): string {
+  if (messages.length === 0) return "";
+  if (messages.length === 1) return messages[0].content;
+  let result = messages[0].content;
+  for (let i = 1; i < messages.length; i++) {
+    result += "\n";
+    result += messages[i].content;
+  }
+  return result;
 }
 
 /**
@@ -512,43 +642,62 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
 
   for (const entry of entries) {
     const content = entry.content;
-    if (!content) continue;
+    if (!hasMeaningfulWorldInfoContent(entry)) continue;
     const role = normalizeRole(entry.role);
+    const entryLabel = getWorldInfoEntryLabel(entry);
 
     switch (entry.position) {
       case 0:
-        cache.before.push({ content, role });
+        cache.before.push({ content, role, entryLabel });
         break;
       case 1:
-        cache.after.push({ content, role });
+        cache.after.push({ content, role, entryLabel });
         break;
       case 2:
-        cache.anBefore.push({ content, role });
+        cache.anBefore.push({ content, role, entryLabel });
         break;
       case 3:
-        cache.anAfter.push({ content, role });
+        cache.anAfter.push({ content, role, entryLabel });
         break;
       case 4:
         cache.depth.push({
           content,
           depth: entry.depth,
           role,
+          entryLabel,
         });
         break;
       case 5:
-        cache.emBefore.push({ content, role });
+        cache.emBefore.push({ content, role, entryLabel });
         break;
       case 6:
-        cache.emAfter.push({ content, role });
+        cache.emAfter.push({ content, role, entryLabel });
         break;
       default:
         // Unknown position — treat as "before"
-        cache.before.push({ content, role });
+        cache.before.push({ content, role, entryLabel });
         break;
     }
   }
 
   return cache;
+}
+
+function hasMeaningfulWorldInfoContent(entry: Pick<WorldBookEntry, "content">): boolean {
+  return typeof entry.content === "string" && entry.content.trim().length > 0;
+}
+
+function getWorldInfoEntryLabel(entry: Pick<WorldBookEntry, "id" | "comment" | "key" | "keysecondary">): string {
+  const comment = entry.comment?.trim();
+  if (comment) return comment;
+
+  const primaryKeys = entry.key?.map((key) => key.trim()).filter(Boolean) ?? [];
+  if (primaryKeys.length > 0) return primaryKeys.join(", ");
+
+  const secondaryKeys = entry.keysecondary?.map((key) => key.trim()).filter(Boolean) ?? [];
+  if (secondaryKeys.length > 0) return secondaryKeys.join(", ");
+
+  return `(unnamed entry ${entry.id.slice(0, 8)})`;
 }
 
 function normalizeRole(role: string | null): "system" | "user" | "assistant" {

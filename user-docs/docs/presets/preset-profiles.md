@@ -1,6 +1,6 @@
 # Preset Profiles
 
-Preset profiles let you save and restore **block enabled/disabled states** — snapshots of which blocks are on and which are off. You can bind these snapshots to specific characters or chats so your block configuration switches automatically.
+Preset profiles let you save and restore a **preset selection plus its block enabled/disabled states**. You can bind these snapshots to specific characters or chats so Lumiverse switches to the right preset and block configuration automatically.
 
 ---
 
@@ -8,7 +8,7 @@ Preset profiles let you save and restore **block enabled/disabled states** — s
 
 Imagine you have a preset with 15 blocks. For one character, you want blocks 1-10 enabled. For another, you want blocks 3, 7, and 11-15 enabled. Without profiles, you'd have to manually toggle blocks every time you switch characters.
 
-Profiles automate this. Each profile remembers the on/off state of every block, and restores it when you switch context.
+Profiles automate this. Each profile remembers which preset to use and the on/off state of every block inside it, then restores both when you switch context.
 
 ---
 
@@ -16,15 +16,15 @@ Profiles automate this. Each profile remembers the on/off state of every block, 
 
 ### Default Profile
 
-A baseline snapshot that applies whenever no character or chat profile exists. Think of it as your "general purpose" block configuration.
+A baseline snapshot for one specific preset. Think of it as that preset's "general purpose" block configuration.
 
 ### Character Profile
 
-A snapshot bound to a specific character. When you open a chat with that character, these block states are restored automatically.
+A preset + block snapshot bound to a specific character. When you open a chat with that character, Lumiverse switches to that preset and restores its block states automatically.
 
 ### Chat Profile
 
-A snapshot bound to a specific chat. This is the most specific level — it overrides both the default and character profiles.
+A preset + block snapshot bound to a specific chat. This is the most specific level — it overrides both the default and character profiles.
 
 ---
 
@@ -37,7 +37,7 @@ When assembling a prompt, Lumiverse resolves the active profile in this order:
 3. **Default profile** — Otherwise, use the default profile
 4. **Raw preset states** — If no profiles exist at all, use the block states as they are in the preset
 
-Profiles only apply when their `preset_id` matches the preset being used. This prevents stale profiles from a different preset from interfering.
+Chat and character profiles are authoritative: they choose the preset first, then apply that profile's block states. Defaults are stored per preset, so the default profile only applies to the currently selected preset.
 
 ---
 
@@ -46,11 +46,11 @@ Profiles only apply when their `preset_id` matches the preset being used. This p
 1. Configure your blocks the way you want them (enable/disable as needed)
 2. Click **Capture Profile** (or the equivalent in the Loom Builder)
 3. Choose what to save as:
-    - **Default** — The baseline snapshot
+    - **Default** — The baseline snapshot for the current preset
     - **Character** — Bound to the current character
     - **Chat** — Bound to the current chat
 
-The snapshot records the current enabled/disabled state of every block.
+The snapshot records the current preset and the enabled/disabled state of every block.
 
 ---
 

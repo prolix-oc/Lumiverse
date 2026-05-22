@@ -46,16 +46,37 @@ import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
 import { openrouterRoutes } from "./routes/openrouter.routes";
 import { ttsConnectionsRoutes } from "./routes/tts-connections.routes";
+import { sttConnectionsRoutes } from "./routes/stt-connections.routes";
 import { ttsRoutes } from "./routes/tts.routes";
 import { sttRoutes } from "./routes/stt.routes";
 import { mcpServersRoutes } from "./routes/mcp-servers.routes";
 import { databankRoutes } from "./routes/databank.routes";
 import { globalAddonsRoutes } from "./routes/global-addons.routes";
+import { webSearchRoutes } from "./routes/web-search.routes";
+import { themeAssetsRoutes } from "./routes/theme-assets.routes";
+import { notificationSoundsRoutes } from "./routes/notification-sounds.routes";
+import { bootstrapRoutes } from "./routes/bootstrap.routes";
+import { userDataRoutes } from "./routes/user-data.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
+import {
+  isHostAllowed,
+  isOriginAllowed,
+} from "./services/trusted-hosts.service";
+import { authLockoutService } from "./services/auth-lockout.service";
+import { getClientIp } from "./utils/client-ip";
 
 const app = new Hono();
+const SIGN_IN_AUTH_PATTERN = /^\/api\/auth\/sign-in(?:\/|$)/;
+
+function applyLockoutHeaders(
+  response: Response,
+  retryAfterSeconds: number,
+): Response {
+  response.headers.set("Retry-After", String(retryAfterSeconds));
+  return response;
+}
 
 app.use("*", compress());
 
@@ -74,8 +95,34 @@ const PUBLIC_POST_PREFIXES = [
   "/api/v1/openrouter/oauth-landing",
 ];
 app.use("/api/*", async (c, next) => {
+  const clientId = getClientIp(c);
+  const lockout = authLockoutService.getActiveLockout(clientId);
+  if (lockout) {
+    authLockoutService.logBlockedRequest(clientId, lockout, {
+      method: c.req.method,
+      path: c.req.path,
+      origin: c.req.header("origin") || undefined,
+      host: c.req.header("host") || undefined,
+    });
+    return applyLockoutHeaders(
+      c.json(
+        authLockoutService.buildPayload(
+          lockout,
+          "Too many authentication failures from this client. Try again later.",
+        ),
+        429,
+      ),
+      Math.max(1, Math.ceil(lockout.retryAfterMs / 1000)),
+    );
+  }
+  return next();
+});
+
+app.use("/api/*", async (c, next) => {
   const path = c.req.path;
-  const isPublic = PUBLIC_POST_PREFIXES.some((p) => path === p || path.startsWith(p));
+  const isPublic = PUBLIC_POST_PREFIXES.some(
+    (p) => path === p || path.startsWith(p),
+  );
   if (!isPublic) return next();
   return bodyLimit({
     maxSize: 1 * 1024 * 1024,
@@ -83,9 +130,31 @@ app.use("/api/*", async (c, next) => {
   })(c, next);
 });
 
+// Routes that handle multi-megabyte uploads enforce their own per-file caps
+// (e.g. images.routes.ts: 50 MB/image, expressions.routes.ts: 100 MB/ZIP,
+// character-gallery.routes.ts: 50 MB/image × up to 100 files). Letting them
+// through here is what keeps the gallery /bulk endpoint from 413-ing on the
+// sum of all images even though every individual file is well under the cap.
+const GALLERY_PATH_RE = /^\/api\/v1\/characters\/[^/]+\/gallery(?:\/.*)?$/;
+const EXPRESSIONS_ZIP_PATH_RE =
+  /^\/api\/v1\/characters\/[^/]+\/expressions\/(?:groups\/[^/]+\/)?upload-zip$/;
 app.use("/api/*", async (c, next) => {
   const path = c.req.path;
-  if (path.startsWith("/api/v1/migrate/") || path === "/api/v1/characters/import-bulk" || path === "/api/v1/characters/import" || path.startsWith("/api/v1/world-books/import") || path === "/api/v1/images" || path.endsWith("/expressions/upload-zip") || path === "/api/v1/stt/transcribe") {
+  if (
+    path.startsWith("/api/v1/migrate/") ||
+    path === "/api/v1/characters/import-bulk" ||
+    path === "/api/v1/characters/import" ||
+    path.startsWith("/api/v1/world-books/import") ||
+    path === "/api/v1/images" ||
+    path === "/api/v1/theme-assets" ||
+    path === "/api/v1/notification-sounds/completion" ||
+    GALLERY_PATH_RE.test(path) ||
+    EXPRESSIONS_ZIP_PATH_RE.test(path) ||
+    path === "/api/v1/stt/transcribe" ||
+    path === "/api/v1/chats/import" ||
+    path === "/api/v1/chats/import-st" ||
+    path === "/api/v1/user-data/import"
+  ) {
     return next();
   }
   return bodyLimit({
@@ -94,25 +163,42 @@ app.use("/api/*", async (c, next) => {
   })(c, next);
 });
 
-// Host header validation — prevents DNS rebinding attacks
-const allowedHosts = new Set<string>();
-for (const origin of env.trustedOrigins) {
-  try {
-    allowedHosts.add(new URL(origin).host);
-  } catch { /* skip malformed */ }
-}
-// Always allow localhost variants
-allowedHosts.add(`localhost:${env.port}`);
-allowedHosts.add(`127.0.0.1:${env.port}`);
-allowedHosts.add(`[::1]:${env.port}`);
-
+// Host header validation — prevents DNS rebinding attacks.
+// The allowlist is sourced from trustedHostsService so it can be updated at
+// runtime via the Operator panel without a server restart.
 app.use("/api/*", async (c, next) => {
+  const clientId = getClientIp(c);
+  const origin = c.req.header("origin");
+  if (!env.trustAnyOrigin && origin && !isOriginAllowed(origin)) {
+    const result = authLockoutService.recordFailure(clientId, "origin", {
+      method: c.req.method,
+      path: c.req.path,
+      origin,
+      host: c.req.header("host") || undefined,
+    });
+    if (result.lockout) {
+      return applyLockoutHeaders(
+        c.json(
+          authLockoutService.buildPayload(
+            result.lockout,
+            "Too many invalid-origin requests. Try again later.",
+          ),
+          429,
+        ),
+        Math.max(1, Math.ceil(result.lockout.retryAfterMs / 1000)),
+      );
+    }
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  authLockoutService.recordSuccess(clientId, "origin");
+
   if (env.trustAnyOrigin) return next();
   const host = c.req.header("host");
   // Reject when Host is missing entirely — a raw HTTP/1.0 request or a crafted
   // TCP connection can omit the Host header, which would otherwise bypass the
   // DNS-rebinding guard.
-  if (!host || !allowedHosts.has(host)) {
+  if (!isHostAllowed(host)) {
     return c.json({ error: "Forbidden" }, 403);
   }
   return next();
@@ -123,10 +209,10 @@ app.use(
   cors({
     origin: (origin) => {
       if (env.trustAnyOrigin) return origin;
-      return env.trustedOriginsSet.has(origin) ? origin : '';
+      return isOriginAllowed(origin) ? origin : "";
     },
     credentials: true,
-  })
+  }),
 );
 
 // Rate-limit credential-touching auth endpoints to throttle scrypt-driven DoS
@@ -145,7 +231,8 @@ const authGeneralLimiter = rateLimit({
   windowMs: 60 * 1000, // 60 requests per minute per IP for non-credential auth ops
 });
 
-const SENSITIVE_AUTH_PATTERN = /\/api\/auth\/(sign-in|sign-up|forget-password|reset-password|change-password|update-password)/;
+const SENSITIVE_AUTH_PATTERN =
+  /\/api\/auth\/(sign-in|sign-up|forget-password|reset-password|change-password|update-password)/;
 
 app.use("/api/auth/*", async (c, next) => {
   if (SENSITIVE_AUTH_PATTERN.test(c.req.path)) {
@@ -154,15 +241,68 @@ app.use("/api/auth/*", async (c, next) => {
   return authGeneralLimiter(c, next);
 });
 
+app.use("/api/auth/*", async (c, next) => {
+  await next();
+
+  if (c.req.method !== "POST" || !SIGN_IN_AUTH_PATTERN.test(c.req.path)) {
+    return;
+  }
+
+  const clientId = getClientIp(c);
+  if (c.res.status >= 200 && c.res.status < 300) {
+    authLockoutService.recordSuccess(clientId, ["login", "unauthorized"]);
+    return;
+  }
+
+  if (c.res.status !== 401) {
+    return;
+  }
+
+  const result = authLockoutService.recordFailure(clientId, "login", {
+    method: c.req.method,
+    path: c.req.path,
+    origin: c.req.header("origin") || undefined,
+    host: c.req.header("host") || undefined,
+  });
+  if (!result.lockout) return;
+
+  c.res = applyLockoutHeaders(
+    c.json(
+      authLockoutService.buildPayload(
+        result.lockout,
+        "Too many failed sign-in attempts. Try again later.",
+      ),
+      429,
+    ),
+    Math.max(1, Math.ceil(result.lockout.retryAfterMs / 1000)),
+  );
+});
+
+// Global security headers — applied to every response.
+// frame-src / child-src are enforced via the frontend HTML meta tag as well;
+// these headers complement it by preventing the app from being embedded in
+// external frames and hardening the overall document boundary.
+app.use("*", async (c, next) => {
+  await next();
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
+});
+
 // BetterAuth handler — BEFORE auth middleware
 // Rewrite the request URL to use the actual Host header so BetterAuth
 // constructs the correct redirect URLs and cookie domains when accessed via
-// a LAN IP instead of localhost
+// a LAN IP instead of localhost. Respect X-Forwarded-Proto/Host from reverse
+// proxies (Cloudflare, nginx, HuggingFace Spaces) so BetterAuth generates
+// https:// callback URLs when served behind TLS termination.
 app.on(["POST", "GET"], "/api/auth/*", (c) => {
-  const host = c.req.header("host");
+  if (c.req.path === "/api/auth/sign-up/email") {
+    return c.json({ error: "Not found" }, 404);
+  }
+  const host = c.req.header("x-forwarded-host") || c.req.header("host");
+  const proto = c.req.header("x-forwarded-proto") || "http";
   if (host) {
     const url = new URL(c.req.url);
-    const rewritten = new URL(url.pathname + url.search, `http://${host}`);
+    const rewritten = new URL(url.pathname + url.search, `${proto}://${host}`);
     return auth.handler(new Request(rewritten.toString(), c.req.raw));
   }
   return auth.handler(c.req.raw);
@@ -179,15 +319,30 @@ app.route("/api/v1/lumihub", lumihubCallbackRoute);
 // to the opener window via postMessage so it can call our exchange endpoint.
 app.get("/api/v1/openrouter/oauth-landing", async (c) => {
   const rawCode = c.req.query("code") || "";
+  const rawOpenerOrigin = c.req.query("opener_origin") || "";
   // Whitelist the OAuth code character set. OpenRouter codes are URL-safe
   // base64-style strings; rejecting anything outside that set blocks the
   // </script> XSS payload entirely. JSON.stringify alone does NOT HTML-encode
   // < or >, so a value like </script><script>alert(1)</script> would otherwise
   // break out of the inline script context.
   const code = /^[A-Za-z0-9._~+/=-]{1,512}$/.test(rawCode) ? rawCode : "";
+  let openerOrigin = "";
+  try {
+    const parsed = new URL(rawOpenerOrigin);
+    if (parsed.origin === rawOpenerOrigin && isOriginAllowed(parsed.origin)) {
+      openerOrigin = parsed.origin;
+    }
+  } catch {
+    openerOrigin = "";
+  }
   // Pass the code to the inline script via a data attribute. dataset reads it
   // from the DOM as a plain string with no HTML/JS interpretation.
   const codeAttr = code
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const openerOriginAttr = openerOrigin
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
@@ -196,13 +351,14 @@ app.get("/api/v1/openrouter/oauth-landing", async (c) => {
 <html><head><title>OpenRouter Authorization</title>
 <style>body{background:#1c1826;color:rgba(255,255,255,.8);font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:14px}</style></head>
 <body>
-<div id="s" data-code="${codeAttr}">Completing authorization...</div>
+<div id="s" data-code="${codeAttr}" data-opener-origin="${openerOriginAttr}">Completing authorization...</div>
 <script>
 var el = document.getElementById('s');
 var code = el.dataset.code || '';
+var targetOrigin = el.dataset.openerOrigin || window.location.origin;
 if (code && window.opener) {
-  // Restrict postMessage to this origin so only the Lumiverse opener receives the code
-  window.opener.postMessage({ type: 'openrouter_oauth_code', code: code }, window.location.origin);
+  // Restrict postMessage to the known Lumiverse opener origin.
+  window.opener.postMessage({ type: 'openrouter_oauth_code', code: code }, targetOrigin);
   el.textContent = 'Authorized! Closing...';
   setTimeout(function(){ window.close(); }, 500);
 } else if (!code) {
@@ -241,6 +397,8 @@ app.route("/api/v1/connections", connectionsRoutes);
 app.route("/api/v1/openrouter", openrouterRoutes);
 app.route("/api/v1/files", filesRoutes);
 app.route("/api/v1/images", imagesRoutes);
+app.route("/api/v1/theme-assets", themeAssetsRoutes);
+app.route("/api/v1/notification-sounds", notificationSoundsRoutes);
 app.route("/api/v1/generate", generateRoutes);
 app.route("/api/v1/providers", providersRoutes);
 app.route("/api/v1/macros", macrosRoutes);
@@ -268,11 +426,15 @@ app.route("/api/v1/lumihub", lumihubRoutes);
 app.route("/api/v1/memory-cortex", memoryCortexRoutes);
 app.route("/api/v1/operator", operatorRoutes);
 app.route("/api/v1/tts-connections", ttsConnectionsRoutes);
+app.route("/api/v1/stt-connections", sttConnectionsRoutes);
 app.route("/api/v1/tts", ttsRoutes);
 app.route("/api/v1/stt", sttRoutes);
 app.route("/api/v1/mcp-servers", mcpServersRoutes);
 app.route("/api/v1/databanks", databankRoutes);
+app.route("/api/v1/web-search", webSearchRoutes);
 app.route("/api/v1/global-addons", globalAddonsRoutes);
+app.route("/api/v1/bootstrap", bootstrapRoutes);
+app.route("/api/v1/user-data", userDataRoutes);
 
 // Issue single-use WS tickets (behind auth middleware)
 app.post("/api/v1/ws-ticket", (c) => {
@@ -305,10 +467,7 @@ if (env.frontendDir) {
     }
   });
 
-  app.use(
-    "*",
-    serveStatic({ root: env.frontendDir })
-  );
+  app.use("*", serveStatic({ root: env.frontendDir }));
 
   // SPA fallback: serve index.html for any non-API route not matched above
   app.use("*", serveStatic({ root: env.frontendDir, path: "index.html" }));
@@ -317,7 +476,21 @@ if (env.frontendDir) {
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 app.onError((err, c) => {
-  console.error(err);
+  const path = `${c.req.method} ${c.req.path}`;
+  // DOMException has an empty stack, so a raw console.error(err) prints a
+  // contextless object dump. Demote client-disconnect aborts to a warn line
+  // tagged with the route so they're traceable, and surface real errors with
+  // a stack when one is available.
+  if (err instanceof DOMException && err.name === "AbortError") {
+    console.warn(`[abort] ${path}: ${err.message}`);
+    // 499 ("Client Closed Request") is an nginx convention and outside Hono's
+    // ContentfulStatusCode union — build the Response directly to preserve it.
+    return new Response(JSON.stringify({ error: "Client disconnected" }), {
+      status: 499,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  console.error(`[onError] ${path}:`, err instanceof Error ? err.stack || err.message : err);
   return c.json({ error: "Internal server error" }, 500);
 });
 

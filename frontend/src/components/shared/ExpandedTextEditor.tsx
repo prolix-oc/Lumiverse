@@ -1,10 +1,22 @@
-import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Minimize2, Maximize2, Hash, Search } from 'lucide-react'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
 import s from './ExpandedTextEditor.module.css'
+
+type TextareaSelection = {
+  start: number
+  end: number
+  direction: HTMLTextAreaElement['selectionDirection']
+}
+
+function clampSelection(selection: TextareaSelection, valueLength: number): TextareaSelection {
+  const start = Math.min(selection.start, valueLength)
+  const end = Math.min(selection.end, valueLength)
+  return { start, end, direction: selection.direction }
+}
 
 // ============================================================================
 // SYNTAX HIGHLIGHTING
@@ -163,6 +175,12 @@ interface ExpandedTextEditorProps {
   macros?: MacroGroup[]
   onRefreshMacros?: () => void
   inline?: boolean
+  /**
+   * Render the syntax-highlight overlay (markdown + XML) without a macro
+   * catalog. Also hides the macro toggle. Use for free-text content that
+   * isn't a prompt template — e.g. databank document bodies.
+   */
+  markdownOnly?: boolean
 }
 
 export default function ExpandedTextEditor({
@@ -175,17 +193,19 @@ export default function ExpandedTextEditor({
   macros,
   onRefreshMacros,
   inline,
+  markdownOnly,
 }: ExpandedTextEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
   const overlayMouseDownRef = useRef<EventTarget | null>(null)
+  const pendingSelectionRef = useRef<TextareaSelection | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
   const [showMacros, setShowMacros] = useState(false)
   const [macroSearch, setMacroSearch] = useState('')
   const [selfLoadedMacros, setSelfLoadedMacros] = useState<MacroGroup[] | null>(
-    () => macros ? null : getAvailableMacros(),
+    () => (macros || markdownOnly) ? null : getAvailableMacros(),
   )
 
   // Use caller-provided macros, or eagerly-loaded local catalog
@@ -221,6 +241,18 @@ export default function ExpandedTextEditor({
     })).filter(g => g.macros.length > 0)
   }, [resolvedMacros, macroSearch])
 
+  useLayoutEffect(() => {
+    const selection = pendingSelectionRef.current
+    const ta = textareaRef.current
+    if (!selection) return
+
+    pendingSelectionRef.current = null
+    if (!ta || document.activeElement !== ta) return
+
+    const nextSelection = clampSelection(selection, value.length)
+    ta.setSelectionRange(nextSelection.start, nextSelection.end, nextSelection.direction)
+  }, [value])
+
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -254,6 +286,15 @@ export default function ExpandedTextEditor({
     }
   }, [])
 
+  const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    pendingSelectionRef.current = {
+      start: e.currentTarget.selectionStart,
+      end: e.currentTarget.selectionEnd,
+      direction: e.currentTarget.selectionDirection,
+    }
+    onChange(e.currentTarget.value)
+  }, [onChange])
+
   const insertMacro = useCallback((syntax: string) => {
     const ta = textareaRef.current
     if (!ta) { onChange(value + syntax); return }
@@ -269,9 +310,10 @@ export default function ExpandedTextEditor({
   }, [value, onChange])
 
   const hasMacros = resolvedMacros.length > 0
+  const showHighlight = hasMacros || !!markdownOnly
   const highlightNodes = useMemo(
-    () => hasMacros ? highlightSyntax(value) : null,
-    [value, hasMacros],
+    () => showHighlight ? highlightSyntax(value) : null,
+    [value, showHighlight],
   )
 
   const editorContent = (
@@ -279,13 +321,15 @@ export default function ExpandedTextEditor({
       <div className={s.header}>
         <div className={s.headerContent}>
           <h3 className={s.title}>{title}</h3>
-          <button
-            className={s.macroToggle}
-            onClick={() => { if (!showMacros) loadMacros(); setShowMacros(!showMacros) }}
-            type="button"
-          >
-            <Hash size={12} /> {showMacros ? 'Hide Macros' : 'Insert Macro'}
-          </button>
+          {!markdownOnly && (
+            <button
+              className={s.macroToggle}
+              onClick={() => { if (!showMacros) loadMacros(); setShowMacros(!showMacros) }}
+              type="button"
+            >
+              <Hash size={12} /> {showMacros ? 'Hide Macros' : 'Insert Macro'}
+            </button>
+          )}
         </div>
         <button className={s.closeBtn} onClick={onClose} title="Collapse editor" type="button">
           <Minimize2 size={18} />
@@ -322,7 +366,7 @@ export default function ExpandedTextEditor({
           </div>
         )}
         <div className={s.editorArea}>
-          {hasMacros ? (
+          {showHighlight ? (
             <div className={s.highlightContainer}>
               <div ref={highlightRef} className={s.highlightBackdrop} aria-hidden="true">
                 <pre className={s.highlightPre}>{highlightNodes}{'\n'}</pre>
@@ -331,7 +375,7 @@ export default function ExpandedTextEditor({
                 ref={textareaRef}
                 className={s.textareaHighlighted}
                 value={value}
-                onChange={e => onChange(e.target.value)}
+                onChange={handleTextareaChange}
                 onScroll={handleScroll}
                 placeholder={placeholder}
                 spellCheck={false}
@@ -342,7 +386,7 @@ export default function ExpandedTextEditor({
               ref={textareaRef}
               className={s.textarea}
               value={value}
-              onChange={e => onChange(e.target.value)}
+              onChange={handleTextareaChange}
               placeholder={placeholder}
             />
           )}
@@ -383,6 +427,7 @@ export function ExpandableTextarea({
   spellCheck,
   macros,
   onRefreshMacros,
+  markdownOnly,
 }: {
   value: string
   onChange: (value: string) => void
@@ -393,16 +438,41 @@ export function ExpandableTextarea({
   spellCheck?: boolean
   macros?: MacroGroup[]
   onRefreshMacros?: () => void
+  /** Forwarded to the full-screen editor. See ExpandedTextEditor.markdownOnly. */
+  markdownOnly?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const cursorPosRef = useRef<number | null>(null)
+  const pendingSelectionRef = useRef<TextareaSelection | null>(null)
+
+  useLayoutEffect(() => {
+    const selection = pendingSelectionRef.current
+    const ta = textareaRef.current
+    if (!selection) return
+
+    pendingSelectionRef.current = null
+    if (!ta || document.activeElement !== ta) return
+
+    const nextSelection = clampSelection(selection, value.length)
+    ta.setSelectionRange(nextSelection.start, nextSelection.end, nextSelection.direction)
+  }, [value])
 
   // Track cursor position continuously so it's correct even after
   // the expand button steals focus via mousedown before click fires
   const handleSelect = useCallback(() => {
     cursorPosRef.current = textareaRef.current?.selectionStart ?? cursorPosRef.current
   }, [])
+
+  const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    pendingSelectionRef.current = {
+      start: e.currentTarget.selectionStart,
+      end: e.currentTarget.selectionEnd,
+      direction: e.currentTarget.selectionDirection,
+    }
+    cursorPosRef.current = e.currentTarget.selectionStart
+    onChange(e.currentTarget.value)
+  }, [onChange])
 
   const handleExpand = () => {
     setExpanded(true)
@@ -414,7 +484,7 @@ export function ExpandableTextarea({
         ref={textareaRef}
         className={className}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={handleTextareaChange}
         onSelect={handleSelect}
         placeholder={placeholder}
         rows={rows}
@@ -438,6 +508,7 @@ export function ExpandableTextarea({
           initialCursorPos={cursorPosRef.current}
           macros={macros}
           onRefreshMacros={onRefreshMacros}
+          markdownOnly={markdownOnly}
         />
       )}
     </div>

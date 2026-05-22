@@ -8,6 +8,19 @@ interface UseSwipeGestureOptions {
   velocityThreshold?: number // px/ms, default 0.3
 }
 
+// True if there's a non-collapsed selection whose range sits inside `el`.
+// Used to bail out of a swipe when the user is actually extending a native
+// text selection (long-press-then-drag) on touch.
+function hasActiveSelectionWithin(el: HTMLElement): boolean {
+  const sel = typeof window !== 'undefined' ? window.getSelection() : null
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false
+  for (let i = 0; i < sel.rangeCount; i++) {
+    const range = sel.getRangeAt(i)
+    if (el.contains(range.commonAncestorContainer)) return true
+  }
+  return false
+}
+
 /**
  * Touch gesture hook for horizontal swipe detection.
  * Attaches native event listeners to the ref'd element with { passive: false }
@@ -16,6 +29,10 @@ interface UseSwipeGestureOptions {
  * Uses a 10px dead zone + axis-lock pattern:
  * - If vertical wins at the lock point, gesture is abandoned (scroll proceeds)
  * - If horizontal wins, preventDefault claims the gesture
+ *
+ * Additionally: if a native text selection is active inside the element at
+ * touchstart, or becomes active during the touch (e.g. iOS long-press → drag
+ * to extend), the gesture is abandoned so the OS keeps the selection drag.
  */
 export default function useSwipeGesture(
   ref: React.RefObject<HTMLElement | null>,
@@ -42,6 +59,14 @@ export default function useSwipeGesture(
       if (!optionsRef.current.enabled) return
       if (e.touches.length !== 1) return
 
+      // If a native text selection inside this element is already active,
+      // the touch is most likely the user extending that selection — don't
+      // arm the swipe at all.
+      if (hasActiveSelectionWithin(el)) {
+        locked = 'vertical'
+        return
+      }
+
       const touch = e.touches[0]
       startX = touch.clientX
       startY = touch.clientY
@@ -53,6 +78,14 @@ export default function useSwipeGesture(
     const onTouchMove = (e: TouchEvent) => {
       if (!optionsRef.current.enabled) return
       if (e.touches.length !== 1) return
+
+      // If a selection became active during this touch (long-press finished
+      // mid-drag and the OS started selection-extension), abandon the swipe
+      // so we don't preventDefault the OS's selection move events.
+      if (hasActiveSelectionWithin(el)) {
+        locked = 'vertical'
+        return
+      }
 
       const touch = e.touches[0]
       const deltaX = touch.clientX - startX

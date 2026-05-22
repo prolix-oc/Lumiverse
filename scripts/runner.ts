@@ -47,6 +47,7 @@ function pickRandomGoodbyeLine(lines: string[]): string {
 // ─── Parse arguments ────────────────────────────────────────────────────────
 
 const isDev = process.argv.includes("--dev");
+const autoOpen = process.argv.includes("--auto-open") || process.argv.includes("-a");
 setDevMode(isDev);
 
 // ─── Color helpers ──────────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ function setupKeyboard(): void {
 // ─── Server lifecycle ───────────────────────────────────────────────────────
 
 let shuttingDown = false;
+let openedAtStartup = false;
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
@@ -163,6 +165,13 @@ setStateChangeHandler((state: ServerState) => {
   switch (state) {
     case "running":
       console.log(`${C.dim}[${ts}]${C.reset} ${C.green}Server is running.${C.reset}`);
+      if (autoOpen && !openedAtStartup) {
+        openedAtStartup = true;
+        const config = readEnvConfig();
+        const url = `http://localhost:${config.port}`;
+        console.log(`${C.dim}[runner]${C.reset} Opening ${url}...`);
+        openBrowser(url);
+      }
       break;
     case "crashed":
       console.log(`${C.dim}[${ts}]${C.reset} ${C.red}Server crashed. Waiting for operator action or restart.${C.reset}`);

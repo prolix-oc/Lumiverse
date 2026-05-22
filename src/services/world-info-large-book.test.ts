@@ -20,11 +20,17 @@ import path from "node:path";
 import os from "node:os";
 
 import type { WorldBookEntry } from "../types/world-book";
+import type { Message } from "../types/message";
 import {
   mergeActivatedWorldInfoEntries,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
-import type { WorldInfoSettings } from "./world-info-activation.service";
+import {
+  activateWorldInfo,
+  finalizeActivatedWorldInfoEntries,
+  normalizeWorldInfoSettings,
+  type WorldInfoSettings,
+} from "./world-info-activation.service";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -43,6 +49,7 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
     id: overrides.id ?? crypto.randomUUID(),
     world_book_id: "book-a",
     uid: overrides.uid ?? crypto.randomUUID(),
+    outlet_name: null,
     key: [],
     keysecondary: [],
     content: filler,
@@ -83,6 +90,25 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
   };
 }
 
+function makeMessage(content: string): Message {
+  return {
+    id: crypto.randomUUID(),
+    chat_id: "chat-a",
+    index_in_chat: 0,
+    is_user: true,
+    name: "User",
+    content,
+    send_date: 0,
+    swipe_id: 0,
+    swipes: [content],
+    swipe_dates: [0],
+    extra: {},
+    parent_message_id: null,
+    branch_id: null,
+    created_at: 0,
+  };
+}
+
 /** Wrap a WorldBookEntry as a VectorActivatedEntry with realistic scoring. */
 function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActivatedEntry {
   return {
@@ -111,6 +137,150 @@ function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActiv
     searchTextPreview: entry.content.slice(0, 120),
   };
 }
+
+describe("finalizeActivatedWorldInfoEntries", () => {
+  test("drops whitespace-only world info entries from activation and cache", () => {
+    const result = finalizeActivatedWorldInfoEntries([
+      makeEntry({ id: "blank", uid: "blank", content: "   \n\t  " }),
+      makeEntry({ id: "real", uid: "real", content: "Useful lore" }),
+    ]);
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["real"]);
+    expect(result.cache.before).toEqual([{ role: "system", content: "Useful lore", entryLabel: "(unnamed entry real)" }]);
+  });
+});
+
+describe("activateWorldInfo recursion settings", () => {
+  test("maxRecursionPasses=0 only performs the base keyword scan", () => {
+    const first = makeEntry({
+      key: ["alpha"],
+      content: "recursive beta content",
+      prevent_recursion: false,
+      vectorized: false,
+    });
+    const second = makeEntry({ key: ["beta"], content: "second entry", vectorized: false });
+
+    const result = activateWorldInfo({
+      entries: [first, second],
+      messages: [makeMessage("alpha")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { maxRecursionPasses: 0 },
+    });
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([first.id]);
+    expect(result.stats.recursionPassesUsed).toBe(0);
+  });
+
+  test("recursive content consumes one configured recursion pass", () => {
+    const first = makeEntry({
+      key: ["alpha"],
+      content: "recursive beta content",
+      prevent_recursion: false,
+      vectorized: false,
+    });
+    const second = makeEntry({ key: ["beta"], content: "second entry", vectorized: false });
+
+    const result = activateWorldInfo({
+      entries: [first, second],
+      messages: [makeMessage("alpha")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { maxRecursionPasses: 1 },
+    });
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([first.id, second.id]);
+    expect(result.stats.recursionPassesUsed).toBe(1);
+  });
+
+  test("vectorized entries do not feed recursive keyword chaining", () => {
+    const first = makeEntry({
+      key: ["alpha"],
+      content: "recursive beta content",
+      prevent_recursion: false,
+      vectorized: true,
+      vector_index_status: "indexed",
+    });
+    const second = makeEntry({ key: ["beta"], content: "second entry", vectorized: false });
+
+    const result = activateWorldInfo({
+      entries: [first, second],
+      messages: [makeMessage("alpha")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { maxRecursionPasses: 1 },
+    });
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([first.id]);
+    expect(result.stats.recursionPassesUsed).toBe(0);
+  });
+
+  test("vectorized entries are not activated by recursive keyword chaining", () => {
+    const first = makeEntry({
+      key: ["alpha"],
+      content: "recursive beta content",
+      prevent_recursion: false,
+      vectorized: false,
+    });
+    const second = makeEntry({
+      key: ["beta"],
+      content: "second entry",
+      vectorized: true,
+      vector_index_status: "indexed",
+    });
+
+    const result = activateWorldInfo({
+      entries: [first, second],
+      messages: [makeMessage("alpha")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { maxRecursionPasses: 1 },
+    });
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([first.id]);
+    expect(result.stats.recursionPassesUsed).toBe(0);
+  });
+
+  test("constant content does not recursively activate entries when recursion is disabled", () => {
+    const constant = makeEntry({
+      key: [],
+      constant: true,
+      content: "constant beta content",
+      prevent_recursion: false,
+      vectorized: false,
+    });
+    const conditional = makeEntry({ key: ["beta"], content: "conditional entry", vectorized: false });
+
+    const result = activateWorldInfo({
+      entries: [constant, conditional],
+      messages: [makeMessage("no matching keywords")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { maxRecursionPasses: 0 },
+    });
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([constant.id]);
+    expect(result.stats.recursionPassesUsed).toBe(0);
+  });
+});
+
+describe("normalizeWorldInfoSettings", () => {
+  test("normalizes invalid and zero-valued world info settings", () => {
+    expect(normalizeWorldInfoSettings({
+      globalScanDepth: 0,
+      maxRecursionPasses: -1,
+      maxActivatedEntries: -5,
+      maxTokenBudget: -100,
+      minPriority: -2,
+    })).toEqual({
+      globalScanDepth: null,
+      maxRecursionPasses: 0,
+      maxActivatedEntries: 0,
+      maxTokenBudget: 0,
+      minPriority: 0,
+    });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Scenario 1: the "as-imported" shape — keys=[], vectorized=true, no constants.

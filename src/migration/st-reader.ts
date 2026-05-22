@@ -78,11 +78,32 @@ export interface ChatPayload {
   messages: ChatMessage[];
 }
 
+export interface ParsedStJsonlChat {
+  name: string;
+  createdAt?: number;
+  userName?: string;
+  messages: ChatMessage[];
+  speakerNameFallbackCount?: number;
+}
+
 export interface GroupDefinition {
   name: string;
   members: string[]; // PNG filenames
   chatIds: string[];
   createDate?: string;
+}
+
+export interface GroupChatFileEntry {
+  id: string;
+}
+
+export interface ReadChatFileOptions {
+  stDataDir: string;
+  charDirName: string;
+  chatFileName: string;
+  personaNameToId: Map<string, string>;
+  filenameToId?: Map<string, string>;
+  fs?: FileSystem;
 }
 
 // ─── Default filesystem singleton ──────────────────────────────────────────
@@ -209,6 +230,125 @@ export function parseMessageDate(msg: any): number {
   }
 
   return Math.floor(Date.now() / 1000);
+}
+
+export function resolveOriginalAvatarToCharacterId(
+  originalAvatar: unknown,
+  filenameToId?: Map<string, string>,
+): string | undefined {
+  if (!filenameToId || filenameToId.size === 0) return undefined;
+  if (typeof originalAvatar !== "string" || originalAvatar.length === 0) return undefined;
+  const stem = originalAvatar.toLowerCase().endsWith(".png")
+    ? originalAvatar.slice(0, -4)
+    : originalAvatar;
+  return filenameToId.get(stem) || filenameToId.get(stem.toLowerCase());
+}
+
+function parseStHeader(firstLine: string): {
+  hasHeader: boolean;
+  name?: string;
+  createdAt?: number;
+  userName?: string;
+} {
+  try {
+    const meta = JSON.parse(firstLine);
+    if (meta.chat_metadata || meta.user_name !== undefined) {
+      let createdAt: number | undefined;
+      if (meta.create_date) {
+        const ts = parseDateString(meta.create_date);
+        if (ts) createdAt = ts;
+      }
+      return {
+        hasHeader: true,
+        name: meta.chat_metadata?.name,
+        createdAt,
+        userName: meta.user_name,
+      };
+    }
+  } catch { /* ignore */ }
+  return { hasHeader: false };
+}
+
+export function parseStChatJsonl(raw: string, fallbackName: string): ParsedStJsonlChat | null {
+  const lines = raw.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return null;
+
+  const header = parseStHeader(lines[0]);
+  const messages: ChatMessage[] = [];
+
+  for (let i = header.hasHeader ? 1 : 0; i < lines.length; i++) {
+    try {
+      const msg = JSON.parse(lines[i]);
+      const msgSwipes: string[] | undefined = Array.isArray(msg.swipes) ? msg.swipes : undefined;
+      const swipeId: number | undefined = typeof msg.swipe_id === "number" ? msg.swipe_id : undefined;
+      const content =
+        msg.mes ||
+        msg.content ||
+        (msgSwipes && swipeId !== undefined ? msgSwipes[swipeId] : undefined) ||
+        (msgSwipes ? msgSwipes[0] : undefined) ||
+        "";
+
+      if (!content && !msg.name) continue;
+
+      const extra = {
+        ...(msg.extra || {}),
+        ...(typeof msg.original_avatar === "string" && msg.original_avatar
+          ? { original_avatar: msg.original_avatar }
+          : {}),
+      };
+
+      messages.push({
+        is_user: !!msg.is_user,
+        name: msg.name || (msg.is_user ? "User" : "Character"),
+        content,
+        send_date: parseMessageDate(msg),
+        swipes: msgSwipes,
+        swipe_id: swipeId,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+      });
+    } catch { /* skip unparseable lines */ }
+  }
+
+  if (messages.length === 0) return null;
+  return {
+    name: header.name || fallbackName,
+    createdAt: header.createdAt,
+    userName: header.userName,
+    messages,
+  };
+}
+
+export function parseStGroupChatJsonl(
+  raw: string,
+  fallbackName: string,
+  personaNameToId: Map<string, string>,
+  filenameToId?: Map<string, string>,
+): ParsedStJsonlChat | null {
+  const parsed = parseStChatJsonl(raw, fallbackName);
+  if (!parsed) return null;
+
+  let speakerNameFallbackCount = 0;
+
+  const messages = parsed.messages.map((message) => {
+    let extra = message.extra || undefined;
+
+    if (message.is_user && personaNameToId.size > 0) {
+      const personaId = personaNameToId.get(message.name) || (parsed.userName ? personaNameToId.get(parsed.userName) : undefined);
+      if (personaId) extra = { ...(extra || {}), persona_id: personaId };
+    }
+
+    if (!message.is_user) {
+      const avatarCharId = resolveOriginalAvatarToCharacterId(extra?.original_avatar, filenameToId);
+      const nameCharId = resolveOriginalAvatarToCharacterId(message.name, filenameToId);
+      const charId = avatarCharId || nameCharId;
+      if (!avatarCharId && nameCharId) speakerNameFallbackCount++;
+      if (charId) extra = { ...(extra || {}), character_id: charId };
+    }
+
+    return extra ? { ...message, extra } : message;
+  });
+
+  return { ...parsed, messages, speakerNameFallbackCount };
 }
 
 // ─── Directory scanners ─────────────────────────────────────────────────────
@@ -384,6 +524,7 @@ export async function readChatsForCharacter(
   stDataDir: string,
   charDirName: string,
   personaNameToId: Map<string, string>,
+  filenameToId?: Map<string, string>,
   logger?: MigrationLogger,
   fs: FileSystem = defaultFs,
 ): Promise<ChatPayload[]> {
@@ -399,67 +540,14 @@ export async function readChatsForCharacter(
   for (const chatFileEntry of chatFiles) {
     const filePath = fs.join(chatsDir, chatFileEntry.name);
     try {
-      const raw = await fs.readText(filePath);
-      const lines = raw.split("\n").filter((l) => l.trim());
-      if (lines.length === 0) continue;
-
-      let chatName = fs.basename(chatFileEntry.name, ".jsonl");
-      let chatCreatedAt: number | undefined;
-      let chatUserName: string | undefined;
-
-      try {
-        const meta = JSON.parse(lines[0]);
-        if (meta.chat_metadata || meta.user_name !== undefined) {
-          chatName = meta.chat_metadata?.name || chatName;
-          chatUserName = meta.user_name;
-          if (meta.create_date) {
-            const ts = parseDateString(meta.create_date);
-            if (ts) chatCreatedAt = ts;
-          }
-        }
-      } catch { /* not metadata */ }
-
-      const startLine = (() => {
-        try {
-          const first = JSON.parse(lines[0]);
-          if (first.user_name !== undefined || first.chat_metadata) return 1;
-        } catch { /* ignore */ }
-        return 0;
-      })();
-
-      const messages: ChatMessage[] = [];
-
-      for (let i = startLine; i < lines.length; i++) {
-        try {
-          const msg = JSON.parse(lines[i]);
-          const content = msg.mes || msg.content || "";
-          if (!content && !msg.name) continue;
-
-          const isUser = !!msg.is_user;
-          const msgName = msg.name || (isUser ? "User" : charDirName);
-          let extra = msg.extra || undefined;
-
-          if (isUser && personaNameToId.size > 0) {
-            const personaId = personaNameToId.get(msgName) || (chatUserName ? personaNameToId.get(chatUserName) : undefined);
-            if (personaId) {
-              extra = { ...(extra || {}), persona_id: personaId };
-            }
-          }
-
-          messages.push({
-            is_user: isUser,
-            name: msgName,
-            content,
-            send_date: parseMessageDate(msg),
-            swipes: Array.isArray(msg.swipes) ? msg.swipes : undefined,
-            swipe_id: typeof msg.swipe_id === "number" ? msg.swipe_id : undefined,
-            extra,
-          });
-        } catch { /* skip unparseable */ }
-      }
-
-      if (messages.length > 0) {
-        results.push({ name: chatName, created_at: chatCreatedAt, messages });
+      const parsed = parseStGroupChatJsonl(
+        await fs.readText(filePath),
+        fs.basename(chatFileEntry.name, ".jsonl"),
+        personaNameToId,
+        filenameToId,
+      );
+      if (parsed) {
+        results.push({ name: parsed.name, created_at: parsed.createdAt, messages: parsed.messages });
       }
     } catch {
       logger?.warn(`Could not read ${chatFileEntry.name}, skipping`);
@@ -467,6 +555,30 @@ export async function readChatsForCharacter(
   }
 
   return results;
+}
+
+export async function readCharacterChatFile({
+  stDataDir,
+  charDirName,
+  chatFileName,
+  personaNameToId,
+  filenameToId,
+  fs = defaultFs,
+}: ReadChatFileOptions): Promise<ChatPayload | null> {
+  const filePath = fs.join(stDataDir, "chats", charDirName, chatFileName);
+
+  try {
+    const parsed = parseStGroupChatJsonl(
+      await fs.readText(filePath),
+      fs.basename(chatFileName, ".jsonl"),
+      personaNameToId,
+      filenameToId,
+    );
+    if (!parsed) return null;
+    return { name: parsed.name, created_at: parsed.createdAt, messages: parsed.messages };
+  } catch {
+    return null;
+  }
 }
 
 export async function readGroupDefinitions(stDataDir: string, fs: FileSystem = defaultFs): Promise<GroupDefinition[]> {
@@ -494,6 +606,16 @@ export async function readGroupDefinitions(stDataDir: string, fs: FileSystem = d
   return results;
 }
 
+export async function readGroupChatFileEntries(stDataDir: string, fs: FileSystem = defaultFs): Promise<GroupChatFileEntry[]> {
+  const groupChatsDir = fs.join(stDataDir, "group chats");
+  if (!(await fs.exists(groupChatsDir))) return [];
+
+  const entries = await fs.readdir(groupChatsDir);
+  return entries
+    .filter((e) => e.isFile && fs.extname(e.name).toLowerCase() === ".jsonl")
+    .map((e) => ({ id: fs.basename(e.name, ".jsonl") }));
+}
+
 /**
  * Read a single group chat JSONL file.
  */
@@ -501,71 +623,17 @@ export async function readGroupChatFile(
   stDataDir: string,
   chatId: string,
   personaNameToId: Map<string, string>,
+  filenameToId?: Map<string, string>,
   fs: FileSystem = defaultFs,
 ): Promise<{ messages: ChatMessage[]; createdAt?: number } | null> {
-  const chatFilePath = fs.join(stDataDir, "group chats", `${chatId}.jsonl`);
+  const chatFileName = chatId.toLowerCase().endsWith(".jsonl") ? chatId : `${chatId}.jsonl`;
+  const chatFilePath = fs.join(stDataDir, "group chats", chatFileName);
   if (!(await fs.exists(chatFilePath))) return null;
 
   try {
-    const raw = await fs.readText(chatFilePath);
-    const lines = raw.split("\n").filter((l) => l.trim());
-    if (lines.length === 0) return null;
-
-    let chatCreatedAt: number | undefined;
-    let chatUserName: string | undefined;
-
-    try {
-      const meta = JSON.parse(lines[0]);
-      if (meta.chat_metadata || meta.user_name !== undefined) {
-        chatUserName = meta.user_name;
-        if (meta.create_date) {
-          const ts = parseDateString(meta.create_date);
-          if (ts) chatCreatedAt = ts;
-        }
-      }
-    } catch { /* ignore */ }
-
-    const startLine = (() => {
-      try {
-        const first = JSON.parse(lines[0]);
-        if (first.chat_metadata || first.user_name !== undefined) return 1;
-      } catch { /* ignore */ }
-      return 0;
-    })();
-
-    const messages: ChatMessage[] = [];
-
-    for (let i = startLine; i < lines.length; i++) {
-      try {
-        const msg = JSON.parse(lines[i]);
-        const content = msg.mes || msg.content || "";
-        if (!content && !msg.name) continue;
-
-        const isUser = !!msg.is_user;
-        const msgName = msg.name || (isUser ? "User" : "Unknown");
-        let extra = msg.extra || undefined;
-
-        if (isUser && personaNameToId.size > 0) {
-          const personaId = personaNameToId.get(msgName) || (chatUserName ? personaNameToId.get(chatUserName) : undefined);
-          if (personaId) {
-            extra = { ...(extra || {}), persona_id: personaId };
-          }
-        }
-
-        messages.push({
-          is_user: isUser,
-          name: msgName,
-          content,
-          send_date: parseMessageDate(msg),
-          swipes: Array.isArray(msg.swipes) ? msg.swipes : undefined,
-          swipe_id: typeof msg.swipe_id === "number" ? msg.swipe_id : undefined,
-          extra,
-        });
-      } catch { /* skip */ }
-    }
-
-    if (messages.length === 0) return null;
-    return { messages, createdAt: chatCreatedAt };
+    const parsed = parseStGroupChatJsonl(await fs.readText(chatFilePath), chatId, personaNameToId, filenameToId);
+    if (!parsed) return null;
+    return { messages: parsed.messages, createdAt: parsed.createdAt };
   } catch {
     return null;
   }

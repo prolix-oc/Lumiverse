@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { ChevronLeft, ChevronDown, ChevronRight, Plus, Pencil, Trash2, Settings, Eye, EyeOff } from 'lucide-react'
+import { ChevronLeft, ChevronDown, ChevronRight, Plus, Pencil, Trash2, Settings, Eye, EyeOff, RefreshCw } from 'lucide-react'
 import { packsApi } from '@/api/packs'
 import LazyImage from '@/components/shared/LazyImage'
 import { Button } from '@/components/shared/FormComponents'
@@ -18,7 +18,7 @@ interface Props {
   onRefresh: () => void
 }
 
-const GENDER_LABELS: Record<number, string> = { 0: 'Any', 1: 'Fem', 2: 'Masc' }
+const GENDER_LABELS: Record<number, string> = { 0: 'Fem', 1: 'Masc', 2: 'Neutral', 3: 'Any' }
 const CATEGORY_LABELS: Record<string, string> = {
   narrative_style: 'Style',
   loom_utility: 'Utility',
@@ -125,6 +125,7 @@ export default function PackDetailView({ pack, onBack, onEdit, onDelete, onRefre
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: string; id: string } | null>(null)
   const [deletePackConfirm, setDeletePackConfirm] = useState(false)
+  const [repairConfirm, setRepairConfirm] = useState(false)
 
   const handleDeleteItem = useCallback(async () => {
     if (!deleteConfirm) return
@@ -141,6 +142,14 @@ export default function PackDetailView({ pack, onBack, onEdit, onDelete, onRefre
     } catch {}
   }, [deleteConfirm, pack.id, onRefresh])
 
+  const handleRepairLegacyGenderMapping = useCallback(async () => {
+    try {
+      await packsApi.repairOldLumiverseGenderMapping(pack.id)
+      setRepairConfirm(false)
+      onRefresh()
+    } catch {}
+  }, [pack.id, onRefresh])
+
   return (
     <div className={styles.detail}>
       <div className={styles.detailHeader}>
@@ -152,6 +161,15 @@ export default function PackDetailView({ pack, onBack, onEdit, onDelete, onRefre
           {pack.author && <div className={styles.detailAuthor}>by {pack.author}</div>}
         </div>
         <div className={styles.detailActions}>
+          {pack.lumia_items.length > 0 && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setRepairConfirm(true)}
+              title="Repair old Lumiverse gender mapping"
+              icon={<RefreshCw size={14} />}
+            />
+          )}
           {pack.is_custom && (
             <Button size="icon" variant="ghost" onClick={onEdit} title="Edit pack" icon={<Settings size={14} />} />
           )}
@@ -317,6 +335,18 @@ export default function PackDetailView({ pack, onBack, onEdit, onDelete, onRefre
           confirmText="Delete"
           onConfirm={() => { setDeletePackConfirm(false); onDelete() }}
           onCancel={() => setDeletePackConfirm(false)}
+        />
+      )}
+
+      {repairConfirm && (
+        <ConfirmationModal
+          isOpen={true}
+          title="Repair Old Lumiverse Gender Mapping"
+          message="Convert this pack from Lumiverse's older gender enum (0=Any, 1=Feminine, 2=Masculine) to the current enum (0=Feminine, 1=Masculine, 2=Neutral, 3=Any)? Use this only for packs created or edited under the old Lumiverse mapping."
+          variant="warning"
+          confirmText="Repair"
+          onConfirm={handleRepairLegacyGenderMapping}
+          onCancel={() => setRepairConfirm(false)}
         />
       )}
     </div>

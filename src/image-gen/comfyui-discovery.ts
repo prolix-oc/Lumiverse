@@ -19,16 +19,44 @@ export type ComfyUIObjectInfo = Record<string, {
   };
 }>;
 
+export interface ComfyDiscoveryOptions {
+  // Optional Cookie header value — used for SwarmUI's /ComfyBackendDirect proxy.
+  cookie?: string;
+}
+
 /**
- * Query a single node type from /object_info.
- * Returns null if the node type is not available (404 or error).
+ * Resolve a connection profile to the ComfyUI HTTP base URL + optional auth
+ * cookie. For native `comfyui` connections this is just the API URL; for
+ * `swarmui` it's the /ComfyBackendDirect proxy plus a swarm_token cookie.
  */
+export function resolveComfyTarget(
+  connection: { provider: string; api_url?: string | null },
+  apiKey?: string | null,
+): { baseUrl: string; cookie?: string } {
+  const raw = connection.api_url
+    || (connection.provider === "swarmui" ? "http://localhost:7801" : "http://localhost:8188");
+  const trimmed = raw.replace(/\/+$/, "");
+  if (connection.provider === "swarmui") {
+    return {
+      baseUrl: `${trimmed}/ComfyBackendDirect`,
+      cookie: apiKey ? `swarm_token=${apiKey}` : undefined,
+    };
+  }
+  return { baseUrl: trimmed };
+}
+
+function buildHeaders(cookie?: string): Record<string, string> | undefined {
+  return cookie ? { Cookie: cookie } : undefined;
+}
+
 async function queryNodeInfo(
   baseUrl: string,
   nodeType: string,
+  opts?: ComfyDiscoveryOptions,
 ): Promise<Record<string, any> | null> {
   try {
     const res = await fetch(`${baseUrl}/object_info/${encodeURIComponent(nodeType)}`, {
+      headers: buildHeaders(opts?.cookie),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
@@ -41,9 +69,11 @@ async function queryNodeInfo(
 
 async function queryAllNodeInfo(
   baseUrl: string,
+  opts?: ComfyDiscoveryOptions,
 ): Promise<ComfyUIObjectInfo | null> {
   try {
     const res = await fetch(`${baseUrl}/object_info`, {
+      headers: buildHeaders(opts?.cookie),
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
@@ -56,13 +86,14 @@ async function queryAllNodeInfo(
 export async function getComfyUIObjectInfo(
   apiUrl: string,
   forceRefresh = false,
+  opts?: ComfyDiscoveryOptions,
 ): Promise<ComfyUIObjectInfo | null> {
   const cached = objectInfoCache.get(apiUrl);
   if (!forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.objectInfo;
   }
 
-  const objectInfo = await queryAllNodeInfo(apiUrl);
+  const objectInfo = await queryAllNodeInfo(apiUrl, opts);
   if (!objectInfo) return null;
 
   objectInfoCache.set(apiUrl, { objectInfo, timestamp: Date.now() });
@@ -72,8 +103,9 @@ export async function getComfyUIObjectInfo(
 export async function getAvailableNodeTypes(
   apiUrl: string,
   nodeTypes: string[],
+  opts?: ComfyDiscoveryOptions,
 ): Promise<Set<string>> {
-  const allNodeInfo = await queryAllNodeInfo(apiUrl);
+  const allNodeInfo = await queryAllNodeInfo(apiUrl, opts);
   if (allNodeInfo && typeof allNodeInfo === "object") {
     const availableNodeTypes = new Set(Object.keys(allNodeInfo));
     return new Set(
@@ -84,7 +116,7 @@ export async function getAvailableNodeTypes(
   const available = await Promise.all(
     nodeTypes.map(async (nodeType) => ({
       nodeType,
-      exists: (await queryNodeInfo(apiUrl, nodeType)) !== null,
+      exists: (await queryNodeInfo(apiUrl, nodeType, opts)) !== null,
     })),
   );
 
@@ -121,6 +153,7 @@ function extractOptions(
 export async function discoverCapabilities(
   apiUrl: string,
   forceRefresh = false,
+  opts?: ComfyDiscoveryOptions,
 ): Promise<ComfyUICapabilities> {
   const cached = cache.get(apiUrl);
   if (!forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -142,18 +175,18 @@ export async function discoverCapabilities(
     faceDetailerInfo,
     controlnetInfo,
   ] = await Promise.all([
-    queryNodeInfo(apiUrl, "CheckpointLoaderSimple"),
-    queryNodeInfo(apiUrl, "UNETLoader"),
-    queryNodeInfo(apiUrl, "CLIPLoader"),
-    queryNodeInfo(apiUrl, "DualCLIPLoader"),
-    queryNodeInfo(apiUrl, "VAELoader"),
-    queryNodeInfo(apiUrl, "LoraLoader"),
-    queryNodeInfo(apiUrl, "KSampler"),
-    queryNodeInfo(apiUrl, "UpscaleModelLoader"),
-    queryNodeInfo(apiUrl, "UltralyticsDetectorProvider"),
-    queryNodeInfo(apiUrl, "UltimateSDUpscale"),
-    queryNodeInfo(apiUrl, "FaceDetailer"),
-    queryNodeInfo(apiUrl, "ControlNetApplyAdvanced"),
+    queryNodeInfo(apiUrl, "CheckpointLoaderSimple", opts),
+    queryNodeInfo(apiUrl, "UNETLoader", opts),
+    queryNodeInfo(apiUrl, "CLIPLoader", opts),
+    queryNodeInfo(apiUrl, "DualCLIPLoader", opts),
+    queryNodeInfo(apiUrl, "VAELoader", opts),
+    queryNodeInfo(apiUrl, "LoraLoader", opts),
+    queryNodeInfo(apiUrl, "KSampler", opts),
+    queryNodeInfo(apiUrl, "UpscaleModelLoader", opts),
+    queryNodeInfo(apiUrl, "UltralyticsDetectorProvider", opts),
+    queryNodeInfo(apiUrl, "UltimateSDUpscale", opts),
+    queryNodeInfo(apiUrl, "FaceDetailer", opts),
+    queryNodeInfo(apiUrl, "ControlNetApplyAdvanced", opts),
   ]);
 
   const checkpoints = extractOptions(checkpointInfo, "ckpt_name");

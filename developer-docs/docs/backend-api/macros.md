@@ -41,12 +41,21 @@ spindle.registerMacro({
   category: 'extension:my_extension',
   description: 'Returns the current weather (pull model)',
   returnType: 'string',
-  handler: 'return "Sunny, 72°F"',
+  handler: (ctx) => ctx.commit ? 'Sunny, 72°F' : 'Preview unavailable',
 })
 ```
 
 !!! tip "When to use which"
     Use the push model whenever your extension already has the data available (polling loops, event listeners, cached state). Use the pull model only for macros whose values are impossible to pre-compute without the generation-time `MacroExecContext`.
+
+### Handler Context: `ctx.commit`
+
+Custom macro handlers receive a `commit` boolean on their execution context:
+
+- `true` — normal committing execution
+- `false` — dry / non-committing execution
+
+This is primarily useful when your macro has separate display-only and state-mutating paths.
 
 ## MacroDefinitionDTO
 
@@ -57,7 +66,17 @@ spindle.registerMacro({
 | `description` | `string` | Shown in the macro reference panel |
 | `returnType` | `"string" \| "integer" \| "number" \| "boolean"` | Optional. Default: `"string"` |
 | `args` | `Array<{ name, description?, required? }>` | Optional argument definitions |
-| `handler` | `string` | Serialized function body that returns the macro value. Can be empty when using the push model. |
+| `handler` | `function \| ""` | Optional macro handler. Use a function for pull-model macros, or an empty string when using the push model. |
+| `volatile` | `boolean` | Optional. Set `true` when the macro returns different output across calls with the same args (time, randomness, idle duration, etc.) so the display-regex cache doesn't store the result as static. |
+
+!!! note "Reading variables inside a handler"
+    If your handler reads `ctx.env.variables.local` (or `.global`/`.chat`), use `.get(key)` and `.has(key)`. Iteration (`.entries()`, `.keys()`, `for...of`) isn't recorded in the per-resolution dependency fingerprint, so the cached output may be stale longer than expected when those vars change.
+
+!!! note "When to set `volatile: true`"
+    Set the flag when the handler's output isn't a pure function of its args and tracked env reads.
+    **Needs the flag:** time based output (`Date.now()`, `new Date()`), random output (`Math.random()`), stateful side effects (read then write to a var, mutable internal counters), or external calls (HTTP, files, anything outside the env).
+    **Doesn't need the flag (auto invalidates):** variable reads via `.get(key)` / `.has(key)` (the fingerprint records the dependency and the cache invalidates when that var changes), static fields on `env` (character, persona, scenario), and computed-from-tracked-inputs handlers (math, conditionals, string ops) where args evaluate through the same fingerprint mechanism so dependencies propagate.
+    Rule of thumb: if the handler only touches `ctx.args` and `env.variables.<scope>.get(...)`, leave the flag off. If it reaches for `Date`, `Math.random`, or mutates state, set it.
 
 ## Methods
 
@@ -88,11 +107,32 @@ const { text } = await spindle.macros.resolve(
 | `options.chatId` | `string?` | Chat ID for full context (messages, variables, etc.) |
 | `options.characterId` | `string?` | Character ID (inferred from chat if omitted) |
 | `options.userId` | `string?` | For operator-scoped extensions only |
+| `options.commit` | `boolean?` | Defaults to `true`. Set to `false` for a dry / non-committing resolve. |
 
 **Returns:** `Promise<{ text: string; diagnostics: Array<{ message: string; offset: number; length: number }> }>`
 
 - `text` — the fully resolved string
 - `diagnostics` — any warnings from the macro engine (unknown macros, evaluation errors, etc.)
+
+### Dry / Non-Committing Resolves
+
+Use `commit: false` when you want rendered text without allowing the resolve path to persist side effects.
+
+```ts
+const { text } = await spindle.macros.resolve(template, {
+  chatId: activeChatId,
+  characterId: activeCharacterId,
+  commit: false,
+})
+```
+
+When `commit: false` is active:
+
+- extension macro handlers receive `ctx.commit === false`
+- host-backed mutating Spindle APIs called from that macro invocation reject instead of persisting changes
+- nested `spindle.macros.resolve()` calls inherit the current commit mode unless you explicitly override it
+
+This lets extensions cleanly separate preview/display parsing from generation-time state mutation.
 
 ### Context Levels
 

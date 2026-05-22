@@ -5,14 +5,14 @@
 }
 
 .sectionTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   margin: 0;
 }
 
 .sectionDesc {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   margin: 4px 0 12px;
 }
@@ -25,7 +25,7 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .table th {
@@ -34,7 +34,7 @@
   border-bottom: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-muted);
   font-weight: 500;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .table td {
@@ -109,7 +109,7 @@
 }
 
 .fieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   font-weight: 500;
 }
@@ -121,7 +121,7 @@
   border-radius: 5px;
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
 }
 
@@ -140,7 +140,7 @@
   border-radius: 5px;
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   resize: vertical;
   min-height: 60px;
@@ -161,7 +161,7 @@
   border-radius: 5px;
   background: var(--lumiverse-primary);
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: opacity var(--lumiverse-transition-fast);
@@ -189,7 +189,7 @@
 }
 
 .testResult {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   padding: 8px 10px;
   background: var(--lumiverse-bg);
@@ -199,7 +199,7 @@
 
 .testResultLabel {
   color: var(--lumiverse-text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .testResultValue {
@@ -209,7 +209,7 @@
 
 .error {
   color: var(--lumiverse-danger);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
 
 .divider {
@@ -220,7 +220,7 @@
 
 .configJson {
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   max-width: 200px;
   overflow: hidden;
@@ -241,7 +241,7 @@
   .table th,
   .table td {
     padding: 6px 6px;
-    font-size: 11px;
+    font-size: calc(11px * var(--lumiverse-font-scale, 1));
   }
 
   .configJson {

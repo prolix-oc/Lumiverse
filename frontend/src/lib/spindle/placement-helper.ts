@@ -21,6 +21,14 @@ function getStore() {
   return useStore.getState()
 }
 
+function clampFloatWidgetRect(x: number, y: number, width: number, height: number) {
+  const pad = 12
+  return {
+    x: Math.max(pad, Math.min(x, window.innerWidth - width - pad)),
+    y: Math.max(pad, Math.min(y, window.innerHeight - height - pad)),
+  }
+}
+
 // ── Drawer Tab ──
 
 export function createDrawerTabHandle(
@@ -29,14 +37,25 @@ export function createDrawerTabHandle(
 ): SpindleDrawerTabHandle {
   const tabId = nextId(extensionId, `tab:${options.id}`)
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-drawer-tab', tabId)
 
   const activateHandlers = new Set<() => void>()
+  const unsubscribeStore = useStore.subscribe((state, previousState) => {
+    if (state.drawerTab !== tabId || previousState.drawerTab === tabId) return
+    for (const handler of activateHandlers) {
+      try { handler() } catch { /* no-op */ }
+    }
+  })
 
   getStore().registerDrawerTab({
     id: tabId,
     extensionId,
     title: options.title,
+    shortName: options.shortName,
+    description: options.description,
+    keywords: options.keywords,
+    headerTitle: options.headerTitle,
     iconUrl: options.iconUrl,
     iconSvg: options.iconSvg,
     badge: null,
@@ -59,11 +78,9 @@ export function createDrawerTabHandle(
       const store = getStore()
       store.setDrawerTab(tabId)
       store.openDrawer(tabId)
-      for (const handler of activateHandlers) {
-        try { handler() } catch { /* no-op */ }
-      }
     },
     destroy() {
+      unsubscribeStore()
       getStore().unregisterDrawerTab(tabId)
       activateHandlers.clear()
     },
@@ -82,6 +99,7 @@ export function createFloatWidgetHandle(
 ): SpindleFloatWidgetHandle {
   const widgetId = nextId(extensionId, 'float')
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-float-widget', widgetId)
 
   const width = options?.width ?? 48
@@ -107,12 +125,17 @@ export function createFloatWidgetHandle(
     root,
     x,
     y,
+    defaultX: x,
+    defaultY: y,
+    defaultWidth: width,
+    defaultHeight: height,
     width,
     height,
     visible: true,
     snapToEdge: options?.snapToEdge ?? true,
     tooltip: options?.tooltip,
     chromeless: options?.chromeless,
+    fullscreen: options?.fullscreen ?? false,
   })
 
   return {
@@ -125,12 +148,60 @@ export function createFloatWidgetHandle(
       const w = getStore().floatWidgets.find((w) => w.id === widgetId)
       return { x: w?.x ?? x, y: w?.y ?? y }
     },
+    setSize(newWidth: number, newHeight: number) {
+      const store = getStore()
+      const w = store.floatWidgets.find((w) => w.id === widgetId)
+      if (!w || w.fullscreen) return
+
+      const width = Math.max(1, Math.round(newWidth))
+      const height = Math.max(1, Math.round(newHeight))
+      const pos = clampFloatWidgetRect(w.x, w.y, width, height)
+
+      store.updateFloatWidget(widgetId, {
+        width,
+        height,
+        x: pos.x,
+        y: pos.y,
+      })
+    },
     setVisible(visible: boolean) {
       getStore().updateFloatWidget(widgetId, { visible })
     },
     isVisible() {
       const w = getStore().floatWidgets.find((w) => w.id === widgetId)
       return w?.visible ?? true
+    },
+    setFullscreen(fullscreen: boolean) {
+      const store = getStore()
+      const w = store.floatWidgets.find((w) => w.id === widgetId)
+      if (!w) return
+      if (fullscreen) {
+        // Save current state before entering fullscreen
+        const preFullscreen = { x: w.x, y: w.y, width: w.width, height: w.height }
+        store.updateFloatWidget(widgetId, {
+          fullscreen: true,
+          preFullscreen,
+          x: 0,
+          y: 0,
+          width: window.innerWidth,
+          height: window.innerHeight,
+        })
+      } else {
+        // Restore pre-fullscreen state
+        const pre = w.preFullscreen
+        store.updateFloatWidget(widgetId, {
+          fullscreen: false,
+          x: pre?.x ?? w.x,
+          y: pre?.y ?? w.y,
+          width: pre?.width ?? w.width,
+          height: pre?.height ?? w.height,
+          preFullscreen: undefined,
+        })
+      }
+    },
+    isFullscreen() {
+      const w = getStore().floatWidgets.find((w) => w.id === widgetId)
+      return w?.fullscreen ?? false
     },
     destroy() {
       window.removeEventListener('spindle:float-drag-end', handleDragEndEvent)
@@ -161,6 +232,7 @@ export function createDockPanelHandle(
 ): SpindleDockPanelHandle {
   const panelId = nextId(extensionId, `dock:${options.edge}`)
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-dock-panel', panelId)
 
   const visibilityHandlers = new Set<(visible: boolean) => void>()
@@ -220,6 +292,7 @@ export function createAppMountHandle(
 ): SpindleAppMountHandle {
   const mountId = nextId(extensionId, 'app')
   const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-app-mount', extensionId)
   root.setAttribute('data-spindle-mount-id', mountId)
   if (options?.className) {
@@ -231,7 +304,7 @@ export function createAppMountHandle(
     extensionId,
     root,
     className: options?.className,
-    position: options?.position ?? 'end',
+    position: (options?.position ?? 'end') as 'start' | 'end' | 'app-overlay',
     visible: true,
   })
 
@@ -263,6 +336,7 @@ export function createInputBarActionHandle(
     extensionId,
     extensionName,
     label: options.label,
+    subtitle: options.subtitle,
     iconSvg: options.iconSvg,
     iconUrl: options.iconUrl,
     enabled: options.enabled !== false,
@@ -273,6 +347,9 @@ export function createInputBarActionHandle(
     actionId,
     setLabel(label: string) {
       getStore().updateInputBarAction(actionId, { label })
+    },
+    setSubtitle(subtitle?: string) {
+      getStore().updateInputBarAction(actionId, { subtitle })
     },
     setEnabled(enabled: boolean) {
       getStore().updateInputBarAction(actionId, { enabled })

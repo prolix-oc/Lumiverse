@@ -4,10 +4,30 @@ import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { loadFrontendExtension, unloadFrontendExtension } from '@/lib/spindle/loader'
 
+const MUTED_THEMES_KEY = 'lumiverse:mutedExtensionThemes'
+
+function loadMutedThemes(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(MUTED_THEMES_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const result: Record<string, boolean> = {}
+    for (const [id, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (v === true) result[id] = true
+    }
+    return result
+  } catch { return {} }
+}
+
+function saveMutedThemes(muted: Record<string, boolean>) {
+  try { localStorage.setItem(MUTED_THEMES_KEY, JSON.stringify(muted)) } catch {}
+}
+
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
   extensionThemeOverrides: {},
-  mutedExtensionThemes: {},
+  mutedExtensionThemes: loadMutedThemes(),
   extensionOperationStatus: null,
   bulkUpdateStatus: null,
   spindlePrivileged: false,
@@ -23,16 +43,25 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       const { extensions, isPrivileged } = await spindleApi.list()
       set({ extensions, spindlePrivileged: isPrivileged })
 
-      await Promise.all(
-        extensions.map(async (ext) => {
-          if (ext.enabled && ext.has_frontend) {
-            const manifest = await spindleApi.getManifest(ext.id)
-            await loadFrontendExtension(ext.id, manifest)
-          } else {
-            await unloadFrontendExtension(ext.id)
-          }
-        })
-      )
+      queueMicrotask(() => {
+        void Promise.allSettled(
+          extensions.map(async (ext) => {
+            const status = get().extensionOperationStatus
+            const updateReloadPending =
+              status?.extensionId === ext.id &&
+              (status.operation === 'updating' || status.operation === 'updated')
+
+            if (updateReloadPending) return
+
+            if (ext.enabled && ext.has_frontend) {
+              const manifest = await spindleApi.getManifest(ext.id)
+              await loadFrontendExtension(ext.id, manifest)
+            } else {
+              await unloadFrontendExtension(ext.id)
+            }
+          })
+        )
+      })
     } catch (err) {
       console.error('[Spindle] Failed to load extensions:', err)
     }
@@ -45,36 +74,60 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
 
   updateExtension: async (id: string) => {
     const updated = await spindleApi.update(id)
+    spindleApi.clearManifestCache(id)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))
+    if (updated.enabled && updated.has_frontend) {
+      const manifest = await spindleApi.getManifest(id, { force: true })
+      await loadFrontendExtension(id, manifest, true)
+    }
   },
 
   switchBranch: async (id: string, branch: string) => {
     const updated = await spindleApi.switchBranch(id, branch)
+    spindleApi.clearManifestCache(id)
     set((state) => ({
       extensions: state.extensions.map((e) => (e.id === id ? updated : e)),
     }))
+    if (updated.enabled && updated.has_frontend) {
+      const manifest = await spindleApi.getManifest(id, { force: true })
+      await loadFrontendExtension(id, manifest, true)
+    }
   },
 
   removeExtension: async (id: string) => {
     await spindleApi.remove(id)
+    spindleApi.clearManifestCache(id)
     await unloadFrontendExtension(id)
-    set((state) => ({
-      extensions: state.extensions.filter((e) => e.id !== id),
-    }))
+    set((state) => {
+      const { [id]: _o, ...overridesRest } = state.extensionThemeOverrides
+      const { [id]: _m, ...mutedRest } = state.mutedExtensionThemes
+      if (id in state.mutedExtensionThemes) saveMutedThemes(mutedRest)
+      return {
+        extensions: state.extensions.filter((e) => e.id !== id),
+        extensionThemeOverrides: overridesRest,
+        mutedExtensionThemes: mutedRest,
+      }
+    })
   },
 
   enableExtension: async (id: string) => {
     await spindleApi.enable(id)
-
-    const manifest = await spindleApi.getManifest(id)
-    await loadFrontendExtension(id, manifest)
     set((state) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, enabled: true, status: 'running' as const } : e
       ),
     }))
+
+    const ext = get().extensions.find((e) => e.id === id)
+    if (ext?.has_frontend) {
+      queueMicrotask(() => {
+        void spindleApi.getManifest(id)
+          .then((manifest) => loadFrontendExtension(id, manifest))
+          .catch((err) => console.error('[Spindle] Failed to load frontend after enable:', err))
+      })
+    }
   },
 
   disableExtension: async (id: string) => {
@@ -84,13 +137,18 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, enabled: false, status: 'stopped' as const } : e
       ),
+      extensionThemeOverrides: Object.fromEntries(
+        Object.entries(state.extensionThemeOverrides).filter(([extensionId]) => extensionId !== id)
+      ),
     }))
   },
 
   restartExtension: async (id: string) => {
+    get().clearExtensionThemeOverride(id)
     await unloadFrontendExtension(id)
     await spindleApi.restart(id)
-    const manifest = await spindleApi.getManifest(id)
+    spindleApi.clearManifestCache(id)
+    const manifest = await spindleApi.getManifest(id, { force: true })
     await loadFrontendExtension(id, manifest)
   },
 
@@ -265,17 +323,16 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
 
   muteExtensionTheme: (extensionId: string) => {
     set((state) => {
-      const { [extensionId]: _, ...rest } = state.extensionThemeOverrides
-      return {
-        mutedExtensionThemes: { ...state.mutedExtensionThemes, [extensionId]: true },
-        extensionThemeOverrides: rest,
-      }
+      const next = { ...state.mutedExtensionThemes, [extensionId]: true }
+      saveMutedThemes(next)
+      return { mutedExtensionThemes: next }
     })
   },
 
   unmuteExtensionTheme: (extensionId: string) => {
     set((state) => {
       const { [extensionId]: _, ...rest } = state.mutedExtensionThemes
+      saveMutedThemes(rest)
       return { mutedExtensionThemes: rest }
     })
   },

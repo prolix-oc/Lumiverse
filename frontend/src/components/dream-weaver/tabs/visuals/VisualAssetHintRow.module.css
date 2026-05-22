@@ -10,7 +10,7 @@
   align-items: center;
   gap: 0.45rem;
   padding: 0.35rem 0.7rem;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--lumiverse-border) 92%, transparent);
   background: color-mix(in srgb, var(--lumiverse-bg-elevated) 38%, transparent);
 }
@@ -25,7 +25,7 @@
 }
 
 .label {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -33,6 +33,6 @@
 }
 
 .hint {
-  font-size: 0.67rem;
+  font-size: calc(0.67rem * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }

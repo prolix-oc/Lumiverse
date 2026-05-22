@@ -23,7 +23,10 @@ import type {
   CortexMemory,
   CortexStats,
   EntitySnapshot,
+  EntityType,
+  EntityStatus,
   RelationEdge,
+  RelationType,
   EmotionalTag,
   MemorySalienceRow,
 } from "./types";
@@ -109,7 +112,8 @@ export async function queryCortex(
   let vectorResults: VectorSearchResult[];
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText]);
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText], { signal });
+    if (signal?.aborted) return emptyResult(startTime);
     if (!queryVector || queryVector.length === 0) {
       return emptyResult(startTime);
     }
@@ -121,8 +125,10 @@ export async function queryCortex(
       candidateChunkIds,
       query.topK * 3, // Over-fetch for reranking
       query.excludeMessageIds,
+      signal,
     );
   } catch (err) {
+    if (signal?.aborted) return emptyResult(startTime);
     console.warn("[memory-cortex] Vector search failed:", err);
     return emptyResult(startTime);
   }
@@ -419,6 +425,7 @@ async function searchChatChunksScoped(
   candidateChunkIds: Set<string>,
   limit: number,
   excludeMessageIds?: string[],
+  signal?: AbortSignal,
 ): Promise<VectorSearchResult[]> {
   // Pass exclude IDs to the vector search so chunks containing the
   // regeneration target (or other excluded messages) are filtered out.
@@ -434,6 +441,7 @@ async function searchChatChunksScoped(
     undefined,
     undefined,
     candidateChunkIds,
+    signal,
   );
 
   // Filter to candidate set if we have one
@@ -589,4 +597,256 @@ function emptyResult(startTime: number): CortexResult {
 function safeJsonArray(raw: string | null | undefined): string[] {
   if (!raw) return [];
   try { return JSON.parse(raw); } catch { return []; }
+}
+
+// ─── Vault-scoped retrieval ────────────────────────────────────
+
+export interface VaultCortexQuery {
+  userId: string;
+  vaultId: string;
+  queryText: string;
+  topK: number;
+  emotionalContext?: EmotionalTag[];
+  includeRelationships?: boolean;
+  signal?: AbortSignal;
+}
+
+/**
+ * Retrieve memories + entity/relation context from a vault's own snapshot.
+ * Mirrors the chat pipeline (Phase 1-5) but reads from cortex_vault_*
+ * tables and vault-scoped LanceDB rows — the source chat is never touched,
+ * so this works even after the source chat has been deleted.
+ */
+export async function queryVaultCortex(
+  query: VaultCortexQuery,
+  config: MemoryCortexConfig,
+): Promise<CortexResult> {
+  const startTime = Date.now();
+  const db = getDb();
+  const { userId, vaultId, queryText, topK, emotionalContext, signal } = query;
+
+  // ── Load vault entity list for fuzzy name overlap + Phase 5 output ──
+  const vaultEntities = db.query(
+    `SELECT id, name, entity_type, aliases, description, status, facts,
+            emotional_valence, salience_avg
+     FROM cortex_vault_entities WHERE vault_id = ? ORDER BY salience_avg DESC`,
+  ).all(vaultId) as Array<{
+    id: string; name: string; entity_type: string; aliases: string;
+    description: string; status: string; facts: string;
+    emotional_valence: string; salience_avg: number;
+  }>;
+
+  // Name-based entity activation — vault chunks store entity_names (not ids),
+  // so we match against the query text via the same normalized-name scan the
+  // live pipeline uses (prefix/alias/exact).
+  const activeEntityNames = new Set<string>();
+  if (queryText && vaultEntities.length > 0) {
+    const lowerQuery = queryText.toLowerCase();
+    for (const e of vaultEntities) {
+      if (lowerQuery.includes(e.name.toLowerCase())) {
+        activeEntityNames.add(e.name);
+        continue;
+      }
+      const aliases = safeJsonArray(e.aliases);
+      for (const a of aliases) {
+        if (a.length >= 2 && lowerQuery.includes(a.toLowerCase())) {
+          activeEntityNames.add(e.name);
+          break;
+        }
+      }
+    }
+  }
+
+  // ── Phase 1: Candidate chunk set from SQLite ──
+  const chunkRows = db.query(
+    `SELECT id, source_chunk_id, content, salience_score, emotional_tags,
+            entity_names, source_created_at
+     FROM cortex_vault_chunks WHERE vault_id = ?`,
+  ).all(vaultId) as Array<{
+    id: string; source_chunk_id: string; content: string;
+    salience_score: number | null; emotional_tags: string;
+    entity_names: string; source_created_at: number;
+  }>;
+
+  if (chunkRows.length === 0) return emptyResult(startTime);
+  if (signal?.aborted) return emptyResult(startTime);
+
+  // Build a chunk lookup + candidate pool: entity-name matches + high-salience fallback.
+  const chunkMap = new Map<string, typeof chunkRows[number]>();
+  for (const c of chunkRows) chunkMap.set(c.id, c);
+
+  const candidateIds = new Set<string>();
+  if (activeEntityNames.size > 0) {
+    for (const c of chunkRows) {
+      const names = safeJsonArray(c.entity_names);
+      if (names.some((n) => activeEntityNames.has(n))) {
+        candidateIds.add(c.id);
+      }
+    }
+  }
+
+  // Always add top-salience chunks for serendipitous recall.
+  const highSalience = [...chunkRows]
+    .filter((c) => (c.salience_score ?? 0) >= 0.6)
+    .sort((a, b) => (b.salience_score ?? 0) - (a.salience_score ?? 0))
+    .slice(0, Math.ceil(topK * 0.5));
+  for (const c of highSalience) candidateIds.add(c.id);
+
+  // Final fallback: most recent chunks (source_created_at DESC).
+  if (candidateIds.size === 0) {
+    const recent = [...chunkRows]
+      .sort((a, b) => b.source_created_at - a.source_created_at)
+      .slice(0, topK * 5);
+    for (const c of recent) candidateIds.add(c.id);
+  }
+
+  if (candidateIds.size === 0) return emptyResult(startTime);
+
+  // ── Phase 2: LanceDB vector search scoped to this vault ──
+  let vectorResults: VectorSearchResult[];
+  try {
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    if (signal?.aborted) return emptyResult(startTime);
+    if (!queryVector || queryVector.length === 0) return emptyResult(startTime);
+
+    const hits = await embeddingsSvc.searchVaultChunks(
+      userId, vaultId, queryVector, topK * 3, candidateIds, signal,
+    );
+    vectorResults = hits.map((h) => ({ chunkId: h.chunk_id, content: h.content, distance: h.score }));
+  } catch (err) {
+    if (signal?.aborted) return emptyResult(startTime);
+    console.warn("[memory-cortex] Vault vector search failed:", err);
+    return emptyResult(startTime);
+  }
+
+  if (vectorResults.length === 0) return emptyResult(startTime);
+
+  // ── Phase 3: Score fusion ──
+  const now = Math.floor(Date.now() / 1000);
+  const lambda = Math.LN2 / config.decay.halfLifeTurns;
+
+  const scored: CortexMemory[] = vectorResults.map((vr) => {
+    const row = chunkMap.get(vr.chunkId);
+    const salienceScore = row?.salience_score ?? 0.3;
+    const emotionalTags = safeJsonArray(row?.emotional_tags) as EmotionalTag[];
+    const entityNames = safeJsonArray(row?.entity_names);
+
+    const semanticScore = Math.max(0, 1 - vr.distance);
+
+    const age = Math.max(0, now - (row?.source_created_at ?? now));
+    const ageInTurns = age / 60;
+    const isCoreMemory = salienceScore >= config.decay.coreMemoryThreshold;
+    const recencyScore = isCoreMemory
+      ? Math.max(0.5, Math.exp(-lambda * ageInTurns * 0.2))
+      : Math.exp(-lambda * ageInTurns);
+
+    let emoScore = 0;
+    if (config.retrieval.emotionalResonance && emotionalContext?.length && emotionalTags.length) {
+      const overlap = emotionalTags.filter((t) => emotionalContext.includes(t));
+      emoScore = Math.min(0.4, overlap.length * 0.15);
+    }
+
+    let entityScore = 0;
+    if (activeEntityNames.size > 0 && entityNames.length > 0) {
+      const overlap = entityNames.filter((n) => activeEntityNames.has(n));
+      entityScore = Math.min(0.3, overlap.length * 0.1);
+    }
+
+    const finalScore = config.retrieval.useFusedScoring
+      ? semanticScore * 0.35 + salienceScore * 0.25 + recencyScore * 0.15 + emoScore * 0.10 + entityScore * 0.10
+      : semanticScore;
+
+    return {
+      source: "chunk" as const,
+      sourceId: vr.chunkId,
+      content: vr.content,
+      finalScore,
+      components: {
+        semantic: semanticScore,
+        salience: salienceScore,
+        recency: recencyScore,
+        reinforcement: 0,
+        emotional: emoScore,
+        entity: entityScore,
+      },
+      emotionalTags,
+      entityNames,
+      messageRange: [0, 0] as [number, number],
+      timeRange: [row?.source_created_at ?? 0, row?.source_created_at ?? 0] as [number, number],
+    };
+  });
+
+  // ── Phase 4: Diversity selection ──
+  const selected = config.retrieval.diversitySelection
+    ? diversitySelect(scored, topK, chunkRows.length)
+    : scored.sort((a, b) => b.finalScore - a.finalScore).slice(0, topK);
+
+  // ── Phase 5: Entity + relation context from vault tables ──
+  const entitySnapshots: EntitySnapshot[] = [];
+  const activeRelationships: RelationEdge[] = [];
+
+  if (config.retrieval.entityContextInjection) {
+    // Prioritise entities surfaced in selected memories; fall back to top-salience.
+    const activeInMemories = new Set<string>();
+    for (const m of selected) for (const n of m.entityNames) activeInMemories.add(n);
+    const orderedEntities = [
+      ...vaultEntities.filter((e) => activeInMemories.has(e.name) || activeEntityNames.has(e.name)),
+      ...vaultEntities.filter((e) => !activeInMemories.has(e.name) && !activeEntityNames.has(e.name)),
+    ].slice(0, config.retrieval.maxEntitySnapshots);
+
+    for (const e of orderedEntities) {
+      let emotionalProfile: Record<string, number> = {};
+      try { emotionalProfile = JSON.parse(e.emotional_valence); } catch { /* empty */ }
+      entitySnapshots.push({
+        id: e.id,
+        name: e.name,
+        type: e.entity_type as EntityType,
+        status: e.status as EntityStatus,
+        description: e.description,
+        lastSeenAt: null,
+        mentionCount: 0,
+        topFacts: safeJsonArray(e.facts),
+        emotionalProfile,
+        relationships: [],
+      });
+    }
+  }
+
+  if (query.includeRelationships !== false && config.retrieval.relationshipInjection) {
+    const relRows = db.query(
+      `SELECT source_entity_name, target_entity_name, relation_type, relation_label,
+              strength, sentiment
+       FROM cortex_vault_relations WHERE vault_id = ?
+       ORDER BY strength DESC LIMIT ?`,
+    ).all(vaultId, config.retrieval.maxRelationships) as Array<{
+      source_entity_name: string; target_entity_name: string;
+      relation_type: string; relation_label: string | null;
+      strength: number; sentiment: number;
+    }>;
+    for (const r of relRows) {
+      activeRelationships.push({
+        sourceName: r.source_entity_name,
+        targetName: r.target_entity_name,
+        type: r.relation_type as RelationType,
+        label: r.relation_label,
+        strength: r.strength,
+        sentiment: r.sentiment,
+      });
+    }
+  }
+
+  return {
+    memories: selected,
+    entityContext: entitySnapshots,
+    activeRelationships,
+    arcContext: null,
+    stats: {
+      candidatePoolSize: candidateIds.size,
+      vectorSearchResults: vectorResults.length,
+      entitiesMatched: activeEntityNames.size,
+      scoreFusionApplied: config.retrieval.useFusedScoring,
+      topScore: selected[0]?.finalScore ?? 0,
+      retrievalTimeMs: Date.now() - startTime,
+    },
+  };
 }

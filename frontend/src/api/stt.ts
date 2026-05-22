@@ -2,14 +2,14 @@ import { BASE_URL } from './client'
 
 export const sttApi = {
   /**
-   * Transcribe an audio blob via the backend OpenAI STT proxy.
+   * Transcribe an audio blob via the backend STT proxy.
    */
   async transcribe(
     audioBlob: Blob,
-    options?: { language?: string; connectionId?: string; model?: string }
+    options?: { language?: string; connectionId?: string; model?: string; fileName?: string }
   ): Promise<{ text: string; language?: string }> {
     const form = new FormData()
-    form.append('audio', audioBlob, 'recording.webm')
+    form.append('audio', audioBlob, options?.fileName || 'recording.webm')
     if (options?.language) form.append('language', options.language)
     if (options?.connectionId) form.append('connectionId', options.connectionId)
     if (options?.model) form.append('model', options.model)

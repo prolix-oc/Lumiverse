@@ -1,0 +1,28 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.picker[data-disabled] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.label {
+  flex: 0 0 80px;
+  font-size: 12px;
+  color: var(--text-secondary, #a0a0a8);
+}
+
+.row > :nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}

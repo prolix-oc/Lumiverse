@@ -6,6 +6,7 @@ import { settingsApi } from '@/api/settings'
 export const createSummarySlice: StateCreator<SummarySlice> = (set) => ({
   summarization: { ...DEFAULT_SUMMARIZATION_SETTINGS },
   isSummarizing: false,
+  lastSummaryMutation: null,
 
   setSummarization: (updates) =>
     set((state) => {
@@ -15,4 +16,5 @@ export const createSummarySlice: StateCreator<SummarySlice> = (set) => ({
     }),
 
   setIsSummarizing: (value) => set({ isSummarizing: value }),
+  setLastSummaryMutation: (value) => set({ lastSummaryMutation: value }),
 })

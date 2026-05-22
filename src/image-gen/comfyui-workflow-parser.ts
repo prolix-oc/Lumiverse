@@ -15,6 +15,9 @@ export interface DetectedInjectionPoint {
     | "width"
     | "height"
     | "checkpoint"
+    | "lora_name"
+    | "lora_strength_model"
+    | "lora_strength_clip"
     | null;
 }
 
@@ -52,6 +55,11 @@ const KNOWN_FIELD_HINTS: Record<string, Record<string, DetectedInjectionPoint["s
   },
   CheckpointLoaderSimple: {
     ckpt_name: "checkpoint",
+  },
+  LoraLoader: {
+    lora_name: "lora_name",
+    strength_model: "lora_strength_model",
+    strength_clip: "lora_strength_clip",
   },
 };
 

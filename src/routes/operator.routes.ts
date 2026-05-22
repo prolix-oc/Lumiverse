@@ -2,6 +2,17 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import { operatorService, OperationConflictError } from "../services/operator.service";
 import { InsufficientDiskSpaceError } from "../db/maintenance";
+import {
+  detectHostnameSuggestions,
+  getSnapshot as getTrustedHostsSnapshot,
+  InvalidTrustedHostError,
+  setTrustedHosts,
+} from "../services/trusted-hosts.service";
+import {
+  getSharpSettingsStatus,
+  putSharpSettings,
+} from "../services/sharp-settings.service";
+import { InvalidSettingError } from "../services/settings.service";
 
 const app = new Hono();
 const CHECKPOINT_MODES = new Set(["PASSIVE", "FULL", "RESTART", "TRUNCATE"]);
@@ -19,6 +30,23 @@ app.get("/status", async (c) => {
 app.get("/database", async (c) => {
   const userId = c.get("userId");
   return c.json(await operatorService.getDatabaseStatus(userId));
+});
+
+app.get("/sharp", (c) => {
+  return c.json(getSharpSettingsStatus());
+});
+
+app.put("/sharp", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  try {
+    return c.json(putSharpSettings(userId, body ?? {}));
+  } catch (err) {
+    if (err instanceof InvalidSettingError) {
+      return c.json({ error: err.message }, 400);
+    }
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
 });
 
 app.post("/database/maintenance", async (c) => {
@@ -47,6 +75,32 @@ app.post("/database/maintenance", async (c) => {
     }
     if (err instanceof InsufficientDiskSpaceError) {
       return c.json({ error: err.message }, 409);
+    }
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+// ── Trusted hosts ───────────────────────────────────────────────────────────
+
+app.get("/trusted-hosts", async (c) => {
+  const snapshot = getTrustedHostsSnapshot();
+  const fresh = c.req.query("fresh") === "1";
+  const suggestions = await detectHostnameSuggestions({ forceRefresh: fresh, baseline: snapshot.baseline });
+  return c.json({ ...snapshot, ...suggestions });
+});
+
+app.put("/trusted-hosts", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const hosts = Array.isArray(body?.hosts) ? body.hosts : null;
+  if (!hosts) {
+    return c.json({ error: "Payload must be { hosts: string[] }" }, 400);
+  }
+  try {
+    const configured = setTrustedHosts(hosts);
+    return c.json({ configured, baseline: getTrustedHostsSnapshot().baseline });
+  } catch (err) {
+    if (err instanceof InvalidTrustedHostError) {
+      return c.json({ error: err.message }, 400);
     }
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }

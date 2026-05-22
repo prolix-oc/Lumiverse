@@ -28,7 +28,7 @@
   border-radius: 4px;
   background: var(--lumiverse-primary-010);
   border: 1px solid var(--lumiverse-primary-020);
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   line-height: 1.2;
   animation: chipIn 0.12s ease-out;
@@ -69,7 +69,7 @@
   border: none;
   outline: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   padding: 2px 0;
 }
 
@@ -109,7 +109,7 @@
   background: transparent;
   border: none;
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   text-align: left;
   cursor: pointer;
   transition: background var(--lumiverse-transition-fast);
@@ -124,13 +124,13 @@
 }
 
 .dropdownSlug {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
 .dropdownEmpty {
   padding: 8px;
   text-align: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }

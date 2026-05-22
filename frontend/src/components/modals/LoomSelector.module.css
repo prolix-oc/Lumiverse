@@ -31,14 +31,14 @@
 
 .title {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
 }
 
 .subtitle {
   margin: 3px 0 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -47,7 +47,7 @@
   align-items: center;
   gap: 5px;
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   border-radius: var(--lumiverse-radius-sm);
   border: 1px solid var(--lumiverse-danger-020, rgba(239, 68, 68, 0.2));
@@ -91,7 +91,7 @@
   border: none;
   outline: none;
   color: var(--lumiverse-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 .searchInput::placeholder {
@@ -119,7 +119,7 @@
   align-items: center;
   gap: 3px;
   padding: 5px 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   border-radius: var(--lumiverse-radius-sm);
   border: none;
   background: var(--lumiverse-fill-subtle);
@@ -145,7 +145,7 @@
   text-align: center;
   padding: 40px 20px;
   color: var(--lumiverse-text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
 }
 
 /* ── Pack section ── */
@@ -166,7 +166,7 @@
   border: none;
   color: var(--lumiverse-text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   text-align: left;
   cursor: pointer;
@@ -192,7 +192,7 @@
 }
 
 .packCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-primary-text);
   padding: 1px 6px;
   border-radius: 4px;
@@ -240,7 +240,7 @@
 }
 
 .itemName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -249,7 +249,7 @@
 }
 
 .itemAuthor {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -297,13 +297,13 @@
 }
 
 .footerCount {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
 .doneBtn {
   padding: 8px 20px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   border-radius: var(--lumiverse-radius);
   border: none;

@@ -6,7 +6,7 @@ import { useNavigate, useLocation } from 'react-router'
 import clsx from 'clsx'
 import { useStore } from '@/store'
 import { buildCommands, GROUP_ORDER, type Command, type CommandScope } from '@/lib/commands'
-import { extensionTabsToCommands, extensionCommandsToCommands } from '@/lib/drawer-tab-registry'
+import { extensionTabsToCommands, extensionCommandsToCommands, sanitizeHiddenDrawerTabIds } from '@/lib/drawer-tab-registry'
 import styles from './CommandPalette.module.css'
 
 // ── Match highlight ────────────────────────────────────────────────────────────
@@ -31,6 +31,7 @@ export default function CommandPalette() {
   const close = useStore((s) => s.closeCommandPalette)
   const userRole = useStore((s) => s.user?.role)
   const drawerTabs = useStore((s) => s.drawerTabs)
+  const drawerSettings = useStore((s) => s.drawerSettings)
   const extensionCommands = useStore((s) => s.extensionCommands)
   const activeChatId = useStore((s) => s.activeChatId)
   const messageCount = useStore((s) => s.messages.length)
@@ -70,10 +71,18 @@ export default function CommandPalette() {
     return scopes
   }, [location.pathname, streaming, messageCount])
 
+  const hiddenTabIds = useMemo(
+    () => new Set(sanitizeHiddenDrawerTabIds(drawerSettings.hiddenTabIds)),
+    [drawerSettings.hiddenTabIds],
+  )
+
   const { grouped, orderedFlat, flatIndexMap } = useMemo(() => {
     const allCommands = [...buildCommands(userRole), ...extensionTabsToCommands(drawerTabs), ...extensionCommandsToCommands(extensionCommands)]
     
     let filtered = allCommands.filter((cmd) => {
+      if (cmd.id.startsWith('panel-') && hiddenTabIds.has(cmd.id.slice('panel-'.length))) return false
+      if (cmd.id.startsWith('ext-tab-') && hiddenTabIds.has(cmd.id.slice('ext-tab-'.length))) return false
+
       const isVisible = activeScopes.has(cmd.scope || 'global')
       if (!isVisible) return false
 
@@ -119,7 +128,7 @@ export default function CommandPalette() {
     }
 
     return { grouped: groups, orderedFlat: flat, flatIndexMap: idxMap }
-  }, [query, userRole, drawerTabs, extensionCommands, activeScopes, location.pathname])
+  }, [query, userRole, drawerTabs, drawerSettings.hiddenTabIds, extensionCommands, activeScopes, location.pathname, hiddenTabIds])
 
   // Clamp active index when filtered list shrinks
   useEffect(() => {

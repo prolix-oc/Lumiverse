@@ -497,7 +497,26 @@ export function runStartupDatabaseMaintenance(
 ): DatabaseMaintenanceResult {
   const statsBefore = collectDatabaseStats(db, dbPath);
   const tuning = applyAdaptiveDatabasePragmas(db, dbPath, userId);
-  db.run("PRAGMA optimize");
+  
+  try {
+    db.run("PRAGMA optimize");
+  } catch (err: any) {
+    if (err?.code && typeof err.code === "string" && err.code.startsWith("SQLITE_CORRUPT")) {
+      console.warn(`[db] WARNING: SQLite database disk image is malformed (${err.code}) during startup optimize. Entering recovery path...`);
+      healCorruptDatabase(db, dbPath);
+      
+      // Try again after healing
+      try {
+        db.run("PRAGMA optimize");
+      } catch (retryErr) {
+        console.error(`[db] PRAGMA optimize still failing after recovery attempt:`, retryErr);
+        throw retryErr;
+      }
+    } else {
+      throw err;
+    }
+  }
+
   const state = writeDatabaseMaintenanceState(db, userId, { lastOptimizeAt: Date.now() });
   const statsAfter = collectDatabaseStats(db, dbPath);
   logDatabaseStats("startup", statsAfter, tuning);
@@ -512,6 +531,72 @@ export function runStartupDatabaseMaintenance(
     state,
   };
 }
+
+export function healCorruptDatabase(db: Database, dbPath?: string): void {
+  console.warn(`[db] WARNING: SQLite database is corrupted! Attempting automatic recovery...`);
+  
+  try {
+    const checksBefore = db.query("PRAGMA integrity_check").all() as Record<string, unknown>[];
+    const msgs = checksBefore.map(r => String(Object.values(r)[0]));
+    console.warn("[db] Integrity check before recovery:\n  - " + msgs.join("\n  - "));
+  } catch (err) {
+    console.warn("[db] PRAGMA integrity_check threw:", err);
+  }
+  
+  try {
+    console.warn("[db] Dropping SQLite statistics tables...");
+    db.run("DROP TABLE IF EXISTS sqlite_stat1;");
+    db.run("DROP TABLE IF EXISTS sqlite_stat4;");
+  } catch (err) {
+    console.warn("[db] Failed to drop stats tables:", err);
+  }
+
+  try {
+    console.warn("[db] Running REINDEX to rebuild all indices...");
+    db.run("REINDEX");
+    console.warn("[db] REINDEX completed successfully.");
+  } catch(err) {
+    console.warn("[db] REINDEX failed:", err);
+  }
+
+  try {
+    const ftsTables = db.query("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%USING fts5%'").all() as {name: string}[];
+    if (ftsTables.length > 0) {
+      console.warn(`[db] Rebuilding ${ftsTables.length} FTS5 virtual table(s)...`);
+      for (const {name} of ftsTables) {
+        db.run(`INSERT INTO "${name}"("${name}") VALUES('rebuild');`);
+      }
+      console.warn("[db] FTS5 rebuild completed successfully.");
+    }
+  } catch (err) {
+    console.warn("[db] FTS5 rebuild failed:", err);
+  }
+
+  try {
+    console.warn("[db] Running VACUUM to defragment and rebuild database file...");
+    const stats = collectDatabaseStats(db, dbPath);
+    ensureVacuumDiskHeadroom(stats);
+    db.run("VACUUM");
+    console.warn("[db] VACUUM completed successfully.");
+  } catch (err) {
+    console.warn("[db] VACUUM failed:", err);
+  }
+
+  try {
+    const checksAfter = db.query("PRAGMA integrity_check").all() as Record<string, unknown>[];
+    const msgs = checksAfter.map(r => String(Object.values(r)[0]));
+    const isOk = msgs.length === 1 && msgs[0] === "ok";
+    if (isOk) {
+      console.warn("[db] SUCCESS: Integrity check passed! The database was successfully healed.");
+    } else {
+      console.error("[db] FAILURE: Integrity check failed after recovery attempts. The database is still corrupted.");
+      console.error("[db] Remaining errors:\n  - " + msgs.join("\n  - "));
+    }
+  } catch (err) {
+    console.error("[db] Final integrity check threw:", err);
+  }
+}
+
 
 export function runDatabaseMaintenance(
   db: Database,
@@ -543,15 +628,25 @@ export function runDatabaseMaintenance(
     }
   }
 
-  if (vacuumed) {
-    ensureVacuumDiskHeadroom(statsBefore);
-    db.run("VACUUM");
-  }
-  if (analyzed) {
-    db.run("ANALYZE");
-  }
-  if (optimized) {
-    db.run("PRAGMA optimize");
+  try {
+    if (vacuumed) {
+      ensureVacuumDiskHeadroom(statsBefore);
+      db.run("VACUUM");
+    }
+    if (analyzed) {
+      db.run("ANALYZE");
+    }
+    if (optimized) {
+      db.run("PRAGMA optimize");
+    }
+  } catch (err: any) {
+    if (err?.code && typeof err.code === "string" && err.code.startsWith("SQLITE_CORRUPT")) {
+      console.warn(`[db] WARNING: SQLite database disk image is malformed (${err.code}) during periodic maintenance. Entering recovery path...`);
+      healCorruptDatabase(db, options.dbPath);
+      // Skip the rest of the maintenance this tick; we'll try again next time
+    } else {
+      throw err;
+    }
   }
 
   const statsAfter = collectDatabaseStats(db, options.dbPath);

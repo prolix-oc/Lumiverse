@@ -6,6 +6,7 @@ import { resolveMode } from '@/hooks/useThemeApplicator'
 import type { ThemeConfig, ThemeMode, BaseColors } from '@/types/theme'
 import ModeSelector from './theme-panel/ModeSelector'
 import PresetGrid from './theme-panel/PresetGrid'
+import SavedThemes from './theme-panel/SavedThemes'
 import ExtensionThemes from './theme-panel/ExtensionThemes'
 import AccentPicker from './theme-panel/AccentPicker'
 import BaseColorPicker from './theme-panel/BaseColorPicker'
@@ -15,7 +16,9 @@ import styles from './ThemePanel.module.css'
 export default function ThemePanel() {
   const theme = useStore((s) => s.theme) as ThemeConfig | null
   const setTheme = useStore((s) => s.setTheme)
-  const hasExtensionOverrides = useStore((s) => Object.keys(s.extensionThemeOverrides).length > 0)
+  const hasExtensionOverrides = useStore((s) =>
+    Object.keys(s.extensionThemeOverrides).some((id) => !s.mutedExtensionThemes[id])
+  )
 
   const openModal = useStore((s) => s.openModal)
   const current = theme ?? DEFAULT_THEME
@@ -104,6 +107,8 @@ export default function ThemePanel() {
     URL.revokeObjectURL(url)
   }, [current])
 
+  const addSavedTheme = useStore((s) => s.addSavedTheme)
+
   const handleImportTheme = useCallback(() => {
     const input = document.createElement('input')
     input.type = 'file'
@@ -119,12 +124,16 @@ export default function ThemePanel() {
           typeof parsed.mode === 'string' &&
           typeof parsed.accent === 'object' && parsed.accent !== null
         ) {
-          setTheme({ ...parsed, id: 'custom' } as ThemeConfig)
+          const importedTheme = { ...parsed, id: 'custom' } as ThemeConfig
+          const baseName = file.name.replace(/\.json$/i, '').replace(/^lumiverse-theme-/i, '')
+          const name = parsed.name || baseName || 'Imported Theme'
+          addSavedTheme({ kind: 'config', name, theme: { ...importedTheme, name } })
+          setTheme(importedTheme)
         }
       } catch { /* ignore invalid files */ }
     }
     input.click()
-  }, [setTheme])
+  }, [setTheme, addSavedTheme])
 
   return (
     <div className={styles.panel}>
@@ -137,6 +146,8 @@ export default function ThemePanel() {
         <h4 className={styles.sectionLabel}>Presets</h4>
         <PresetGrid activeId={hasExtensionOverrides ? '' : current.id} onSelect={handlePresetSelect} />
       </section>
+
+      <SavedThemes />
 
       <ExtensionThemes />
 

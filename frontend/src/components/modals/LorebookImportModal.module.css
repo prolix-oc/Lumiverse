@@ -14,7 +14,7 @@
 }
 
 .title {
-  font-size: 16px;
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -22,7 +22,7 @@
 .badge {
   padding: 2px 8px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   background: rgba(var(--lumiverse-primary-rgb, 139, 92, 246), 0.15);
   color: var(--lumiverse-primary);
@@ -73,7 +73,7 @@
 }
 
 .lorebookName {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   white-space: nowrap;
@@ -82,7 +82,7 @@
 }
 
 .lorebookMeta {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -93,7 +93,7 @@
   flex-shrink: 0;
   padding: 2px 8px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-dim);

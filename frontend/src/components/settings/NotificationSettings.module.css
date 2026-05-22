@@ -18,7 +18,7 @@
   gap: 8px;
   padding: 10px 14px;
   background: var(--lumiverse-fill-subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
@@ -45,13 +45,13 @@
 }
 
 .infoLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text-muted);
 }
 
 .infoValue {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   display: flex;
   align-items: center;
@@ -111,7 +111,7 @@
 
 .deviceName {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
   min-width: 0;
@@ -121,7 +121,7 @@
 }
 
 .deviceDate {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   flex-shrink: 0;
 }
@@ -157,7 +157,7 @@
   border: 1px solid var(--lumiverse-border);
   background: transparent;
   color: var(--lumiverse-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
@@ -203,7 +203,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
   background: var(--lumiverse-fill-subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -211,7 +211,7 @@
 
 .emptyRow {
   padding: 16px 14px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   border-top: 1px solid var(--lumiverse-border);
 }

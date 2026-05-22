@@ -23,6 +23,29 @@ app.post("/", async (c) => {
   return c.json(persona, 201);
 });
 
+app.post("/folders/rename", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ old_name?: string; new_name?: string }>();
+  const oldName = body.old_name?.trim() || "";
+  const newName = body.new_name?.trim() || "";
+  if (!oldName) return c.json({ error: "old_name is required" }, 400);
+  if (!newName) return c.json({ error: "new_name is required" }, 400);
+
+  const updated = svc.renamePersonaFolder(userId, oldName, newName);
+  if (updated.length === 0) return c.json({ error: "Folder not found" }, 404);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/folders/delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ name?: string }>();
+  const name = body.name?.trim() || "";
+  if (!name) return c.json({ error: "name is required" }, 400);
+
+  const updated = svc.deletePersonaFolder(userId, name);
+  return c.json({ updated, count: updated.length });
+});
+
 app.get("/:id", (c) => {
   const userId = c.get("userId");
   const persona = svc.getPersona(userId, c.req.param("id"));

@@ -10,10 +10,12 @@
  */
 
 import type { GenerationType } from "../llm/types";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type PoolStatus = "assembling" | "council" | "streaming" | "completed" | "stopped" | "error";
+export type PoolStatus = "assembling" | "council" | "waiting" | "reasoning" | "streaming" | "completed" | "stopped" | "error";
 
 export interface PooledTokensEntry {
   generationId: string;
@@ -34,10 +36,24 @@ export interface PooledTokensEntry {
   completedMessageId?: string;
   completedAt?: number;
   error?: string;
-  /** Whether the user has acknowledged (viewed) a terminal generation */
+  /** Legacy field retained for old in-memory entries; attention is client-local. */
   acknowledged?: boolean;
   /** True while the generation is paused waiting for user to decide on failed council tools */
   councilRetryPending?: boolean;
+  /** Details for a paused council retry decision so clients can recover the modal after reconnects. */
+  councilToolsFailure?: {
+    generationId: string;
+    chatId: string;
+    failedTools: {
+      memberId: string;
+      memberName: string;
+      toolName: string;
+      toolDisplayName: string;
+      error?: string;
+    }[];
+    successCount: number;
+    failedCount: number;
+  };
   /** Timestamp (ms) when the LLM streaming request was initiated (post-assembly, post-council) */
   streamingStartedAt?: number;
   /** Timestamp (ms) when the first token (content or reasoning) arrived from the provider */
@@ -59,11 +75,11 @@ const chatIndex = new Map<string, string>();
 /** Terminal statuses that indicate a generation is no longer active */
 const TERMINAL_STATUSES: Set<PoolStatus> = new Set(["completed", "stopped", "error"]);
 
-/** TTL for acknowledged terminal entries before cleanup */
-const TERMINAL_TTL_MS = 5 * 60 * 1000; // 5 minutes
+/** Safety cap: terminal entries are swept after this to prevent memory leaks */
+const UNACKNOWLEDGED_MAX_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-/** Safety cap: unacknowledged entries are swept after this to prevent memory leaks */
-const UNACKNOWLEDGED_MAX_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+/** Additional cap so terminal chat-head state cannot grow without bound. */
+const MAX_TERMINAL_ENTRIES = 200;
 
 /** Sweep interval */
 const SWEEP_INTERVAL_MS = 60 * 1000; // 60 seconds
@@ -103,7 +119,11 @@ export function setPoolStatus(generationId: string, status: PoolStatus): void {
   const entry = pool.get(generationId);
   if (!entry) return;
   entry.status = status;
-  if (status === "streaming" && !entry.streamingStartedAt) {
+}
+
+export function markStreamingStarted(generationId: string): void {
+  const entry = pool.get(generationId);
+  if (entry && !entry.streamingStartedAt) {
     entry.streamingStartedAt = Date.now();
   }
 }
@@ -122,6 +142,10 @@ export function appendPoolContent(generationId: string, text: string): number {
   }
   if (!entry.firstTokenAt) entry.firstTokenAt = now;
   if (!entry.firstContentTokenAt) entry.firstContentTokenAt = now;
+  if (entry.status === "assembling" || entry.status === "council" || entry.status === "waiting" || entry.status === "reasoning") {
+    setPoolStatus(generationId, "streaming");
+    eventBus.emit(EventType.GENERATION_PHASE_CHANGED, { generationId, chatId: entry.chatId, phase: "streaming" }, entry.userId);
+  }
   entry.content += text;
   return ++entry.tokenSeq;
 }
@@ -136,16 +160,21 @@ export function appendPoolReasoning(generationId: string, text: string): number 
   const now = Date.now();
   if (!entry.reasoningStartedAt) entry.reasoningStartedAt = now;
   if (!entry.firstTokenAt) entry.firstTokenAt = now;
+  if (entry.status === "assembling" || entry.status === "council" || entry.status === "waiting") {
+    setPoolStatus(generationId, "reasoning");
+    eventBus.emit(EventType.GENERATION_PHASE_CHANGED, { generationId, chatId: entry.chatId, phase: "reasoning" }, entry.userId);
+  }
   entry.reasoning += text;
   return ++entry.tokenSeq;
 }
 
-export function completePool(generationId: string, messageId: string): void {
+export function completePool(generationId: string, messageId: string | undefined): void {
   const entry = pool.get(generationId);
   if (!entry) return;
   entry.status = "completed";
   entry.completedMessageId = messageId;
   entry.completedAt = Date.now();
+  trimTerminalEntries();
 }
 
 export function stopPool(generationId: string): void {
@@ -153,6 +182,7 @@ export function stopPool(generationId: string): void {
   if (!entry) return;
   entry.status = "stopped";
   entry.completedAt = Date.now();
+  trimTerminalEntries();
 }
 
 export function errorPool(generationId: string, message: string): void {
@@ -161,6 +191,7 @@ export function errorPool(generationId: string, message: string): void {
   entry.status = "error";
   entry.error = message;
   entry.completedAt = Date.now();
+  trimTerminalEntries();
 }
 
 // ── Lookups ──────────────────────────────────────────────────────────────────
@@ -198,30 +229,47 @@ export function getActivePoolsForUser(userId: string): PooledTokensEntry[] {
 }
 
 /**
- * Return all entries the user should see as chat heads:
- * active generations + terminal ones not yet acknowledged.
+ * Return the latest pooled entry per chat that the user should see as a chat
+ * head. Older generations for the same chat are intentionally hidden.
  */
 export function getChatHeadPoolsForUser(userId: string): PooledTokensEntry[] {
   const results: PooledTokensEntry[] = [];
-  for (const entry of pool.values()) {
-    if (entry.userId !== userId) continue;
-    if (!TERMINAL_STATUSES.has(entry.status) || !entry.acknowledged) {
-      results.push(entry);
-    }
+  for (const generationId of chatIndex.values()) {
+    const entry = pool.get(generationId);
+    if (!entry || entry.userId !== userId) continue;
+    results.push(entry);
   }
   return results;
 }
 
 /**
- * Mark all terminal entries for a chat as acknowledged.
- * Called when the user navigates to the chat or clicks the chat head.
+ * Clear terminal chat-head state for a chat once a user actually opens it.
+ * Active generations are preserved so streaming recovery still works.
  */
-export function acknowledgeChat(userId: string, chatId: string): void {
-  for (const entry of pool.values()) {
-    if (entry.userId === userId && entry.chatId === chatId && TERMINAL_STATUSES.has(entry.status)) {
-      entry.acknowledged = true;
+export function acknowledgeChat(userId: string, chatId: string): string[] {
+  const currentGenerationId = chatIndex.get(`${userId}:${chatId}`);
+  if (currentGenerationId) {
+    const currentEntry = pool.get(currentGenerationId);
+    if (currentEntry && !TERMINAL_STATUSES.has(currentEntry.status)) {
+      return [];
     }
   }
+
+  const removed: string[] = [];
+  for (const [generationId, entry] of pool) {
+    if (entry.userId !== userId || entry.chatId !== chatId) continue;
+    if (!TERMINAL_STATUSES.has(entry.status)) continue;
+    removed.push(generationId);
+  }
+  for (const generationId of removed) {
+    removePoolEntry(generationId);
+  }
+  return removed;
+}
+
+export function clearAllPoolEntries(): void {
+  pool.clear();
+  chatIndex.clear();
 }
 
 export function removePoolEntry(generationId: string): void {
@@ -257,11 +305,23 @@ function sweep(): void {
   for (const [id, entry] of pool) {
     if (!TERMINAL_STATUSES.has(entry.status) || !entry.completedAt) continue;
     const age = now - entry.completedAt;
-    // Acknowledged entries use the short TTL; unacknowledged get the safety cap
-    const ttl = entry.acknowledged ? TERMINAL_TTL_MS : UNACKNOWLEDGED_MAX_TTL_MS;
+    const ttl = UNACKNOWLEDGED_MAX_TTL_MS;
     if (age > ttl) {
       removePoolEntry(id);
     }
+  }
+
+  trimTerminalEntries();
+}
+
+function trimTerminalEntries(): void {
+  const terminalEntries = [...pool.entries()]
+    .filter(([, entry]) => TERMINAL_STATUSES.has(entry.status) && entry.completedAt)
+    .sort((a, b) => (a[1].completedAt ?? 0) - (b[1].completedAt ?? 0));
+
+  while (terminalEntries.length > MAX_TERMINAL_ENTRIES) {
+    const [generationId] = terminalEntries.shift()!;
+    removePoolEntry(generationId);
   }
 }
 

@@ -39,11 +39,17 @@ export default function ImageGenConnectionManager() {
     }
   }, [])
 
+  // `useAppInit` preloads image-gen profiles + providers right after auth.
+  // Only show the loading placeholder on a true cold mount (empty store);
+  // otherwise render from the store and refresh silently in the background.
   useEffect(() => {
     let cancelled = false
 
+    const storeState = useStore.getState()
+    const cacheHit = storeState.imageGenProfiles.length > 0 && storeState.imageGenProviders.length > 0
+
     async function init() {
-      setLoading(true)
+      if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
           imageGenConnectionsApi.list({ limit: 100 }),
@@ -62,7 +68,7 @@ export default function ImageGenConnectionManager() {
       } catch (err) {
         console.error('[ImageGenConnectionManager] Init failed:', err)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && !cacheHit) setLoading(false)
       }
     }
 

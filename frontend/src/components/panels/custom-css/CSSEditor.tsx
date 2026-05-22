@@ -1,11 +1,11 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { forwardRef, useRef, useEffect, useCallback, useImperativeHandle } from 'react'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { EditorState, type Extension } from '@codemirror/state'
 import { css } from '@codemirror/lang-css'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language'
-import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import { closeBrackets, closeBracketsKeymap, autocompletion } from '@codemirror/autocomplete'
 import { lintGutter } from '@codemirror/lint'
 import styles from './CSSEditor.module.css'
 
@@ -14,9 +14,16 @@ interface CodeEditorProps {
   onChange: (value: string) => void
   /** Language extension — defaults to CSS. Pass a different extension for TSX etc. */
   language?: Extension
+  /** Optional extra extensions */
+  extensions?: Extension[]
 }
 
-export default function CodeEditor({ value, onChange, language }: CodeEditorProps) {
+export interface CodeEditorHandle {
+  insertText: (text: string) => void
+  replaceSelection: (text: string) => void
+}
+
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor({ value, onChange, language, extensions = [] }, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
@@ -46,6 +53,7 @@ export default function CodeEditor({ value, onChange, language }: CodeEditorProp
         foldGutter(),
         bracketMatching(),
         closeBrackets(),
+        autocompletion(),
         lang,
         oneDark,
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
@@ -56,6 +64,7 @@ export default function CodeEditor({ value, onChange, language }: CodeEditorProp
           ...foldKeymap,
           ...closeBracketsKeymap,
         ]),
+        ...extensions,
         updateListener,
         EditorView.lineWrapping,
       ],
@@ -94,5 +103,30 @@ export default function CodeEditor({ value, onChange, language }: CodeEditorProp
     }
   }, [value])
 
+  useImperativeHandle(ref, () => ({
+    insertText(text: string) {
+      const view = viewRef.current
+      if (!view) return
+      const { to } = view.state.selection.main
+      view.dispatch({
+        changes: { from: to, to, insert: text },
+        selection: { anchor: to + text.length },
+      })
+      view.focus()
+    },
+    replaceSelection(text: string) {
+      const view = viewRef.current
+      if (!view) return
+      const { from, to } = view.state.selection.main
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+      })
+      view.focus()
+    },
+  }), [])
+
   return <div ref={containerRef} className={styles.editor} />
-}
+})
+
+export default CodeEditor

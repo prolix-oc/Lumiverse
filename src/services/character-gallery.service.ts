@@ -1,5 +1,5 @@
 import { getDb } from "../db/connection";
-import { uploadImage } from "./images.service";
+import { deleteImageIfUnreferenced, uploadImage } from "./images.service";
 import { getCharacter } from "./characters.service";
 import type { CharacterGalleryItem } from "../types/character-gallery";
 import { safeFetch } from "../utils/safe-fetch";
@@ -56,27 +56,61 @@ export function addToGallery(
   return getGalleryItem(userId, id)!;
 }
 
+/**
+ * Lightweight insert used by background flows (image-gen auto-link) that do
+ * not need the resulting row read back. Saves a JOIN read on the hot path.
+ */
+export function linkImageToGallery(
+  userId: string,
+  characterId: string,
+  imageId: string,
+  caption?: string
+): void {
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query(
+      `INSERT INTO character_gallery (id, user_id, character_id, image_id, caption, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(id, userId, characterId, imageId, caption ?? "", 0, now);
+}
+
 export async function uploadToGallery(
   userId: string,
   characterId: string,
   file: File,
   caption?: string
 ): Promise<CharacterGalleryItem> {
-  const image = await uploadImage(userId, file);
+  const image = await uploadImage(userId, file, { owner_character_id: characterId });
   return addToGallery(userId, characterId, image.id, caption);
+}
+
+export interface BulkGallerySkippedFile {
+  name: string;
+  reason: string;
+}
+
+export interface BulkGalleryUploadResult {
+  items: CharacterGalleryItem[];
+  skipped: BulkGallerySkippedFile[];
 }
 
 /**
  * Upload multiple images to a character's gallery in one call.
  * Emits IMPORT_GALLERY_PROGRESS WS events so the frontend can track progress.
+ * Returns both successful items and any files that were skipped (oversized,
+ * runtime failure, etc.) so the caller can surface them to the user.
  */
 export async function uploadBulkToGallery(
   userId: string,
   characterId: string,
   files: File[],
-): Promise<CharacterGalleryItem[]> {
+  preSkipped: BulkGallerySkippedFile[] = [],
+): Promise<BulkGalleryUploadResult> {
   const total = files.length;
   const items: CharacterGalleryItem[] = [];
+  const skipped: BulkGallerySkippedFile[] = [...preSkipped];
 
   for (let i = 0; i < total; i++) {
     eventBus.emit(
@@ -87,18 +121,24 @@ export async function uploadBulkToGallery(
     try {
       const item = await uploadToGallery(userId, characterId, files[i]);
       items.push(item);
-    } catch {
-      // skip individual failures
+    } catch (err: any) {
+      skipped.push({
+        name: files[i].name || "unknown",
+        reason: err?.message ?? "upload failed",
+      });
     }
   }
 
-  return items;
+  return { items, skipped };
 }
 
 export function removeFromGallery(userId: string, itemId: string): boolean {
+  const item = getGalleryItem(userId, itemId);
+  if (!item) return false;
   const result = getDb()
     .query("DELETE FROM character_gallery WHERE id = ? AND user_id = ?")
     .run(itemId, userId);
+  if (result.changes > 0) deleteImageIfUnreferenced(userId, item.image_id);
   return result.changes > 0;
 }
 

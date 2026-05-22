@@ -58,6 +58,14 @@
   opacity: 1;
 }
 
+.avatarOverlayActive {
+  opacity: 1;
+}
+
+.avatarZoneUploading {
+  cursor: wait;
+}
+
 .hiddenInput {
   display: none;
 }
@@ -76,7 +84,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   outline: none;
@@ -93,7 +101,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 5px 10px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -116,7 +124,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 8px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   resize: vertical;
   min-height: 60px;
@@ -154,14 +162,14 @@
 }
 
 .pronounTitle {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
   letter-spacing: 0.01em;
 }
 
 .pronounHint {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -180,7 +188,7 @@
 }
 
 .pronounLabel {
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   letter-spacing: 0.08em;
@@ -209,7 +217,7 @@
   align-items: center;
   padding: 0 7px;
   font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-primary);
   background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
@@ -225,7 +233,7 @@
   background: transparent;
   border: none;
   padding: 7px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
 }
@@ -240,7 +248,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 6px;
   padding: 5px 8px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   cursor: pointer;
@@ -262,7 +270,7 @@
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
@@ -287,7 +295,7 @@
   background: var(--lumiverse-bg);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text-dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   white-space: nowrap;
@@ -311,16 +319,8 @@
   min-width: 0;
 }
 
-.lorebookSelect {
+.lorebookSelectWrapper {
   flex: 1;
-  background: var(--lumiverse-bg);
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 6px;
-  padding: 5px 8px;
-  font-size: 11.5px;
-  color: var(--lumiverse-text);
-  outline: none;
-  cursor: pointer;
   min-width: 0;
 }
 
@@ -366,7 +366,7 @@
 }
 
 .bindingLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -378,6 +378,152 @@
   color: var(--lumiverse-primary);
 }
 
+.tagBindingSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 4%, var(--lumiverse-bg));
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 18%, var(--lumiverse-border));
+  border-radius: 8px;
+}
+
+.tagBindingHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tagBindingTitle {
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.tagBindingHint {
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.tagBindingControls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tagBindingSelect {
+  flex: 1;
+  min-width: 220px;
+}
+
+.tagModeSelect {
+  flex: 0 0 auto;
+  min-width: 92px;
+}
+
+.clearBindingBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.clearBindingBtn:hover {
+  border-color: color-mix(in srgb, #d76b6b 60%, var(--lumiverse-border));
+  color: #d76b6b;
+}
+
+.tagChipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tagChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.tagChipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.tagChipRemove:hover {
+  opacity: 1;
+}
+
+.tagSuggestionRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tagSuggestionLabel {
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.tagSuggestionList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tagSuggestionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.tagSuggestionBtn:hover {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.tagBindingMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
 .rebindBtn {
   display: inline-flex;
   align-items: center;
@@ -387,7 +533,7 @@
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg);
   color: var(--lumiverse-text-dim);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
   flex-shrink: 0;
@@ -409,5 +555,15 @@
 @media (max-width: 720px) {
   .pronounGrid {
     grid-template-columns: 1fr;
+  }
+
+  .tagBindingControls {
+    align-items: stretch;
+  }
+
+  .tagBindingSelect,
+  .tagModeSelect,
+  .clearBindingBtn {
+    width: 100%;
   }
 }

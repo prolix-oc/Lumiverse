@@ -3,7 +3,6 @@ import type {
   CouncilMember,
   CouncilToolResult,
   CouncilExecutionResult,
-  CouncilToolDefinition,
 } from "lumiverse-spindle-types";
 import type { LlmMessage } from "../../llm/types";
 import { eventBus } from "../../ws/bus";
@@ -19,17 +18,24 @@ import * as settingsSvc from "../settings.service";
 import { activateWorldInfo } from "../world-info-activation.service";
 import { getCharacterWorldBookIds } from "../../utils/character-world-books";
 import { getCouncilSettings, getAvailableTools } from "./council-settings.service";
-import { BUILTIN_TOOLS_MAP } from "./builtin-tools";
 import { parseMcpToolName } from "./mcp-tools";
 import { getMcpClientManager } from "../mcp-client-manager";
-import { toolRegistry } from "../../spindle/tool-registry";
-import { getWorkerHost } from "../../spindle/lifecycle";
+import {
+  buildCouncilMemberContext,
+  getCouncilToolArgsSchema,
+  getCouncilToolExecution,
+  getExtensionToolRegistration,
+  invokeExtensionCouncilTool,
+  type RuntimeCouncilToolDefinition,
+} from "./tool-runtime";
+import { executeHostCouncilTool } from "./host-tools";
 import { getExpressionLabels, hasExpressions } from "../expressions.service";
 import { getSidecarSettings } from "../sidecar-settings.service";
+import type { SidecarSettings } from "../sidecar-settings.service";
+import { getToolChoiceParams } from "../memory-cortex/salience-sidecar";
 import type { SidecarConfig } from "lumiverse-spindle-types";
 
 const MAX_RETRIES = 3;
-
 /** Pre-computed enrichment context from the generation chain. When provided,
  *  council tools use this data instead of independently loading and activating
  *  character/persona/world info. This ensures world info resolution happens at
@@ -43,6 +49,8 @@ export interface CouncilEnrichment {
   activatedWorldInfoEntries: import("../../types/world-book").WorldBookEntry[];
 }
 
+const GOOGLE_PLANNING_PROVIDERS = new Set(["google", "google_vertex"]);
+
 interface ExecuteInput {
   userId: string;
   chatId: string;
@@ -50,6 +58,7 @@ interface ExecuteInput {
   connectionId?: string;
   /** Pre-resolved settings — avoids re-fetching and ensures consistency with caller. */
   settings?: CouncilSettings;
+  sidecarSettings?: SidecarSettings;
   /** Abort signal — when fired, stops executing further council tools. */
   signal?: AbortSignal;
   /** Pre-computed enrichment from the generation chain. When provided, council tools
@@ -61,13 +70,32 @@ interface ExecuteInput {
   retryToolNames?: string[];
 }
 
+export interface CouncilHistoricalDeliberationEntry {
+  id: string;
+  createdAt: number;
+  memberId: string;
+  memberName: string;
+  toolName: string;
+  toolDisplayName: string;
+  content: string;
+}
+
+export type CouncilExecutionResultWithHistory = CouncilExecutionResult & {
+  historicalDeliberationBlock?: string;
+};
+
+const COUNCIL_HISTORY_METADATA_KEY = "council_deliberation_history_v1";
+const MAX_HISTORY_RETENTION = 10;
+const MAX_HISTORY_ENTRY_CHARS = 4000;
+const MAX_HISTORY_TOTAL_ENTRIES = 200;
+
 /**
  * Execute the full council cycle: roll dice per member, invoke sidecar LLM
  * for each tool, collect results, format deliberation block.
  */
 export async function executeCouncil(
   input: ExecuteInput
-): Promise<CouncilExecutionResult | null> {
+): Promise<CouncilExecutionResultWithHistory | null> {
   const settings = input.settings ?? getCouncilSettings(input.userId);
 
   if (!settings.councilMode) {
@@ -83,7 +111,7 @@ export async function executeCouncil(
   const hasTools = settings.members.some((m) => m.tools.length > 0);
 
   // Resolve sidecar connection from shared settings (falls back to legacy council config)
-  const sidecar = getSidecarSettings(input.userId);
+  const sidecar = input.sidecarSettings ?? getSidecarSettings(input.userId);
   if (hasTools && (!sidecar.connectionProfileId || !sidecar.model)) {
     console.warn("[council] Tools skipped: sidecar connection not configured (profileId=%s, model=%s)", sidecar.connectionProfileId, sidecar.model);
   }
@@ -102,7 +130,7 @@ export async function executeCouncil(
   const namedResults = new Map<string, string>();
 
   // Build available tools map
-  const availableTools = new Map<string, CouncilToolDefinition>();
+  const availableTools = new Map<string, RuntimeCouncilToolDefinition>();
   for (const t of await getAvailableTools(input.userId)) {
     availableTools.set(t.name, t);
   }
@@ -137,6 +165,12 @@ export async function executeCouncil(
     return null;
   }
 
+  const historicalByAssignment = getHistoricalEntriesForMembers(
+    input.userId,
+    input.chatId,
+    activeMembers,
+  );
+
   eventBus.emit(EventType.COUNCIL_STARTED, {
     chatId: input.chatId,
     memberCount: activeMembers.length,
@@ -159,7 +193,8 @@ export async function executeCouncil(
       member,
       availableTools,
       contextMessages,
-      namedResults
+      namedResults,
+      historicalByAssignment,
     );
     allResults.push(...memberResults);
 
@@ -182,11 +217,15 @@ export async function executeCouncil(
   }
 
   const deliberationBlock = formatDeliberation(allResults, availableTools);
+  const historicalDeliberationBlock = formatHistoricalDeliberations(
+    historicalByAssignment,
+  );
   const totalDurationMs = Date.now() - startTime;
 
-  const result: CouncilExecutionResult = {
+  const result: CouncilExecutionResultWithHistory = {
     results: allResults,
     deliberationBlock,
+    ...(historicalDeliberationBlock ? { historicalDeliberationBlock } : {}),
     totalDurationMs,
   };
 
@@ -205,14 +244,26 @@ async function executeMemberTools(
   settings: CouncilSettings,
   sidecar: SidecarConfig,
   member: CouncilMember,
-  tools: Map<string, CouncilToolDefinition>,
+  tools: Map<string, RuntimeCouncilToolDefinition>,
   contextMessages: LlmMessage[],
-  namedResults: Map<string, string>
+  namedResults: Map<string, string>,
+  historicalByAssignment: Map<string, CouncilHistoricalDeliberationEntry[]>
 ): Promise<CouncilToolResult[]> {
   const results: CouncilToolResult[] = [];
 
+  // Resolve the backing Lumia item once — reused for identity prompt and the
+  // CouncilMemberContext delivered to extension tool invocations.
+  let lumiaItem: ReturnType<typeof packsSvc.getLumiaItem> = null;
+  try {
+    lumiaItem = packsSvc.getLumiaItem(input.userId, member.itemId);
+  } catch {
+    // Item may be missing (pack uninstalled mid-flight) — fall back to null.
+  }
+
+  const memberContext = buildCouncilMemberContext(member, lumiaItem);
+
   // Build member identity context
-  const identityMsg = buildMemberIdentity(input.userId, member);
+  const identityMsg = buildMemberIdentity(member, lumiaItem);
 
   for (const toolName of member.tools) {
     if (input.signal?.aborted) {
@@ -234,43 +285,61 @@ async function executeMemberTools(
     let content = "";
     let error: string | undefined;
 
-    // Check if this tool belongs to an extension (route to worker instead of sidecar)
-    const extToolReg = toolRegistry.getTool(toolName);
-    const isExtensionTool = !!extToolReg?.extension_id;
-
-    // Check if this is an MCP tool (route to connected MCP server)
-    const mcpMatch = !isExtensionTool ? parseMcpToolName(input.userId, toolName) : null;
-    const isMcpTool = !!mcpMatch;
+    const execution = getCouncilToolExecution(input.userId, toolDef);
+    const extToolReg = execution === "extension" ? getExtensionToolRegistration(toolName) : undefined;
+    const mcpMatch = execution === "mcp" ? parseMcpToolName(input.userId, toolName) : null;
+    const toolContextMessages = withHistoricalCouncilContext(
+      contextMessages,
+      member,
+      toolDef,
+      historicalByAssignment.get(assignmentKey(member.id, toolName)) ?? [],
+    );
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        if (isMcpTool) {
-          // Route to connected MCP server — the sidecar determines the arguments
-          // via function calling, but for council mode we pass an empty args object
-          // and let the MCP server handle the execution.
+        if (execution === "mcp") {
+          const plannedArgs = await planCallableToolArgs(
+            input.userId,
+            sidecar,
+            toolDef,
+            member,
+            identityMsg,
+            toolContextMessages,
+            settings.toolsSettings.timeoutMs,
+            input.signal,
+          );
+
           content = await getMcpClientManager().callTool(
             input.userId,
             mcpMatch!.serverId,
             mcpMatch!.toolName,
-            {},
+            plannedArgs,
             settings.toolsSettings.timeoutMs
           );
-        } else if (isExtensionTool) {
+        } else if (execution === "extension") {
           // Pass the bare tool name (not qualified) so extension handlers can
           // match easily, and forward the full chat context so tools can act on it.
           // Extension tools receive the exact same context as sidecar tools —
           // system enrichment (character, persona, world info) plus the full
           // chat history governed by the sidecar context window setting.
+          //
+          // Context is delivered two ways for the same invocation:
+          //   1. `args.context` — flattened string (role prefixes elided for
+          //      system messages, multipart content dropped). Kept for
+          //      backwards compatibility with extensions already reading it.
+          //   2. `contextMessages` (top-level payload field) — structured
+          //      LlmMessageDTO[], role boundaries preserved, multipart text
+          //      extracted. Delivered via worker-host so it can't collide
+          //      with user-space `args` (same rationale as `councilMember`).
           const bareToolName = extToolReg!.name;
-          const contextSummary = contextMessages
+          const contextSummary = toolContextMessages
             .map((m) => {
               const prefix = m.role === "system" ? "" : `${m.role}: `;
               return `${prefix}${typeof m.content === "string" ? m.content : ""}`;
             })
             .join("\n\n");
 
-          content = await invokeExtensionToolViaWorker(
-            input.userId,
+          content = await invokeExtensionCouncilTool(
             extToolReg!.extension_id,
             bareToolName,
             {
@@ -280,8 +349,32 @@ async function executeMemberTools(
               // attempted __userId injection before posting to the worker.
               __deadlineMs: Date.now() + settings.toolsSettings.timeoutMs,
             },
-            settings.toolsSettings.timeoutMs
+            settings.toolsSettings.timeoutMs,
+            memberContext,
+            toolContextMessages
           );
+        } else if (execution === "host") {
+          const plannedArgs = await planCallableToolArgs(
+            input.userId,
+            sidecar,
+            toolDef,
+            member,
+            identityMsg,
+            toolContextMessages,
+            settings.toolsSettings.timeoutMs,
+            input.signal,
+          );
+
+          content = await executeHostCouncilTool({
+            userId: input.userId,
+            tool: toolDef,
+            args: plannedArgs,
+            member,
+            memberContext,
+            contextMessages: toolContextMessages,
+            timeoutMs: settings.toolsSettings.timeoutMs,
+            signal: input.signal,
+          });
         } else {
           content = await invokeSidecarTool(
             input.userId,
@@ -289,7 +382,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            contextMessages,
+            toolContextMessages,
             settings.toolsSettings,
             input.signal,
             input.enrichment
@@ -301,7 +394,7 @@ async function executeMemberTools(
         error = err.message;
         // Don't retry if the generation was aborted — bail out immediately
         if (input.signal?.aborted) break;
-        if (isExtensionTool || isMcpTool) break;
+        if (execution === "extension" || execution === "mcp" || execution === "host") break;
         if (attempt < MAX_RETRIES - 1) {
           await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
         }
@@ -333,32 +426,232 @@ async function executeMemberTools(
   return results;
 }
 
+function assignmentKey(memberId: string, toolName: string): string {
+  return `${memberId}:${toolName}`;
+}
+
+function getToolHistoryRetention(member: CouncilMember, toolName: string): number {
+  const value = (member as any).toolHistoryRetention?.[toolName];
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(MAX_HISTORY_RETENTION, Math.floor(value)));
+}
+
+function truncateHistoryContent(content: string): string {
+  if (content.length <= MAX_HISTORY_ENTRY_CHARS) return content;
+  return `${content.slice(0, MAX_HISTORY_ENTRY_CHARS).trimEnd()}\n[truncated]`;
+}
+
+function readCouncilHistory(
+  userId: string,
+  chatId: string,
+): CouncilHistoricalDeliberationEntry[] {
+  const chat = chatsSvc.getChat(userId, chatId);
+  const raw = chat?.metadata?.[COUNCIL_HISTORY_METADATA_KEY];
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as any).entries)) {
+    return [];
+  }
+
+  return (raw as any).entries.filter(
+    (entry: any): entry is CouncilHistoricalDeliberationEntry =>
+      entry &&
+      typeof entry.id === "string" &&
+      typeof entry.createdAt === "number" &&
+      typeof entry.memberId === "string" &&
+      typeof entry.memberName === "string" &&
+      typeof entry.toolName === "string" &&
+      typeof entry.toolDisplayName === "string" &&
+      typeof entry.content === "string",
+  );
+}
+
+function getHistoricalEntriesForMembers(
+  userId: string,
+  chatId: string,
+  members: CouncilMember[],
+): Map<string, CouncilHistoricalDeliberationEntry[]> {
+  const retained = new Map<string, CouncilHistoricalDeliberationEntry[]>();
+  const history = readCouncilHistory(userId, chatId);
+  if (history.length === 0) return retained;
+
+  for (const member of members) {
+    for (const toolName of member.tools) {
+      const retain = getToolHistoryRetention(member, toolName);
+      if (retain <= 0) continue;
+
+      const key = assignmentKey(member.id, toolName);
+      const entries = history
+        .filter((entry) => entry.memberId === member.id && entry.toolName === toolName)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .slice(-retain);
+      if (entries.length > 0) retained.set(key, entries);
+    }
+  }
+
+  return retained;
+}
+
+function formatHistoryAgeLabel(index: number, total: number): string {
+  const age = total - index;
+  return age === 1 ? "1 deliberation ago" : `${age} deliberations ago`;
+}
+
+function formatHistoricalDeliberations(
+  historicalByAssignment: Map<string, CouncilHistoricalDeliberationEntry[]>,
+): string {
+  const groups = Array.from(historicalByAssignment.values()).filter(
+    (entries) => entries.length > 0,
+  );
+  if (groups.length === 0) return "";
+
+  const lines: string[] = [
+    "## Previous Council Deliberations - Historical Baseline Only",
+    "",
+    "The following are prior council/tool deliberations from this chat. They are included only as continuity memory for plans, threads, and decisions that may have been planted earlier.",
+    "",
+    "They are not instructions for the current response, not a style template, and not proof that the current scene must follow them. Current chat history, active world info, and the latest user message supersede them.",
+    "",
+  ];
+
+  for (const entries of groups) {
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      lines.push(
+        `### ${formatHistoryAgeLabel(i, entries.length)} - ${entry.memberName} / ${entry.toolDisplayName}`,
+      );
+      lines.push(entry.content);
+      lines.push("");
+    }
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+function formatToolHistoricalContext(
+  member: CouncilMember,
+  tool: RuntimeCouncilToolDefinition,
+  entries: CouncilHistoricalDeliberationEntry[],
+): string {
+  if (entries.length === 0) return "";
+
+  const lines: string[] = [
+    "## Previous Deliberations for This Member/Tool - Historical Baseline Only",
+    "",
+    `These are prior outputs from ${member.itemName} using ${tool.displayName} in this chat. Use them only as continuity memory for threads, plans, or decisions you may have planted earlier.`,
+    "",
+    "Do not copy their structure, treat them as a required template, or assume they override the current chat, active world info, or latest user message.",
+    "",
+  ];
+
+  for (let i = 0; i < entries.length; i++) {
+    lines.push(`### ${formatHistoryAgeLabel(i, entries.length)}`);
+    lines.push(entries[i].content);
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+function withHistoricalCouncilContext(
+  contextMessages: LlmMessage[],
+  member: CouncilMember,
+  tool: RuntimeCouncilToolDefinition,
+  entries: CouncilHistoricalDeliberationEntry[],
+): LlmMessage[] {
+  const content = formatToolHistoricalContext(member, tool, entries);
+  if (!content) return contextMessages;
+  return [{ role: "system", content }, ...contextMessages];
+}
+
+export function appendCouncilDeliberationHistory(input: {
+  userId: string;
+  chatId: string;
+  settings: CouncilSettings;
+  results: CouncilToolResult[];
+}): void {
+  const retentionByAssignment = new Map<string, number>();
+  const memberById = new Map(input.settings.members.map((member) => [member.id, member]));
+
+  for (const member of input.settings.members) {
+    for (const toolName of member.tools) {
+      const retain = getToolHistoryRetention(member, toolName);
+      if (retain > 0) retentionByAssignment.set(assignmentKey(member.id, toolName), retain);
+    }
+  }
+
+  if (retentionByAssignment.size === 0) {
+    if (readCouncilHistory(input.userId, input.chatId).length > 0) {
+      chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
+        [COUNCIL_HISTORY_METADATA_KEY]: undefined,
+      });
+    }
+    return;
+  }
+
+  const now = Date.now();
+  const additions: CouncilHistoricalDeliberationEntry[] = [];
+  for (const result of input.results) {
+    if (!result.success || !result.content.trim()) continue;
+    const member = memberById.get(result.memberId);
+    if (!member) continue;
+    if (!retentionByAssignment.has(assignmentKey(result.memberId, result.toolName))) continue;
+
+    additions.push({
+      id: crypto.randomUUID(),
+      createdAt: now,
+      memberId: result.memberId,
+      memberName: result.memberName,
+      toolName: result.toolName,
+      toolDisplayName: result.toolDisplayName,
+      content: truncateHistoryContent(result.content.trim()),
+    });
+  }
+
+  if (additions.length === 0) return;
+
+  const existing = readCouncilHistory(input.userId, input.chatId);
+  const next = [...existing, ...additions]
+    .filter((entry) => retentionByAssignment.has(assignmentKey(entry.memberId, entry.toolName)))
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  const byAssignment = new Map<string, CouncilHistoricalDeliberationEntry[]>();
+  for (const entry of next) {
+    const key = assignmentKey(entry.memberId, entry.toolName);
+    const entries = byAssignment.get(key) ?? [];
+    entries.push(entry);
+    byAssignment.set(key, entries);
+  }
+
+  const pruned: CouncilHistoricalDeliberationEntry[] = [];
+  for (const [key, entries] of byAssignment) {
+    const retain = retentionByAssignment.get(key) ?? 0;
+    pruned.push(...entries.slice(-retain));
+  }
+  pruned.sort((a, b) => a.createdAt - b.createdAt);
+
+  chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
+    [COUNCIL_HISTORY_METADATA_KEY]: {
+      version: 1,
+      entries: pruned.slice(-MAX_HISTORY_TOTAL_ENTRIES),
+    },
+  });
+}
+
 /**
  * Route a tool call to the extension worker that registered it. We never
  * forward the authenticated userId — extensions run in their own user-scoped
  * worker and reach back via the RPC bridge under that identity. Passing the
  * raw userId to the tool handler would let a malicious extension impersonate
  * the user via its own internal state, defeating the worker boundary.
+ *
+ * `councilMember` is a trusted host-built snapshot of the assigned member's
+ * identity/personality fields — delivered to the extension handler alongside
+ * the invocation args so the tool can tailor its output to that member.
  */
-async function invokeExtensionToolViaWorker(
-  userId: string,
-  extensionId: string,
-  toolName: string,
-  args: Record<string, unknown>,
-  timeoutMs: number
-): Promise<string> {
-  const host = getWorkerHost(extensionId);
-  if (!host) {
-    throw new Error(`Extension worker '${extensionId}' is not running`);
-  }
-  return host.invokeExtensionTool(toolName, args, timeoutMs);
-}
-
 /** Call the sidecar LLM for a single tool. */
 async function invokeSidecarTool(
   userId: string,
   sidecar: SidecarConfig,
-  tool: CouncilToolDefinition,
+  tool: RuntimeCouncilToolDefinition,
   member: CouncilMember,
   identityMsg: string,
   contextMessages: LlmMessage[],
@@ -366,6 +659,10 @@ async function invokeSidecarTool(
   signal?: AbortSignal,
   enrichment?: CouncilEnrichment
 ): Promise<string> {
+  if (!tool.prompt) {
+    throw new Error(`LLM council tool \"${tool.displayName}\" is missing a prompt`);
+  }
+
   const brevityNote =
     toolsSettings.maxWordsPerTool > 0
       ? `\n\nIMPORTANT — BREVITY REQUIREMENT: Keep each tool response field under ${toolsSettings.maxWordsPerTool} words. Be direct, specific, and actionable. No preamble, filler, or repetition. Every word must earn its place.`
@@ -421,6 +718,451 @@ ${tool.prompt}${dynamicSuffix}${brevityNote}${userControlNote}`;
   });
 
   return response.content || "";
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  if (!text) return null;
+  const trimmed = text.trim();
+
+  const direct = tryParseJsonObject(trimmed);
+  if (direct) return direct;
+
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim();
+  if (fenced) {
+    const parsedFenced = tryParseJsonObject(fenced);
+    if (parsedFenced) return parsedFenced;
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const embedded = tryParseJsonObject(trimmed.slice(firstBrace, lastBrace + 1));
+    if (embedded) return embedded;
+  }
+
+  return null;
+}
+
+function tryParseJsonObject(text: string): Record<string, unknown> | null {
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function coerceScalarForSchema(value: string, schema: Record<string, unknown> | undefined): unknown {
+  const type = typeof schema?.type === "string" ? schema.type : "string";
+  if (type === "integer" || type === "number") {
+    const num = Number(value.trim());
+    return Number.isFinite(num) ? num : value.trim();
+  }
+  if (type === "boolean") {
+    if (/^(true|yes|on)$/i.test(value.trim())) return true;
+    if (/^(false|no|off)$/i.test(value.trim())) return false;
+  }
+  return value.trim();
+}
+
+function parseArgsFromTextFallback(
+  text: string,
+  schema: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const properties = ((schema as any)?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const propertyNames = Object.keys(properties);
+  if (propertyNames.length === 0) return null;
+
+  const result: Record<string, unknown> = {};
+  for (const key of propertyNames) {
+    const pattern = new RegExp(`(?:^|\\n)\\s*${key}\\s*[:=]\\s*(.+)`, "i");
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+    const rawValue = match[1].split("\n")[0].trim();
+    if (!rawValue) continue;
+    result[key] = coerceScalarForSchema(rawValue, properties[key]);
+  }
+
+  if (Object.keys(result).length > 0) return result;
+
+  const required = Array.isArray((schema as any)?.required) ? (schema as any).required as string[] : [];
+  if (required.length === 1) {
+    const [onlyRequired] = required;
+    const prop = properties[onlyRequired];
+    if (prop?.type === "string" || typeof prop?.type !== "string") {
+      return { [onlyRequired]: text.trim() };
+    }
+  }
+
+  return null;
+}
+
+function sanitizeTopLevelArgs(
+  args: Record<string, unknown>,
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = ((schema as any)?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(args)) {
+    const prop = properties[key];
+    if (typeof value === "string") {
+      sanitized[key] = coerceScalarForSchema(value, prop);
+    } else {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
+function getInvalidRequiredFields(
+  args: Record<string, unknown>,
+  schema: Record<string, unknown>,
+): string[] {
+  const properties = ((schema as any)?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = Array.isArray((schema as any)?.required) ? (schema as any).required as string[] : [];
+  const invalid: string[] = [];
+
+  for (const key of required) {
+    const value = args[key];
+    const prop = properties[key] ?? {};
+    const type = typeof prop.type === "string" ? prop.type : undefined;
+
+    if (value === undefined || value === null) {
+      invalid.push(key);
+      continue;
+    }
+    if (type === "string" && (typeof value !== "string" || value.trim().length === 0)) {
+      invalid.push(key);
+    }
+  }
+
+  return invalid;
+}
+
+function normalizeWebSearchQueryText(text: string): string {
+  let value = text.trim();
+  if (!value) return "";
+
+  const fenced = value.match(/^```(?:text|md|markdown)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim();
+  if (fenced) value = fenced;
+
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^query\s*[:=-]\s*/i, "").trim())
+    .map((line) => line.replace(/^['"`]+|['"`]+$/g, "").trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return "";
+
+  const explanationLike = /^(because|based on|the user|this|i should|we should|use |search for )/i;
+  const queryLines: string[] = [];
+
+  for (const line of lines.slice(0, 3)) {
+    if (queryLines.length > 0 && explanationLike.test(line)) break;
+    queryLines.push(line);
+  }
+
+  return queryLines.join(" ").replace(/\s+/g, " ").trim();
+}
+
+async function planWebSearchArgs(
+  userId: string,
+  conn: ReturnType<typeof connectionsSvc.getConnection>,
+  sidecar: SidecarConfig,
+  tool: RuntimeCouncilToolDefinition,
+  contextMessages: LlmMessage[],
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  if (!conn) throw new Error("Sidecar connection not found");
+
+  const guidanceBlock = tool.planningGuidance
+    ? `\n## Search Guidance\n${tool.planningGuidance}`
+    : "";
+
+  const messages: LlmMessage[] = [
+    {
+      role: "system",
+      content: `You are preparing a web search query.
+
+## Tool
+${tool.displayName}
+${tool.description}${guidanceBlock}
+
+Read the context and produce exactly one short search-engine query.
+
+Rules:
+- Return only the query text.
+- No JSON.
+- No explanation.
+- No quotes.
+- No prefixes like 'query:' or 'search for'.
+- Keep it short, concrete, and keyword-heavy.
+- Do not imitate any character, council member, narrator, or roleplay voice from the context.
+- Ignore stylistic quirks in the chat history and extract only the factual subject that should be searched.`,
+    },
+    ...contextMessages,
+    {
+      role: "user",
+      content: `Based on the context above, what should be searched on the web? Return only the query.`,
+    },
+  ];
+
+  const response = await rawGenerate(userId, {
+    provider: conn.provider,
+    model: sidecar.model,
+    connection_id: sidecar.connectionProfileId,
+    messages,
+    parameters: {
+      temperature: 0,
+      top_p: sidecar.topP,
+      max_tokens: Math.min(sidecar.maxTokens, 96),
+    },
+    signal,
+  });
+
+  const query = normalizeWebSearchQueryText(response.content || "");
+  console.debug("[council] Web Search planner output raw=%j normalized=%j", response.content || "", query);
+  if (!query) {
+    throw new Error("Failed to plan web search query");
+  }
+
+  return { query };
+}
+
+async function repairCallableToolArgs(
+  userId: string,
+  conn: ReturnType<typeof connectionsSvc.getConnection>,
+  sidecar: SidecarConfig,
+  tool: RuntimeCouncilToolDefinition,
+  planningMessages: LlmMessage[],
+  argsSchema: Record<string, unknown>,
+  invalidFields: string[],
+  signal?: AbortSignal,
+): Promise<Record<string, unknown> | null> {
+  if (!conn) return null;
+
+  const repairMessages: LlmMessage[] = [
+    ...planningMessages,
+    {
+      role: "user",
+      content: `The previous tool call was invalid because these required fields were missing or empty: ${invalidFields.join(", ")}.
+Return only a JSON object that matches the schema exactly and ensures those fields are present and non-empty. Do not answer in prose.`,
+    },
+  ];
+
+  const repairResponse = await rawGenerate(userId, {
+    provider: conn.provider,
+    model: sidecar.model,
+    connection_id: sidecar.connectionProfileId,
+    messages: repairMessages,
+    parameters: {
+      temperature: 0,
+      top_p: sidecar.topP,
+      max_tokens: Math.min(sidecar.maxTokens, 192),
+    },
+    signal,
+  });
+
+  const parsed = parseJsonObject(repairResponse.content);
+  if (!parsed) return null;
+
+  const sanitized = sanitizeTopLevelArgs(parsed, argsSchema);
+  return getInvalidRequiredFields(sanitized, argsSchema).length === 0 ? sanitized : null;
+}
+
+function buildArgsSchemaGuide(schema: Record<string, unknown>): string {
+  const properties = ((schema as any)?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = new Set(Array.isArray((schema as any)?.required) ? (schema as any).required as string[] : []);
+  const names = Object.keys(properties);
+  if (names.length === 0) return "";
+
+  const lines = ["## Required Argument Contract"];
+  lines.push("When you call the tool, fill the arguments using these exact field names:");
+  for (const name of names) {
+    const prop = properties[name] ?? {};
+    const type = typeof prop.type === "string" ? prop.type : "any";
+    const desc = typeof prop.description === "string" ? prop.description : "";
+    lines.push(`- ${name}${required.has(name) ? " (required)" : ""} — ${type}${desc ? ` — ${desc}` : ""}`);
+  }
+  lines.push("Do not leave required string fields empty. Use concise JSON-style argument values, not narrative prose. Call the tool exactly once.");
+  return lines.join("\n");
+}
+
+function buildInputExamplesGuide(examples: Array<Record<string, unknown>> | undefined): string {
+  if (!examples || examples.length === 0) return "";
+
+  const lines = ["## Valid Input Examples", "Use these as format examples when constructing the tool arguments:"];
+  for (const example of examples.slice(0, 3)) {
+    lines.push(JSON.stringify(example));
+  }
+  return lines.join("\n");
+}
+
+function toolSchemaRequiresArgs(userId: string, tool: RuntimeCouncilToolDefinition): boolean {
+  const schema = getCouncilToolArgsSchema(userId, tool) ?? {};
+  const required = Array.isArray((schema as any).required) ? (schema as any).required : [];
+  const properties = (schema as any).properties;
+  return required.length > 0 || (properties && Object.keys(properties).length > 0);
+}
+
+async function planCallableToolArgs(
+  userId: string,
+  sidecar: SidecarConfig,
+  tool: RuntimeCouncilToolDefinition,
+  member: CouncilMember,
+  identityMsg: string,
+  contextMessages: LlmMessage[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const argsSchema = getCouncilToolArgsSchema(userId, tool) ?? { type: "object", properties: {}, required: [] };
+  if (!toolSchemaRequiresArgs(userId, tool)) {
+    return {};
+  }
+
+  if (!sidecar.connectionProfileId || !sidecar.model) {
+    throw new Error(`Sidecar connection is required to plan arguments for \"${tool.displayName}\"`);
+  }
+
+  const conn = connectionsSvc.getConnection(userId, sidecar.connectionProfileId);
+  if (!conn) throw new Error("Sidecar connection not found");
+
+  const roleNote = member.role
+    ? `\nYour role on the council is: ${member.role}\nUse that perspective when selecting tool arguments.`
+    : "";
+
+  const execution = getCouncilToolExecution(userId, tool);
+  const executionLabel = execution === "host"
+    ? "host tool"
+    : execution === "mcp"
+      ? "MCP tool"
+      : execution === "extension"
+        ? "extension tool"
+        : "tool";
+
+  const planningTool = {
+    name: "call_tool",
+    description: `Prepare the arguments for the ${executionLabel} \"${tool.displayName}\". Return only a valid function call with complete, non-empty arguments that match the schema exactly.`,
+    parameters: argsSchema,
+    strict: true,
+    inputExamples: tool.inputExamples,
+  };
+
+  const guidanceBlock = tool.planningGuidance
+    ? `\n## Tool-Specific Guidance\n${tool.planningGuidance}`
+    : "";
+  const examplesBlock = buildInputExamplesGuide(tool.inputExamples);
+
+  const instructionBlock = `${identityMsg}${roleNote}
+
+You are preparing arguments for a tool call.
+
+## Tool
+${tool.displayName}
+${tool.description}
+
+${buildArgsSchemaGuide(argsSchema)}
+
+${examplesBlock}${guidanceBlock}
+
+Select the most appropriate arguments from the story context and call the provided tool exactly once. You are not answering the user or continuing the roleplay; you are only selecting tool arguments. Build arguments the way a careful operator would fill out a form for a downstream API. Prefer short, literal values over full sentences. Do not answer in prose.`;
+
+  const planningMessages: LlmMessage[] = [
+    {
+      role: "system",
+      content: instructionBlock,
+    },
+    ...contextMessages,
+    {
+      role: "user",
+      content: `Review the story context above and prepare the arguments for ${tool.displayName}.`,
+    },
+  ];
+
+  const planningParameters: Record<string, unknown> = {
+    temperature: Math.min(sidecar.temperature, 0.2),
+    top_p: sidecar.topP,
+    max_tokens: Math.min(sidecar.maxTokens, Math.max(128, timeoutMs / 100)),
+  };
+
+  if (tool.name === "web_search") {
+    return planWebSearchArgs(
+      userId,
+      conn,
+      sidecar,
+      tool,
+      contextMessages,
+      signal,
+    );
+  }
+
+  if (GOOGLE_PLANNING_PROVIDERS.has(conn.provider)) {
+    // Gemini's forced ANY mode is documented to be more brittle for argument
+    // inference than AUTO. Keep the council tool mandatory at the host layer,
+    // but let Google/Vertex use AUTO for the planner step so the model can
+    // reason its way to better arguments before emitting the function call.
+    planningParameters.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
+  } else {
+    Object.assign(planningParameters, getToolChoiceParams(conn.provider));
+  }
+
+  const response = await rawGenerate(userId, {
+    provider: conn.provider,
+    model: sidecar.model,
+    connection_id: sidecar.connectionProfileId,
+    messages: planningMessages,
+    parameters: planningParameters,
+    tools: [planningTool],
+    signal,
+  });
+
+  const plannedCall = response.tool_calls?.find((call) => call.name === planningTool.name);
+  if (plannedCall) {
+    const sanitized = sanitizeTopLevelArgs(plannedCall.args ?? {}, argsSchema);
+    const invalidFields = getInvalidRequiredFields(sanitized, argsSchema);
+    if (invalidFields.length === 0) {
+      return sanitized;
+    }
+    console.warn("[council] Planner returned invalid required args for '%s': %s", tool.displayName, invalidFields.join(", "));
+    const repaired = await repairCallableToolArgs(
+      userId,
+      conn,
+      sidecar,
+      tool,
+      planningMessages,
+      argsSchema,
+      invalidFields,
+      signal,
+    );
+    if (repaired) {
+      return repaired;
+    }
+  }
+
+  const parsed = parseJsonObject(response.content);
+  if (parsed) {
+    const sanitized = sanitizeTopLevelArgs(parsed, argsSchema);
+    const invalidFields = getInvalidRequiredFields(sanitized, argsSchema);
+    if (invalidFields.length === 0) {
+      return sanitized;
+    }
+  }
+
+  const textFallback = parseArgsFromTextFallback(response.content || "", argsSchema);
+  if (textFallback) {
+    const sanitized = sanitizeTopLevelArgs(textFallback, argsSchema);
+    const invalidFields = getInvalidRequiredFields(sanitized, argsSchema);
+    if (invalidFields.length === 0) {
+      return sanitized;
+    }
+  }
+
+  throw new Error(`Failed to plan arguments for tool \"${tool.displayName}\"`);
 }
 
 /** Build the shared context messages (chat history, character info, world info, etc.).
@@ -522,23 +1264,21 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
 }
 
 /** Build the identity/personality context for a Lumia council member. */
-function buildMemberIdentity(userId: string, member: CouncilMember): string {
+function buildMemberIdentity(
+  member: CouncilMember,
+  item: ReturnType<typeof packsSvc.getLumiaItem>
+): string {
   let identity = `You are a council member named "${member.itemName}".`;
 
-  try {
-    const item = packsSvc.getLumiaItem(userId, member.itemId);
-    if (item) {
-      const parts: string[] = [];
-      if (item.definition) parts.push(`### Your Physical Identity ###\n${item.definition}`);
-      if (item.personality) parts.push(`### Your Personality ###\n${item.personality}`);
-      if (item.behavior) parts.push(`### Your Behavioral Patterns ###\n${item.behavior}`);
-      if (parts.length > 0) {
-        identity += `\n\n### WHO YOU ARE ###\n\n${parts.join("\n\n")}`;
-        identity += `\n\n### INSTRUCTION ###\nYou MUST answer ALL tool calls and contributions through the lens of your personality, behavior, and identity described above. Your biases, quirks, speech patterns, and perspective should color every observation and suggestion you make. Do NOT provide generic or neutral responses—filter everything through who you are. Your unique voice and worldview must be evident in every contribution.`;
-      }
+  if (item) {
+    const parts: string[] = [];
+    if (item.definition) parts.push(`### Your Physical Identity ###\n${item.definition}`);
+    if (item.personality) parts.push(`### Your Personality ###\n${item.personality}`);
+    if (item.behavior) parts.push(`### Your Behavioral Patterns ###\n${item.behavior}`);
+    if (parts.length > 0) {
+      identity += `\n\n### WHO YOU ARE ###\n\n${parts.join("\n\n")}`;
+      identity += `\n\n### INSTRUCTION ###\nYou MUST answer ALL tool calls and contributions through the lens of your personality, behavior, and identity described above. Your biases, quirks, speech patterns, and perspective should color every observation and suggestion you make. Do NOT provide generic or neutral responses—filter everything through who you are. Your unique voice and worldview must be evident in every contribution.`;
     }
-  } catch {
-    // Item may not exist — fall back to name-only identity
   }
 
   return identity;
@@ -547,7 +1287,7 @@ function buildMemberIdentity(userId: string, member: CouncilMember): string {
 /** Format tool results into the Markdown deliberation block. */
 export function formatDeliberation(
   results: CouncilToolResult[],
-  tools: Map<string, CouncilToolDefinition>
+  tools: Map<string, RuntimeCouncilToolDefinition>
 ): string {
   if (results.length === 0) {
     return "## Council Deliberation\n\nNo tools were executed for this generation.";

@@ -58,6 +58,7 @@ export interface MemoryEntityRow {
   last_mention_timestamp: number | null;
   recent_mention_count: number;
   confidence: string; // EntityConfidence
+  user_edited_at: number | null;
 }
 
 /** Salience breakdown — decomposed salience inputs for transparent scoring */
@@ -96,6 +97,7 @@ export interface MemoryEntity {
   lastMentionTimestamp: number | null;
   recentMentionCount: number;
   confidence: EntityConfidence;
+  userEditedAt: number | null;
 }
 
 /** SQLite row shape for memory_mentions */
@@ -153,6 +155,7 @@ export interface MemoryRelationRow {
   label_aliases: string; // JSON array
   canonical_edge_id: string | null;
   merged_into: string | null;
+  user_edited_at: number | null;
 }
 
 /** Service-layer relation DTO */
@@ -186,6 +189,7 @@ export interface MemoryRelation {
   labelAliases: string[];
   canonicalEdgeId: string | null;
   mergedInto: string | null;
+  userEditedAt: number | null;
 }
 
 // ─── Salience Types ────────────────────────────────────────────
@@ -343,6 +347,22 @@ export interface DiscoveredAlias {
   evidence?: string;
 }
 
+/** Sidecar verdict on heuristic candidates and existing graph records for a chunk.
+ *  Only populated when the sidecar was given a candidate list to grade. */
+export interface SidecarGradedHeuristics {
+  /** Heuristic entity names the sidecar judged as not real entities in this chunk. */
+  rejectedHeuristicEntities: string[];
+  /** Heuristic name -> sidecar's canonical name. Heuristic entries are renamed,
+   *  then deduped against the sidecar's own entitiesPresent list. */
+  transformedHeuristicEntities: Array<{ from: string; to: string }>;
+  /** Heuristic relationships the sidecar judged as unsupported by the passage. */
+  rejectedHeuristicRelationships: Array<{ source: string; target: string; type: string }>;
+  /** Existing graph entities (already persisted from prior chunks) the sidecar
+   *  judged as not real entities. Subject to gradesExistingRecords gating and
+   *  user-edit preservation. */
+  rejectedExistingEntities: string[];
+}
+
 export interface SidecarExtractionResult {
   score: number;
   emotionalTags: EmotionalTag[];
@@ -353,6 +373,7 @@ export interface SidecarExtractionResult {
   relationshipsShown: ExtractedRelationship[];
   fontColors: SidecarFontColor[];
   discoveredAliases: DiscoveredAlias[];
+  gradedHeuristics?: SidecarGradedHeuristics;
 }
 
 // ─── Retrieval Types ───────────────────────────────────────────
@@ -427,6 +448,8 @@ export interface CortexStats {
   topScore: number;
   retrievalTimeMs: number;
   timedOut?: boolean;
+  /** Set when retrieval bailed out because the caller's AbortSignal fired. */
+  aborted?: boolean;
 }
 
 export interface CortexResult {

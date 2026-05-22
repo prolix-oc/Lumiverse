@@ -12,6 +12,7 @@ export interface DWTagLlmParams {
 export interface SuggestVisualTagsInput {
   userId: string;
   connectionId?: string | null;
+  model?: string | null;
   draft: DW_DRAFT_V1;
   params?: DWTagLlmParams | null;
   signal?: AbortSignal | null;
@@ -364,6 +365,7 @@ export async function suggestVisualTags(
   const deterministicSeed = buildDeterministicTagSeed(input.draft);
 
   const paramOverrides: Record<string, unknown> = {};
+  if (typeof input.model === "string" && input.model.trim()) paramOverrides.model = input.model.trim();
   if (input.params?.temperature != null) paramOverrides.temperature = input.params.temperature;
   if (input.params?.topP != null) paramOverrides.top_p = input.params.topP;
   if (input.params?.maxTokens != null) paramOverrides.max_tokens = input.params.maxTokens;

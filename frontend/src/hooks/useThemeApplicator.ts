@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useStore } from '@/store'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
-import type { ResolvedMode, ThemeConfig } from '@/types/theme'
+import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/theme'
 
 const THEME_TRANSITION_MS = 280
 const COLOR_TOKEN_RE = /#[\da-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g
@@ -168,12 +168,21 @@ const FULL_THEME_MIN_KEYS = 40
 
 function buildResolvedThemeVars(
   theme: ThemeConfig | null,
+  characterThemeOverlay: CharacterThemeOverlay | null,
   extensionThemeOverrides: ReturnType<typeof useStore.getState>['extensionThemeOverrides'],
+  mutedExtensionThemes: ReturnType<typeof useStore.getState>['mutedExtensionThemes'],
   modeOverride?: ResolvedMode,
 ): { config: ThemeConfig; mode: ResolvedMode; vars: Record<string, string>; hasOverrides: boolean } {
   const config = theme ?? DEFAULT_THEME
-  const hasOverrides = Object.keys(extensionThemeOverrides).length > 0
   const mode = modeOverride ?? resolveMode(config)
+
+  // Filter out overrides whose extension has been muted by the user in the
+  // Theme tab. Muted overrides stay in the store (so re-enabling restores
+  // them instantly) but must not contribute to the rendered CSS vars.
+  const activeOverrides = Object.values(extensionThemeOverrides).filter(
+    (o) => !mutedExtensionThemes[o.extensionId]
+  )
+  const hasOverrides = activeOverrides.length > 0
 
   // Check if any extension provides a full theme-sized override (e.g. via
   // applyPalette). Even then, still layer it on top of the user's resolved
@@ -181,7 +190,7 @@ function buildResolvedThemeVars(
   // scaling) keep their current values instead of falling back to CSS
   // defaults.
   let fullThemeVars: Record<string, string> | null = null
-  for (const override of Object.values(extensionThemeOverrides)) {
+  for (const override of activeOverrides) {
     if (override.paletteAccent) continue
 
     const modeVars = override.variablesByMode?.[mode]
@@ -193,7 +202,19 @@ function buildResolvedThemeVars(
     }
   }
 
-  const baseVars = generateThemeVariables(config, mode)
+  const effectiveConfig = config.characterAware && !hasOverrides && characterThemeOverlay
+    ? {
+        ...config,
+        accent: characterThemeOverlay.accent,
+        baseColorsByMode: {
+          ...config.baseColorsByMode,
+          dark: { ...config.baseColorsByMode?.dark, ...characterThemeOverlay.baseColors },
+          light: { ...config.baseColorsByMode?.light, ...characterThemeOverlay.baseColorsLight },
+        },
+      }
+    : config
+
+  const baseVars = generateThemeVariables(effectiveConfig, mode)
 
   if (fullThemeVars) {
     return {
@@ -210,9 +231,9 @@ function buildResolvedThemeVars(
   // Partial overrides: generate the user's base theme, then layer on the
   // extension's handful of tweaks.
   const vars = baseVars
-  for (const override of Object.values(extensionThemeOverrides)) {
+  for (const override of activeOverrides) {
     if (override.paletteAccent) {
-      Object.assign(vars, generateThemeVariables({ ...config, accent: override.paletteAccent }, mode))
+      Object.assign(vars, generateThemeVariables({ ...effectiveConfig, accent: override.paletteAccent }, mode))
     }
 
     for (const [key, value] of Object.entries(override.variables)) {
@@ -226,12 +247,14 @@ function buildResolvedThemeVars(
     }
   }
 
-  return { config, mode, vars, hasOverrides }
+  return { config: effectiveConfig, mode, vars, hasOverrides }
 }
 
 export function useThemeApplicator() {
   const theme = useStore((s) => s.theme) as ThemeConfig | null
+  const characterThemeOverlay = useStore((s) => s.characterThemeOverlay)
   const extensionThemeOverrides = useStore((s) => s.extensionThemeOverrides)
+  const mutedExtensionThemes = useStore((s) => s.mutedExtensionThemes)
   const prevKeysRef = useRef<string[]>([])
   const appliedVarsRef = useRef<Record<string, string> | null>(null)
   const hadOverridesRef = useRef(false)
@@ -250,7 +273,7 @@ export function useThemeApplicator() {
     const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)')
 
     const applyResolvedTheme = (modeOverride?: ResolvedMode) => {
-      const { config, mode, vars, hasOverrides } = buildResolvedThemeVars(theme, extensionThemeOverrides, modeOverride)
+      const { config, mode, vars, hasOverrides } = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, modeOverride)
       const nextKeys = Object.keys(vars)
 
       for (const key of prevKeysRef.current) {
@@ -344,7 +367,7 @@ export function useThemeApplicator() {
     const config = initial?.config ?? (theme ?? DEFAULT_THEME)
 
     const updateGlass = () => {
-      const latest = buildResolvedThemeVars(theme, extensionThemeOverrides)
+      const latest = buildResolvedThemeVars(theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes)
       if (latest.config.enableGlass && !motionMq.matches) {
         root.setAttribute('data-glass', '')
       } else {
@@ -370,5 +393,5 @@ export function useThemeApplicator() {
     return () => {
       motionMq.removeEventListener('change', updateGlass)
     }
-  }, [theme, extensionThemeOverrides])
+  }, [theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes])
 }

@@ -14,12 +14,24 @@ export const chatsApi = {
     return get<PaginatedResult<RecentChat>>('/chats/recent', params)
   },
 
-  listRecentGrouped(params?: { limit?: number; offset?: number }) {
+  listRecentGrouped(params?: {
+    limit?: number
+    offset?: number
+    search?: string
+    sort?: 'name' | 'recent' | 'created'
+    direction?: 'asc' | 'desc'
+  }) {
     return get<PaginatedResult<GroupedRecentChat>>('/chats/recent-grouped', params)
   },
 
   listCharacterChats(characterId: string) {
     return get<ChatSummary[]>('/chats/character-chats/' + characterId)
+  },
+
+  listGroupChats(params?: { characterIds?: string[] }) {
+    return get<ChatSummary[]>('/chats/group-chats', params?.characterIds?.length
+      ? { character_ids: params.characterIds.join(',') }
+      : undefined)
   },
 
   get(id: string, params?: { messages?: boolean }) {
@@ -52,6 +64,10 @@ export const chatsApi = {
     return post<Chat>('/chats/group', input)
   },
 
+  convertToGroup(id: string) {
+    return post<Chat>(`/chats/${id}/convert-to-group`, {})
+  },
+
   muteCharacter(chatId: string, characterId: string) {
     return post<Chat>(`/chats/${chatId}/mute/${characterId}`, {})
   },
@@ -66,6 +82,10 @@ export const chatsApi = {
 
   removeMember(chatId: string, characterId: string) {
     return del<void>(`/chats/${chatId}/members/${characterId}`)
+  },
+
+  setGroupMemberAlternateFields(chatId: string, characterId: string, selections: Record<string, string | null>) {
+    return patch<Chat>(`/chats/${chatId}/members/${characterId}/alternate-fields`, { selections })
   },
 
   reattributeUserMessages(chatId: string, personaId: string) {
@@ -102,6 +122,14 @@ export const chatsApi = {
     fd.append('character_id', characterId)
     fd.append('file', file)
     return upload<{ chat_id: string; name: string; message_count: number }>('/chats/import-st', fd)
+  },
+
+  importGroupFromSt(characterIds: string[], file: File, greetingCharacterId?: string) {
+    const fd = new FormData()
+    for (const characterId of characterIds) fd.append('character_ids', characterId)
+    if (greetingCharacterId) fd.append('greeting_character_id', greetingCharacterId)
+    fd.append('file', file)
+    return upload<{ chat_id: string; name: string; message_count: number; speaker_name_fallback_count: number }>('/chats/import-st-group', fd)
   },
 }
 
@@ -146,5 +174,9 @@ export const messagesApi = {
       `/chats/${chatId}/messages/bulk-delete`,
       { message_ids: messageIds }
     )
+  },
+
+  removeAttachment(chatId: string, messageId: string, imageId: string) {
+    return del<Message>(`/chats/${chatId}/messages/${messageId}/attachments/${imageId}`)
   },
 }

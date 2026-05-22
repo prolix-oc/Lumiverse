@@ -3,6 +3,32 @@ import * as svc from "../services/character-gallery.service";
 
 const app = new Hono();
 
+const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB per image
+
+function getGalleryFiles(formData: FormData): File[] {
+  const parts = [...formData.getAll("images"), ...formData.getAll("image")];
+  return parts.filter((part): part is File => part instanceof File && part.size > 0);
+}
+
+function partitionBySize(files: File[]): {
+  valid: File[];
+  oversized: svc.BulkGallerySkippedFile[];
+} {
+  const valid: File[] = [];
+  const oversized: svc.BulkGallerySkippedFile[] = [];
+  for (const file of files) {
+    if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+      oversized.push({
+        name: file.name || "unknown",
+        reason: `exceeds ${MAX_IMAGE_UPLOAD_BYTES} byte cap (${file.size} bytes)`,
+      });
+    } else {
+      valid.push(file);
+    }
+  }
+  return { valid, oversized };
+}
+
 // GET / — list gallery items for a character
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -19,12 +45,20 @@ app.post("/bulk", async (c) => {
   if (!characterId) return c.json({ error: "characterId is required" }, 400);
   const formData = await c.req.formData();
 
-  const files = formData.getAll("images") as File[];
+  const files = getGalleryFiles(formData);
   if (!files.length) return c.json({ error: "images are required" }, 400);
   if (files.length > 100) return c.json({ error: "Maximum 100 images per request" }, 400);
 
-  const items = await svc.uploadBulkToGallery(userId, characterId, files);
-  return c.json(items, 201);
+  const { valid, oversized } = partitionBySize(files);
+  if (valid.length === 0) {
+    return c.json(
+      { error: "All files exceed the per-image size cap", maxBytes: MAX_IMAGE_UPLOAD_BYTES, skipped: oversized },
+      413,
+    );
+  }
+
+  const result = await svc.uploadBulkToGallery(userId, characterId, valid, oversized);
+  return c.json(result, 201);
 });
 
 // POST / — upload image file + add to gallery
@@ -34,8 +68,11 @@ app.post("/", async (c) => {
   if (!characterId) return c.json({ error: "characterId is required" }, 400);
   const formData = await c.req.formData();
 
-  const file = formData.get("image") as File | null;
+  const file = getGalleryFiles(formData)[0] ?? null;
   if (!file) return c.json({ error: "image file is required" }, 400);
+  if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+    return c.json({ error: "Image too large", maxBytes: MAX_IMAGE_UPLOAD_BYTES }, 413);
+  }
 
   const caption = (formData.get("caption") as string) || "";
   const item = await svc.uploadToGallery(userId, characterId, file, caption);

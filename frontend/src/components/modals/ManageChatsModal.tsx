@@ -11,6 +11,7 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
 import { get } from '@/api/client'
+import { toast } from '@/lib/toast'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import clsx from 'clsx'
 import styles from './ManageChatsModal.module.css'
@@ -24,6 +25,8 @@ interface ChatSummary {
 }
 
 type SortMode = 'date' | 'name' | 'messages'
+
+const EMPTY_GROUP_CHARACTER_IDS: string[] = []
 
 function formatRelativeTime(epochSeconds: number): string {
   const now = Date.now()
@@ -43,13 +46,17 @@ function formatChatName(chat: ChatSummary): string {
 export default function ManageChatsModal() {
   const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
+  const characters = useStore((s) => s.characters)
   const modalProps = useStore((s) => s.modalProps) as {
     characterId: string
     characterName: string
+    isGroupChat?: boolean
+    groupCharacterIds?: string[]
   }
   const activeChatId = useStore((s) => s.activeChatId)
 
-  const { characterId, characterName } = modalProps
+  const { characterId, characterName, isGroupChat = false, groupCharacterIds = EMPTY_GROUP_CHARACTER_IDS } = modalProps
+  const isGroupContext = isGroupChat && groupCharacterIds.length > 1
 
   const [chats, setChats] = useState<ChatSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -65,18 +72,29 @@ export default function ManageChatsModal() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const stFileInputRef = useRef<HTMLInputElement>(null)
 
-  // Fetch chats for this character
+  const groupLabel = useMemo(() => {
+    if (!isGroupContext) return null
+    const names = groupCharacterIds
+      .map((id) => characters.find((character) => character.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+    if (names.length === 0) return `Group Chat · ${groupCharacterIds.length} members`
+    return `${names.join(', ')} · ${groupCharacterIds.length} members`
+  }, [characters, groupCharacterIds, isGroupContext])
+
+  // Fetch chats for this character or exact group composition.
   const fetchChats = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await get<ChatSummary[]>('/chats/character-chats/' + characterId)
+      const data = isGroupContext
+        ? await chatsApi.listGroupChats({ characterIds: groupCharacterIds })
+        : await get<ChatSummary[]>('/chats/character-chats/' + characterId)
       setChats(data)
     } catch (err) {
       console.error('[ManageChats] Failed to fetch chats:', err)
     } finally {
       setLoading(false)
     }
-  }, [characterId])
+  }, [characterId, groupCharacterIds, isGroupContext])
 
   useEffect(() => {
     fetchChats()
@@ -202,14 +220,27 @@ export default function ManageChatsModal() {
   }, [deleteTarget])
 
   const handleNewChat = useCallback(async () => {
+    const toastId = toast.info('Creating chat and preparing Memory Cortex in the background…', {
+      title: 'Starting Chat',
+      duration: 60_000,
+      dismissible: false,
+    })
     try {
-      const chat = await chatsApi.create({ character_id: characterId })
+      const chat = isGroupContext
+        ? await chatsApi.createGroup({
+            character_ids: groupCharacterIds,
+            greeting_character_id: characterId,
+          })
+        : await chatsApi.create({ character_id: characterId })
+      toast.dismiss(toastId)
       closeModal()
       navigate('/chat/' + chat.id)
     } catch (err) {
+      toast.dismiss(toastId)
       console.error('[ManageChats] Failed to create chat:', err)
+      toast.error('Failed to create chat')
     }
-  }, [characterId, closeModal, navigate])
+  }, [characterId, closeModal, groupCharacterIds, isGroupContext, navigate])
 
   const handleImportClick = useCallback(() => {
     fileInputRef.current?.click()
@@ -228,14 +259,16 @@ export default function ManageChatsModal() {
         const data = JSON.parse(text)
 
         if (!data.chat || !data.messages) {
-          console.error('[ManageChats] Invalid chat export format')
+          toast.error('Invalid chat export format')
           return
         }
 
         await chatsApi.importChat(characterId, data)
         await fetchChats()
-      } catch (err) {
+        toast.success('Chat imported')
+      } catch (err: any) {
         console.error('[ManageChats] Failed to import chat:', err)
+        toast.error(err?.body?.error || err?.message || 'Failed to import chat')
       } finally {
         setImporting(false)
       }
@@ -249,24 +282,47 @@ export default function ManageChatsModal() {
 
   const handleImportStFile = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files
-      if (!files || files.length === 0) return
+      // Snapshot the FileList before clearing — setting input.value = '' mutates
+      // the same FileList reference in Chromium, emptying it in place.
+      const fileList = Array.from(e.target.files || [])
       e.target.value = ''
+      if (fileList.length === 0) return
 
       setImportingSt(true)
       let imported = 0
-      for (const file of Array.from(files)) {
+      let speakerFallbackCount = 0
+      const failures: { name: string; reason: string }[] = []
+      for (const file of fileList) {
         try {
-          await chatsApi.importFromSt(characterId, file)
+          if (isGroupContext) {
+            const result = await chatsApi.importGroupFromSt(groupCharacterIds, file, characterId)
+            speakerFallbackCount += result.speaker_name_fallback_count || 0
+          } else {
+            await chatsApi.importFromSt(characterId, file)
+          }
           imported++
-        } catch (err) {
+        } catch (err: any) {
           console.error('[ManageChats] Failed to import ST chat:', file.name, err)
+          failures.push({ name: file.name, reason: err?.body?.error || err?.message || 'Unknown error' })
         }
       }
       if (imported > 0) await fetchChats()
+      const fallbackSuffix = isGroupContext && speakerFallbackCount > 0
+        ? ` Speaker attribution fell back to names for ${speakerFallbackCount} message${speakerFallbackCount === 1 ? '' : 's'}.`
+        : ''
+      if (imported > 0 && failures.length === 0) {
+        if (fallbackSuffix) toast.warning(`Imported ${imported} chat${imported === 1 ? '' : 's'}.${fallbackSuffix}`)
+        else toast.success(`Imported ${imported} chat${imported === 1 ? '' : 's'}`)
+      } else if (imported > 0 && failures.length > 0) {
+        toast.warning(`Imported ${imported}, failed ${failures.length}: ${failures[0].name} — ${failures[0].reason}.${fallbackSuffix}`.trim())
+      } else if (failures.length === 1) {
+        toast.error(`Failed to import ${failures[0].name}: ${failures[0].reason}`)
+      } else if (failures.length > 1) {
+        toast.error(`Failed to import ${failures.length} chats — first error: ${failures[0].reason}`)
+      }
       setImportingSt(false)
     },
-    [characterId, fetchChats]
+    [characterId, fetchChats, groupCharacterIds, isGroupContext]
   )
 
   return (
@@ -278,7 +334,7 @@ export default function ManageChatsModal() {
             <div className={styles.headerLeft}>
               <h3 className={styles.title}>Manage Chats</h3>
               <span className={styles.subtitle}>
-                {characterName} &middot; {chats.length} chat{chats.length !== 1 ? 's' : ''}
+                {(groupLabel || characterName)} &middot; {chats.length} chat{chats.length !== 1 ? 's' : ''}
               </span>
             </div>
           </div>
@@ -318,7 +374,7 @@ export default function ManageChatsModal() {
               icon={importingSt ? <Spinner size={13} /> : <Upload size={13} />}
               onClick={handleImportStClick}
               disabled={importingSt}
-              title="Import chat from SillyTavern JSONL"
+              title={isGroupContext ? 'Import group chat from SillyTavern JSONL' : 'Import chat from SillyTavern JSONL'}
             >
               Import ST
             </Button>

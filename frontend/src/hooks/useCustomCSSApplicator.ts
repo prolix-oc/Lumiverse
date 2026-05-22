@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useStore } from '@/store'
 import { validateCSS, sanitizeCSS } from '@/lib/cssValidator'
+import { rewriteThemeAssetUrls } from '@/lib/themeAssetCss'
 import { toast } from '@/lib/toast'
 
 const STYLE_ID = 'lumiverse-user-css'
@@ -17,7 +18,8 @@ function getOrCreateStyleElement(): HTMLStyleElement {
 
 /**
  * Flatten global CSS + all enabled per-component CSS overrides into a
- * single string, then inject via a <style> element in @layer lumiverse-user.
+ * single late-injected <style> element. Keep this unlayered so user CSS
+ * can override the app's unlayered CSS modules without requiring !important.
  */
 export function useCustomCSSApplicator() {
   const customCSS = useStore((s) => s.customCSS)
@@ -31,15 +33,17 @@ export function useCustomCSSApplicator() {
     // Collect all CSS sources
     const parts: string[] = []
 
-    // Global CSS (if enabled)
-    if (customCSS.enabled && customCSS.css.trim()) {
-      parts.push(sanitizeCSS(customCSS.css))
-    }
+    if (customCSS.enabled) {
+      // Global CSS
+      if (customCSS.css.trim()) {
+        parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
+      }
 
-    // Per-component CSS (from enabled overrides)
-    for (const [, override] of Object.entries(componentOverrides)) {
-      if (override.enabled && override.css?.trim()) {
-        parts.push(sanitizeCSS(override.css))
+      // Per-component CSS (from enabled overrides)
+      for (const [, override] of Object.entries(componentOverrides)) {
+        if (override.enabled && override.css?.trim()) {
+          parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
+        }
       }
     }
 
@@ -56,12 +60,12 @@ export function useCustomCSSApplicator() {
 
     const result = validateCSS(combined)
     if (result.valid) {
-      el.textContent = `@layer lumiverse-user {\n${combined}\n}`
+      el.textContent = combined
       lastHashRef.current = combined
     } else {
       toast.error(`Custom CSS error: ${result.error}`)
     }
-  }, [customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
+  }, [customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
 
   // Cleanup on unmount
   useEffect(() => {

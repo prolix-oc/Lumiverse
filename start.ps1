@@ -28,6 +28,12 @@
 
 .PARAMETER NoRunner
     Start without the visual terminal runner
+
+.PARAMETER UpgradeBun
+    Upgrade Bun to the latest stable release before continuing
+
+.PARAMETER UpgradeBunCanary
+    Upgrade Bun to the latest canary build before continuing
 #>
 
 param(
@@ -45,7 +51,11 @@ param(
     [switch]$NoRunner,
 
     [Alias("k")]
-    [switch]$KillPkgs
+    [switch]$KillPkgs,
+
+    [switch]$UpgradeBun,
+
+    [switch]$UpgradeBunCanary
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,18 +140,57 @@ function Ensure-Bun {
     exit 1
 }
 
+# ─── Bun channel upgrade (optional) ─────────────────────────────────────────
+# Honors -UpgradeBun / -UpgradeBunCanary. Runs after Ensure-Bun so the binary
+# exists; `bun upgrade [--canary|--stable]` swaps the binary in-place.
+function Update-BunChannel {
+    if (-not $UpgradeBun -and -not $UpgradeBunCanary) { return }
+
+    $before = try { & bun --version } catch { "unknown" }
+
+    if ($UpgradeBunCanary) {
+        Write-Info "Upgrading Bun to latest canary (current: $before)..."
+        try { & bun upgrade --canary } catch {
+            Write-Err "Bun canary upgrade failed: $_"
+            Write-Warn "Continuing with the existing $before binary."
+            return
+        }
+    } else {
+        Write-Info "Upgrading Bun to latest stable (current: $before)..."
+        # --stable is a no-op for users already on stable but forces a switch
+        # back from canary for anyone who previously opted in.
+        try { & bun upgrade --stable } catch {
+            Write-Err "Bun stable upgrade failed: $_"
+            Write-Warn "Continuing with the existing $before binary."
+            return
+        }
+    }
+
+    $after = try { & bun --version } catch { "unknown" }
+    Write-Ok "Bun upgraded: $before -> $after"
+}
+
 # ─── First-run setup wizard ─────────────────────────────────────────────────
 
 function Invoke-SetupIfNeeded {
     $identityFile = Join-Path $BackendDir "data\lumiverse.identity"
-    $envFile = Join-Path $BackendDir ".env"
+    $credentialsFile = Join-Path $BackendDir "data\owner.credentials"
 
-    if (-not (Test-Path $identityFile) -or -not (Test-Path $envFile)) {
+    # A migrated data folder is already set up even if .env was not copied.
+    # The backend can fall back to defaults for missing .env values.
+    if (-not (Test-Path $identityFile) -or -not (Test-Path $credentialsFile)) {
         Write-Info "First run detected - launching setup wizard..."
         Write-Host ""
         Install-Deps $BackendDir "backend"
         Push-Location $BackendDir
         try { & bun run scripts/setup-wizard.ts } finally { Pop-Location }
+
+        if (-not (Test-Path $identityFile) -or -not (Test-Path $credentialsFile)) {
+            Write-Err "Setup wizard did not create the required identity and owner credentials."
+            Write-Err "Files expected at: $identityFile and $credentialsFile"
+            Write-Err "Try running the wizard manually: bun run setup"
+            exit 1
+        }
     }
 }
 
@@ -252,8 +301,10 @@ function Start-Backend {
 
     Install-Deps $BackendDir "backend"
 
-    # Clear Bun transpiler cache to avoid stale bytecode after updates
-    & bun --clear-cache 2>$null
+    # Clear Bun install cache to avoid stale tarballs after updates.
+    # Bun writes its `.env` autoload notice to stderr; PowerShell promotes any
+    # native stderr write to a NativeCommandError, so merge streams and discard.
+    try { & bun pm cache rm 2>&1 | Out-Null } catch { }
 
     $env:FRONTEND_DIR = $frontendDist
     Load-EnvFile
@@ -289,6 +340,7 @@ Write-Host "Lumiverse - Launcher" -ForegroundColor White
 Write-Host ""
 
 Ensure-Bun
+Update-BunChannel
 
 # Allow switches as shorthand for -Mode
 if ($MigrateST) { $Mode = "migrate-st" }

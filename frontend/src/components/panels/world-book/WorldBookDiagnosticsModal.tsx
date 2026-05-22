@@ -802,6 +802,14 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                     {diagnostics.stats.keywordActivated} keyword, {diagnostics.stats.vectorActivated} vector
                   </span>
                 </article>
+
+                <article className={styles.metricCard}>
+                  <span className={styles.metricLabel}>Vector timing</span>
+                  <strong className={styles.metricValue}>{Math.round(diagnostics.retrieval.timings_ms.total)}ms</strong>
+                  <span className={styles.metricMeta}>
+                    search {Math.round(diagnostics.retrieval.timings_ms.search)}ms, rank {Math.round(diagnostics.retrieval.timings_ms.ranking)}ms
+                  </span>
+                </article>
               </div>
 
               <div className={styles.contentGrid}>
@@ -970,6 +978,30 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>Pulled candidates</span>
                         <span className={styles.factValue}>{pulledTraceCount}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Query build</span>
+                        <span className={styles.factValue}>{Math.round(diagnostics.retrieval.timings_ms.query_build)} ms</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Query embed</span>
+                        <span className={styles.factValue}>{Math.round(diagnostics.retrieval.timings_ms.query_embed)} ms</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Vector search</span>
+                        <span className={styles.factValue}>{Math.round(diagnostics.retrieval.timings_ms.search)} ms</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Candidate ranking</span>
+                        <span className={styles.factValue}>{Math.round(diagnostics.retrieval.timings_ms.ranking)} ms</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Final merge</span>
+                        <span className={styles.factValue}>{Math.round(diagnostics.retrieval.timings_ms.merge)} ms</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>Total vector path</span>
+                        <span className={styles.factValue}>{Math.round(diagnostics.retrieval.timings_ms.total)} ms</span>
                       </div>
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>Rejected by similarity threshold</span>

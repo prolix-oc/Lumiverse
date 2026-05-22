@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Volume2, Mic, Play, ExternalLink } from 'lucide-react'
 import { useStore } from '@/store'
+import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { ttsApi } from '@/api/tts'
 import { Toggle } from '@/components/shared/Toggle'
+import SearchableSelect from '@/components/shared/SearchableSelect'
+import VoicePicker from '@/components/shared/VoicePicker'
 import { speak, stop, setTTSVolume, setTTSSpeed, isSpeaking } from '@/lib/ttsAudio'
 import { isWebSpeechAvailable } from '@/lib/sttEngine'
 import styles from './VoiceSettings.module.css'
@@ -12,6 +15,9 @@ import clsx from 'clsx'
 export default function VoiceSettings() {
   const voiceSettings = useStore((s) => s.voiceSettings)
   const setVoiceSettings = useStore((s) => s.setVoiceSettings)
+  const sttProfiles = useStore((s) => s.sttProfiles)
+  const setSttProfiles = useStore((s) => s.setSttProfiles)
+  const setSttProviders = useStore((s) => s.setSttProviders)
   const ttsProfiles = useStore((s) => s.ttsProfiles)
   const setTtsProfiles = useStore((s) => s.setTtsProfiles)
   const setTtsProviders = useStore((s) => s.setTtsProviders)
@@ -20,20 +26,37 @@ export default function VoiceSettings() {
 
   const [testing, setTesting] = useState(false)
 
-  // Load TTS connections + providers on mount
+  // Load voice connections on mount
   useEffect(() => {
+    sttConnectionsApi.list({ limit: 100 }).then((res) => {
+      setSttProfiles(res.data || [])
+    }).catch(() => {})
+    sttConnectionsApi.providers().then((res) => {
+      setSttProviders(res.providers || [])
+    }).catch(() => {})
     ttsConnectionsApi.list().then((res) => {
       setTtsProfiles(res.data || [])
     }).catch(() => {})
     ttsConnectionsApi.providers().then((res) => {
       setTtsProviders(res.providers || [])
     }).catch(() => {})
-  }, [setTtsProfiles, setTtsProviders])
+  }, [setSttProfiles, setSttProviders, setTtsProfiles, setTtsProviders])
 
-  const connectionOptions = useMemo(() => [
-    { value: '', label: 'Select a connection...' },
-    ...ttsProfiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` })),
-  ], [ttsProfiles])
+  const sttConnectionOptions = useMemo(
+    () => sttProfiles
+      .map((p) => ({ value: p.id, label: `${p.name} (${p.provider})`, sublabel: p.model || undefined })),
+    [sttProfiles],
+  )
+
+  const activeSttConnection = useMemo(
+    () => sttProfiles.find((p) => p.id === voiceSettings.sttConnectionId) || null,
+    [sttProfiles, voiceSettings.sttConnectionId],
+  )
+
+  const connectionOptions = useMemo(
+    () => ttsProfiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` })),
+    [ttsProfiles],
+  )
 
   const activeConnection = useMemo(
     () => ttsProfiles.find((p) => p.id === voiceSettings.ttsConnectionId) || null,
@@ -113,16 +136,18 @@ export default function VoiceSettings() {
 
         <div className={styles.row}>
           <span className={styles.label}>Connection</span>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <select
-              className={styles.select}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0 }}>
+            <SearchableSelect
               value={voiceSettings.ttsConnectionId || ''}
-              onChange={(e) => setVoiceSettings({ ttsConnectionId: e.target.value || null })}
-            >
-              {connectionOptions.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+              onChange={(val) => setVoiceSettings({ ttsConnectionId: val || null })}
+              options={connectionOptions}
+              placeholder="Select a connection…"
+              searchPlaceholder="Search connections…"
+              ariaLabel="TTS connection"
+              emptyMessage="No TTS connections configured"
+              clearable
+              clearLabel="No connection"
+            />
             <button
               className={styles.actionBtn}
               onClick={() => openDrawer?.('connections')}
@@ -181,6 +206,106 @@ export default function VoiceSettings() {
           </div>
         </div>
 
+        {/* ── Narration Voice ───────────────────────────────────────── */}
+        <div className={styles.subHeader}>Narration</div>
+
+        <div className={styles.toggleRow}>
+          <Toggle.Checkbox
+            checked={voiceSettings.narrationVoice !== null}
+            onChange={(v) =>
+              setVoiceSettings({
+                narrationVoice: v
+                  ? { connectionId: voiceSettings.ttsConnectionId ?? '', voice: '' }
+                  : null,
+              })
+            }
+            disabled={!voiceSettings.ttsEnabled}
+            label="Use a separate narrator voice"
+            hint="Speak narration/thoughts in a different voice from character speech. Applies anywhere narration appears (single-character cards too)."
+          />
+        </div>
+
+        {voiceSettings.narrationVoice !== null && (
+          <>
+            <div className={styles.row} style={{ alignItems: 'flex-start' }}>
+              <span className={styles.label} style={{ paddingTop: 6 }}>Narrator</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <VoicePicker
+                  value={voiceSettings.narrationVoice}
+                  onChange={(next) => setVoiceSettings({ narrationVoice: next })}
+                  disabled={!voiceSettings.ttsEnabled}
+                  ariaLabel="Narrator"
+                  clearLabel="Use speech voice for narration"
+                  portal
+                />
+              </div>
+            </div>
+
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={voiceSettings.narrationVoice.parameters?.speed !== undefined}
+                onChange={(v) => {
+                  const current = voiceSettings.narrationVoice
+                  if (!current) return
+                  if (v) {
+                    setVoiceSettings({
+                      narrationVoice: {
+                        ...current,
+                        parameters: { ...current.parameters, speed: voiceSettings.ttsSpeed },
+                      },
+                    })
+                  } else {
+                    // Drop only the speed key; preserve any other future parameters.
+                    const { speed: _drop, ...rest } = current.parameters ?? {}
+                    setVoiceSettings({
+                      narrationVoice: {
+                        ...current,
+                        parameters: Object.keys(rest).length > 0 ? rest : undefined,
+                      },
+                    })
+                  }
+                }}
+                disabled={!voiceSettings.ttsEnabled}
+                label="Use a separate narrator speed"
+                hint="Speak narration at its own pace instead of inheriting the Speed setting above."
+              />
+            </div>
+
+            {voiceSettings.narrationVoice.parameters?.speed !== undefined && (
+              <div className={styles.row}>
+                <span className={styles.label}>
+                  Narrator speed ({voiceSettings.narrationVoice.parameters.speed.toFixed(1)}x)
+                </span>
+                <div className={styles.rangeRow}>
+                  <input
+                    type="range"
+                    className={styles.rangeSlider}
+                    min={0.5}
+                    max={2.0}
+                    step={0.1}
+                    value={voiceSettings.narrationVoice.parameters.speed}
+                    disabled={!voiceSettings.ttsEnabled}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      const current = voiceSettings.narrationVoice
+                      if (!current) return
+                      setVoiceSettings({
+                        narrationVoice: {
+                          ...current,
+                          parameters: { ...current.parameters, speed: v },
+                        },
+                      })
+                    }}
+                  />
+                  <span className={styles.rangeValue}>
+                    {voiceSettings.narrationVoice.parameters.speed.toFixed(1)}x
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {/* ── Speech Detection Rules ────────────────────────────────── */}
         <div className={styles.subHeader}>Speech Detection</div>
 
@@ -194,8 +319,9 @@ export default function VoiceSettings() {
             value={voiceSettings.speechDetectionRules.asterisked}
             onChange={(e) => updateDetectionRule('asterisked', e.target.value)}
           >
-            <option value="skip">Skip (Thought)</option>
+            <option value="skip">Skip</option>
             <option value="narration">Read as Narration</option>
+            <option value="thought">Read as Thoughts (character voice)</option>
           </select>
         </div>
 
@@ -244,12 +370,12 @@ export default function VoiceSettings() {
           <select
             className={styles.select}
             value={voiceSettings.sttProvider}
-            onChange={(e) => setVoiceSettings({ sttProvider: e.target.value as 'webspeech' | 'openai' })}
+            onChange={(e) => setVoiceSettings({ sttProvider: e.target.value as 'webspeech' | 'connection' })}
           >
             <option value="webspeech" disabled={!isWebSpeechAvailable()}>
               Web Speech API {!isWebSpeechAvailable() ? '(Unavailable)' : ''}
             </option>
-            <option value="openai">OpenAI Whisper</option>
+            <option value="connection">STT Connection</option>
           </select>
         </div>
 
@@ -279,7 +405,7 @@ export default function VoiceSettings() {
             checked={voiceSettings.sttContinuous}
             onChange={(v) => setVoiceSettings({ sttContinuous: v })}
             label="Continuous recognition"
-            hint="Keep listening after each result"
+            hint="Keep listening after each silence-delimited result"
           />
         </div>
 
@@ -292,16 +418,64 @@ export default function VoiceSettings() {
           />
         </div>
 
+        <div className={styles.toggleRow}>
+          <Toggle.Checkbox
+            checked={voiceSettings.sttAutoSubmitOnSilence}
+            onChange={(v) => setVoiceSettings({ sttAutoSubmitOnSilence: v })}
+            label="Auto-submit after silence"
+            hint={voiceSettings.sttProvider === 'webspeech'
+              ? 'Stop Web Speech recognition after a sustained pause'
+              : 'Wait for a sustained pause before transcribing and queueing'}
+          />
+        </div>
+
+        <div className={styles.toggleRow}>
+          <Toggle.Checkbox
+            checked={voiceSettings.sttShowMicButton}
+            onChange={(v) => setVoiceSettings({ sttShowMicButton: v })}
+            label="Show mic button in input bar"
+            hint="Display the speech-to-text shortcut beside the message input"
+          />
+        </div>
+
         {voiceSettings.sttProvider === 'webspeech' && !isWebSpeechAvailable() && (
           <div className={styles.infoBox}>
-            Web Speech API is not available in this browser. Try Chrome or Edge, or switch to the OpenAI provider.
+            Web Speech API is not available in this browser. Try Chrome or Edge, or switch to an STT connection.
           </div>
         )}
 
-        {voiceSettings.sttProvider === 'openai' && (
-          <div className={styles.infoBox}>
-            OpenAI STT uses your OpenAI connection's API key. Configure it in Connections settings.
-          </div>
+        {voiceSettings.sttProvider === 'connection' && (
+          <>
+            <div className={styles.row}>
+              <span className={styles.label}>Connection</span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0 }}>
+                <SearchableSelect
+                  value={voiceSettings.sttConnectionId || ''}
+                  onChange={(val) => setVoiceSettings({ sttConnectionId: val || null })}
+                  options={sttConnectionOptions}
+                  placeholder="Select a connection…"
+                  searchPlaceholder="Search connections…"
+                  ariaLabel="STT connection"
+                  emptyMessage="No STT connections configured"
+                  clearable
+                  clearLabel="No connection"
+                />
+                <button
+                  className={styles.actionBtn}
+                  onClick={() => openDrawer?.('connections')}
+                  title="Manage STT connections"
+                >
+                  <ExternalLink size={12} />
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.infoBox}>
+              {activeSttConnection
+                ? <>Provider: <strong>{activeSttConnection.provider}</strong>{activeSttConnection.model && <> &middot; Model: <strong>{activeSttConnection.model}</strong></>}</>
+                : 'Speech-to-text uses a dedicated STT connection from Connections settings.'}
+            </div>
+          </>
         )}
       </div>
     </div>

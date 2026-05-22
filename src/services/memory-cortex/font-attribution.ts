@@ -60,6 +60,11 @@ export interface ColorAttribution {
   confidence: number;
 }
 
+export interface ThoughtDelimiters {
+  prefix: string;
+  suffix: string;
+}
+
 // ─── Font Tag Extraction ───────────────────────────────────────
 
 // Matches <font color="...">content</font> and <span style="color: ...">content</span>
@@ -73,7 +78,7 @@ const SPAN_COLOR_PATTERN = /<span\s+style\s*=\s*["'][^"']*color\s*:\s*([^;"']+)[
  * Returns the blocks with normalized hex colors, detected usage type,
  * character offset, and paragraph index.
  */
-export function extractColorBlocks(content: string): ExtractedColorBlock[] {
+export function extractColorBlocks(content: string, thoughtDelimiters?: ThoughtDelimiters): ExtractedColorBlock[] {
   const blocks: ExtractedColorBlock[] = [];
 
   // Pre-compute paragraph boundaries (split on double newline or paragraph-style breaks)
@@ -96,7 +101,7 @@ export function extractColorBlocks(content: string): ExtractedColorBlock[] {
         hexColor,
         content: innerContent,
         fullMatch: match[0],
-        usageType: detectUsageType(innerContent),
+        usageType: detectUsageType(innerContent, thoughtDelimiters),
         offset: match.index,
         paragraphIndex: findParagraphIndex(match.index, paragraphBoundaries),
       });
@@ -182,12 +187,43 @@ function normalizeColor(raw: string): string | null {
   return null;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isDelimitedThought(content: string, delimiters?: ThoughtDelimiters): boolean {
+  if (!delimiters?.prefix || !delimiters?.suffix) return false;
+
+  const prefix = delimiters.prefix.trim();
+  const suffix = delimiters.suffix.trim();
+  if (!prefix || !suffix) return false;
+
+  const escapedPrefix = escapeRegex(prefix);
+  const escapedSuffix = escapeRegex(suffix);
+  return new RegExp(`^\\s*${escapedPrefix}[\\s\\S]*?(?:${escapedSuffix})?\\s*$`, "i").test(content);
+}
+
+export function stripThoughtDelimiters(content: string, delimiters?: ThoughtDelimiters): string {
+  if (!content || !delimiters?.prefix || !delimiters?.suffix) return content;
+
+  const prefix = delimiters.prefix.trim();
+  const suffix = delimiters.suffix.trim();
+  if (!prefix || !suffix) return content;
+
+  const escapedPrefix = escapeRegex(prefix);
+  const escapedSuffix = escapeRegex(suffix);
+  let result = content.replace(new RegExp(`${escapedPrefix}([\\s\\S]*?)${escapedSuffix}`, "gi"), "$1");
+  result = result.replace(new RegExp(`${escapedPrefix}([\\s\\S]*)$`, "gi"), "$1");
+  return result;
+}
+
 // ─── Usage Type Detection ──────────────────────────────────────
 
-function detectUsageType(coloredContent: string): ColorUsageType {
+function detectUsageType(coloredContent: string, thoughtDelimiters?: ThoughtDelimiters): ColorUsageType {
   const trimmed = coloredContent.trim();
   // Quoted dialogue: "Hello" or "Hello," she said
   if (/[""\u201C][^""\u201D]+[""\u201D]/.test(trimmed)) return "speech";
+  if (isDelimitedThought(trimmed, thoughtDelimiters)) return "thought";
   // Asterisk-wrapped narration: *she hesitated*
   if (/^\*[^*]+\*$/.test(trimmed) || /^\*/.test(trimmed)) return "thought";
   // Italic HTML
@@ -210,6 +246,44 @@ const PRE_ATTR_PATTERN = /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s+(?:said|spoke|whis
 // Post-attribution: '"...", said/whispered Name' or '"..." Name said'
 const POST_ATTR_PATTERN = /[""\u201D]\s*(?:,\s*)?(?:said|asked|replied|whispered|murmured|exclaimed|muttered|growled|hissed|called|breathed|moaned|screamed|cried|shouted|gasped|purred|snapped|demanded|declared)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/;
 const POST_ATTR_NAME_VERB = /[""\u201D]\s*(?:,\s*)?([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s+(?:said|asked|replied|whispered|murmured|exclaimed|muttered|growled|hissed|called|breathed|moaned|screamed|cried|shouted|gasped|purred|snapped|demanded|declared)/;
+const DIALOGUE_ATTR_VERBS = "(?:said|spoke|whispered|asked|replied|muttered|murmured|growled|hissed|called|exclaimed|breathed|moaned|screamed|cried|shouted|yelled|gasped|purred|demanded|snapped|declared|warned|ordered|promised|added|answered|admitted)";
+
+function findSurroundingDialogueAttribution(
+  block: ExtractedColorBlock,
+  rawContent: string,
+  knownNames: string[],
+  paragraphBounds?: { start: number; end: number },
+): { entityName: string; confidence: number } | null {
+  if (block.usageType !== "speech") return null;
+
+  const before = paragraphBounds
+    ? rawContent.slice(paragraphBounds.start, block.offset)
+    : rawContent.slice(0, block.offset);
+  const after = paragraphBounds
+    ? rawContent.slice(block.offset + block.fullMatch.length, paragraphBounds.end)
+    : rawContent.slice(block.offset + block.fullMatch.length);
+
+  const plainBefore = stripFontTags(before);
+  const plainAfter = stripFontTags(after);
+
+  for (const name of knownNames) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\s+${DIALOGUE_ATTR_VERBS}\\s*,?\\s*$`, "i").test(plainBefore)) {
+      return { entityName: name, confidence: 0.92 };
+    }
+    if (new RegExp(`\\b${DIALOGUE_ATTR_VERBS}\\s+${escaped}\\s*$`, "i").test(plainBefore)) {
+      return { entityName: name, confidence: 0.9 };
+    }
+    if (new RegExp(`^\\s*(?:[,.!?]\\s*)?${escaped}\\s+${DIALOGUE_ATTR_VERBS}\\b`, "i").test(plainAfter)) {
+      return { entityName: name, confidence: 0.92 };
+    }
+    if (new RegExp(`^\\s*(?:[,.!?]\\s*)?${DIALOGUE_ATTR_VERBS}\\s+${escaped}\\b`, "i").test(plainAfter)) {
+      return { entityName: name, confidence: 0.9 };
+    }
+  }
+
+  return null;
+}
 
 /**
  * Determine the "focal character" of a paragraph — the character the paragraph
@@ -411,14 +485,22 @@ export function attributeColorBlock(
     if (matched) return { entityName: matched, confidence: 0.85 };
   }
 
-  // Strategy 4: Paragraph focal character — BEFORE proximity.
+  // Strategy 4: Dialogue tags just outside the colored block.
+  // Handles common RP patterns like:
+  //   <font>"Stay close."</font> <font>Melina said...</font>
+  if (rawContent) {
+    const surrounding = findSurroundingDialogueAttribution(block, rawContent, knownNames, paragraphBounds);
+    if (surrounding) return surrounding;
+  }
+
+  // Strategy 5: Paragraph focal character — BEFORE proximity.
   // Focal character uses paragraph-wide analysis (name frequency, name+verb, lead-off position)
   // which is more reliable than raw proximity distance when multiple names appear.
   if (focalCharacter) {
     return { entityName: focalCharacter.name, confidence: focalCharacter.confidence };
   }
 
-  // Strategy 5: Proximity scan — only fires when no focal character was found.
+  // Strategy 6: Proximity scan — only fires when no focal character was found.
   // PARAGRAPH-SCOPED to avoid cross-paragraph bleed.
   // Filters out names that appear only in vocative (addressed) position.
   if (rawContent) {
@@ -451,7 +533,7 @@ export function attributeColorBlock(
     }
   }
 
-  // Strategy 6: First-person pronouns → attribute to message owner
+  // Strategy 7: First-person pronouns → attribute to message owner
   // "I drew my blade" in a message from [CHARACTER | Melina] → Melina
   // In multi-character content, "I"/"me" could be ANY character speaking,
   // so confidence is lower to let color consistency override if available.
@@ -460,7 +542,7 @@ export function attributeColorBlock(
     return { entityName: messageOwner, confidence: fpConfidence };
   }
 
-  // Strategy 7: Message owner fallback (reduced confidence in multi-character content)
+  // Strategy 8: Message owner fallback (reduced confidence in multi-character content)
   if (messageOwner && text.trim().length > 10) {
     const fallbackConfidence = multiCharacterContent ? 0.35 : 0.5;
     return { entityName: messageOwner, confidence: fallbackConfidence };
@@ -680,10 +762,11 @@ export function processChunkFontColors(
   content: string,
   knownEntityNames: string[],
   entityIdByName: Map<string, string>,
+  thoughtDelimiters?: ThoughtDelimiters,
 ): { strippedContent: string; attributions: ColorAttribution[] } {
-  const blocks = extractColorBlocks(content);
+  const blocks = extractColorBlocks(content, thoughtDelimiters);
   if (blocks.length === 0) {
-    return { strippedContent: content, attributions: [] };
+    return { strippedContent: stripThoughtDelimiters(content, thoughtDelimiters), attributions: [] };
   }
 
   // ── Phase 0: Context analysis ──
@@ -840,7 +923,7 @@ export function processChunkFontColors(
     attributions.push(result.attribution);
   }
 
-  const strippedContent = stripFontTags(content);
+  const strippedContent = stripThoughtDelimiters(stripFontTags(content), thoughtDelimiters);
   return { strippedContent, attributions };
 }
 
@@ -873,12 +956,13 @@ export function formatColorMapForPrompt(chatId: string): string {
   const mappings = getColorMap(chatId);
   if (mappings.length === 0) return "";
 
-  // Group by entity, then by usage type
-  const byEntity = new Map<string, Map<string, string>>();
+  // Group by entity, keeping only the highest-confidence speech/thought color.
+  const byEntity = new Map<string, Map<string, { hex: string; confidence: number }>>();
   const db = getDb();
 
   for (const m of mappings) {
     if (!m.entityId || m.confidence < 0.5) continue;
+    if (m.usageType !== "speech" && m.usageType !== "thought") continue;
 
     // Resolve entity name
     const entityRow = db.query("SELECT name FROM memory_entities WHERE id = ?").get(m.entityId) as any;
@@ -888,9 +972,9 @@ export function formatColorMapForPrompt(chatId: string): string {
     if (!byEntity.has(name)) byEntity.set(name, new Map());
     const usageMap = byEntity.get(name)!;
     const label = USAGE_LABELS[m.usageType as ColorUsageType] || m.usageType;
-    // Keep the highest-confidence mapping per usage type
-    if (!usageMap.has(label)) {
-      usageMap.set(label, m.hexColor);
+    const existing = usageMap.get(label);
+    if (!existing || m.confidence > existing.confidence) {
+      usageMap.set(label, { hex: m.hexColor, confidence: m.confidence });
     }
   }
 
@@ -899,11 +983,12 @@ export function formatColorMapForPrompt(chatId: string): string {
   const sections: string[] = ["[Character Colors]"];
   for (const [name, usageMap] of byEntity) {
     const lines: string[] = [`\n**${name}:**`];
-    for (const [label, hex] of usageMap) {
-      lines.push(`- ${label}: ${hex}`);
+    for (const label of ["Speech", "Thoughts"]) {
+      const entry = usageMap.get(label);
+      if (entry) lines.push(`- ${label}: ${entry.hex}`);
     }
-    sections.push(lines.join("\n"));
+    if (lines.length > 1) sections.push(lines.join("\n"));
   }
 
-  return sections.join("\n");
+  return sections.length > 1 ? sections.join("\n") : "";
 }

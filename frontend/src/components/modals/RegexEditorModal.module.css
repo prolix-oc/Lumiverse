@@ -1,5 +1,6 @@
 .modal {
-  max-height: 88vh;
+  max-height: calc(88vh / var(--lumiverse-ui-scale, 1));
+  min-height: 0;
 }
 
 .header {
@@ -12,13 +13,14 @@
 }
 
 .title {
-  font-size: 14px;
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px 18px;
   display: flex;
@@ -30,8 +32,14 @@
 
 .identityRow {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: flex-end;
+}
+
+.identityRow .field {
+  flex: 1 1 160px;
+  min-width: 0;
 }
 
 .fieldGrow {
@@ -41,7 +49,7 @@
 
 .monoText {
   font-family: var(--lumiverse-mono, monospace);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   letter-spacing: 0.02em;
 }
 
@@ -54,7 +62,7 @@
 }
 
 .sectionLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -67,7 +75,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
   text-transform: uppercase;
@@ -90,10 +98,11 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .fieldLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-weight: 500;
   display: flex;
@@ -103,13 +112,15 @@
 
 .fieldHint {
   font-weight: 400;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   opacity: 0.55;
 }
 
 .fieldInput {
+  width: 100%;
+  min-width: 0;
   padding: 7px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   border-radius: 7px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
@@ -123,8 +134,10 @@
 }
 
 .monoInput {
+  width: 100%;
+  min-width: 0;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-mono, monospace);
   border-radius: 7px;
   border: 1px solid var(--lumiverse-border);
@@ -141,8 +154,10 @@
 }
 
 .descTextarea {
+  width: 100%;
+  min-width: 0;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   border-radius: 7px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
@@ -161,6 +176,7 @@
 
 .findHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -177,7 +193,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-mono, monospace);
   font-weight: 600;
   border-radius: 5px;
@@ -210,7 +226,7 @@
 
 .tokenChip {
   padding: 2px 7px;
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-mono, monospace);
   border-radius: 4px;
   border: 1px solid var(--lumiverse-border);
@@ -263,6 +279,7 @@
 
 .segmented {
   display: flex;
+  min-width: 0;
   border-radius: 7px;
   border: 1px solid var(--lumiverse-border);
   overflow: hidden;
@@ -271,8 +288,9 @@
 
 .segmentedBtn {
   flex: 1;
+  min-width: 0;
   padding: 5px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   background: transparent;
   border: none;
@@ -310,8 +328,9 @@
 }
 
 .placementChip {
+  min-width: 0;
   padding: 4px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   border-radius: 5px;
   border: 1px solid var(--lumiverse-border);
@@ -342,7 +361,7 @@
 }
 
 .depthSep {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
 }
 
@@ -350,7 +369,7 @@
   flex: 1;
   min-width: 0;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   border-radius: 6px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-fill-subtle);
@@ -373,6 +392,7 @@
 
 .advancedRow {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   align-items: flex-end;
 }
@@ -414,13 +434,13 @@
 }
 
 .presetName {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .presetDesc {
-  font-size: 9px;
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   opacity: 0.7;
 }
@@ -434,8 +454,10 @@
 }
 
 .testInput {
+  width: 100%;
+  min-width: 0;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-mono, monospace);
   border-radius: 7px;
   border: 1px solid var(--lumiverse-border);
@@ -458,7 +480,7 @@
 
 .testOutput {
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: var(--lumiverse-mono, monospace);
   border-radius: 7px;
   border: 1px solid var(--lumiverse-border);
@@ -476,7 +498,7 @@
 }
 
 .matchBadge {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   padding: 1px 7px;
   border-radius: 4px;
   background: var(--lumiverse-primary);
@@ -484,12 +506,12 @@
 }
 
 .testError {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #ef4444);
 }
 
 .testHint {
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   opacity: 0.6;
   text-align: center;
@@ -507,3 +529,51 @@
   flex-shrink: 0;
 }
 
+@media (max-width: 600px) {
+  .modal {
+    max-height: calc(var(--app-scaled-viewport-height, 100dvh) - 24px);
+  }
+
+  .header {
+    padding: 12px 14px;
+  }
+
+  .body {
+    padding: 14px;
+    gap: 14px;
+  }
+
+  .identityRow,
+  .advancedRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .identityRow .field,
+  .advancedRow .field {
+    flex-basis: auto;
+  }
+
+  .findHeader {
+    align-items: flex-start;
+  }
+
+  .fieldLabel {
+    flex-wrap: wrap;
+  }
+
+  .tokenBar {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .tokenChip,
+  .tokenDivider {
+    flex-shrink: 0;
+  }
+
+  .footer {
+    padding: 10px 14px;
+  }
+}

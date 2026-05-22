@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
-import type { PersonasSlice } from '@/types/store'
-import type { CharacterPersonaBinding } from '@/types/api'
+import type { CharacterPersonaBinding, Persona } from '@/types/api'
+import type { PersonaTagBinding, PersonasSlice, ResolvedPersonaBinding } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 
 /** Normalize a binding value to the object form. */
@@ -8,10 +8,105 @@ export function resolveBinding(val: string | CharacterPersonaBinding): Character
   return typeof val === 'string' ? { personaId: val } : val
 }
 
+function normalizeTag(tag: string): string {
+  return tag.trim().toLowerCase()
+}
+
+function sanitizeAddonStates(addonStates?: Record<string, boolean>): Record<string, boolean> | undefined {
+  if (!addonStates || typeof addonStates !== 'object') return undefined
+  const entries = Object.entries(addonStates).filter(([key, value]) => key && typeof value === 'boolean')
+  if (entries.length === 0) return undefined
+  return Object.fromEntries(entries)
+}
+
+export function resolvePersonaTagBinding(val: unknown): PersonaTagBinding | null {
+  if (!val || typeof val !== 'object') return null
+  const raw = val as Partial<PersonaTagBinding>
+  const tags = Array.isArray(raw.tags)
+    ? raw.tags
+        .filter((tag): tag is string => typeof tag === 'string')
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+        .filter((tag, index, arr) => arr.findIndex((candidate) => normalizeTag(candidate) === normalizeTag(tag)) === index)
+    : []
+  if (tags.length === 0) return null
+  return {
+    tags,
+    mode: raw.mode === 'all' ? 'all' : 'any',
+    addonStates: sanitizeAddonStates(raw.addonStates),
+  }
+}
+
+export function characterMatchesPersonaTagBinding(characterTags: string[], binding: PersonaTagBinding | null | undefined): boolean {
+  const resolved = resolvePersonaTagBinding(binding)
+  if (!resolved) return false
+  const characterTagSet = new Set(characterTags.map(normalizeTag).filter(Boolean))
+  if (characterTagSet.size === 0) return false
+  return resolved.mode === 'all'
+    ? resolved.tags.every((tag) => characterTagSet.has(normalizeTag(tag)))
+    : resolved.tags.some((tag) => characterTagSet.has(normalizeTag(tag)))
+}
+
+export function getMatchingPersonaTagBindingIds(
+  personas: Persona[],
+  personaTagBindings: Record<string, PersonaTagBinding>,
+  characterTags: string[],
+): string[] {
+  const personaIds = new Set(personas.map((persona) => persona.id))
+  return Object.entries(personaTagBindings)
+    .filter(([personaId, binding]) => personaIds.has(personaId) && characterMatchesPersonaTagBinding(characterTags, binding))
+    .map(([personaId]) => personaId)
+}
+
+export function resolveAutoPersonaBinding(params: {
+  characterId?: string | null
+  characterTags?: string[]
+  personas: Persona[]
+  characterPersonaBindings: Record<string, string | CharacterPersonaBinding>
+  personaTagBindings: Record<string, PersonaTagBinding>
+}): ResolvedPersonaBinding {
+  const { characterId, characterTags = [], personas, characterPersonaBindings, personaTagBindings } = params
+  const personaIds = new Set(personas.map((persona) => persona.id))
+  const rawCharacterBinding = characterId ? characterPersonaBindings[characterId] : undefined
+
+  if (rawCharacterBinding) {
+    const binding = resolveBinding(rawCharacterBinding)
+    if (personaIds.has(binding.personaId)) {
+      return {
+        personaId: binding.personaId,
+        source: 'character',
+        ambiguous: false,
+        addonStates: binding.addonStates,
+        matchedPersonaIds: [binding.personaId],
+      }
+    }
+  }
+
+  const matchedPersonaIds = getMatchingPersonaTagBindingIds(personas, personaTagBindings, characterTags)
+  if (matchedPersonaIds.length === 1) {
+    const binding = resolvePersonaTagBinding(personaTagBindings[matchedPersonaIds[0]])
+    return {
+      personaId: matchedPersonaIds[0],
+      source: 'tag',
+      ambiguous: false,
+      addonStates: binding?.addonStates,
+      matchedPersonaIds,
+    }
+  }
+
+  return {
+    personaId: null,
+    source: matchedPersonaIds.length > 1 ? 'tag' : 'none',
+    ambiguous: matchedPersonaIds.length > 1,
+    matchedPersonaIds,
+  }
+}
+
 export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
   personas: [],
   activePersonaId: null,
   characterPersonaBindings: {},
+  personaTagBindings: {},
   personaSearchQuery: '',
   personaFilterType: 'all',
   personaSortField: 'name',
@@ -46,6 +141,17 @@ export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
     set({ characterPersonaBindings: bindings })
     settingsApi.put('characterPersonaBindings', bindings).catch(() => {})
   },
+  setPersonaTagBinding: (personaId, binding) => {
+    const bindings = { ...get().personaTagBindings }
+    const resolved = resolvePersonaTagBinding(binding)
+    if (resolved) {
+      bindings[personaId] = resolved
+    } else {
+      delete bindings[personaId]
+    }
+    set({ personaTagBindings: bindings })
+    settingsApi.put('personaTagBindings', bindings).catch(() => {})
+  },
   addPersona: (persona) => set((s) => ({ personas: [...s.personas, persona] })),
   updatePersona: (id, persona) =>
     set((s) => {
@@ -67,19 +173,35 @@ export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
       }
 
       // Clean up character bindings that reference the deleted persona
-      const bindings = { ...s.characterPersonaBindings }
-      let bindingsChanged = false
-      for (const [charId, val] of Object.entries(bindings)) {
+      const characterBindings = { ...s.characterPersonaBindings }
+      let characterBindingsChanged = false
+      for (const [charId, val] of Object.entries(characterBindings)) {
         if (resolveBinding(val).personaId === id) {
-          delete bindings[charId]
-          bindingsChanged = true
+          delete characterBindings[charId]
+          characterBindingsChanged = true
         }
       }
-      if (bindingsChanged) {
-        settingsApi.put('characterPersonaBindings', bindings).catch(() => {})
+
+      const personaTagBindings = { ...s.personaTagBindings }
+      const tagBindingsChanged = id in personaTagBindings
+      if (tagBindingsChanged) {
+        delete personaTagBindings[id]
       }
 
-      return { personas, selectedPersonaId, activePersonaId, ...(bindingsChanged ? { characterPersonaBindings: bindings } : {}) }
+      if (characterBindingsChanged) {
+        settingsApi.put('characterPersonaBindings', characterBindings).catch(() => {})
+      }
+      if (tagBindingsChanged) {
+        settingsApi.put('personaTagBindings', personaTagBindings).catch(() => {})
+      }
+
+      return {
+        personas,
+        selectedPersonaId,
+        activePersonaId,
+        ...(characterBindingsChanged ? { characterPersonaBindings: characterBindings } : {}),
+        ...(tagBindingsChanged ? { personaTagBindings } : {}),
+      }
     }),
   setPersonaSearchQuery: (query) => set({ personaSearchQuery: query }),
   setPersonaFilterType: (type) => {

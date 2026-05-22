@@ -5,13 +5,26 @@ import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as imagesSvc from "./images.service";
+import * as gallerySvc from "./character-gallery.service";
 import * as secretsSvc from "./secrets.service";
 import * as imageGenConnSvc from "./image-gen-connections.service";
 import { imageGenConnectionSecretKey } from "./image-gen-connections.service";
+import * as imageGenBindingsSvc from "./image-gen-preset-bindings.service";
+import * as characterLoraSvc from "./character-lora.service";
+import { buildMacroEnvForChat } from "./chats.service";
+import { evaluate as evaluateMacros, registry as macroRegistry } from "../macros";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
+import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-discovery";
+import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
+import { readComfyUIConfig } from "../image-gen/comfyui-workflow-storage";
+import { patchWorkflow, type ComfyUIPatchValues } from "../image-gen/comfyui-workflow-patch";
 import { rawGenerate } from "./generate.service";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
+import type { Message } from "../types/message";
+import type { ImageGenConnectionProfile } from "../types/image-gen-connection";
 
 // Ensure image gen providers are registered
 import "../image-gen/index";
@@ -22,15 +35,35 @@ interface ImageGenSettings {
   enabled: boolean;
   activeImageGenConnectionId?: string | null;
   includeCharacters: boolean;
+  promptMode?: ImageGenPromptMode;
+  customPrompt?: string;
+  customNegativePrompt?: string;
+  activePromptPresetId?: string | null;
+  promptPresets?: ImageGenPromptPreset[];
+  promptParserConnectionId?: string | null;
+  promptParserModel?: string;
+  promptParserParameters?: Record<string, any>;
+  outputTarget?: ImageGenOutputTarget;
   sceneChangeThreshold: number;
   autoGenerate: boolean;
   forceGeneration: boolean;
+  /** When true, generated chat attachment images may be re-sent to multimodal LLM context. */
+  recycleGeneratedImages: boolean;
+  /** Maximum generated images to re-send when recycling is enabled. */
+  recycledImageLimit: number;
+  /** When true, generated images are also linked into the active chat's character gallery. */
+  addToGallery?: boolean;
   backgroundOpacity: number;
   fadeTransitionMs: number;
-  /** Per-session parameter overrides set via the Image Gen panel — merged on top of connection.default_parameters at generation time. */
+  /** @deprecated Legacy global parameter bag. Provider parameters live on connection.default_parameters. */
   parameters?: Record<string, any>;
   /**
-   * Maximum seconds to wait for the image provider to respond.
+   * Maximum seconds to wait for the LLM sidecar/parser prompt generation phase.
+   * Defaults to 60. Set to 0 to disable this timeout.
+   */
+  promptGenerationTimeoutSeconds?: number;
+  /**
+   * Maximum seconds to wait for the image provider generation phase.
    * Defaults to 300 (5 minutes). Set to 0 to disable the timeout entirely.
    */
   generationTimeoutSeconds?: number;
@@ -45,11 +78,25 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   enabled: false,
   activeImageGenConnectionId: null,
   includeCharacters: false,
+  promptMode: "scene",
+  customPrompt: "",
+  customNegativePrompt: "",
+  activePromptPresetId: null,
+  promptPresets: [],
+  promptParserConnectionId: null,
+  promptParserModel: "",
+  promptParserParameters: {},
+  outputTarget: "background",
   sceneChangeThreshold: 2,
   autoGenerate: true,
   forceGeneration: false,
+  recycleGeneratedImages: false,
+  recycledImageLimit: 1,
+  addToGallery: true,
   backgroundOpacity: 0.35,
   fadeTransitionMs: 800,
+  promptGenerationTimeoutSeconds: 60,
+  generationTimeoutSeconds: 300,
 };
 
 export interface SceneData {
@@ -60,24 +107,95 @@ export interface SceneData {
   focal_detail: string;
   palette_override?: string;
   scene_changed: boolean;
+  character_names?: string;
+  character_appearances?: Array<{
+    name?: string;
+    role?: string;
+    appearance?: string;
+    tags?: string;
+  }>;
+  composition_subjects?: string;
+  composition_shot?: string;
+  composition_camera?: string;
+  composition_rating?: string[];
 }
 
 export interface ImageGenResult {
   generated: boolean;
   reason?: string;
-  scene: SceneData;
+  scene?: SceneData;
   prompt: string;
+  negativePrompt?: string;
   provider: string;
   imageDataUrl?: string;
   /** Persisted image ID in the images table */
   imageId?: string;
   /** Public URL for the image (works without authentication) */
   imageUrl?: string;
+  /** Message created (chat_attachment) or patched (attach_to_message) by this generation. */
+  message?: Message;
+  /** Job id streamed alongside progress events so the frontend can correlate. */
+  jobId?: string;
+}
+
+export type ImageGenPromptMode = "scene" | "custom" | "parsed_custom";
+export type ImageGenOutputTarget =
+  | "background"
+  | "chat_attachment"
+  | "preview"
+  | "attach_to_message";
+
+export type ImageGenPresetKind = "main" | "character" | "persona";
+
+export interface ImageGenPromptPreset {
+  id: string;
+  name: string;
+  mode: Exclude<ImageGenPromptMode, "scene">;
+  prompt: string;
+  negativePrompt?: string;
+  parserConnectionId?: string | null;
+  parserModel?: string;
+  parserParameters?: Record<string, any>;
+  /** Whether this preset is intended as a main scene preset or as a per-character snippet. Legacy entries default to "main". */
+  kind?: ImageGenPresetKind;
+}
+
+export interface GenerateImageOptions {
+  forceGeneration?: boolean;
+  promptMode?: ImageGenPromptMode;
+  prompt?: string;
+  negativePrompt?: string;
+  promptPresetId?: string | null;
+  outputTarget?: ImageGenOutputTarget;
+  /** Existing message to attach the generated image to (output target = attach_to_message). */
+  attachToMessageId?: string;
+  /** When true, the parser is skipped and `prompt`/`negativePrompt` are sent verbatim. Used after the preview-prompt modal. */
+  skipParse?: boolean;
+  /** Caller-supplied job id so the frontend can subscribe to progress events before the HTTP request returns. */
+  clientJobId?: string;
+  promptGenerationTimeoutSeconds?: number;
+  generationTimeoutSeconds?: number;
 }
 
 const SCENE_CACHE_MAX = 200;
 const sceneCache = new Map<string, SceneData>();
 const SCENE_FIELDS: Array<keyof SceneData> = ["environment", "time_of_day", "weather", "mood", "focal_detail"];
+
+const CUSTOM_PROMPT_PARSER_SYSTEM =
+  "You are a visual scene analyst and image-prompt writer. Read the current roleplay chat context and rewrite it into the final image generation prompt. Preserve the current scene, visible subjects, actions, composition, lighting, and mood. Follow the user's parser instructions, but do not treat those instructions as the final prompt unless they explicitly say so. Return either plain prompt text or JSON with keys prompt and negative_prompt. Do not include markdown fences unless returning JSON.";
+
+const CHARACTER_AWARE_SCENE_INSTRUCTIONS = `Character-aware mode is enabled because the user selected Include Characters.
+Override any earlier environment-only instruction: include visible characters and the user persona when the context supports it.
+
+In addition to the base scene keys, include these optional JSON keys:
+- character_names: comma-separated names of visible subjects.
+- character_appearances: array of objects with name, role, appearance, and tags. Use concise visual image-generation tags in tags.
+- composition_subjects: the main subject grouping or pose/action relationship.
+- composition_shot: shot framing such as close-up, waist-up, full-body, or wide shot.
+- composition_camera: camera angle or lens direction.
+- composition_rating: array of concise composition tags.
+
+Do not invent unsupported character details. Use character/persona descriptions and the latest chat actions.`;
 
 // Tracks in-flight image generations keyed by `${userId}:${chatId}` so a new
 // request for the same chat can abort an existing one mid-flight.
@@ -107,12 +225,13 @@ export function getImageProviders() {
 export async function generateSceneBackground(
   userId: string,
   chatId: string,
-  opts?: { forceGeneration?: boolean }
+  opts?: GenerateImageOptions
 ): Promise<ImageGenResult> {
-  const settings = getImageGenSettings(userId);
+  let settings = getImageGenSettings(userId);
 
   // Auto-migrate legacy settings to connection profiles
   await maybeAutoMigrate(userId, settings);
+  settings = getImageGenSettings(userId);
 
   // Resolve connection profile
   const connectionId = settings.activeImageGenConnectionId;
@@ -133,12 +252,7 @@ export async function generateSceneBackground(
 
   // Register this generation up-front so a newer request for the same chat
   // can abort it during *any* phase (scene analysis as well as image gen).
-  // The timeout is an optional trigger; supersession works independently.
-  const timeoutSecs = settings.generationTimeoutSeconds ?? 300;
   const controller = new AbortController();
-  const timeoutHandle = timeoutSecs > 0
-    ? setTimeout(() => controller.abort(new Error(`Image generation timed out after ${timeoutSecs}s`)), timeoutSecs * 1000)
-    : null;
 
   const registryKey = `${userId}:${chatId}`;
   const existing = activeImageGenerations.get(registryKey);
@@ -147,31 +261,74 @@ export async function generateSceneBackground(
   }
   activeImageGenerations.set(registryKey, { controller, startedAt: Date.now() });
 
+  const jobId = opts?.clientJobId || crypto.randomUUID();
+
   try {
-    // Scene analysis — abortable by supersession or timeout
-    const scene = await analyzeScene(userId, chatId, controller.signal);
-
-    // Scene change threshold
     const cacheKey = `${userId}:${chatId}`;
-    const previous = sceneCache.get(cacheKey) || null;
-    const threshold = Math.max(1, Number(settings.sceneChangeThreshold || 2));
-    const force = !!opts?.forceGeneration || !!settings.forceGeneration;
-
-    if (!force && previous && !hasSceneChanged(scene, previous, threshold)) {
-      return {
-        generated: false,
-        reason: "Scene has not changed enough",
-        scene,
-        prompt: buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters),
-        provider: connection.provider,
-      };
+    const promptInput = await resolvePromptInput(userId, chatId, settings, opts);
+    const promptMode = opts?.skipParse
+      ? "custom"
+      : opts?.promptMode || settings.promptMode || "scene";
+    const outputTarget = opts?.outputTarget || settings.outputTarget || "background";
+    const params = { ...connection.default_parameters };
+    normalizeRandomSeed(params, !!provider.capabilities.parameters.seed);
+    resolveProviderRandomSeed(params, connection.provider);
+    const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
+    const promptSignal = createPhaseTimeoutSignal(
+      controller.signal,
+      promptTimeoutSecs,
+      `Image prompt generation timed out after ${promptTimeoutSecs}s`,
+    );
+    let promptResult: Awaited<ReturnType<typeof resolveImagePrompt>>;
+    try {
+      promptResult = await resolveImagePrompt(
+        userId,
+        chatId,
+        settings,
+        promptMode,
+        promptInput,
+        params,
+        connection.provider,
+        promptSignal.signal,
+      );
+    } catch (err) {
+      throw resolveAbortReason(promptSignal.signal) ?? err;
+    } finally {
+      promptSignal.cleanup();
     }
 
-    // Build prompt
-    const prompt = buildImagePrompt(scene, connection.provider, settings.includeCharacters, connection.default_parameters);
+    if (promptResult.scene) {
+      const previous = sceneCache.get(cacheKey) || null;
+      const threshold = Math.max(1, Number(settings.sceneChangeThreshold || 2));
+      const force = !!opts?.forceGeneration || !!settings.forceGeneration;
 
-    // Prepare request parameters — connection defaults first, then panel-level overrides
-    const params = { ...connection.default_parameters, ...(settings.parameters || {}) };
+      if (!force && previous && !hasSceneChanged(promptResult.scene, previous, threshold)) {
+        return {
+          generated: false,
+          reason: "Scene has not changed enough",
+          scene: promptResult.scene,
+          prompt: promptResult.prompt,
+          negativePrompt: promptResult.negativePrompt,
+          provider: connection.provider,
+        };
+      }
+    }
+
+    // Resolve the active chat's character LoRA binding (if any) and weave it
+    // into the prompt + provider params. Done before provider-specific work so
+    // every provider that opts in sees the spliced prompt; only Comfy/Swarm
+    // actually consume the workflow/body LoRA params today.
+    const characterLora = resolveCharacterLoraForChat(userId, chatId);
+    if (characterLora?.base_tags) {
+      promptResult.prompt = composeWithBaseTags(characterLora.base_tags, promptResult.prompt);
+    }
+
+    if (!promptResult.prompt.trim()) throw new Error("Image generation prompt is required");
+    if (promptResult.negativePrompt) params.negativePrompt = promptResult.negativePrompt;
+
+    if (characterLora) {
+      applyCharacterLoraToParams(connection.provider, params, characterLora);
+    }
 
     // For NovelAI: pre-resolve director reference images (orchestration concern)
     if (connection.provider === "novelai") {
@@ -182,8 +339,8 @@ export async function generateSceneBackground(
 
       // Pass character tags from scene analysis
       const charTags =
-        settings.includeCharacters && Array.isArray((scene as any).character_appearances)
-          ? (scene as any).character_appearances
+        settings.includeCharacters && Array.isArray((promptResult.scene as any)?.character_appearances)
+          ? (promptResult.scene as any).character_appearances
               .map((c: any) => ({ tags: String(c?.tags || "") }))
               .filter((c: any) => c.tags)
           : [];
@@ -192,44 +349,147 @@ export async function generateSceneBackground(
       }
     }
 
+    if (connection.provider === "comfyui" || connection.provider === "swarmui") {
+      await applyComfyUIWorkflowConfig(connection, params, promptResult.prompt, promptResult.negativePrompt, characterLora, apiKey ?? undefined);
+    }
+
+    const generationTimeoutSecs = resolveTimeoutSeconds(opts?.generationTimeoutSeconds, settings.generationTimeoutSeconds ?? 300);
+    const generationSignal = createPhaseTimeoutSignal(
+      controller.signal,
+      generationTimeoutSecs,
+      `Image generation timed out after ${generationTimeoutSecs}s`,
+    );
     const request: ImageGenRequest = {
-      prompt,
+      prompt: promptResult.prompt,
+      negativePrompt: promptResult.negativePrompt,
       model: connection.model,
       parameters: params,
-      signal: controller.signal,
+      signal: generationSignal.signal,
     };
 
-    const response = await provider.generate(apiKey || "", connection.api_url || "", request);
+    let response: Awaited<ReturnType<typeof provider.generate>>;
+    try {
+      response = await runProviderGeneration(provider, apiKey || "", connection.api_url || "", request, {
+        jobId,
+        chatId,
+        userId,
+      });
+    } catch (err) {
+      eventBus.emit(
+        EventType.IMAGE_GEN_ERROR,
+        { assetId: jobId, chatId, message: err instanceof Error ? err.message : String(err) },
+        userId,
+      );
+      throw resolveAbortReason(generationSignal.signal) ?? err;
+    } finally {
+      generationSignal.cleanup();
+    }
 
     // Persist the generated image to the images table
     let imageId: string | undefined;
     let imageUrl: string | undefined;
+    let message: Message | undefined;
     if (response.imageDataUrl) {
+      const image = await imagesSvc.saveImageFromDataUrl(
+        userId,
+        response.imageDataUrl,
+        `image-gen-${connection.provider}-${Date.now()}.png`,
+        { owner_chat_id: chatId },
+      );
+      imageId = image.id;
+      imageUrl = `/api/v1/image-gen/results/${image.id}`;
+
+      const newAttachment = {
+        type: "image" as const,
+        image_id: image.id,
+        mime_type: image.mime_type,
+        original_filename: image.original_filename,
+        width: image.width ?? undefined,
+        height: image.height ?? undefined,
+      };
+      const imageGenMeta = {
+        provider: connection.provider,
+        prompt: promptResult.prompt,
+        negativePrompt: promptResult.negativePrompt,
+        mode: promptMode,
+      };
+
       try {
-        const image = await imagesSvc.saveImageFromDataUrl(
+        if (outputTarget === "chat_attachment") {
+          message = chatsSvc.createMessage(chatId, {
+            is_user: false,
+            name: "ImageGen",
+            content: "",
+            extra: {
+              image_gen: imageGenMeta,
+              attachments: [newAttachment],
+            },
+          }, userId);
+        } else if (outputTarget === "attach_to_message") {
+          if (!opts?.attachToMessageId) {
+            throw new Error("attachToMessageId is required for the attach_to_message output target");
+          }
+          // Lighter path than updateMessage: 1 read + 1 update + 1 emit, no
+          // chat-memory cache invalidation, no second read-back.
+          const updated = chatsSvc.appendMessageAttachment(
+            userId,
+            opts.attachToMessageId,
+            newAttachment,
+            { image_gen: imageGenMeta },
+          );
+          if (!updated) {
+            throw new Error("Target message for image attachment was not found");
+          }
+          message = updated;
+        }
+      } catch (err) {
+        // Image is already saved to our DB and (for streaming providers) sits
+        // in the provider's history — surface the failure so the user sees
+        // why nothing landed in chat instead of silently dropping it.
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error("[image-gen] Failed to attach generated image to chat:", err);
+        eventBus.emit(
+          EventType.IMAGE_GEN_ERROR,
+          { assetId: jobId, chatId, message: `Image generated but chat attachment failed: ${detail}` },
           userId,
-          response.imageDataUrl,
-          `image-gen-${connection.provider}-${Date.now()}.png`
         );
-        imageId = image.id;
-        imageUrl = `/api/v1/image-gen/results/${image.id}`;
-      } catch {
-        // Persistence failure is non-fatal — the data URL is still returned
+        throw err;
+      }
+
+      // Gallery linkage is best-effort and not on the response's critical
+      // path — defer to a microtask so the HTTP response (and the chat
+      // re-render that follows from MESSAGE_EDITED) lands sooner.
+      if (settings.addToGallery !== false) {
+        const characterId = chatsSvc.getChat(userId, chatId)?.character_id;
+        if (characterId) {
+          queueMicrotask(() => {
+            try {
+              gallerySvc.linkImageToGallery(userId, characterId, image.id, "Generated image");
+            } catch (err) {
+              console.warn("[image-gen] Gallery linkage failed (non-fatal):", err);
+            }
+          });
+        }
       }
     }
 
-    sceneCacheSet(cacheKey, scene);
+    if (promptResult.scene) sceneCacheSet(cacheKey, promptResult.scene);
+
+    eventBus.emit(EventType.IMAGE_GEN_COMPLETE, { assetId: jobId, chatId, imageId, imageUrl }, userId);
+
     return {
       generated: true,
-      scene,
-      prompt,
+      scene: promptResult.scene,
+      prompt: promptResult.prompt,
+      negativePrompt: promptResult.negativePrompt,
       provider: connection.provider,
       imageDataUrl: response.imageDataUrl,
       imageId,
       imageUrl,
+      message,
+      jobId,
     };
   } finally {
-    if (timeoutHandle !== null) clearTimeout(timeoutHandle);
     // Only clear the registry entry if it still points at our controller —
     // a newer request may have already overwritten it.
     if (activeImageGenerations.get(registryKey)?.controller === controller) {
@@ -238,38 +498,594 @@ export async function generateSceneBackground(
   }
 }
 
-// --- Scene Analysis ---
+/**
+ * Runs a provider generation, preferring its streaming generator (Comfy/Swarm)
+ * so we can broadcast IMAGE_GEN_PROGRESS events as steps and previews arrive.
+ * Falls back to the plain `generate()` call for providers without streaming.
+ */
+async function runProviderGeneration(
+  provider: ReturnType<typeof getImageProvider>,
+  apiKey: string,
+  apiUrl: string,
+  request: ImageGenRequest,
+  ctx: { jobId: string; chatId: string; userId: string },
+): Promise<import("../image-gen/types").ImageGenResponse> {
+  if (!provider) throw new Error("Image provider not available");
 
-async function analyzeScene(userId: string, chatId: string, signal?: AbortSignal): Promise<SceneData> {
-  const sidecar = getSidecarSettings(userId);
-  if (!sidecar.connectionProfileId || !sidecar.model) {
-    throw new Error("Sidecar LLM connection is required for scene analysis — configure it in the Council panel");
+  // generateStream is optional on the ImageProvider interface; only Comfy/Swarm
+  // implement it today.
+  const stream = (provider as any).generateStream;
+  if (typeof stream === "function") {
+    const iter = stream.call(provider, apiKey, apiUrl, request) as AsyncGenerator<
+      { step?: number; totalSteps?: number; preview?: string; nodeId?: string },
+      import("../image-gen/types").ImageGenResponse,
+      unknown
+    >;
+    let lastStep = 0;
+    let lastTotal = 0;
+    while (true) {
+      const next = await iter.next();
+      if (next.done) {
+        return next.value;
+      }
+      const chunk = next.value;
+      if (typeof chunk.step === "number") lastStep = chunk.step;
+      if (typeof chunk.totalSteps === "number") lastTotal = chunk.totalSteps;
+      eventBus.emit(
+        EventType.IMAGE_GEN_PROGRESS,
+        {
+          assetId: ctx.jobId,
+          chatId: ctx.chatId,
+          step: typeof chunk.step === "number" ? chunk.step : lastStep,
+          totalSteps: typeof chunk.totalSteps === "number" ? chunk.totalSteps : lastTotal,
+          preview: chunk.preview,
+          nodeId: chunk.nodeId,
+        },
+        ctx.userId,
+      );
+    }
   }
 
-  // Use LLM connection service for sidecar (not image gen connections)
+  return provider.generate(apiKey, apiUrl, request);
+}
+
+/**
+ * Runs the prompt-resolution half of the pipeline (settings → preset → optional
+ * parser LLM call) without sending anything to the image provider. Used by the
+ * "Preview prompt before generating" flow so the user can edit the assembled
+ * prompt before committing to a generation.
+ */
+export async function previewImagePrompt(
+  userId: string,
+  chatId: string,
+  opts?: Omit<GenerateImageOptions, "outputTarget" | "attachToMessageId" | "skipParse" | "clientJobId" | "generationTimeoutSeconds" | "forceGeneration">,
+): Promise<{ prompt: string; negativePrompt?: string; scene?: SceneData; provider: string }> {
+  let settings = getImageGenSettings(userId);
+  await maybeAutoMigrate(userId, settings);
+  settings = getImageGenSettings(userId);
+
+  const connectionId = settings.activeImageGenConnectionId;
+  if (!connectionId) {
+    throw new Error("No image generation connection selected. Create one in Settings → Image Gen Connections.");
+  }
+  const connection = imageGenConnSvc.getConnection(userId, connectionId);
+  if (!connection) throw new Error("Image generation connection not found");
+
+  const params = { ...connection.default_parameters };
+  const promptInput = await resolvePromptInput(userId, chatId, settings, opts);
+  const promptMode = opts?.promptMode || settings.promptMode || "scene";
+  const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
+
+  const controller = new AbortController();
+  const promptSignal = createPhaseTimeoutSignal(
+    controller.signal,
+    promptTimeoutSecs,
+    `Image prompt generation timed out after ${promptTimeoutSecs}s`,
+  );
+  try {
+    const promptResult = await resolveImagePrompt(
+      userId,
+      chatId,
+      settings,
+      promptMode,
+      promptInput,
+      params,
+      connection.provider,
+      promptSignal.signal,
+    );
+    return {
+      prompt: promptResult.prompt,
+      negativePrompt: promptResult.negativePrompt,
+      scene: promptResult.scene,
+      provider: connection.provider,
+    };
+  } catch (err) {
+    throw resolveAbortReason(promptSignal.signal) ?? err;
+  } finally {
+    promptSignal.cleanup();
+  }
+}
+
+function resolveTimeoutSeconds(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : fallback;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function createPhaseTimeoutSignal(
+  parentSignal: AbortSignal,
+  timeoutSeconds: number,
+  timeoutMessage: string,
+): { signal: AbortSignal; cleanup: () => void } {
+  if (timeoutSeconds <= 0) return { signal: parentSignal, cleanup: () => {} };
+
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  if (parentSignal.aborted) abortFromParent();
+  else parentSignal.addEventListener("abort", abortFromParent, { once: true });
+
+  const timeout = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutSeconds * 1000);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parentSignal.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+function resolveAbortReason(signal: AbortSignal): Error | null {
+  return signal.aborted && signal.reason instanceof Error ? signal.reason : null;
+}
+
+async function applyComfyUIWorkflowConfig(
+  connection: ImageGenConnectionProfile,
+  params: Record<string, any>,
+  prompt: string,
+  negativePrompt?: string,
+  characterLora?: characterLoraSvc.CharacterLoraBinding | null,
+  apiKey?: string,
+): Promise<void> {
+  if (params.workflow && typeof params.workflow === "object") return;
+
+  const config = readComfyUIConfig(connection.metadata);
+  if (!config) return;
+
+  const mappings = config.field_mappings || [];
+  const hasPositivePrompt = mappings.some((mapping) => mapping.mappedAs === "positive_prompt");
+  if (!hasPositivePrompt) {
+    throw new Error("Imported ComfyUI workflow must map at least one positive prompt field");
+  }
+
+  const target = resolveComfyTarget(connection, apiKey);
+  const objectInfo = await getComfyUIObjectInfo(target.baseUrl, false, { cookie: target.cookie });
+  const normalizedWorkflow = normalizeComfyUIWorkflow(
+    config.workflow_api_json || config.workflow_json,
+    objectInfo ?? undefined,
+  );
+
+  const customValues =
+    params.comfyui_custom_fields && typeof params.comfyui_custom_fields === "object"
+      ? params.comfyui_custom_fields as Record<string, unknown>
+      : params.custom && typeof params.custom === "object"
+        ? params.custom as Record<string, unknown>
+        : undefined;
+
+  const patchValues: ComfyUIPatchValues = {
+    positive_prompt: prompt,
+    negative_prompt: negativePrompt || params.negativePrompt,
+    steps: numberParam(params.steps),
+    cfg: numberParam(params.cfg),
+    sampler_name: stringParam(params.sampler_name),
+    scheduler: stringParam(params.scheduler),
+    width: numberParam(params.width),
+    height: numberParam(params.height),
+    checkpoint: stringParam(params.checkpoint || params.ckpt_name),
+    custom: customValues,
+  };
+
+  if (characterLora) {
+    patchValues.lora_name = characterLora.lora_name;
+    patchValues.lora_strength_model = characterLora.weight_model;
+    patchValues.lora_strength_clip = characterLora.weight_clip;
+  }
+
+  const extraFieldValues = params.comfyui_field_values;
+  if (extraFieldValues && typeof extraFieldValues === "object") {
+    Object.assign(patchValues, extraFieldValues);
+  }
+  patchValues.seed = resolveComfySeedParam(patchValues.seed ?? params.seed);
+
+  params.workflow = patchWorkflow(normalizedWorkflow.apiWorkflow, mappings, patchValues);
+  params.workflowFormat = "api_prompt";
+  params.preserveImportedWorkflow = true;
+}
+
+function resolveCharacterLoraForChat(
+  userId: string,
+  chatId: string,
+): characterLoraSvc.CharacterLoraBinding | null {
+  const chat = chatsSvc.getChat(userId, chatId);
+  if (!chat?.character_id) return null;
+  return characterLoraSvc.getCharacterLora(userId, chat.character_id);
+}
+
+/**
+ * Prepend per-character anchor tags to the assembled prompt. Tags toward the
+ * front carry the most weight in tag-style prompts (Booru/SD), so character
+ * identity stays stable across scene variation.
+ */
+function composeWithBaseTags(baseTags: string, prompt: string): string {
+  const trimmedTags = baseTags.trim();
+  const trimmedPrompt = prompt.trim();
+  if (!trimmedTags) return prompt;
+  if (!trimmedPrompt) return trimmedTags;
+  return `${trimmedTags}, ${trimmedPrompt}`;
+}
+
+/**
+ * Wire the per-character LoRA into provider-specific parameter slots.
+ * ComfyUI consumes them via patchWorkflow later in the pipeline; SwarmUI
+ * gets `loras` + `loraWeights` body params. Other providers ignore the
+ * binding (base tags still apply via the prompt prepend).
+ *
+ * Honors user-supplied values: if the connection's default_parameters already
+ * specify a LoRA (e.g. for a non-character image gen), the character binding
+ * is layered on top via comma-joined parameter strings — SwarmUI accepts
+ * multi-LoRA via parallel comma-separated lists.
+ */
+function applyCharacterLoraToParams(
+  provider: string,
+  params: Record<string, any>,
+  binding: characterLoraSvc.CharacterLoraBinding,
+): void {
+  if (provider === "swarmui") {
+    const existingNames = stringParam(params.loras);
+    const existingWeights = stringParam(params.loraWeights);
+    params.loras = existingNames ? `${existingNames},${binding.lora_name}` : binding.lora_name;
+    // SwarmUI requires parallel lists; we use weight_model as the SwarmUI
+    // weight (it has a single strength field, not separate model/clip).
+    params.loraWeights = existingWeights
+      ? `${existingWeights},${binding.weight_model}`
+      : String(binding.weight_model);
+    return;
+  }
+  // ComfyUI is handled by applyComfyUIWorkflowConfig which reads the binding
+  // directly. Other providers don't have a LoRA story to wire into.
+}
+
+function numberParam(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function stringParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function resolveComfySeedParam(value: unknown): number | undefined {
+  const seed = numberParam(value);
+  if (seed === undefined) return undefined;
+  if (seed !== -1) return seed;
+
+  return randomImageSeed();
+}
+
+function normalizeRandomSeed(params: Record<string, any>, supportsSeed: boolean): void {
+  if (!supportsSeed) return;
+  const seed = params.seed;
+  if (seed == null || (typeof seed === "string" && seed.trim() === "")) {
+    params.seed = -1;
+  }
+}
+
+function resolveProviderRandomSeed(params: Record<string, any>, providerName: string): void {
+  if (providerName === "swarmui") return;
+  if (numberParam(params.seed) === -1) params.seed = randomImageSeed();
+}
+
+function randomImageSeed(): number {
+  const max = 2_147_483_647;
+  const range = max + 1;
+  const limit = Math.floor(0x1_0000_0000 / range) * range;
+  const values = new Uint32Array(1);
+
+  do {
+    globalThis.crypto.getRandomValues(values);
+  } while (values[0] >= limit);
+
+  return values[0] % range;
+}
+
+async function resolvePromptInput(
+  userId: string,
+  chatId: string,
+  settings: ImageGenSettings,
+  opts?: GenerateImageOptions,
+): Promise<ImageGenPromptPreset> {
+  const presets = settings.promptPresets || [];
+  const preset = presets.find((p) => p.id === (opts?.promptPresetId || settings.activePromptPresetId));
+  const requestedMode = opts?.skipParse
+    ? "custom"
+    : opts?.promptMode || preset?.mode || settings.promptMode || "custom";
+
+  let prompt = opts?.prompt ?? preset?.prompt ?? settings.customPrompt ?? "";
+  let negativePrompt = opts?.negativePrompt ?? preset?.negativePrompt ?? settings.customNegativePrompt ?? "";
+
+  // Skip character/persona splice when the caller passes a pre-resolved prompt
+  // (e.g. coming back from the preview modal). Standard macros still run below
+  // so {{user}}/{{char}} in the edited text are expanded.
+  if (!opts?.skipParse) {
+    const { prompt: expanded, negativePrompt: expandedNeg } = expandCharacterPromptMacro(
+      userId,
+      chatId,
+      presets,
+      prompt,
+      negativePrompt,
+    );
+    prompt = expanded;
+    negativePrompt = expandedNeg;
+  }
+
+  // Run the full macro engine last so the standard macro vocabulary —
+  // {{user}}, {{char}}, {{group}}, temporal/string helpers, etc. — works
+  // inside image-gen prompts (and inside any spliced character/persona text).
+  // Best-effort: failure here must not block generation.
+  if (prompt || negativePrompt) {
+    try {
+      const env = buildMacroEnvForChat(userId, chatId);
+      if (env) {
+        if (prompt) prompt = (await evaluateMacros(prompt, env, macroRegistry)).text;
+        if (negativePrompt) negativePrompt = (await evaluateMacros(negativePrompt, env, macroRegistry)).text;
+      }
+    } catch {
+      // Macros are a convenience; leave the raw text in place on failure.
+    }
+  }
+
+  return {
+    id: preset?.id || "inline",
+    name: preset?.name || "Inline prompt",
+    mode: requestedMode === "parsed_custom" ? "parsed_custom" : "custom",
+    prompt,
+    negativePrompt,
+    parserConnectionId: preset?.parserConnectionId ?? settings.promptParserConnectionId ?? null,
+    parserModel: preset?.parserModel ?? settings.promptParserModel ?? "",
+    parserParameters: preset?.parserParameters ?? settings.promptParserParameters ?? {},
+  };
+}
+
+/**
+ * Pure substitution helper — replaces {{character_prompt}} and
+ * {{character_negative_prompt}} placeholders with the bound character preset's
+ * text. Empty bound text removes the placeholder entirely. Exported for
+ * focused unit tests.
+ */
+export function substituteCharacterPromptMacro(
+  prompt: string,
+  negativePrompt: string,
+  characterPrompt: string,
+  characterNegativePrompt: string,
+): { prompt: string; negativePrompt: string } {
+  return {
+    prompt: prompt.replace(/\{\{\s*character_prompt\s*\}\}/gi, characterPrompt),
+    negativePrompt: negativePrompt.replace(/\{\{\s*character_negative_prompt\s*\}\}/gi, characterNegativePrompt),
+  };
+}
+
+/**
+ * Pure substitution helper for the persona macro — symmetric counterpart to
+ * substituteCharacterPromptMacro. Exported for unit tests.
+ */
+export function substitutePersonaPromptMacro(
+  prompt: string,
+  negativePrompt: string,
+  personaPrompt: string,
+  personaNegativePrompt: string,
+): { prompt: string; negativePrompt: string } {
+  return {
+    prompt: prompt.replace(/\{\{\s*persona_prompt\s*\}\}/gi, personaPrompt),
+    negativePrompt: negativePrompt.replace(/\{\{\s*persona_negative_prompt\s*\}\}/gi, personaNegativePrompt),
+  };
+}
+
+/**
+ * Looks up the active persona for a chat. Prefers the persona referenced by
+ * the most recent user message's `extra.persona_id`, then falls back to the
+ * user's default persona. Returns null if neither is available.
+ */
+function resolveActivePersonaId(userId: string, chatId: string): string | null {
+  const messages = chatsSvc.getMessages(userId, chatId);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const pid = m?.is_user && (m.extra as any)?.persona_id;
+    if (typeof pid === "string" && pid) return pid;
+  }
+  const def = personasSvc.getDefaultPersona(userId);
+  return def?.id ?? null;
+}
+
+/**
+ * Resolves bound character and persona presets for the active chat context
+ * and threads them through `{{character_prompt}}` / `{{persona_prompt}}`
+ * placeholders in the main preset text. The two are independent — having one
+ * binding does not affect the other.
+ */
+function expandCharacterPromptMacro(
+  userId: string,
+  chatId: string,
+  presets: ImageGenPromptPreset[],
+  prompt: string,
+  negativePrompt: string,
+): { prompt: string; negativePrompt: string } {
+  const hasCharMacro = /\{\{\s*character_prompt\s*\}\}/i.test(prompt)
+    || /\{\{\s*character_negative_prompt\s*\}\}/i.test(negativePrompt);
+  const hasPersonaMacro = /\{\{\s*persona_prompt\s*\}\}/i.test(prompt)
+    || /\{\{\s*persona_negative_prompt\s*\}\}/i.test(negativePrompt);
+  if (!hasCharMacro && !hasPersonaMacro) return { prompt, negativePrompt };
+
+  let out = { prompt, negativePrompt };
+
+  if (hasCharMacro) {
+    const chat = chatsSvc.getChat(userId, chatId);
+    let charPrompt = "";
+    let charNegative = "";
+    if (chat?.character_id) {
+      const binding = imageGenBindingsSvc.getCharacterBinding(userId, chat.character_id);
+      if (binding) {
+        const bound = presets.find((p) => p.id === binding.preset_id && p.kind === "character");
+        if (bound) {
+          charPrompt = bound.prompt || "";
+          charNegative = bound.negativePrompt || "";
+        }
+      }
+    }
+    out = substituteCharacterPromptMacro(out.prompt, out.negativePrompt, charPrompt, charNegative);
+  }
+
+  if (hasPersonaMacro) {
+    const personaId = resolveActivePersonaId(userId, chatId);
+    let personaPrompt = "";
+    let personaNegative = "";
+    if (personaId) {
+      const binding = imageGenBindingsSvc.getPersonaBinding(userId, personaId);
+      if (binding) {
+        const bound = presets.find((p) => p.id === binding.preset_id && p.kind === "persona");
+        if (bound) {
+          personaPrompt = bound.prompt || "";
+          personaNegative = bound.negativePrompt || "";
+        }
+      }
+    }
+    out = substitutePersonaPromptMacro(out.prompt, out.negativePrompt, personaPrompt, personaNegative);
+  }
+
+  return out;
+}
+
+async function resolveImagePrompt(
+  userId: string,
+  chatId: string,
+  settings: ImageGenSettings,
+  mode: ImageGenPromptMode,
+  input: ImageGenPromptPreset,
+  imageParams: Record<string, any>,
+  providerName: string,
+  signal?: AbortSignal,
+): Promise<{ prompt: string; negativePrompt?: string; scene?: SceneData }> {
+  if (mode === "custom") return { prompt: input.prompt, negativePrompt: input.negativePrompt };
+  if (mode === "parsed_custom") return parseCustomPrompt(userId, chatId, settings, input, signal);
+
+  const scene = await analyzeScene(userId, chatId, settings, signal);
+  return {
+    scene,
+    prompt: buildImagePrompt(scene, providerName, settings.includeCharacters, imageParams),
+    negativePrompt: input.negativePrompt,
+  };
+}
+
+async function parseCustomPrompt(
+  userId: string,
+  chatId: string,
+  settings: ImageGenSettings,
+  input: ImageGenPromptPreset,
+  signal?: AbortSignal,
+): Promise<{ prompt: string; negativePrompt?: string }> {
+  const parser = await resolvePromptParser(userId, settings, input);
+  const response = await rawGenerate(userId, {
+    provider: parser.connection.provider,
+    model: parser.model,
+    connection_id: parser.connection.id,
+    messages: [
+      {
+        role: "system",
+        content: CUSTOM_PROMPT_PARSER_SYSTEM,
+      },
+      ...buildContextMessages(userId, chatId, settings.includeCharacters),
+      {
+        role: "user",
+        content: `Parser instructions from the user:\n${input.prompt}\n\nReturn the final image prompt now.`,
+      },
+    ],
+    parameters: parser.parameters,
+    signal,
+  });
+
+  return parsePromptResponse(response.content || "", input.negativePrompt);
+}
+
+function parsePromptResponse(input: string, fallbackNegative?: string): { prompt: string; negativePrompt?: string } {
+  const cleaned = input.trim();
+  const fromFence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fromFence?.[1] || cleaned).trim();
+  if (candidate.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(candidate);
+      return {
+        prompt: String(parsed.prompt || parsed.positive_prompt || "").trim(),
+        negativePrompt: parsed.negative_prompt || parsed.negativePrompt || fallbackNegative,
+      };
+    } catch {
+      // Fall through to plain text.
+    }
+  }
+  return { prompt: candidate, negativePrompt: fallbackNegative };
+}
+
+async function resolvePromptParser(userId: string, settings: ImageGenSettings, input?: ImageGenPromptPreset) {
   const { getConnection } = await import("./connections.service");
-  const conn = getConnection(userId, sidecar.connectionProfileId);
-  if (!conn) throw new Error("Sidecar connection not found");
+  const configuredId = input?.parserConnectionId || settings.promptParserConnectionId;
+  let model = input?.parserModel || settings.promptParserModel || "";
+  let parameters = input?.parserParameters || settings.promptParserParameters || {};
+
+  if (configuredId) {
+    const connection = getConnection(userId, configuredId);
+    if (!connection) throw new Error("Image prompt parser connection not found");
+    return { connection, model: model || connection.model, parameters };
+  }
+
+  const sidecar = getSidecarSettings(userId);
+  if (!sidecar.connectionProfileId || !sidecar.model) {
+    throw new Error("Image prompt parser connection is required. Select one in ImageGen settings or configure the Council sidecar.");
+  }
+
+  const connection = getConnection(userId, sidecar.connectionProfileId);
+  if (!connection) throw new Error("Sidecar connection not found");
+  model = model || sidecar.model;
+  parameters = Object.keys(parameters).length > 0 ? parameters : {
+    temperature: sidecar.temperature,
+    top_p: sidecar.topP,
+    max_tokens: sidecar.maxTokens,
+  };
+  return { connection, model, parameters };
+}
+
+// --- Scene Analysis ---
+
+async function analyzeScene(userId: string, chatId: string, settings: ImageGenSettings, signal?: AbortSignal): Promise<SceneData> {
+  const parser = await resolvePromptParser(userId, settings);
 
   const tool = BUILTIN_TOOLS_MAP.get("generate_scene");
   if (!tool) throw new Error("generate_scene council tool is unavailable");
 
   const response = await rawGenerate(userId, {
-    provider: conn.provider,
-    model: sidecar.model,
-    connection_id: sidecar.connectionProfileId,
+    provider: parser.connection.provider,
+    model: parser.model,
+    connection_id: parser.connection.id,
     messages: [
       {
         role: "system",
-        content: `${tool.prompt}\n\nYou must return ONLY valid JSON with the exact schema keys and no markdown fences.`,
+        content: `${tool.prompt}${settings.includeCharacters ? `\n\n${CHARACTER_AWARE_SCENE_INSTRUCTIONS}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
       },
-      ...buildContextMessages(userId, chatId),
+      ...buildContextMessages(userId, chatId, settings.includeCharacters),
       { role: "user", content: "Return scene JSON now." },
     ],
     parameters: {
-      temperature: sidecar.temperature,
-      top_p: sidecar.topP,
-      max_tokens: sidecar.maxTokens,
+      ...parser.parameters,
     },
     signal,
   });
@@ -277,7 +1093,7 @@ async function analyzeScene(userId: string, chatId: string, signal?: AbortSignal
   return parseSceneJson(response.content || "");
 }
 
-function buildContextMessages(userId: string, chatId: string): LlmMessage[] {
+function buildContextMessages(userId: string, chatId: string, includeCharacters = false): LlmMessage[] {
   const msgs: LlmMessage[] = [];
   const chat = chatsSvc.getChat(userId, chatId);
   if (chat) {
@@ -291,6 +1107,21 @@ function buildContextMessages(userId: string, chatId: string): LlmMessage[] {
         .filter(Boolean)
         .join("\n");
       if (charInfo) msgs.push({ role: "system", content: `## Character Information\n${charInfo}` });
+    }
+  }
+  if (includeCharacters) {
+    const persona = personasSvc.resolvePersonaOrDefault(userId);
+    if (persona) {
+      const personaInfo = [
+        persona.name && `Name: ${persona.name}`,
+        persona.title && `Title: ${persona.title}`,
+        persona.description && `Description: ${persona.description}`,
+        (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
+          `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
     }
   }
   for (const m of chatsSvc.getMessages(userId, chatId).slice(-24)) {
@@ -312,7 +1143,7 @@ function parseSceneJson(input: string): SceneData {
     if (start >= 0 && end > start) parsed = JSON.parse(candidate.slice(start, end + 1));
     else throw new Error("Could not parse scene JSON from council response");
   }
-  return {
+  const scene: SceneData = {
     environment: String(parsed.environment || "A neutral establishing shot"),
     time_of_day: String(parsed.time_of_day || "night"),
     weather: String(parsed.weather || "clear"),
@@ -321,6 +1152,22 @@ function parseSceneJson(input: string): SceneData {
     palette_override: parsed.palette_override ? String(parsed.palette_override) : undefined,
     scene_changed: Boolean(parsed.scene_changed),
   };
+  if (parsed.character_names) scene.character_names = String(parsed.character_names);
+  if (Array.isArray(parsed.character_appearances)) {
+    scene.character_appearances = parsed.character_appearances
+      .filter((entry: any) => entry && typeof entry === "object")
+      .map((entry: any) => ({
+        name: entry.name ? String(entry.name) : undefined,
+        role: entry.role ? String(entry.role) : undefined,
+        appearance: entry.appearance ? String(entry.appearance) : undefined,
+        tags: entry.tags ? String(entry.tags) : undefined,
+      }));
+  }
+  if (parsed.composition_subjects) scene.composition_subjects = String(parsed.composition_subjects);
+  if (parsed.composition_shot) scene.composition_shot = String(parsed.composition_shot);
+  if (parsed.composition_camera) scene.composition_camera = String(parsed.composition_camera);
+  if (Array.isArray(parsed.composition_rating)) scene.composition_rating = parsed.composition_rating.map((v: any) => String(v));
+  return scene;
 }
 
 // --- Prompt Building ---
@@ -380,7 +1227,19 @@ function buildImagePrompt(
   if (scene.mood) prompt += ` Mood: ${scene.mood}.`;
   if (scene.focal_detail) prompt += ` Focus: ${scene.focal_detail}.`;
   if (scene.palette_override) prompt += ` Colors: ${scene.palette_override}.`;
-  if (!includeCharacters) {
+  if (includeCharacters) {
+    if (scene.character_names) prompt += ` Characters: ${scene.character_names}.`;
+    if (Array.isArray(scene.character_appearances) && scene.character_appearances.length > 0) {
+      const appearances = scene.character_appearances
+        .map((c) => [c.name, c.role, c.appearance, c.tags].filter(Boolean).join(" - "))
+        .filter(Boolean)
+        .join("; ");
+      if (appearances) prompt += ` Character details: ${appearances}.`;
+    }
+    if (scene.composition_subjects) prompt += ` Composition: ${scene.composition_subjects}.`;
+    if (scene.composition_shot) prompt += ` Framing: ${scene.composition_shot}.`;
+    if (scene.composition_camera) prompt += ` Camera: ${scene.composition_camera}.`;
+  } else {
     prompt +=
       "\nThis is a background/environment image ONLY. Do NOT include any people, characters, or humanoid figures in the image.";
   }
@@ -477,7 +1336,27 @@ function uint8ToBase64(bytes: Uint8Array): string {
 
 export function getImageGenSettings(userId: string): ImageGenSettings {
   const row = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY);
-  return { ...DEFAULT_IMAGE_SETTINGS, ...(row?.value || {}) };
+  const settings = { ...DEFAULT_IMAGE_SETTINGS, ...(row?.value || {}) };
+  const savedConnectionId = settings.activeImageGenConnectionId || null;
+  const savedConnection = savedConnectionId
+    ? imageGenConnSvc.getConnection(userId, savedConnectionId)
+    : null;
+
+  if (savedConnection) return settings;
+
+  const defaultConnection = imageGenConnSvc.getDefaultConnection(userId);
+  if (!defaultConnection) {
+    if (savedConnectionId) {
+      const next = { ...settings, activeImageGenConnectionId: null };
+      settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+      return next;
+    }
+    return settings;
+  }
+
+  const next = { ...settings, activeImageGenConnectionId: defaultConnection.id };
+  settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+  return next;
 }
 
 // --- Auto-Migration (Legacy Settings → Connection Profiles) ---

@@ -6,7 +6,7 @@
 }
 
 .desc {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.5;
   margin-bottom: 4px;
@@ -35,13 +35,13 @@
 }
 
 .toggleText {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .toggleHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.4;
 }
@@ -73,7 +73,7 @@
   border-radius: var(--lumiverse-radius);
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   line-height: 1.5;
 }
@@ -115,7 +115,7 @@
 }
 
 .modeNote {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   font-style: italic;
   margin-top: 4px;
@@ -146,13 +146,13 @@
 }
 
 .quirksLabel {
-  font-size: 13px;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
   color: var(--lumiverse-text);
 }
 
 .quirksHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-top: 4px;
   line-height: 1.4;
@@ -184,7 +184,7 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-family: inherit;
   line-height: 1.5;
   resize: vertical;
@@ -208,7 +208,7 @@
   padding: 6px 10px;
   border-radius: var(--lumiverse-radius);
   background: var(--lumiverse-fill-subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   color: var(--lumiverse-text-muted);
   min-height: 28px;
@@ -243,7 +243,7 @@
   border: 1px solid var(--lumiverse-border);
   color: var(--lumiverse-text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   text-align: left;
   cursor: pointer;
   transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
@@ -279,7 +279,7 @@
   border-radius: 9px;
   background: var(--lumiverse-primary);
   color: var(--lumiverse-primary-contrast, #fff);
-  font-size: 10px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   line-height: 1;
 }
@@ -312,7 +312,7 @@
 }
 
 .filterDepthLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
   flex: 1;
 }
