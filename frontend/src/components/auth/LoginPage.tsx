@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [focused, setFocused] = useState<string | null>(null)
+  const [subtitle] = useState(() => (Math.random() < 0.076 ? 'Enter the goon' : 'Enter the loom'))
   const login = useStore((s) => s.login)
   const authError = useStore((s) => s.authError)
   const navigate = useNavigate()
@@ -95,7 +96,7 @@ export default function LoginPage() {
             </svg>
           </div>
           <h1 className={styles.logoTitle}>Lumiverse</h1>
-          <p className={styles.logoSubtitle}>{Math.random() < 0.076 ? 'Enter the goon' : 'Enter the loom'}</p>
+          <p className={styles.logoSubtitle}>{subtitle}</p>
         </motion.div>
 
         {/* Card */}
