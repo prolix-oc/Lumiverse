@@ -78,6 +78,10 @@ export async function* executeComfyWorkflowStream(
   opts: ComfyRunnerOptions,
 ): AsyncGenerator<ComfyStreamEvent, ComfyRunnerResult, unknown> {
   const { label, cookie } = opts
+  // Trailing slashes on user-provided apiUrl cause `//ws`, `//prompt`, etc.
+  // The WS handshake then returns a normal HTTP response and Bun reports
+  // "Expected 101 status code". Strip once at the boundary.
+  baseUrl = baseUrl.replace(/\/+$/, "")
   const clientId = crypto.randomUUID()
 
   const wsUrl = baseUrl.replace(/^http/, "ws") + `/ws?clientId=${clientId}`
