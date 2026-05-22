@@ -8,6 +8,7 @@ import {
   normalizeReasoningSettingsForProvider,
 } from '@/lib/reasoning-binding'
 import { formatAnthropicPromptCachingSummary } from '@/lib/anthropic-prompt-caching'
+import { formatNanoGptCachingSummary } from '@/lib/nanogpt-prompt-caching'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
@@ -206,6 +207,10 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
   const anthropicCachingSummary = profile.provider === 'anthropic'
     ? formatAnthropicPromptCachingSummary(profile.metadata?.prompt_caching)
     : null
+  const nanogptCachingSummary = profile.provider === 'nanogpt'
+    ? formatNanoGptCachingSummary(profile.metadata?.nanogpt_caching)
+    : null
+  const cachingSummary = anthropicCachingSummary ?? nanogptCachingSummary
 
   if (editing) {
     return (
@@ -247,9 +252,9 @@ export default function ConnectionItem({ profile, isActive, providers, onSelect,
                   {boundReasoningSummary}
                 </span>
               )}
-              {anthropicCachingSummary && (
-                <span className={styles.itemCachingMeta} title={anthropicCachingSummary}>
-                  {anthropicCachingSummary}
+              {cachingSummary && (
+                <span className={styles.itemCachingMeta} title={cachingSummary}>
+                  {cachingSummary}
                 </span>
               )}
             </div>

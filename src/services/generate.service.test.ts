@@ -34,6 +34,76 @@ describe("injectConnectionMetadataFlags", () => {
 
     expect(params.prompt_caching).toBeUndefined();
   });
+
+  test("injects nanogpt caching params when enabled", () => {
+    const params: Record<string, unknown> = {};
+
+    __test__.injectConnectionMetadataFlags(
+      {
+        provider: "nanogpt",
+        metadata: {
+          nanogpt_caching: { enabled: true, ttl: "1h", stickyProvider: true },
+        },
+      },
+      params,
+    );
+
+    expect(params.caching).toBe(true);
+    expect(params.stickyProvider).toBe(true);
+    expect(params.prompt_caching).toEqual({ enabled: true, ttl: "1h", stickyProvider: true });
+  });
+
+  test("defaults nanogpt caching ttl to 5m and stickyProvider to true", () => {
+    const params: Record<string, unknown> = {};
+
+    __test__.injectConnectionMetadataFlags(
+      {
+        provider: "nanogpt",
+        metadata: {
+          nanogpt_caching: { enabled: true },
+        },
+      },
+      params,
+    );
+
+    expect(params.prompt_caching).toEqual({ enabled: true, ttl: "5m", stickyProvider: true });
+    expect(params.stickyProvider).toBe(true);
+  });
+
+  test("honors stickyProvider=false on nanogpt caching", () => {
+    const params: Record<string, unknown> = {};
+
+    __test__.injectConnectionMetadataFlags(
+      {
+        provider: "nanogpt",
+        metadata: {
+          nanogpt_caching: { enabled: true, ttl: "5m", stickyProvider: false },
+        },
+      },
+      params,
+    );
+
+    expect(params.stickyProvider).toBe(false);
+    expect(params.prompt_caching).toEqual({ enabled: true, ttl: "5m", stickyProvider: false });
+  });
+
+  test("does not inject disabled nanogpt caching", () => {
+    const params: Record<string, unknown> = {};
+
+    __test__.injectConnectionMetadataFlags(
+      {
+        provider: "nanogpt",
+        metadata: {
+          nanogpt_caching: false,
+        },
+      },
+      params,
+    );
+
+    expect(params.caching).toBeUndefined();
+    expect(params.stickyProvider).toBeUndefined();
+    expect(params.prompt_caching).toBeUndefined();
+  });
 });
 
 describe("anthropic prompt caching helpers", () => {

@@ -226,6 +226,22 @@ function injectConnectionMetadataFlags(
     }
   }
 
+  if (connection.provider === "nanogpt") {
+    const cacheSetting = connection.metadata?.nanogpt_caching;
+    if (
+      cacheSetting &&
+      typeof cacheSetting === "object" &&
+      !Array.isArray(cacheSetting) &&
+      cacheSetting.enabled === true
+    ) {
+      const ttl = cacheSetting.ttl === "1h" ? "1h" : "5m";
+      const stickyProvider = cacheSetting.stickyProvider !== false;
+      params.caching = true;
+      params.stickyProvider = stickyProvider;
+      params.prompt_caching = { enabled: true, ttl, stickyProvider };
+    }
+  }
+
   if (
     connection.provider === "openrouter" &&
     connection.metadata?.openrouter

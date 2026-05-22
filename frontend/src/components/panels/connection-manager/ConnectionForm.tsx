@@ -14,6 +14,11 @@ import {
   parseAnthropicPromptCachingSettings,
   type AnthropicPromptCachingSettings,
 } from '@/lib/anthropic-prompt-caching'
+import {
+  buildNanoGptCachingMetadata,
+  parseNanoGptCachingSettings,
+  type NanoGptCachingSettings,
+} from '@/lib/nanogpt-prompt-caching'
 import ModelCombobox from './ModelCombobox'
 import OpenRouterSettings from './OpenRouterSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
@@ -52,6 +57,11 @@ const ANTHROPIC_CACHE_TTL_OPTIONS = [
   { value: '1h', label: '1 hour' },
 ]
 
+const NANOGPT_CACHE_TTL_OPTIONS = [
+  { value: '5m', label: '5 minutes' },
+  { value: '1h', label: '1 hour' },
+]
+
 export default function ConnectionForm({ providers, profile, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || 'openai')
@@ -64,6 +74,9 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [useZaiCodingPlanEndpoint, setUseZaiCodingPlanEndpoint] = useState(profile?.metadata?.use_coding_plan_endpoint || false)
   const [anthropicPromptCachingSettings, setAnthropicPromptCachingSettings] = useState<AnthropicPromptCachingSettings>(
     () => parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching)
+  )
+  const [nanogptCachingSettings, setNanogptCachingSettings] = useState<NanoGptCachingSettings>(
+    () => parseNanoGptCachingSettings(profile?.metadata?.nanogpt_caching)
   )
   const [bindReasoning, setBindReasoning] = useState(!!profile?.metadata?.reasoningBindings)
   const reasoningSettings = useStore((s) => s.reasoningSettings)
@@ -229,6 +242,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const showSubscriptionApiToggle = provider === 'nanogpt'
   const showZaiCodingPlanToggle = provider === 'zai'
   const showAnthropicPromptCachingToggle = provider === 'anthropic'
+  const showNanoGptCachingToggle = provider === 'nanogpt'
   const isOpenRouter = provider === 'openrouter'
   // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
   // field has no purpose and we don't display it.
@@ -244,6 +258,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     const storedPromptBias = profile?.metadata?.reasoningBindings?.promptBias
     setBoundPromptBias(typeof storedPromptBias === 'string' ? storedPromptBias : promptBias)
     setAnthropicPromptCachingSettings(parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching))
+    setNanogptCachingSettings(parseNanoGptCachingSettings(profile?.metadata?.nanogpt_caching))
   }, [profile?.id])
 
   const handlePollinationsSignIn = useCallback(async () => {
@@ -318,6 +333,11 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } else {
       delete metadata.prompt_caching
     }
+    if (showNanoGptCachingToggle) {
+      metadata.nanogpt_caching = buildNanoGptCachingMetadata(nanogptCachingSettings)
+    } else {
+      delete metadata.nanogpt_caching
+    }
     if (bindReasoning) {
       metadata.reasoningBindings = {
         settings: normalizedBoundReasoningSettings,
@@ -358,7 +378,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
 
   return (
     <div className={styles.form}>
@@ -461,6 +481,37 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
         <FormField label="">
           <Toggle.Checkbox checked={useSubscriptionApi} onChange={setUseSubscriptionApi} label="Use Subscription API" hint="Use /api/subscription/v1 to only use models from your NanoGPT subscription" />
         </FormField>
+      )}
+      {showNanoGptCachingToggle && (
+        <>
+          <FormField label="">
+            <Toggle.Checkbox
+              checked={nanogptCachingSettings.enabled}
+              onChange={(checked) => setNanogptCachingSettings((current) => ({ ...current, enabled: checked }))}
+              label="Enable Prompt Caching"
+              hint="Route to cache-capable providers and pass NanoGPT's prompt_caching helper. Avoids stale responses when upstream caches collide."
+            />
+          </FormField>
+          {nanogptCachingSettings.enabled && (
+            <>
+              <FormField label="Prompt Cache TTL" hint="How long NanoGPT should retain the cached prefix. Use 1 hour for slower flows at higher write cost.">
+                <Select
+                  value={nanogptCachingSettings.ttl}
+                  onChange={(ttl) => setNanogptCachingSettings((current) => ({ ...current, ttl: ttl as '5m' | '1h' }))}
+                  options={NANOGPT_CACHE_TTL_OPTIONS}
+                />
+              </FormField>
+              <FormField label="">
+                <Toggle.Checkbox
+                  checked={nanogptCachingSettings.stickyProvider}
+                  onChange={(checked) => setNanogptCachingSettings((current) => ({ ...current, stickyProvider: checked }))}
+                  label="Sticky Provider"
+                  hint="Prefer the previously recorded upstream provider for cache hits. NanoGPT returns 503 on failover instead of switching providers, preserving cache integrity."
+                />
+              </FormField>
+            </>
+          )}
+        </>
       )}
       {showZaiCodingPlanToggle && (
         <FormField label="">

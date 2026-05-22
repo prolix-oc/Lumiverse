@@ -483,7 +483,12 @@ app.onError((err, c) => {
   // a stack when one is available.
   if (err instanceof DOMException && err.name === "AbortError") {
     console.warn(`[abort] ${path}: ${err.message}`);
-    return c.json({ error: "Client disconnected" }, 499);
+    // 499 ("Client Closed Request") is an nginx convention and outside Hono's
+    // ContentfulStatusCode union — build the Response directly to preserve it.
+    return new Response(JSON.stringify({ error: "Client disconnected" }), {
+      status: 499,
+      headers: { "content-type": "application/json" },
+    });
   }
   console.error(`[onError] ${path}:`, err instanceof Error ? err.stack || err.message : err);
   return c.json({ error: "Internal server error" }, 500);
