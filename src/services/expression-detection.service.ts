@@ -18,6 +18,7 @@ interface DetectExpressionInput {
   labels: string[];
   recentMessages: LlmMessage[];
   connectionId?: string;
+  modelOverride?: string;
 }
 
 /**
@@ -32,7 +33,7 @@ export async function detectExpression(input: DetectExpressionInput, generateFn:
   const sidecar = getSidecarSettings(userId);
 
   let connectionId = input.connectionId || sidecar.connectionProfileId;
-  let model: string | undefined = sidecar.model || undefined;
+  let model: string | undefined = input.modelOverride || sidecar.model || undefined;
   let temperature = sidecar.temperature ?? 0.3;
   let maxTokens = Math.min(sidecar.maxTokens ?? 50, 100);
 
@@ -46,16 +47,21 @@ export async function detectExpression(input: DetectExpressionInput, generateFn:
   const conn = connectionsSvc.getConnection(userId, connectionId);
   if (!conn) return null;
 
-  const systemPrompt = `You are a character expression analyst. Based on the recent conversation, determine which facial expression best represents the character's current emotional state.
+  const systemPrompt = `Select a character sprite expression. Read the LAST assistant message and choose the single expression that best matches the character's visible emotion in that moment.
+
+Rules:
+- Base your choice ONLY on the last assistant message, not the overall conversation.
+- Prefer specific expressions over generic ones — only choose "neutral" or "default" if no other label fits.
+- Look for cues in dialogue tone, actions, and narration.
 
 Available expressions: ${labels.join(", ")}
 
-Respond with ONLY one of the listed expression labels, exactly as written. Nothing else.`;
+Reply with ONLY one label from the list above, exactly as written.`;
 
   const messages: LlmMessage[] = [
     { role: "system", content: systemPrompt },
     ...recentMessages.slice(-5),
-    { role: "user", content: "Based on the conversation above, which expression label best matches the character's current emotional state? Respond with only the label." },
+    { role: "user", content: "Which expression matches the character in the last message?" },
   ];
 
   const response = await generateFn(userId, {
@@ -90,6 +96,8 @@ Respond with ONLY one of the listed expression labels, exactly as written. Nothi
 export interface ExpressionDetectionSettings {
   mode: "auto" | "council" | "off";
   contextWindow: number;
+  connectionProfileId?: string;
+  model?: string;
 }
 
 export function getExpressionDetectionSettings(userId: string): ExpressionDetectionSettings {
@@ -99,6 +107,8 @@ export function getExpressionDetectionSettings(userId: string): ExpressionDetect
   return {
     mode: val.mode ?? "auto",
     contextWindow: val.contextWindow ?? 5,
+    connectionProfileId: val.connectionProfileId,
+    model: val.model,
   };
 }
 
@@ -113,6 +123,7 @@ interface DetectMultiCharExpressionInput {
   groups: ExpressionGroups;
   recentMessages: LlmMessage[];
   connectionId?: string;
+  modelOverride?: string;
 }
 
 export interface MultiCharExpressionResult {
@@ -157,7 +168,7 @@ export async function detectMultiCharacterExpression(
   // LLM fallback when heuristic is inconclusive (no names found in text)
   if (!targetCharacter) {
     targetCharacter = await identifyCharacterLLM(
-      userId, characterNames, recentMessages, generateFn, input.connectionId,
+      userId, characterNames, recentMessages, generateFn, input.connectionId, input.modelOverride,
     );
   }
 
@@ -217,11 +228,12 @@ async function identifyCharacterLLM(
   recentMessages: LlmMessage[],
   generateFn: RawGenerateFn,
   connectionIdOverride?: string,
+  modelOverride?: string,
 ): Promise<string | null> {
   const sidecar = getSidecarSettings(userId);
 
   let connectionId = connectionIdOverride || sidecar.connectionProfileId;
-  let model: string | undefined = sidecar.model || undefined;
+  let model: string | undefined = modelOverride || sidecar.model || undefined;
 
   if (!connectionId) {
     const defaultConn = connectionsSvc.getDefaultConnection(userId);

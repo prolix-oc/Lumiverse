@@ -3500,6 +3500,8 @@ async function fireExpressionDetection(
         characterId,
         groups: expressionGroups,
         recentMessages,
+        connectionId: detectionSettings.connectionProfileId,
+        modelOverride: detectionSettings.model,
       },
       rawGenerate,
     );
@@ -3566,6 +3568,8 @@ async function fireExpressionDetection(
       characterId,
       labels,
       recentMessages,
+      connectionId: detectionSettings.connectionProfileId,
+      modelOverride: detectionSettings.model,
     },
     rawGenerate,
   );
