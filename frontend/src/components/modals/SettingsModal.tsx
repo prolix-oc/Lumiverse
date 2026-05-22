@@ -1,7 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, GripVertical } from 'lucide-react'
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { uiScaledTransform } from '@/lib/dndUiScale'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
@@ -927,10 +945,87 @@ function ExtensionSettingsView() {
   )
 }
 
+interface SortableGuideRowProps {
+  guide: GuidedGeneration
+  editing: boolean
+  onToggleEnabled: (id: string, value: boolean) => void
+  onToggleEdit: (id: string) => void
+  onUpdate: (id: string, patch: Partial<GuidedGeneration>) => void
+  onRemove: (id: string) => void
+}
+
+function SortableGuideRow({ guide, editing, onToggleEnabled, onToggleEdit, onUpdate, onRemove }: SortableGuideRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: guide.id })
+  const style = { transform: uiScaledTransform(transform), transition }
+  const positionLabel = { system: 'System', user_prefix: 'Before message', user_suffix: 'After message' }[guide.position] ?? guide.position
+  const modeLabel = guide.mode === 'oneshot' ? 'One-shot' : 'Persistent'
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={clsx(styles.card, guide.enabled && styles.cardEnabled, isDragging && styles.cardDragging)}
+    >
+      <div className={styles.cardRow}>
+        <span
+          {...attributes}
+          {...listeners}
+          className={styles.dragHandle}
+          title="Drag to reorder"
+          aria-label="Drag to reorder guide"
+        >
+          <GripVertical size={14} />
+        </span>
+        <Toggle.Switch checked={guide.enabled} onChange={(v) => onToggleEnabled(guide.id, v)} size="sm" />
+        <div className={styles.cardTitleWrap}>
+          <div className={styles.cardTitle}>{guide.name || 'Untitled Guide'}</div>
+          <div className={styles.cardMeta}>{modeLabel} · {positionLabel}</div>
+        </div>
+        <Button variant="ghost" size="sm" onClick={() => onToggleEdit(guide.id)}>{editing ? 'Done' : 'Edit'}</Button>
+        <Button variant="danger-ghost" size="sm" onClick={() => onRemove(guide.id)}>Delete</Button>
+      </div>
+
+      {editing && (
+        <div className={styles.editorGrid}>
+          <input
+            className={styles.select}
+            value={guide.name}
+            onChange={(e) => onUpdate(guide.id, { name: e.target.value })}
+            placeholder="Guide name"
+          />
+          <div className={styles.drawerRow}>
+            <select className={styles.select} value={guide.position} onChange={(e) => onUpdate(guide.id, { position: e.target.value as GuidedGeneration['position'] })}>
+              <option value="system">System</option>
+              <option value="user_prefix">Before message</option>
+              <option value="user_suffix">After message</option>
+            </select>
+            <select className={styles.select} value={guide.mode} onChange={(e) => onUpdate(guide.id, { mode: e.target.value as GuidedGeneration['mode'] })}>
+              <option value="persistent">Persistent</option>
+              <option value="oneshot">One-shot</option>
+            </select>
+          </div>
+          <textarea
+            className={styles.textarea}
+            value={guide.content}
+            onChange={(e) => onUpdate(guide.id, { content: e.target.value })}
+            placeholder="Guide prompt content"
+            rows={4}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function GuidedGenerationSettings() {
   const guides = useStore((s) => s.guidedGenerations)
   const setSetting = useStore((s) => s.setSetting)
   const [editingId, setEditingId] = useState<string | null>(null)
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   const addGuide = () => {
     const next: GuidedGeneration = {
@@ -955,63 +1050,40 @@ function GuidedGenerationSettings() {
     if (editingId === id) setEditingId(null)
   }
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = guides.findIndex((g) => g.id === active.id)
+    const newIndex = guides.findIndex((g) => g.id === over.id)
+    if (oldIndex < 0 || newIndex < 0) return
+    setSetting('guidedGenerations', arrayMove(guides, oldIndex, newIndex))
+  }
+
   return (
     <div className={styles.settingsSection}>
       <div className={styles.inlineHeader}>
         <h3 className={styles.sectionTitle}>Guided Generations</h3>
         <Button size="sm" onClick={addGuide}>New Guide</Button>
       </div>
-      <p className={styles.placeholder}>Attach reusable prompts as system content or user prefixes/suffixes.</p>
+      <p className={styles.placeholder}>Attach reusable prompts as system content or user prefixes/suffixes. Drag the handle to reorder.</p>
 
       {guides.length === 0 && <p className={styles.placeholder}>No guides configured yet.</p>}
 
-      {guides.map((g) => {
-        const editing = editingId === g.id
-        const positionLabel = { system: 'System', user_prefix: 'Before message', user_suffix: 'After message' }[g.position] ?? g.position
-        const modeLabel = g.mode === 'oneshot' ? 'One-shot' : 'Persistent'
-        return (
-          <div key={g.id} className={clsx(styles.card, g.enabled && styles.cardEnabled)}>
-            <div className={styles.cardRow}>
-              <Toggle.Switch checked={g.enabled} onChange={(v) => updateGuide(g.id, { enabled: v })} size="sm" />
-              <div className={styles.cardTitleWrap}>
-                <div className={styles.cardTitle}>{g.name || 'Untitled Guide'}</div>
-                <div className={styles.cardMeta}>{modeLabel} · {positionLabel}</div>
-              </div>
-              <Button variant="ghost" size="sm" onClick={() => setEditingId(editing ? null : g.id)}>{editing ? 'Done' : 'Edit'}</Button>
-              <Button variant="danger-ghost" size="sm" onClick={() => removeGuide(g.id)}>Delete</Button>
-            </div>
-
-            {editing && (
-              <div className={styles.editorGrid}>
-                <input
-                  className={styles.select}
-                  value={g.name}
-                  onChange={(e) => updateGuide(g.id, { name: e.target.value })}
-                  placeholder="Guide name"
-                />
-                <div className={styles.drawerRow}>
-                  <select className={styles.select} value={g.position} onChange={(e) => updateGuide(g.id, { position: e.target.value as GuidedGeneration['position'] })}>
-                    <option value="system">System</option>
-                    <option value="user_prefix">Before message</option>
-                    <option value="user_suffix">After message</option>
-                  </select>
-                  <select className={styles.select} value={g.mode} onChange={(e) => updateGuide(g.id, { mode: e.target.value as GuidedGeneration['mode'] })}>
-                    <option value="persistent">Persistent</option>
-                    <option value="oneshot">One-shot</option>
-                  </select>
-                </div>
-                <textarea
-                  className={styles.textarea}
-                  value={g.content}
-                  onChange={(e) => updateGuide(g.id, { content: e.target.value })}
-                  placeholder="Guide prompt content"
-                  rows={4}
-                />
-              </div>
-            )}
-          </div>
-        )
-      })}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={guides.map((g) => g.id)} strategy={verticalListSortingStrategy}>
+          {guides.map((g) => (
+            <SortableGuideRow
+              key={g.id}
+              guide={g}
+              editing={editingId === g.id}
+              onToggleEnabled={(id, value) => updateGuide(id, { enabled: value })}
+              onToggleEdit={(id) => setEditingId((prev) => (prev === id ? null : id))}
+              onUpdate={updateGuide}
+              onRemove={removeGuide}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
     </div>
   )
 }

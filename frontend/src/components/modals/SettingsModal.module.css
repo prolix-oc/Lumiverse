@@ -912,11 +912,37 @@
   border-color: var(--lumiverse-primary-020);
 }
 
+.cardDragging {
+  opacity: 0.65;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  z-index: 2;
+}
+
 .cardRow {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
+}
+
+.dragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  padding: 2px;
+  flex-shrink: 0;
+  touch-action: none;
+  user-select: none;
+}
+
+.dragHandle:hover {
+  color: var(--lumiverse-text);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
 }
 
 .cardTitleWrap {

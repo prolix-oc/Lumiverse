@@ -18,7 +18,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { uiScaledTransform } from '@/lib/dndUiScale'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
@@ -355,7 +355,7 @@ interface SortableAddonRowProps {
 function SortableAddonRow({ addon, onToggle, onDelete, onLabelChange, onContentChange }: SortableAddonRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: addon.id })
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: uiScaledTransform(transform),
     transition,
     opacity: isDragging ? 0.6 : undefined,
     zIndex: isDragging ? 1 : undefined,

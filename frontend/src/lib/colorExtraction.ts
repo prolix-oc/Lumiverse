@@ -677,6 +677,56 @@ function getRegions(w: number, h: number): Record<string, Region> {
 
 // ── Main extraction ──
 
+/** Count opaque pixels in a raw RGBA buffer using the same alpha cutoff as analyzePixels. */
+function countOpaquePixels(data: Uint8ClampedArray): number {
+  let count = 0
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] >= 48) count++
+  }
+  return count
+}
+
+/**
+ * Draw `img` into `canvas` and return the full RGBA buffer, retrying across
+ * animation frames if the read comes back fully transparent.
+ *
+ * Even after `img.decode()` resolves, some browsers will paint the next
+ * `drawImage`/`getImageData` as fully transparent if the texture hasn't been
+ * uploaded yet (cache miss after eviction, slow GPU upload, hidden tab waking,
+ * etc.). When that happens analyzePixels falls through to grey, which makes
+ * `extractPalette` treat the result as a "uniform" image, which triggers the
+ * `DEFAULT_FALLBACK_HUE` (263 — a vivid blue/violet). That cascade is what
+ * causes character-aware themes to randomly flip the whole UI super blue.
+ *
+ * We retry a few times with a frame yield in between, then give up and throw
+ * — the caller treats throws as "do not apply overlay", which preserves the
+ * user's existing theme instead of poisoning it with the fallback hue.
+ */
+async function sampleImageData(
+  img: HTMLImageElement,
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  src: string
+): Promise<Uint8ClampedArray> {
+  const maxAttempts = 3
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => resolve())
+        } else {
+          setTimeout(resolve, 16)
+        }
+      })
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    if (countOpaquePixels(data) > 0) return data
+  }
+  throw new Error(`Image rendered with no opaque pixels after ${maxAttempts} attempts: ${src}`)
+}
+
 export async function extractPalette(src: string): Promise<ImagePalette> {
   const img = await loadImage(src)
   const canvas = document.createElement('canvas')
@@ -699,10 +749,11 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
 
   canvas.width = SAMPLE_SIZE
   canvas.height = SAMPLE_SIZE
-  ctx.drawImage(img, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE)
 
-  // Full-image analysis
-  const fullData = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data
+  // Full-image analysis. sampleImageData verifies we actually painted opaque
+  // pixels before we derive anything — otherwise we'd silently fall into the
+  // blue/violet fallback hue and stamp it onto the UI.
+  const fullData = await sampleImageData(img, canvas, ctx, src)
   const fullAnalysis = analyzePixels(fullData)
 
   // Per-region analysis

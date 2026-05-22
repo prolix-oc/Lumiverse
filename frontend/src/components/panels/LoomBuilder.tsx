@@ -15,7 +15,7 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { uiScaledTransform } from '@/lib/dndUiScale'
 import {
   GripVertical,
   ChevronDown,
@@ -135,7 +135,7 @@ function SortableCategoryItem({
   block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
-  const style = { transform: CSS.Transform.toString(transform), transition }
+  const style = { transform: uiScaledTransform(transform), transition }
   const isDisabled = !block.enabled
   const displayName = block.name.replace(/^\u2501\s*/, '')
 
@@ -197,7 +197,7 @@ interface SortableBlockItemProps {
 
 function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
-  const style = { transform: CSS.Transform.toString(transform), transition }
+  const style = { transform: uiScaledTransform(transform), transition }
   const isMarker = block.marker && block.marker !== 'category'
   const isDisabled = !block.enabled
   const preview = block.content ? block.content.substring(0, 50) + (block.content.length > 50 ? '...' : '') : ''

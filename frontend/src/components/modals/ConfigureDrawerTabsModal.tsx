@@ -18,7 +18,7 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { uiScaledTransform } from '@/lib/dndUiScale'
 import { useStore } from '@/store'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { Toggle } from '@/components/shared/Toggle'
@@ -43,7 +43,7 @@ interface SortableTabRowProps {
 
 function SortableTabRow({ tab, hidden, onToggle, variant }: SortableTabRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
-  const style = { transform: CSS.Transform.toString(transform), transition }
+  const style = { transform: uiScaledTransform(transform), transition }
   const Icon = tab.tabIcon
   const locked = variant === 'builtin' && isDrawerTabCore(tab.id)
   const enabled = !hidden

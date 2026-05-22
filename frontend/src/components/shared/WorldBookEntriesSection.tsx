@@ -40,7 +40,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { uiScaledTransform } from '@/lib/dndUiScale'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
@@ -139,7 +139,7 @@ function SortableEntryRow({
     disabled: !dragEnabled,
   })
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: uiScaledTransform(transform),
     transition,
   }
 

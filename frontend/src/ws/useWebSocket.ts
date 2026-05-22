@@ -559,6 +559,18 @@ export function useWebSocket() {
               ) {
                 const ig = latest.imageGeneration
                 const outputTarget = ig.outputTarget || 'background'
+                // attach_to_message needs the just-finalized AI message as its
+                // target; fall back to the last message in the store if the
+                // event didn't carry one. Skip the auto-gen entirely when we
+                // can't resolve a target so the backend's required-id check
+                // doesn't surface as a user-facing error.
+                let attachToMessageId: string | undefined
+                if (outputTarget === 'attach_to_message') {
+                  attachToMessageId =
+                    payload.messageId ||
+                    (latest.messages.length > 0 ? latest.messages[latest.messages.length - 1].id : undefined)
+                  if (!attachToMessageId) return
+                }
                 // Pass settings from the live store rather than relying on the
                 // backend's persisted row — settings flushes are debounced
                 // ~1.5s, so without this a reply sent right after a toggle
@@ -568,6 +580,7 @@ export function useWebSocket() {
                   chatId: payload.chatId,
                   forceGeneration: !!ig.forceGeneration,
                   outputTarget,
+                  attachToMessageId,
                   promptMode: ig.promptMode,
                   prompt: ig.customPrompt,
                   negativePrompt: ig.customNegativePrompt,
