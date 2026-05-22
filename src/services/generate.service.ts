@@ -2866,6 +2866,7 @@ async function runGeneration(
         ...(Object.keys(partialExtra).length > 0
           ? { extra: partialExtra }
           : {}),
+        skipCouncilCacheInvalidation: true,
       });
       messageId = lifecycle.stagedMessageId;
     } else if (lifecycle.continueMessageId && closedContent) {
@@ -2883,6 +2884,7 @@ async function runGeneration(
       chatsSvc.updateMessage(userId, lifecycle.continueMessageId, {
         content: combined,
         ...(continueExtra ? { extra: continueExtra } : {}),
+        skipCouncilCacheInvalidation: true,
       });
       messageId = lifecycle.continueMessageId;
     } else if (lifecycle.impersonateDraft) {
@@ -3187,6 +3189,7 @@ async function runGeneration(
           {
             content: combined,
             ...(continueExtra ? { extra: continueExtra } : {}),
+            skipCouncilCacheInvalidation: true,
           },
         );
         messageId = updated?.id ?? lifecycle.continueMessageId;
@@ -3203,6 +3206,7 @@ async function runGeneration(
         chatsSvc.updateMessage(userId, lifecycle.stagedMessageId, {
           content: fullContent,
           ...(stagedExtra ? { extra: stagedExtra } : {}),
+          skipCouncilCacheInvalidation: true,
         });
         messageId = lifecycle.stagedMessageId;
       } else if (lifecycle.impersonateDraft) {

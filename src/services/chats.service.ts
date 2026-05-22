@@ -1594,8 +1594,10 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   // but actively clearing the metadata avoids carrying dead state on the chat
   // row and frees space. Gated on existence to avoid spurious CHAT_CHANGED
   // events when no cache is present (which would re-render the frontend on
-  // every edit).
-  if (activeContentChanged) {
+  // every edit). Skipped when the generation pipeline is finalizing its own
+  // staged/continued message — the cache was just written during the same
+  // generation and remains valid for the next regen/swipe.
+  if (activeContentChanged && input.skipCouncilCacheInvalidation !== true) {
     try {
       const chatRow = getChat(userId, updated.chat_id);
       if (chatRow?.metadata?.last_council_results !== undefined) {
