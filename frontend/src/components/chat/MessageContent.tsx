@@ -1091,6 +1091,40 @@ function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: Tr
   return { content, embeds }
 }
 
+// While streaming, an unclosed <details>/<summary> tag makes the markdown +
+// sanitize pipeline emit a structure where the in-progress block briefly takes
+// up real vertical space. That spike gets locked in by the streamingMinHeight
+// ratchet below, so the bubble stays inflated until the stream ends and then
+// snaps back. Pre-closing any unbalanced tags keeps the rendered tree stable.
+const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*>/gi
+
+function balanceStreamingDetails(raw: string): string {
+  if (!raw.includes('<')) return raw
+  const fences = getMarkdownFenceRanges(raw)
+  let openDetails = 0
+  let openSummary = 0
+  let fenceIdx = 0
+  STREAMING_DETAILS_TAG_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = STREAMING_DETAILS_TAG_RE.exec(raw)) !== null) {
+    const pos = match.index
+    while (fenceIdx < fences.length && fences[fenceIdx][1] <= pos) fenceIdx++
+    if (fenceIdx < fences.length && pos >= fences[fenceIdx][0] && pos < fences[fenceIdx][1]) continue
+
+    const isClose = match[0].startsWith('</')
+    const tag = match[1].toLowerCase()
+    if (tag === 'details') openDetails += isClose ? -1 : 1
+    else openSummary += isClose ? -1 : 1
+  }
+
+  if (openDetails <= 0 && openSummary <= 0) return raw
+
+  let suffix = ''
+  if (openSummary > 0) suffix += '</summary>'.repeat(openSummary)
+  if (openDetails > 0) suffix += '</details>'.repeat(openDetails)
+  return raw + suffix
+}
+
 function formatContentPieces(raw: string, isStreaming: boolean): ContentPiece[] {
   if (!raw) return []
 
@@ -1426,7 +1460,7 @@ export default function MessageContent({
     [risuResolvedContent, charName, userName],
   )
   const deferredResolvedContent = useDeferredValue(resolvedContent)
-  const renderContent = isStreaming ? deferredResolvedContent : resolvedContent
+  const renderContent = isStreaming ? balanceStreamingDetails(deferredResolvedContent) : resolvedContent
   const blocks = useMemo(() => parseOOC(renderContent), [renderContent])
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
