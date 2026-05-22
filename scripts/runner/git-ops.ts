@@ -77,7 +77,10 @@ function bunInstallCmd(): string[] {
   if (isTermuxRuntime() || isProotRuntime()) {
     // Android filesystem emulation can't hardlink — copyfile is the only
     // backend that reliably installs without "Cannot find package" corruption.
-    return ["bun", "install", "--backend=copyfile"];
+    // --ignore-scripts: proot's path translation makes getcwd() fail when bun
+    // forks lifecycle scripts (ssh2, cpu-features), producing spurious
+    // CouldntReadCurrentDirectory errors. Both packages fall back to pure-JS.
+    return ["bun", "install", "--backend=copyfile", "--ignore-scripts"];
   }
   return ["bun", "install"];
 }

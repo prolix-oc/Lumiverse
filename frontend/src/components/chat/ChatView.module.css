@@ -442,6 +442,27 @@
     pointer-events: none;
   }
 
+  /* Force absolute positioning on mobile even in full-width chat mode,
+     so the slim tab floats over the chat column instead of stealing
+     flex space and shifting bubbles off-center. The desktop rule at
+     .body:not([data-chat-constrained]) .portraitSide normally switches
+     this to position: relative for full-width mode — we re-override here
+     because mobile always wants overlay behavior. */
+  .body:not([data-chat-constrained]) .portraitSide {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 3;
+  }
+  .body:not([data-chat-constrained]) .portraitSideLeft {
+    left: 0;
+    right: auto;
+  }
+  .body:not([data-chat-constrained]) .portraitSideRight {
+    right: 0;
+    left: auto;
+  }
+
   .portraitTab {
     pointer-events: auto;
   }

@@ -564,13 +564,16 @@ install_deps() {
     # The Android arm64 native bindings (@rolldown/binding-android-arm64,
     # lightningcss-android-arm64) are declared as optionalDependencies in
     # frontend/package.json and resolve automatically here.
-    (cd "$dir" && _proot_bun install --backend=copyfile)
+    # --ignore-scripts: proot's path translation makes getcwd() fail when bun
+    # forks lifecycle scripts (ssh2, cpu-features), producing spurious
+    # CouldntReadCurrentDirectory errors. Both packages fall back to pure-JS.
+    (cd "$dir" && _proot_bun install --backend=copyfile --ignore-scripts)
   elif [[ "$IS_PROOT" == true ]]; then
     # Inside proot-distro: proot already intercepts syscalls, just need copyfile backend
     if [[ -d "$HOME/.bun/install/cache" ]]; then
       rm -rf "$HOME/.bun/install/cache"
     fi
-    (cd "$dir" && bun install --backend=copyfile)
+    (cd "$dir" && bun install --backend=copyfile --ignore-scripts)
   else
     (cd "$dir" && bun install)
   fi
