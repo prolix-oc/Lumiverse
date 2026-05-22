@@ -1349,6 +1349,85 @@ app.delete("/chats/:chatId/colors/:id", (c) => {
   return c.json({ success: true });
 });
 
+const VALID_COLOR_USAGE_TYPES = new Set(["speech", "thought", "narration", "unknown"]);
+
+/**
+ * PUT /chats/:chatId/colors/:id — Edit a font color attribution.
+ *
+ * Accepts a partial body. Any combination of:
+ *   - entityId: string | null — reassign to a different entity, or null to detach
+ *   - usageType: "speech" | "thought" | "narration" | "unknown"
+ *   - hexColor: a "#RRGGBB" string — only useful when the original color was
+ *     mis-detected (e.g., a typo in a font tag); rare but supported.
+ *   - confidence: a 0..1 number — manual override (also marks as user-edited
+ *     implicitly via the confidence bump).
+ */
+app.put("/chats/:chatId/colors/:id", async (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const body = await c.req.json();
+
+  const updates: string[] = [];
+  const params: any[] = [];
+
+  if (body.entityId !== undefined) {
+    const entityId = body.entityId === null ? null
+      : (typeof body.entityId === "string" && body.entityId.length > 0 ? body.entityId : undefined);
+    if (entityId === undefined) {
+      return c.json({ error: "entityId must be a string or null" }, 400);
+    }
+    if (entityId !== null) {
+      // Verify the target entity belongs to this chat to prevent cross-chat reassignment.
+      const owns = getDb().query(
+        "SELECT 1 FROM memory_entities WHERE id = ? AND chat_id = ?",
+      ).get(entityId, chatId);
+      if (!owns) return c.json({ error: "Target entity not found in this chat" }, 404);
+    }
+    updates.push("entity_id = ?");
+    params.push(entityId);
+  }
+
+  if (body.usageType !== undefined) {
+    if (typeof body.usageType !== "string" || !VALID_COLOR_USAGE_TYPES.has(body.usageType)) {
+      return c.json({ error: "usageType must be one of: " + [...VALID_COLOR_USAGE_TYPES].join(", ") }, 400);
+    }
+    updates.push("usage_type = ?");
+    params.push(body.usageType);
+  }
+
+  if (body.hexColor !== undefined) {
+    if (typeof body.hexColor !== "string" || !/^#[0-9a-fA-F]{6}$/.test(body.hexColor)) {
+      return c.json({ error: "hexColor must be a string in #RRGGBB format" }, 400);
+    }
+    updates.push("hex_color = ?");
+    params.push(body.hexColor.toLowerCase());
+  }
+
+  if (body.confidence !== undefined) {
+    const conf = Number(body.confidence);
+    if (!Number.isFinite(conf) || conf < 0 || conf > 1) {
+      return c.json({ error: "confidence must be a number in [0,1]" }, 400);
+    }
+    updates.push("confidence = ?");
+    params.push(conf);
+  }
+
+  if (updates.length === 0) {
+    return c.json({ error: "No fields to update" }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  updates.push("updated_at = ?");
+  params.push(now, c.req.param("id"), chatId);
+
+  const result = getDb().query(
+    `UPDATE memory_font_colors SET ${updates.join(", ")} WHERE id = ? AND chat_id = ?`,
+  ).run(...params) as { changes?: number };
+  if ((result.changes ?? 0) === 0) return c.json({ error: "Color attribution not found" }, 404);
+  return c.json({ success: true });
+});
+
 // ─── Relations ─────────────────────────────────────────────────
 
 /** GET /chats/:chatId/relations — List relations with resolved entity names */
@@ -1377,6 +1456,152 @@ app.get("/chats/:chatId/relations", (c) => {
   }));
 
   return c.json({ data: enriched, total: enriched.length });
+});
+
+const VALID_RELATION_TYPES = new Set([
+  "ally", "enemy", "lover", "parent", "child", "sibling",
+  "mentor", "rival", "owns", "member_of", "located_in",
+  "fears", "serves", "custom",
+]);
+const VALID_RELATION_STATUSES = new Set(["active", "broken", "dormant", "former"]);
+
+/** POST /chats/:chatId/relations — Create a manual relation between two entities */
+app.post("/chats/:chatId/relations", async (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const body = await c.req.json();
+
+  const sourceEntityId = typeof body.sourceEntityId === "string" ? body.sourceEntityId : null;
+  const targetEntityId = typeof body.targetEntityId === "string" ? body.targetEntityId : null;
+  const relationType = typeof body.relationType === "string" ? body.relationType : null;
+
+  if (!sourceEntityId || !targetEntityId) {
+    return c.json({ error: "sourceEntityId and targetEntityId required" }, 400);
+  }
+  if (sourceEntityId === targetEntityId) {
+    return c.json({ error: "Cannot relate entity to itself" }, 400);
+  }
+  if (!relationType || !VALID_RELATION_TYPES.has(relationType)) {
+    return c.json({ error: "relationType must be one of: " + [...VALID_RELATION_TYPES].join(", ") }, 400);
+  }
+
+  const db = getDb();
+  // Verify both endpoints exist in this chat
+  const endpoints = db.query(
+    "SELECT id FROM memory_entities WHERE chat_id = ? AND id IN (?, ?)",
+  ).all(chatId, sourceEntityId, targetEntityId) as Array<{ id: string }>;
+  if (endpoints.length !== 2) {
+    return c.json({ error: "One or both endpoint entities not found in this chat" }, 404);
+  }
+
+  // Reject duplicate (source, target, type) — UNIQUE INDEX would otherwise throw.
+  const existing = db.query(
+    `SELECT id FROM memory_relations
+     WHERE source_entity_id = ? AND target_entity_id = ? AND relation_type = ?
+       AND merged_into IS NULL`,
+  ).get(sourceEntityId, targetEntityId, relationType) as { id: string } | null;
+  if (existing) {
+    return c.json({ error: "Relation already exists; PUT to edit it.", existingId: existing.id }, 409);
+  }
+
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const relationLabel = typeof body.relationLabel === "string" ? body.relationLabel : null;
+  const strength = typeof body.strength === "number" ? Math.max(0, Math.min(1, body.strength)) : 0.5;
+  const sentiment = typeof body.sentiment === "number" ? Math.max(-1, Math.min(1, body.sentiment)) : 0;
+  const status = typeof body.status === "string" && VALID_RELATION_STATUSES.has(body.status)
+    ? body.status : "active";
+
+  db.query(
+    `INSERT INTO memory_relations
+      (id, chat_id, source_entity_id, target_entity_id, relation_type, relation_label,
+       strength, sentiment, evidence_chunk_ids, first_established_at, last_reinforced_at,
+       status, metadata, created_at, updated_at, user_edited_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, '{}', ?, ?, ?)`,
+  ).run(
+    id, chatId, sourceEntityId, targetEntityId, relationType, relationLabel,
+    strength, sentiment, now, now, status, now, now, now,
+  );
+
+  const created = db.query("SELECT * FROM memory_relations WHERE id = ?").get(id);
+  return c.json(created);
+});
+
+/** PUT /chats/:chatId/relations/:relationId — Update a relation (manual edit) */
+app.put("/chats/:chatId/relations/:relationId", async (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const relationId = c.req.param("relationId");
+  const body = await c.req.json();
+
+  const db = getDb();
+  const existing = db.query(
+    "SELECT * FROM memory_relations WHERE id = ? AND chat_id = ?",
+  ).get(relationId, chatId) as any;
+  if (!existing) return c.json({ error: "Relation not found" }, 404);
+
+  const updates: string[] = [];
+  const params: any[] = [];
+  const now = Math.floor(Date.now() / 1000);
+
+  if (body.relationType !== undefined) {
+    if (!VALID_RELATION_TYPES.has(body.relationType)) {
+      return c.json({ error: "Invalid relationType" }, 400);
+    }
+    updates.push("relation_type = ?");
+    params.push(body.relationType);
+  }
+  if (body.relationLabel !== undefined) {
+    updates.push("relation_label = ?");
+    params.push(body.relationLabel === null ? null : String(body.relationLabel));
+  }
+  if (body.strength !== undefined) {
+    const s = Math.max(0, Math.min(1, Number(body.strength)));
+    if (!Number.isFinite(s)) return c.json({ error: "strength must be a number in [0,1]" }, 400);
+    updates.push("strength = ?");
+    params.push(s);
+  }
+  if (body.sentiment !== undefined) {
+    const s = Math.max(-1, Math.min(1, Number(body.sentiment)));
+    if (!Number.isFinite(s)) return c.json({ error: "sentiment must be a number in [-1,1]" }, 400);
+    updates.push("sentiment = ?");
+    params.push(s);
+  }
+  if (body.status !== undefined) {
+    if (!VALID_RELATION_STATUSES.has(body.status)) {
+      return c.json({ error: "Invalid status" }, 400);
+    }
+    updates.push("status = ?");
+    params.push(body.status);
+  }
+
+  if (updates.length === 0) return c.json({ error: "No fields to update" }, 400);
+
+  updates.push("updated_at = ?", "user_edited_at = ?");
+  params.push(now, now, relationId, chatId);
+
+  db.query(
+    `UPDATE memory_relations SET ${updates.join(", ")} WHERE id = ? AND chat_id = ?`,
+  ).run(...params);
+
+  const updated = db.query("SELECT * FROM memory_relations WHERE id = ?").get(relationId);
+  return c.json(updated);
+});
+
+/** DELETE /chats/:chatId/relations/:relationId — Delete a relation */
+app.delete("/chats/:chatId/relations/:relationId", (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const relationId = c.req.param("relationId");
+  const db = getDb();
+  const result = db.query(
+    "DELETE FROM memory_relations WHERE id = ? AND chat_id = ?",
+  ).run(relationId, chatId);
+  if (result.changes === 0) return c.json({ error: "Relation not found" }, 404);
+  return c.json({ success: true });
 });
 
 // ─── Consolidations ────────────────────────────────────────────

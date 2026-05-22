@@ -8150,6 +8150,11 @@ export class WorkerHost {
         chunkId ?? "",
         ts,
       );
+      // Extensions can flag an upsert as a curated edit so future rebuilds
+      // preserve the row's curated fields. Mirrors the REST PUT semantics.
+      if (entity.markUserEdited === true) {
+        entityGraphSvc.markEntityUserEdited(id);
+      }
       const result = entityGraphSvc.getEntity(id);
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
@@ -8319,6 +8324,11 @@ export class WorkerHost {
             r.targetEntityId === targetEntity.id &&
             r.relationType === relation.type,
         ) ?? null;
+      // Extensions can flag a relation upsert as a curated edit so future
+      // rebuilds preserve the curated fields (label, strength, sentiment).
+      if (created && relation.markUserEdited === true) {
+        entityGraphSvc.markRelationUserEdited(created.id);
+      }
       this.postToWorker({ type: "response", requestId, result: created });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });

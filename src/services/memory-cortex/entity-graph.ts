@@ -104,6 +104,7 @@ function rowToRelation(row: MemoryRelationRow): MemoryRelation {
     labelAliases: safeJsonArray(row.label_aliases),
     canonicalEdgeId: row.canonical_edge_id ?? null,
     mergedInto: row.merged_into ?? null,
+    userEditedAt: row.user_edited_at ?? null,
   };
 }
 
@@ -739,6 +740,64 @@ export function upsertEntity(
 }
 
 /**
+ * Append a learned alias to an entity's `aliases` JSON column.
+ *
+ * Used when the sidecar or heuristic detects a recurring nickname/short-form
+ * for a known entity. Persisting it means the alias survives rebuilds and
+ * gets re-fed into the sidecar's `<canonical_aliases>` block on subsequent
+ * extractions, compounding extraction quality over time.
+ *
+ * Skips if:
+ *   - The alias fails plausibility/sanitization checks.
+ *   - The entity row is user-edited — manual alias curation wins; learning
+ *     can't add or remove user-curated aliases.
+ *   - The alias is already present (case-insensitive).
+ *
+ * @returns true if a new alias was persisted, false otherwise.
+ */
+export function persistLearnedAlias(entityId: string, alias: string): boolean {
+  const cleaned = sanitizeAlias(alias);
+  if (!cleaned) return false;
+  const db = getDb();
+  const row = db.query(
+    "SELECT name, aliases, user_edited_at FROM memory_entities WHERE id = ?",
+  ).get(entityId) as { name: string; aliases: string; user_edited_at: number | null } | null;
+  if (!row) return false;
+  if (row.user_edited_at !== null) return false;
+  if (!isPlausibleAlias(cleaned, row.name)) return false;
+
+  const existing = safeJsonArray(row.aliases);
+  const lowerSet = new Set(existing.map((a) => a.toLowerCase()));
+  if (lowerSet.has(cleaned.toLowerCase())) return false;
+  if (cleaned.toLowerCase() === row.name.toLowerCase()) return false;
+
+  existing.push(cleaned);
+  const now = Math.floor(Date.now() / 1000);
+  db.query(
+    "UPDATE memory_entities SET aliases = ?, updated_at = ? WHERE id = ?",
+  ).run(JSON.stringify(existing), now, entityId);
+  return true;
+}
+
+/** Flip user_edited_at on an entity so rebuilds preserve its curated fields. */
+export function markEntityUserEdited(entityId: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const result = getDb()
+    .query("UPDATE memory_entities SET user_edited_at = ?, updated_at = ? WHERE id = ?")
+    .run(now, now, entityId) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+/** Flip user_edited_at on a relation so rebuilds preserve its curated fields. */
+export function markRelationUserEdited(relationId: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const result = getDb()
+    .query("UPDATE memory_relations SET user_edited_at = ?, updated_at = ? WHERE id = ?")
+    .run(now, now, relationId) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+/**
  * Update entity status (e.g., "deceased", "departed").
  * If a branchId is provided, the status change is recorded as a branch-scoped fact
  * instead of overwriting the global status — this prevents branch A's death from
@@ -1255,15 +1314,42 @@ export function upsertRelation(
       evidenceIds.push(chunkId);
     }
 
-    // ── BUG 2: Logarithmic strength from evidence count ──
-    const newStrength = computeStrength(evidenceIds.length);
-    const newSentiment = existing.sentiment + (rel.sentiment - existing.sentiment) * 0.3;
-
     // Track arc provenance
     const existingArcIds = safeJsonArray(existing.arc_ids);
     if (arcId && !existingArcIds.includes(arcId)) {
       existingArcIds.push(arcId);
     }
+
+    // User-edited relations: never overwrite curated fields (label,
+    // strength, sentiment). Still track evidence + recompute edge salience
+    // so time-decay continues to age the user's strength override.
+    if (existing.user_edited_at !== null) {
+      const curatedDecayRate = computeEdgeDecayRate(existing.strength);
+      const curatedEdgeSalience = computeEdgeSalience(existing.strength, curatedDecayRate, now);
+      db.query(
+        `UPDATE memory_relations SET
+          evidence_chunk_ids = ?,
+          last_reinforced_at = ?,
+          last_evidence_timestamp = ?,
+          arc_ids = ?,
+          last_seen_arc_id = COALESCE(?, last_seen_arc_id),
+          decay_rate = ?,
+          edge_salience = ?,
+          updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        JSON.stringify(evidenceIds), now, now,
+        JSON.stringify(existingArcIds),
+        arcId || null,
+        curatedDecayRate, curatedEdgeSalience,
+        now, existing.id,
+      );
+      return;
+    }
+
+    // ── BUG 2: Logarithmic strength from evidence count ──
+    const newStrength = computeStrength(evidenceIds.length);
+    const newSentiment = existing.sentiment + (rel.sentiment - existing.sentiment) * 0.3;
 
     // ── IMP 1: Recompute decay rate ──
     const newDecayRate = computeEdgeDecayRate(newStrength);
@@ -1448,9 +1534,60 @@ export function getActiveEdgesForEntity(chatId: string, entityId: string): Memor
   return rows.map(rowToRelation);
 }
 
-/** Delete all relations for a chat (used in rebuild) */
-export function deleteRelationsForChat(chatId: string): void {
-  getDb().query("DELETE FROM memory_relations WHERE chat_id = ?").run(chatId);
+/** Delete all relations for a chat (used in rebuild).
+ *
+ *  With `preserveUserEdited`, rows that the user has manually edited
+ *  (user_edited_at IS NOT NULL) are kept with their curated fields
+ *  intact and derived stats reset. If either endpoint entity no longer
+ *  exists (because the user deleted it outside this relation's lifecycle),
+ *  the relation is downgraded to status='superseded' rather than preserved
+ *  with a dangling reference — the user can re-link it explicitly.
+ */
+export function deleteRelationsForChat(
+  chatId: string,
+  opts: { preserveUserEdited?: boolean } = {},
+): void {
+  const db = getDb();
+  if (!opts.preserveUserEdited) {
+    db.query("DELETE FROM memory_relations WHERE chat_id = ?").run(chatId);
+    return;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  db.transaction(() => {
+    // Endpoint-safety workaround: a user-edited relation whose source or target
+    // entity no longer exists is downgraded to status='broken' rather than
+    // preserved with a dangling reference. The user can re-link it from the UI.
+    db.query(
+      `UPDATE memory_relations
+       SET status = 'broken', updated_at = ?
+       WHERE chat_id = ?
+         AND user_edited_at IS NOT NULL
+         AND (
+           source_entity_id NOT IN (SELECT id FROM memory_entities WHERE chat_id = ?)
+           OR target_entity_id NOT IN (SELECT id FROM memory_entities WHERE chat_id = ?)
+         )`,
+    ).run(now, chatId, chatId, chatId);
+
+    // Reset derived counters on surviving user-edited relations so live
+    // ingestion can rebuild evidence/strength/decay cleanly.
+    db.query(
+      `UPDATE memory_relations SET
+        evidence_chunk_ids = '[]',
+        edge_salience = 0,
+        last_reinforced_at = NULL,
+        last_evidence_timestamp = NULL,
+        contradiction_flag = 'none',
+        contradiction_peer_id = NULL,
+        updated_at = ?
+       WHERE chat_id = ? AND user_edited_at IS NOT NULL AND status != 'broken'`,
+    ).run(now, chatId);
+
+    // Delete everything else.
+    db.query(
+      "DELETE FROM memory_relations WHERE chat_id = ? AND user_edited_at IS NULL",
+    ).run(chatId);
+  })();
 }
 
 // ─── Batch Ingestion ───────────────────────────────────────────
@@ -1517,12 +1654,17 @@ export function ingestChunkEntities(
 
     // Pre-seed discovered aliases into the local map so relationship writes
     // using a new nickname resolve to the canonical entity in this same chunk.
+    // Also persist them onto the entity row so they survive rebuilds and feed
+    // back into the sidecar's <canonical_aliases> block on future extractions.
     if (discoveredAliases?.length) {
       for (const da of discoveredAliases) {
         const canonicalId = resolveCanonicalId(da.canonicalName, chatId)
           ?? entityIdMap.get(da.canonicalName.toLowerCase());
         if (canonicalId && !entityIdMap.has(da.alias.toLowerCase())) {
           entityIdMap.set(da.alias.toLowerCase(), canonicalId);
+        }
+        if (canonicalId) {
+          persistLearnedAlias(canonicalId, da.alias);
         }
       }
     }

@@ -548,9 +548,20 @@ kill_pkgs() {
 install_deps() {
   local dir="$1"
   local name="$2"
+  # Stamp written only after `bun install` exits 0. Its absence next to an
+  # existing node_modules means a previous install was interrupted (crash,
+  # kill, OOM, proot path-translation error mid-stream) — tree can't be
+  # trusted, so nuke node_modules and reinstall from scratch.
+  local stamp="$dir/node_modules/.lumiverse-install-complete"
+
+  if [[ -d "$dir/node_modules" && ! -f "$stamp" ]]; then
+    warn "Detected interrupted $name install — removing node_modules and retrying..."
+    rm -rf "$dir/node_modules"
+  fi
 
   info "Installing $name dependencies..."
 
+  local install_status=0
   if [[ "$IS_TERMUX" == true ]]; then
     # Android doesn't support hardlinks — use file copy backend instead.
     # Clear Bun's install cache first — filesystem emulation can corrupt
@@ -567,17 +578,24 @@ install_deps() {
     # --ignore-scripts: proot's path translation makes getcwd() fail when bun
     # forks lifecycle scripts (ssh2, cpu-features), producing spurious
     # CouldntReadCurrentDirectory errors. Both packages fall back to pure-JS.
-    (cd "$dir" && _proot_bun install --backend=copyfile --ignore-scripts)
+    (cd "$dir" && _proot_bun install --backend=copyfile --ignore-scripts) || install_status=$?
   elif [[ "$IS_PROOT" == true ]]; then
     # Inside proot-distro: proot already intercepts syscalls, just need copyfile backend
     if [[ -d "$HOME/.bun/install/cache" ]]; then
       rm -rf "$HOME/.bun/install/cache"
     fi
-    (cd "$dir" && bun install --backend=copyfile --ignore-scripts)
+    (cd "$dir" && bun install --backend=copyfile --ignore-scripts) || install_status=$?
   else
-    (cd "$dir" && bun install)
+    (cd "$dir" && bun install) || install_status=$?
   fi
 
+  if [[ $install_status -ne 0 ]]; then
+    err "$name install failed (exit $install_status) — node_modules will be cleaned on next launch"
+    return $install_status
+  fi
+
+  # Stamp success so next launch knows this tree is complete.
+  touch "$stamp" 2>/dev/null || true
   ok "$name dependencies installed"
 }
 

@@ -4,10 +4,12 @@ import {
   MapPin, Swords, Package, Landmark, Lightbulb, Calendar,
   Heart, Shield, Zap, BookOpen, BarChart3, Search, ArrowRight,
   Palette, Trash2, AlertTriangle, FileQuestion, Clock, Link2,
+  Edit2, CheckCircle2, Plus,
 } from "lucide-react";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
 import CortexLinksTab from "./CortexLinksTab";
+import { EntityEditorModal, RelationEditorModal, RelationCreatorModal, ColorEditorModal } from "./MemoryCortexEditors";
 import styles from "./MemoryCortexPanel.module.css";
 import clsx from "clsx";
 
@@ -45,6 +47,7 @@ export default function MemoryCortexPanel() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [editingEntity, setEditingEntity] = useState<CortexEntity | null>(null);
 
   const loadEntities = useCallback(async () => {
     if (!activeChatId) return;
@@ -285,6 +288,7 @@ export default function MemoryCortexPanel() {
                   expanded={expandedId === entity.id}
                   onToggle={() => setExpandedId(expandedId === entity.id ? null : entity.id)}
                   onDelete={() => handleDeleteEntity(entity.id)}
+                  onEdit={() => setEditingEntity(entity)}
                   selectionMode={selectionMode}
                   selected={selectedEntityIds.has(entity.id)}
                   onSelect={() => toggleEntitySelection(entity.id)}
@@ -300,6 +304,7 @@ export default function MemoryCortexPanel() {
                       expanded={expandedId === entity.id}
                       onToggle={() => setExpandedId(expandedId === entity.id ? null : entity.id)}
                       onDelete={() => handleDeleteEntity(entity.id)}
+                      onEdit={() => setEditingEntity(entity)}
                       selectionMode={selectionMode}
                       selected={selectedEntityIds.has(entity.id)}
                       onSelect={() => toggleEntitySelection(entity.id)}
@@ -313,15 +318,24 @@ export default function MemoryCortexPanel() {
       )}
 
       {tab === "colors" && (
-        <ColorsView chatId={activeChatId} addToast={addToast} />
+        <ColorsView chatId={activeChatId} addToast={addToast} entities={entities} />
       )}
 
       {tab === "stats" && (
-        <StatsView stats={stats} chatId={activeChatId} />
+        <StatsView stats={stats} chatId={activeChatId} entities={entities} addToast={addToast} />
       )}
 
       {tab === "links" && (
         <CortexLinksTab activeChatId={activeChatId} />
+      )}
+
+      {editingEntity && (
+        <EntityEditorModal
+          chatId={activeChatId}
+          entity={editingEntity}
+          onClose={() => setEditingEntity(null)}
+          onSaved={() => { setEditingEntity(null); loadEntities(); }}
+        />
       )}
     </div>
   );
@@ -344,6 +358,7 @@ function EntityCard({
   expanded,
   onToggle,
   onDelete,
+  onEdit,
   selectionMode,
   selected,
   onSelect,
@@ -352,6 +367,7 @@ function EntityCard({
   expanded: boolean;
   onToggle: () => void;
   onDelete: () => void;
+  onEdit: () => void;
   selectionMode: boolean;
   selected: boolean;
   onSelect: () => void;
@@ -412,6 +428,11 @@ function EntityCard({
             {entity.name}
             <span className={styles.entityStatus} style={{ background: statusColor }} />
             {isProvisional && <span className={styles.provisionalBadge}>provisional</span>}
+            {entity.userEditedAt !== null && (
+              <span className={styles.curatedBadge} title="User-curated — preserved through rebuilds">
+                <CheckCircle2 size={9} /> curated
+              </span>
+            )}
             {needsFacts && (
               <span className={clsx(styles.factStatusBadge, entity.factExtractionStatus === "never" ? styles.factStatusNever : styles.factStatusEmpty)} title={entity.factExtractionStatus === "never" ? "No facts extracted yet" : "Fact extraction found nothing — will retry"}>
                 <FileQuestion size={9} />
@@ -508,6 +529,9 @@ function EntityCard({
           )}
 
           <div className={styles.entityActions}>
+            <button className={styles.editBtn} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+              <Edit2 size={12} /> Edit
+            </button>
             <button className={styles.dangerBtn} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
               Remove
             </button>
@@ -520,9 +544,18 @@ function EntityCard({
 
 // ─── Colors View ───────────────────────────────────────────────
 
-function ColorsView({ chatId, addToast }: { chatId: string; addToast: (t: any) => void }) {
+function ColorsView({
+  chatId,
+  addToast,
+  entities,
+}: {
+  chatId: string;
+  addToast: (t: any) => void;
+  entities: CortexEntity[];
+}) {
   const [colors, setColors] = useState<CortexFontColor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingColor, setEditingColor] = useState<CortexFontColor | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -545,6 +578,16 @@ function ColorsView({ chatId, addToast }: { chatId: string; addToast: (t: any) =
       addToast({ type: "info", message: "Color attribution removed" });
     } catch {
       addToast({ type: "error", message: "Failed to remove" });
+    }
+  };
+
+  const handleReattribute = async (colorId: string, entityId: string | null) => {
+    try {
+      await memoryCortexApi.reattributeColor(chatId, colorId, entityId);
+      addToast({ type: "success", message: entityId ? "Color reattributed" : "Color detached" });
+      load();
+    } catch (err: any) {
+      addToast({ type: "error", message: `Reattribute failed: ${err.message}` });
     }
   };
 
@@ -573,22 +616,53 @@ function ColorsView({ chatId, addToast }: { chatId: string; addToast: (t: any) =
     }
   }
 
+  const renderRow = (c: CortexFontColor) => (
+    <div key={c.id} className={styles.colorRow}>
+      <div className={styles.colorRowMain}>
+        <span className={styles.colorSwatch} style={{ background: c.hexColor }} />
+        <span className={styles.colorHex}>{c.hexColor}</span>
+        <span className={styles.colorUsage}>{c.usageType.replace(/_/g, " ")}</span>
+        <span className={styles.colorConfidence}>{(c.confidence * 100).toFixed(0)}%</span>
+        <button className={styles.colorEditBtn} onClick={() => setEditingColor(c)} title="Edit">
+          <Edit2 size={11} />
+        </button>
+        <button className={styles.colorDeleteBtn} onClick={() => handleDelete(c.id)} title="Remove">
+          <Trash2 size={11} />
+        </button>
+      </div>
+      <div className={styles.colorRowReassign}>
+        <span className={styles.colorRowReassignLabel}>Reassign:</span>
+        <select
+          className={styles.colorReattributeSelect}
+          value={c.entityId ?? ""}
+          onChange={(e) => handleReattribute(c.id, e.target.value || null)}
+          disabled={entities.length === 0}
+          title={entities.length === 0 ? "No entities yet to attribute to" : "Reattribute to…"}
+        >
+          <option value="">{c.entityId ? "(detach)" : "Pick entity…"}</option>
+          {entities.map((ent) => (
+            <option key={ent.id} value={ent.id}>{ent.name}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+
   return (
     <div className={styles.entityList}>
+      {unattributed.length > 0 && (
+        <div className={styles.colorGroup}>
+          <div className={styles.colorGroupHeader} style={{ color: "#f59e0b" }}>
+            <AlertTriangle size={12} style={{ marginRight: 4, verticalAlign: -1 }} />
+            Unattributed ({unattributed.length})
+          </div>
+          {unattributed.map(renderRow)}
+        </div>
+      )}
       {[...byCharacter.entries()].map(([name, entries]) => (
         <div key={name} className={styles.colorGroup}>
           <div className={styles.colorGroupHeader}>{name}</div>
-          {entries.map((c) => (
-            <div key={c.id} className={styles.colorRow}>
-              <span className={styles.colorSwatch} style={{ background: c.hexColor }} />
-              <span className={styles.colorHex}>{c.hexColor}</span>
-              <span className={styles.colorUsage}>{c.usageType.replace(/_/g, " ")}</span>
-              <span className={styles.colorConfidence}>{(c.confidence * 100).toFixed(0)}%</span>
-              <button className={styles.colorDeleteBtn} onClick={() => handleDelete(c.id)} title="Remove">
-                <Trash2 size={11} />
-              </button>
-            </div>
-          ))}
+          {entries.map(renderRow)}
           {entries[0]?.sampleExcerpt && (
             <div className={styles.colorSample}>
               {entries[0].sampleExcerpt.slice(0, 100)}
@@ -596,21 +670,15 @@ function ColorsView({ chatId, addToast }: { chatId: string; addToast: (t: any) =
           )}
         </div>
       ))}
-      {unattributed.length > 0 && (
-        <div className={styles.colorGroup}>
-          <div className={styles.colorGroupHeader} style={{ opacity: 0.6 }}>Unattributed</div>
-          {unattributed.map((c) => (
-            <div key={c.id} className={styles.colorRow}>
-              <span className={styles.colorSwatch} style={{ background: c.hexColor }} />
-              <span className={styles.colorHex}>{c.hexColor}</span>
-              <span className={styles.colorUsage}>{c.usageType.replace(/_/g, " ")}</span>
-              <span className={styles.colorConfidence}>{(c.confidence * 100).toFixed(0)}%</span>
-              <button className={styles.colorDeleteBtn} onClick={() => handleDelete(c.id)} title="Remove">
-                <Trash2 size={11} />
-              </button>
-            </div>
-          ))}
-        </div>
+
+      {editingColor && (
+        <ColorEditorModal
+          chatId={chatId}
+          color={editingColor}
+          entities={entities}
+          onClose={() => setEditingColor(null)}
+          onSaved={() => { setEditingColor(null); load(); }}
+        />
       )}
     </div>
   );
@@ -620,10 +688,43 @@ function ColorsView({ chatId, addToast }: { chatId: string; addToast: (t: any) =
 
 type DrillTarget = "chunks" | "entities" | "relations" | "consolidations" | "salience" | null;
 
-function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: string }) {
+function StatsView({
+  stats,
+  chatId,
+  entities,
+  addToast,
+}: {
+  stats: CortexUsageStats | null;
+  chatId: string;
+  entities: CortexEntity[];
+  addToast: (t: any) => void;
+}) {
   const [drill, setDrill] = useState<DrillTarget>(null);
   const [drillData, setDrillData] = useState<any[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
+  const [editingRelation, setEditingRelation] = useState<CortexRelation | null>(null);
+  const [creatingRelation, setCreatingRelation] = useState(false);
+
+  const reloadDrill = useCallback(async () => {
+    if (!drill) return;
+    setDrillLoading(true);
+    try {
+      let res: { data: any[] };
+      switch (drill) {
+        case "chunks": res = await memoryCortexApi.getChunks(chatId, 30); break;
+        case "entities": res = await memoryCortexApi.getEntities(chatId); break;
+        case "relations": res = await memoryCortexApi.getRelations(chatId); break;
+        case "consolidations": res = await memoryCortexApi.getConsolidations(chatId); break;
+        case "salience": res = await memoryCortexApi.getSalience(chatId, 30); break;
+        default: res = { data: [] };
+      }
+      setDrillData(res.data);
+    } catch {
+      setDrillData([]);
+    } finally {
+      setDrillLoading(false);
+    }
+  }, [drill, chatId]);
 
   const openDrill = async (target: DrillTarget) => {
     if (!target) return;
@@ -648,6 +749,17 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
     }
   };
 
+  const handleDeleteRelation = async (relationId: string) => {
+    if (!confirm("Delete this relation?")) return;
+    try {
+      await memoryCortexApi.deleteRelation(chatId, relationId);
+      addToast({ type: "success", message: "Relation deleted" });
+      reloadDrill();
+    } catch (err: any) {
+      addToast({ type: "error", message: `Delete failed: ${err.message}` });
+    }
+  };
+
   if (!stats) return <div className={styles.loadingText}>Loading stats...</div>;
 
   // Drill-down view
@@ -658,7 +770,14 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
           <ChevronLeft size={14} />
           Back to stats
         </button>
-        <div className={styles.drillTitle}>{drill.charAt(0).toUpperCase() + drill.slice(1)}</div>
+        <div className={styles.drillTitle}>
+          {drill.charAt(0).toUpperCase() + drill.slice(1)}
+          {drill === "relations" && entities.length >= 2 && (
+            <button className={styles.addRelationBtn} onClick={() => setCreatingRelation(true)}>
+              <Plus size={11} /> Add relation
+            </button>
+          )}
+        </div>
         {drillLoading ? (
           <div className={styles.loadingText}>Loading records...</div>
         ) : drillData.length === 0 ? (
@@ -676,7 +795,12 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
               ]} tags={c.emotional_tags ? JSON.parse(c.emotional_tags) : []} />
             ))}
             {drill === "relations" && drillData.map((r: CortexRelation) => (
-              <RelationDrillRecord key={r.id} relation={r} />
+              <RelationDrillRecord
+                key={r.id}
+                relation={r}
+                onEdit={() => setEditingRelation(r)}
+                onDelete={() => handleDeleteRelation(r.id)}
+              />
             ))}
             {drill === "consolidations" && (() => {
               const arcs = drillData.filter((c: any) => c.tier === 2);
@@ -740,6 +864,25 @@ function StatsView({ stats, chatId }: { stats: CortexUsageStats | null; chatId: 
               ]} />
             ))}
           </div>
+        )}
+
+        {editingRelation && (
+          <RelationEditorModal
+            chatId={chatId}
+            relation={editingRelation}
+            sourceName={editingRelation.sourceName}
+            targetName={editingRelation.targetName}
+            onClose={() => setEditingRelation(null)}
+            onSaved={() => { setEditingRelation(null); reloadDrill(); }}
+          />
+        )}
+        {creatingRelation && (
+          <RelationCreatorModal
+            chatId={chatId}
+            entities={entities}
+            onClose={() => setCreatingRelation(false)}
+            onSaved={() => { setCreatingRelation(false); reloadDrill(); }}
+          />
         )}
       </div>
     );
@@ -914,7 +1057,15 @@ function SalienceDrillRecord({ record: s }: { record: any }) {
 
 // ─── Relation Drill Record ────────────────────────────────────
 
-function RelationDrillRecord({ relation: r }: { relation: CortexRelation }) {
+function RelationDrillRecord({
+  relation: r,
+  onEdit,
+  onDelete,
+}: {
+  relation: CortexRelation;
+  onEdit?: () => void;
+  onDelete?: () => void;
+}) {
   const contradictionFlag = r.contradictionFlag ?? "none";
   const hasContradiction = contradictionFlag !== "none";
   const edgeSalience = r.edgeSalience ?? r.strength ?? 0;
@@ -934,6 +1085,11 @@ function RelationDrillRecord({ relation: r }: { relation: CortexRelation }) {
           <span className={styles.relationEntityName}>{r.sourceName || (r.sourceEntityId ?? "").slice(0, 8)}</span>
           <span className={styles.relationArrow}>→</span>
           <span className={styles.relationEntityName}>{r.targetName || (r.targetEntityId ?? "").slice(0, 8)}</span>
+          {r.userEditedAt !== null && (
+            <span className={styles.curatedBadge} title="User-curated — preserved through rebuilds" style={{ marginLeft: 6 }}>
+              <CheckCircle2 size={9} /> curated
+            </span>
+          )}
         </span>
         <span
           className={styles.relationTypeBadge}
@@ -1018,6 +1174,21 @@ function RelationDrillRecord({ relation: r }: { relation: CortexRelation }) {
                 ))}
               </div>
             </>
+          )}
+        </div>
+      )}
+
+      {(onEdit || onDelete) && (
+        <div className={styles.relationActions}>
+          {onEdit && (
+            <button className={styles.editBtn} onClick={onEdit}>
+              <Edit2 size={11} /> Edit
+            </button>
+          )}
+          {onDelete && (
+            <button className={styles.dangerBtn} onClick={onDelete}>
+              <Trash2 size={11} /> Delete
+            </button>
           )}
         </div>
       )}

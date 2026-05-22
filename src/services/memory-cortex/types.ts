@@ -155,6 +155,7 @@ export interface MemoryRelationRow {
   label_aliases: string; // JSON array
   canonical_edge_id: string | null;
   merged_into: string | null;
+  user_edited_at: number | null;
 }
 
 /** Service-layer relation DTO */
@@ -188,6 +189,7 @@ export interface MemoryRelation {
   labelAliases: string[];
   canonicalEdgeId: string | null;
   mergedInto: string | null;
+  userEditedAt: number | null;
 }
 
 // ─── Salience Types ────────────────────────────────────────────

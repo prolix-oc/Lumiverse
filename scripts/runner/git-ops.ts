@@ -1,5 +1,5 @@
 import { join } from "path";
-import { existsSync, rmSync } from "fs";
+import { existsSync, rmSync, writeFileSync } from "fs";
 import { runGit, getUpstreamRef, getCurrentBranch } from "./lib/git.js";
 import {
   PROJECT_ROOT,
@@ -327,24 +327,47 @@ export async function switchBranch(
   await startServer();
 }
 
+// Written into node_modules only after `bun install` exits 0. Its absence
+// alongside an existing node_modules means a previous install was interrupted
+// (crash, kill, OOM, proot path-translation error mid-stream) and the tree
+// can't be trusted — nuke and reinstall.
+const INSTALL_STAMP = "node_modules/.lumiverse-install-complete";
+
+function repairHalfInstall(dir: string, label: string): void {
+  const nodeModules = join(dir, "node_modules");
+  const stamp = join(dir, INSTALL_STAMP);
+  if (existsSync(nodeModules) && !existsSync(stamp)) {
+    log(`Detected interrupted ${label} install — removing node_modules and retrying...`);
+    try { rmSync(nodeModules, { recursive: true, force: true }); } catch {}
+  }
+}
+
+function writeInstallStamp(dir: string): void {
+  try { writeFileSync(join(dir, INSTALL_STAMP), `${Date.now()}\n`); } catch {}
+}
+
 export async function ensureDependencies(frontendDir: string): Promise<void> {
   const installCmd = bunInstallCmd();
   clearBunInstallCacheIfTermux();
 
+  repairHalfInstall(PROJECT_ROOT, "backend");
   log("Installing backend dependencies...");
   await runCommandOrThrow(installCmd, {
     cwd: PROJECT_ROOT,
     timeoutMs: TIMEOUT_BUN_INSTALL_MS,
     label: "backend install",
   });
+  writeInstallStamp(PROJECT_ROOT);
   log("Backend dependencies updated.");
 
+  repairHalfInstall(frontendDir, "frontend");
   log("Installing frontend dependencies...");
   await runCommandOrThrow(installCmd, {
     cwd: frontendDir,
     timeoutMs: TIMEOUT_BUN_INSTALL_MS,
     label: "frontend install",
   });
+  writeInstallStamp(frontendDir);
   log("Frontend dependencies updated.");
 }
 

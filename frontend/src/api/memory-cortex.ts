@@ -105,6 +105,7 @@ export interface CortexEntity {
   lastMentionTimestamp: number | null;
   recentMentionCount: number;
   confidence: "confirmed" | "provisional";
+  userEditedAt: number | null;
 }
 
 export interface CortexRelation {
@@ -129,9 +130,35 @@ export interface CortexRelation {
   decayRate: number;
   labelAliases: string[];
   mergedInto: string | null;
+  userEditedAt: number | null;
   // Enriched by route
   sourceName?: string;
   targetName?: string;
+}
+
+export type CortexRelationType =
+  | "ally" | "enemy" | "lover" | "parent" | "child" | "sibling"
+  | "mentor" | "rival" | "owns" | "member_of" | "located_in"
+  | "fears" | "serves" | "custom";
+
+export type CortexRelationStatus = "active" | "broken" | "dormant" | "former";
+
+export interface CreateRelationInput {
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationType: CortexRelationType;
+  relationLabel?: string | null;
+  strength?: number;
+  sentiment?: number;
+  status?: CortexRelationStatus;
+}
+
+export interface UpdateRelationInput {
+  relationType?: CortexRelationType;
+  relationLabel?: string | null;
+  strength?: number;
+  sentiment?: number;
+  status?: CortexRelationStatus;
 }
 
 export interface CortexUsageStats {
@@ -387,12 +414,25 @@ export const memoryCortexApi = {
   },
   deleteColor: (chatId: string, colorId: string) =>
     del<{ success: boolean }>(`${BASE}/chats/${chatId}/colors/${colorId}`),
+  reattributeColor: (chatId: string, colorId: string, entityId: string | null) =>
+    put<{ success: boolean }>(`${BASE}/chats/${chatId}/colors/${colorId}`, { entityId }),
+  updateColor: (
+    chatId: string,
+    colorId: string,
+    patch: { entityId?: string | null; usageType?: string; hexColor?: string; confidence?: number },
+  ) => put<{ success: boolean }>(`${BASE}/chats/${chatId}/colors/${colorId}`, patch),
 
   // Relations
   getRelations: (chatId: string) =>
     get<{ data: CortexRelation[]; total: number }>(`${BASE}/chats/${chatId}/relations`),
   getAllRelations: (chatId: string) =>
     get<{ data: CortexRelation[]; total: number }>(`${BASE}/chats/${chatId}/relations/all`),
+  createRelation: (chatId: string, data: CreateRelationInput) =>
+    post<CortexRelation>(`${BASE}/chats/${chatId}/relations`, data),
+  updateRelation: (chatId: string, relationId: string, data: UpdateRelationInput) =>
+    put<CortexRelation>(`${BASE}/chats/${chatId}/relations/${relationId}`, data),
+  deleteRelation: (chatId: string, relationId: string) =>
+    del<{ success: boolean }>(`${BASE}/chats/${chatId}/relations/${relationId}`),
 
   // Heuristics engine
   migrateHeuristics: (chatId: string) =>

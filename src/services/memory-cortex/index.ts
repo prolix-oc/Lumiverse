@@ -334,7 +334,7 @@ function clearDerivedCortexData(chatId: string, options: { preserveSalience?: bo
   // their derived counters are reset so live ingestion can rebuild stats cleanly.
   entityGraph.deleteEntitiesForChat(chatId, { preserveUserEdited: true });
   entityGraph.deleteMentionsForChat(chatId);
-  entityGraph.deleteRelationsForChat(chatId);
+  entityGraph.deleteRelationsForChat(chatId, { preserveUserEdited: true });
   consolidation.deleteConsolidationsForChat(chatId);
   deleteColorMapForChat(chatId);
   if (!options.preserveSalience) {
@@ -1068,9 +1068,7 @@ export async function processChunk(
               characterNames,
               knownEntities: entityContext,
               arbiter: arbiterInput,
-              descriptionAliases: descriptionAliases
-                ? [...descriptionAliases.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }))
-                : undefined,
+              descriptionAliases: buildSidecarAliasList(descriptionAliases, knownEntities),
               samplingParameters: buildSidecarSamplingParameters(config.sidecar),
               tokenCounter: liveSidecarTokenCounter,
               logTag: `live chunk=${data.chunkId.slice(0, 8)} attempt=${attempt + 1}/${maxAttempts}`,
@@ -1861,9 +1859,10 @@ export async function rebuildCortex(
                 characterNames,
                 perChunkArbiter,
                 batchExistingEntities,
-                descriptionAliases: descriptionAliases
-                  ? [...descriptionAliases.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }))
-                  : undefined,
+                descriptionAliases: buildSidecarAliasList(
+                  descriptionAliases,
+                  entityGraph.getActiveEntities(chatId),
+                ),
                 samplingParameters: buildSidecarSamplingParameters(config.sidecar),
                 tokenCounter: rebuildTokenCounter,
                 logTag: `rebuild:batch-${batchIdx} chat=${chatId.slice(0, 8)}`,
@@ -2471,6 +2470,20 @@ export function extractDescriptionAliases(
         }
       }
     }
+
+    // Pattern 4: colloquial intros — "real name is X", "everyone calls him X",
+    // "they call her X". Catches forms outside the formal "known as" register.
+    const colloquialPatterns = /(?:real name(?:\s+is)?|everyone\s+calls?(?:\s+(?:him|her|them|me|it))?|they\s+call(?:\s+(?:him|her|them|me|it))?)\s+["'“‘]?([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})["'”’]?/gi;
+    while ((match = colloquialPatterns.exec(desc)) !== null) {
+      addAlias(aliases, match[1], canonicalName);
+    }
+
+    // Pattern 5: locale-scoped aliases — "in/at/around <Place>, they/people call him/her X".
+    // Picks up aliases bound to a setting (common in fantasy/regional naming).
+    const localePatterns = /(?:in|at|around|among|to)\s+[A-Z][A-Za-z']+(?:\s+[A-Za-z']+){0,3},?\s+(?:they|she|he|people|locals|the\s+\w+)\s+(?:call|know)\s+(?:him|her|them|me|it)\s+(?:as\s+)?["'“‘]?([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})["'”’]?/gi;
+    while ((match = localePatterns.exec(desc)) !== null) {
+      addAlias(aliases, match[1], canonicalName);
+    }
   }
 
   return aliases;
@@ -2486,6 +2499,38 @@ function addAlias(map: Map<string, string>, alias: string, canonical: string): v
   if (withoutThe !== trimmed && withoutThe.length >= 2) {
     map.set(withoutThe.toLowerCase(), canonical);
   }
+}
+
+/**
+ * Build the alias list passed to the sidecar's <canonical_aliases> block.
+ *
+ * Merges two sources:
+ *   1. Persisted entity-graph aliases (includes prior user-curated edits and
+ *      learned aliases from earlier rebuild passes). These survive rebuilds via
+ *      memory_entities.user_edited_at and the entity row's `aliases` JSON.
+ *   2. Description aliases from character/persona/world-book definitions —
+ *      take priority on key collision since they're the canonical authority.
+ *
+ * Resulting list is what the sidecar sees as authoritative alias→canonical
+ * mappings for the current chat.
+ */
+export function buildSidecarAliasList(
+  descriptionAliases: Map<string, string> | undefined,
+  knownEntities: Array<{ name: string; aliases: string[] }>,
+): Array<{ alias: string; canonicalName: string }> {
+  const merged = new Map<string, string>();
+  for (const e of knownEntities) {
+    for (const alias of e.aliases) {
+      const lower = alias.toLowerCase();
+      if (!merged.has(lower)) merged.set(lower, e.name);
+    }
+  }
+  if (descriptionAliases) {
+    for (const [alias, canonical] of descriptionAliases.entries()) {
+      merged.set(alias.toLowerCase(), canonical);
+    }
+  }
+  return [...merged.entries()].map(([alias, canonicalName]) => ({ alias, canonicalName }));
 }
 
 /**
