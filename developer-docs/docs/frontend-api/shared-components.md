@@ -89,6 +89,7 @@ You do **not** need to mirror state into your own variables and call `update()` 
 | `mountTextArea` | Multi-line text editor |
 | `mountNumericInput` | Validated number input with optional empty state |
 | `mountNumberStepper` | Number input with +/− buttons |
+| `mountRangeSlider` | Touch-friendly slider with optional label, hint, and formatted value display |
 | `mountCheckbox` | Standard checkbox with optional label and hint |
 | `mountSwitch` | Toggle switch |
 | `mountSelect` | Searchable single-select dropdown |
@@ -161,6 +162,75 @@ const temperature = ctx.components.mountNumberStepper(target, {
 | `disabled` | `boolean` | `false` | Disable user interaction |
 
 `SpindleNumberStepperOptions` accepts the same fields except `integer`, and uses `step: 1` by default.
+
+### Range slider
+
+A touch-first slider with horizontal drag. Vertical scroll passes through the slider on mobile (the host does JS direction detection and only claims horizontal gestures), and mid-drag interruptions don't kill the gesture — the slider commits the last live value if the touch is cancelled after movement. The built-in header tracks the live drag value in real time; `onCommit` only fires once when the gesture ends.
+
+```ts
+const opacity = ctx.components.mountRangeSlider(target, {
+  label: 'Opacity',
+  min: 0,
+  max: 100,
+  step: 5,
+  integer: true,
+  value: 35,
+  format: { suffix: '%' },
+  onCommit: (v) => ctx.sendToBackend({ type: 'set_opacity', value: v / 100 }),
+})
+
+// Programmatically jump to a value
+opacity.update({ value: 80 })
+
+// Read the latest committed value
+const current = opacity.getValue()
+```
+
+Omit `label` to render the bare track without a header — useful when you want to lay out your own label/value display alongside other content. In that case, use `onDragValue` to mirror the live value into your own UI:
+
+```ts
+const valueLabel = document.createElement('span')
+container.appendChild(valueLabel)
+
+ctx.components.mountRangeSlider(track, {
+  min: 0, max: 1, step: 0.05, value: 0.5,
+  onDragValue: (v) => { valueLabel.textContent = v === null ? '0.50' : v.toFixed(2) },
+  onCommit: (v) => { valueLabel.textContent = v.toFixed(2); ctx.sendToBackend({ type: 'set_strength', value: v }) },
+})
+```
+
+#### SpindleRangeSliderOptions
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `min` | `number` | — | **Required.** Inclusive lower bound. |
+| `max` | `number` | — | **Required.** Inclusive upper bound. |
+| `value` | `number` | `min` | Initial committed value. |
+| `step` | `number` | `1` | Snap increment. |
+| `integer` | `boolean` | `false` | Round to integers regardless of `step` formatting. |
+| `onCommit` | `(v: number) => void` | — | Fired once when a drag ends or the user taps the track. Not fired during the drag. |
+| `onDragValue` | `(v: number \| null) => void` | — | Fired with the live value during a drag, and with `null` if the gesture ends without committing. |
+| `label` | `string` | — | If set, renders a header above the track with the label and live value. |
+| `hint` | `string` | — | Helper text under the header. Ignored if `label` is omitted. |
+| `format` | `SpindleRangeSliderFormat` | — | Declarative formatting for the value in the header (see below). Ignored if `label` is omitted. |
+| `disabled` | `boolean` | `false` | Dim the track and ignore input. |
+| `className` | `string` | — | Additional CSS class merged onto the track area. |
+
+#### SpindleRangeSliderFormat
+
+| Field | Type | Description |
+|---|---|---|
+| `decimals` | `number` | Number of decimal places to show. Defaults to whatever `step` implies (or `0` for `integer` sliders). |
+| `prefix` | `string` | Prepended before the value, e.g. `"$"`. |
+| `suffix` | `string` | Appended after the value, e.g. `"%"` or `"ms"`. |
+
+#### SpindleRangeSliderHandle
+
+In addition to the [shared handle methods](#shared-handle-shape):
+
+| Method | Returns | Description |
+|---|---|---|
+| `getValue()` | `number` | The current committed value. |
 
 ## Boolean inputs
 

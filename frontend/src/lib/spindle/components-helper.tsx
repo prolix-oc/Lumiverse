@@ -15,6 +15,9 @@ import type {
   SpindleNumericInputHandle,
   SpindleNumberStepperOptions,
   SpindleNumberStepperHandle,
+  SpindleRangeSliderOptions,
+  SpindleRangeSliderHandle,
+  SpindleRangeSliderFormat,
   SpindleCheckboxOptions,
   SpindleCheckboxHandle,
   SpindleSwitchOptions,
@@ -45,6 +48,7 @@ import { TextInput, TextArea } from '@/components/shared/FormComponents'
 import formStyles from '@/components/shared/FormComponents.module.css'
 import NumericInput from '@/components/shared/NumericInput'
 import NumberStepper from '@/components/shared/NumberStepper'
+import { RangeSlider, LabeledRangeSlider } from '@/components/shared/RangeSlider'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
 import { Spinner } from '@/components/shared/Spinner'
@@ -475,6 +479,61 @@ function NumberStepperBridge({ initial, bridge }: { initial: SpindleNumberSteppe
   )
 }
 
+function buildRangeSliderFormatter(
+  format: SpindleRangeSliderFormat | undefined,
+  step: number,
+  integer: boolean,
+): (val: number) => string {
+  const decimals = format?.decimals ?? (integer ? 0 : (String(step).split('.')[1] || '').length)
+  const prefix = format?.prefix ?? ''
+  const suffix = format?.suffix ?? ''
+  return (val) => {
+    const num = decimals === 0 ? String(Math.round(val)) : val.toFixed(decimals)
+    return `${prefix}${num}${suffix}`
+  }
+}
+
+function RangeSliderBridge({ initial, bridge }: { initial: SpindleRangeSliderOptions; bridge: BridgeAPI<SpindleRangeSliderOptions, number> }) {
+  const [props, setProps] = useState(initial)
+  const [value, setValue] = useState<number>(initial.value ?? initial.min)
+  useBridgeBinding(bridge, props, setProps, value, setValue, 'value')
+
+  const handleCommit = (v: number) => {
+    setValue(v)
+    props.onCommit?.(v)
+  }
+
+  const handleDragValue = (v: number | null) => {
+    props.onDragValue?.(v)
+  }
+
+  const sharedProps = {
+    min: props.min,
+    max: props.max,
+    step: props.step,
+    integer: props.integer,
+    value,
+    disabled: props.disabled,
+    className: props.className,
+    onCommit: handleCommit,
+    onDragValue: handleDragValue,
+  }
+
+  if (props.label !== undefined) {
+    const formatValue = buildRangeSliderFormatter(props.format, props.step ?? 1, props.integer ?? false)
+    return (
+      <LabeledRangeSlider
+        label={props.label}
+        hint={props.hint}
+        formatValue={formatValue}
+        {...sharedProps}
+      />
+    )
+  }
+
+  return <RangeSlider {...sharedProps} />
+}
+
 function CheckboxBridge({ initial, bridge }: { initial: SpindleCheckboxOptions; bridge: BridgeAPI<SpindleCheckboxOptions, boolean> }) {
   const [props, setProps] = useState(initial)
   const [checked, setChecked] = useState<boolean>(initial.checked ?? false)
@@ -753,6 +812,14 @@ export function createComponentsHelper(extensionId: string): SpindleComponentsHe
     ))
     return buildHandle(extensionId, id, el, result) as SpindleNumberStepperHandle
   }
+  function mountRangeSlider(target: SpindleComponentTarget, options: SpindleRangeSliderOptions): SpindleRangeSliderHandle {
+    const el = resolveTarget(target)
+    const id = nextId(extensionId, 'range-slider')
+    const result = mountBridge<SpindleRangeSliderOptions, number>(el, (b) => (
+      <RangeSliderBridge initial={options} bridge={b} />
+    ))
+    return buildHandle(extensionId, id, el, result) as SpindleRangeSliderHandle
+  }
   function mountCheckbox(target: SpindleComponentTarget, options?: SpindleCheckboxOptions): SpindleCheckboxHandle {
     const el = resolveTarget(target)
     const id = nextId(extensionId, 'checkbox')
@@ -865,6 +932,7 @@ export function createComponentsHelper(extensionId: string): SpindleComponentsHe
     mountTextArea,
     mountNumericInput,
     mountNumberStepper,
+    mountRangeSlider,
     mountCheckbox,
     mountSwitch,
     mountSelect,
