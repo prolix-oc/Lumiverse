@@ -42,7 +42,11 @@ function getGroupMemberIds(metadata: Record<string, any>): string[] {
 
 function getGroupMemberKey(metadata: Record<string, any>): string | null {
   const ids = getGroupMemberIds(metadata);
-  return ids.length > 0 ? [...ids].sort().join("\0") : null;
+  if (ids.length === 0) return null;
+  // Dedupe within the set so chats that picked up stray duplicate IDs (older
+  // import paths, mid-stream races on addGroupMember) still cluster with
+  // otherwise-identical member lists.
+  return Array.from(new Set(ids)).sort().join("\0");
 }
 
 /**
@@ -564,11 +568,38 @@ export function listRecentChatsGrouped(
   const parsedRows = rows.map((row) => {
     const metadata = parseMetadataObject(row.metadata);
     const isGroup = isGroupMetadata(metadata);
-    const groupKey = isGroup ? getGroupMemberKey(metadata) : null;
     if (!isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
-    else if (groupKey) groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
-    return { ...row, metadata, isGroup, groupKey };
+    return { ...row, metadata, isGroup, groupKey: null as string | null };
   });
+
+  // Build a metadata lookup so we can resolve each group chat's lineage root.
+  // Branches inherit the root's member-set key — without this, mutating the
+  // parent's membership (or a branch's) after forking pushes the branch into
+  // a separate landing-page entry, which users perceive as "new group chats
+  // spawning on every fork."
+  const metadataById = new Map<string, Record<string, any>>();
+  for (const row of parsedRows) metadataById.set(row.id, row.metadata);
+
+  const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
+    const visited = new Set<string>([rowId]);
+    let currentMeta = metadata;
+    for (let i = 0; i < 64; i++) {
+      const parentId = typeof currentMeta?.branched_from === "string" ? currentMeta.branched_from : null;
+      if (!parentId || visited.has(parentId)) break;
+      const parentMeta = metadataById.get(parentId);
+      if (!parentMeta || !isGroupMetadata(parentMeta)) break;
+      visited.add(parentId);
+      currentMeta = parentMeta;
+    }
+    return getGroupMemberKey(currentMeta);
+  };
+
+  for (const row of parsedRows) {
+    if (!row.isGroup) continue;
+    const groupKey = resolveGroupDedupKey(row.id, row.metadata);
+    row.groupKey = groupKey;
+    if (groupKey) groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
+  }
 
   // Dedup on the rows pre-sorted by updated_at DESC so the surviving row
   // is always the most recent chat per solo character / group member set.

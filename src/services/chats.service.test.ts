@@ -177,6 +177,39 @@ describe("recent chats", () => {
     expect(result.data[0].group_character_ids).toEqual(["c2", "c1"]);
   });
 
+  test("clusters group chat forks even when membership has diverged from the root", () => {
+    // Parent gained a member after the branch was taken (or the branch dropped
+    // one) — the branch should still cluster with the root rather than spawn a
+    // second landing-page entry.
+    seedChat("group-root", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2", "c3"] }), 100);
+    seedChat("group-branch", "c1", "Group — Branch at #2", JSON.stringify({
+      group: true,
+      character_ids: ["c1", "c2"],
+      branched_from: "group-root",
+      branch_at_message: "msg-2",
+    }), 200);
+
+    const result = listRecentChatsGrouped("u1", { limit: 10, offset: 0 });
+
+    expect(result.total).toBe(1);
+    expect(result.data[0].latest_chat_id).toBe("group-branch");
+    expect(result.data[0].chat_count).toBe(2);
+    expect(result.data[0].is_group).toBe(true);
+    // group_character_ids reflects the surviving (latest) row's own members.
+    expect(result.data[0].group_character_ids).toEqual(["c1", "c2"]);
+  });
+
+  test("dedupes group chats whose character_ids contain duplicate entries", () => {
+    seedChat("group-clean", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 100);
+    seedChat("group-dup", "c1", "Group dup", JSON.stringify({ group: true, character_ids: ["c1", "c1", "c2"] }), 200);
+
+    const result = listRecentChatsGrouped("u1", { limit: 10, offset: 0 });
+
+    expect(result.total).toBe(1);
+    expect(result.data[0].latest_chat_id).toBe("group-dup");
+    expect(result.data[0].chat_count).toBe(2);
+  });
+
   test("keeps reasoning scoped to the swipe it belongs to", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {
