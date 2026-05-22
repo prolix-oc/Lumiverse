@@ -210,7 +210,7 @@ export default function DatabankPanel() {
       return
     }
     try {
-      const result = await databankApi.listDocuments(selectedDatabankId)
+      const result = await databankApi.listDocuments(selectedDatabankId, { limit: 1000 })
       setDatabankDocuments(result.data)
     } catch {
       setDatabankDocuments([])
@@ -225,7 +225,7 @@ export default function DatabankPanel() {
     if (hasProcessing && selectedDatabankId) {
       pollRef.current = setInterval(async () => {
         try {
-          const result = await databankApi.listDocuments(selectedDatabankId)
+          const result = await databankApi.listDocuments(selectedDatabankId, { limit: 1000 })
           setDatabankDocuments(result.data)
           const stillProcessing = result.data.some((d) => d.status === 'pending' || d.status === 'processing')
           if (!stillProcessing && pollRef.current) {
