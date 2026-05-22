@@ -535,7 +535,7 @@ The web UI wizard walks you through these steps:
     - Everything (recommended)
     - Custom selection
 5. **Select target** — Choose which Lumiverse account receives the data.
-6. **(Optional) TagLibrary Backup** — If you used the [SillyTavern-TagLibrary](https://github.com/Inkbottle007/SillyTavern-TagLibrary) extension and exported a JSON backup, upload it here. Lumiverse will re-apply your tags to the imported characters once the main migration finishes. See [TagLibrary Re-Apply](#tag-library-re-apply) below.
+6. **(Optional) TagLibrary Backup** — If you used the [SillyTavern-TagLibrary](https://github.com/Inkbottle007/SillyTavern-TagLibrary) extension and exported a JSON backup, upload it here. Lumiverse will re-apply your tags to the imported characters once the main migration finishes. See [TagLibrary Re-Apply](#taglibrary-re-apply) below.
 7. **Confirm & import** — Review the summary and start the migration. Progress and logs stream in real time.
 8. **Results** — See counts of imported, skipped, and failed items.
 
