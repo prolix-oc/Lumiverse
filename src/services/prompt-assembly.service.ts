@@ -838,10 +838,14 @@ function resolvePromptVariables(
   // value as {{var::name}}. Seeding happens before any block renders, so
   // in-prompt {{setvar::name::…}} can still override mid-assembly (setvar
   // wins because it runs later during block evaluation).
+  //
+  // Preset-variable names are AUTHORITATIVE — they always overwrite any
+  // pre-seeded entry from chat.metadata.macro_variables.local. Without the
+  // overwrite, a value persisted from a prior generation would shadow the
+  // user's current Configure-Prompt-Variables choice, which is the exact bug
+  // chat-macro-render.service.ts:localWithoutPresetVars also defends against.
   for (const [name, value] of Object.entries(values)) {
-    if (!env.variables.local.has(name)) {
-      env.variables.local.set(name, String(value));
-    }
+    env.variables.local.set(name, String(value));
   }
 }
 

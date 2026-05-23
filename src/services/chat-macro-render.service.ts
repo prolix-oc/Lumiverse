@@ -5,6 +5,31 @@ import * as chatsSvc from "./chats.service";
 
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
 
+/**
+ * Preset-defined prompt variable names are seeded into env.variables.local by
+ * the assembly pipeline so {{var::}}, {{getvar::}}, and {{.name}} share a
+ * backing store mid-prompt. Persisting them into chat.metadata.macro_variables.local
+ * would freeze the user's first-generation values into the chat forever, so any
+ * later change in the Configure Prompt Variables modal would be shadowed by the
+ * stale chat-stored copy. We strip preset-variable names from the persisted
+ * snapshot — they re-seed from preset.metadata.promptVariables on the next
+ * generation. In-prompt {{setvar::}} writes to non-colliding names still persist.
+ */
+function localWithoutPresetVars(
+  local: Record<string, string>,
+  env: MacroEnv | undefined,
+): Record<string, string> {
+  const pv = env?.extra?.promptVariables;
+  if (!pv || typeof pv !== "object") return local;
+  const presetNames = new Set(Object.keys(pv));
+  if (presetNames.size === 0) return local;
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(local)) {
+    if (!presetNames.has(key)) out[key] = local[key];
+  }
+  return out;
+}
+
 interface ReconcileChatMessageMacrosInput {
   userId: string;
   chatId: string;
@@ -84,9 +109,10 @@ export function persistMacroVariableState(
   const existingLocal = (existingMacroVars.local as Record<string, string> | undefined) ?? {};
   const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
   const existingChatVars = (chat.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
+  const incomingLocal = localWithoutPresetVars(Object.fromEntries(env.variables.local), env);
   const macroVariables = {
     ...existingMacroVars,
-    local: { ...existingLocal, ...Object.fromEntries(env.variables.local) },
+    local: { ...existingLocal, ...incomingLocal },
     global: { ...existingGlobal, ...Object.fromEntries(env.variables.global) },
   };
   chatsSvc.mergeChatMetadata(userId, chatId, {
@@ -125,9 +151,10 @@ export async function reconcileChatMessageMacros(
     const existingLocal = (existingMacroVars.local as Record<string, string> | undefined) ?? {};
     const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
     const existingChatVars = (chat?.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
+    const incomingLocal = localWithoutPresetVars(localVariables, input.macroEnvSeed);
     const macroVariables = {
       ...existingMacroVars,
-      local: { ...existingLocal, ...localVariables },
+      local: { ...existingLocal, ...incomingLocal },
       global: { ...existingGlobal, ...globalVariables },
     };
     chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
