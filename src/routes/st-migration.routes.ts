@@ -36,8 +36,12 @@ async function ensureMigrationTargetAccess(c: any, targetUserId: string): Promis
   const callerRole = c.get("session")?.user?.role;
 
   if (callerRole === "owner") {
-    if (targetUserId !== callerUserId) {
-      return c.json({ error: "Owner can only migrate to their own account" }, 403);
+    if (targetUserId === callerUserId) return null;
+    const targetUser = getDb()
+      .query('SELECT id FROM "user" WHERE id = ?')
+      .get(targetUserId) as { id: string } | null;
+    if (!targetUser) {
+      return c.json({ error: "Target user not found" }, 404);
     }
     return null;
   }

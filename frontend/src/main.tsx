@@ -4,6 +4,7 @@ import { RouterProvider } from 'react-router'
 import { registerSW } from 'virtual:pwa-register'
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
+import { rememberRegistration } from './lib/swUpdater'
 import { router } from './router'
 import './theme/variables.css'
 import './theme/reset.css'
@@ -22,6 +23,10 @@ registerSW({
     if (registration) {
       setInterval(() => { registration.update() }, 60 * 60 * 1000)
     }
+    // Hand the registration to swUpdater so the connection-lost overlay can
+    // ask for an immediate bundle check on reconnect, and so we can surface
+    // an "Updating…" state when a new worker is installing.
+    rememberRegistration(registration)
   },
 })
 

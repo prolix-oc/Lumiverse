@@ -13,6 +13,7 @@ import ViewportDrawer from '@/components/panels/ViewportDrawer'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
+import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
@@ -168,6 +169,7 @@ export default function App() {
               <SpindleUIManager />
               <ToastContainer />
               <ChatHeads />
+              <ConnectionLostOverlay />
             </ErrorBoundary>
           </div>
         </MotionConfig>

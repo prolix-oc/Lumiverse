@@ -245,6 +245,11 @@
 
 .input::placeholder {
   color: var(--lumiverse-text-hint);
+  text-transform: none;
+}
+
+.inputLowercase {
+  text-transform: lowercase;
 }
 
 /* ─── Submit button ──────────────────────────────────────────────────── */
@@ -302,6 +307,26 @@
 
 @keyframes loginSpin {
   to { transform: rotate(360deg); }
+}
+
+/* ─── Session-check loading state ────────────────────────────────────── */
+
+.checking {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1)));
+  background: var(--lumiverse-bg-deep, #0a0812);
+}
+
+.checkingSpinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-top-color: var(--lumiverse-primary, #8B5FC7);
+  border-radius: 50%;
+  animation: loginSpin 0.8s linear infinite;
 }
 
 /* ─── Error message ──────────────────────────────────────────────────── */

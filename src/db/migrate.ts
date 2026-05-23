@@ -146,6 +146,18 @@ function repairDreamWeaverBaselineDrift(db: Database): void {
   db.run("ALTER TABLE dream_weaver_sessions ADD COLUMN model TEXT");
 }
 
+// The shipped baseline.sql was regenerated from a DB that already had
+// migration 072 applied, so world_books.folder is present after baseline
+// bootstrap. Returns true when the migration's effect is already in place
+// and the runner should record it as applied without re-running.
+function isBaselineDriftAlreadyApplied(db: Database, file: string): boolean {
+  if (file === "072_world_books_folder.sql") {
+    const columns = db.query("PRAGMA table_info('world_books')").all() as Array<{ name: string }>;
+    return columns.some((column) => column.name === "folder");
+  }
+  return false;
+}
+
 export async function runMigrations(db: Database, migrationsDir?: string): Promise<void> {
   const dir = migrationsDir || join(import.meta.dir, "migrations");
 
@@ -224,6 +236,12 @@ export async function runMigrations(db: Database, migrationsDir?: string): Promi
 
     if (file === "068_migrate_dream_weaver_from_1_0.sql") {
       repairDreamWeaverBaselineDrift(db);
+    }
+
+    if (isBaselineDriftAlreadyApplied(db, file)) {
+      console.log(`Skipping migration: ${file} (already present from baseline)`);
+      db.run("INSERT INTO _migrations (name) VALUES (?)", [file]);
+      continue;
     }
 
     const sql = await Bun.file(join(dir, file)).text();

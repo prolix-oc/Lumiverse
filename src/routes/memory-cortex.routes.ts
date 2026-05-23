@@ -196,13 +196,13 @@ function getStoredChatMemoryHash(chat: ReturnType<typeof getChat>): string | nul
   return typeof hash === "string" && hash.trim().length > 0 ? hash : null;
 }
 
-async function buildCortexFreshnessSnapshot(
-  userId: string,
+function buildCortexFreshnessSnapshot(
   chatId: string,
   cortexConfig: memoryCortex.MemoryCortexConfig,
-): Promise<CortexFreshnessSnapshot> {
+  ltcmConfigHash: string | null,
+): CortexFreshnessSnapshot {
   return {
-    ltcmConfigHash: await chatsSvc.getCurrentChatMemoryHash(userId),
+    ltcmConfigHash,
     rebuildSignature: memoryCortex.getCortexStructuralSignature(cortexConfig),
     sourceChunkCount: getChatChunkCount(chatId),
   };
@@ -363,8 +363,9 @@ async function warmLongTermChatMemory(options: {
   force: boolean;
   allowRebuild: boolean;
   embeddings: Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>;
+  currentChatMemoryHash: string | null;
 }): Promise<WarmupComponentResult> {
-  const { userId, chatId, force, allowRebuild, embeddings } = options;
+  const { userId, chatId, force, allowRebuild, embeddings, currentChatMemoryHash } = options;
 
   if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
     return { status: "skipped", reason: "chat_vectorization_disabled" };
@@ -386,9 +387,8 @@ async function warmLongTermChatMemory(options: {
 
   if (!allowRebuild) {
     const chat = getChat(userId, chatId);
-    const currentHash = await chatsSvc.getCurrentChatMemoryHash(userId);
     const storedHash = getStoredChatMemoryHash(chat);
-    if (currentHash && storedHash !== currentHash) {
+    if (currentChatMemoryHash && storedHash !== currentChatMemoryHash) {
       return { status: "skipped", reason: "chat_memory_rebuild_deferred" };
     }
   }
@@ -430,6 +430,13 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
   const config = memoryCortex.getCortexConfig(userId);
   const allowPassiveChunkRebuild = !config.enabled || config.autoWarmup;
 
+  // Compute the LTCM config hash once and thread it through downstream helpers.
+  // Previously this was awaited 2-3× per warmup (warmLongTermChatMemory,
+  // buildCortexFreshnessSnapshot, and again inline below), each hop awaiting
+  // getEmbeddingConfig + hasEmbeddingSecret. The check-only fast path opening
+  // a chat now does a single resolve.
+  const currentChatMemoryHash = await chatsSvc.getCurrentChatMemoryHash(userId);
+
   const chatMemory = await warmLongTermChatMemory({
     userId,
     chatId,
@@ -439,6 +446,7 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
     // Cortex is also allowed to rebuild its derived state in the same flow.
     allowRebuild: force || allowPassiveChunkRebuild,
     embeddings,
+    currentChatMemoryHash,
   });
 
   const freshChat = getChat(userId, chatId);
@@ -452,7 +460,6 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
     };
   }
 
-  const currentChatMemoryHash = await chatsSvc.getCurrentChatMemoryHash(userId);
   const storedChatMemoryHash = getStoredChatMemoryHash(freshChat);
   const chatMemoryFresh = !!currentChatMemoryHash && storedChatMemoryHash === currentChatMemoryHash;
 
@@ -468,26 +475,29 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
   } else if (!force && !chatMemoryFresh) {
     cortex = { status: "skipped", reason: "chat_memory_stale" };
   } else {
-    const sidecar = resolveCortexSidecarAdapter(userId, config);
-    if (sidecar.unavailableReason) {
-      cortex = { status: "skipped", reason: sidecar.unavailableReason };
-    } else {
-      const stats = memoryCortex.getCortexUsageStats(chatId);
-      const rebuild = memoryCortex.getRebuildStatus(chatId);
-      const ingestion = memoryCortex.getIngestionStatus(chatId);
+    // Fast-path freshness check: the rebuild/ingestion in-progress probes are
+    // sync map lookups, and a stored cortex_rebuild_state stamp that still
+    // matches the current structural + LTCM signatures means we can short-
+    // circuit before touching the heavy usage-stats and coverage SQL.
+    const rebuild = memoryCortex.getRebuildStatus(chatId);
+    const ingestion = memoryCortex.getIngestionStatus(chatId);
 
-      if (rebuild?.status === "processing") {
-        cortex = { status: "skipped", reason: "rebuild_in_progress" };
-      } else if (ingestion?.status === "processing") {
-        cortex = { status: "skipped", reason: "ingestion_in_progress" };
-      } else if (stats.chunkCount === 0) {
-        cortex = { status: "skipped", reason: "no_chunks" };
-      } else if (!force && stats.chunkCount <= 2 && Math.floor(Date.now() / 1000) - freshChat.updated_at < 20) {
-        cortex = { status: "skipped", reason: "recent_chat" };
+    if (rebuild?.status === "processing") {
+      cortex = { status: "skipped", reason: "rebuild_in_progress" };
+    } else if (ingestion?.status === "processing") {
+      cortex = { status: "skipped", reason: "ingestion_in_progress" };
+    } else {
+      const snapshot = buildCortexFreshnessSnapshot(chatId, config, currentChatMemoryHash);
+      if (!force && isCortexFresh(freshChat, snapshot)) {
+        cortex = { status: "skipped", reason: "already_ready" };
       } else {
-        const snapshot = await buildCortexFreshnessSnapshot(userId, chatId, config);
-        if (!force && isCortexFresh(freshChat, snapshot)) {
-          cortex = { status: "skipped", reason: "already_ready" };
+        const sidecar = resolveCortexSidecarAdapter(userId, config);
+        if (sidecar.unavailableReason) {
+          cortex = { status: "skipped", reason: sidecar.unavailableReason };
+        } else if (snapshot.sourceChunkCount === 0) {
+          cortex = { status: "skipped", reason: "no_chunks" };
+        } else if (!force && snapshot.sourceChunkCount <= 2 && Math.floor(Date.now() / 1000) - freshChat.updated_at < 20) {
+          cortex = { status: "skipped", reason: "recent_chat" };
         } else {
           const coverage = memoryCortex.getCortexWarmupCoverage(chatId, snapshot.rebuildSignature);
           if (!force && coverage.pendingChunks === 0 && !coverage.requiresFullRebuild) {
@@ -1726,7 +1736,8 @@ app.post("/chats/:chatId/rebuild", async (c) => {
     return c.json({ status: "skipped", reason: sidecar.unavailableReason, chatId });
   }
 
-  const snapshot = await buildCortexFreshnessSnapshot(userId, chatId, cortexConfig);
+  const ltcmConfigHash = await chatsSvc.getCurrentChatMemoryHash(userId);
+  const snapshot = buildCortexFreshnessSnapshot(chatId, cortexConfig, ltcmConfigHash);
 
   // Run rebuild in the background — return immediately so Bun doesn't timeout
   startTrackedCortexRebuild({

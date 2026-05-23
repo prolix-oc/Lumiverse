@@ -173,9 +173,9 @@ export default function MigrationSettings() {
     }
   }, [migrationLogs])
 
-  // Fetch users for admin target selection
+  // Fetch users for target selection (owners and admins can both pick a target)
   useEffect(() => {
-    if (user?.role === 'admin') {
+    if (user?.role === 'admin' || user?.role === 'owner') {
       listUsers().then(setUsers).catch(() => {})
     }
   }, [user?.role, listUsers])
@@ -313,6 +313,8 @@ export default function MigrationSettings() {
 
   const filteredUsers = users.filter((u) => {
     if (u.id === user?.id) return true
+    // Owners can target any account; admins can only target user-role accounts.
+    if (user?.role === 'owner') return true
     return u.role === 'user'
   })
 
@@ -535,27 +537,21 @@ export default function MigrationSettings() {
         Select which Lumiverse account should receive the imported data.
       </p>
 
-      {user?.role === 'owner' ? (
-        <div className={styles.targetInfo}>
-          Migrating to your account ({user.name || user.username || user.email})
-        </div>
-      ) : (
-        <div className={styles.selectRow}>
-          <label className={styles.selectLabel}>Target user</label>
-          <select
-            className={styles.select}
-            value={targetUserId}
-            onChange={(e) => setTargetUserId(e.target.value)}
-          >
-            {filteredUsers.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name || u.username || u.email}
-                {u.id === user?.id ? ' (you)' : ` (${u.role})`}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+      <div className={styles.selectRow}>
+        <label className={styles.selectLabel}>Target user</label>
+        <select
+          className={styles.select}
+          value={targetUserId}
+          onChange={(e) => setTargetUserId(e.target.value)}
+        >
+          {filteredUsers.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name || u.username || u.email}
+              {u.id === user?.id ? ' (you)' : ` (${u.role})`}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <div className={styles.actions}>
         <button type="button" className={styles.btn} onClick={() => setStep('scan')}>
@@ -582,9 +578,10 @@ export default function MigrationSettings() {
         return labels[k] || k
       })
 
-    const targetLabel = user?.role === 'owner'
-      ? (user.name || user.username || 'Owner')
-      : filteredUsers.find((u) => u.id === targetUserId)?.name || targetUserId
+    const targetUser = filteredUsers.find((u) => u.id === targetUserId)
+    const targetLabel = targetUser
+      ? (targetUser.name || targetUser.username || targetUser.email || targetUserId)
+      : targetUserId
 
     return (
       <div className={styles.section}>

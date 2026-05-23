@@ -11,8 +11,12 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [focused, setFocused] = useState<string | null>(null)
+  const [subtitle] = useState(() => (Math.random() < 0.076 ? 'Enter the goon' : 'Enter the loom'))
   const login = useStore((s) => s.login)
   const authError = useStore((s) => s.authError)
+  const isAuthenticated = useStore((s) => s.isAuthenticated)
+  const isAuthLoading = useStore((s) => s.isAuthLoading)
+  const checkSession = useStore((s) => s.checkSession)
   const navigate = useNavigate()
   const formRef = useRef<HTMLFormElement>(null)
   const visibleError = error ?? authError
@@ -32,6 +36,19 @@ export default function LoginPage() {
     }
   }
 
+  // Verify any existing session on mount — if valid, skip the form
+  useEffect(() => {
+    if (!isAuthenticated) {
+      checkSession()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/', { replace: true })
+    }
+  }, [isAuthenticated, navigate])
+
   // Scroll focused input into view on mobile virtual keyboard
   useEffect(() => {
     if (!focused) return
@@ -49,6 +66,15 @@ export default function LoginPage() {
       window.visualViewport?.removeEventListener('resize', scrollFocusedInput)
     }
   }, [focused])
+
+  // Don't flash the form while we're verifying the session, or if we're about to redirect
+  if (isAuthLoading || isAuthenticated) {
+    return (
+      <div className={styles.checking} role="status" aria-live="polite" aria-busy="true">
+        <div className={styles.checkingSpinner} aria-label="Checking session" />
+      </div>
+    )
+  }
 
   return (
     <LazyMotion features={domAnimation} strict={false}>
@@ -95,7 +121,7 @@ export default function LoginPage() {
             </svg>
           </div>
           <h1 className={styles.logoTitle}>Lumiverse</h1>
-          <p className={styles.logoSubtitle}>{Math.random() < 0.076 ? 'Enter the goon' : 'Enter the loom'}</p>
+          <p className={styles.logoSubtitle}>{subtitle}</p>
         </motion.div>
 
         {/* Card */}
@@ -119,10 +145,10 @@ export default function LoginPage() {
                 <input
                   id="username"
                   name="username"
-                  className={styles.input}
+                  className={clsx(styles.input, styles.inputLowercase)}
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => setUsername(e.target.value.toLowerCase())}
                   onFocus={() => setFocused('username')}
                   onBlur={() => setFocused(null)}
                   autoComplete="username"

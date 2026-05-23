@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { wsClient } from './client'
+import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { hasUnsavedSettings } from '@/store/slices/settings'
@@ -18,6 +18,7 @@ import {
 } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
+import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -110,6 +111,13 @@ export function useWebSocket() {
   const activeChatId = useStore((s) => s.activeChatId)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
+  /**
+   * Set to true when the socket closes after we'd already had a fully healthy
+   * connection — i.e. an actual drop, not the initial connect. The next pong
+   * that completes the recovery will trigger one bundle-update check and clear
+   * the flag, so checks only fire on reconnect-after-drop.
+   */
+  const pendingReconnectCheckRef = useRef(false)
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -173,6 +181,38 @@ export function useWebSocket() {
     wsClient.connect()
 
     const unsubs = [
+      // Connection lifecycle — drives the full-screen "Server connection lost"
+      // overlay. Each disconnect resets all three signals; reconnect flips them
+      // back to true (socket open → CONNECTED with role → pong received).
+      wsClient.on(WS_OPEN, () => {
+        store.getState().setWsConnected(true)
+      }),
+      wsClient.on(WS_CLOSE, () => {
+        store.getState().setWsConnected(false)
+        // If the user had a working connection before this close, remember to
+        // ask the SW for a fresh bundle once we recover. Initial-load failures
+        // (wsHasEverConnected still false) shouldn't trigger an update check.
+        if (store.getState().wsHasEverConnected) {
+          pendingReconnectCheckRef.current = true
+        }
+      }),
+      wsClient.on(WS_PONG, () => {
+        store.getState().setWsRoundTripVerified(true)
+        if (pendingReconnectCheckRef.current) {
+          pendingReconnectCheckRef.current = false
+          checkForBundleUpdate()
+        }
+      }),
+      wsClient.on(WS_AUTH_ERROR, () => {
+        // Server has explicitly rejected our session — the cookie is invalid
+        // (e.g. logged out elsewhere, server restart with cleared sessions).
+        // Re-check the session so AuthGuard can redirect to /login instead of
+        // leaving the user stuck behind the connection-lost overlay forever.
+        store.getState().checkSession().catch(() => {
+          /* AuthGuard reads isAuthenticated; checkSession sets it on failure */
+        })
+      }),
+
       wsClient.on(EventType.MESSAGE_SENT, (payload: MessageSentPayload) => {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
@@ -712,11 +752,16 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.CONNECTED, (payload: { role?: string }) => {
-        // Reconcile user role from the backend's DB-authoritative source.
-        // This ensures the frontend never falls out of sync with the actual
-        // role (e.g. if the HTTP session response omitted it).
+        // The client emits CONNECTED twice per connection: once locally from
+        // onopen with an empty payload, and once when the backend's CONNECTED
+        // message arrives (carrying the user role). Only the second one means
+        // auth has been verified server-side — gate auth-sync on `role`.
         if (payload?.role) {
           store.getState().reconcileRole(payload.role)
+          store.getState().setWsAuthSynced(true)
+          // Immediately verify round-trip so the overlay can dismiss without
+          // waiting up to 30s for the next scheduled ping.
+          wsClient.forcePing()
         }
         syncExtensions(true)
 

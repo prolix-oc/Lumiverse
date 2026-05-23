@@ -1280,6 +1280,32 @@ export interface ChatHeadsSlice {
   reconcileChatHeads: () => Promise<void>
 }
 
+// ---- Connection Slice ----
+export interface ConnectionSlice {
+  /** True while the WebSocket is in OPEN state. */
+  wsConnected: boolean
+  /** True after the backend CONNECTED event (with role) has been received since the last open. */
+  wsAuthSynced: boolean
+  /** True after a pong has been received since the last open — confirms the round-trip works. */
+  wsRoundTripVerified: boolean
+  /**
+   * Flips to true the first time all three healthy signals coincide. Stays true for the rest of
+   * the session so the connection-lost overlay only appears AFTER an initial healthy connection.
+   */
+  wsHasEverConnected: boolean
+  /**
+   * True once a new service worker bundle has been detected (post-reconnect bundle check).
+   * Keeps the connection-lost overlay mounted with "Updating…" messaging until the page reloads
+   * — the existing controllerchange handler in main.tsx performs the reload itself.
+   */
+  wsUpdatePending: boolean
+  setWsConnected: (connected: boolean) => void
+  setWsAuthSynced: (synced: boolean) => void
+  setWsRoundTripVerified: (verified: boolean) => void
+  setWsUpdatePending: (pending: boolean) => void
+  resetConnectionState: () => void
+}
+
 export interface DatabankSlice {
   databanks: import('@/api/databank').Databank[]
   databankDocuments: import('@/api/databank').DatabankDocument[]
@@ -1329,4 +1355,5 @@ export type AppStore = ChatSlice &
   OperatorSlice &
   FloatingAvatarSlice &
   ChatHeadsSlice &
-  DatabankSlice
+  DatabankSlice &
+  ConnectionSlice
