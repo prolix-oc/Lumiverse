@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import * as linkSvc from "../services/lumihub-link.service";
 import { getLumiHubClient } from "../lumihub/client";
-import { validateHost, SSRFError } from "../utils/safe-fetch";
 
 // --- PKCE state storage (in-memory, same pattern as spindle/oauth-state.ts) ---
 
@@ -96,11 +95,7 @@ lumihubCallbackRoute.get("/callback", async (c) => {
       if (wsParsed.protocol !== "ws:" && wsParsed.protocol !== "wss:") {
         return c.html(errorHtml("Invalid WebSocket URL", "LumiHub returned an unsupported WebSocket protocol."), 400);
       }
-      await validateHost(wsParsed.hostname);
     } catch (err: any) {
-      if (err instanceof SSRFError) {
-        return c.html(errorHtml("Blocked WebSocket URL", err.message), 400);
-      }
       return c.html(errorHtml("Invalid WebSocket URL", "LumiHub returned an unparseable WebSocket URL."), 400);
     }
 
@@ -166,15 +161,6 @@ lumihubRoutes.post("/link", requireOwner, async (c) => {
   if (parsedHub.protocol !== "https:" && parsedHub.protocol !== "http:") {
     return c.json({ error: "lumihub_url must use http or https" }, 400);
   }
-  try {
-    await validateHost(parsedHub.hostname);
-  } catch (err: any) {
-    if (err instanceof SSRFError) {
-      return c.json({ error: err.message }, 400);
-    }
-    throw err;
-  }
-
   // Generate PKCE
   const { codeVerifier, codeChallenge } = await linkSvc.generatePKCE();
 
