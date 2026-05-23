@@ -1,9 +1,19 @@
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { WifiOff, Download } from 'lucide-react'
 import { useStore } from '@/store'
 import { Spinner } from './Spinner'
 import styles from './ConnectionLostOverlay.module.css'
+
+/**
+ * Grace window after a hidden→visible transition where we suppress the
+ * overlay so iOS PWAs (and any other browser that silently kills the WS during
+ * suspension) can finish their recovery dance without flashing the screen at
+ * the user. Tuned to comfortably cover: fast-watchdog timeout (3s) + scheduled
+ * reconnect delay (3s) + handshake (~200ms) = ~6.2s worst case.
+ */
+const RESUME_GRACE_MS = 7_000
 
 /**
  * Full-screen, non-dismissable overlay shown when the WebSocket connection to
@@ -25,10 +35,47 @@ export default function ConnectionLostOverlay() {
   const wsHasEverConnected = useStore((s) => s.wsHasEverConnected)
   const wsUpdatePending = useStore((s) => s.wsUpdatePending)
 
+  // Grace state used only for hidden→visible recoveries — see RESUME_GRACE_MS.
+  const [inResumeGrace, setInResumeGrace] = useState(false)
+  // Snapshot whether the overlay was visible right before the page went hidden.
+  // If it was, we DON'T grant grace on resume — hiding an already-shown overlay
+  // for 7s only to re-show it would be more jarring than the current behavior.
+  const overlayWasShowingAtHideRef = useRef(false)
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const onVisChange = () => {
+      if (document.visibilityState === 'hidden') {
+        const state = useStore.getState()
+        const healthyNow = state.wsConnected && state.wsAuthSynced && state.wsRoundTripVerified
+        overlayWasShowingAtHideRef.current =
+          state.isAuthenticated && state.wsHasEverConnected && !healthyNow
+      } else if (document.visibilityState === 'visible') {
+        if (!overlayWasShowingAtHideRef.current) {
+          setInResumeGrace(true)
+          if (timer) clearTimeout(timer)
+          timer = setTimeout(() => setInResumeGrace(false), RESUME_GRACE_MS)
+        }
+        overlayWasShowingAtHideRef.current = false
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisChange)
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+
   const healthy = wsConnected && wsAuthSynced && wsRoundTripVerified
   // wsUpdatePending forces the overlay to stay up through the bundle swap, so
   // the user never sees a flash of normal UI before the page reloads.
-  const visible = isAuthenticated && (wsUpdatePending || (wsHasEverConnected && !healthy))
+  // wsUpdatePending also bypasses the resume grace — an actual update needs to
+  // be communicated even if we just resumed from the background.
+  const visible =
+    isAuthenticated &&
+    (wsUpdatePending || (wsHasEverConnected && !healthy && !inResumeGrace))
 
   const title = wsUpdatePending ? 'Updating Lumiverse' : 'Server connection lost'
   const message = wsUpdatePending

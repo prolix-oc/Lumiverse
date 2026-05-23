@@ -12,6 +12,14 @@ export const WS_AUTH_ERROR = '__ws_auth_error'
 /** If we send a ping and don't see a pong within this window, treat the socket as dead. */
 const PONG_TIMEOUT_MS = 10_000
 
+/**
+ * Shorter watchdog used when the page returns from hidden — iOS PWAs and some
+ * desktop browsers silently kill the WS during suspension, and a snappier
+ * timeout here keeps the connection-lost overlay's grace window from
+ * overflowing on resume.
+ */
+const RESUME_PONG_TIMEOUT_MS = 3_000
+
 export class WebSocketClient {
   private ws: WebSocket | null = null
   private handlers = new Map<string, Set<EventHandler>>()
@@ -22,6 +30,8 @@ export class WebSocketClient {
   private shouldReconnect = true
   private visibilityCleanup: Array<() => void> = []
   private focusedChatId: string | null = null
+  /** Previous visibility state — used to detect hidden→visible transitions. */
+  private wasVisible = false
 
   constructor(url?: string) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -144,13 +154,13 @@ export class WebSocketClient {
     this.clearPongWatchdog()
   }
 
-  private sendPingNow() {
+  private sendPingNow(timeoutMs: number = PONG_TIMEOUT_MS) {
     if (this.ws?.readyState !== WebSocket.OPEN) return
     this.ws.send(JSON.stringify({ type: 'ping' }))
-    this.armPongWatchdog()
+    this.armPongWatchdog(timeoutMs)
   }
 
-  private armPongWatchdog() {
+  private armPongWatchdog(timeoutMs: number = PONG_TIMEOUT_MS) {
     this.clearPongWatchdog()
     this.pongWatchdog = setTimeout(() => {
       this.pongWatchdog = null
@@ -162,7 +172,7 @@ export class WebSocketClient {
       } catch {
         /* noop */
       }
-    }, PONG_TIMEOUT_MS)
+    }, timeoutMs)
   }
 
   private clearPongWatchdog() {
@@ -181,6 +191,11 @@ export class WebSocketClient {
 
   private startVisibilityTracking() {
     this.stopVisibilityTracking()
+
+    // Seed wasVisible with the current state so the first sendVisibility()
+    // doesn't fire a spurious resume-check ping. onopen → forcePing already
+    // verifies round-trip for the initial connection.
+    this.wasVisible = this.isDocumentVisible()
 
     const handler = () => this.sendVisibility()
     this.visibilityHandler = handler
@@ -215,6 +230,13 @@ export class WebSocketClient {
     const visible = !forceHidden && this.isDocumentVisible()
     this.send({ type: 'visibility', visible })
     this.sendStreamFocus(forceHidden)
+    // Hidden→visible transition: iOS aggressively kills WS in suspended PWAs.
+    // Send a fast-watchdog ping so we detect a dead socket within ~3s, instead
+    // of waiting up to a full 30s ping window before noticing.
+    if (visible && !this.wasVisible) {
+      this.sendPingNow(RESUME_PONG_TIMEOUT_MS)
+    }
+    this.wasVisible = visible
   }
 
   private sendStreamFocus(forceHidden = false) {
