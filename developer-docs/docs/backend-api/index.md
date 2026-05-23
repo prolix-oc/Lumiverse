@@ -55,4 +55,5 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Frontend Process Lifecycle](frontend-processes.md) | Free | Spawn and supervise long-lived frontend-side controllers |
 | [Backend Process Lifecycle](backend-processes.md) | Free | Spawn and supervise isolated backend subprocesses |
 | [Commands](commands.md) | Free | Register custom commands in the command palette (Cmd/Ctrl+K) |
+| [UI Automation](ui-automation.md) | Free | Enumerate drawer / settings tabs and navigate the user to a specific surface |
 | [Version](version.md) | Free | Read the backend and frontend semantic versions |
