@@ -1213,21 +1213,31 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
 
-  // Clean build artifacts and installed dependencies so git pull succeeds.
-  // We don't read stdout for these — ignore it to reduce pipe overhead.
-  await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
-  await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
+  // Read manifest up-front so we can honor `dev_mode` before touching the
+  // working tree. Extensions with `dev_mode: true` keep their local repo
+  // contents intact — we skip the git checkout/clean/pull and just rebuild
+  // + relaunch from whatever the developer has on disk.
+  const initialManifest = await readManifest(identifier);
+  const devMode = (initialManifest as { dev_mode?: boolean }).dev_mode === true;
 
-  const pullProc = await spawnAsync(["git", "pull"], {
-    cwd: repo,
-    timeoutMs: 60_000,
-  });
-  if (pullProc.exitCode !== 0) {
-    throw new Error(`git pull failed: ${pullProc.stderr}`);
+  if (!devMode) {
+    // Clean build artifacts and installed dependencies so git pull succeeds.
+    // We don't read stdout for these — ignore it to reduce pipe overhead.
+    await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
+    await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
+
+    const pullProc = await spawnAsync(["git", "pull"], {
+      cwd: repo,
+      timeoutMs: 60_000,
+    });
+    if (pullProc.exitCode !== 0) {
+      throw new Error(`git pull failed: ${pullProc.stderr}`);
+    }
   }
 
-  // Re-read manifest
-  const manifest = await readManifest(identifier);
+  // Re-read manifest — in non-dev mode the pull may have modified it; in
+  // dev mode we already have the current version.
+  const manifest = devMode ? initialManifest : await readManifest(identifier);
 
   const db = getDb();
   const existing = db
