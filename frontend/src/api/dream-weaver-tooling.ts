@@ -7,6 +7,7 @@ export interface ToolCatalogEntry {
   category: "soul" | "world" | "lifecycle";
   userInvocable: boolean;
   slashCommand: string | null;
+  aliases: string[];
   description: string;
   conflictMode: "overwrite" | "append";
 }

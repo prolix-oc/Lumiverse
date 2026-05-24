@@ -2,20 +2,23 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { ArrowUpRight, Globe, Send, Sparkles, Wrench } from "lucide-react";
 import { parseSlash } from "../../lib/slash-parser";
 import type { ToolCatalogEntry } from "@/api/dream-weaver-tooling";
+import type { DreamWeaverSession } from "@/api/dream-weaver";
 import styles from "./Composer.module.css";
 
 interface Props {
   catalog: ToolCatalogEntry[];
   hasSource: boolean;
+  workspaceKind: DreamWeaverSession["workspace_kind"];
   onSubmit: (tool: string, rawArgs: string, raw: string) => void;
 }
 
-export function Composer({ catalog, hasSource, onSubmit }: Props) {
+export function Composer({ catalog, hasSource, workspaceKind, onSubmit }: Props) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [tipIndex, setTipIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const suggestionsId = useId();
 
@@ -95,6 +98,7 @@ export function Composer({ catalog, hasSource, onSubmit }: Props) {
     setValue("");
     setMenuDismissed(false);
     setActiveIndex(0);
+    setTipIndex((i) => i + 1);
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -142,6 +146,7 @@ export function Composer({ catalog, hasSource, onSubmit }: Props) {
           </div>
           {suggestions.map((tool, index) => {
             const command = tool.slashCommand ?? `/${tool.name}`;
+            const aliasLabel = tool.aliases?.length ? ` (${tool.aliases.join(", ")})` : "";
             return (
               <button
                 id={`${suggestionsId}-option-${tool.name}`}
@@ -161,7 +166,7 @@ export function Composer({ catalog, hasSource, onSubmit }: Props) {
                   {tool.name === "help" ? <ArrowUpRight size={13} /> : getCategoryIcon(tool.category)}
                 </span>
                 <span className={styles.suggestionMain}>
-                  <span className={styles.suggestionCommand}>{command}</span>
+                  <span className={styles.suggestionCommand}>{command}{aliasLabel}</span>
                   <span className={styles.suggestionDescription}>{tool.description}</span>
                 </span>
                 <span className={styles.suggestionCategory}>{tool.category}</span>
@@ -191,7 +196,7 @@ export function Composer({ catalog, hasSource, onSubmit }: Props) {
               setActiveIndex(0);
             }}
             onKeyDown={onKey}
-            placeholder="/dream describe the setup, or run /name. Shift+Enter for a new line."
+            placeholder={getPlaceholder(workspaceKind, hasSource, tipIndex)}
             className={styles.input}
             rows={1}
             aria-controls={showSuggestions ? suggestionsId : undefined}
@@ -244,12 +249,16 @@ function getCommandMatchScore(tool: ToolCatalogEntry, term: string): number {
   const displayName = tool.displayName.toLowerCase();
   const compactDisplayName = displayName.replace(/\s+/g, "");
   const compactTerm = term.replace(/[_\s-]+/g, "");
+  const aliasTexts = (tool.aliases ?? []).map((a) => a.replace(/^\//, "").toLowerCase());
 
   if (command === term || name === term || compactName === compactTerm) return 0;
+  if (aliasTexts.some((a) => a === term || a === compactTerm)) return 0;
   if (command.startsWith(term)) return 1;
+  if (aliasTexts.some((a) => a.startsWith(term) || a.startsWith(compactTerm))) return 1;
   if (name.startsWith(term) || compactName.startsWith(compactTerm)) return 2;
   if (displayName.startsWith(term) || compactDisplayName.startsWith(compactTerm)) return 3;
   if (command.includes(term)) return 4;
+  if (aliasTexts.some((a) => a.includes(term) || a.includes(compactTerm))) return 4;
   if (name.includes(term) || compactName.includes(compactTerm)) return 5;
   if (displayName.includes(term) || compactDisplayName.includes(compactTerm)) return 6;
   return Number.POSITIVE_INFINITY;
@@ -276,4 +285,32 @@ function getCategoryRank(category: ToolCatalogEntry["category"]): number {
 
 function requiresSource(tool: ToolCatalogEntry): boolean {
   return tool.name !== "help" && tool.name !== "dream_source";
+}
+
+const PLACEHOLDER_TIPS: Record<string, string[]> = {
+  character: [
+    "/dream describe the setup, or run /name",
+    "/dream describe the setup, then try /appearance",
+    "/personality add guidance, or let the AI decide",
+    "/scenario set the current situation",
+    "/first_message generate the opening",
+    "/voice shape how the character speaks",
+    "/help to see all available commands",
+  ],
+  scenario: [
+    "/dream describe the setup, or run /title",
+    "/dream describe the setup, then try /premise",
+    "/opening_scene generate the opening",
+    "/personality define the main character",
+    "/appearance describe the main character's look",
+    "/voice shape how the character speaks",
+    "/help to see all available commands",
+  ],
+};
+
+function getPlaceholder(workspaceKind: DreamWeaverSession["workspace_kind"], hasSource: boolean, tipIndex: number): string {
+  const kind = workspaceKind === "scenario" ? "scenario" : "character";
+  const tips = PLACEHOLDER_TIPS[kind];
+  const idx = hasSource ? tipIndex % tips.length : 0;
+  return `${tips[idx]}. Shift+Enter for a new line.`;
 }

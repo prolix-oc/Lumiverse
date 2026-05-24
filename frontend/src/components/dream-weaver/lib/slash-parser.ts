@@ -17,7 +17,10 @@ export function parseSlash(input: string, catalog: ToolCatalogEntry[]): ParseRes
   const tool = catalog.find(
     (t) =>
       t.userInvocable &&
-      (t.slashCommand === `/${name}` || t.name === name || t.slashCommand === `/add_${name.replace(/^add_/, "")}`),
+      (t.slashCommand === `/${name}` ||
+        t.name === name ||
+        t.slashCommand === `/add_${name.replace(/^add_/, "")}` ||
+        t.aliases?.includes(`/${name}`)),
   );
   if (!tool) return { ok: false, error: `Unknown command: /${name}` };
   return { ok: true, tool, rawArgs };

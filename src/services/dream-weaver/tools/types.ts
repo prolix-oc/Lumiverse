@@ -9,6 +9,7 @@ export interface DreamWeaverTool<TOutput = unknown> {
   category: "soul" | "world" | "lifecycle";
   userInvocable: boolean;
   slashCommand?: string;
+  aliases?: string[];
   description: string;
   prompt: string;
   validate: (input: unknown) => ValidateResult<TOutput>;

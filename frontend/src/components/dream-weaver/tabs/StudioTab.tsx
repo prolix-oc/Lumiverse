@@ -79,7 +79,7 @@ export function StudioTab({ sessionId, hasSource, workspaceKind, progressFields,
         <SuiteRunner suite={suite} workspaceKind={workspaceKind} onDismiss={() => setSuiteVisible(false)} />
       )}
       <ChatLog messages={messages} onAccept={acceptAndRefresh} onReject={rejectAndRefresh} onCancel={cancel} onRetry={onRetry} onSaveDream={saveDream} />
-      <Composer catalog={catalog} hasSource={hasSource} onSubmit={onSubmit} />
+      <Composer catalog={catalog} hasSource={hasSource} workspaceKind={workspaceKind} onSubmit={onSubmit} />
     </div>
   );
 }

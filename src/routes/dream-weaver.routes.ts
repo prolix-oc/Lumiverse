@@ -83,7 +83,9 @@ function buildToolHelpText(): string {
     "",
     ...tools.map((tool) => {
       const command = tool.slashCommand ?? `/${tool.name}`;
-      return `${command} — ${tool.displayName}: ${tool.description}`;
+      const aliases = (tool as any).aliases as string[] | undefined;
+      const aliasSuffix = aliases?.length ? ` (also: ${aliases.join(", ")})` : "";
+      return `${command} — ${tool.displayName}: ${tool.description}${aliasSuffix}`;
     }),
   ];
   return lines.join("\n");
@@ -163,6 +165,7 @@ app.get("/tools", (c) => {
     category: t.category,
     userInvocable: t.userInvocable,
     slashCommand: t.slashCommand ?? null,
+    aliases: (t as any).aliases ?? [],
     description: t.description,
     conflictMode: t.conflictMode,
   }));

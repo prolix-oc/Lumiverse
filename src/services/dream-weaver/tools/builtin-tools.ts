@@ -37,6 +37,7 @@ const setName: DreamWeaverTool<{ name: string }> = {
   category: "soul",
   userInvocable: true,
   slashCommand: "/name",
+  aliases: ["/title"],
   description: "Generate a grounded character name from the dream.",
   prompt: `Tool: set_name. Pick a single name that fits the dream. Output JSON: { "name": "<string>" }.`,
   validate(input): ValidateResult<{ name: string }> {
@@ -113,6 +114,7 @@ const setScenario: DreamWeaverTool<{ scenario: string }> = {
   category: "soul",
   userInvocable: true,
   slashCommand: "/scenario",
+  aliases: ["/premise"],
   description: "Current situation, tension, relationship to {{user}}.",
   prompt: `Tool: set_scenario. Write the current situation, tension, and relationship to {{user}}. 1-2 paragraphs. Output JSON: { "scenario": "<string>" }.`,
   validate(input): ValidateResult<{ scenario: string }> {
@@ -184,6 +186,7 @@ const setFirstMessage: DreamWeaverTool<{ first_mes: string }> = {
   category: "soul",
   userInvocable: true,
   slashCommand: "/first_message",
+  aliases: ["/opening_scene", "/opening"],
   description: "Opening message, beginning with action or dialogue.",
   prompt: `Tool: set_first_message. Write the character's opening message — 3-5 paragraphs, beginning with action or dialogue, NOT scene-setting. Output JSON: { "first_mes": "<string>" }.`,
   validate(input): ValidateResult<{ first_mes: string }> {
