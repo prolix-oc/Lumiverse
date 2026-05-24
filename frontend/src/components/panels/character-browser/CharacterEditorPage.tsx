@@ -15,7 +15,7 @@ import { useStore } from '@/store'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
 import { uuidv7 } from '@/lib/uuid'
 import useImageCropFlow from '@/hooks/useImageCropFlow'
-import { getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
+import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import ImageCropModal from '@/components/shared/ImageCropModal'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
@@ -873,7 +873,7 @@ export default function CharacterEditorPage() {
                   >
                     <LazyImage
                       key={avatarKey}
-                      src={getCharacterAvatarLargeUrl(character) ?? ''}
+                      src={getCharacterAvatarThumbUrl(character) ?? ''}
                       alt={character.name}
                       className={styles.avatarImg}
                       fallback={
