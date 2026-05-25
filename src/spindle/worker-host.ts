@@ -1738,6 +1738,10 @@ export class WorkerHost {
     // Clear theme overrides
     this.clearThemeOverrides();
 
+    // Clear chat-style-mode claims, broadcasts null-chatId per affected user
+    // so frontend stores drop this extension's relaxation claims.
+    this.clearChatStyleModes();
+
     // Unregister interceptors and context handlers
     interceptorPipeline.unregisterByExtension(this.extensionId);
     contextHandlerChain.unregisterByExtension(this.extensionId);
@@ -2998,6 +3002,10 @@ export class WorkerHost {
         break;
       case "image_gen_models":
         this.handleImageGenModels(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      // ─── Chat style mode (gated: "app_manipulation") ────────────────────
+      case "chat_set_style_mode":
+        this.handleChatSetStyleMode(msg.requestId, msg.chatId, msg.mode, msg.userId);
         break;
       // ─── Theme (gated: "app_manipulation") ──────────────────────────────
       case "theme_apply":
@@ -10320,6 +10328,101 @@ export class WorkerHost {
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
+  }
+
+  // ─── Chat style mode (gated: "app_manipulation") ────────────────────
+
+  /** Per-user chat-style-mode claims, outer key userId, inner key chatId.
+   *  Bucketed by user so dispose can emit cleanup events per affected user. */
+  private chatStyleModes = new Map<string, Map<string, "bounded" | "extension-relaxed">>();
+
+  private handleChatSetStyleMode(
+    requestId: string,
+    chatId: unknown,
+    mode: unknown,
+    userId?: string,
+  ): void {
+    if (!this.hasPermission("app_manipulation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Chat style mode requires the app_manipulation permission`,
+      });
+      return;
+    }
+    if (typeof chatId !== "string" || chatId.length === 0) {
+      this.postToWorker({ type: "response", requestId, error: "chatId must be a non-empty string" });
+      return;
+    }
+    if (mode !== "bounded" && mode !== "extension-relaxed") {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `mode must be 'bounded' or 'extension-relaxed', got ${JSON.stringify(mode)}`,
+      });
+      return;
+    }
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) {
+        this.postToWorker({
+          type: "response",
+          requestId,
+          error: "userId is required for operator-scoped extensions",
+        });
+        return;
+      }
+      this.enforceScopedUser(resolvedUserId);
+
+      let userMap = this.chatStyleModes.get(resolvedUserId);
+      if (mode === "bounded") {
+        if (userMap) {
+          userMap.delete(chatId);
+          if (userMap.size === 0) this.chatStyleModes.delete(resolvedUserId);
+        }
+      } else {
+        if (!userMap) {
+          userMap = new Map();
+          this.chatStyleModes.set(resolvedUserId, userMap);
+        }
+        userMap.set(chatId, mode);
+      }
+
+      eventBus.emit(
+        EventType.SPINDLE_CHAT_STYLE_MODE,
+        {
+          extensionId: this.extensionId,
+          extensionName: this.manifest.name,
+          chatId,
+          mode,
+        },
+        resolvedUserId,
+      );
+
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message || "Chat style mode set failed" });
+    }
+  }
+
+  /** Called on worker shutdown to clear chat-style-mode claims. Emits one
+   *  null-chatId event per affected user so frontend stores drop this
+   *  extension's claims without per-chat enumeration. */
+  clearChatStyleModes(): void {
+    if (this.chatStyleModes.size === 0) return;
+    for (const userId of this.chatStyleModes.keys()) {
+      eventBus.emit(
+        EventType.SPINDLE_CHAT_STYLE_MODE,
+        {
+          extensionId: this.extensionId,
+          extensionName: this.manifest.name,
+          chatId: null,
+          mode: "bounded",
+        },
+        userId,
+      );
+    }
+    this.chatStyleModes.clear();
   }
 
   // ─── Theme (gated: "app_manipulation") ──────────────────────────────

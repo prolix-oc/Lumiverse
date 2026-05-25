@@ -189,6 +189,14 @@
   backdrop-filter: none;
 }
 
+:global([data-style-mode='extension-relaxed']) .streaming {
+  will-change: opacity;
+}
+
+:global([data-style-mode='extension-relaxed']) .card {
+  contain: style;
+}
+
 /* ── Bubble inner content ── */
 .bubble {
   flex: 1;

@@ -28,6 +28,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
   extensionThemeOverrides: {},
   mutedExtensionThemes: loadMutedThemes(),
+  chatStyleModes: {},
   extensionOperationStatus: null,
   bulkUpdateStatus: null,
   spindlePrivileged: false,
@@ -100,6 +101,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     await spindleApi.remove(id)
     spindleApi.clearManifestCache(id)
     await unloadFrontendExtension(id)
+    get().clearExtensionChatStyleModes(id)
     set((state) => {
       const { [id]: _o, ...overridesRest } = state.extensionThemeOverrides
       const { [id]: _m, ...mutedRest } = state.mutedExtensionThemes
@@ -133,6 +135,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   disableExtension: async (id: string) => {
     await spindleApi.disable(id)
     await unloadFrontendExtension(id)
+    get().clearExtensionChatStyleModes(id)
     set((state) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, enabled: false, status: 'stopped' as const } : e
@@ -319,6 +322,57 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
 
   clearAllExtensionThemeOverrides: () => {
     set({ extensionThemeOverrides: {} })
+  },
+
+  setChatStyleMode: (chatId: string, extensionId: string, mode: 'bounded' | 'extension-relaxed') => {
+    set((state) => {
+      const current = state.chatStyleModes[chatId] ?? {}
+      const hasClaim = extensionId in current
+      if (mode === 'bounded') {
+        if (!hasClaim) return state
+        const { [extensionId]: _, ...remaining } = current
+        const nextBucket = remaining
+        if (Object.keys(nextBucket).length === 0) {
+          const { [chatId]: __, ...rest } = state.chatStyleModes
+          return { chatStyleModes: rest }
+        }
+        return { chatStyleModes: { ...state.chatStyleModes, [chatId]: nextBucket } }
+      }
+      if (current[extensionId] === mode) return state
+      return {
+        chatStyleModes: {
+          ...state.chatStyleModes,
+          [chatId]: { ...current, [extensionId]: mode },
+        },
+      }
+    })
+  },
+
+  clearChatStyleMode: (chatId: string) => {
+    set((state) => {
+      if (!(chatId in state.chatStyleModes)) return state
+      const { [chatId]: _, ...rest } = state.chatStyleModes
+      return { chatStyleModes: rest }
+    })
+  },
+
+  clearExtensionChatStyleModes: (extensionId: string) => {
+    set((state) => {
+      let mutated = false
+      const next: Record<string, Record<string, 'extension-relaxed'>> = {}
+      for (const [chatId, bucket] of Object.entries(state.chatStyleModes)) {
+        if (!(extensionId in bucket)) {
+          next[chatId] = bucket
+          continue
+        }
+        mutated = true
+        const { [extensionId]: _, ...remaining } = bucket
+        if (Object.keys(remaining).length > 0) {
+          next[chatId] = remaining as Record<string, 'extension-relaxed'>
+        }
+      }
+      return mutated ? { chatStyleModes: next } : state
+    })
   },
 
   muteExtensionTheme: (extensionId: string) => {

@@ -59,6 +59,10 @@
   contain: layout style;
 }
 
+.virtualRow[data-style-mode='extension-relaxed'] {
+  contain: style;
+}
+
 .virtualRow:not([data-item-type='messageFooter']):not([data-item-type='bottom']) {
   padding-bottom: 8px;
 }

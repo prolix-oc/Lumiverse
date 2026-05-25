@@ -29,6 +29,7 @@
   padding: 18px 12px 14px;
   overflow-y: auto;
   overflow-x: hidden;
+  pointer-events: auto;
   background:
     linear-gradient(180deg, var(--lcs-glass-char-tint, rgba(100, 120, 255, 0.03)) 0%, transparent 40%),
     var(--lcs-glass-bg, rgba(18, 16, 28, 0.55));
