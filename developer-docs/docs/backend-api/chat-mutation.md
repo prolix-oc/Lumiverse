@@ -93,6 +93,7 @@ const isHidden = await spindle.chat.isMessageHidden(chatId, messageId)
 | `setMessageHidden(chatId, messageId, hidden)` | `Promise<void>` | Toggle the `hidden` flag on one message |
 | `setMessagesHidden(chatId, messageIds, hidden)` | `Promise<void>` | Bulk variant. Up to 500 IDs per call. |
 | `isMessageHidden(chatId, messageId)` | `Promise<boolean>` | Read the current hidden flag |
+| `setStyleMode(chatId, mode, userId?)` | `Promise<void>` | Per-chat CSS containment mode. Requires `app_manipulation`, see [Per-Chat Style Mode](#per-chat-style-mode). |
 
 ## Append And Generate
 
@@ -241,3 +242,30 @@ Messages created via `appendMessage` use the `role` field to set `is_user` and `
 | `"system"` | `false` | `"System"` |
 
 Extension metadata is stored in the message's `extra.spindle_metadata` field.
+
+## Per-Chat Style Mode
+
+!!! warning "Permission required: `app_manipulation`"
+
+Opt a chat out of the host's CSS containment sandbox so card-authored `position: fixed` content paints at viewport scope instead of resolving against the message bubble's containing block.
+
+```ts
+await spindle.chat.setStyleMode(chatId, 'extension-relaxed', userId)
+// later, to revert:
+await spindle.chat.setStyleMode(chatId, 'bounded', userId)
+```
+
+| Mode | Behavior |
+|------|----------|
+| `'bounded'` (default) | Virtualized rows carry `transform: translateY(...)`, bubbles carry `contain: layout style paint`. `position: fixed` descendants are trapped at bubble coordinates per CSS spec. |
+| `'extension-relaxed'` | Rows switch to `top: Npx`, bubbles drop to `contain: style`, streaming `will-change` drops `transform`. `position: fixed` descendants escape to the viewport. |
+
+State is held per-chat in the frontend store, not persisted to the database. The extension re-sets on each chat-open (or `SETTINGS_UPDATED activeChatId`) for chats it wants relaxed. When the extension is disabled, uninstalled, or its worker stops, all of its claims are dropped automatically.
+
+Multiple extensions can claim the same chat. A chat is effectively `'extension-relaxed'` if at least one claimant has set that mode. The `'bounded'` call removes that extension's claim without affecting others.
+
+Frontend reflects the change via the `SPINDLE_CHAT_STYLE_MODE` WS event (see [Events](events.md)).
+
+### Trade-offs
+
+Relaxed-mode rows position via `top` instead of `transform`, so each row-position update triggers a layout pass rather than a compositor-only update. For typical chat-list sizes this is imperceptible. For fast flick-scroll on very long chats it may be measurable. Use this mode only for chats whose content genuinely needs viewport-scope rendering.

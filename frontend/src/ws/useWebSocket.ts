@@ -1117,6 +1117,18 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.SPINDLE_CHAT_STYLE_MODE, (payload: { extensionId: string; extensionName: string; chatId: string | null; mode: 'bounded' | 'extension-relaxed' }) => {
+        if (typeof payload?.extensionId !== 'string' || payload.extensionId.length === 0) return
+        // chatId === null signals extension dispose, drop all of its claims.
+        if (payload.chatId === null) {
+          store.getState().clearExtensionChatStyleModes(payload.extensionId)
+          return
+        }
+        if (typeof payload.chatId !== 'string' || payload.chatId.length === 0) return
+        if (payload.mode !== 'bounded' && payload.mode !== 'extension-relaxed') return
+        store.getState().setChatStyleMode(payload.chatId, payload.extensionId, payload.mode)
+      }),
+
       wsClient.on(EventType.SPINDLE_COMMANDS_CHANGED, (payload: { extensionId: string; extensionName: string; commands: Array<{ id: string; label: string; description: string; keywords?: string[]; scope?: 'global' | 'chat' | 'chat-idle' | 'landing' | 'character' }> }) => {
         store.getState().setExtensionCommands({
           extensionId: payload.extensionId,

@@ -227,6 +227,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [isCoarsePointer])
   const streamingError = useStore((s) => s.streamingError)
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const styleMode = useStore((s) => {
+    const claims = s.chatStyleModes[chatId]
+    return claims && Object.keys(claims).length > 0 ? 'extension-relaxed' as const : undefined
+  })
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const isNudgeLoopActive = useStore((s) => s.isNudgeLoopActive)
@@ -1039,6 +1043,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
               measureKey={measureKey}
               start={virtualRow.start}
               visualOffset={prependVisualOffset}
+              styleMode={styleMode}
               measureElement={rowVirtualizer.measureElement}
             >
               {content}
@@ -1058,11 +1063,12 @@ interface VirtualRowProps {
   measureKey?: string
   start: number
   visualOffset: number
+  styleMode?: 'bounded' | 'extension-relaxed'
   measureElement: (el: Element | null) => void
   children: ReactNode
 }
 
-function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, start, visualOffset, measureElement, children }: VirtualRowProps) {
+function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, start, visualOffset, styleMode, measureElement, children }: VirtualRowProps) {
   const elRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -1115,6 +1121,7 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
     }
   }, [measureElement])
 
+  const relaxed = styleMode === 'extension-relaxed'
   return (
     <div
       ref={elRef}
@@ -1124,8 +1131,12 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
       data-message-index={messageIndex}
       data-message-id={messageId}
       data-measure-key={measureKey}
+      data-style-mode={relaxed ? 'extension-relaxed' : undefined}
       className={styles.virtualRow}
-      style={{ transform: `translateY(${start - visualOffset}px)` }}
+      style={relaxed
+        ? { top: `${start - visualOffset}px` }
+        : { transform: `translateY(${start - visualOffset}px)` }
+      }
     >
       {children}
     </div>

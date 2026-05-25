@@ -819,6 +819,9 @@ export interface SpindleSlice {
   extensionThemeOverrides: Record<string, ExtensionThemeOverride>
   /** Extension IDs whose theme overrides are suppressed by the user */
   mutedExtensionThemes: Record<string, boolean>
+  /** Per-chat extension claims for CSS containment mode, keyed chatId then
+   *  extensionId. A chat is effectively relaxed iff any extension claims it. */
+  chatStyleModes: Record<string, Record<string, 'extension-relaxed'>>
   /** Real-time operation status from backend WS events */
   extensionOperationStatus: ExtensionOperationStatus | null
   /** In-flight bulk update progress (null when idle). */
@@ -856,6 +859,9 @@ export interface SpindleSlice {
   setExtensionThemeOverride: (override: ExtensionThemeOverride) => void
   clearExtensionThemeOverride: (extensionId: string) => void
   clearAllExtensionThemeOverrides: () => void
+  setChatStyleMode: (chatId: string, extensionId: string, mode: 'bounded' | 'extension-relaxed') => void
+  clearChatStyleMode: (chatId: string) => void
+  clearExtensionChatStyleModes: (extensionId: string) => void
   muteExtensionTheme: (extensionId: string) => void
   unmuteExtensionTheme: (extensionId: string) => void
   setExtensionOperationStatus: (extensionId: string | null, operation: string, name: string | null) => void

@@ -1626,6 +1626,17 @@ const spindleApi: RuntimeSpindleAPI = {
       });
       return result as boolean;
     },
+    async setStyleMode(chatId: string, mode: "bounded" | "extension-relaxed", userId?: string): Promise<void> {
+      assertMutationAllowed("spindle.chat.setStyleMode()");
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "chat_set_style_mode",
+        requestId,
+        chatId,
+        mode,
+        userId,
+      });
+    },
   },
 
   events: {

@@ -167,6 +167,7 @@ No `action` discriminator is provided — if you need add/update/delete/navigate
 | Event | Payload |
 |-------|---------|
 | `SPINDLE_THEME_OVERRIDES` | `{ extensionId, extensionName, overrides }` — `overrides` is `{ variables: Record<string, string> }` or `null` when cleared |
+| `SPINDLE_CHAT_STYLE_MODE` | `{ extensionId, extensionName, chatId, mode }`. `chatId` is `null` with `mode: 'bounded'` when an extension's worker stops, signalling that all of its claims should be dropped. See [Chat Mutation](chat-mutation.md#per-chat-style-mode). |
 | `SPINDLE_EXTENSION_LOADED` | `{ extensionId }` |
 | `SPINDLE_EXTENSION_UNLOADED` | `{ extensionId }` |
 | `SPINDLE_EXTENSION_ERROR` | `{ extensionId, error }` |

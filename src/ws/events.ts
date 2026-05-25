@@ -129,6 +129,9 @@ export enum EventType {
   // Theme overrides (Spindle extensions)
   SPINDLE_THEME_OVERRIDES = "SPINDLE_THEME_OVERRIDES",
 
+  // Per-chat CSS containment mode (Spindle extensions, app_manipulation)
+  SPINDLE_CHAT_STYLE_MODE = "SPINDLE_CHAT_STYLE_MODE",
+
   // Spindle permission changes (broadcast with extensionId so frontends can scope)
   SPINDLE_PERMISSION_CHANGED = "SPINDLE_PERMISSION_CHANGED",
 

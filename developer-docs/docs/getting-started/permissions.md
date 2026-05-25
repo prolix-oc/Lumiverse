@@ -41,7 +41,7 @@ These are always available:
 | `"chat_mutation"` | Read and modify chat messages (append, update, delete, hide/unhide, inspect raw message history) |
 | `"event_tracking"` | Track, query, and replay extension-level telemetry events |
 | `"ui_panels"` | Create floating widgets and docked edge panels that overlay/consume screen space |
-| `"app_manipulation"` | Mount unrestricted portals into the document body that persist across routes. Also grants access to the Theme API for applying CSS variable overrides on top of the user's theme |
+| `"app_manipulation"` | Mount unrestricted portals into the document body that persist across routes. Also grants access to the Theme API for applying CSS variable overrides on top of the user's theme, and to `spindle.chat.setStyleMode` for opting individual chats out of the host's CSS containment sandbox so card-authored `position: fixed` content paints at viewport scope |
 | `"oauth"` | Register an OAuth callback handler to receive authorization redirects from external services |
 | `"push_notification"` | Send OS-level push notifications to users' devices even when the app is closed or backgrounded |
 | `"image_gen"` | Generate images via image gen connection profiles. Also grants access to list providers, connections, and models |

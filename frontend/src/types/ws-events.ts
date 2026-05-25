@@ -64,6 +64,9 @@ export enum EventType {
   // Spindle theme overrides
   SPINDLE_THEME_OVERRIDES = 'SPINDLE_THEME_OVERRIDES',
 
+  // Per-chat CSS containment mode (Spindle, app_manipulation)
+  SPINDLE_CHAT_STYLE_MODE = 'SPINDLE_CHAT_STYLE_MODE',
+
   // Spindle text editor
   SPINDLE_TEXT_EDITOR_OPEN = 'SPINDLE_TEXT_EDITOR_OPEN',
   SPINDLE_TEXT_EDITOR_RESULT = 'SPINDLE_TEXT_EDITOR_RESULT',
