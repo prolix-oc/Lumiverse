@@ -3,6 +3,7 @@ import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSe
 import { settingsApi } from '@/api/settings'
 import { BASE_URL } from '@/api/client'
 import { generateUUID } from '@/lib/uuid'
+import { DEFAULT_THEME } from '@/theme/presets'
 
 /** Default reasoning settings — used as initial state and for restore-on-unbind. */
 export const REASONING_DEFAULTS: ReasoningSettings = {
@@ -559,6 +560,22 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     } else {
       get().applyThemePack(entry.pack)
     }
+  },
+
+  updateSavedTheme: (id) => {
+    const currentTheme = get().theme ?? DEFAULT_THEME
+    const savedThemes = get().savedThemes.map((entry) => {
+      if (entry.id !== id) return entry
+      if (entry.kind === 'config') {
+        return { ...entry, theme: currentTheme } as typeof entry
+      }
+      return {
+        ...entry,
+        pack: { ...entry.pack, theme: currentTheme },
+      } as typeof entry
+    })
+    set({ savedThemes })
+    persistKey('savedThemes', savedThemes)
   },
 
   loadSettings: async () => {

@@ -229,8 +229,16 @@ async function doLoadFrontendExtension(
     const dom = createDOMHelper(extensionId, corsProxy)
     const uiEvents = createUIEventsHelper(extensionId)
 
-    // Cache granted permissions for synchronous permission checks in ui methods
+    // Cache granted permissions for synchronous permission checks in ui methods.
+    // Kept in sync via the SPINDLE_PERMISSION_CHANGED WS event so admin
+    // grant/revoke takes effect without a full extension reload.
     let cachedGrantedPermissions: string[] = await permissionsPromise
+    const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: any) => {
+      if (payload?.extensionId === extensionId && Array.isArray(payload.allGranted)) {
+        cachedGrantedPermissions = payload.allGranted
+      }
+    })
+    eventUnsubs.push(unsubPermissionSync)
     const mountedPoints = new Set<string>()
     let openModalCount = 0
 

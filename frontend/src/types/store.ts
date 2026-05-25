@@ -470,6 +470,7 @@ export interface SettingsSlice {
   renameSavedTheme: (id: string, name: string) => void
   deleteSavedTheme: (id: string) => Promise<void>
   applySavedTheme: (id: string) => void
+  updateSavedTheme: (id: string) => void
   loadSettings: () => Promise<void>
 }
 

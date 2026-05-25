@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Download, Upload, Code2 } from 'lucide-react'
+import { Bookmark, Download, Upload, Code2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { DEFAULT_THEME } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
@@ -109,6 +109,15 @@ export default function ThemePanel() {
 
   const addSavedTheme = useStore((s) => s.addSavedTheme)
 
+  const handleSaveTheme = useCallback(() => {
+    const latest = getLatest()
+    addSavedTheme({
+      kind: 'config',
+      name: latest.name || 'My Theme',
+      theme: latest,
+    })
+  }, [getLatest, addSavedTheme])
+
   const handleImportTheme = useCallback(() => {
     const input = document.createElement('input')
     input.type = 'file'
@@ -200,6 +209,9 @@ export default function ThemePanel() {
         </button>
         <button type="button" className={styles.actionBtn} onClick={handleImportTheme}>
           <Upload size={12} /> Import Theme
+        </button>
+        <button type="button" className={styles.actionBtn} onClick={handleSaveTheme}>
+          <Bookmark size={12} /> Save to My Themes
         </button>
         <button
           type="button"
