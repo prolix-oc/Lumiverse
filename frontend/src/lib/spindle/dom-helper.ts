@@ -20,7 +20,8 @@ const FORBIDDEN_CREATE_TAGS = new Set(['iframe', 'frame', 'object', 'embed'])
 
 export function createDOMHelper(
   extensionId: string,
-  corsProxy?: (url: string, options?: any) => Promise<any>
+  corsProxy?: (url: string, options?: any) => Promise<any>,
+  canEval?: () => boolean
 ): SpindleDOMHelper {
   const trackedElements = new Set<Element>()
   const trackedStyles: (() => void)[] = []
@@ -122,7 +123,13 @@ export function createDOMHelper(
     },
 
     createSandboxFrame(options) {
-      const handle = createSandboxFrame(extensionId, options, corsProxy)
+      // Honor allowEval only if the extension holds the unsafe_eval grant
+      // (fail-closed).
+      const gatedOptions = {
+        ...options,
+        allowEval: options.allowEval === true && canEval?.() === true,
+      }
+      const handle = createSandboxFrame(extensionId, gatedOptions, corsProxy)
       trackedElements.add(handle.element)
       const originalDestroy = handle.destroy.bind(handle)
 

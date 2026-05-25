@@ -8,6 +8,7 @@ interface SandboxFrameRecord {
   maxHeight: number
   destroyed: boolean
   corsProxy?: (url: string, options?: any) => Promise<any>
+  allowEval: boolean
 }
 
 const SANDBOX_MESSAGE_KEY = '__lumiverseSpindleSandbox'
@@ -133,6 +134,7 @@ export function createSandboxFrame(
     maxHeight,
     destroyed: false,
     corsProxy,
+    allowEval: options.allowEval === true,
   }
   sandboxFrames.set(token, record)
 
@@ -155,6 +157,7 @@ export function createSandboxFrame(
         minHeight,
         maxHeight,
         corsProxy: !!record.corsProxy,
+        allowEval: record.allowEval,
       })
     },
     postMessage(payload: unknown) {
@@ -189,6 +192,7 @@ function buildSandboxDocument(options: {
   minHeight: number
   maxHeight: number
   corsProxy?: boolean
+  allowEval?: boolean
 }): string {
   const injection = buildHeadInjection(options)
   const html = options.html || ''
@@ -207,9 +211,11 @@ function buildHeadInjection(options: {
   minHeight: number
   maxHeight: number
   corsProxy?: boolean
+  allowEval?: boolean
 }): string {
   const tokenLit = JSON.stringify(options.token)
   const autoResizeLit = options.autoResize ? 'true' : 'false'
+  const scriptSrc = options.allowEval ? "'unsafe-inline' 'unsafe-eval'" : "'unsafe-inline'"
   const minHeightLit = String(options.minHeight)
   const maxHeightLit = String(options.maxHeight)
 
@@ -231,7 +237,7 @@ function buildHeadInjection(options: {
   return [
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'; upgrade-insecure-requests;">`,
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${scriptSrc}; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'; upgrade-insecure-requests;">`,
     '<meta name="color-scheme" content="dark light">',
     '<style>html,body{margin:0;padding:0;background:transparent!important}body{box-sizing:border-box;overflow-x:hidden}:root{color-scheme:dark light}</style>',
     '<script>(function(){',

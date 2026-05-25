@@ -226,7 +226,11 @@ async function doLoadFrontendExtension(
       })
     }
 
-    const dom = createDOMHelper(extensionId, corsProxy)
+    const dom = createDOMHelper(
+      extensionId,
+      corsProxy,
+      () => cachedGrantedPermissions.includes('unsafe_eval'),
+    )
     const uiEvents = createUIEventsHelper(extensionId)
 
     // Cache granted permissions for synchronous permission checks in ui methods

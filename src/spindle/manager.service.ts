@@ -749,6 +749,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "image_gen",
   "images",
   "web_search",
+  "unsafe_eval",
 ]);
 
 function grantRequestedPermissionsByDefault(
