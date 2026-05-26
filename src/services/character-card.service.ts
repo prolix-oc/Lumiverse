@@ -297,11 +297,11 @@ export function decodeRisuModule(data: Uint8Array): RisuModule | null {
   return null;
 }
 
-const RISU_TYPE_TO_TARGET: Record<string, RegexTarget> = {
-  editdisplay: "display",
-  editprocess: "prompt",
-  editoutput: "response",
-  editinput: "prompt",
+const RISU_TYPE_TO_TARGET: Record<string, RegexTarget[]> = {
+  editdisplay: ["display"],
+  editprocess: ["prompt"],
+  editoutput: ["response"],
+  editinput: ["prompt"],
 };
 
 /**
@@ -317,7 +317,7 @@ export function convertRisuRegexScripts(
     const r = regexes[i];
     if (!r.in) continue;
 
-    const target = RISU_TYPE_TO_TARGET[r.type] ?? "display";
+    const target = RISU_TYPE_TO_TARGET[r.type] ?? ["display"];
 
     results.push({
       name: r.comment || `Imported RisuAI Script ${i + 1}`,
@@ -609,7 +609,7 @@ export interface BundledRegexScript {
   placement: string[];
   scope: string;
   scope_id: string | null;
-  target: string;
+  target: string | string[];
   min_depth: number | null;
   max_depth: number | null;
   trim_strings: string[];

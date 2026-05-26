@@ -805,7 +805,7 @@ export async function queryVaultCortex(
         description: e.description,
         lastSeenAt: null,
         mentionCount: 0,
-        topFacts: safeJsonArray(e.facts),
+        topFacts: safeJsonArray(e.facts).map((f: string) => entityGraph.stripFactTags(f)),
         emotionalProfile,
         relationships: [],
       });

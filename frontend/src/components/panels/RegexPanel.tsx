@@ -267,13 +267,15 @@ export default function RegexPanel() {
     openModal('regexImport')
   }, [openModal])
 
-  const targetBadge = (target: string) => {
-    switch (target) {
-      case 'prompt': return <Badge color="warning" size="sm">P</Badge>
-      case 'response': return <Badge color="success" size="sm">R</Badge>
-      case 'display': return <Badge color="info" size="sm">D</Badge>
-      default: return null
-    }
+  const targetBadge = (target: string | string[]) => {
+    const targets = Array.isArray(target) ? target : [target]
+    return (
+      <>
+        {targets.includes('prompt') && <Badge color="warning" size="sm">P</Badge>}
+        {targets.includes('response') && <Badge color="success" size="sm">R</Badge>}
+        {targets.includes('display') && <Badge color="info" size="sm">D</Badge>}
+      </>
+    )
   }
 
   const scopeIcon = (scope: RegexScope) => {

@@ -170,7 +170,7 @@ export interface PackImportPayload {
     replaceString?: string;
     flags?: string;
     placement?: string[];
-    target?: string;
+    target?: string | string[];
     minDepth?: number | null;
     maxDepth?: number | null;
     trimStrings?: string[];

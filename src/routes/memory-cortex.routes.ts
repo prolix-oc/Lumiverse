@@ -1407,12 +1407,19 @@ app.put("/chats/:chatId/colors/:id", async (c) => {
 
 // ─── Relations ─────────────────────────────────────────────────
 
-/** GET /chats/:chatId/relations — List relations with resolved entity names */
+/** GET /chats/:chatId/relations — List relations with resolved entity names.
+ *  Query params:
+ *    ?includeInactive=true — include dormant, broken, and former relations (default: true)
+ */
 app.get("/chats/:chatId/relations", (c) => {
   const chatId = c.req.param("chatId");
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
-  const relations = memoryCortex.getRelations(chatId);
+
+  const includeInactive = c.req.query("includeInactive") !== "false";
+  const relations = includeInactive
+    ? memoryCortex.getRelationsIncludingInactive(chatId)
+    : memoryCortex.getRelations(chatId);
 
   // Resolve entity names for display
   const { getDb } = require("../db/connection");

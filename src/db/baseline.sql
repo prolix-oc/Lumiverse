@@ -619,7 +619,7 @@ CREATE TABLE regex_scripts (
   placement TEXT NOT NULL DEFAULT '["ai_output"]',
   scope TEXT NOT NULL DEFAULT 'global',
   scope_id TEXT,
-  target TEXT NOT NULL DEFAULT 'response',
+  target TEXT NOT NULL DEFAULT '["response"]',
   min_depth INTEGER,
   max_depth INTEGER,
   trim_strings TEXT NOT NULL DEFAULT '[]',

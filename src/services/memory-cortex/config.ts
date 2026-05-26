@@ -74,6 +74,19 @@ export interface SidecarReliabilityConfig {
   gradesExistingRecords: boolean;
 }
 
+export interface FactManagementConfig {
+  /** Minimum chunk importance (0–10) required for facts to be persisted.
+   *  Chunks scoring below this threshold contribute no facts. Default: 3. */
+  importanceThreshold: number;
+  /** Maximum facts stored per entity. When exceeded, lowest-importance facts
+   *  are trimmed first. Default: 30. */
+  maxFactsPerEntity: number;
+  /** When true and the sidecar is active, exceeding maxFactsPerEntity triggers
+   *  an LLM call to curate which facts to keep/merge/discard instead of
+   *  purely score-based trimming. ("Fact Auto-Pilot") Default: false. */
+  autopilot: boolean;
+}
+
 export interface ThoughtMarkerConfig {
   /** Prefix marking a character thought block, e.g. <thinking> */
   prefix: string;
@@ -184,6 +197,9 @@ export interface MemoryCortexConfig {
     coreMemoryFlags: string[];
   };
 
+  /** Fact persistence and curation policy */
+  factManagement: FactManagementConfig;
+
   /** Entity lifecycle management */
   entityPruning: {
     /** Auto-archive entities with 1 mention and no recent activity */
@@ -270,6 +286,11 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     reinforcementWeight: 0.1,
     coreMemoryThreshold: 0.7,
     coreMemoryFlags: ["death", "promise", "first_meeting", "transformation", "confession"],
+  },
+  factManagement: {
+    importanceThreshold: 3,
+    maxFactsPerEntity: 30,
+    autopilot: false,
   },
   entityPruning: {
     enabled: true,
@@ -504,6 +525,19 @@ export function normalizeCortexConfig(
       reinforcementWeight: input.decay?.reinforcementWeight ?? defaults.decay.reinforcementWeight,
       coreMemoryThreshold: input.decay?.coreMemoryThreshold ?? defaults.decay.coreMemoryThreshold,
       coreMemoryFlags: input.decay?.coreMemoryFlags ?? defaults.decay.coreMemoryFlags,
+    },
+    factManagement: {
+      importanceThreshold: Math.max(0, Math.min(10,
+        typeof input.factManagement?.importanceThreshold === "number"
+          ? Math.floor(input.factManagement.importanceThreshold)
+          : defaults.factManagement.importanceThreshold,
+      )),
+      maxFactsPerEntity: Math.max(5, Math.min(100,
+        typeof input.factManagement?.maxFactsPerEntity === "number"
+          ? Math.floor(input.factManagement.maxFactsPerEntity)
+          : defaults.factManagement.maxFactsPerEntity,
+      )),
+      autopilot: input.factManagement?.autopilot ?? defaults.factManagement.autopilot,
     },
     entityPruning: {
       enabled: input.entityPruning?.enabled ?? defaults.entityPruning.enabled,

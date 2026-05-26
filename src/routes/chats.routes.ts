@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import * as svc from "../services/chats.service";
 import * as personasSvc from "../services/personas.service";
 import * as charactersSvc from "../services/characters.service";
+import * as regexScriptsSvc from "../services/regex-scripts.service";
 import { parsePagination } from "../services/pagination";
 import { RECENT_CHATS_DEFAULT_LIMIT } from "../types/pagination";
 import { parseStChatJsonl, parseStGroupChatJsonl } from "../migration/st-reader";
@@ -622,6 +623,24 @@ app.put("/:chatId/messages/:id", async (c) => {
     );
     body.content = processed.content;
     if (processed.extra !== undefined) body.extra = processed.extra;
+
+    const chat = svc.getChat(userId, chatId);
+    if (chat) {
+      const editScripts = regexScriptsSvc.getRunOnEditScripts(userId, {
+        characterId: chat.character_id,
+        chatId,
+      });
+      if (editScripts.length > 0) {
+        const existing = svc.getMessage(userId, messageId);
+        const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
+        body.content = await regexScriptsSvc.applyRegexScripts(
+          body.content,
+          editScripts,
+          placement,
+          0,
+        );
+      }
+    }
   }
 
   const msg = svc.updateMessage(userId, messageId, body);
@@ -694,7 +713,26 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
     c.req.raw.signal,
   );
 
-  const msg = svc.updateSwipe(userId, messageId, idx, processed.content);
+  let finalContent = processed.content;
+  const chat = svc.getChat(userId, chatId);
+  if (chat) {
+    const editScripts = regexScriptsSvc.getRunOnEditScripts(userId, {
+      characterId: chat.character_id,
+      chatId,
+    });
+    if (editScripts.length > 0) {
+      const existing = svc.getMessage(userId, messageId);
+      const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
+      finalContent = await regexScriptsSvc.applyRegexScripts(
+        finalContent,
+        editScripts,
+        placement,
+        0,
+      );
+    }
+  }
+
+  const msg = svc.updateSwipe(userId, messageId, idx, finalContent);
   if (!msg) return c.json({ error: "Not found or invalid swipe index" }, 404);
   return c.json(msg);
 });

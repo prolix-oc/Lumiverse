@@ -1373,7 +1373,7 @@ export default function CharacterEditorPage() {
                               options={unboundGlobals.map((s) => ({
                                 value: s.id,
                                 label: s.name,
-                                sublabel: s.target,
+                                sublabel: s.target.join(', '),
                               }))}
                               placeholder="Bind a global regex to this character…"
                               searchPlaceholder="Search regex scripts…"

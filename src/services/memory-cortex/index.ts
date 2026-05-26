@@ -61,7 +61,7 @@ import type {
 
 // Re-export public types and config
 export { getCortexConfig, putCortexConfig, applyCortexPreset, shouldUseCortexSidecar, shouldUseCortexSidecarForChunkAnalysis } from "./config";
-export type { MemoryCortexConfig, CortexPresetMode } from "./config";
+export type { MemoryCortexConfig, CortexPresetMode, FactManagementConfig } from "./config";
 export { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
 export { formatShadowPrompt, formatLinkedCortexSection } from "./shadow-formatter";
 export type { FormatterMode, ShadowPromptResult, LinkedFormatResult } from "./shadow-formatter";
@@ -1229,7 +1229,9 @@ export async function processChunk(
 
     updateIngestionStatus(data.userId, data.chatId, { phase: "persisting", chunkId: data.chunkId });
     const persistStartedAt = performance.now();
-    db.transaction(() => {
+    const deferredFactAutopilot = db.transaction(() => {
+      let deferredAutopilotEntityId: string | null = null;
+
       if (config.salienceScoring) {
         const dbStart = performance.now();
         db.query(
@@ -1385,10 +1387,25 @@ export async function processChunk(
           }
         }
 
-        if (sidecarFacts.length > 0 && sidecarEntities.length > 0) {
+        const chunkImportance = Math.round(salienceResult.score * 10);
+        const factThreshold = config.factManagement.importanceThreshold;
+        const maxFacts = config.factManagement.maxFactsPerEntity;
+
+        // Deferred autopilot: collect entity ID for post-transaction LLM curation.
+        // Returned from the transaction so the async LLM call runs after commit.
+
+        if (sidecarFacts.length > 0 && sidecarEntities.length > 0 && chunkImportance >= factThreshold) {
           const subjectEntity = sidecarEntities.find((e) => e.role === "subject") ?? sidecarEntities[0];
           const entity = entityGraph.findEntityByName(data.chatId, subjectEntity.name);
-          if (entity) entityGraph.addEntityFacts(entity.id, sidecarFacts);
+          if (entity) {
+            if (config.factManagement.autopilot && sidecarActive && generateRawFn && sidecarConnectionId) {
+              // Defer LLM call to after the transaction completes
+              deferredAutopilotEntityId = entity.id;
+              entityGraph.addEntityFacts(entity.id, sidecarFacts, null, chunkImportance, maxFacts);
+            } else {
+              entityGraph.addEntityFacts(entity.id, sidecarFacts, null, chunkImportance, maxFacts);
+            }
+          }
         }
 
         if (salienceResult.statusChanges.length > 0) {
@@ -1403,7 +1420,8 @@ export async function processChunk(
             };
             const newStatus = statusMap[change.change];
             if (newStatus) entityGraph.updateEntityStatus(entity.id, newStatus as any);
-            entityGraph.addEntityFacts(entity.id, [`${change.change}: ${change.detail}`]);
+            // Status changes are always high-importance (8+)
+            entityGraph.addEntityFacts(entity.id, [`${change.change}: ${change.detail}`], null, 8, maxFacts);
           }
         }
 
@@ -1418,11 +1436,12 @@ export async function processChunk(
           }, data.chunkId, data.createdAt);
 
           const evidence = "evidence" in discovered ? (discovered as any).evidence : undefined;
+          // Alias facts are durable metadata — always high importance
           entityGraph.addEntityFacts(canonicalEntity.id, [
             evidence
               ? `Also known as "${discovered.alias}" (${evidence})`
               : `Also known as "${discovered.alias}"`,
-          ]);
+          ], null, 7, maxFacts);
         }
         timings.graphMs += performance.now() - postGraphStart;
       }
@@ -1529,8 +1548,33 @@ export async function processChunk(
       db.query(
         "UPDATE chat_chunks SET cortex_warmup_signature = ?, cortex_warmup_completed_at = ? WHERE id = ?",
       ).run(warmupSignature, now, data.chunkId);
+
+      return deferredAutopilotEntityId;
     })();
     timings.dbMs += performance.now() - persistStartedAt;
+
+    // Fact Auto-Pilot: run LLM curation after the transaction commits
+    if (deferredFactAutopilot && config.factManagement.autopilot
+      && sidecarActive && generateRawFn && sidecarConnectionId) {
+      const chunkImp = Math.round(salienceResult.score * 10);
+      await curateEntityFactsWithLLM(
+        deferredFactAutopilot, sidecarFacts, chunkImp,
+        config.factManagement.maxFactsPerEntity,
+        generateRawFn, sidecarConnectionId, config,
+      );
+    }
+
+    // Relationship Reactivation: check for dormant user-curated relations
+    // that received fresh evidence in this chunk. If the arbiter is active,
+    // ask it whether to reactivate; otherwise auto-reactivate.
+    if (sidecarActive && config.sidecarReliability.arbitratesHeuristics) {
+      await evaluatePendingReactivations(
+        data.chatId, proseContent, generateRawFn!, sidecarConnectionId!, config,
+      );
+    } else {
+      // Non-arbiter mode: auto-reactivate any pending relations
+      autoReactivatePendingRelations(data.chatId);
+    }
 
     const mode: CortexIngestionTimings["mode"] = extraction
       ? (heuristicResult ? "mixed" : "sidecar")
@@ -2172,9 +2216,14 @@ export function getConsolidations(chatId: string, tier?: number) {
   return consolidation.getConsolidations(chatId, tier);
 }
 
-/** Get relations for a chat */
+/** Get active relations for a chat */
 export function getRelations(chatId: string) {
   return entityGraph.getRelations(chatId);
+}
+
+/** Get all viewable relations including dormant/broken/former (for UI listing) */
+export function getRelationsIncludingInactive(chatId: string) {
+  return entityGraph.getRelationsIncludingInactive(chatId);
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
@@ -2210,6 +2259,256 @@ function buildSidecarSamplingParameters(
     params.max_tokens = sidecar.maxTokens;
   }
   return params;
+}
+
+/**
+ * LLM-arbitrated fact curation ("Fact Auto-Pilot").
+ * When the entity's facts exceed maxFacts, asks the sidecar to decide which
+ * facts to keep, merge, or discard.
+ *
+ * Salience back-linking: each fact carries an [i:N] importance tag from its
+ * source chunk's salience score. The LLM sees these scores so it can weigh
+ * "this fact came from a story-defining moment" vs "this came from filler".
+ * Surviving facts retain their original importance; merged facts inherit the
+ * highest importance of their constituents.
+ */
+async function curateEntityFactsWithLLM(
+  entityId: string,
+  _newFacts: string[],
+  _chunkImportance: number,
+  maxFacts: number,
+  generateRawFn: (opts: {
+    connectionId: string;
+    messages: Array<{ role: string; content: string }>;
+    parameters: Record<string, any>;
+    tools?: import("../../llm/types").ToolDefinition[];
+    signal?: AbortSignal;
+  }) => Promise<{ content: string; tool_calls?: Array<{ name: string; args: Record<string, unknown> }> }>,
+  connectionId: string,
+  config: MemoryCortexConfig,
+): Promise<void> {
+  // Read raw facts WITH importance tags to preserve provenance
+  const entity = entityGraph.getEntity(entityId);
+  if (!entity || entity.facts.length <= maxFacts) return;
+
+  // Build scored fact list: { text (clean), importance, raw }
+  const scoredFacts = entity.facts.map((raw) => ({
+    raw,
+    text: entityGraph.stripFactTags(raw),
+    importance: entityGraph.getFactImportance(raw),
+  }));
+
+  const prompt = `You are a memory curator for a narrative entity. Given the numbered facts below (each with a salience score 0–10), select which to KEEP.
+
+SCORING CONTEXT:
+- The [salience:N] prefix shows how narratively important the source passage was.
+- Higher salience = the fact emerged from a story-defining moment (death, betrayal, discovery, transformation).
+- Lower salience = the fact came from routine or atmospheric content.
+
+RULES:
+- You MUST keep facts with salience >= 7 unless they are provably superseded by a later fact (e.g. "X is alive" superseded by "X died").
+- You MUST keep facts about lasting events: deaths, betrayals, promises, confessions, transformations, major actions, status changes, and relationship changes — regardless of salience score.
+- You MUST keep facts that would be untrue or misleading to forget (e.g. "X stole from Y" cannot be discarded just because newer events happened).
+- You MAY discard facts with salience <= 3 that are purely transient observations (walked somewhere, looked around, routine movements) with no lasting consequence.
+- You MAY merge near-duplicate facts into one concise fact. When merging, keep the higher salience score.
+- Return at most ${maxFacts} facts.
+
+OUTPUT FORMAT:
+Return a JSON array of objects: [{"text": "fact text", "salience": N}, ...]
+Each object has the curated fact text and its salience score (preserve original, or use the highest if merging).
+
+CURRENT FACTS:
+${scoredFacts.map((f, i) => `${i + 1}. [salience:${f.importance}] ${f.text}`).join("\n")}`;
+
+  try {
+    const result = await generateRawFn({
+      connectionId,
+      messages: [
+        { role: "system", content: "You are a factual memory curator. Output valid JSON only — an array of {\"text\": string, \"salience\": number} objects." },
+        { role: "user", content: prompt },
+      ],
+      parameters: {
+        ...buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        max_tokens: 2048,
+        temperature: 0.1,
+      },
+    });
+
+    const text = result.content.trim();
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return;
+
+    const curated: unknown = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(curated) || curated.length === 0) return;
+
+    const curatedFacts: Array<{ text: string; importance: number }> = [];
+    for (const item of curated) {
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Record<string, unknown>;
+      const factText = typeof obj.text === "string" ? obj.text.trim() : "";
+      if (!factText) continue;
+      // Preserve original salience, falling back to 5
+      const salience = typeof obj.salience === "number" && Number.isFinite(obj.salience)
+        ? Math.max(0, Math.min(10, Math.round(obj.salience)))
+        : 5;
+      curatedFacts.push({ text: factText, importance: salience });
+    }
+
+    if (curatedFacts.length === 0) return;
+
+    // Rebuild tagged facts preserving per-fact provenance
+    const tagged = curatedFacts
+      .slice(0, maxFacts)
+      .map((f) => `[i:${f.importance}] ${f.text}`);
+    const db = getDb();
+    const now = Math.floor(Date.now() / 1000);
+    db.query(
+      `UPDATE memory_entities SET facts = ?, fact_extraction_status = 'ok', updated_at = ? WHERE id = ?`,
+    ).run(JSON.stringify(tagged), now, entityId);
+  } catch (err) {
+    console.warn("[memory-cortex] Fact autopilot LLM call failed, keeping score-based result:", err);
+  }
+}
+
+/**
+ * Auto-reactivate all pending dormant relations for a chat (non-arbiter mode).
+ * Called when the sidecar/arbiter isn't available to make nuanced decisions.
+ */
+function autoReactivatePendingRelations(chatId: string): void {
+  const db = getDb();
+  const rows = db.query(
+    `SELECT id, metadata FROM memory_relations
+     WHERE chat_id = ? AND status != 'active'
+       AND metadata LIKE '%"pending_reactivation":true%'`,
+  ).all(chatId) as Array<{ id: string; metadata: string }>;
+
+  for (const row of rows) {
+    entityGraph.reactivateRelation(row.id);
+  }
+  if (rows.length > 0) {
+    console.info(`[memory-cortex] Auto-reactivated ${rows.length} dormant relation(s) on fresh evidence.`);
+  }
+}
+
+/**
+ * Arbiter-evaluated reactivation of dormant user-curated relations.
+ * Asks the sidecar whether dormant relations should be restored based on
+ * the current passage content (are the entities meaningfully interacting
+ * in a way that re-establishes the relationship?).
+ */
+async function evaluatePendingReactivations(
+  chatId: string,
+  passageContent: string,
+  generateRawFn: (opts: {
+    connectionId: string;
+    messages: Array<{ role: string; content: string }>;
+    parameters: Record<string, any>;
+    tools?: import("../../llm/types").ToolDefinition[];
+    signal?: AbortSignal;
+  }) => Promise<{ content: string; tool_calls?: Array<{ name: string; args: Record<string, unknown> }> }>,
+  connectionId: string,
+  config: MemoryCortexConfig,
+): Promise<void> {
+  const db = getDb();
+  const pendingRows = db.query(
+    `SELECT r.id, r.source_entity_id, r.target_entity_id, r.relation_type,
+            r.relation_label, r.status
+     FROM memory_relations r
+     WHERE r.chat_id = ? AND r.status != 'active'
+       AND r.metadata LIKE '%"pending_reactivation":true%'
+       AND r.superseded_by IS NULL AND r.merged_into IS NULL`,
+  ).all(chatId) as Array<{
+    id: string; source_entity_id: string; target_entity_id: string;
+    relation_type: string; relation_label: string | null; status: string;
+  }>;
+
+  if (pendingRows.length === 0) return;
+
+  // Resolve entity names for the LLM prompt
+  const nameCache = new Map<string, string>();
+  const resolveName = (id: string) => {
+    if (nameCache.has(id)) return nameCache.get(id)!;
+    const row = db.query("SELECT name FROM memory_entities WHERE id = ?").get(id) as any;
+    const name = row?.name ?? "Unknown";
+    nameCache.set(id, name);
+    return name;
+  };
+
+  const candidates = pendingRows.map((r) => ({
+    id: r.id,
+    source: resolveName(r.source_entity_id),
+    target: resolveName(r.target_entity_id),
+    type: r.relation_type,
+    label: r.relation_label,
+    currentStatus: r.status,
+  }));
+
+  const prompt = `Given the passage below, decide whether these DORMANT relationships should be REACTIVATED.
+
+A relationship should be reactivated if the passage shows the entities meaningfully interacting in a way consistent with that relationship type (not just being mentioned in passing).
+
+PASSAGE:
+${passageContent.slice(0, 2000)}
+
+DORMANT RELATIONSHIPS:
+${candidates.map((c, i) => `${i + 1}. ${c.source} → ${c.target} (${c.type}${c.label ? `: ${c.label}` : ""}) [currently: ${c.currentStatus}]`).join("\n")}
+
+Return a JSON array of objects: [{"index": N, "reactivate": true/false, "reason": "brief reason"}]
+Only include entries where you have a clear signal. Omit entries you're unsure about (they stay dormant).`;
+
+  try {
+    const result = await generateRawFn({
+      connectionId,
+      messages: [
+        { role: "system", content: "You are a relationship status evaluator. Output valid JSON only." },
+        { role: "user", content: prompt },
+      ],
+      parameters: {
+        ...buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        max_tokens: 1024,
+        temperature: 0.1,
+      },
+    });
+
+    const text = result.content.trim();
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      // No decision — keep dormant
+      for (const c of candidates) entityGraph.dismissReactivation(c.id);
+      return;
+    }
+
+    const decisions: unknown = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(decisions)) {
+      for (const c of candidates) entityGraph.dismissReactivation(c.id);
+      return;
+    }
+
+    const decided = new Set<string>();
+    for (const d of decisions) {
+      if (!d || typeof d !== "object") continue;
+      const obj = d as Record<string, unknown>;
+      const idx = typeof obj.index === "number" ? obj.index - 1 : -1;
+      if (idx < 0 || idx >= candidates.length) continue;
+      const candidate = candidates[idx];
+      decided.add(candidate.id);
+
+      if (obj.reactivate === true) {
+        entityGraph.reactivateRelation(candidate.id);
+        console.info(`[memory-cortex] Arbiter reactivated: ${candidate.source} → ${candidate.target} (${candidate.type})`);
+      } else {
+        entityGraph.dismissReactivation(candidate.id);
+      }
+    }
+
+    // Dismiss any candidates the LLM didn't mention (stay dormant)
+    for (const c of candidates) {
+      if (!decided.has(c.id)) entityGraph.dismissReactivation(c.id);
+    }
+  } catch (err) {
+    console.warn("[memory-cortex] Relationship reactivation arbiter failed, auto-reactivating:", err);
+    for (const c of candidates) entityGraph.reactivateRelation(c.id);
+  }
 }
 
 /**

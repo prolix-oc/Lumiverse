@@ -24,7 +24,7 @@ export interface RegexScript {
   placement: RegexPlacement[]
   scope: RegexScope
   scope_id: string | null
-  target: RegexTarget
+  target: RegexTarget[]
   min_depth: number | null
   max_depth: number | null
   trim_strings: string[]
@@ -50,7 +50,7 @@ export interface CreateRegexScriptInput {
   placement?: RegexPlacement[]
   scope?: RegexScope
   scope_id?: string | null
-  target?: RegexTarget
+  target?: RegexTarget[]
   min_depth?: number | null
   max_depth?: number | null
   trim_strings?: string[]

@@ -58,7 +58,8 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
     ))) {
       return "script placement is invalid";
     }
-    if (target !== "display") return "only display regex scripts can be applied";
+    const normalizedTarget: RegexTarget[] = Array.isArray(target) ? target : (typeof target === "string" ? [target] : ["display"]);
+    if (!normalizedTarget.includes("display")) return "only display regex scripts can be applied";
     if (!APPLY_VALID_MACRO_MODES.has(substituteMacros as RegexMacroMode)) return "script substitute_macros is invalid";
 
     scripts.push({
@@ -72,7 +73,7 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
       placement,
       scope: raw.scope === "character" || raw.scope === "chat" ? raw.scope : "global",
       scope_id: typeof raw.scope_id === "string" ? raw.scope_id : null,
-      target,
+      target: normalizedTarget,
       min_depth: typeof raw.min_depth === "number" ? raw.min_depth : null,
       max_depth: typeof raw.max_depth === "number" ? raw.max_depth : null,
       trim_strings: Array.isArray(raw.trim_strings)

@@ -395,7 +395,7 @@ export function useDisplayRegex(
     () =>
       regexScripts.filter(
         (s) =>
-          s.target === 'display' &&
+          s.target.includes('display') &&
           !s.disabled &&
           (s.scope === 'global' ||
             (s.scope === 'character' && s.scope_id === activeCharacterId) ||

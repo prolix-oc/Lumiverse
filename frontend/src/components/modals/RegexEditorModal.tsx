@@ -73,7 +73,7 @@ export default function RegexEditorModal() {
   const [replaceString, setReplaceString] = useState('')
   const [flags, setFlags] = useState('gi')
   const [placement, setPlacement] = useState<RegexPlacement[]>(['ai_output'])
-  const [target, setTarget] = useState<RegexTarget>('response')
+  const [target, setTarget] = useState<RegexTarget[]>(['response'])
   const [scope, setScope] = useState<RegexScope>('global')
   const [minDepth, setMinDepth] = useState<string>('')
   const [maxDepth, setMaxDepth] = useState<string>('')
@@ -97,7 +97,7 @@ export default function RegexEditorModal() {
       setReplaceString(script.replace_string)
       setFlags(script.flags)
       setPlacement([...script.placement])
-      setTarget(script.target)
+      setTarget([...script.target])
       setScope(script.scope)
       setMinDepth(script.min_depth != null ? String(script.min_depth) : '')
       setMaxDepth(script.max_depth != null ? String(script.max_depth) : '')
@@ -339,7 +339,7 @@ export default function RegexEditorModal() {
               <div className={styles.targetCol}>
                 <div className={styles.field}>
                   <label className={styles.fieldLabel}>Pipeline</label>
-                  <div className={styles.segmented}>
+                  <div className={styles.placementGrid}>
                     {([
                       { t: 'prompt' as const, label: 'Prompt' },
                       { t: 'response' as const, label: 'Response' },
@@ -348,8 +348,8 @@ export default function RegexEditorModal() {
                       <button
                         key={t}
                         type="button"
-                        className={clsx(styles.segmentedBtn, target === t && styles.segmentedBtnActive)}
-                        onClick={() => setTarget(t)}
+                        className={clsx(styles.placementChip, target.includes(t) && styles.placementChipActive)}
+                        onClick={() => setTarget((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t])}
                       >
                         {label}
                       </button>

@@ -812,11 +812,21 @@ export function mergeEntitiesInternal(
     }
 
     const targetFacts = [...target.facts];
-    const lowerFacts = new Set(targetFacts.map((f) => f.toLowerCase()));
+    const lowerFacts = new Set(targetFacts.map((f) => stripFactTags(f).toLowerCase()));
     for (const fact of source.facts) {
-      if (!lowerFacts.has(fact.toLowerCase())) {
+      if (!lowerFacts.has(stripFactTags(fact).toLowerCase())) {
         targetFacts.push(fact);
       }
+    }
+
+    // Importance-weighted trimming on merge (use 30 as default cap)
+    let mergedFacts: string[];
+    if (targetFacts.length > 30) {
+      const scored = targetFacts.map((f, idx) => ({ fact: f, importance: getFactImportance(f), idx }));
+      scored.sort((a, b) => b.importance - a.importance || b.idx - a.idx);
+      mergedFacts = scored.slice(0, 30).sort((a, b) => a.idx - b.idx).map((s) => s.fact);
+    } else {
+      mergedFacts = targetFacts;
     }
 
     db.query(
@@ -828,7 +838,7 @@ export function mergeEntitiesInternal(
         updated_at = ?
        WHERE id = ?`,
     ).run(
-      JSON.stringify(targetAliases), JSON.stringify(targetFacts.slice(-20)),
+      JSON.stringify(targetAliases), JSON.stringify(mergedFacts),
       source.mentionCount, source.salienceAvg, source.saliencePeak,
       now, targetId,
     );
@@ -924,15 +934,33 @@ export function updateEntityStatus(
   }
 }
 
+/** Extract the importance score from a fact's inline tag. Default 5 for untagged facts. */
+export function getFactImportance(fact: string): number {
+  const m = fact.match(/^\[i:(\d+)\]\s*/);
+  return m ? parseInt(m[1], 10) : 5;
+}
+
+/** Strip all internal metadata tags from a fact for display/comparison. */
+export function stripFactTags(fact: string): string {
+  return fact.replace(/^\[i:\d+\]\s*/, "").replace(/^\[branch:[^\]]+\]\s*/, "");
+}
+
 /**
- * Add facts to an entity (deduplicating).
+ * Add facts to an entity (deduplicating, importance-weighted retention).
  * Facts can optionally carry branch provenance — if a branchId is provided,
  * the fact is stored as "[branch:id] fact text" so it can be filtered later.
+ *
+ * @param importance - The source chunk's importance score (0–10). Encoded as
+ *   an inline tag so facts from important passages survive trimming.
+ * @param maxFacts - Cap on stored facts per entity (default 30). When exceeded,
+ *   lowest-importance facts are dropped first.
  */
 export function addEntityFacts(
   entityId: string,
   newFacts: string[],
   branchId?: string | null,
+  importance?: number,
+  maxFacts: number = 30,
 ): void {
   if (newFacts.length === 0) return;
   const db = getDb();
@@ -940,24 +968,33 @@ export function addEntityFacts(
   if (!row) return;
 
   const existing = safeJsonArray(row.facts);
-  const lowerExisting = new Set(existing.map((f) => f.toLowerCase().replace(/^\[branch:[^\]]+\]\s*/, "")));
+  const lowerExisting = new Set(existing.map((f) => stripFactTags(f).toLowerCase()));
 
   const merged = [...existing];
   for (let fact of newFacts) {
     if (!fact) continue;
+    // Add importance tag if provided
+    if (typeof importance === "number") fact = `[i:${Math.round(importance)}] ${fact}`;
     // Add branch provenance tag if provided
     if (branchId) fact = `[branch:${branchId}] ${fact}`;
-    const normalizedFact = fact.toLowerCase().replace(/^\[branch:[^\]]+\]\s*/, "");
+    const normalizedFact = stripFactTags(fact).toLowerCase();
     if (!lowerExisting.has(normalizedFact)) {
       merged.push(fact);
       lowerExisting.add(normalizedFact);
     }
   }
 
-  // Keep only the most recent 20 facts
-  const trimmed = merged.slice(-20);
+  // Importance-weighted trimming: drop lowest-importance facts first
+  let trimmed: string[];
+  if (merged.length > maxFacts) {
+    const scored = merged.map((f, idx) => ({ fact: f, importance: getFactImportance(f), idx }));
+    scored.sort((a, b) => b.importance - a.importance || b.idx - a.idx);
+    trimmed = scored.slice(0, maxFacts).sort((a, b) => a.idx - b.idx).map((s) => s.fact);
+  } else {
+    trimmed = merged;
+  }
+
   const now = Math.floor(Date.now() / 1000);
-  // BUG 4: Update fact_extraction_status when facts are successfully added
   const newFactsAdded = trimmed.length > existing.length;
   db.query(
     `UPDATE memory_entities SET
@@ -971,14 +1008,14 @@ export function addEntityFacts(
 /**
  * Get facts for an entity, optionally filtered to a specific branch.
  * If branchId is provided, returns only facts from that branch or untagged facts.
+ * All internal metadata tags ([i:N], [branch:...]) are stripped from output.
  */
 export function getEntityFacts(entityId: string, branchId?: string | null): string[] {
   const entity = getEntity(entityId);
   if (!entity) return [];
 
   if (!branchId) {
-    // Return all facts, stripping branch tags for display
-    return entity.facts.map((f) => f.replace(/^\[branch:[^\]]+\]\s*/, ""));
+    return entity.facts.map((f) => stripFactTags(f));
   }
 
   // Filter: include untagged facts + facts from this specific branch
@@ -987,7 +1024,7 @@ export function getEntityFacts(entityId: string, branchId?: string | null): stri
       const match = f.match(/^\[branch:([^\]]+)\]/);
       return !match || match[1] === branchId;
     })
-    .map((f) => f.replace(/^\[branch:[^\]]+\]\s*/, ""));
+    .map((f) => stripFactTags(f));
 }
 
 /** Update the running emotional valence for an entity */
@@ -1431,14 +1468,31 @@ export function upsertRelation(
       existingArcIds.push(arcId);
     }
 
+    // Dormant/inactive reactivation: if the relation is non-active and both
+    // entities are interacting again, consider reactivating.
+    const isInactive = existing.status !== "active";
+    const isUserCurated = existing.user_edited_at !== null;
+
     // User-edited relations: never overwrite curated fields (label,
     // strength, sentiment). Still track evidence + recompute edge salience
     // so time-decay continues to age the user's strength override.
-    if (existing.user_edited_at !== null) {
+    // For user-curated dormant relations: record the new evidence but
+    // flag for potential arbiter reactivation (don't auto-reactivate).
+    if (isUserCurated) {
       const curatedDecayRate = computeEdgeDecayRate(existing.strength);
       const curatedEdgeSalience = computeEdgeSalience(existing.strength, curatedDecayRate, now);
-      db.query(
-        `UPDATE memory_relations SET
+      // If dormant and new evidence arrived, mark pending_reactivation in metadata
+      // so the arbiter can evaluate whether to restore it.
+      let metadataUpdate = "";
+      let metadataValue: string | null = null;
+      if (isInactive) {
+        const meta = safeJsonObject(existing.metadata);
+        meta.pending_reactivation = true;
+        meta.reactivation_evidence_chunk = chunkId;
+        metadataUpdate = ", metadata = ?";
+        metadataValue = JSON.stringify(meta);
+      }
+      const query = `UPDATE memory_relations SET
           evidence_chunk_ids = ?,
           last_reinforced_at = ?,
           last_evidence_timestamp = ?,
@@ -1446,17 +1500,24 @@ export function upsertRelation(
           last_seen_arc_id = COALESCE(?, last_seen_arc_id),
           decay_rate = ?,
           edge_salience = ?,
-          updated_at = ?
-         WHERE id = ?`,
-      ).run(
+          updated_at = ?${metadataUpdate}
+         WHERE id = ?`;
+      const params: any[] = [
         JSON.stringify(evidenceIds), now, now,
         JSON.stringify(existingArcIds),
         arcId || null,
         curatedDecayRate, curatedEdgeSalience,
-        now, existing.id,
-      );
+        now,
+      ];
+      if (metadataValue) params.push(metadataValue);
+      params.push(existing.id);
+      db.query(query).run(...params);
       return;
     }
+
+    // Non-user-edited inactive relation: auto-reactivate on fresh evidence.
+    // The entities are interacting again, so the relationship is alive.
+    const statusUpdate = isInactive ? "active" : existing.status;
 
     // ── BUG 2: Logarithmic strength from evidence count ──
     const newStrength = computeStrength(evidenceIds.length);
@@ -1471,6 +1532,7 @@ export function upsertRelation(
         relation_label = COALESCE(?, relation_label),
         strength = ?,
         sentiment = ?,
+        status = ?,
         evidence_chunk_ids = ?,
         last_reinforced_at = ?,
         last_evidence_timestamp = ?,
@@ -1481,7 +1543,7 @@ export function upsertRelation(
         updated_at = ?
        WHERE id = ?`,
     ).run(
-      rel.label || null, newStrength, newSentiment,
+      rel.label || null, newStrength, newSentiment, statusUpdate,
       JSON.stringify(evidenceIds), now, now,
       JSON.stringify(existingArcIds),
       arcId || null,
@@ -1590,7 +1652,7 @@ export function upsertRelation(
   }
 }
 
-/** Get all relations for a chat (excludes superseded, suspect, and merged edges) */
+/** Get all active relations for a chat (excludes superseded, suspect, merged, and inactive) */
 export function getRelations(chatId: string): MemoryRelation[] {
   const rows = getDb()
     .query(
@@ -1599,6 +1661,21 @@ export function getRelations(chatId: string): MemoryRelation[] {
          AND superseded_by IS NULL AND merged_into IS NULL
          AND contradiction_flag != 'suspect'
        ORDER BY edge_salience DESC, strength DESC`,
+    )
+    .all(chatId) as MemoryRelationRow[];
+  return rows.map(rowToRelation);
+}
+
+/** Get all viewable relations including dormant/broken/former (for UI listing).
+ *  Excludes only superseded and merged-into edges (structural deduplication). */
+export function getRelationsIncludingInactive(chatId: string): MemoryRelation[] {
+  const rows = getDb()
+    .query(
+      `SELECT * FROM memory_relations
+       WHERE chat_id = ?
+         AND superseded_by IS NULL AND merged_into IS NULL
+         AND contradiction_flag != 'suspect'
+       ORDER BY status = 'active' DESC, edge_salience DESC, strength DESC`,
     )
     .all(chatId) as MemoryRelationRow[];
   return rows.map(rowToRelation);
@@ -1643,6 +1720,55 @@ export function getActiveEdgesForEntity(chatId: string, entityId: string): Memor
     )
     .all(chatId, entityId, entityId) as MemoryRelationRow[];
   return rows.map(rowToRelation);
+}
+
+/** Get dormant/inactive relations between specific entity pairs that have
+ *  pending reactivation evidence. Used by the arbiter to decide whether to
+ *  reactivate user-curated dormant relationships. */
+export function getPendingReactivationRelations(chatId: string, entityIds: string[]): MemoryRelation[] {
+  if (entityIds.length === 0) return [];
+  const placeholders = entityIds.map(() => "?").join(",");
+  const rows = getDb()
+    .query(
+      `SELECT * FROM memory_relations
+       WHERE chat_id = ? AND status != 'active'
+         AND superseded_by IS NULL AND merged_into IS NULL
+         AND metadata LIKE '%"pending_reactivation":true%'
+         AND (source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders}))
+       ORDER BY last_reinforced_at DESC`,
+    )
+    .all(chatId, ...entityIds, ...entityIds) as MemoryRelationRow[];
+  return rows.map(rowToRelation);
+}
+
+/** Reactivate a dormant relation (called by arbiter or manually). Clears
+ *  the pending_reactivation flag and sets status back to active. */
+export function reactivateRelation(relationId: string): void {
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const row = db.query("SELECT metadata FROM memory_relations WHERE id = ?").get(relationId) as any;
+  if (!row) return;
+  const meta = safeJsonObject(row.metadata);
+  delete meta.pending_reactivation;
+  delete meta.reactivation_evidence_chunk;
+  db.query(
+    `UPDATE memory_relations SET status = 'active', metadata = ?, updated_at = ? WHERE id = ?`,
+  ).run(JSON.stringify(meta), now, relationId);
+}
+
+/** Clear the pending_reactivation flag without reactivating (arbiter decided
+ *  the relationship should stay dormant). */
+export function dismissReactivation(relationId: string): void {
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const row = db.query("SELECT metadata FROM memory_relations WHERE id = ?").get(relationId) as any;
+  if (!row) return;
+  const meta = safeJsonObject(row.metadata);
+  delete meta.pending_reactivation;
+  delete meta.reactivation_evidence_chunk;
+  db.query(
+    `UPDATE memory_relations SET metadata = ?, updated_at = ? WHERE id = ?`,
+  ).run(JSON.stringify(meta), now, relationId);
 }
 
 /** Delete all relations for a chat (used in rebuild).
