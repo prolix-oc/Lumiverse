@@ -33,6 +33,7 @@ function makeEntity(name: string, entityType: MemoryEntity["entityType"], aliase
       mentionComponent: 0,
       arcComponent: 0,
       graphComponent: 0,
+      frequencyFloor: 0,
       total: 0,
     },
     lastMentionTimestamp: null,

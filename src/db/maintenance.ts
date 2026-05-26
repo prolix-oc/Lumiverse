@@ -292,8 +292,8 @@ export function applyBaseDatabasePragmas(db: Database): void {
   db.run("PRAGMA synchronous = NORMAL");
   db.run(`PRAGMA cache_size = ${-Math.floor(DEFAULT_CACHE_BYTES / 1024)}`);
   db.run("PRAGMA temp_store = MEMORY");
-  const isWindows = process.platform === "win32";
-  db.run(`PRAGMA mmap_size = ${isWindows ? 0 : MIN_MMAP_BYTES}`);
+  const mmapDisabled = process.platform === "win32" || env.sqliteMmapDisabled;
+  db.run(`PRAGMA mmap_size = ${mmapDisabled ? 0 : MIN_MMAP_BYTES}`);
   db.run("PRAGMA wal_autocheckpoint = 500");
   db.run(`PRAGMA journal_size_limit = ${DEFAULT_JOURNAL_SIZE_LIMIT_BYTES}`);
 }
@@ -421,7 +421,7 @@ function computeMmapBytes(stats: DatabaseStats, settings: DatabaseTuningSettings
   bytes: number;
   source: "auto" | "settings" | "disabled";
 } {
-  if (process.platform === "win32") {
+  if (process.platform === "win32" || env.sqliteMmapDisabled) {
     return { bytes: 0, source: "disabled" };
   }
 

@@ -44,6 +44,8 @@ export interface EnvConfig {
   stForceNewMigration: boolean;
   /** Optional Pollinations BYOP app key (publishable pk_...) */
   pollinationsAppKey: string;
+  /** Disable SQLite mmap entirely (saves memory on low-RAM hosts). */
+  sqliteMmapDisabled: boolean;
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -133,6 +135,7 @@ export function loadEnv(): EnvConfig {
   const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
   // Publishable BYOP app key default used when no per-instance override is set.
   const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "pk_Y3z2ooD6zSWfLdL3";
+  const sqliteMmapDisabled = process.env.LUMIVERSE_SQLITE_MMAP_DISABLED === "true";
 
   return {
     port,
@@ -155,6 +158,7 @@ export function loadEnv(): EnvConfig {
     stMigrationTarget,
     stForceNewMigration,
     pollinationsAppKey,
+    sqliteMmapDisabled,
   };
 }
 
