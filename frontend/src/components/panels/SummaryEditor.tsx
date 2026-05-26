@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, type ReactNode } from 'react'
 import {
   FileText, Check, AlertCircle, Trash2, Save, RefreshCw,
   Settings, Clock, Cloud, ChevronDown, Play, Scissors, Link2,
-  Sparkles, RotateCcw,
+  Sparkles, RotateCcw, Hammer,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import clsx from 'clsx'
@@ -14,6 +14,7 @@ import { Button } from '@/components/shared/FormComponents'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import {
   loadSummarizationDefaults,
 } from '@/lib/summary/service'
@@ -24,6 +25,9 @@ import {
   USER_PROMPT_PLACEHOLDERS,
 } from '@/lib/summary/prompts'
 import { DEFAULT_SUMMARY_REQUEST_TIMEOUT_MS, type SummaryMode, type SummaryApiSource } from '@/lib/summary/types'
+import { messagesApi } from '@/api/chats'
+import { useStore } from '@/store'
+import type { SummaryOperation } from '@/types/store'
 import styles from './SummaryEditor.module.css'
 
 // ─── Shared sub-components ────────────────────────────────────────
@@ -94,9 +98,21 @@ function SummaryTextEditor() {
     summaryText, originalText, hasChat, hasChanges,
     isLoading, error,
     setSummaryText, generate, save, clear, loadSummary,
+    rebuildProgress,
+    rebuild,
   } = useSummary()
 
+  const activeChatId = useStore((s) => s.activeChatId)
+  const summarization = useStore((s) => s.summarization)
+  const activeOperation = useStore((s) => s.activeSummaryOperation)
+
   const [isSaving, setIsSaving] = useState(false)
+  const [showClearModal, setShowClearModal] = useState(false)
+  const [showRebuildModal, setShowRebuildModal] = useState(false)
+  const [rebuildInfo, setRebuildInfo] = useState<{ totalMessages: number; batchCount: number } | null>(null)
+
+  const isGenerating = activeOperation === 'generating'
+  const isRebuilding = activeOperation === 'rebuilding'
 
   const handleGenerate = useCallback(async () => {
     if (!hasChat || isLoading) return
@@ -117,10 +133,32 @@ function SummaryTextEditor() {
     }
   }, [save])
 
-  const handleClear = useCallback(async () => {
-    if (!confirm('Clear the summary for this chat?')) return
+  const handleClearConfirm = useCallback(async () => {
+    setShowClearModal(false)
     await clear()
   }, [clear])
+
+  const handleRebuildConfirm = useCallback(async () => {
+    setShowRebuildModal(false)
+    if (!rebuildInfo) return
+    await rebuild()
+  }, [rebuild, rebuildInfo])
+
+  const openRebuildModal = useCallback(async () => {
+    if (!hasChat || isLoading) return
+    // Get total message count for the confirmation dialog
+    let totalMessages = 0
+    try {
+      const msgPage = await messagesApi.list(activeChatId, { limit: 1 })
+      totalMessages = msgPage.total
+    } catch {
+      totalMessages = 0
+    }
+    const manualContext = summarization.manualMessageContext || 10
+    const batchCount = Math.ceil(totalMessages / manualContext)
+    setRebuildInfo({ totalMessages, batchCount })
+    setShowRebuildModal(true)
+  }, [hasChat, isLoading, activeChatId, summarization.manualMessageContext])
 
   return (
     <Section icon={<FileText size={16} />} title="Summary Text" defaultOpen>
@@ -156,9 +194,9 @@ function SummaryTextEditor() {
         <Button
           size="icon" variant="primary"
           onClick={handleGenerate}
-          disabled={!hasChat || isLoading}
-          title={isLoading ? 'Generating...' : 'Generate'}
-          icon={isLoading ? <Spinner size={14} fast /> : <Play size={14} />}
+          disabled={!hasChat || isRebuilding}
+          title={isGenerating ? 'Generating...' : isRebuilding ? 'Rebuilding in progress' : 'Generate'}
+          icon={isGenerating ? <Spinner size={14} fast /> : <Play size={14} />}
         />
         <Button
           size="icon" variant="ghost"
@@ -169,19 +207,68 @@ function SummaryTextEditor() {
         />
         <Button
           size="icon" variant="danger-ghost"
-          onClick={handleClear}
-          disabled={!hasChat || !originalText}
+          onClick={() => setShowClearModal(true)}
+          disabled={!hasChat || !originalText || isGenerating || isRebuilding}
           title="Clear"
           icon={<Trash2 size={14} />}
         />
         <Button
           size="icon" variant="primary"
           onClick={handleSave}
-          disabled={!hasChat || !hasChanges}
+          disabled={!hasChat || !hasChanges || isGenerating || isRebuilding}
           title={isSaving ? 'Saved!' : 'Save'}
           icon={isSaving ? <Check size={14} /> : <Save size={14} />}
         />
+        {/* Rebuild button */}
+        <Button
+          size="icon" variant="secondary"
+          onClick={openRebuildModal}
+          disabled={!hasChat || isGenerating}
+          title={isRebuilding ? 'Rebuilding...' : 'Rebuild from scratch'}
+          icon={isRebuilding ? <Spinner size={14} fast /> : <Hammer size={14} />}
+        />
       </div>
+
+      {/* Rebuild progress — shows immediately with batch count from store */}
+      {rebuildProgress && rebuildProgress.totalBatches > 0 && (
+        <motion.div
+          className={styles.rebuildProgress}
+          initial={{ opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 5 }}
+        >
+          <Spinner size={12} fast />
+          <span>
+            {`Processing batch ${rebuildProgress.batchNumber + 1}/${rebuildProgress.totalBatches}…`}
+          </span>
+        </motion.div>
+      )}
+
+      {/* Clear confirmation modal */}
+      <ConfirmationModal
+        isOpen={showClearModal}
+        onConfirm={handleClearConfirm}
+        onCancel={() => setShowClearModal(false)}
+        title="Clear Summary"
+        message="Are you sure you want to clear the summary for this chat?"
+        variant="danger"
+        confirmText="Clear"
+        cancelText="Cancel"
+      />
+
+      {/* Rebuild confirmation modal */}
+      <ConfirmationModal
+        isOpen={showRebuildModal}
+        onConfirm={handleRebuildConfirm}
+        onCancel={() => setShowRebuildModal(false)}
+        title="Rebuild Summary"
+        message={rebuildInfo
+          ? <>This will process all <strong>{rebuildInfo.totalMessages}</strong> messages in <strong>{rebuildInfo.batchCount}</strong> batch(es). The existing summary will be preserved if the rebuild fails midway.</>
+          : 'Rebuilding summary from scratch…'}
+        variant="warning"
+        confirmText="Rebuild"
+        cancelText="Cancel"
+      />
 
       {/* Unsaved changes */}
       <AnimatePresence>

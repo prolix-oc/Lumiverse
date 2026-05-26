@@ -873,13 +873,19 @@ export interface SpindleSlice {
 // ---- Summary Slice ----
 import type { SummarizationSettings } from '@/lib/summary/types'
 
+export type SummaryOperation = 'generating' | 'rebuilding' | null
+
 export interface SummarySlice {
   summarization: SummarizationSettings
   isSummarizing: boolean
   lastSummaryMutation: { chatId: string; summaryText: string } | null
+  rebuildProgress: { batchNumber: number; totalBatches: number } | null
+  activeSummaryOperation: SummaryOperation
   setSummarization: (settings: Partial<SummarizationSettings>) => void
   setIsSummarizing: (value: boolean) => void
   setLastSummaryMutation: (value: { chatId: string; summaryText: string } | null) => void
+  setRebuildProgress: (value: { batchNumber: number; totalBatches: number } | null) => void
+  setActiveSummaryOperation: (value: SummaryOperation) => void
 }
 
 // ---- Auth Slice ----

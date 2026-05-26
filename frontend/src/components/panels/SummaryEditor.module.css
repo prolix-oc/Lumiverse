@@ -140,6 +140,19 @@
   text-align: center;
 }
 
+/* ─── Rebuild progress indicator ──────────────────────────── */
+.rebuildProgress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-primary);
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--lumiverse-primary-010);
+  border: 1px solid var(--lumiverse-primary-020);
+}
+
 /* ─── Radio group ─────────────────────────────────────────── */
 .radioGroup {
   display: flex;

@@ -148,8 +148,11 @@ app.get("/summarize/prompt-defaults", (c) => {
 app.post("/summarize", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
-    return c.json({ error: "messages array is required" }, 400);
+  if (!body.chat_id) {
+    return c.json({ error: "chat_id is required" }, 400);
+  }
+  if (!body.message_context || !Number.isFinite(body.message_context) || body.message_context < 1) {
+    return c.json({ error: "message_context must be a positive integer" }, 400);
   }
 
   try {
@@ -172,6 +175,32 @@ app.get("/summarize/status/:chatId", (c) => {
     generationId: entry.generationId,
     startedAt: entry.startedAt,
   });
+});
+
+// --- Rebuild summary endpoint ---
+
+app.post("/summarize/rebuild", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body.chat_id) return c.json({ error: "chat_id is required" }, 400);
+  if (!body.batch_size || !Number.isFinite(body.batch_size) || body.batch_size < 1) {
+    return c.json({ error: "batch_size must be a positive integer" }, 400);
+  }
+  if (!body.user_name || typeof body.user_name !== "string" || body.user_name.trim().length === 0) {
+    return c.json({ error: "user_name is required" }, 400);
+  }
+
+  try {
+    const result = await svc.rebuildSummary(userId, body);
+    // Start background processing — frontend tracks via WS events
+    void svc.startRebuildSummary(userId, body).catch((err) => {
+      console.error("[rebuild] Background processing failed:", err?.message);
+    });
+    return c.json(result);
+  } catch (err: any) {
+    const status = err.message.includes("No connection") || err.message.includes("Unknown provider") || err.message.includes("No API key") ? 400 : 502;
+    return c.json({ error: err.message }, status);
+  }
 });
 
 // --- Extension endpoints (localhost-only, synchronous, stateless) ---

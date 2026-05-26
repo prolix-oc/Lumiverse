@@ -34,6 +34,7 @@ import {
   type ToolCallResult,
 } from "../llm/types";
 import type { Message } from "../types/message";
+import type { ConnectionProfile } from "../types/connection-profile";
 import {
   interceptorPipeline,
   type InterceptorBreakdownEntry,
@@ -63,6 +64,10 @@ import * as breakdownSvc from "./breakdown.service";
 import * as regexScriptsSvc from "./regex-scripts.service";
 import * as pool from "./generation-pool.service";
 import * as summarizePool from "./summarize-pool.service";
+import {
+  getSummarizationPromptDefaults,
+  buildSummarizationPrompt,
+} from "./summarization-prompts.service";
 import {
   detectExpression,
   detectMultiCharacterExpression,
@@ -270,6 +275,28 @@ export interface QuietGenerateInput {
    * the user's global `reasoningSettings`. See `GenerationReasoningOverrideDTO`.
    */
   reasoning?: GenerationReasoningOverrideDTO;
+}
+
+/** Input for the /summarize endpoint — backend fetches messages and builds the prompt. */
+export interface SummarizeGenerateInput {
+  /** Chat ID to summarize. */
+  chat_id: string;
+  /** Number of recent messages to include in the prompt. */
+  message_context: number;
+  /** Previously stored summary text (may be empty). */
+  existingSummary?: string;
+  /** Active persona / user name. */
+  userName: string;
+  /** Active character name. */
+  characterName: string;
+  /** Optional custom system prompt template (falls back to backend default). */
+  systemPromptOverride?: string | null;
+  /** Optional custom user prompt template (falls back to backend default). */
+  userPromptOverride?: string | null;
+  /** Connection profile ID for the LLM call. */
+  connection_id?: string;
+  /** Optional abort signal. */
+  signal?: AbortSignal;
 }
 
 export interface DryRunResult {
@@ -3971,12 +3998,13 @@ export async function quietGenerateStream(
 
 /**
  * Summarize generation — used by the Loom Summary feature.
- * Resolves connection via: explicit connection_id → sidecar settings → default.
- * When using sidecar, applies sidecar model/temperature/maxTokens overrides.
+ * Accepts raw message data and builds the prompt internally using the shared
+ * `buildSummarizationPrompt` function. Resolves connection via: explicit
+ * connection_id → sidecar settings → default.
  */
 export async function summarizeGenerate(
   userId: string,
-  input: QuietGenerateInput,
+  input: SummarizeGenerateInput,
 ): Promise<GenerationResponse> {
   const chatId = input.chat_id;
   // One generationId per summary invocation — tracked in summarize-pool so the
@@ -3989,6 +4017,37 @@ export async function summarizeGenerate(
   }
 
   try {
+    // Fetch messages from the database (last N by message_context)
+    const allMessages = chatsSvc.getMessages(userId, chatId);
+    const visibleMessages = allMessages.filter((m) => m.extra?.hidden !== true);
+    const recentMessages = visibleMessages.slice(-input.message_context);
+
+    if (recentMessages.length === 0) {
+      throw new Error('No messages to summarize');
+    }
+
+    // Build the prompt using the shared backend function
+    const defaults = getSummarizationPromptDefaults();
+    const systemPrompt = input.systemPromptOverride && input.systemPromptOverride.trim().length > 0
+      ? input.systemPromptOverride
+      : defaults.systemPrompt;
+    const userPrompt = input.userPromptOverride && input.userPromptOverride.trim().length > 0
+      ? input.userPromptOverride
+      : defaults.userPrompt;
+
+    const prompt = buildSummarizationPrompt({
+      messages: recentMessages,
+      previousSummary: input.existingSummary || '',
+      userName: input.userName,
+      characterName: input.characterName,
+      systemPromptTemplate: systemPrompt,
+      userPromptTemplate: userPrompt,
+    });
+
+    if (!prompt) {
+      throw new Error('No messages to summarize');
+    }
+
     let connectionId = input.connection_id;
     let sidecarModel: string | undefined;
     let sidecarParams: Record<string, unknown> = {};
@@ -4002,7 +4061,7 @@ export async function summarizeGenerate(
         sidecarParams = {
           temperature: sidecar.temperature,
           top_p: sidecar.topP,
-          max_tokens: sidecar.maxTokens,
+          max_tokens: sidecar.maxTokens ?? 8192,
         };
       }
     }
@@ -4013,7 +4072,7 @@ export async function summarizeGenerate(
       connection.id,
     );
 
-    // Merge: preset defaults < sidecar overrides < request overrides
+    // Merge: preset defaults < sidecar overrides
     let mergedParams: GenerationParameters = {};
     if (connection.preset_id) {
       const preset = presetsSvc.getPreset(userId, connection.preset_id);
@@ -4021,7 +4080,11 @@ export async function summarizeGenerate(
         mergedParams = { ...preset.parameters };
       }
     }
-    mergedParams = { ...mergedParams, ...sidecarParams, ...input.parameters };
+    mergedParams = { ...mergedParams, ...sidecarParams };
+    // Ensure summary generation has enough tokens — presets may cap at 1024
+    if ((mergedParams.max_tokens as number) < 4096) {
+      mergedParams.max_tokens = 8192;
+    }
 
     injectConnectionMetadataFlags(connection, mergedParams);
 
@@ -4034,40 +4097,32 @@ export async function summarizeGenerate(
     );
 
     const resolvedModel = sidecarModel || connection.model;
+    const summarizeMessages: LlmMessage[] = [
+      { role: 'system', content: prompt.systemPrompt },
+      { role: 'user', content: prompt.userPrompt },
+    ];
     const cached = applyPromptCaching(
       {
         provider: provider.name,
         model: resolvedModel,
         metadata: connection.metadata,
       },
-      { params: mergedParams, messages: input.messages, tools: input.tools },
+      { params: mergedParams, messages: summarizeMessages },
     );
 
     const request: GenerationRequest = {
       messages: cached.messages,
       model: resolvedModel,
       parameters: cached.params,
-      tools: cached.tools,
     };
 
-    // Use streaming when tools are present — some providers only emit tool call
-    // deltas correctly via the streaming path.
-    const result =
-      input.tools && input.tools.length > 0
-        ? await consumeStream(
-            provider.generateStream(apiKey, apiUrl, {
-              ...request,
-              stream: true,
-            }),
-            userId,
-          )
-        : applyDelimitedReasoningParsing(
-            userId,
-            await provider.generate(apiKey, apiUrl, {
-              ...request,
-              stream: false,
-            }),
-          );
+    const result = applyDelimitedReasoningParsing(
+      userId,
+      await provider.generate(apiKey, apiUrl, {
+        ...request,
+        stream: false,
+      }),
+    );
 
     if (chatId) {
       summarizePool.completeSummarizePool({ generationId, userId, chatId });
@@ -4083,6 +4138,439 @@ export async function summarizeGenerate(
       });
     }
     throw err;
+  }
+}
+
+// ── Batch Rebuild Summary ────────────────────────────────────────────────
+
+interface RebuildSummaryResult {
+  generationId: string;
+  totalBatches: number;
+  totalMessages: number;
+}
+
+interface RebuildBatchContext {
+  chatId: string;
+  generationId: string;
+  userId: string;
+  batchSize: number;
+  connection: ConnectionProfile;
+  provider: LlmProvider;
+  apiKey: string;
+  apiUrl: string;
+  sidecarModel: string | undefined;
+  sidecarParams: Record<string, unknown>;
+  systemPrompt: string;
+  userPrompt: string;
+  userName: string;
+  characterName: string;
+  presetParams: Record<string, unknown>;
+}
+
+/**
+ * Process a single batch in the rebuild flow.
+ */
+async function processRebuildBatch(
+  ctx: RebuildBatchContext,
+  batch: Message[],
+  batchIdx: number,
+  totalBatches: number,
+  messagesProcessed: number,
+  currentSummary: string,
+): Promise<{ summary: string; messagesProcessed: number; failed: boolean }> {
+  const { chatId, generationId, userId, provider, apiKey, apiUrl, sidecarModel, sidecarParams, systemPrompt, userPrompt, userName, characterName, presetParams } = ctx;
+
+  // Build prompt for this batch
+  const prompt = buildSummarizationPrompt({
+    messages: batch,
+    previousSummary: currentSummary,
+    userName,
+    characterName,
+    systemPromptTemplate: systemPrompt,
+    userPromptTemplate: userPrompt,
+  });
+
+  if (!prompt) {
+    // Empty batch, skip (not a failure)
+    summarizePool.emitSummarizationProgress({
+      chatId,
+      generationId,
+      batchNumber: batchIdx + 1,
+      totalBatches,
+      messagesProcessed: messagesProcessed + batch.length,
+      userId,
+    });
+    return { summary: currentSummary, messagesProcessed: messagesProcessed + batch.length, failed: false };
+  }
+
+  // Merge parameters
+  const mergedParams = { ...presetParams, ...sidecarParams };
+  // Ensure summary generation has enough tokens — presets may cap at 1024
+  if ((mergedParams.max_tokens as number) < 4096) {
+    mergedParams.max_tokens = 8192;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  injectConnectionMetadataFlags(ctx.connection, mergedParams as any);
+
+  console.log(
+    `[rebuild] Batch ${batchIdx + 1}/${totalBatches}: model=${sidecarModel || ctx.connection.model}, max_tokens=${mergedParams.max_tokens ?? 'NOT SET'}`,
+  );
+
+  const rebuildMessages: LlmMessage[] = [
+    { role: 'system' as const, content: prompt.systemPrompt },
+    { role: 'user' as const, content: prompt.userPrompt },
+  ];
+  const cached = applyPromptCaching(
+    {
+      provider: provider.name,
+      model: sidecarModel || ctx.connection.model,
+      metadata: ctx.connection.metadata,
+    },
+    { params: mergedParams as GenerationParameters, messages: rebuildMessages },
+  );
+
+  const request = {
+    messages: cached.messages,
+    model: sidecarModel || ctx.connection.model,
+    parameters: cached.params,
+    stream: false,
+  };
+
+  // Call LLM for this batch
+  let result: GenerationResponse;
+  try {
+    result = applyDelimitedReasoningParsing(
+      userId,
+      await provider.generate(apiKey, apiUrl, request),
+    );
+  } catch (err: any) {
+    // Retry once on failure
+    try {
+      await new Promise<void>((r) => setTimeout(r, 500));
+      result = applyDelimitedReasoningParsing(
+        userId,
+        await provider.generate(apiKey, apiUrl, request),
+      );
+    } catch (retryErr: any) {
+      // On retry failure, keep the previous summary unchanged
+      console.warn(
+        `[rebuild] Batch ${batchIdx + 1}/${totalBatches} failed, keeping previous summary`,
+        retryErr?.message,
+      );
+      summarizePool.emitSummarizationProgress({
+        chatId,
+        generationId,
+        batchNumber: batchIdx + 1,
+        totalBatches,
+        messagesProcessed: messagesProcessed + batch.length,
+        userId,
+      });
+      return { summary: currentSummary, messagesProcessed: messagesProcessed + batch.length, failed: true };
+    }
+  }
+
+  const batchSummary = result.content?.trim();
+  const newSummary = batchSummary || currentSummary;
+
+  console.log(
+    `[rebuild] Batch ${batchIdx + 1}/${totalBatches}: contentLen=${(result.content || '').length}, batchSummaryLen=${(batchSummary || '').length}, newSummaryLen=${newSummary.length}`,
+  );
+
+  // Emit progress event
+  summarizePool.emitSummarizationProgress({
+    chatId,
+    generationId,
+    batchNumber: batchIdx + 1,
+    totalBatches,
+    messagesProcessed: messagesProcessed + batch.length,
+    userId,
+  });
+
+  return { summary: newSummary, messagesProcessed: messagesProcessed + batch.length, failed: false };
+}
+
+/**
+ * Rebuild a chat summary by processing all messages in sequential batches.
+ * Each batch's output feeds into the next as the "previous summary".
+ *
+ * This function is non-blocking: it resolves connection/settings, registers
+ * in the pool, kicks off the batch processing as a fire-and-forget async
+ * task, and returns immediately with metadata. The frontend tracks progress
+ * via SUMMARIZATION_PROGRESS and SUMMARIZATION_COMPLETED WS events.
+ */
+export async function rebuildSummary(
+  userId: string,
+  input: {
+    chat_id: string;
+    batch_size: number;
+    userName: string;
+    system_prompt_override?: string | null;
+    user_prompt_override?: string | null;
+    connection_id?: string;
+  },
+): Promise<RebuildSummaryResult> {
+  const chatId = input.chat_id;
+  const generationId = crypto.randomUUID();
+  const batchSize = Math.max(1, input.batch_size);
+
+  // Resolve connection
+  let connectionId = input.connection_id;
+  if (!connectionId) {
+    const sidecar = getSidecarSettings(userId);
+    if (sidecar.connectionProfileId) {
+      connectionId = sidecar.connectionProfileId;
+    }
+  }
+  const connection = resolveConnection(userId, connectionId);
+  const { provider, apiKey, apiUrl } = await resolveProviderAndKey(
+    userId,
+    connection.id,
+  );
+
+  // Resolve model and parameters
+  let sidecarModel: string | undefined;
+  let sidecarParams: Record<string, unknown> = {};
+  if (!input.connection_id) {
+    const sidecar = getSidecarSettings(userId);
+    if (sidecar.model) sidecarModel = sidecar.model;
+    sidecarParams = {
+      temperature: sidecar.temperature,
+      top_p: sidecar.topP,
+      max_tokens: sidecar.maxTokens ?? 8192,
+    };
+  }
+
+  // Get prompt defaults
+  const defaults = getSummarizationPromptDefaults();
+  const systemPrompt = input.system_prompt_override && input.system_prompt_override.trim().length > 0
+    ? input.system_prompt_override
+    : defaults.systemPrompt;
+  const userPrompt = input.user_prompt_override && input.user_prompt_override.trim().length > 0
+    ? input.user_prompt_override
+    : defaults.userPrompt;
+
+  // Get chat for character/user names
+  const chat = chatsSvc.getChat(userId, chatId);
+  const characterId = chat?.character_id;
+  const character = characterId ? charactersSvc.getCharacter(userId, characterId) : null;
+  const characterName = character?.name || 'Character';
+  const userName = input.userName || 'User';
+
+  // Fetch all messages ordered chronologically
+  const allMessages = chatsSvc.getMessages(userId, chatId);
+  const visibleMessages = allMessages.filter((m) => m.extra?.hidden !== true);
+
+  if (visibleMessages.length === 0) {
+    throw new Error('No messages to summarize');
+  }
+
+  // Get preset params
+  let presetParams: Record<string, unknown> = {};
+  if (connection.preset_id) {
+    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    if (preset) {
+      presetParams = { ...preset.parameters };
+    }
+  }
+
+  // Slice into batches
+  const batches: Message[][] = [];
+  for (let i = 0; i < visibleMessages.length; i += batchSize) {
+    batches.push(visibleMessages.slice(i, i + batchSize));
+  }
+
+  // Return immediately — batch processing runs in background
+  // (startRebuildSummary emits SUMMARIZATION_STARTED)
+  return { generationId, totalBatches: batches.length, totalMessages: visibleMessages.length };
+}
+
+/**
+ * Start the background batch processing for a rebuild summary.
+ * Called by the route handler after rebuildSummary() returns.
+ */
+export async function startRebuildSummary(
+  userId: string,
+  input: {
+    chat_id: string;
+    batch_size: number;
+    userName: string;
+    system_prompt_override?: string | null;
+    user_prompt_override?: string | null;
+    connection_id?: string;
+  },
+): Promise<void> {
+  const chatId = input.chat_id;
+  const generationId = crypto.randomUUID();
+  const batchSize = Math.max(1, input.batch_size);
+
+  // Resolve connection
+  let connectionId = input.connection_id;
+  if (!connectionId) {
+    const sidecar = getSidecarSettings(userId);
+    if (sidecar.connectionProfileId) {
+      connectionId = sidecar.connectionProfileId;
+    }
+  }
+  const connection = resolveConnection(userId, connectionId);
+  const { provider, apiKey, apiUrl } = await resolveProviderAndKey(
+    userId,
+    connection.id,
+  );
+
+  // Resolve model and parameters
+  let sidecarModel: string | undefined;
+  let sidecarParams: Record<string, unknown> = {};
+  if (!input.connection_id) {
+    const sidecar = getSidecarSettings(userId);
+    if (sidecar.model) sidecarModel = sidecar.model;
+    sidecarParams = {
+      temperature: sidecar.temperature,
+      top_p: sidecar.topP,
+      max_tokens: sidecar.maxTokens ?? 8192,
+    };
+  }
+
+  // Get prompt defaults
+  const defaults = getSummarizationPromptDefaults();
+  const systemPrompt = input.system_prompt_override && input.system_prompt_override.trim().length > 0
+    ? input.system_prompt_override
+    : defaults.systemPrompt;
+  const userPrompt = input.user_prompt_override && input.user_prompt_override.trim().length > 0
+    ? input.user_prompt_override
+    : defaults.userPrompt;
+
+  // Get chat for character/user names
+  const chat = chatsSvc.getChat(userId, chatId);
+  const characterId = chat?.character_id;
+  const character = characterId ? charactersSvc.getCharacter(userId, characterId) : null;
+  const characterName = character?.name || 'Character';
+  const userName = input.userName || 'User';
+
+  // Fetch all messages
+  const allMessages = chatsSvc.getMessages(userId, chatId);
+  const visibleMessages = allMessages.filter((m) => m.extra?.hidden !== true);
+
+  if (visibleMessages.length === 0) {
+    summarizePool.failSummarizePool({ generationId, userId, chatId, error: 'No messages to summarize' });
+    return;
+  }
+
+  // Get preset params
+  let presetParams: Record<string, unknown> = {};
+  if (connection.preset_id) {
+    const preset = presetsSvc.getPreset(userId, connection.preset_id);
+    if (preset) {
+      presetParams = { ...preset.parameters };
+    }
+  }
+
+  // Slice into batches
+  const batches: Message[][] = [];
+  for (let i = 0; i < visibleMessages.length; i += batchSize) {
+    batches.push(visibleMessages.slice(i, i + batchSize));
+  }
+
+  // Register in pool
+  if (chatId) {
+    summarizePool.startSummarizePool({ generationId, userId, chatId });
+  }
+
+  try {
+    // Get existing summary
+    const existingSummary = (chat?.metadata?.loom_summary as string) || '';
+    console.log(
+      `[rebuild] Starting rebuild for ${chatId}: existingSummary=${existingSummary ? existingSummary.slice(0, 80) + '…' : '(empty)'}, batches=${batches.length}`,
+    );
+
+    let currentSummary = existingSummary;
+    let messagesProcessed = 0;
+    let hadFailure = false;
+
+    // Process each batch
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+      const batch = batches[batchIdx];
+      const result = await processRebuildBatch(
+        {
+          chatId,
+          generationId,
+          userId,
+          batchSize,
+          connection,
+          provider,
+          apiKey,
+          apiUrl,
+          sidecarModel,
+          sidecarParams,
+          systemPrompt,
+          userPrompt,
+          userName,
+          characterName,
+          presetParams,
+        },
+        batch,
+        batchIdx,
+        batches.length,
+        messagesProcessed,
+        currentSummary,
+      );
+      currentSummary = result.summary;
+      messagesProcessed = result.messagesProcessed;
+
+      // Track whether this batch failed
+      if (result.failed) {
+        hadFailure = true;
+      }
+
+      console.log(
+        `[rebuild] Batch ${batchIdx + 1}/${batches.length} done, summaryLen=${currentSummary.length}, failed=${result.failed}`,
+      );
+
+      // Small delay between batches
+      if (batchIdx < batches.length - 1) {
+        await new Promise<void>((r) => setTimeout(r, 500));
+      }
+    }
+
+    // Rebuild is atomic: only commit if ALL batches succeeded.
+    // If any batch failed, the chain is broken and the result is unreliable.
+    const allBatchesSucceeded = !hadFailure;
+
+    if (allBatchesSucceeded) {
+      // All batches produced new content — commit the rebuilt summary
+      console.log(
+        `[rebuild] All ${batches.length} batches succeeded, committing summary (len=${currentSummary.length})`,
+      );
+      await chatsSvc.mergeChatMetadata(userId, chatId, {
+        loom_summary: currentSummary,
+        loom_last_summarized_at: {
+          messageCount: visibleMessages.length,
+          timestamp: Date.now(),
+        },
+      });
+      eventBus.emit(
+        EventType.SUMMARIZATION_COMPLETED,
+        { chatId, generationId, summaryText: currentSummary },
+        userId,
+      );
+    } else {
+      // At least one batch failed — keep existing summary, emit failure
+      console.warn(
+        `[rebuild] Rebuild aborted: at least one batch failed, keeping existing summary`,
+      );
+      eventBus.emit(
+        EventType.SUMMARIZATION_FAILED,
+        { chatId, generationId, error: 'One or more batches failed — rebuild aborted' },
+        userId,
+      );
+    }
+  } catch (err: any) {
+    summarizePool.failSummarizePool({
+      generationId,
+      userId,
+      chatId,
+      error: err?.message || 'Rebuild summary failed',
+    });
   }
 }
 

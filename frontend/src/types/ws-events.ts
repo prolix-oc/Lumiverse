@@ -147,6 +147,7 @@ export enum EventType {
 
   // Loom summary auto-summarization
   SUMMARIZATION_STARTED = 'SUMMARIZATION_STARTED',
+  SUMMARIZATION_PROGRESS = 'SUMMARIZATION_PROGRESS',
   SUMMARIZATION_COMPLETED = 'SUMMARIZATION_COMPLETED',
   SUMMARIZATION_FAILED = 'SUMMARIZATION_FAILED',
 
@@ -173,6 +174,15 @@ export interface SummarizationStartedPayload {
 export interface SummarizationCompletedPayload {
   chatId: string
   generationId: string
+  summaryText?: string
+}
+
+export interface SummarizationProgressPayload {
+  chatId: string
+  generationId: string
+  batchNumber: number
+  totalBatches: number
+  messagesProcessed: number
 }
 
 export interface SummarizationFailedPayload {

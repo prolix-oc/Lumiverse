@@ -50,10 +50,36 @@ export interface QuietGenerateRequest {
   chat_id?: string
 }
 
+/** Request for the /summarize endpoint — backend fetches messages and builds the prompt. */
+export interface SummarizeRequest {
+  /** Chat ID to summarize. */
+  chat_id: string
+  /** Number of recent messages to include in the prompt. */
+  message_context: number
+  /** Previously stored summary text (may be empty). */
+  existingSummary?: string
+  /** Active persona / user name. */
+  userName: string
+  /** Active character name. */
+  characterName: string
+  /** Optional custom system prompt template. */
+  systemPromptOverride?: string | null
+  /** Optional custom user prompt template. */
+  userPromptOverride?: string | null
+  /** Connection profile ID for the LLM call. */
+  connection_id?: string
+}
+
 export interface SummarizeStatusResponse {
   active: boolean
   generationId?: string
   startedAt?: number
+}
+
+export interface RebuildSummaryResponse {
+  summary: string
+  batchesProcessed: number
+  totalMessages: number
 }
 
 export interface QuietGenerateResponse {
@@ -286,7 +312,7 @@ export const generateApi = {
     return post<QuietGenerateResponse>('/generate/quiet', request, LONG)
   },
 
-  summarize(request: QuietGenerateRequest, options: RequestOptions = LONG) {
+  summarize(request: SummarizeRequest, options: RequestOptions = LONG) {
     return post<QuietGenerateResponse>('/generate/summarize', request, options)
   },
 
@@ -296,6 +322,19 @@ export const generateApi = {
 
   getSummarizeStatus(chatId: string) {
     return get<SummarizeStatusResponse>(`/generate/summarize/status/${chatId}`)
+  },
+
+  rebuildSummary(chatId: string, batchSize: number, userName: string, options?: {
+    system_prompt_override?: string | null
+    user_prompt_override?: string | null
+    connection_id?: string
+  }) {
+    return post<RebuildSummaryResponse>('/generate/summarize/rebuild', {
+      chat_id: chatId,
+      batch_size: batchSize,
+      user_name: userName,
+      ...options,
+    }, LONG)
   },
 
   async dryRun(request: GenerateRequest) {

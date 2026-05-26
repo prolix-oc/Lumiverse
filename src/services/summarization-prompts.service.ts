@@ -78,3 +78,85 @@ export function getSummarizationPromptDefaults(): SummarizationPromptDefaults {
     userPrompt: DEFAULT_SUMMARIZATION_USER_PROMPT,
   };
 }
+
+// ── Shared prompt builder ──────────────────────────────────────────────
+
+export interface SummarizationPrompt {
+  systemPrompt: string;
+  userPrompt: string;
+}
+
+export interface BuildSummarizationPromptOptions {
+  messages: Array<{ is_user: boolean; name: string; content: string }>;
+  previousSummary: string;
+  userName: string;
+  characterName: string;
+  systemPromptTemplate: string;
+  userPromptTemplate: string;
+}
+
+/**
+ * Build a summarization prompt from a batch of messages, with optional
+ * previous summary. This is the shared backend implementation used by
+ * both the existing summarize endpoint and the rebuild endpoint.
+ *
+ * Mirrors the frontend's buildSummarizationPrompt logic so both paths
+ * produce identical prompts.
+ */
+export function buildSummarizationPrompt(
+  opts: BuildSummarizationPromptOptions,
+): SummarizationPrompt | null {
+  const { messages, previousSummary, userName, characterName, systemPromptTemplate, userPromptTemplate } = opts;
+
+  if (messages.length === 0) return null;
+
+  // Build conversation text
+  let conversationText = '';
+  for (const msg of messages) {
+    const role = msg.is_user ? (msg.name || 'User') : (msg.name || 'Character');
+    let content = msg.content || '';
+    // Strip any existing loom_sum blocks
+    content = content.replace(/<loom_sum>[\s\S]*?<\/loom_sum>/gi, '').trim();
+    if (content) {
+      conversationText += `${role}: ${content}\n\n`;
+    }
+  }
+
+  const previousSummaryBlock = previousSummary
+    ? `**PREVIOUS LOOM SUMMARY** (use this as your foundation—do NOT discard important information):
+${previousSummary}
+
+---
+
+**MERGE INSTRUCTIONS:**
+- Start with ALL existing entries from the previous summary
+- Add new developments from the recent events below
+- When a category exceeds its item limit, consolidate related items or remove the least narratively relevant
+- NEVER silently drop items that still have ongoing relevance (active conflicts, unresolved threads, important relationships)
+- If an item from the previous summary is still relevant but needs updating, modify it rather than removing it
+
+---
+`
+    : '';
+
+  const substitutions: Record<string, string> = {
+    '{{user}}': userName,
+    '{{char}}': characterName,
+    '{{previousSummaryBlock}}': previousSummaryBlock,
+    '{{existingSummary}}': previousSummary,
+    '{{conversation}}': conversationText.trimEnd(),
+  };
+
+  function applySubstitutions(template: string): string {
+    let out = template;
+    for (const [token, value] of Object.entries(substitutions)) {
+      out = out.split(token).join(value);
+    }
+    return out;
+  }
+
+  return {
+    systemPrompt: applySubstitutions(systemPromptTemplate),
+    userPrompt: applySubstitutions(userPromptTemplate),
+  };
+}

@@ -60,6 +60,31 @@ export function startSummarizePool(opts: {
 }
 
 /**
+ * Emit a progress event for a batched summary rebuild.
+ * Payload: { chatId, generationId, batchNumber, totalBatches, messagesProcessed }
+ */
+export function emitSummarizationProgress(opts: {
+  chatId: string;
+  generationId: string;
+  batchNumber: number;
+  totalBatches: number;
+  messagesProcessed: number;
+  userId: string;
+}): void {
+  eventBus.emit(
+    EventType.SUMMARIZATION_PROGRESS,
+    {
+      chatId: opts.chatId,
+      generationId: opts.generationId,
+      batchNumber: opts.batchNumber,
+      totalBatches: opts.totalBatches,
+      messagesProcessed: opts.messagesProcessed,
+    },
+    opts.userId,
+  );
+}
+
+/**
  * Mark a summary job as completed. Emits `SUMMARIZATION_COMPLETED` and removes
  * the pool entry. No-op if the entry was already cleared (e.g. by a later
  * registration from another tab).
