@@ -55,7 +55,7 @@ export default function LoginPage() {
     const scrollFocusedInput = () => {
       formRef.current?.querySelector(`#${focused}`)?.scrollIntoView({
         behavior: 'smooth',
-        block: 'center',
+        block: 'nearest',
       })
     }
     const timers = [100, 350, 650].map((delay) => setTimeout(scrollFocusedInput, delay))

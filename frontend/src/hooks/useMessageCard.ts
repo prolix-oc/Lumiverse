@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
@@ -209,7 +209,10 @@ export function useMessageCard(message: Message, chatId: string) {
 
   // Populate edit fields on the false→true transition of isEditing,
   // so externally-triggered edits (keyboard shortcut) seed the fields too.
-  useEffect(() => {
+  // useLayoutEffect so the content is populated before paint — useEffect
+  // leaves a frame where the textarea is empty (min-height 220px) which
+  // the virtualizer measures as a height spike ("void").
+  useLayoutEffect(() => {
     if (isEditing && !wasEditingRef.current) {
       initializeEdit()
     }
