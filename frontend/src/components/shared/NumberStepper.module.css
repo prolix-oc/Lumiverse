@@ -2,15 +2,18 @@
   display: flex;
   align-items: stretch;
   border: 1px solid var(--lumiverse-border);
-  border-radius: 6px;
-  background: var(--lumiverse-bg);
+  border-radius: 7px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
   overflow: hidden;
   height: 28px;
-  transition: border-color var(--lumiverse-transition-fast);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
 }
 
 .stepper:focus-within {
-  border-color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010, rgba(147, 112, 219, 0.1));
 }
 
 .input {

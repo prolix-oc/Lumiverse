@@ -1867,6 +1867,7 @@ export async function assemblePrompt(
       wiCache.emBefore,
       wiCache.emAfter,
       wiCache.depth,
+      wiCache.atMarker,
     ];
     let wiEvalCounter = 0;
     for (const bucket of allWiEntries) {
@@ -1883,6 +1884,16 @@ export async function assemblePrompt(
     }
   }
   pruneEmptyWorldInfoCacheEntries(wiCache);
+
+  // Populate {{wi_marker}} — all position-7 entries joined by double newlines
+  if (wiCache.atMarker.length > 0) {
+    macroEnv.extra.worldInfoAtMarker = wiCache.atMarker
+      .map((e) => e.content)
+      .join("\n\n");
+  } else {
+    macroEnv.extra.worldInfoAtMarker = "";
+  }
+
   profiler.addPhase("macro-prepass", performance.now() - phaseStartedAt);
 
   // Yield before the main block iteration — WI macro evaluation above can run
@@ -2450,6 +2461,17 @@ export async function assemblePrompt(
       ),
       role: depthEntry.role,
       content: depthEntry.content,
+    });
+  }
+
+  // Position 7 (at marker): injected via {{wi_marker}} macro, add breakdown only
+  for (const markerEntry of wiCache.atMarker) {
+    breakdown.push({
+      type: "world_info",
+      name: formatWorldInfoBreakdownName("WI At Marker", markerEntry.entryLabel),
+      role: markerEntry.role,
+      content: markerEntry.content,
+      excludeFromTotal: true,
     });
   }
 
@@ -4249,7 +4271,28 @@ function formatCortexForAssembly(
   };
 
   if (cortexConfig.useChatMemoryFormatting) {
-    return memoryCortex.cortexToMemoryResult(cortexResult, chatMemorySettings);
+    const memResult = memoryCortex.cortexToMemoryResult(cortexResult, chatMemorySettings);
+
+    // Append entity/relationship/arc context so the LLM still benefits from
+    // cortex scoring signals even when memory chunks use chat memory templates.
+    const contextBudget = Math.floor(cortexConfig.contextTokenBudget * 0.55);
+    const contextText = memoryCortex.formatContextSections(
+      cortexResult.entityContext,
+      cortexResult.activeRelationships,
+      cortexResult.arcContext,
+      {
+        mode: cortexConfig.formatterMode as any,
+        tokenBudget: contextBudget,
+        currentSpeakerName: character?.name,
+      },
+    );
+    if (contextText) {
+      memResult.formatted = memResult.formatted
+        ? memResult.formatted + "\n\n" + contextText
+        : contextText;
+    }
+
+    return memResult;
   }
 
   return {
@@ -4403,6 +4446,7 @@ function pruneEmptyWorldInfoCacheEntries(cache: WorldInfoCache): void {
   pruneEmptyWorldInfoEntriesInPlace(cache.depth);
   pruneEmptyWorldInfoEntriesInPlace(cache.emBefore);
   pruneEmptyWorldInfoEntriesInPlace(cache.emAfter);
+  pruneEmptyWorldInfoEntriesInPlace(cache.atMarker);
 }
 
 function injectPromptBlocksAt(

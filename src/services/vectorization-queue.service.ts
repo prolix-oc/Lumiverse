@@ -108,7 +108,13 @@ class VectorizationQueue {
 
     try {
       while (this.queue.length > 0) {
-        const batch = this.takeBatch(10);
+        const userId = this.queue[0].userId;
+        let maxBatch = 10;
+        try {
+          const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+          maxBatch = Math.max(1, Math.min(cfg.batch_size, 200));
+        } catch {}
+        const batch = this.takeBatch(maxBatch);
 
         if (batch[0].type === "chunk") {
           await this.processChunkBatch(batch);
@@ -165,33 +171,52 @@ class VectorizationQueue {
 
     try {
       const cfg = await embeddingsSvc.getEmbeddingConfig(jobs[0].userId);
-      const texts = chunks.map((c) => c.content);
-      const vectors = await embeddingsSvc.cachedEmbedTexts(jobs[0].userId, texts);
+      const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
       const refreshedChats = new Set<string>();
+      const failedChunkIds = new Set<string>();
 
-      // Batch upsert all vectors in a single LanceDB mergeInsert call
-      // to avoid creating one fragment per chunk (main cause of slow queries).
-      const batchItems = chunks.map((chunk, i) => ({
-        chatId: chunk.chatId,
-        chunkId: chunk.id,
-        vector: vectors[i],
-        content: chunk.content,
-      }));
-      await embeddingsSvc.batchUpsertChunkVectors(jobs[0].userId, batchItems);
+      await embeddingsSvc.embedWithAdaptiveBatching(
+        jobs[0].userId,
+        chunks,
+        batchSize,
+        (chunk) => chunk.content,
+        async (batchChunks, _texts, vectors) => {
+          const batchItems = batchChunks.map((chunk, i) => ({
+            chatId: chunk.chatId,
+            chunkId: chunk.id,
+            vector: vectors[i],
+            content: chunk.content,
+          }));
+          await embeddingsSvc.batchUpsertChunkVectors(jobs[0].userId, batchItems);
 
-      const now = Math.floor(Date.now() / 1000);
-      for (let i = 0; i < chunks.length; i++) {
-        db.query(
-          "UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?"
-        ).run(now, cfg.model, chunks[i].id);
-        refreshedChats.add(chunks[i].chatId);
+          const now = Math.floor(Date.now() / 1000);
+          for (const chunk of batchChunks) {
+            db.query(
+              "UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?"
+            ).run(now, cfg.model, chunk.id);
+            refreshedChats.add(chunk.chatId);
+          }
+        },
+        (failedItems, error) => {
+          console.warn(`[vectorization] Failed to embed ${failedItems.length} chunk(s):`, error.message);
+          for (const chunk of failedItems) failedChunkIds.add(chunk.id);
+        },
+        { label: "chat-chunks" },
+      );
+
+      for (const job of jobs) {
+        if (job.chunkId && failedChunkIds.has(job.chunkId) && job.priority > 0) {
+          this.add({ ...job, priority: job.priority - 1 });
+        }
       }
 
       for (const chatId of refreshedChats) {
         scheduleChatMemoryRefresh(jobs[0].userId, chatId, 7);
       }
 
-      console.info(`[vectorization] Processed ${chunks.length} chunk(s)`);
+      if (chunks.length > failedChunkIds.size) {
+        console.info(`[vectorization] Processed ${chunks.length - failedChunkIds.size} chunk(s)`);
+      }
     } catch (err) {
       console.warn("[vectorization] Chunk batch failed, requeueing with lower priority", err);
       for (const job of jobs) {

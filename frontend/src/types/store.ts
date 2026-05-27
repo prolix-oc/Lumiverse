@@ -684,7 +684,7 @@ export interface ImageGenSettings {
   novelai?: Record<string, any>
 }
 
-export type ImageGenPresetKind = 'main' | 'character' | 'persona'
+export type ImageGenPresetKind = 'main' | 'character' | 'persona' | 'captioning'
 
 export interface ImageGenPromptPreset {
   id: string

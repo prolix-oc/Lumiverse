@@ -111,6 +111,22 @@ export const imageGenApi = {
       timeout: resolveClientTimeoutMs(input.promptGenerationTimeoutSeconds, 0),
     })
   },
+
+  caption(input: {
+    image: string
+    mimeType: string
+    prompt?: string
+    presetId?: string | null
+    parserConnectionId?: string | null
+    parserModel?: string
+    parserParameters?: Record<string, any>
+    timeoutSeconds?: number
+  }) {
+    const timeoutSec = Number.isFinite(input.timeoutSeconds) ? Math.max(0, Math.floor(input.timeoutSeconds!)) : 60
+    return post<{ caption: string }>('/image-gen/caption', input, {
+      timeout: timeoutSec > 0 ? timeoutSec * 1000 + CLIENT_TIMEOUT_BUFFER_MS : 0,
+    })
+  },
 }
 
 export const imageGenPresetBindingsApi = {

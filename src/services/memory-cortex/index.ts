@@ -63,7 +63,7 @@ import type {
 export { getCortexConfig, putCortexConfig, applyCortexPreset, shouldUseCortexSidecar, shouldUseCortexSidecarForChunkAnalysis } from "./config";
 export type { MemoryCortexConfig, CortexPresetMode, FactManagementConfig } from "./config";
 export { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
-export { formatShadowPrompt, formatLinkedCortexSection } from "./shadow-formatter";
+export { formatShadowPrompt, formatContextSections, formatLinkedCortexSection } from "./shadow-formatter";
 export type { FormatterMode, ShadowPromptResult, LinkedFormatResult } from "./shadow-formatter";
 export { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 export type { CortexUsageStats } from "./gc";

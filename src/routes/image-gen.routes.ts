@@ -57,6 +57,30 @@ app.post("/preview-prompt", async (c) => {
   }
 });
 
+app.post("/caption", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body?.image || !body?.mimeType) return c.json({ error: "image and mimeType are required" }, 400);
+
+  try {
+    const result = await svc.captionImage(userId, {
+      image: body.image,
+      mimeType: body.mimeType,
+      prompt: body.prompt,
+      presetId: body.presetId,
+      parserConnectionId: body.parserConnectionId,
+      parserModel: body.parserModel,
+      parserParameters: body.parserParameters,
+      timeoutSeconds: body.timeoutSeconds,
+    });
+    return c.json(result);
+  } catch (err: any) {
+    const msg = clampErrorMessage(describeProviderError(err, "Image captioning failed"));
+    const status = /required|not found|unsupported|parse|No API key|missing|connection/i.test(msg) ? 400 : 502;
+    return c.json({ error: msg }, status);
+  }
+});
+
 // ─── Character preset bindings ─────────────────────────────────────────
 
 app.get("/preset-bindings/character/:characterId", (c) => {

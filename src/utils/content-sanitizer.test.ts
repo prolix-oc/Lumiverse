@@ -22,6 +22,24 @@ describe("sanitizeForVectorization", () => {
       "A wrapped fact B",
     );
   });
+
+  test("strips scaffold tags and their content", () => {
+    expect(sanitizeForVectorization("Prose. <status>HP: 100/100\nMP: 50/50</status> More prose.")).toBe(
+      "Prose. More prose.",
+    );
+    expect(sanitizeForVectorization("Before <hud>Level: 5 | XP: 1200</hud> after")).toBe(
+      "Before after",
+    );
+    expect(sanitizeForVectorization("Text <dice>3d6: 14</dice> rest")).toBe(
+      "Text rest",
+    );
+    expect(sanitizeForVectorization("A <inventory>sword, shield</inventory> B")).toBe(
+      "A B",
+    );
+    expect(sanitizeForVectorization("Narrative <tool_call>function(args)</tool_call> continues")).toBe(
+      "Narrative continues",
+    );
+  });
 });
 
 describe("stripNonProseTags", () => {

@@ -145,7 +145,7 @@ export type ImageGenOutputTarget =
   | "preview"
   | "attach_to_message";
 
-export type ImageGenPresetKind = "main" | "character" | "persona";
+export type ImageGenPresetKind = "main" | "character" | "persona" | "captioning";
 
 export interface ImageGenPromptPreset {
   id: string;
@@ -603,6 +603,78 @@ export async function previewImagePrompt(
     throw resolveAbortReason(promptSignal.signal) ?? err;
   } finally {
     promptSignal.cleanup();
+  }
+}
+
+export interface CaptionImageInput {
+  image: string;
+  mimeType: string;
+  prompt?: string;
+  presetId?: string | null;
+  parserConnectionId?: string | null;
+  parserModel?: string;
+  parserParameters?: Record<string, any>;
+  timeoutSeconds?: number;
+}
+
+export async function captionImage(
+  userId: string,
+  input: CaptionImageInput,
+): Promise<{ caption: string }> {
+  const settings = getImageGenSettings(userId);
+
+  const promptText =
+    input.prompt?.trim() ||
+    (input.presetId
+      ? (settings.promptPresets || []).find((p) => p.id === input.presetId)?.prompt
+      : undefined) ||
+    "Describe this image in detail using concise image-generation tags. Include subject, composition, style, lighting, mood, and colors.";
+
+  const parser = await resolvePromptParser(userId, settings, {
+    id: "",
+    name: "",
+    mode: "parsed_custom",
+    prompt: "",
+    parserConnectionId: input.parserConnectionId || null,
+    parserModel: input.parserModel || "",
+    parserParameters: input.parserParameters || {},
+  });
+
+  const timeoutSecs = resolveTimeoutSeconds(input.timeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
+  const controller = new AbortController();
+  const timeout = createPhaseTimeoutSignal(
+    controller.signal,
+    timeoutSecs,
+    `Image captioning timed out after ${timeoutSecs}s`,
+  );
+
+  try {
+    const response = await rawGenerate(userId, {
+      provider: parser.connection.provider,
+      model: parser.model,
+      connection_id: parser.connection.id,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an image analyst producing concise, detailed descriptions suitable for image generation prompts. Follow the user's instructions for style and format. Return only the caption text, no markdown fences or JSON.",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "image", data: input.image, mime_type: input.mimeType },
+            { type: "text", text: promptText },
+          ],
+        },
+      ],
+      parameters: parser.parameters,
+      signal: timeout.signal,
+    });
+    return { caption: (response.content || "").trim() };
+  } catch (err) {
+    throw resolveAbortReason(timeout.signal) ?? err;
+  } finally {
+    timeout.cleanup();
   }
 }
 

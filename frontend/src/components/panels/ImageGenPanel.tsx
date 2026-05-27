@@ -309,7 +309,7 @@ export default function ImageGenPanel() {
   const [parserModelsLoading, setParserModelsLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
   const [availableMacros, setAvailableMacros] = useState<MacroGroup[]>(() => getAvailableMacros())
-  const [editTarget, setEditTarget] = useState<'main' | 'character' | 'persona'>('main')
+  const [editTarget, setEditTarget] = useState<'main' | 'character' | 'persona' | 'captioning'>('main')
   const [draftPrompt, setDraftPrompt] = useState('')
   const [draftNegative, setDraftNegative] = useState('')
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
@@ -514,6 +514,7 @@ export default function ImageGenPanel() {
   const mainPresets = useMemo(() => promptPresets.filter((p) => (p.kind ?? 'main') === 'main'), [promptPresets])
   const characterPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'character'), [promptPresets])
   const personaPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'persona'), [promptPresets])
+  const captioningPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'captioning'), [promptPresets])
 
   // Load this character's bound preset whenever the active character changes.
   useEffect(() => {
@@ -575,11 +576,15 @@ export default function ImageGenPanel() {
       setLoadedPresetId(preset?.id ?? null)
       setDraftPrompt(preset?.prompt || '')
       setDraftNegative(preset?.negativePrompt || '')
-    } else {
+    } else if (editTarget === 'persona') {
       const preset = personaPresetId ? personaPresets.find((p) => p.id === personaPresetId) : null
       setLoadedPresetId(preset?.id ?? null)
       setDraftPrompt(preset?.prompt || '')
       setDraftNegative(preset?.negativePrompt || '')
+    } else if (editTarget === 'captioning') {
+      setLoadedPresetId(null)
+      setDraftPrompt('')
+      setDraftNegative('')
     }
     setPresetName('')
     // We intentionally exclude `imageGeneration.customPrompt`/`customNegativePrompt`
@@ -690,6 +695,9 @@ export default function ImageGenPanel() {
         bindPersonaPreset(null)
         setDraftPrompt('')
         setDraftNegative('')
+      } else if (editTarget === 'captioning') {
+        setDraftPrompt('')
+        setDraftNegative('')
       }
       return
     }
@@ -720,7 +728,7 @@ export default function ImageGenPanel() {
   // target: 'main' bumps the activePromptPresetId and writes to settings;
   // 'character'/'persona' rebind the new id to the active actor.
   const savePromptPreset = useCallback(() => {
-    const targetLabel = editTarget === 'main' ? 'Image prompt' : editTarget === 'character' ? 'Character preset' : 'Persona preset'
+    const targetLabel = editTarget === 'main' ? 'Image prompt' : editTarget === 'character' ? 'Character preset' : editTarget === 'captioning' ? 'Captioning preset' : 'Persona preset'
     const name = presetName.trim() || loadedPreset?.name || targetLabel
     const existingId = loadedPresetId
     const nextPreset: ImageGenPromptPreset = {
@@ -729,9 +737,9 @@ export default function ImageGenPanel() {
       mode: imageGeneration.promptMode === 'parsed_custom' ? 'parsed_custom' : 'custom',
       prompt: draftPrompt,
       negativePrompt: draftNegative,
-      parserConnectionId: editTarget === 'main' ? (imageGeneration.promptParserConnectionId || null) : null,
-      parserModel: editTarget === 'main' ? (imageGeneration.promptParserModel || '') : '',
-      parserParameters: editTarget === 'main' ? (imageGeneration.promptParserParameters || {}) : {},
+      parserConnectionId: (editTarget === 'main' || editTarget === 'captioning') ? (imageGeneration.promptParserConnectionId || null) : null,
+      parserModel: (editTarget === 'main' || editTarget === 'captioning') ? (imageGeneration.promptParserModel || '') : '',
+      parserParameters: (editTarget === 'main' || editTarget === 'captioning') ? (imageGeneration.promptParserParameters || {}) : {},
       kind: editTarget,
     }
     const next = existingId
@@ -986,6 +994,11 @@ export default function ImageGenPanel() {
     ...personaPresets.map((p) => ({ value: p.id, label: p.name })),
   ], [personaPresets])
 
+  const captioningPresetOptions = useMemo(() => [
+    { value: '', label: 'No captioning preset' },
+    ...captioningPresets.map((p) => ({ value: p.id, label: p.name })),
+  ], [captioningPresets])
+
   // Resolve the model ID to a human-readable label
   const modelLabel = useMemo(() => {
     if (!activeConnection?.model) return null
@@ -1003,6 +1016,12 @@ export default function ImageGenPanel() {
         label="Enable Image Generation"
         hint="Generate scene-aware chat backgrounds through the council scene tool"
       />
+
+      <FormField label="Image Captioner" hint="Upload an image and generate descriptive tags using your parser model. Useful for creating character or scene prompts from reference images.">
+        <Button variant="secondary" size="sm" onClick={() => useStore.getState().openModal('imageCaptioner', {})}>
+          Open Captioner
+        </Button>
+      </FormField>
 
       {imageGeneration.enabled && (
         <>
@@ -1055,34 +1074,37 @@ export default function ImageGenPanel() {
                 >
                   <Select
                     value={editTarget}
-                    onChange={(value) => setEditTarget(value as 'main' | 'character' | 'persona')}
+                    onChange={(value) => setEditTarget(value as 'main' | 'character' | 'persona' | 'captioning')}
                     options={[
                       { value: 'main', label: 'Main preset' },
                       { value: 'character', label: 'Character preset' },
                       { value: 'persona', label: 'Persona preset' },
+                      { value: 'captioning', label: 'Captioning preset' },
                     ]}
                   />
                 </FormField>
 
                 <FormField
-                  label={editTarget === 'main' ? 'Active Main Preset' : editTarget === 'character' ? 'Bound Character Preset' : 'Bound Persona Preset'}
+                  label={editTarget === 'main' ? 'Active Main Preset' : editTarget === 'character' ? 'Bound Character Preset' : editTarget === 'captioning' ? 'Captioning Preset' : 'Bound Persona Preset'}
                   hint={
                     editTarget === 'main'
                       ? 'Pick a saved main preset to load it into the editor below. It also becomes the active prompt sent at generation time.'
                       : editTarget === 'character'
                         ? activeCharacterId
-                          ? 'Pick a character preset to load it into the editor and bind it to the current chat’s character.'
-                          : 'Open a chat to bind a preset to its character. Until then, picks won’t persist.'
-                        : activePersonaId
-                          ? 'Pick a persona preset to load it into the editor and bind it to the active persona.'
-                          : 'Select an active persona to bind a preset to it.'
+                          ? "Pick a character preset to load it into the editor and bind it to the current chat's character."
+                          : "Open a chat to bind a preset to its character. Until then, picks won't persist."
+                        : editTarget === 'captioning'
+                          ? 'Pick a saved captioning preset to load it. These presets define how the Image Captioner describes uploaded images.'
+                          : activePersonaId
+                            ? 'Pick a persona preset to load it into the editor and bind it to the active persona.'
+                            : 'Select an active persona to bind a preset to it.'
                   }
                 >
                   <Select
                     value={loadedPresetId || ''}
                     onChange={(value) => pickPreset(value || null)}
                     options={
-                      editTarget === 'main' ? mainPresetOptions : editTarget === 'character' ? characterPresetOptions : personaPresetOptions
+                      editTarget === 'main' ? mainPresetOptions : editTarget === 'character' ? characterPresetOptions : editTarget === 'captioning' ? captioningPresetOptions : personaPresetOptions
                     }
                   />
                 </FormField>
@@ -1091,7 +1113,9 @@ export default function ImageGenPanel() {
                   label={
                     editTarget === 'main'
                       ? (imageGeneration.promptMode === 'parsed_custom' ? 'Parser Instructions' : 'Prompt')
-                      : editTarget === 'character' ? 'Character snippet' : 'Persona snippet'
+                      : editTarget === 'character' ? 'Character snippet'
+                      : editTarget === 'captioning' ? 'Captioning Instructions'
+                      : 'Persona snippet'
                   }
                   hint={
                     editTarget === 'main'
@@ -1100,7 +1124,9 @@ export default function ImageGenPanel() {
                           : 'Sent directly to the image provider.')
                       : editTarget === 'character'
                         ? 'Text spliced in wherever {{character_prompt}} appears in the main preset.'
-                        : 'Text spliced in wherever {{persona_prompt}} appears in the main preset.'
+                        : editTarget === 'captioning'
+                          ? 'Instructions sent alongside the uploaded image to the parser LLM in the Image Captioner modal.'
+                          : 'Text spliced in wherever {{persona_prompt}} appears in the main preset.'
                   }
                 >
                   <ExpandableTextarea
@@ -1115,7 +1141,9 @@ export default function ImageGenPanel() {
                             : 'Describe the image you want to generate...')
                         : editTarget === 'character'
                           ? '1girl, long red hair, leather jacket'
-                          : 'middle-aged man, glasses, beige coat'
+                          : editTarget === 'captioning'
+                            ? 'Describe this image in detail using concise image-generation tags. Include subject, composition, style, lighting, mood, and colors.'
+                            : 'middle-aged man, glasses, beige coat'
                     }
                     rows={5}
                     macros={availableMacros}
@@ -1134,11 +1162,11 @@ export default function ImageGenPanel() {
                 </FormField>
 
                 <FormField
-                  label={editTarget === 'main' ? 'Negative Prompt' : `${editTarget === 'character' ? 'Character' : 'Persona'} negative snippet`}
+                  label={editTarget === 'main' ? 'Negative Prompt' : `${editTarget === 'character' ? 'Character' : editTarget === 'captioning' ? 'Captioning' : 'Persona'} negative snippet`}
                   hint={
                     editTarget === 'main'
                       ? undefined
-                      : `Replaces {{${editTarget}_negative_prompt}} in the main preset’s negative prompt.`
+                      : `Replaces {{${editTarget}_negative_prompt}} in the main preset's negative prompt.`
                   }
                 >
                   <ExpandableTextarea
@@ -1173,6 +1201,7 @@ export default function ImageGenPanel() {
                 )}
               </>
             )}
+
           </EditorSection>
 
           {(imageGeneration.promptMode === 'scene' || imageGeneration.promptMode === 'parsed_custom') && (

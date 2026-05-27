@@ -1010,11 +1010,19 @@ export interface WorldBookEntryBulkAddKeywordInput {
   target?: 'primary' | 'secondary';
 }
 
+export interface WorldBookEntryBulkSetPositionInput {
+  action: 'set_position';
+  entry_ids: string[];
+  position: number;
+  depth?: number;
+}
+
 export type WorldBookEntryBulkActionInput =
   | WorldBookEntryBulkDeleteInput
   | WorldBookEntryBulkMoveInput
   | WorldBookEntryBulkRenumberInput
-  | WorldBookEntryBulkAddKeywordInput;
+  | WorldBookEntryBulkAddKeywordInput
+  | WorldBookEntryBulkSetPositionInput;
 
 export interface WorldBookEntryBulkActionResult {
   action: WorldBookEntryBulkActionInput['action'];

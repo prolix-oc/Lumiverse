@@ -17,6 +17,7 @@ export const POSITION_OPTIONS = [
   { value: 2, label: 'Before AN' },
   { value: 3, label: 'After AN' },
   { value: 4, label: 'At Depth' },
+  { value: 7, label: 'At Marker' },
 ]
 
 export const ROLE_OPTIONS = [

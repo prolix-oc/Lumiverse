@@ -486,10 +486,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
 
     // Layer 2: Global CSS
-    const hasEnabledComponentCSS = Object.values(pack.components).some((comp) => comp.enabled && !!comp.css.trim())
     const customCSS = {
       css: pack.globalCSS || '',
-      enabled: !!pack.globalCSS.trim() || hasEnabledComponentCSS,
+      enabled: !!pack.globalCSS.trim(),
       revision: Date.now(),
       bundleId: pack.bundleId || generateUUID(),
     }

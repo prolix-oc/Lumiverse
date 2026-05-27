@@ -25,6 +25,7 @@ export function useCustomCSSApplicator() {
   const customCSS = useStore((s) => s.customCSS)
   const componentOverrides = useStore((s) => s.componentOverrides)
   const toggleCustomCSS = useStore((s) => s.toggleCustomCSS)
+  const toggleComponentOverride = useStore((s) => s.toggleComponentOverride)
   const lastHashRef = useRef('')
 
   useEffect(() => {
@@ -33,17 +34,15 @@ export function useCustomCSSApplicator() {
     // Collect all CSS sources
     const parts: string[] = []
 
-    if (customCSS.enabled) {
-      // Global CSS
-      if (customCSS.css.trim()) {
-        parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
-      }
+    // Global CSS (independent toggle)
+    if (customCSS.enabled && customCSS.css.trim()) {
+      parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
+    }
 
-      // Per-component CSS (from enabled overrides)
-      for (const [, override] of Object.entries(componentOverrides)) {
-        if (override.enabled && override.css?.trim()) {
-          parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
-        }
+    // Per-component CSS — each override has its own toggle, independent of global
+    for (const [, override] of Object.entries(componentOverrides)) {
+      if (override.enabled && override.css?.trim()) {
+        parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
       }
     }
 
@@ -80,9 +79,12 @@ export function useCustomCSSApplicator() {
     if (e.ctrlKey && e.shiftKey && e.key === 'U') {
       e.preventDefault()
       toggleCustomCSS(false)
-      toast.info('Custom CSS disabled')
+      for (const name of Object.keys(componentOverrides)) {
+        toggleComponentOverride(name, false)
+      }
+      toast.info('All custom CSS disabled')
     }
-  }, [toggleCustomCSS])
+  }, [toggleCustomCSS, toggleComponentOverride, componentOverrides])
 
   useEffect(() => {
     document.addEventListener('keydown', handleEscape)

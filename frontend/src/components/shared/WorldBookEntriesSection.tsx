@@ -22,6 +22,7 @@ import {
   BetweenHorizontalStart,
   BetweenHorizontalEnd,
   Lock,
+  MapPin,
   Zap,
 } from 'lucide-react'
 import {
@@ -62,13 +63,21 @@ import type {
 } from '@/types/store'
 import styles from './WorldBookEntriesSection.module.css'
 
-const POSITION_SHORT = ['Before Main', 'After Main', 'Before AN', 'After AN', '@ Depth']
+const POSITION_SHORT: Record<number, string> = {
+  0: 'Before Main',
+  1: 'After Main',
+  2: 'Before AN',
+  3: 'After AN',
+  4: '@ Depth',
+  7: '@ Marker',
+}
 const POSITION_OPTIONS = [
   { value: 0, label: 'Before Main' },
   { value: 1, label: 'After Main' },
   { value: 2, label: 'Before AN' },
   { value: 3, label: 'After AN' },
   { value: 4, label: 'At Depth' },
+  { value: 7, label: 'At Marker' },
 ] as const
 const TYPE_OPTIONS = [
   { value: 'trigger', label: 'Trigger' },
@@ -329,6 +338,9 @@ export default function WorldBookEntriesSection({
   const [renumberDirection, setRenumberDirection] = useState<'asc' | 'desc'>('asc')
   const [keywordValue, setKeywordValue] = useState('')
   const [keywordTarget, setKeywordTarget] = useState<'primary' | 'secondary'>('primary')
+  const [positionState, setPositionState] = useState<{ entryIds: string[] } | null>(null)
+  const [bulkPosition, setBulkPosition] = useState(0)
+  const [bulkDepth, setBulkDepth] = useState('4')
   const [pendingAction, setPendingAction] = useState(false)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
@@ -596,6 +608,26 @@ export default function WorldBookEntriesSection({
     }
   }, [keywordState, keywordValue, keywordTarget, selectedBookId, refetchCurrentPage, refreshVectorSummary])
 
+  const handleBulkSetPosition = useCallback(async () => {
+    if (!positionState) return
+    setPendingAction(true)
+    try {
+      const payload: WorldBookEntryBulkActionInput = {
+        action: 'set_position',
+        entry_ids: positionState.entryIds,
+        position: bulkPosition,
+        ...(bulkPosition === 4 ? { depth: Math.max(0, parseInt(bulkDepth, 10) || 4) } : {}),
+      }
+      await worldBooksApi.bulkEntryAction(selectedBookId, payload)
+      setPositionState(null)
+      setBulkPosition(0)
+      setBulkDepth('4')
+      await refetchCurrentPage()
+    } finally {
+      setPendingAction(false)
+    }
+  }, [positionState, bulkPosition, bulkDepth, selectedBookId, refetchCurrentPage])
+
   const handleToggleSelect = useCallback((entryId: string) => {
     setSelectedIds((current) => (
       current.includes(entryId)
@@ -760,7 +792,9 @@ export default function WorldBookEntriesSection({
               ? <BetweenHorizontalStart size={14} />
               : option.value === 3
                 ? <BetweenHorizontalEnd size={14} />
-                : <Hash size={14} />,
+                : option.value === 7
+                  ? <MapPin size={14} />
+                  : <Hash size={14} />,
         active: selectedPositionEntry.position === option.value,
         onClick: () => {
           updateEntry(selectedPositionEntry.id, { position: option.value })
@@ -903,6 +937,19 @@ export default function WorldBookEntriesSection({
             >
               <Tag size={13} />
               <span>Add Keyword</span>
+            </button>
+            <button
+              type="button"
+              className={styles.bulkActionBtn}
+              disabled={selectedCount === 0}
+              onClick={() => {
+                setBulkPosition(0)
+                setBulkDepth('4')
+                setPositionState({ entryIds: selectedIds })
+              }}
+            >
+              <MapPin size={13} />
+              <span>Set Position</span>
             </button>
             <button
               type="button"
@@ -1117,6 +1164,43 @@ export default function WorldBookEntriesSection({
             <div className={styles.dialogActions}>
               <button type="button" className={styles.dialogBtn} onClick={() => setKeywordState(null)} disabled={pendingAction}>Cancel</button>
               <button type="button" className={styles.dialogPrimaryBtn} onClick={() => void handleBulkKeyword()} disabled={pendingAction || !keywordValue.trim()}>Add</button>
+            </div>
+          </div>
+        </ModalShell>
+      )}
+      {positionState && (
+        <ModalShell isOpen={true} onClose={() => !pendingAction && setPositionState(null)} maxWidth="520px">
+          <div className={styles.dialogBody}>
+            <h3 className={styles.dialogTitle}>Set Position</h3>
+            <div className={styles.dialogGrid}>
+              <label className={styles.dialogField}>
+                <span className={styles.dialogLabel}>Position</span>
+                <select
+                  className={styles.dialogSelect}
+                  value={bulkPosition}
+                  onChange={(e) => setBulkPosition(Number(e.target.value))}
+                >
+                  {POSITION_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
+              {bulkPosition === 4 && (
+                <label className={styles.dialogField}>
+                  <span className={styles.dialogLabel}>Depth</span>
+                  <input
+                    type="number"
+                    className={styles.dialogInput}
+                    value={bulkDepth}
+                    min={0}
+                    onChange={(e) => setBulkDepth(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
+            <div className={styles.dialogActions}>
+              <button type="button" className={styles.dialogBtn} onClick={() => setPositionState(null)} disabled={pendingAction}>Cancel</button>
+              <button type="button" className={styles.dialogPrimaryBtn} onClick={() => void handleBulkSetPosition()} disabled={pendingAction}>Apply</button>
             </div>
           </div>
         </ModalShell>

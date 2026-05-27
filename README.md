@@ -86,46 +86,6 @@ ARG LUMIVERSE_REPO=https://github.com/prolix-oc/Lumiverse.git
 ARG LUMIVERSE_REF=staging
 RUN git clone --depth 1 --branch "${LUMIVERSE_REF}" "${LUMIVERSE_REPO}" .
 
-RUN cat > /tmp/patch-auth-rewrite.mjs <<'PATCH'
-import { readFileSync, writeFileSync } from "fs";
-
-const path = "src/app.ts";
-const src = readFileSync(path, "utf8");
-
-const before = `app.on(["POST", "GET"], "/api/auth/*", (c) => {
-  const host = c.req.header("host");
-  if (host) {
-    const url = new URL(c.req.url);
-    const rewritten = new URL(url.pathname + url.search, \`http://\${host}\`);
-    return auth.handler(new Request(rewritten.toString(), c.req.raw));
-  }
-  return auth.handler(c.req.raw);
-});`;
-
-const after = `app.on(["POST", "GET"], "/api/auth/*", (c) => {
-  const host = c.req.header("x-forwarded-host") || c.req.header("host");
-  const proto = c.req.header("x-forwarded-proto") || "http";
-
-  if (host) {
-    const url = new URL(c.req.url);
-    const rewritten = new URL(url.pathname + url.search, \`\${proto}://\${host}\`);
-    return auth.handler(new Request(rewritten.toString(), c.req.raw));
-  }
-  return auth.handler(c.req.raw);
-});`;
-
-if (!src.includes(before)) {
-  console.error("[patch] Expected auth rewrite block not found in src/app.ts");
-  process.exit(1);
-}
-
-writeFileSync(path, src.replace(before, after), "utf8");
-console.log("[patch] Patched src/app.ts for x-forwarded-proto/host");
-PATCH
-
-RUN bun /tmp/patch-auth-rewrite.mjs \
-  && grep -n "x-forwarded-proto" src/app.ts >/dev/null
-
 RUN rm -f package-lock.json && bun install --production
 
 WORKDIR /app/frontend
@@ -173,8 +133,6 @@ This overrides the `admin123` default baked into the Dockerfile. **Do not skip t
 #### 5. Open the Space
 
 Once the build finishes (~3–5 min on the free tier), click **Open in new tab** (or visit `https://<your-username>-<space-name>.hf.space`). Log in with username `admin` and the password you set.
-
-> **Why the patch?** Hugging Face's reverse proxy injects `x-forwarded-proto` and `x-forwarded-host` headers. Without the patch, BetterAuth constructs `http://` callback URLs instead of `https://`, causing auth redirects to fail.
 
 ## First-Run Setup
 

@@ -1123,6 +1123,25 @@ export function bulkOperateEntries(
     return { action: input.action, affected: uniqueIds.length };
   }
 
+  if (input.action === "set_position") {
+    const position = Number.isFinite(input.position) ? Math.trunc(input.position) : 0;
+    if (position < 0 || position > 7) {
+      throw new Error("position must be between 0 and 7");
+    }
+    const depth = position === 4 && Number.isFinite(input.depth) ? Math.trunc(input.depth!) : 4;
+    db.transaction(() => {
+      const stmt = db.query(
+        "UPDATE world_book_entries SET position = ?, depth = ?, updated_at = ? WHERE id = ? AND world_book_id = ?",
+      );
+      uniqueIds.forEach((entryId) => {
+        stmt.run(position, position === 4 ? depth : orderedEntries.find((e) => e.id === entryId)!.depth, now, entryId, worldBookId);
+      });
+      touchWorldBook(worldBookId, now);
+    })();
+    emitWorldBookChanged(userId, worldBookId);
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
   throw new Error("Unsupported bulk action");
 }
 

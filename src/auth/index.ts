@@ -3,6 +3,7 @@ import { username, admin, bearer } from "better-auth/plugins";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
+import { seedDefaultPreset } from "./default-preset";
 import { getAllowedOrigins } from "../services/trusted-hosts.service";
 
 // ─── Signup gate ────────────────────────────────────────────────────────
@@ -87,9 +88,10 @@ export const auth = betterAuth({
           // log instead of silently dropping it.
           try {
             provisionUserDirectories(user.id);
+            seedDefaultPreset(user.id);
           } catch (err) {
             console.error(
-              `[Auth] Failed to provision directories for user ${user.id}:`,
+              `[Auth] Failed to provision user ${user.id}:`,
               err instanceof Error ? err.message : err,
             );
           }
