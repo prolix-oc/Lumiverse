@@ -1,0 +1,9 @@
+{
+  "failedToRegenerate": "重新生成失敗",
+  "failedToContinue": "繼續生成失敗",
+  "failedToStartGeneration": "啟動生成失敗",
+  "failedToImpersonate": "扮演失敗",
+  "failedToResolveMacros": "解析宏失敗",
+  "failedToGenerate": "生成失敗",
+  "failedMentionChain": "繼續 @提及 鏈失敗"
+}

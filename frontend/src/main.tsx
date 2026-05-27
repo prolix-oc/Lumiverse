@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
-import '@/i18n'
+import { initI18n } from '@/i18n'
 import { registerSW } from 'virtual:pwa-register'
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
@@ -298,8 +298,10 @@ if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 
   })
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <RouterProvider router={router} />
-  </StrictMode>
-)
+void initI18n().then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <RouterProvider router={router} />
+    </StrictMode>,
+  )
+})

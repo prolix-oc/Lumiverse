@@ -1,0 +1,32 @@
+{
+  "groupChat": "群聊",
+  "active": "进行中",
+  "account": "账户",
+  "subtitle": {
+    "chooseGroupThreads": "从群组话题中选择",
+    "resumeGroupThread": "继续最新的群组话题",
+    "chooseConversations": "从最近对话中选择",
+    "resumeConversation": "继续对话"
+  },
+  "empty": {
+    "title": "暂无最近聊天",
+    "description": "与角色开始对话后，会显示在这里"
+  },
+  "tagline": "继续你的故事",
+  "logOutTitle": "在此设备上退出登录",
+  "loadFailed": "加载聊天失败",
+  "tryAgain": "重试",
+  "loadingMore": "正在加载更多聊天…",
+  "footer": "选择角色，继续你的旅程",
+  "deleteChat": "删除聊天",
+  "deleteChatTitle": "删除聊天",
+  "deleteChatConfirm": "将永久删除{{label}}，此操作无法撤销。",
+  "deleteLabelGroup": "群聊「{{name}}」",
+  "deleteLabelChat": "与 {{name}} 的聊天",
+  "untitled": "未命名",
+  "logOut": {
+    "title": "退出登录",
+    "message": "你将在此设备上退出登录，其他设备仍保持登录状态。",
+    "confirm": "退出登录"
+  }
+}

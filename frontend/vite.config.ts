@@ -17,6 +17,7 @@ export default defineConfig({
       includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+        // Main app chunk is ~5MB; locale JSON are separate lazy chunks (see src/i18n/resources.ts).
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
     }),
@@ -49,6 +50,23 @@ export default defineConfig({
     // fails the production build emits no CSS — pin to esbuild so the minify
     // step uses a binding we ship and can rely on across platforms.
     cssMinify: 'esbuild',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/')
+          const m = normalized.match(/\/i18n\/locales\/([^/]+)\//)
+          if (m) return `i18n-${m[1]}`
+        },
+        chunkFileNames(chunkInfo) {
+          const name = chunkInfo.name ?? ''
+          if (name.startsWith('i18n-')) {
+            const lang = name.slice('i18n-'.length)
+            return `assets/i18n/${lang}-[hash].js`
+          }
+          return 'assets/[name]-[hash].js'
+        },
+      },
+    },
   },
   server: {
     host: '::',

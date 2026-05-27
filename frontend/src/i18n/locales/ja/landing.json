@@ -1,0 +1,32 @@
+{
+  "groupChat": "グループチャット",
+  "active": "アクティブ",
+  "account": "アカウント",
+  "subtitle": {
+    "chooseGroupThreads": "グループ スレッドから選択",
+    "resumeGroupThread": "再開最新のグループ スレッド",
+    "chooseConversations": "最近の会話から選択",
+    "resumeConversation": "会話を再開"
+  },
+  "empty": {
+    "title": "最近のチャットはありません",
+    "description": "始めるキャラクターと会話を開始"
+  },
+  "tagline": "ストーリーを続ける",
+  "logOutTitle": "このデバイスからログアウトします",
+  "loadFailed": "チャットの読み込みに失敗しました",
+  "tryAgain": "もう一度試してください",
+  "loadingMore": "さらにチャットを読み込んでいます...",
+  "footer": "旅を続けるキャラクターを選択してください",
+  "deleteChat": "チャットを削除",
+  "deleteChatTitle": "チャットを削除する",
+  "deleteChatConfirm": "これにより、{{label}} は完全に削除されます。この操作は元に戻すことができません。",
+  "deleteLabelGroup": "グループ チャット \"{{name}}\"",
+  "deleteLabelChat": "{{name}} とチャット",
+  "untitled": "無題",
+  "logOut": {
+    "title": "ログアウト",
+    "message": "このデバイスではサインアウトされます。他のデバイスはサインインしたままです。",
+    "confirm": "ログアウト"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "groupChat": "Group Chat",
+  "active": "Active",
+  "account": "Account",
+  "subtitle": {
+    "chooseGroupThreads": "Choose from group threads",
+    "resumeGroupThread": "Resume the latest group thread",
+    "chooseConversations": "Choose from recent conversations",
+    "resumeConversation": "Resume conversation"
+  },
+  "empty": {
+    "title": "No recent chats",
+    "description": "Start a conversation with a character to begin"
+  },
+  "tagline": "Continue your story",
+  "logOutTitle": "Log out of this device",
+  "loadFailed": "Failed to load chats",
+  "tryAgain": "Try Again",
+  "loadingMore": "Loading more chats...",
+  "footer": "Select a character to continue your journey",
+  "deleteChat": "Delete chat",
+  "deleteChatTitle": "Delete Chat",
+  "deleteChatConfirm": "This will permanently delete your {{label}}. This action cannot be undone.",
+  "deleteLabelGroup": "group chat \"{{name}}\"",
+  "deleteLabelChat": "chat with {{name}}",
+  "untitled": "Untitled",
+  "logOut": {
+    "title": "Log out",
+    "message": "You'll be signed out on this device. Other devices stay signed in.",
+    "confirm": "Log out"
+  }
+}

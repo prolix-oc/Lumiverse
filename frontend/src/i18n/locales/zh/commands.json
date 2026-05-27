@@ -1,0 +1,296 @@
+{
+  "groups": {
+    "actions": "操作",
+    "panels": "面板",
+    "settings": "设置",
+    "extensions": "扩展"
+  },
+  "items": {
+    "action-regenerate": {
+      "label": "重新生成回复",
+      "description": "删除上一条 AI 回复并生成新的"
+    },
+    "action-continue": {
+      "label": "继续生成",
+      "description": "让 AI 继续上一条回复"
+    },
+    "action-new-chat": {
+      "label": "新聊天",
+      "description": "前往主页开始新对话"
+    },
+    "action-character-browser": {
+      "label": "浏览角色",
+      "description": "打开完整角色库"
+    },
+    "action-import-character": {
+      "label": "导入角色",
+      "description": "上传角色卡 (.png, .charx, .jpg, .json)"
+    },
+    "action-new-chat-same-character": {
+      "label": "新聊天（同角色）",
+      "description": "与当前角色开始全新对话"
+    },
+    "action-fork-chat": {
+      "label": "分叉聊天",
+      "description": "在最新消息处分支当前聊天"
+    },
+    "action-manage-chats": {
+      "label": "管理聊天",
+      "description": "打开当前角色的聊天管理器"
+    },
+    "action-copy-last-message": {
+      "label": "复制上一条消息",
+      "description": "将最近一条消息复制到剪贴板"
+    },
+    "action-delete-last-message": {
+      "label": "删除上一条消息",
+      "description": "从此聊天中移除最近一条消息"
+    },
+    "action-toggle-hidden-last": {
+      "label": "切换隐藏上一条消息",
+      "description": "在 AI 上下文中显示或隐藏最近一条消息"
+    },
+    "action-dry-run": {
+      "label": "预览提示词",
+      "description": "试运行以查看组装的提示词与 token 数"
+    },
+    "action-edit-character": {
+      "label": "编辑角色",
+      "description": "打开当前角色的编辑器"
+    },
+    "action-duplicate-character": {
+      "label": "复制角色",
+      "description": "创建当前角色的副本"
+    },
+    "action-toggle-portrait": {
+      "label": "切换立绘面板",
+      "description": "显示或隐藏角色立绘侧栏"
+    },
+    "action-delete-chat": {
+      "label": "删除聊天",
+      "description": "永久删除此对话"
+    },
+    "panel-profile": {
+      "label": "角色档案",
+      "description": "查看并编辑当前角色"
+    },
+    "panel-presets": {
+      "label": "推理",
+      "description": "配置推理、思维链与提示词行为"
+    },
+    "panel-loom": {
+      "label": "织机",
+      "description": "配置叙事结构与故事节拍"
+    },
+    "panel-dream-weaver": {
+      "label": "梦境编织",
+      "description": "从想象中创建角色"
+    },
+    "panel-connections": {
+      "label": "连接",
+      "description": "管理 API 连接与提供商"
+    },
+    "panel-browser": {
+      "label": "内容包浏览器",
+      "description": "浏览并管理内容包"
+    },
+    "panel-characters": {
+      "label": "角色",
+      "description": "浏览并管理角色卡"
+    },
+    "panel-personas": {
+      "label": "人设",
+      "description": "管理用户人设"
+    },
+    "panel-lorebook": {
+      "label": "世界书",
+      "description": "编辑世界书条目"
+    },
+    "panel-cortex": {
+      "label": "记忆皮层",
+      "description": "查看并管理记忆皮层条目"
+    },
+    "panel-databank": {
+      "label": "资料库",
+      "description": "上传并管理 AI 上下文参考文档"
+    },
+    "panel-create": {
+      "label": "创作者工坊",
+      "description": "创建并编辑 Lumia 与 Loom 预设"
+    },
+    "panel-ooc": {
+      "label": "OOC",
+      "description": "角色外评论显示设置"
+    },
+    "panel-prompt": {
+      "label": "编排",
+      "description": "选择 Lumia、Loom、主权之手与上下文过滤"
+    },
+    "panel-council": {
+      "label": "议会",
+      "description": "配置 Lumia 议会与工具函数"
+    },
+    "panel-summary": {
+      "label": "摘要",
+      "description": "配置上下文摘要与截断"
+    },
+    "panel-feedback": {
+      "label": "议会反馈",
+      "description": "查看最新议会执行结果"
+    },
+    "panel-worldinfo": {
+      "label": "世界信息",
+      "description": "查看当前激活的世界信息条目"
+    },
+    "panel-imagegen": {
+      "label": "图像生成",
+      "description": "配置并控制 AI 场景生成"
+    },
+    "panel-wallpaper": {
+      "label": "壁纸",
+      "description": "设置全局或单聊背景壁纸"
+    },
+    "panel-regex": {
+      "label": "正则脚本",
+      "description": "创建并管理正则查找替换脚本"
+    },
+    "panel-branches": {
+      "label": "分支树",
+      "description": "查看并导航聊天分支历史"
+    },
+    "panel-theme": {
+      "label": "主题",
+      "description": "自定义颜色、强调色与视觉风格"
+    },
+    "panel-spindle": {
+      "label": "扩展",
+      "description": "管理 Spindle 扩展"
+    },
+    "settings-account": {
+      "label": "账户设置",
+      "description": "管理账户详情与密码"
+    },
+    "settings-display": {
+      "label": "显示与布局",
+      "description": "面板宽度、侧栏位置与布局选项"
+    },
+    "settings-chat": {
+      "label": "聊天行为",
+      "description": "消息显示模式、发送键与聊天选项"
+    },
+    "settings-extensions": {
+      "label": "扩展设置",
+      "description": "管理 Spindle 扩展配置"
+    },
+    "settings-guided": {
+      "label": "引导生成",
+      "description": "配置引导生成序列与提示词偏置"
+    },
+    "settings-quickReplies": {
+      "label": "快捷回复",
+      "description": "管理快捷回复集与消息快捷键"
+    },
+    "settings-extensionPools": {
+      "label": "扩展池",
+      "description": "配置扩展资源池限制"
+    },
+    "settings-webSearch": {
+      "label": "网页搜索",
+      "description": "配置议会工具使用的 SearXNG 网页搜索"
+    },
+    "settings-embeddings": {
+      "label": "嵌入",
+      "description": "配置嵌入模型与向量存储"
+    },
+    "settings-memoryCortex": {
+      "label": "记忆皮层设置",
+      "description": "配置记忆皮层提取与显著性"
+    },
+    "settings-notifications": {
+      "label": "通知",
+      "description": "配置通知偏好与提醒"
+    },
+    "settings-voice": {
+      "label": "语音与朗读",
+      "description": "文字转语音、语音转文字与语音设置"
+    },
+    "settings-mcpServers": {
+      "label": "MCP 服务器",
+      "description": "连接外部 MCP 工具服务器以进行函数调用"
+    },
+    "settings-advanced": {
+      "label": "高级设置",
+      "description": "高级配置与调试选项"
+    },
+    "settings-lumihub": {
+      "label": "LumiHub",
+      "description": "LumiHub 云同步与分享设置"
+    },
+    "settings-dataPortability": {
+      "label": "数据可移植性",
+      "description": "导出数据或导入先前导出的归档"
+    },
+    "settings-diagnostics": {
+      "label": "诊断",
+      "description": "系统健康、性能指标与调试信息"
+    },
+    "settings-operator": {
+      "label": "运维面板",
+      "description": "服务器管理、更新与重启控制"
+    },
+    "settings-tokenizers": {
+      "label": "分词器管理",
+      "description": "管理并测试分词器配置"
+    },
+    "settings-users": {
+      "label": "用户管理",
+      "description": "管理用户账户、角色与权限"
+    },
+    "settings-migration": {
+      "label": "迁移",
+      "description": "从 SillyTavern 等来源导入数据"
+    }
+  },
+  "palette": {
+    "search": "搜索命令…",
+    "clear": "清除搜索",
+    "aria": "命令面板",
+    "noResults": "没有与「{{query}}」匹配的结果",
+    "listAria": "命令"
+  },
+  "confirm": {
+    "forkChat": {
+      "title": "分叉聊天",
+      "message": "从最新消息创建新分支？",
+      "confirm": "分叉"
+    },
+    "deleteChat": {
+      "title": "删除聊天",
+      "message": "永久删除此对话？",
+      "confirm": "删除"
+    }
+  },
+  "toast": {
+    "failedRegenerate": "重新生成失败",
+    "failedContinue": "继续生成失败",
+    "importedCharacter": "已导入 {{name}}",
+    "failedImportCharacter": "导入角色失败",
+    "failedForkChat": "分叉聊天失败",
+    "copiedToClipboard": "已复制到剪贴板",
+    "failedCopy": "复制失败",
+    "messageDeleted": "消息已删除",
+    "failedDeleteMessage": "删除消息失败",
+    "messageHidden": "消息已从 AI 上下文中隐藏",
+    "messageVisible": "消息已对 AI 上下文可见",
+    "failedUpdateMessage": "更新消息失败",
+    "dryRunFailed": "试运行失败",
+    "duplicatedCharacter": "已复制 {{name}}",
+    "failedDuplicateCharacter": "复制角色失败",
+    "chatDeleted": "聊天已删除",
+    "failedDeleteChat": "删除聊天失败"
+  },
+  "misc": {
+    "groupChat": "群聊",
+    "character": "角色"
+  }
+}

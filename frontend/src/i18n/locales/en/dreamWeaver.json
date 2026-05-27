@@ -1,0 +1,446 @@
+{
+  "brand": "Dream Weaver",
+  "create": {
+    "ariaLabel": "Create a Dream Weaver session",
+    "kicker": "New Weave",
+    "title": "Start anywhere, shape it freely.",
+    "cardType": "Card Type",
+    "cardTypeAria": "Dream Weaver card type",
+    "character": "Character",
+    "scenario": "Scenario",
+    "sourceMaterial": "Source Material",
+    "sourcePlaceholder": "Optional. Paste a premise, scene, imported card notes, worldbook ideas, or anything worth preserving.",
+    "characters_one": "{{count}} character",
+    "characters_other": "{{count}} characters",
+    "persona": "Persona",
+    "personaPlaceholder": "Use active or default persona",
+    "searchPersonas": "Search personas…",
+    "noPersonas": "No personas available",
+    "connection": "Connection",
+    "connectionPlaceholder": "Use active connection",
+    "searchConnections": "Search connections…",
+    "noConnections": "No connections available",
+    "model": "Model",
+    "modelPlaceholder": "Connection default",
+    "noModelsManual": "No models returned. Enter one manually or use the connection default.",
+    "noConnection": "No connection available.",
+    "refineDirection": "Refine Direction",
+    "tone": "Tone",
+    "tonePlaceholder": "Uneasy, intimate, grounded, sharp…",
+    "keep": "Keep",
+    "keepPlaceholder": "Specific history, rules, relationships, or constraints.",
+    "avoid": "Avoid",
+    "avoidPlaceholder": "Clichés, tone drift, unwanted tropes, or exclusions.",
+    "advancedGeneration": "Advanced Generation",
+    "tuneHint": "Applies to every Dream Weaver generation step. Leave blank for tool defaults.",
+    "temperature": "Temperature",
+    "topP": "Top P",
+    "maxTokens": "Max Tokens",
+    "topK": "Top K",
+    "timeoutSeconds": "Timeout (s)",
+    "defaultPlaceholder": "Default",
+    "nonePlaceholder": "None",
+    "opening": "Opening...",
+    "startWeaving": "Start Weaving",
+    "openBlankStudio": "Open Blank Studio"
+  },
+  "archive": {
+    "previousWeaves": "Previous Weaves",
+    "filterAria": "Filter previous weaves",
+    "all": "All",
+    "drafts": "Drafts",
+    "finalized": "Finalized",
+    "searchPlaceholder": "Search weaves...",
+    "searchAria": "Search previous weaves",
+    "clearSearch": "Clear weave search",
+    "loading": "Loading saved weaves...",
+    "empty": "No saved weaves yet.",
+    "noMatch": "No weaves match this view.",
+    "results": "Results",
+    "today": "Today",
+    "thisWeek": "This Week",
+    "older": "Older",
+    "open": "Open",
+    "deleteSession": "Delete session"
+  },
+  "session": {
+    "title": "Session",
+    "titleNumbered": "Session #{{number}}",
+    "previewCharacter": "Blank character studio",
+    "previewScenario": "Blank scenario studio",
+    "statusFinalized": "Finalized",
+    "statusWeaving": "Weaving",
+    "statusSaved": "Saved weave",
+    "statusNeedsAttention": "Needs attention",
+    "statusCharacterStudio": "Character studio",
+    "statusScenarioStudio": "Scenario studio",
+    "todayAt": "Today, {{time}}"
+  },
+  "toast": {
+    "generationStartFailed": "Failed to start generation. Check the image connection and try again.",
+    "loadFailed": "Failed to load Dream Weaver sessions",
+    "dreamSaveFailed": "Dream source could not be saved",
+    "recoverySuffix": "The studio was created, so you can reopen it later.",
+    "createFailed": "Failed to create Dream Weaver session",
+    "deleted": "Dream Weaver session deleted",
+    "deleteFailed": "Failed to delete Dream Weaver session"
+  },
+  "confirm": {
+    "deleteTitle": "Delete this session?",
+    "deleteMessage": "This removes the saved weave state. The generated character stays if you already finalized it.",
+    "deleteConfirm": "Delete session"
+  },
+  "modelCombobox": {
+    "refreshModels": "Refresh models",
+    "noMatching": "No matching models",
+    "loading": "Loading models...",
+    "emptyDefault": "No models found. Enter one manually."
+  },
+  "studio": {
+    "headerLabel": "Dream Weaver Studio",
+    "loadingSession": "Loading session...",
+    "tabs": {
+      "studio": "Studio",
+      "visuals": "Visuals"
+    },
+    "kind": {
+      "character": "Character",
+      "scenario": "Scenario",
+      "ariaLabel": "Card type"
+    },
+    "status": {
+      "linked": "Linked",
+      "draft": "Draft"
+    },
+    "footer": {
+      "updatesExisting": "Updates the existing generated card.",
+      "createsNew": "Creates a new card when finalized."
+    },
+    "finalize": {
+      "updateCharacter": "Update Character",
+      "updateScenario": "Update Scenario",
+      "finalizeCharacter": "Finalize Character",
+      "finalizeScenario": "Finalize Scenario"
+    },
+    "needsBeforeFinalize": "Needs {{fields}} before finalizing.",
+    "needsTitle": "Needs: {{fields}}",
+    "addBeforeFinalize": "Add {{fields}} before finalizing.",
+    "session": {
+      "newDream": "New Dream"
+    },
+    "missingFields": {
+      "aName": "a name",
+      "aTitle": "a title",
+      "personality": "personality",
+      "firstMessage": "first message",
+      "requiredFields": "required fields",
+      "joinTwo": "{{first}} and {{second}}",
+      "joinMany": "{{items}}, and {{last}}"
+    },
+    "toast": {
+      "visualSaveFailed": "Failed to save visual settings. Try again before finalizing.",
+      "createdCharacter": "Character created. You can now open it in chat.",
+      "createdScenario": "Scenario created. You can now open it in chat."
+    },
+    "progress": {
+      "completionAriaCharacter": "Character completion status",
+      "completionAriaScenario": "Scenario completion status",
+      "labelCharacter": "Character Progress",
+      "labelScenario": "Scenario Progress",
+      "fieldComplete": "{{label}}: complete",
+      "fieldMissing": "{{label}}: missing",
+      "fieldCompleteAria": "{{label}} complete",
+      "fieldMissingAria": "{{label}} missing",
+      "countTitle": "{{complete}} of {{total}} fields complete",
+      "defaultGreeting": "Greeting",
+      "fields": {
+        "name": "Name",
+        "title": "Title",
+        "personality": "Personality",
+        "first_mes": "First Message",
+        "scenario": "Scenario",
+        "premise": "Premise",
+        "openingScene": "Opening Scene",
+        "mainCharacter": "Main Character",
+        "appearance": "Appearance",
+        "voice_guidance": "Voice",
+        "npcs": "NPCs ({{count}}/{{min}})",
+        "lorebooks": "Lorebook ({{count}}/{{min}})"
+      }
+    },
+    "suite": {
+      "title": "Generate everything at once?",
+      "runFullSuite": "Run Full Suite",
+      "running": "Running full suite…",
+      "done": "{{count}} tools ready — review results below, then accept what you like.",
+      "failed": "Suite failed: {{message}}",
+      "descriptionCharacter": "Runs name, appearance, personality, scenario, first message, and voice in sequence — or run tools individually below.",
+      "descriptionScenario": "Runs title, premise, main character (appearance/personality/voice), opening scene, then batches a supporting cast and lorebook entries — or run tools individually below.",
+      "dismissAria": "Dismiss suite banner"
+    },
+    "voice": {
+      "structured": "Structured",
+      "compiled": "Compiled",
+      "compiledHint": "Read-only compiled output used at runtime.",
+      "noCompiledYet": "No compiled voice guidance yet.",
+      "rulePlaceholder": "{{label}} rule...",
+      "addRule": "+ Add rule",
+      "categories": {
+        "baseline": "Baseline",
+        "rhythm": "Rhythm",
+        "diction": "Diction",
+        "quirks": "Quirks",
+        "hard_nos": "Hard Nos"
+      }
+    },
+    "providerParams": {
+      "browseModels": "Browse available models",
+      "clearDefault": "(clear / use default)",
+      "noModelsFound": "No models found"
+    }
+  },
+  "chat": {
+    "empty": {
+      "kicker": "Where to start",
+      "title": "Describe your concept.",
+      "body": "Type <code>/dream</code> followed by a few sentences about your character — their personality, look, or role. Once your source is set, run individual tools like <code>/name</code> or <code>/personality</code>, or use Run Full Suite to fill everything at once."
+    },
+    "summary": {
+      "dreamTitle": "Dream",
+      "sourceActive": "Source Active",
+      "editDream": "Edit dream",
+      "saveDreamAria": "Save dream",
+      "cancelEditAria": "Cancel edit",
+      "dreamSourceAria": "Dream source",
+      "showLess": "Show less",
+      "showMore": "Show more",
+      "errors": {
+        "required": "Dream source text is required.",
+        "saveFailed": "Could not save dream source. Try again."
+      }
+    },
+    "composer": {
+      "toolsHeader": "Tools",
+      "tabHint": "Tab completes a typed command",
+      "placeholder": "/dream describe the setup, or run /name. Shift+Enter for a new line.",
+      "runCommand": "Run command",
+      "runCommandAria": "Run Dream Weaver command",
+      "needsSource": "Add source material with /dream before running generation tools."
+    },
+    "nudge": {
+      "placeholder": "What should change?",
+      "runAdjusted": "Run adjusted"
+    },
+    "toolCard": {
+      "runTime": "Run time",
+      "toolError": "Tool Error",
+      "cancelRun": "Cancel run",
+      "runDetails": "Run details",
+      "useResult": "Use result",
+      "runAgain": "Run again",
+      "adjust": "Adjust",
+      "discard": "Discard",
+      "errors": {
+        "generic": "Tool execution failed. Check the connection and try again."
+      },
+      "status": {
+        "accepted": "Applied",
+        "pending": "Ready to Review",
+        "running": "Running",
+        "rejected": "Discarded",
+        "superseded": "Replaced"
+      },
+      "intent": {
+        "set_name": "Identity",
+        "set_appearance": "Visual profile",
+        "set_personality": "Behavior",
+        "set_scenario": "Situation",
+        "set_voice_guidance": "Voice",
+        "set_first_message": "Opening message",
+        "set_greeting": "Alternate start",
+        "add_lorebook_entry": "World memory",
+        "add_npc": "World cast",
+        "default": "Tool result"
+      },
+      "output": {
+        "result": "Result",
+        "firstMes": "First Message",
+        "notProvided": "Not provided",
+        "appearanceData": "Appearance Data",
+        "voiceRules": "Voice Rules",
+        "none": "None",
+        "showFull": "Show full {{label}}"
+      },
+      "tokens": {
+        "in": "in",
+        "out": "out"
+      }
+    }
+  },
+  "visuals": {
+    "emptyDraft": "Generate a Soul draft first.",
+    "hints": {
+      "ariaLabel": "Visual asset types",
+      "portrait": "Portrait",
+      "expressions": "Expressions",
+      "gallery": "Gallery",
+      "later": "Later"
+    },
+    "portrait": {
+      "eyebrow": "Portrait",
+      "mainPortrait": "Main Portrait",
+      "candidateReady": "Candidate Ready",
+      "accepted": "Accepted",
+      "newResult": "New Result",
+      "acceptedAlt": "Accepted portrait",
+      "candidateAlt": "Candidate portrait",
+      "noAcceptedYet": "No accepted portrait yet.",
+      "replacePortrait": "Replace Portrait",
+      "acceptPortrait": "Accept Portrait",
+      "dismiss": "Dismiss",
+      "regenerate": "Regenerate",
+      "generating": "Generating",
+      "noPortraitTitle": "No portrait yet.",
+      "noPortraitBody": "Choose the default image source, shape the prompts, then generate.",
+      "queued": "Queued for generation",
+      "generatingPortrait": "Generating portrait",
+      "errorTimeout": "Image generation timed out. Try again with a shorter prompt or a longer timeout.",
+      "errorGeneric": "Image generation failed. Check the image connection and try again."
+    },
+    "ribbon": {
+      "source": "Source",
+      "noSourcesConfigured": "No sources configured",
+      "chooseSource": "Choose source",
+      "noSourcesAvailable": "No image sources are available yet.",
+      "chooseSourceUnlock": "Choose a source to unlock generation controls.",
+      "importWorkflow": "Import a ComfyUI workflow.",
+      "mapPrompts": "Map the positive and negative prompts.",
+      "lastFailed": "The last generation failed.",
+      "providerReady": "{{provider}} is ready.",
+      "worldStale": "World content is stale.",
+      "workflow": "Workflow",
+      "mappedCount": "{{count}} mapped",
+      "editWorkflow": "Edit Workflow",
+      "importWorkflowButton": "Import Workflow",
+      "mappingsReady": "Prompt mappings are ready.",
+      "mapPromptsFirst": "Map positive and negative prompts first.",
+      "settings": "Settings",
+      "providerSettings": "Provider Settings",
+      "noExtraControls": "This source does not expose extra controls yet.",
+      "auto": "Auto"
+    },
+    "prompts": {
+      "positive": "Positive Prompt",
+      "negative": "Negative Prompt",
+      "suggesting": "Suggesting...",
+      "suggestTags": "Suggest Tags",
+      "suggestedTags": "Suggested Tags",
+      "suggestedTagsHint": "Replaces the previous suggested tag block only",
+      "positiveSection": "Positive",
+      "negativeSection": "Negative",
+      "applyTags": "Apply Tags",
+      "regenerate": "Regenerate",
+      "positivePlaceholder": "Prompt details, macro tokens, and portrait direction...",
+      "negativePlaceholder": "What to avoid in the result...",
+      "generating": "Generating...",
+      "generateAgain": "Generate Again",
+      "generatePortrait": "Generate Portrait",
+      "hintNoSource": "Choose a source before generating.",
+      "hintNeedsWorkflow": "Import a workflow before generating.",
+      "hintNeedsMapping": "Map positive and negative prompt fields before generating.",
+      "hintFailed": "Adjust the prompts or settings, then try again.",
+      "hintDefault": "Positive and negative prompts stay inline so you can tune them without leaving the portrait view."
+    }
+  },
+  "comfyui": {
+    "graph": {
+      "empty": "No workflow loaded yet.",
+      "mapped": "Mapped",
+      "workflowNode": "Workflow node",
+      "unknownNode": "Unknown"
+    },
+    "mappedFields": {
+      "show": "Show Mapped Fields ({{count}})",
+      "hide": "Hide Mapped Fields",
+      "fieldCount": "{{count}} fields mapped",
+      "positivePrompt": "Positive Prompt",
+      "negativePrompt": "Negative Prompt",
+      "seed": "Seed",
+      "steps": "Steps",
+      "cfg": "CFG",
+      "width": "Width",
+      "height": "Height",
+      "sampler": "Sampler",
+      "scheduler": "Scheduler",
+      "generating": "Generating...",
+      "generate": "Generate"
+    },
+    "nodeMenu": {
+      "nodeId": "Node #{{id}}",
+      "notMapped": "Not mapped",
+      "autoDetected": "Auto-detected",
+      "semantics": {
+        "positive_prompt": "Positive Prompt",
+        "negative_prompt": "Negative Prompt",
+        "seed": "Seed",
+        "steps": "Steps",
+        "cfg": "CFG",
+        "sampler_name": "Sampler",
+        "scheduler": "Scheduler",
+        "width": "Width",
+        "height": "Height",
+        "checkpoint": "Checkpoint",
+        "custom": "Custom Setting"
+      }
+    },
+    "workflowEditor": {
+      "eyebrow": "Workflow Editor",
+      "title": "ComfyUI Workflow",
+      "backToMap": "Back to Map",
+      "replaceWorkflow": "Replace Workflow",
+      "closeAria": "Close workflow editor",
+      "replace": "Replace",
+      "import": "Import",
+      "replaceTitle": "Swap in a new ComfyUI export.",
+      "importTitle": "Bring in the original ComfyUI export.",
+      "importing": "Importing...",
+      "chooseJson": "Choose JSON",
+      "replaceHint": "Importing a new JSON replaces the current workflow and refreshes the mapping choices.",
+      "importHint": "Image generation will pick up the usual prompt, sampler, seed, and size fields when it can, and you can expose anything else from the graph after import.",
+      "pastePlaceholder": "{ \"1\": { \"class_type\": \"...\" } }",
+      "importPasted": "Import Pasted JSON",
+      "mapEyebrow": "Map",
+      "mapTitle": "Click a node to map prompts or expose settings.",
+      "mappedMetaReady": "{{count}} mapped · Ready. You can leave now or expose more controls.",
+      "mappedMetaNeedsPrompts": "{{count}} mapped · Map positive and negative prompts, then click Done.",
+      "formatMismatch": "This workflow was recovered from legacy metadata. Re-import the original ComfyUI export if the graph layout looks wrong.",
+      "graphToolbarAria": "Workflow graph controls",
+      "zoomOut": "Zoom out",
+      "zoomIn": "Zoom in",
+      "fitGraph": "Fit graph",
+      "centerGraph": "Center graph",
+      "guideClick": "Click a node to map it.",
+      "guidePan": "Drag to pan.",
+      "guideZoom": "Ctrl/Cmd + wheel to zoom.",
+      "importFailed": "Failed to import workflow JSON",
+      "parseFailed": "Failed to parse workflow JSON"
+    }
+  },
+  "weaving": {
+    "soul": {
+      "title": "Weaving The Soul",
+      "description": "Shaping the card, voice, and opening from your dream.",
+      "steps": ["Reading dream", "Shaping voice", "Binding the card"]
+    },
+    "world": {
+      "title": "Building The World",
+      "description": "Generating lorebooks, NPC definitions, and regex scripts from the soul.",
+      "steps": ["Preparing world", "Building world", "Assembling lorebooks & NPCs", "Saving world data"]
+    },
+    "finalize": {
+      "title": "Bringing To Life",
+      "description": "Creating your character and preparing the first chat.",
+      "steps": ["Saving portrait", "Creating character", "Setting up chat", "Finishing up"]
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "connectionLost": {
+    "updatingTitle": "Updating Lumiverse",
+    "lostTitle": "Server connection lost",
+    "updatingMessage": "A new version is available. Applying the update — the page will refresh in a moment.",
+    "verifyingConnection": "Verifying connection…",
+    "resyncingSession": "Re-syncing your session…",
+    "unreachable": "The server has become unreachable. We'll automatically restore your session as soon as it's back.",
+    "installingBundle": "Installing latest bundle…",
+    "verifying": "Verifying…",
+    "reconnecting": "Attempting to reconnect…"
+  },
+  "confirmDelete": "Are you sure?",
+  "selectCategory": "Select a settings category",
+  "promptVariables": {
+    "title": "Configure Prompt Variables",
+    "subtitle": "Values set here are substituted into preset blocks via {{token}}.",
+    "tokenExample": "{{var::name}}",
+    "empty": "No enabled blocks define any prompt variables. Add some in the block editor to configure them here.",
+    "untitledBlock": "Untitled block",
+    "variableCount_one": "{{count}} variable",
+    "variableCount_other": "{{count}} variables",
+    "resetAll": "Reset all",
+    "saving": "Saving…",
+    "resetToDefault": "Reset to default"
+  },
+  "voicePicker": {
+    "useDefault": "Use default",
+    "ariaLabel": "Voice",
+    "connection": "Connection",
+    "selectConnection": "Select a connection…",
+    "searchConnections": "Search connections…",
+    "noConnections": "No TTS connections configured",
+    "voice": "Voice",
+    "loadingVoices": "Loading voices…",
+    "selectVoice": "Select a voice…",
+    "searchVoices": "Search voices…",
+    "loading": "Loading…",
+    "noVoices": "No voices available — use the connection default",
+    "connectionDefault": "Connection default",
+    "connectionAria": "{{label}} connection",
+    "voiceAria": "{{label}} voice"
+  },
+  "folderDropdown": {
+    "noFolder": "No folder",
+    "searchFolders": "Search folders...",
+    "none": "None",
+    "folderNamePlaceholder": "Folder name...",
+    "createNew": "Create new folder..."
+  },
+  "imageLightbox": {
+    "loadFailed": "Failed to load image"
+  },
+  "inputPrompt": {
+    "submit": "Submit"
+  },
+  "pagination": {
+    "perPage": "per page",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "total": "{{count}} total"
+  },
+  "toast": {
+    "dismiss": "Dismiss"
+  },
+  "imageCrop": {
+    "zoom": "Zoom",
+    "cropping": "Cropping...",
+    "confirm": "Confirm"
+  },
+  "searchableSelect": {
+    "placeholder": "Select…",
+    "searchPlaceholder": "Search…",
+    "emptyMessage": "No options available",
+    "noResultsMessage": "No matches",
+    "uncategorized": "Uncategorized",
+    "clear": "None"
+  },
+  "expandedTextEditor": {
+    "collapseEditor": "Collapse editor",
+    "expandEditor": "Expand editor",
+    "hideMacros": "Hide Macros",
+    "insertMacro": "Insert Macro",
+    "searchMacros": "Search macros..."
+  },
+  "spindle": {
+    "floatWidget": "Float Widget",
+    "drawerTab": "Drawer Tab",
+    "dockPanel": "Dock ({{edge}})",
+    "appMount": "App Mount",
+    "extensionUi": "Extension UI ({{count}})",
+    "showAll": "Show All",
+    "hideAll": "Hide All",
+    "show": "Show",
+    "hide": "Hide",
+    "hideWidget": "Hide Widget",
+    "resetPosition": "Reset Position"
+  }
+}

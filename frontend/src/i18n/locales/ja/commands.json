@@ -1,0 +1,296 @@
+{
+  "groups": {
+    "actions": "アクション",
+    "panels": "パネル",
+    "settings": "設定",
+    "extensions": "拡張機能"
+  },
+  "items": {
+    "action-regenerate": {
+      "label": "応答を再生成",
+      "description": "最後のAI返信を削除して、新しい返信を生成します"
+    },
+    "action-continue": {
+      "label": "生成を続行",
+      "description": "AIに最後の応答を続けるよう促す"
+    },
+    "action-new-chat": {
+      "label": "新しいチャット",
+      "description": "ホーム画面に移動して新しい会話を開始します"
+    },
+    "action-character-browser": {
+      "label": "キャラクターを閲覧",
+      "description": "完全なキャラクターライブラリを開く"
+    },
+    "action-import-character": {
+      "label": "キャラクターをインポート",
+      "description": "キャラクターカード（.png、.charx、.jpg、.json ）をアップロードする"
+    },
+    "action-new-chat-same-character": {
+      "label": "新しいチャット（同じキャラクター）",
+      "description": "現在のキャラクターとの新しい会話を開始する"
+    },
+    "action-fork-chat": {
+      "label": "フォークチャット",
+      "description": "最新のメッセージで現在のチャットをブランチ"
+    },
+    "action-manage-chats": {
+      "label": "チャットを管理",
+      "description": "現在のキャラクターのチャットマネージャーを開きます"
+    },
+    "action-copy-last-message": {
+      "label": "最新のメッセージ",
+      "description": "最新のメッセージをクリップボードにコピー"
+    },
+    "action-delete-last-message": {
+      "label": "最後のメッセージを削除",
+      "description": "このチャットから最新のメッセージを削除する"
+    },
+    "action-toggle-hidden-last": {
+      "label": "最後のメッセージを非表示に切り替え",
+      "description": "AIコンテキストから最後のメッセージを表示または非表示にする"
+    },
+    "action-dry-run": {
+      "label": "プレビュープロンプト",
+      "description": "組み立てられたプロンプトとトークン数を確認するためのドライラン"
+    },
+    "action-edit-character": {
+      "label": "[[[// Edit character",
+      "description": "現在のキャラクターのキャラクターエディターを開きます"
+    },
+    "action-duplicate-character": {
+      "label": "キャラクターの複製",
+      "description": "現在のキャラクターのコピーを作成する"
+    },
+    "action-toggle-portrait": {
+      "label": "ポートレートパネルの切り替え",
+      "description": "キャラクターのポートレートサイドバーを表示または非表示にする"
+    },
+    "action-delete-chat": {
+      "label": "チャットを削除する",
+      "description": "この会話を完全に削除する"
+    },
+    "panel-profile": {
+      "label": "材料形状",
+      "description": "アクティブなキャラクターの表示と編集"
+    },
+    "panel-presets": {
+      "label": "理性",
+      "description": "推論、思考の連鎖、プロンプトの動作を設定する"
+    },
+    "panel-loom": {
+      "label": "織機",
+      "description": "物語の構造とストーリーのビートを設定する"
+    },
+    "panel-dream-weaver": {
+      "label": "夢の編み手",
+      "description": "想像力を駆使してキャラクターを作成"
+    },
+    "panel-connections": {
+      "label": "接続",
+      "description": "API接続とプロバイダーの管理"
+    },
+    "panel-browser": {
+      "label": "パックブラウザ",
+      "description": "コンテンツパックの閲覧と管理"
+    },
+    "panel-characters": {
+      "label": "登場&#12040;物",
+      "description": "キャラクターカードの閲覧と管理"
+    },
+    "panel-personas": {
+      "label": "ペルソナ",
+      "description": "ユーザーペルソナを管理する"
+    },
+    "panel-lorebook": {
+      "label": "ロアブック",
+      "description": "ワールドブックとロアブックのエントリーを編集する"
+    },
+    "panel-cortex": {
+      "label": "記憶皮質",
+      "description": "メモリ皮質エントリの表示と管理"
+    },
+    "panel-databank": {
+      "label": "データベース",
+      "description": "AIコンテキストの参照文書をアップロードして管理する"
+    },
+    "panel-create": {
+      "label": "クリエイターワークショップ",
+      "description": "LumiaアイテムとLoomプリセットの作成と編集"
+    },
+    "panel-ooc": {
+      "label": "OOC",
+      "description": "文字外のコメント表示設定"
+    },
+    "panel-prompt": {
+      "label": "構成",
+      "description": "LumiaとLoomのコンテンツ、Sovereign Hand、コンテキストフィルターを選択します"
+    },
+    "panel-council": {
+      "label": "協議会",
+      "description": "Lumia協議会とツールの機能を設定する"
+    },
+    "panel-summary": {
+      "label": "要約",
+      "description": "コンテキストの要約と切り捨てを構成する"
+    },
+    "panel-feedback": {
+      "label": "市議会のフィードバック",
+      "description": "最新の評議会実行結果を表示する"
+    },
+    "panel-worldinfo": {
+      "label": "ワールドインフォメーション",
+      "description": "現在有効化されているワールド情報エントリーを表示"
+    },
+    "panel-imagegen": {
+      "label": "画像の生成に失敗しました",
+      "description": "AIシーン生成の設定と制御"
+    },
+    "panel-wallpaper": {
+      "label": "壁紙",
+      "description": "グローバルまたはチャットごとの背景の壁紙を設定する"
+    },
+    "panel-regex": {
+      "label": "正規表現スクリプト",
+      "description": "正規表現検索/置換スクリプトの作成と管理"
+    },
+    "panel-branches": {
+      "label": "ブランチツリー",
+      "description": "チャットブランチの履歴を表示およびナビゲートする"
+    },
+    "panel-theme": {
+      "label": "テーマ",
+      "description": "色、アクセント、ビジュアルスタイルをカスタマイズ"
+    },
+    "panel-spindle": {
+      "label": "拡張機能",
+      "description": "スピンドルエクステンションの管理"
+    },
+    "settings-account": {
+      "label": "アカウント設定",
+      "description": "アカウントの詳細とパスワードを管理する"
+    },
+    "settings-display": {
+      "label": "表示レイアウト",
+      "description": "パネルの幅、サイドバーの位置、レイアウトのオプション"
+    },
+    "settings-chat": {
+      "label": "チャットの動作",
+      "description": "メッセージ表示モード、送信キー、チャットオプション"
+    },
+    "settings-extensions": {
+      "label": "拡張機能の設定",
+      "description": "スピンドルエクステンション設定の管理"
+    },
+    "settings-guided": {
+      "label": "ガイド付き世代",
+      "description": "ガイド付き生成シーケンスとプロンプトバイアスを構成する"
+    },
+    "settings-quickReplies": {
+      "label": "素早い返信",
+      "description": "クイック返信セットとメッセージショートカットを管理する"
+    },
+    "settings-extensionPools": {
+      "label": "エクステンションプール",
+      "description": "拡張機能リソースプールの制限を構成する"
+    },
+    "settings-webSearch": {
+      "label": "ウェブ検索",
+      "description": "SearXNGが支援する協議会ツールのWeb検索を構成する"
+    },
+    "settings-embeddings": {
+      "label": "埋め込み",
+      "description": "埋め込みモデルとベクトルストレージの設定"
+    },
+    "settings-memoryCortex": {
+      "label": "メモリ皮質の設定",
+      "description": "メモリ皮質の抽出と顕著性を設定する"
+    },
+    "settings-notifications": {
+      "label": "通知",
+      "description": "通知設定とアラートを設定する"
+    },
+    "settings-voice": {
+      "label": "ボイス＆スピーチ",
+      "description": "テキスト読み上げ、音声読み上げ、音声設定"
+    },
+    "settings-mcpServers": {
+      "label": "MCPサーバー",
+      "description": "関数呼び出しのために外部MCPツールサーバーに接続する"
+    },
+    "settings-advanced": {
+      "label": "高度な設定",
+      "description": "高度な構成とデバッグオプション"
+    },
+    "settings-lumihub": {
+      "label": "ルミハブ",
+      "description": "LumiHubクラウドの同期と共有設定"
+    },
+    "settings-dataPortability": {
+      "label": "データポータビリティ",
+      "description": "データをエクスポートするか、以前にエクスポートしたアーカイブをインポートします"
+    },
+    "settings-diagnostics": {
+      "label": "診断",
+      "description": "システムの健全性、パフォーマンスメトリクス、デバッグ情報"
+    },
+    "settings-operator": {
+      "label": "操作パネル",
+      "description": "サーバー管理、アップデート、および再起動コントロール"
+    },
+    "settings-tokenizers": {
+      "label": "トークナイザーマネージャー",
+      "description": "トークナイザー構成の管理とテスト"
+    },
+    "settings-users": {
+      "label": "ユーザー管理",
+      "description": "ユーザーアカウント、ロール、アクセス許可を管理する"
+    },
+    "settings-migration": {
+      "label": "マイグレーション",
+      "description": "SillyTavernやその他のソースからデータをインポートする"
+    }
+  },
+  "palette": {
+    "search": "Search コマンド",
+    "clear": "検索をクリア",
+    "aria": "コマンドパレット",
+    "noResults": "「{{query}}」の結果はありません",
+    "listAria": "コマンド"
+  },
+  "confirm": {
+    "forkChat": {
+      "title": "フォークチャット",
+      "message": "最新のメッセージから新しいブランチを作成しますか?",
+      "confirm": "フォーク"
+    },
+    "deleteChat": {
+      "title": "チャットを削除する",
+      "message": "この会話を完全に削除しますか?",
+      "confirm": "削除"
+    }
+  },
+  "toast": {
+    "failedRegenerate": "再生成できませんでした",
+    "failedContinue": "続行できませんでした",
+    "importedCharacter": "インポートできませんでした{{name}}",
+    "failedImportCharacter": "キャラクターをインポートできませんでした",
+    "failedForkChat": "チャットをフォークできませんでした",
+    "copiedToClipboard": "クリップボードにコピーしました",
+    "failedCopy": "コピーできませんでした",
+    "messageDeleted": "メッセージが削除されました",
+    "failedDeleteMessage": "メッセージを削除できませんでした",
+    "messageHidden": "AI コンテキストから隠されたメッセージ",
+    "messageVisible": "AI コンテキストに表示されるメッセージ",
+    "failedUpdateMessage": "メッセージの更新に失敗しました",
+    "dryRunFailed": "ドライ ランに失敗しました",
+    "duplicatedCharacter": "複製 {{name}}",
+    "failedDuplicateCharacter": "キャラクターの複製に失敗しました",
+    "chatDeleted": "チャットの削除",
+    "failedDeleteChat": "チャットの削除に失敗しました"
+  },
+  "misc": {
+    "groupChat": "グループチャット",
+    "character": "キャラクター"
+  }
+}

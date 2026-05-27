@@ -1,0 +1,9 @@
+{
+  "failedToRegenerate": "再生成できませんでした",
+  "failedToContinue": "生成の続行に失敗しました",
+  "failedToStartGeneration": "生成の開始に失敗しました",
+  "failedToImpersonate": "偽装に失敗しました",
+  "failedToResolveMacros": "マクロの解決に失敗しました",
+  "failedToGenerate": "生成に失敗しました",
+  "failedMentionChain": "続行できませんでした @メンション チェーン"
+}

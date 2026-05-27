@@ -1,0 +1,99 @@
+{
+  "connectionLost": {
+    "updatingTitle": "Lumiverse の更新中",
+    "lostTitle": "サーバー接続が失われました",
+    "updatingMessage": "新しいバージョンが利用可能です。更新を適用しています — ページはすぐに更新されます。",
+    "verifyingConnection": "接続を確認しています…",
+    "resyncingSession": "セッションを再同期しています…",
+    "unreachable": "サーバーに到達できなくなりました。セッションが戻り次第、自動的に復元します。",
+    "installingBundle": "最新のバンドルをインストール中…",
+    "verifying": "確認中…",
+    "reconnecting": "再接続を試行中…"
+  },
+  "confirmDelete": "よろしいですか?",
+  "selectCategory": "設定カテゴリを選択してください",
+  "promptVariables": {
+    "title": "プロンプト変数の構成",
+    "subtitle": "ここで設定した値は、{{token}} を介してプリセット ブロックに置き換えられます。",
+    "tokenExample": "{{var::name}}",
+    "empty": "有効なブロックはプロンプト変数を定義しません。ブロック エディターでいくつかを追加して、ここで設定します。",
+    "untitledBlock": "無題ブロック",
+    "variableCount_one": "{{count}} 変数",
+    "variableCount_other": "{{count}} 変数",
+    "resetAll": "すべてリセット",
+    "saving": "保存中…",
+    "resetToDefault": "デフォルトにリセット"
+  },
+  "voicePicker": {
+    "useDefault": "デフォルトを使用",
+    "ariaLabel": "音声",
+    "connection": "繋がり",
+    "selectConnection": "接続を選択してください…",
+    "searchConnections": "接続を検索…",
+    "noConnections": "TTS 接続が設定されていません",
+    "voice": "音声",
+    "loadingVoices": "音声を読み込んでいます…",
+    "selectVoice": "音声を選択...",
+    "searchVoices": "音声を検索...",
+    "loading": "読み込み中…",
+    "noVoices": "使用可能な音声はありません — デフォルトの接続を使用",
+    "connectionDefault": "接続のデフォルト",
+    "connectionAria": "{{label}} 接続",
+    "voiceAria": "{{label}}の声"
+  },
+  "folderDropdown": {
+    "noFolder": "フォルダーなし",
+    "searchFolders": "フォルダーを検索...",
+    "none": "なし",
+    "folderNamePlaceholder": "フォルダー名...",
+    "createNew": "新しいフォルダーを作成..."
+  },
+  "imageLightbox": {
+    "loadFailed": "画像の読み込みに失敗しました"
+  },
+  "inputPrompt": {
+    "submit": "送信"
+  },
+  "pagination": {
+    "perPage": "ページごと",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "total": "合計 {{count}}"
+  },
+  "toast": {
+    "dismiss": "却下する"
+  },
+  "imageCrop": {
+    "zoom": "ズーム",
+    "cropping": "トリミング中...",
+    "confirm": "確認"
+  },
+  "searchableSelect": {
+    "placeholder": "Select...",
+    "searchPlaceholder": "Search...",
+    "emptyMessage": "利用可能なオプションはありません",
+    "noResultsMessage": "一致しません",
+    "uncategorized": "未分類",
+    "clear": "なし"
+  },
+  "expandedTextEditor": {
+    "collapseEditor": "エディタを折りたたむ",
+    "expandEditor": "エディタを展開",
+    "hideMacros": "マクロを非表示",
+    "insertMacro": "マクロを挿入",
+    "searchMacros": "マクロを検索..."
+  },
+  "spindle": {
+    "floatWidget": "フロート ウィジェット",
+    "drawerTab": "ドロワー タブ",
+    "dockPanel": "ドック ({{edge}})",
+    "appMount": "アプリ マウント",
+    "extensionUi": "拡張 UI ({{count}})",
+    "showAll": "すべて表示",
+    "hideAll": "すべて非表示",
+    "show": "表示",
+    "hide": "非表示",
+    "hideWidget": "ウィジェットを非表示",
+    "resetPosition": "位置をリセットする"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "failedToRegenerate": "Échec de la régénération",
+  "failedToContinue": "Échec de la poursuite de la génération",
+  "failedToStartGeneration": "Échec du démarrage de la génération",
+  "failedToImpersonate": "Échec de l'usurpation d'identité",
+  "failedToResolveMacros": "Échec de la résolution des macros",
+  "failedToGenerate": "Échec de la génération",
+  "failedMentionChain": "Échec de la poursuite @mention chain"
+}

@@ -1,0 +1,9 @@
+{
+  "failedToRegenerate": "Failed to regenerate",
+  "failedToContinue": "Failed to continue generation",
+  "failedToStartGeneration": "Failed to start generation",
+  "failedToImpersonate": "Failed to impersonate",
+  "failedToResolveMacros": "Failed to resolve macros",
+  "failedToGenerate": "Failed to generate",
+  "failedMentionChain": "Failed to continue @mention chain"
+}

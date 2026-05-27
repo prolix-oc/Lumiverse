@@ -1,0 +1,296 @@
+{
+  "groups": {
+    "actions": "Actes",
+    "panels": "Panneaux",
+    "settings": "Paramètres",
+    "extensions": "Rallonges"
+  },
+  "items": {
+    "action-regenerate": {
+      "label": "Régénérer la réponse",
+      "description": "Supprimer la dernière réponse de l'IA et en générer une nouvelle"
+    },
+    "action-continue": {
+      "label": "Continuer Génération",
+      "description": "Demander à l'IA de poursuivre sa dernière réponse"
+    },
+    "action-new-chat": {
+      "label": "Nouveau chat",
+      "description": "Aller à l'écran d'accueil pour démarrer une nouvelle conversation"
+    },
+    "action-character-browser": {
+      "label": "Parcourir les personnages",
+      "description": "Ouvrir la bibliothèque complète de personnages"
+    },
+    "action-import-character": {
+      "label": "Importer un personnage",
+      "description": "Téléchargez une carte de personnage (.png, .charx, .jpg, .json)"
+    },
+    "action-new-chat-same-character": {
+      "label": "Nouveau chat (même personnage)",
+      "description": "Démarrez une nouvelle conversation avec le personnage actuel"
+    },
+    "action-fork-chat": {
+      "label": "Bavarder",
+      "description": "Diversez le chat en cours au dernier message"
+    },
+    "action-manage-chats": {
+      "label": "Gérer les discussions",
+      "description": "Ouvrez le gestionnaire de chat pour le personnage actuel"
+    },
+    "action-copy-last-message": {
+      "label": "Copier le dernier message",
+      "description": "Copier le message le plus récent dans le presse-papiers"
+    },
+    "action-delete-last-message": {
+      "label": "Supprimer le dernier message",
+      "description": "Supprimer le message le plus récent de ce chat"
+    },
+    "action-toggle-hidden-last": {
+      "label": "Toggle Masquer le dernier message",
+      "description": "Afficher ou masquer le dernier message du contexte IA"
+    },
+    "action-dry-run": {
+      "label": "Aperçu de l'invite",
+      "description": "Exécution à sec pour voir l'invite assemblée et le nombre de jetons"
+    },
+    "action-edit-character": {
+      "label": "Modifier le personnage",
+      "description": "Ouvrir l'éditeur de personnage pour le personnage actuel"
+    },
+    "action-duplicate-character": {
+      "label": "Dupliquer le personnage",
+      "description": "Créer une copie du personnage actuel"
+    },
+    "action-toggle-portrait": {
+      "label": "Basculer le panneau de portrait",
+      "description": "Afficher ou masquer la barre latérale du portrait du personnage"
+    },
+    "action-delete-chat": {
+      "label": "Supprimer le chat",
+      "description": "Supprimer définitivement cette conversation"
+    },
+    "panel-profile": {
+      "label": "Profil",
+      "description": "Afficher et modifier le personnage actif"
+    },
+    "panel-presets": {
+      "label": "Raisonnement",
+      "description": "Configurer le raisonnement, la chaîne de pensée et le comportement des invites"
+    },
+    "panel-loom": {
+      "label": "Métier à tisser",
+      "description": "Configurer la structure narrative et les rythmes de l'histoire"
+    },
+    "panel-dream-weaver": {
+      "label": "Tisserand de rêves",
+      "description": "Créer des personnages à partir de votre imagination"
+    },
+    "panel-connections": {
+      "label": "Connexions",
+      "description": "Gérer les connexions et les fournisseurs API"
+    },
+    "panel-browser": {
+      "label": "Navigateur de packs",
+      "description": "Parcourir et gérer les packs de contenu"
+    },
+    "panel-characters": {
+      "label": "Personnages",
+      "description": "Parcourir et gérez vos cartes de personnage"
+    },
+    "panel-personas": {
+      "label": "Personnages",
+      "description": "Gérez vos personnages d'utilisateur"
+    },
+    "panel-lorebook": {
+      "label": "Livre d'histoire",
+      "description": "Modifiez les entrées du livre mondial et du livre d'histoire"
+    },
+    "panel-cortex": {
+      "label": "Cortex mémoire",
+      "description": "Affichez et gérez les entrées du cortex mémoire"
+    },
+    "panel-databank": {
+      "label": "Banque de données",
+      "description": "Télécharger et gérer des documents de référence pour le contexte de l'IA"
+    },
+    "panel-create": {
+      "label": "Atelier Créateur",
+      "description": "Créer et modifier des éléments Lumia et des préréglages Loom"
+    },
+    "panel-ooc": {
+      "label": "OOC",
+      "description": "Paramètres d'affichage des commentaires hors caractères"
+    },
+    "panel-prompt": {
+      "label": "Composition",
+      "description": "Choisir le contenu Lumia et Loom, Sovereign Hand et les filtres contextuels"
+    },
+    "panel-council": {
+      "label": "Conseil",
+      "description": "Configurer le Conseil Lumia et les fonctions des outils"
+    },
+    "panel-summary": {
+      "label": "Résumé",
+      "description": "Configurer le résumé du contexte et troncature"
+    },
+    "panel-feedback": {
+      "label": "Commentaires du Conseil",
+      "description": "Voir les derniers résultats de l'exécution du conseil"
+    },
+    "panel-worldinfo": {
+      "label": "Infos mondiales",
+      "description": "Voir les entrées d'informations mondiales actuellement activées"
+    },
+    "panel-imagegen": {
+      "label": "Génération d'images",
+      "description": "Configurer et contrôler la génération de scènes d'IA"
+    },
+    "panel-wallpaper": {
+      "label": "Fond d'écran",
+      "description": "Définir des fonds d'écran globaux ou par chat"
+    },
+    "panel-regex": {
+      "label": "Scripts Regex",
+      "description": "Créez et gérez des scripts de recherche/remplacement d'expressions régulières"
+    },
+    "panel-branches": {
+      "label": "Arborescence des branches",
+      "description": "Affichez et parcourez l'historique des branches de discussion"
+    },
+    "panel-theme": {
+      "label": "Thème",
+      "description": "Personnalisez les couleurs, l'accent et le style visuel"
+    },
+    "panel-spindle": {
+      "label": "Rallonges",
+      "description": "Gérez les extensions de broche"
+    },
+    "settings-account": {
+      "label": "Paramètres du compte",
+      "description": "Gérez les détails de votre compte et votre mot de passe"
+    },
+    "settings-display": {
+      "label": "Affichage et mise en page",
+      "description": "Largeur du panneau, position de la barre latérale et options de mise en page"
+    },
+    "settings-chat": {
+      "label": "Comportement du chat",
+      "description": "Mode d'affichage des messages, envoi de clé et discussion options"
+    },
+    "settings-extensions": {
+      "label": "Paramètres d'extension",
+      "description": "Gérer la configuration de l'extension de broche"
+    },
+    "settings-guided": {
+      "label": "Génération guidée",
+      "description": "Configurer les séquences de génération guidée et les biais d'invite"
+    },
+    "settings-quickReplies": {
+      "label": "Réponses rapides",
+      "description": "Gérer les jeux de réponses rapides et les raccourcis de messages"
+    },
+    "settings-extensionPools": {
+      "label": "Pools d'extensions",
+      "description": "Configurer les limites du pool de ressources d'extension"
+    },
+    "settings-webSearch": {
+      "label": "Recherche sur le Web",
+      "description": "Configurer la recherche Web basée sur SearXNG pour les outils du conseil"
+    },
+    "settings-embeddings": {
+      "label": "Intégrations",
+      "description": "Configurer les modèles d'intégration et le stockage vectoriel"
+    },
+    "settings-memoryCortex": {
+      "label": "Paramètres du cortex mémoire",
+      "description": "Configurer l'extraction et la saillance du cortex mémoire"
+    },
+    "settings-notifications": {
+      "label": "Notifications",
+      "description": "Configurer les préférences de notification et les alertes"
+    },
+    "settings-voice": {
+      "label": "Voix et parole",
+      "description": "Texte-parole, parole-texte et paramètres vocaux"
+    },
+    "settings-mcpServers": {
+      "label": "Serveurs MCP",
+      "description": "Se connecter à des externes Serveurs d'outils MCP pour l'appel de fonctions"
+    },
+    "settings-advanced": {
+      "label": "Paramètres avancés",
+      "description": "Options avancées de configuration et de débogage"
+    },
+    "settings-lumihub": {
+      "label": "LumiHub",
+      "description": "Paramètres de synchronisation et de partage dans le cloud LumiHub"
+    },
+    "settings-dataPortability": {
+      "label": "Portabilité des données",
+      "description": "Exportez vos données ou importez une archive précédemment exportée"
+    },
+    "settings-diagnostics": {
+      "label": "Diagnostic",
+      "description": "Santé du système, mesures de performances et informations de débogage"
+    },
+    "settings-operator": {
+      "label": "Panneau de commande",
+      "description": "Gestion du serveur, mises à jour et contrôles de redémarrage"
+    },
+    "settings-tokenizers": {
+      "label": "Gestionnaire de tokenizer",
+      "description": "Gérer et tester les configurations du tokenizer"
+    },
+    "settings-users": {
+      "label": "Gestion des utilisateurs",
+      "description": "Gérer les comptes d'utilisateurs, les rôles et les autorisations"
+    },
+    "settings-migration": {
+      "label": "Migration",
+      "description": "Importer des données depuis SillyTavern et d'autres sources"
+    }
+  },
+  "palette": {
+    "search": "Commandes de recherche…",
+    "clear": "Effacer la recherche",
+    "aria": "Palette de commandes",
+    "noResults": "Aucun résultat pour \"{{query}}\"",
+    "listAria": "Commandes"
+  },
+  "confirm": {
+    "forkChat": {
+      "title": "Bavarder",
+      "message": "Créer une nouvelle branche du dernier message ?",
+      "confirm": "Fourchette"
+    },
+    "deleteChat": {
+      "title": "Supprimer le chat",
+      "message": "Supprimer définitivement cette conversation ?",
+      "confirm": "Supprimer"
+    }
+  },
+  "toast": {
+    "failedRegenerate": "Échec de la régénération",
+    "failedContinue": "Échec de la poursuite",
+    "importedCharacter": "Importé {{name}}",
+    "failedImportCharacter": "Échec de l'importation du personnage",
+    "failedForkChat": "Échec de la création du chat",
+    "copiedToClipboard": "Copié dans le presse-papiers",
+    "failedCopy": "Échec de la copie",
+    "messageDeleted": "Message supprimé",
+    "failedDeleteMessage": "Échec de la suppression du message",
+    "messageHidden": "Message masqué du contexte IA",
+    "messageVisible": "Message visible dans le contexte IA",
+    "failedUpdateMessage": "Échec de la mise à jour du message",
+    "dryRunFailed": "Échec de l'exécution à sec",
+    "duplicatedCharacter": "Dupliqué {{name}}",
+    "failedDuplicateCharacter": "Échec de la duplication du personnage",
+    "chatDeleted": "Chat supprimé",
+    "failedDeleteChat": "Échec de la suppression chat"
+  },
+  "misc": {
+    "groupChat": "Chat de groupe",
+    "character": "Personnage"
+  }
+}

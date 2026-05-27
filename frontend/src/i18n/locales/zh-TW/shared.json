@@ -1,0 +1,99 @@
+{
+  "connectionLost": {
+    "updatingTitle": "正在更新 Lumiverse",
+    "lostTitle": "服務器連接已斷開",
+    "updatingMessage": "有新版本可用，正在應用更新，頁面將很快刷新。",
+    "verifyingConnection": "正在驗證連接…",
+    "resyncingSession": "正在重新同步會話…",
+    "unreachable": "無法連接到服務器，恢復後將自動還原你的會話。",
+    "installingBundle": "正在安裝最新版本…",
+    "verifying": "正在驗證…",
+    "reconnecting": "正在嘗試重新連接…"
+  },
+  "confirmDelete": "確定嗎？",
+  "selectCategory": "請選擇設置類別",
+  "promptVariables": {
+    "title": "配置提示詞變量",
+    "subtitle": "此處設置的值會通過 {{token}} 替換到預設塊中。",
+    "tokenExample": "{{var::name}}",
+    "empty": "沒有已啟用的塊定義提示詞變量。請在塊編輯器中添加後在此配置。",
+    "untitledBlock": "未命名塊",
+    "variableCount_one": "{{count}} 個變量",
+    "variableCount_other": "{{count}} 個變量",
+    "resetAll": "全部重置",
+    "saving": "保存中…",
+    "resetToDefault": "恢復默認值"
+  },
+  "voicePicker": {
+    "useDefault": "使用默認",
+    "ariaLabel": "語音",
+    "connection": "連接",
+    "selectConnection": "選擇連接…",
+    "searchConnections": "搜索連接…",
+    "noConnections": "未配置 TTS 連接",
+    "voice": "音色",
+    "loadingVoices": "加載音色中…",
+    "selectVoice": "選擇音色…",
+    "searchVoices": "搜索音色…",
+    "loading": "加載中…",
+    "noVoices": "無可用音色 — 將使用連接默認",
+    "connectionDefault": "連接默認",
+    "connectionAria": "{{label}} 連接",
+    "voiceAria": "{{label}} 音色"
+  },
+  "folderDropdown": {
+    "noFolder": "無文件夾",
+    "searchFolders": "搜索文件夾…",
+    "none": "無",
+    "folderNamePlaceholder": "文件夾名稱…",
+    "createNew": "新建文件夾…"
+  },
+  "imageLightbox": {
+    "loadFailed": "圖片加載失敗"
+  },
+  "inputPrompt": {
+    "submit": "提交"
+  },
+  "pagination": {
+    "perPage": "每頁",
+    "previousPage": "上一頁",
+    "nextPage": "下一頁",
+    "total": "共 {{count}} 項"
+  },
+  "toast": {
+    "dismiss": "關閉"
+  },
+  "imageCrop": {
+    "zoom": "縮放",
+    "cropping": "裁剪中…",
+    "confirm": "確認"
+  },
+  "searchableSelect": {
+    "placeholder": "選擇…",
+    "searchPlaceholder": "搜索…",
+    "emptyMessage": "無可用選項",
+    "noResultsMessage": "無匹配項",
+    "uncategorized": "未分類",
+    "clear": "無"
+  },
+  "expandedTextEditor": {
+    "collapseEditor": "收起編輯器",
+    "expandEditor": "展開編輯器",
+    "hideMacros": "隱藏宏",
+    "insertMacro": "插入宏",
+    "searchMacros": "搜索宏…"
+  },
+  "spindle": {
+    "floatWidget": "浮動組件",
+    "drawerTab": "抽屜標籤",
+    "dockPanel": "停靠 ({{edge}})",
+    "appMount": "應用掛載",
+    "extensionUi": "擴展界面 ({{count}})",
+    "showAll": "全部顯示",
+    "hideAll": "全部隱藏",
+    "show": "顯示",
+    "hide": "隱藏",
+    "hideWidget": "隱藏組件",
+    "resetPosition": "重置位置"
+  }
+}

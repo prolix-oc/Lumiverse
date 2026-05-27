@@ -1,0 +1,296 @@
+{
+  "groups": {
+    "actions": "Actions",
+    "panels": "Panels",
+    "settings": "Settings",
+    "extensions": "Extensions"
+  },
+  "items": {
+    "action-regenerate": {
+      "label": "Regenerate Response",
+      "description": "Delete the last AI reply and generate a new one"
+    },
+    "action-continue": {
+      "label": "Continue Generation",
+      "description": "Prompt the AI to continue its last response"
+    },
+    "action-new-chat": {
+      "label": "New Chat",
+      "description": "Go to the home screen to start a new conversation"
+    },
+    "action-character-browser": {
+      "label": "Browse Characters",
+      "description": "Open the full character library"
+    },
+    "action-import-character": {
+      "label": "Import Character",
+      "description": "Upload a character card (.png, .charx, .jpg, .json)"
+    },
+    "action-new-chat-same-character": {
+      "label": "New Chat (Same Character)",
+      "description": "Start a fresh conversation with the current character"
+    },
+    "action-fork-chat": {
+      "label": "Fork Chat",
+      "description": "Branch the current chat at the latest message"
+    },
+    "action-manage-chats": {
+      "label": "Manage Chats",
+      "description": "Open the chat manager for the current character"
+    },
+    "action-copy-last-message": {
+      "label": "Copy Last Message",
+      "description": "Copy the most recent message to clipboard"
+    },
+    "action-delete-last-message": {
+      "label": "Delete Last Message",
+      "description": "Remove the most recent message from this chat"
+    },
+    "action-toggle-hidden-last": {
+      "label": "Toggle Hide Last Message",
+      "description": "Show or hide the last message from AI context"
+    },
+    "action-dry-run": {
+      "label": "Preview Prompt",
+      "description": "Dry-run to see the assembled prompt and token count"
+    },
+    "action-edit-character": {
+      "label": "Edit Character",
+      "description": "Open the character editor for the current character"
+    },
+    "action-duplicate-character": {
+      "label": "Duplicate Character",
+      "description": "Create a copy of the current character"
+    },
+    "action-toggle-portrait": {
+      "label": "Toggle Portrait Panel",
+      "description": "Show or hide the character portrait sidebar"
+    },
+    "action-delete-chat": {
+      "label": "Delete Chat",
+      "description": "Permanently delete this conversation"
+    },
+    "panel-profile": {
+      "label": "Profile",
+      "description": "View and edit the active character"
+    },
+    "panel-presets": {
+      "label": "Reasoning",
+      "description": "Configure reasoning, chain-of-thought, and prompt behavior"
+    },
+    "panel-loom": {
+      "label": "Loom",
+      "description": "Configure narrative structure and story beats"
+    },
+    "panel-dream-weaver": {
+      "label": "Dream Weaver",
+      "description": "Create characters from your imagination"
+    },
+    "panel-connections": {
+      "label": "Connections",
+      "description": "Manage API connections and providers"
+    },
+    "panel-browser": {
+      "label": "Pack Browser",
+      "description": "Browse and manage content packs"
+    },
+    "panel-characters": {
+      "label": "Characters",
+      "description": "Browse and manage your character cards"
+    },
+    "panel-personas": {
+      "label": "Personas",
+      "description": "Manage your user personas"
+    },
+    "panel-lorebook": {
+      "label": "Lorebook",
+      "description": "Edit world book and lorebook entries"
+    },
+    "panel-cortex": {
+      "label": "Memory Cortex",
+      "description": "View and manage memory cortex entries"
+    },
+    "panel-databank": {
+      "label": "Databank",
+      "description": "Upload and manage reference documents for AI context"
+    },
+    "panel-create": {
+      "label": "Creator Workshop",
+      "description": "Create and edit Lumia items and Loom presets"
+    },
+    "panel-ooc": {
+      "label": "OOC",
+      "description": "Out-of-character comment display settings"
+    },
+    "panel-prompt": {
+      "label": "Composition",
+      "description": "Pick Lumia and Loom content, Sovereign Hand, and context filters"
+    },
+    "panel-council": {
+      "label": "Council",
+      "description": "Configure the Lumia Council and tool functions"
+    },
+    "panel-summary": {
+      "label": "Summary",
+      "description": "Configure context summarization and truncation"
+    },
+    "panel-feedback": {
+      "label": "Council Feedback",
+      "description": "View the latest council execution results"
+    },
+    "panel-worldinfo": {
+      "label": "World Info",
+      "description": "View currently activated world info entries"
+    },
+    "panel-imagegen": {
+      "label": "Image Generation",
+      "description": "Configure and control AI scene generation"
+    },
+    "panel-wallpaper": {
+      "label": "Wallpaper",
+      "description": "Set global or per-chat background wallpapers"
+    },
+    "panel-regex": {
+      "label": "Regex Scripts",
+      "description": "Create and manage regex find/replace scripts"
+    },
+    "panel-branches": {
+      "label": "Branch Tree",
+      "description": "View and navigate the chat branch history"
+    },
+    "panel-theme": {
+      "label": "Theme",
+      "description": "Customize colors, accent, and visual style"
+    },
+    "panel-spindle": {
+      "label": "Extensions",
+      "description": "Manage Spindle extensions"
+    },
+    "settings-account": {
+      "label": "Account Settings",
+      "description": "Manage your account details and password"
+    },
+    "settings-display": {
+      "label": "Display & Layout",
+      "description": "Panel width, sidebar position, and layout options"
+    },
+    "settings-chat": {
+      "label": "Chat Behavior",
+      "description": "Message display mode, send key, and chat options"
+    },
+    "settings-extensions": {
+      "label": "Extension Settings",
+      "description": "Manage Spindle extension configuration"
+    },
+    "settings-guided": {
+      "label": "Guided Generation",
+      "description": "Configure guided generation sequences and prompt biases"
+    },
+    "settings-quickReplies": {
+      "label": "Quick Replies",
+      "description": "Manage quick reply sets and message shortcuts"
+    },
+    "settings-extensionPools": {
+      "label": "Extension Pools",
+      "description": "Configure extension resource pool limits"
+    },
+    "settings-webSearch": {
+      "label": "Web Search",
+      "description": "Configure SearXNG-backed web search for council tools"
+    },
+    "settings-embeddings": {
+      "label": "Embeddings",
+      "description": "Configure embedding models and vector storage"
+    },
+    "settings-memoryCortex": {
+      "label": "Memory Cortex Settings",
+      "description": "Configure memory cortex extraction and salience"
+    },
+    "settings-notifications": {
+      "label": "Notifications",
+      "description": "Configure notification preferences and alerts"
+    },
+    "settings-voice": {
+      "label": "Voice & Speech",
+      "description": "Text-to-speech, speech-to-text, and voice settings"
+    },
+    "settings-mcpServers": {
+      "label": "MCP Servers",
+      "description": "Connect to external MCP tool servers for function calling"
+    },
+    "settings-advanced": {
+      "label": "Advanced Settings",
+      "description": "Advanced configuration and debug options"
+    },
+    "settings-lumihub": {
+      "label": "LumiHub",
+      "description": "LumiHub cloud sync and sharing settings"
+    },
+    "settings-dataPortability": {
+      "label": "Data Portability",
+      "description": "Export your data or import a previously exported archive"
+    },
+    "settings-diagnostics": {
+      "label": "Diagnostics",
+      "description": "System health, performance metrics, and debug info"
+    },
+    "settings-operator": {
+      "label": "Operator Panel",
+      "description": "Server management, updates, and restart controls"
+    },
+    "settings-tokenizers": {
+      "label": "Tokenizer Manager",
+      "description": "Manage and test tokenizer configurations"
+    },
+    "settings-users": {
+      "label": "User Management",
+      "description": "Manage user accounts, roles, and permissions"
+    },
+    "settings-migration": {
+      "label": "Migration",
+      "description": "Import data from SillyTavern and other sources"
+    }
+  },
+  "palette": {
+    "search": "Search commands…",
+    "clear": "Clear search",
+    "aria": "Command palette",
+    "noResults": "No results for \"{{query}}\"",
+    "listAria": "Commands"
+  },
+  "confirm": {
+    "forkChat": {
+      "title": "Fork Chat",
+      "message": "Create a new branch from the latest message?",
+      "confirm": "Fork"
+    },
+    "deleteChat": {
+      "title": "Delete Chat",
+      "message": "Permanently delete this conversation?",
+      "confirm": "Delete"
+    }
+  },
+  "toast": {
+    "failedRegenerate": "Failed to regenerate",
+    "failedContinue": "Failed to continue",
+    "importedCharacter": "Imported {{name}}",
+    "failedImportCharacter": "Failed to import character",
+    "failedForkChat": "Failed to fork chat",
+    "copiedToClipboard": "Copied to clipboard",
+    "failedCopy": "Failed to copy",
+    "messageDeleted": "Message deleted",
+    "failedDeleteMessage": "Failed to delete message",
+    "messageHidden": "Message hidden from AI context",
+    "messageVisible": "Message visible to AI context",
+    "failedUpdateMessage": "Failed to update message",
+    "dryRunFailed": "Dry run failed",
+    "duplicatedCharacter": "Duplicated {{name}}",
+    "failedDuplicateCharacter": "Failed to duplicate character",
+    "chatDeleted": "Chat deleted",
+    "failedDeleteChat": "Failed to delete chat"
+  },
+  "misc": {
+    "groupChat": "Group Chat",
+    "character": "Character"
+  }
+}

@@ -1,67 +1,55 @@
-import commonEn from '@/locales/en/common.json'
-import commonZh from '@/locales/zh/common.json'
-import authEn from '@/locales/en/auth.json'
-import authZh from '@/locales/zh/auth.json'
-import landingEn from '@/locales/en/landing.json'
-import landingZh from '@/locales/zh/landing.json'
-import chatEn from '@/locales/en/chat.json'
-import chatZh from '@/locales/zh/chat.json'
-import sharedEn from '@/locales/en/shared.json'
-import sharedZh from '@/locales/zh/shared.json'
-import commandsEn from '@/locales/en/commands.json'
-import commandsZh from '@/locales/zh/commands.json'
-import modalsEn from '@/locales/en/modals.json'
-import modalsZh from '@/locales/zh/modals.json'
-import panelsEn from '@/locales/en/panels.json'
-import panelsZh from '@/locales/zh/panels.json'
-import settingsEn from '@/locales/en/settings.json'
-import settingsZh from '@/locales/zh/settings.json'
-import dreamWeaverEn from '@/locales/en/dreamWeaver.json'
-import dreamWeaverZh from '@/locales/zh/dreamWeaver.json'
-import errorsEn from '@/locales/en/errors.json'
-import errorsZh from '@/locales/zh/errors.json'
+/**
+ * Lazy-load locale JSON per language. Edit/add JSON under locales/<lng>/ — no codegen step.
+ * Vite groups each language folder into one chunk (see vite.config manualChunks).
+ */
+import type { I18nNamespace } from './resources.types'
 
-export const I18N_NAMESPACES = [
-  'common',
-  'auth',
-  'landing',
-  'chat',
-  'shared',
-  'commands',
-  'modals',
-  'panels',
-  'settings',
-  'dreamWeaver',
-  'errors',
-] as const
+export { I18N_NAMESPACES, type I18nNamespace } from './resources.types'
 
-export type I18nNamespace = (typeof I18N_NAMESPACES)[number]
+type LocaleJsonLoader = () => Promise<{ default: Record<string, unknown> }>
 
-export const resources = {
-  en: {
-    common: commonEn,
-    auth: authEn,
-    landing: landingEn,
-    chat: chatEn,
-    shared: sharedEn,
-    commands: commandsEn,
-    modals: modalsEn,
-    panels: panelsEn,
-    settings: settingsEn,
-    dreamWeaver: dreamWeaverEn,
-    errors: errorsEn,
-  },
-  zh: {
-    common: commonZh,
-    auth: authZh,
-    landing: landingZh,
-    chat: chatZh,
-    shared: sharedZh,
-    commands: commandsZh,
-    modals: modalsZh,
-    panels: panelsZh,
-    settings: settingsZh,
-    dreamWeaver: dreamWeaverZh,
-    errors: errorsZh,
-  },
-} as const
+const languageGlobs = {
+  en: import.meta.glob('./locales/en/*.json') as Record<string, LocaleJsonLoader>,
+  zh: import.meta.glob('./locales/zh/*.json') as Record<string, LocaleJsonLoader>,
+  'zh-TW': import.meta.glob('./locales/zh-TW/*.json') as Record<string, LocaleJsonLoader>,
+  ja: import.meta.glob('./locales/ja/*.json') as Record<string, LocaleJsonLoader>,
+  fr: import.meta.glob('./locales/fr/*.json') as Record<string, LocaleJsonLoader>,
+}
+
+export type UiLanguage = keyof typeof languageGlobs
+
+const nsFromPathRe = /\/([^/]+)\.json$/
+
+const loadedLanguages = new Set<string>()
+
+/** Fallback chain must be loaded before switching to `lng`. */
+export function fallbackLanguagesFor(lng: string): string[] {
+  const chain: string[] = [lng]
+  if (lng === 'zh-TW') chain.push('zh')
+  if (lng !== 'en') chain.push('en')
+  return [...new Set(chain)]
+}
+
+export async function loadLanguageBundles(
+  lng: string,
+  addBundle: (lng: string, ns: I18nNamespace, data: Record<string, unknown>) => void,
+): Promise<void> {
+  if (loadedLanguages.has(lng)) return
+
+  const glob = languageGlobs[lng as UiLanguage]
+  if (!glob) {
+    console.warn(`[i18n] unknown language: ${lng}`)
+    return
+  }
+
+  await Promise.all(
+    Object.entries(glob).map(async ([filePath, load]) => {
+      const m = filePath.match(nsFromPathRe)
+      if (!m) return
+      const mod = await load()
+      addBundle(lng, m[1] as I18nNamespace, mod.default)
+    }),
+  )
+
+  loadedLanguages.add(lng)
+}
