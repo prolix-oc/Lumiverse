@@ -3437,6 +3437,47 @@ export async function deleteChatChunkEmbeddings(
   scheduleOptimize("chat_chunk");
 }
 
+/**
+ * Delete chat-chunk vectors whose source_id is no longer a live chunk.
+ * Chunk rebuilds mint fresh chunk UUIDs and clear the chat's vectors up
+ * front, but the vectorization queue writes asynchronously — a batch that
+ * was mid-flight during a rebuild can land its vectors *after* that delete,
+ * leaving orphans keyed to chunk UUIDs that no longer exist. Those orphans
+ * carry the same content as the rebuilt chunks, so retrieval surfaces them
+ * as duplicate memory-injection entries. This reconciles LanceDB against the
+ * authoritative chat_chunks set and removes the strays.
+ *
+ * `validChunkIds` MUST be the current chat_chunks ids. An empty set is
+ * treated as "unknown" and skipped so we never wipe a chat that is mid-
+ * rebuild (between its DELETE and its re-insert).
+ */
+export async function reconcileChatChunkEmbeddings(
+  userId: string,
+  chatId: string,
+  validChunkIds: Iterable<string>,
+): Promise<number> {
+  const valid = new Set(validChunkIds);
+  if (valid.size === 0) return 0;
+
+  const table = await getTableIfExists(EMBEDDINGS_TABLE, true);
+  if (!table) return 0;
+
+  const rows = await table
+    .query()
+    .where(`user_id = ${sqlValue(userId)} AND source_type = 'chat_chunk' AND owner_id = ${sqlValue(chatId)}`)
+    .select(["source_id"])
+    .toArray();
+
+  const orphanIds = Array.from(
+    new Set((rows as any[]).map((r) => String(r.source_id)).filter((id) => !valid.has(id))),
+  );
+  if (orphanIds.length === 0) return 0;
+
+  await deleteChatChunkEmbeddings(userId, chatId, orphanIds);
+  console.info(`[embeddings] Reconciled chat ${chatId.split("-")[0]}…: removed ${orphanIds.length} orphaned chunk vector(s)`);
+  return orphanIds.length;
+}
+
 export async function syncChatChunkEmbedding(
   userId: string,
   chatId: string,

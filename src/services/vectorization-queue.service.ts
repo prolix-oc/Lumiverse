@@ -181,16 +181,38 @@ class VectorizationQueue {
         batchSize,
         (chunk) => chunk.content,
         async (batchChunks, _texts, vectors) => {
-          const batchItems = batchChunks.map((chunk, i) => ({
-            chatId: chunk.chatId,
-            chunkId: chunk.id,
-            vector: vectors[i],
-            content: chunk.content,
-          }));
+          // Re-confirm each chunk still exists before writing. The embedding
+          // API call above can take seconds; a chunk rebuild that ran in that
+          // window deletes these rows and mints new chunk UUIDs. Writing now
+          // would leave orphaned vectors that retrieval surfaces as duplicate
+          // memory-injection entries.
+          const batchIds = batchChunks.map((c) => c.id);
+          const placeholders = batchIds.map(() => "?").join(",");
+          const surviving = new Set(
+            (db
+              .query(`SELECT id FROM chat_chunks WHERE id IN (${placeholders})`)
+              .all(...batchIds) as Array<{ id: string }>).map((r) => r.id),
+          );
+
+          const batchItems: Array<{ chatId: string; chunkId: string; vector: number[]; content: string }> = [];
+          const writtenChunks: Array<{ id: string; content: string; chatId: string }> = [];
+          batchChunks.forEach((chunk, i) => {
+            if (!surviving.has(chunk.id)) return;
+            batchItems.push({
+              chatId: chunk.chatId,
+              chunkId: chunk.id,
+              vector: vectors[i],
+              content: chunk.content,
+            });
+            writtenChunks.push(chunk);
+          });
+
+          if (batchItems.length === 0) return;
+
           await embeddingsSvc.batchUpsertChunkVectors(jobs[0].userId, batchItems);
 
           const now = Math.floor(Date.now() / 1000);
-          for (const chunk of batchChunks) {
+          for (const chunk of writtenChunks) {
             db.query(
               "UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?"
             ).run(now, cfg.model, chunk.id);
@@ -212,6 +234,20 @@ class VectorizationQueue {
 
       for (const chatId of refreshedChats) {
         scheduleChatMemoryRefresh(jobs[0].userId, chatId, 7);
+
+        // Self-heal: drop any vectors left over from a previous chunk
+        // generation that a concurrent rebuild couldn't clean up. Reading
+        // chat_chunks here is safe because a chunk row is always inserted
+        // before its vector is written, so live chunks are never seen as
+        // orphans. An empty set is left alone (chat may be mid-rebuild).
+        try {
+          const liveIds = (db
+            .query("SELECT id FROM chat_chunks WHERE chat_id = ?")
+            .all(chatId) as Array<{ id: string }>).map((r) => r.id);
+          await embeddingsSvc.reconcileChatChunkEmbeddings(jobs[0].userId, chatId, liveIds);
+        } catch (err) {
+          console.warn(`[vectorization] Orphan reconcile failed for chat ${chatId}:`, err);
+        }
       }
 
       if (chunks.length > failedChunkIds.size) {

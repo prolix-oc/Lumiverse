@@ -405,6 +405,17 @@ async function warmLongTermChatMemory(options: {
     return { status: "complete", reason: "chat_memory_warmup_resumed" };
   }
 
+  // Fully vectorized, nothing to (re)build or resume. Sweep any orphaned
+  // vectors a past rebuild/vectorization race may have left behind so
+  // existing duplicate memory-injection entries self-heal on chat open.
+  // Fire-and-forget to keep the warmup fast path snappy.
+  const liveChunkIds = (getDb()
+    .query("SELECT id FROM chat_chunks WHERE chat_id = ?")
+    .all(chatId) as Array<{ id: string }>).map((r) => r.id);
+  void embeddingsSvc
+    .reconcileChatChunkEmbeddings(userId, chatId, liveChunkIds)
+    .catch((err) => console.warn("[memory-cortex] Orphan reconcile failed:", err));
+
   return { status: "skipped", reason: "chat_memory_already_fresh" };
 }
 
