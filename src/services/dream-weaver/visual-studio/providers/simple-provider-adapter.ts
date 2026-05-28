@@ -9,7 +9,7 @@ import type { VisualProviderAdapter } from "../provider-adapter";
 
 type SimpleVisualProvider = Extract<
   DreamWeaverVisualProvider,
-  "novelai" | "nanogpt" | "google_gemini" | "swarmui"
+  "novelai" | "nanogpt" | "google_gemini" | "sdapi" | "swarmui"
 >;
 
 function filterSupportedParameters(

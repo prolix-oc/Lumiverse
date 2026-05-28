@@ -96,7 +96,7 @@ export type DreamWeaverVisualProvider =
   | "novelai"
   | "nanogpt"
   | "google_gemini"
-  | "a1111"
+  | "sdapi"
   | "swarmui";
 
 export interface DreamWeaverVisualReference {
