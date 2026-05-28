@@ -256,14 +256,14 @@ export default function ChatPickerModal({
             className={clsx(styles.card, styles.freshChatCard)}
             onClick={() => handleNewChat({ memoryIsolation: true })}
             disabled={loading}
-            title={t('freshChatTitle')}
+            title={t('chatPicker.freshChatTitle')}
           >
             <div className={styles.freshChatIcon}>
               <Sparkles size={14} strokeWidth={2.5} />
             </div>
             <div className={clsx(styles.cardHeader, styles.freshChatHeader)}>
-              <span className={styles.cardLabel}>{t('startFreshChat')}</span>
-              <span className={styles.freshChatSubtitle}>{t('freshChatSubtitle')}</span>
+              <span className={styles.cardLabel}>{t('chatPicker.startFreshChat')}</span>
+              <span className={styles.freshChatSubtitle}>{t('chatPicker.freshChatSubtitle')}</span>
             </div>
           </button>
 
@@ -322,7 +322,7 @@ export default function ChatPickerModal({
                     {isActive && !isRenaming && (
                       <span className={styles.activeBadge}>
                         <Check size={10} />
-                        {t('mostRecent')}
+                        {t('chatPicker.mostRecent')}
                       </span>
                     )}
                   </div>
@@ -339,7 +339,7 @@ export default function ChatPickerModal({
                       }
                       openActiveMenu(item.id, e.currentTarget)
                     }}
-                    title={t('moreOptions')}
+                    title={t('chatPicker.moreOptions')}
                   >
                     <MoreHorizontal size={14} />
                   </button>
@@ -349,10 +349,10 @@ export default function ChatPickerModal({
                   <div className={styles.metaRow}>
                     <span className={styles.metaItem}>
                       <MessageSquare size={12} />
-                      {t('messageCount', { count: item.message_count })}
+                      {t('chatPicker.messageCount', { count: item.message_count })}
                     </span>
                     <span className={styles.metaItem}>
-                      {t('updated', { time: formatRelativeTime(item.updated_at) })}
+                      {t('chatPicker.updated', { time: formatRelativeTime(item.updated_at) })}
                     </span>
                   </div>
                 </div>
@@ -369,8 +369,8 @@ export default function ChatPickerModal({
         isOpen={deleteTarget !== null}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
-        title={t('deleteTitle')}
-        message={t('deleteMessage', { name: deleteTarget ? formatChatName(deleteTarget) : '' })}
+        title={t('chatPicker.deleteTitle')}
+        message={t('chatPicker.deleteMessage', { name: deleteTarget ? formatChatName(deleteTarget) : '' })}
         variant="danger"
         confirmText={tc('actions.delete')}
         cancelText={tc('actions.cancel')}

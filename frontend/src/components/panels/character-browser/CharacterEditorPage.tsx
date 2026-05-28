@@ -1333,9 +1333,9 @@ export default function CharacterEditorPage() {
                         </div>
                       )}
                       <div className={styles.fieldGroup}>
-                        <span className={styles.fieldLabel}>{t('characterEditor.boundRegex')}</span>
+                        <span className={styles.fieldLabel}>{t('characterEditor.characterRegexScripts')}</span>
                         <span className={styles.fieldHelper}>
-                          {t('characterEditor.boundRegexHelper')}
+                          {t('characterEditor.characterRegexScriptsHelper')}
                         </span>
 
                         {boundRegexScripts.length > 0 && (
@@ -1382,7 +1382,7 @@ export default function CharacterEditorPage() {
                                 sublabel: s.target.join(', '),
                               }))}
                               placeholder={t('characterEditor.bindRegexPlaceholder')}
-                              searchPlaceholder={t('characterEditor.searchRegex')}
+                              searchPlaceholder={t('characterEditor.searchRegexScripts')}
                               emptyMessage={t('characterEditor.noUnboundRegex')}
                             />
                           )
@@ -1423,8 +1423,8 @@ export default function CharacterEditorPage() {
     {showDeleteConfirm && (
       <ConfirmationModal
         isOpen={true}
-        title={t('characterEditor.deleteTitle')}
-        message={t('characterEditor.deleteMessage', { name: character?.name || t('characterEditor.thisCharacter') })}
+        title={t('characterEditor.deleteCharacterTitle')}
+        message={t('characterEditor.deleteCharacterMessage', { name: character?.name || t('characterEditor.thisCharacter') })}
         variant="danger"
         confirmText={t('characterEditor.delete')}
         onConfirm={handleDelete}

@@ -243,7 +243,7 @@
     "showFull": "Afficher le contenu complet ({{count}} caractères)",
     "chars": "{{count}} caractères",
     "lines": "{{count}} lignes",
-    "tokens": "Jetons {{count}}"
+    "tokens": "Jetons {{count, number}}"
   },
   "dryRun": {
     "title": "Exécution rapide",
@@ -255,7 +255,7 @@
     "showFull": "Afficher le contenu complet ({{count}} caractères)",
     "assistantPrefill": "Assistant de pré-remplissage",
     "assemblyBreakdown": "Répartition de l'assemblage ({{count}})",
-    "totalTokens": "{{count}} total de jetons",
+    "totalTokens": "{{count, number}} total de jetons",
     "viaTokenizer": "via {{name}}",
     "cacheReadWrite": "read {{read}} • écrire {{write}}",
     "cache5m": " • 5 min {{count}}",
@@ -271,8 +271,8 @@
     "contextBudget": "Budget contextuel",
     "clippingDisabled": "(aucun paramètre max_context_length défini — découpage désactivé)",
     "budgetInvalid": "(budget non valide — taille du contexte ≤ jetons de réponse réservés)",
-    "messagesClipped": "(message {{messages}} coupé, jetons {{tokens}})",
-    "messagesClipped_plural": "(messages {{messages}} coupés, jetons {{tokens}})",
+    "messagesClipped_one": "(message {{messages}} coupé, jetons {{tokens}})",
+    "messagesClipped_other": "(messages {{messages}} coupés, jetons {{tokens}})",
     "fitsBudget": "(convient au budget)",
     "budgetNoHistory": "Le budget ne peut pas tenir tout historique de discussion",
     "budgetNoHistoryDetail": "input budget = max_context ({{max}}) − max_tokens ({{reserved}}) − sécurité ({{safety}}) = {{input}}. Augmentez la taille du contexte ou réduisez le nombre maximum de jetons.",
@@ -310,7 +310,7 @@
       "settingsSource": "Source des paramètres",
       "queryPreview": "Requête aperçu",
       "retrievedChunks": "Morceaux récupérés",
-      "chunkLine": "#{{index}} — score : {{score}}, ~{{tokens}} jetons"
+      "chunkLine": "#{{index}} — score : {{score}}, ~{{tokens, number}} jetons"
     },
     "databank": {
       "embeddingsEnabled": "Embeddings activés",
@@ -320,7 +320,7 @@
       "activeBankIds": "ID de banque de données actives",
       "queryPreview": "Requête aperçu",
       "retrievedChunks": "Morceaux récupérés",
-      "chunkLine": "#{{index}} — {{document}}, score : {{score}}, ~{{tokens}} jetons"
+      "chunkLine": "#{{index}} — {{document}}, score : {{score}}, ~{{tokens, number}} jetons"
     },
     "budget": {
       "maxContext": "Longueur maximale du contexte",
@@ -336,7 +336,7 @@
       "tokensDropped": "Jetons supprimés",
       "tokenizerUsed": "Tokenizer utilisé",
       "unset": "— (non défini)",
-      "tokens": "Jetons {{count}}"
+      "tokens": "Jetons {{count, number}}"
     },
     "yes": "Oui",
     "no": "Non"

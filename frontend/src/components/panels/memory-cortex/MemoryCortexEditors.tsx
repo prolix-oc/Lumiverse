@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from 'react-i18next'
 
 import { Edit2, Plus, X } from "lucide-react";
@@ -24,6 +24,37 @@ const RELATION_STATUSES: CortexRelationStatus[] = ["active", "broken", "dormant"
 const COLOR_USAGE_TYPES = ["speech", "thought", "narration", "unknown"] as const;
 
 const E = 'memoryCortexPanel.editors';
+
+// Commit-on-Enter for single-line inputs that stays reliable on Android.
+//
+// Gboard (and other Android IMEs) commit the Enter key on a single-line input
+// as a `beforeinput` event with `inputType === "insertLineBreak"`. The matching
+// `keydown` arrives mid-composition as `keyCode 229` / `key "Unidentified"`, so a
+// handler that only checks `e.key === "Enter"` never fires — which is why Termux
+// users couldn't add aliases/facts by pressing Enter. We listen to the native
+// `beforeinput` event (React's synthetic `onBeforeInput` doesn't reliably expose
+// `inputType`) and treat a line-break insertion as a commit. Desktop keeps using
+// the existing `onKeyDown` path; the `onEnter` callbacks no-op on an empty draft,
+// so a double-fire is harmless.
+function useEnterCommit(onEnter: () => void) {
+  const ref = useRef<HTMLInputElement>(null);
+  const cb = useRef(onEnter);
+  cb.current = onEnter;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const handler = (e: Event) => {
+      const inputType = (e as InputEvent).inputType;
+      if (inputType === "insertLineBreak" || inputType === "insertParagraph") {
+        e.preventDefault();
+        cb.current();
+      }
+    };
+    el.addEventListener("beforeinput", handler);
+    return () => el.removeEventListener("beforeinput", handler);
+  }, []);
+  return ref;
+}
 
 // ─── Entity editor modal ──────────────────────────────────────
 
@@ -68,6 +99,10 @@ export function EntityEditorModal({
     setFacts([...facts, f]);
     setFactDraft("");
   };
+
+  // Android/Gboard-safe Enter handling for the single-line chip inputs below.
+  const aliasInputRef = useEnterCommit(addAlias);
+  const factInputRef = useEnterCommit(addFact);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -137,6 +172,7 @@ export function EntityEditorModal({
               </span>
             ))}
             <input
+              ref={aliasInputRef}
               className={styles.chipInput}
               value={aliasDraft}
               onChange={(e) => {
@@ -192,6 +228,7 @@ export function EntityEditorModal({
             ))}
             <div className={styles.addFactRow}>
               <input
+                ref={factInputRef}
                 className={styles.textInput}
                 value={factDraft}
                 onChange={(e) => setFactDraft(e.target.value)}

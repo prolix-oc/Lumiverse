@@ -243,7 +243,7 @@
     "showFull": "Show full ({{count}} chars)",
     "chars": "{{count}} chars",
     "lines": "{{count}} lines",
-    "tokens": "{{count}} tokens"
+    "tokens": "{{count, number}} tokens"
   },
   "dryRun": {
     "title": "Prompt Dry Run",
@@ -255,7 +255,7 @@
     "showFull": "Show full ({{count}} chars)",
     "assistantPrefill": "Assistant Prefill",
     "assemblyBreakdown": "Assembly Breakdown ({{count}})",
-    "totalTokens": "{{count}} total tokens",
+    "totalTokens": "{{count, number}} total tokens",
     "viaTokenizer": "via {{name}}",
     "cacheReadWrite": "read {{read}} • write {{write}}",
     "cache5m": " • 5m {{count}}",
@@ -271,8 +271,8 @@
     "contextBudget": "Context Budget",
     "clippingDisabled": "(no max_context_length set — clipping disabled)",
     "budgetInvalid": "(budget invalid — context size ≤ reserved response tokens)",
-    "messagesClipped": "({{messages}} message clipped, {{tokens}} tokens)",
-    "messagesClipped_plural": "({{messages}} messages clipped, {{tokens}} tokens)",
+    "messagesClipped_one": "({{messages}} message clipped, {{tokens}} tokens)",
+    "messagesClipped_other": "({{messages}} messages clipped, {{tokens}} tokens)",
     "fitsBudget": "(fits within budget)",
     "budgetNoHistory": "Budget cannot fit any chat history",
     "budgetNoHistoryDetail": "input budget = max_context ({{max}}) − max_tokens ({{reserved}}) − safety ({{safety}}) = {{input}}. Raise Context Size or lower Max Tokens.",
@@ -310,7 +310,7 @@
       "settingsSource": "Settings source",
       "queryPreview": "Query preview",
       "retrievedChunks": "Retrieved Chunks",
-      "chunkLine": "#{{index}} — score: {{score}}, ~{{tokens}} tokens"
+      "chunkLine": "#{{index}} — score: {{score}}, ~{{tokens, number}} tokens"
     },
     "databank": {
       "embeddingsEnabled": "Embeddings enabled",
@@ -320,7 +320,7 @@
       "activeBankIds": "Active databank IDs",
       "queryPreview": "Query preview",
       "retrievedChunks": "Retrieved Chunks",
-      "chunkLine": "#{{index}} — {{document}}, score: {{score}}, ~{{tokens}} tokens"
+      "chunkLine": "#{{index}} — {{document}}, score: {{score}}, ~{{tokens, number}} tokens"
     },
     "budget": {
       "maxContext": "Max context length",
@@ -336,7 +336,7 @@
       "tokensDropped": "Tokens dropped",
       "tokenizerUsed": "Tokenizer used",
       "unset": "— (unset)",
-      "tokens": "{{count}} tokens"
+      "tokens": "{{count, number}} tokens"
     },
     "yes": "Yes",
     "no": "No"

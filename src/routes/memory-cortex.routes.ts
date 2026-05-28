@@ -1222,7 +1222,7 @@ app.put("/chats/:chatId/entities/:entityId", async (c) => {
   const params: any[] = [];
 
   if (body.name !== undefined) { updates.push("name = ?"); params.push(body.name); }
-  if (body.entity_type !== undefined) { updates.push("entity_type = ?"); params.push(body.entity_type); }
+  if (body.entityType !== undefined) { updates.push("entity_type = ?"); params.push(body.entityType); }
   if (body.aliases !== undefined) { updates.push("aliases = ?"); params.push(JSON.stringify(body.aliases)); }
   if (body.description !== undefined) { updates.push("description = ?"); params.push(body.description); }
   if (body.facts !== undefined) { updates.push("facts = ?"); params.push(JSON.stringify(body.facts)); }

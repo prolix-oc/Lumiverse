@@ -243,7 +243,7 @@
     "showFull": "顯示全文（{{count}} 字符）",
     "chars": "{{count}} 字符",
     "lines": "{{count}} 行",
-    "tokens": "{{count}} token"
+    "tokens": "{{count, number}} token"
   },
   "dryRun": {
     "title": "提示詞試運行",
@@ -255,7 +255,7 @@
     "showFull": "顯示全文（{{count}} 字符）",
     "assistantPrefill": "助手預填",
     "assemblyBreakdown": "組裝明細（{{count}}）",
-    "totalTokens": "共 {{count}} tokens",
+    "totalTokens": "共 {{count, number}} tokens",
     "viaTokenizer": "via {{name}}",
     "cacheReadWrite": "讀 {{read}} • 寫 {{write}}",
     "cache5m": " • 5m {{count}}",
@@ -271,8 +271,8 @@
     "contextBudget": "上下文預算",
     "clippingDisabled": "（未設置 max_context_length — 未啟用裁剪）",
     "budgetInvalid": "（預算無效 — 上下文 ≤ 預留回覆 tokens）",
-    "messagesClipped": "（裁剪 {{messages}} 條消息，{{tokens}} tokens）",
-    "messagesClipped_plural": "（裁剪 {{messages}} 條消息，{{tokens}} tokens）",
+    "messagesClipped_one": "（裁剪 {{messages}} 條消息，{{tokens}} tokens）",
+    "messagesClipped_other": "（裁剪 {{messages}} 條消息，{{tokens}} tokens）",
     "fitsBudget": "（在預算內）",
     "budgetNoHistory": "預算無法容納任何聊天曆史",
     "budgetNoHistoryDetail": "輸入預算 = max_context ({{max}}) − max_tokens ({{reserved}}) − 安全餘量 ({{safety}}) = {{input}}。請提高上下文長度或降低最大 tokens。",
@@ -310,7 +310,7 @@
       "settingsSource": "設置來源",
       "queryPreview": "查詢預覽",
       "retrievedChunks": "檢索到的塊",
-      "chunkLine": "#{{index}} — 分數: {{score}}，約 {{tokens}} tokens"
+      "chunkLine": "#{{index}} — 分數: {{score}}，約 {{tokens, number}} tokens"
     },
     "databank": {
       "embeddingsEnabled": "嵌入已啟用",
@@ -320,7 +320,7 @@
       "activeBankIds": "活動資料庫 ID",
       "queryPreview": "查詢預覽",
       "retrievedChunks": "檢索到的塊",
-      "chunkLine": "#{{index}} — {{document}}，分數: {{score}}，約 {{tokens}} tokens"
+      "chunkLine": "#{{index}} — {{document}}，分數: {{score}}，約 {{tokens, number}} tokens"
     },
     "budget": {
       "maxContext": "最大上下文長度",
@@ -336,7 +336,7 @@
       "tokensDropped": "丟棄 tokens",
       "tokenizerUsed": "使用的分詞器",
       "unset": "—（未設置）",
-      "tokens": "{{count}} tokens"
+      "tokens": "{{count, number}} tokens"
     },
     "yes": "是",
     "no": "否"
