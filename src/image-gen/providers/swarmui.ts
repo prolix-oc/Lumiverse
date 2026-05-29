@@ -133,6 +133,15 @@ interface SessionEntry {
 /** 25 minutes — SwarmUI sessions typically last 30. */
 const SESSION_TTL_MS = 25 * 60 * 1000
 
+/**
+ * Short-lived cache for ListModels responses. Opening the image-gen panel
+ * fires several identical ListModels walks (e.g. seven text_encoders fields),
+ * each a depth=10 directory scan. A brief TTL collapses those to one call,
+ * mirroring the ComfyUI provider's cached model listing.
+ */
+const MODEL_LIST_TTL_MS = 5 * 60 * 1000
+const modelListCache = new Map<string, { at: number; models: Array<{ id: string; label: string }> }>()
+
 export class SwarmUIImageProvider implements ImageProvider {
   readonly name = "swarmui"
   readonly displayName = "SwarmUI"
@@ -528,6 +537,12 @@ export class SwarmUIImageProvider implements ImageProvider {
     query: { path: string; depth: number; subtype: string },
   ): Promise<Array<{ id: string; label: string }>> {
     const base = this.baseUrl(apiUrl)
+    const cacheKey = `${base} ${query.path} ${query.subtype} ${query.depth}`
+    const cached = modelListCache.get(cacheKey)
+    if (cached && Date.now() - cached.at < MODEL_LIST_TTL_MS) {
+      return cached.models
+    }
+
     const token = apiKey || undefined
     const sessionId = await this.getSession(base, token)
 
@@ -558,6 +573,7 @@ export class SwarmUIImageProvider implements ImageProvider {
       if (id) models.push({ id, label: modelLabel(id) })
     }
 
+    modelListCache.set(cacheKey, { at: Date.now(), models })
     return models
   }
 

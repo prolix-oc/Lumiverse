@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import type { ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import type { GenerationRequest, GenerationResponse, StreamChunk, ToolCallResult, LlmMessage, LlmMessagePart } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
@@ -83,16 +83,15 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/chat/completions`;
     const body = this.buildBody(request, false);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) await throwProviderResponseError(this.displayName, GENERATE_OPERATION, res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const choice = data.choices?.[0];
 
     const rawToolCalls = choice?.message?.tool_calls;

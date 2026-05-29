@@ -1,6 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import { throwProviderResponseError } from "../../utils/provider-errors";
 
 export class PollinationsTextProvider extends OpenAICompatibleProvider {
@@ -38,16 +38,15 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) await throwProviderResponseError(this.displayName, "generate", res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const choice = data.choices?.[0];
     const normalized = this.splitMirroredReasoning(
       choice?.message?.content,

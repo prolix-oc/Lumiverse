@@ -12,6 +12,14 @@ export interface TokenCountMessageLike {
  * Validate a tokenizer resource URL before fetching. Owner-supplied, but still
  * should not reach private/internal hosts.
  */
+/**
+ * Deadline for fetching remote tokenizer / vocab files (one-time, then cached).
+ * Without it, a reachable-but-hung host stalls token counting on the live
+ * generation path indefinitely (a hang never throws, so the char/4 fallback
+ * would never engage). On timeout the fetch throws and the fallback kicks in.
+ */
+const TOKENIZER_FETCH_TIMEOUT_MS = 30_000;
+
 async function validateTokenizerUrl(url: string, label: string): Promise<void> {
   let parsed: URL;
   try {
@@ -188,7 +196,7 @@ async function loadHuggingFace(config: TokenizerConfig): Promise<TokenizerInstan
     // try fetching the JSON data manually and use fromPreTrained() instead of fromPreTrainedUrls()
     if (configUrl === cfg.url) {
       await validateTokenizerUrl(cfg.url, "tokenizer url");
-      const resp = await fetch(cfg.url);
+      const resp = await fetch(cfg.url, { signal: AbortSignal.timeout(TOKENIZER_FETCH_TIMEOUT_MS) });
       if (!resp.ok) throw new Error(`Failed to fetch tokenizer.json from ${cfg.url}: ${resp.status}`);
       const tokenizerJSON = await resp.json();
       const tokenizer = withoutBenignTokenizerWarning(() => TokenizerLoader.fromPreTrained({
@@ -202,9 +210,9 @@ async function loadHuggingFace(config: TokenizerConfig): Promise<TokenizerInstan
     // not the whole network request inside fromPreTrainedUrls().
     await validateTokenizerUrl(cfg.url, "tokenizer url");
     await validateTokenizerUrl(configUrl, "tokenizer config url");
-    const tokenizerResp = await fetch(cfg.url);
+    const tokenizerResp = await fetch(cfg.url, { signal: AbortSignal.timeout(TOKENIZER_FETCH_TIMEOUT_MS) });
     if (!tokenizerResp.ok) throw new Error(`Failed to fetch tokenizer.json from ${cfg.url}: ${tokenizerResp.status}`);
-    const configResp = await fetch(configUrl);
+    const configResp = await fetch(configUrl, { signal: AbortSignal.timeout(TOKENIZER_FETCH_TIMEOUT_MS) });
     if (!configResp.ok) throw new Error(`Failed to fetch tokenizer_config.json from ${configUrl}: ${configResp.status}`);
     const tokenizerJSON = await tokenizerResp.json();
     const tokenizerConfig = await configResp.json();
@@ -261,7 +269,7 @@ async function loadTiktoken(config: TokenizerConfig): Promise<TokenizerInstance>
   if (!cfg.url) throw new Error("Tiktoken requires 'url' in config pointing to .model file");
 
   await validateTokenizerUrl(cfg.url, "tiktoken model url");
-  const resp = await fetch(cfg.url);
+  const resp = await fetch(cfg.url, { signal: AbortSignal.timeout(TOKENIZER_FETCH_TIMEOUT_MS) });
   if (!resp.ok) throw new Error(`Failed to fetch tiktoken model from ${cfg.url}`);
   const rawBpe = await resp.text();
 

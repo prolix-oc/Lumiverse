@@ -1,6 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import type {
   GenerationRequest,
   GenerationResponse,
@@ -194,16 +194,15 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
     const url = `${this.baseUrl(apiUrl)}/responses`;
     const body = this.buildResponsesBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) await throwProviderResponseError(this.displayName, "responses generate", res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
 
     // Extract text content from response output
     let content = "";

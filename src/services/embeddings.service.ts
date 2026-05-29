@@ -20,7 +20,7 @@ import {
 import { getProvider } from "../llm/registry";
 import { getFirstUserId } from "../auth/seed";
 import { sanitizeForVectorization } from "../utils/content-sanitizer";
-import { describeProviderError } from "../utils/provider-errors";
+import { describeProviderError, readBoundedText } from "../utils/provider-errors";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../llm/stream-utils";
 import { resolveBrokenTermuxLanceDbMirrorPath, resolveLanceDbConnectUri } from "../utils/lancedb-path";
 import { chunkDocument } from "./databank/document-chunker.service";
@@ -2328,7 +2328,7 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
       throw mapAbortError(err);
     }
     if (!res.ok) {
-      const msg = await res.text().catch(() => "Vertex embedding request failed");
+      const msg = (await readBoundedText(res)) || "Vertex embedding request failed";
       throw new Error(`Vertex embedding request failed (${res.status}): ${msg}`);
     }
     try {
@@ -2417,7 +2417,7 @@ async function requestEmbeddings(
     }
 
     if (!res.ok) {
-      const msg = await res.text().catch(() => "Embedding request failed");
+      const msg = (await readBoundedText(res)) || "Embedding request failed";
       throw new Error(`Embedding request failed (${res.status}): ${msg}`);
     }
 
@@ -3649,9 +3649,9 @@ export async function reindexChatMessages(
     }
   }
 
-  // Delete orphaned chunks
-  for (const id of chunksToDelete) {
-    await deleteChatChunkEmbeddings(userId, chatId, id);
+  // Delete orphaned chunks in a single call (the helper accepts a string[]).
+  if (chunksToDelete.length > 0) {
+    await deleteChatChunkEmbeddings(userId, chatId, chunksToDelete);
   }
 
   const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));

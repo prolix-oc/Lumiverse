@@ -8,6 +8,7 @@ import * as images from "../services/images.service";
 import * as gallerySvc from "../services/character-gallery.service";
 import * as exprSvc from "../services/expressions.service";
 import { safeFetch } from "../utils/safe-fetch";
+import { mapWithConcurrency } from "../utils/concurrency";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -128,20 +129,23 @@ function stampInstallSource(userId: string, characterId: string, payload: Instal
  * Each image gets full-size + thumbnail storage via the gallery service.
  */
 async function importGalleryFromUrls(userId: string, characterId: string, urls: string[]): Promise<void> {
-  const files: File[] = [];
-  for (const url of urls) {
+  // Download through a small pool instead of serially — these are independent
+  // network fetches. The subsequent gallery write stays serial below.
+  const downloaded = await mapWithConcurrency(urls, 6, async (url): Promise<File | null> => {
     try {
       const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
-      if (!res.ok) continue;
+      if (!res.ok) return null;
       const buf = await res.arrayBuffer();
       const contentType = res.headers.get("content-type") || "image/webp";
       const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "webp";
       const filename = `gallery_${crypto.randomUUID()}.${ext}`;
-      files.push(new File([buf], filename, { type: contentType }));
+      return new File([buf], filename, { type: contentType });
     } catch {
       // Skip individual failures
+      return null;
     }
-  }
+  });
+  const files: File[] = downloaded.filter((f): f is File => f !== null);
 
   if (files.length === 0) return;
 

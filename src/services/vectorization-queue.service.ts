@@ -212,12 +212,14 @@ class VectorizationQueue {
           await embeddingsSvc.batchUpsertChunkVectors(jobs[0].userId, batchItems);
 
           const now = Math.floor(Date.now() / 1000);
-          for (const chunk of writtenChunks) {
-            db.query(
-              "UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?"
-            ).run(now, cfg.model, chunk.id);
-            refreshedChats.add(chunk.chatId);
-          }
+          // Mark the whole batch vectorized in one statement instead of N
+          // per-row UPDATEs (writtenChunks is bounded by the embed batch size,
+          // well under the SQLite variable limit). Mirrors the databank path.
+          const updatePlaceholders = writtenChunks.map(() => "?").join(", ");
+          db.query(
+            `UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id IN (${updatePlaceholders})`
+          ).run(now, cfg.model, ...writtenChunks.map((c) => c.id));
+          for (const chunk of writtenChunks) refreshedChats.add(chunk.chatId);
         },
         (failedItems, error) => {
           console.warn(`[vectorization] Failed to embed ${failedItems.length} chunk(s):`, error.message);

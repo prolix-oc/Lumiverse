@@ -40,7 +40,9 @@ export default function CortexLinksTab({
   // ─── State ──────────────────────────────────────────────────
   const [links, setLinks] = useState<CortexChatLink[]>([]);
   const [vaults, setVaults] = useState<CortexVault[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Start loading: the load effect runs after first paint, so initializing to
+  // false would flash the empty state for a frame before the fetch begins.
+  const [loading, setLoading] = useState(true);
   const [showVaultLibrary, setShowVaultLibrary] = useState(false);
 
   // Create vault form

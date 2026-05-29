@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import {
   getTextContent,
   type GenerationUsage,
@@ -176,12 +176,11 @@ export class AnthropicProvider implements LlmProvider {
     const body = this.buildBody(request, false);
     const suppressThinking = this.shouldSuppressThinking(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) {
       const rawBody = await readBoundedText(res);
@@ -197,7 +196,7 @@ export class AnthropicProvider implements LlmProvider {
       });
     }
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const blocks = data.content || [];
     let textContent = "";
     let thinkingContent = "";

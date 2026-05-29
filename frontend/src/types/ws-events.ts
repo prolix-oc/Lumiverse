@@ -232,7 +232,11 @@ export interface StreamTokenPayload {
   chatId: string
   token: string
   type?: 'text' | 'reasoning'
+  // seq is the tokenSeq of the LAST token coalesced into this segment; startSeq
+  // is the FIRST. Recovery dedup uses startSeq to drop a segment whose range is
+  // already covered by backfilled pool content.
   seq?: number
+  startSeq?: number
 }
 
 export interface ContextClipStats {

@@ -18,6 +18,24 @@ function readEnvCap(): number {
 
 export const MAX_REMOTE_FILE_BYTES = readEnvCap();
 
+const DEFAULT_REMOTE_FETCH_TIMEOUT_MS = 30_000; // 30 s
+
+function readEnvTimeout(): number {
+  const raw = process.env.LUMIVERSE_REMOTE_FETCH_TIMEOUT_MS;
+  if (!raw) return DEFAULT_REMOTE_FETCH_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REMOTE_FETCH_TIMEOUT_MS;
+  return Math.floor(parsed);
+}
+
+/**
+ * Per-request deadline for remote HTTP file providers (Dropbox, Google Drive).
+ * Without this, a stalled remote read hangs the calling operation (browse,
+ * validate, or an entire SillyTavern migration) indefinitely. Override via
+ * LUMIVERSE_REMOTE_FETCH_TIMEOUT_MS.
+ */
+export const REMOTE_FETCH_TIMEOUT_MS = readEnvTimeout();
+
 /**
  * Read a Response body into a Buffer, rejecting anything beyond `maxBytes`.
  * Honors Content-Length when present so we can fail fast on declared-large

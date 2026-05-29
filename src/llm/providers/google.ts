@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
@@ -54,16 +54,15 @@ export class GoogleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:generateContent?key=${apiKey}`;
     const body = this.buildBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) await throwProviderResponseError(this.displayName, "generate", res);
 
-    const data = await res.json() as any;
+    const data = await readJsonWithAbort<any>(res, request.signal) as any;
     const candidate = data.candidates?.[0];
     const parts = candidate?.content?.parts || [];
 

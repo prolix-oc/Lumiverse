@@ -1,6 +1,13 @@
 import { safeFetch } from "../utils/safe-fetch";
+import { mapWithConcurrency } from "../utils/concurrency";
 import { scrapeUrl, type ScrapedContent } from "./databank";
 import { getWebSearchApiKey, getWebSearchSettings, type WebSearchSettings } from "./web-search-settings.service";
+
+// Pages are scraped through a small worker pool rather than serially: each
+// scrapeUrl can take up to ~15s, so summing them on an interactive Council/
+// Spindle path is the bottleneck. A pool of 4 overlaps them without fanning
+// out an unbounded number of outbound requests.
+const WEB_SEARCH_SCRAPE_CONCURRENCY = 4;
 
 export interface WebSearchResult {
   title: string;
@@ -183,28 +190,33 @@ export async function searchWebWithConfig(
     };
   }
 
-  const documents: WebSearchDocument[] = [];
   const scrapeCount = Math.min(results.length, settings.maxPagesToScrape);
-  for (const result of results.slice(0, scrapeCount)) {
-    try {
-      const scraped = await scrapeUrl(result.url);
-      documents.push({
-        title: scraped.title || result.title,
-        url: result.url,
-        snippet: result.snippet,
-        sourceType: scraped.sourceType,
-        content: clipText(scraped.content, settings.maxCharsPerPage),
-        contentLength: scraped.contentLength,
-      });
-    } catch (err) {
-      documents.push({
-        title: result.title,
-        url: result.url,
-        snippet: result.snippet,
-        error: err instanceof Error ? err.message : "Failed to extract page content",
-      });
-    }
-  }
+  // Order is preserved by mapWithConcurrency, so documents stay aligned with
+  // the ranked results. Per-page errors are captured per item (not thrown).
+  const documents: WebSearchDocument[] = await mapWithConcurrency(
+    results.slice(0, scrapeCount),
+    WEB_SEARCH_SCRAPE_CONCURRENCY,
+    async (result) => {
+      try {
+        const scraped = await scrapeUrl(result.url);
+        return {
+          title: scraped.title || result.title,
+          url: result.url,
+          snippet: result.snippet,
+          sourceType: scraped.sourceType,
+          content: clipText(scraped.content, settings.maxCharsPerPage),
+          contentLength: scraped.contentLength,
+        };
+      } catch (err) {
+        return {
+          title: result.title,
+          url: result.url,
+          snippet: result.snippet,
+          error: err instanceof Error ? err.message : "Failed to extract page content",
+        };
+      }
+    },
+  );
 
   return {
     query: trimmedQuery,

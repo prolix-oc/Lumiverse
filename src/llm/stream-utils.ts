@@ -57,15 +57,25 @@ export async function readWithAbort<T>(
   });
 }
 
+// Hard ceiling on a buffered JSON response. Without this, a misconfigured or
+// hostile endpoint (a user-supplied embedding server, or a proxy returning a
+// huge chunked error page with no/false Content-Length) could grow the buffer
+// unbounded and OOM the single-process server. The cap is generous enough for
+// any realistic JSON API response; callers handling smaller payloads can pass
+// a tighter limit.
+const DEFAULT_MAX_JSON_BYTES = 64 * 1024 * 1024; // 64 MB
+
 // Read a non-streaming JSON response body via the same user-space abort path
 // the streaming providers use. The user signal is checked between reads instead
 // of being handed to Bun's fetch, and reader.cancel() is awaited so the
 // underlying HTTP connection is fully torn down before the response object
 // becomes eligible for GC — closing the window where Bun's HTTPThread can
-// dispatch a callback into freed memory.
+// dispatch a callback into freed memory. A byte cap bounds peak memory and
+// cancels the stream the instant it trips.
 export async function readJsonWithAbort<T>(
   res: Response,
   signal: AbortSignal | undefined,
+  maxBytes: number = DEFAULT_MAX_JSON_BYTES,
 ): Promise<T> {
   if (!res.body) {
     return (await res.json()) as T;
@@ -73,6 +83,7 @@ export async function readJsonWithAbort<T>(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let total = 0;
   try {
     while (true) {
       const { done, value } = await readWithAbort(reader, signal);
@@ -80,7 +91,13 @@ export async function readJsonWithAbort<T>(
         throw signal.reason ?? new DOMException("Aborted", "AbortError");
       }
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          throw new Error(`Response body exceeded ${maxBytes} bytes`);
+        }
+        buffer += decoder.decode(value, { stream: true });
+      }
     }
     buffer += decoder.decode();
     return JSON.parse(buffer) as T;

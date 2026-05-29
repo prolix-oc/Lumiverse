@@ -46,7 +46,10 @@ export default function MemoryCortexPanel() {
   const [tab, setTab] = useState<ViewTab>("entities");
   const [entities, setEntities] = useState<CortexEntity[]>([]);
   const [stats, setStats] = useState<CortexUsageStats | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start in the loading state: the fetch is kicked off by an effect that runs
+  // after first paint, so initializing to false would paint the empty state
+  // ("No entities yet") for one frame before loading begins — a visible flash.
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -54,6 +57,22 @@ export default function MemoryCortexPanel() {
   const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [editingEntity, setEditingEntity] = useState<CortexEntity | null>(null);
+
+  // Reset read-state when the active chat changes — DURING render, not in an
+  // effect. An effect runs after paint, so it can't stop the previous chat's
+  // entities/stats (and the count badge) from flashing for a frame before the
+  // refetch lands. React's "adjust state on prior-render change" pattern
+  // re-renders synchronously with the cleared state before committing.
+  const [loadedChatId, setLoadedChatId] = useState<string | null>(activeChatId);
+  if (activeChatId !== loadedChatId) {
+    setLoadedChatId(activeChatId);
+    setEntities([]);
+    setStats(null);
+    setLoading(true);
+    setExpandedId(null);
+    setSelectionMode(false);
+    setSelectedEntityIds(new Set());
+  }
 
   const loadEntities = useCallback(async () => {
     if (!activeChatId) return;
@@ -82,12 +101,6 @@ export default function MemoryCortexPanel() {
     loadEntities();
     loadStats();
   }, [loadEntities, loadStats]);
-
-  useEffect(() => {
-    setSelectionMode(false);
-    setSelectedEntityIds(new Set());
-    setExpandedId(null);
-  }, [activeChatId]);
 
   const handleDeleteEntity = async (entityId: string) => {
     if (!activeChatId) return;

@@ -60,14 +60,21 @@ export interface CreatePromptBlockInput extends Partial<PromptBlock> {
 export type UpdatePromptBlockInput = Partial<Omit<PromptBlock, "id">>;
 
 function rowToPreset(row: any): Preset {
-  const preset: Preset = {
-    ...row,
+  // Construct explicitly from the Preset fields rather than spreading `...row`:
+  // the latter ships internal columns (e.g. user_id) to the client and carries
+  // the raw JSON-string columns alongside the parsed ones.
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    engine: row.engine,
     parameters: JSON.parse(row.parameters),
     prompt_order: JSON.parse(row.prompt_order),
     prompts: JSON.parse(row.prompts),
     metadata: JSON.parse(row.metadata),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
-  return preset;
 }
 
 export function listPresets(userId: string, pagination: PaginationParams): PaginatedResult<Preset> {
@@ -118,11 +125,47 @@ export function listPresetRegistry(
   );
 }
 
+/**
+ * Cheap signature of the registry result set for ETag generation. Any
+ * create/delete changes the count; any edit/rename bumps updated_at (and thus
+ * the max), so (count, maxUpdatedAt) over the same filter uniquely identifies
+ * the current registry without serializing it.
+ */
+export function getPresetRegistrySignature(
+  userId: string,
+  provider?: string,
+  engine?: string,
+): { count: number; maxUpdatedAt: number } {
+  const filters: string[] = [];
+  const params: any[] = [userId];
+  if (provider) {
+    filters.push("provider = ?");
+    params.push(provider);
+  }
+  if (engine) {
+    filters.push("engine = ?");
+    params.push(engine);
+  }
+  const filterSQL = filters.length > 0 ? " AND " + filters.join(" AND ") : "";
+  const row = getDb()
+    .query(
+      `SELECT COUNT(*) as count, COALESCE(MAX(updated_at), 0) as maxUpdatedAt
+       FROM presets WHERE user_id = ?${filterSQL}`
+    )
+    .get(...params) as { count: number; maxUpdatedAt: number };
+  return { count: row.count, maxUpdatedAt: row.maxUpdatedAt };
+}
+
 // Prepared statement for hot-path preset fetch (avoids re-compiling for large JSON blobs)
 let _stmtPresetById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtPresetByIdGen = -1;
 
 export function getPreset(userId: string, id: string): Preset | null {
-  if (!_stmtPresetById) _stmtPresetById = getDb().query("SELECT * FROM presets WHERE id = ? AND user_id = ?");
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (!_stmtPresetById || _stmtPresetByIdGen !== gen) {
+    _stmtPresetById = getDb().query("SELECT * FROM presets WHERE id = ? AND user_id = ?");
+    _stmtPresetByIdGen = gen;
+  }
   const row = _stmtPresetById.get(id, userId) as any;
   return row ? rowToPreset(row) : null;
 }
@@ -130,6 +173,18 @@ export function getPreset(userId: string, id: string): Preset | null {
 export function countPresets(userId: string): number {
   const row = getDb().query("SELECT COUNT(*) as count FROM presets WHERE user_id = ?").get(userId) as any;
   return row?.count ?? 0;
+}
+
+/**
+ * Fetch just the preset's updated_at for ETag generation, avoiding the full
+ * row read + JSON parse of the (potentially large) preset on a cache hit.
+ * Returns null when the preset doesn't exist for this user.
+ */
+export function getPresetUpdatedAt(userId: string, id: string): number | null {
+  const row = getDb()
+    .query("SELECT updated_at FROM presets WHERE id = ? AND user_id = ?")
+    .get(id, userId) as { updated_at: number } | null;
+  return row ? row.updated_at : null;
 }
 
 /**

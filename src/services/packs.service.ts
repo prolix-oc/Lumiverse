@@ -134,9 +134,20 @@ let _stmtPackById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtLumiaByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtLoomByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtToolsByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _packStmtsGen = -1;
 
 function getPackStmts() {
   const db = getDb();
+  // Invalidate cached statements when the underlying Database is replaced
+  // (reset/reopen); statements bound to a closed DB throw on reuse.
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (_packStmtsGen !== gen) {
+    _stmtPackById = null;
+    _stmtLumiaByPack = null;
+    _stmtLoomByPack = null;
+    _stmtToolsByPack = null;
+    _packStmtsGen = gen;
+  }
   if (!_stmtPackById) _stmtPackById = db.query("SELECT * FROM packs WHERE id = ? AND user_id = ?");
   if (!_stmtLumiaByPack) _stmtLumiaByPack = db.query("SELECT * FROM lumia_items WHERE pack_id = ? ORDER BY sort_order ASC");
   if (!_stmtLoomByPack) _stmtLoomByPack = db.query("SELECT * FROM loom_items WHERE pack_id = ? ORDER BY sort_order ASC");

@@ -453,10 +453,19 @@ export function useWebSocket() {
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
-          // Skip tokens already included in the pooled recovery content
-          if (state.lastPooledSeq != null && payload.seq != null && payload.seq <= state.lastPooledSeq) return
-          // Clear the watermark after the first new token arrives
-          if (state.lastPooledSeq != null) state.setLastPooledSeq(null as any)
+          if (state.lastPooledSeq != null) {
+            // startSeq..seq is this segment's coalesced tokenSeq range. If its
+            // start is at/below the recovery watermark, the leading tokens are
+            // already present in the backfilled pool content — drop the whole
+            // segment instead of re-appending the overlapping prefix (the
+            // recovery double-render). Any new tail tokens are reconciled by the
+            // authoritative pool (watchdog re-poll + final DB message), so this
+            // defers rather than loses content.
+            const segStart = payload.startSeq ?? payload.seq
+            if (segStart != null && segStart <= state.lastPooledSeq) return
+            // First segment fully past the watermark — clear it and render normally.
+            state.setLastPooledSeq(null as any)
+          }
           if (payload.type === 'reasoning') {
             state.appendStreamReasoning(payload.token)
           } else {

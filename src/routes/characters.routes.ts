@@ -14,6 +14,7 @@ import { parsePagination } from "../services/pagination";
 import { safeFetch, SSRFError, validateHost } from "../utils/safe-fetch";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
+import { mapWithConcurrency } from "../utils/concurrency";
 import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -59,28 +60,6 @@ function respondImportError(c: any, err: any, fallbackMessage: string) {
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   return c.json({ error: err?.message || fallbackMessage }, 400);
-}
-
-// ─── Concurrency-limited map (worker pool) ───────────────────────────────
-
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  concurrency: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  if (items.length === 0) return results;
-  const workers = Math.min(Math.max(1, concurrency), items.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      results[i] = await fn(items[i], i);
-    }
-  }
-  await Promise.all(Array.from({ length: workers }, () => worker()));
-  return results;
 }
 
 const GALLERY_UPLOAD_CONCURRENCY = 6;

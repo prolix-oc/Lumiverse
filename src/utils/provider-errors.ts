@@ -11,6 +11,20 @@ export interface ProviderRequestErrorOptions {
   detail?: string;
   rawBody?: string;
   retryable?: boolean;
+  /** Parsed Retry-After hint (ms) the caller may honor before retrying. */
+  retryAfterMs?: number;
+}
+
+/**
+ * Parse an HTTP Retry-After header into milliseconds. Supports the
+ * delta-seconds form (the common case for 429/503 from LLM providers); the
+ * HTTP-date form is ignored (returns undefined) as it is rare for these APIs.
+ */
+export function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const secs = Number(value.trim());
+  if (Number.isFinite(secs) && secs >= 0) return Math.floor(secs * 1000);
+  return undefined;
 }
 
 export class ProviderRequestError extends Error {
@@ -21,6 +35,7 @@ export class ProviderRequestError extends Error {
   readonly detail?: string;
   readonly rawBody?: string;
   readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(options: ProviderRequestErrorOptions) {
     const status = options.status ? ` (${options.status})` : "";
@@ -34,6 +49,7 @@ export class ProviderRequestError extends Error {
     this.detail = options.detail;
     this.rawBody = options.rawBody;
     this.retryable = options.retryable ?? isRetryableProviderStatus(options.status);
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
@@ -186,6 +202,7 @@ export async function throwProviderResponseError(provider: string, operation: st
     code: parsed.code || res.statusText || undefined,
     detail: parsed.detail || res.statusText || undefined,
     rawBody,
+    retryAfterMs: parseRetryAfterMs(res.headers.get("retry-after")),
   });
 }
 

@@ -233,6 +233,9 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         activeGenerationId: null,
         regeneratingMessageId: nextRegeneratingMessageId,
         streamingGenerationType: generationType ?? null,
+        // Clear any stale recovery watermark from a prior generation so this
+        // fresh stream's opening tokens (seq 1..N) are not dropped as dupes.
+        lastPooledSeq: null,
       })
     },
 
@@ -295,6 +298,9 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         activeGenerationId: generationId,
         regeneratingMessageId: nextRegeneratingMessageId,
         streamingGenerationType: resolvedGenerationType ?? null,
+        // Clear any stale recovery watermark from a prior generation. Recovery
+        // re-sets it via setLastPooledSeq() immediately after this call.
+        lastPooledSeq: null,
       })
     },
 

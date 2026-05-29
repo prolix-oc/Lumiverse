@@ -196,9 +196,17 @@ function rowToProfile(row: any): ConnectionProfile {
 // Prepared statements for hot-path queries
 let _stmtConnById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtConnDefault: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _connStmtsGen = -1;
 
 function getConnStmts() {
   const db = getDb();
+  // Invalidate cached statements when the underlying Database is replaced.
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (_connStmtsGen !== gen) {
+    _stmtConnById = null;
+    _stmtConnDefault = null;
+    _connStmtsGen = gen;
+  }
   if (!_stmtConnById) _stmtConnById = db.query("SELECT * FROM connection_profiles WHERE id = ? AND user_id = ?");
   if (!_stmtConnDefault) _stmtConnDefault = db.query("SELECT * FROM connection_profiles WHERE is_default = 1 AND user_id = ? LIMIT 1");
   return { byId: _stmtConnById, byDefault: _stmtConnDefault };

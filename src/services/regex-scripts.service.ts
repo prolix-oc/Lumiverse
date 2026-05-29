@@ -461,9 +461,14 @@ export function listRegexScripts(
 
 // Prepared statement for hot-path regex fetch
 let _stmtRegexById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtRegexByIdGen = -1;
 
 export function getRegexScript(userId: string, id: string): RegexScript | null {
-  if (!_stmtRegexById) _stmtRegexById = getDb().query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?");
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (!_stmtRegexById || _stmtRegexByIdGen !== gen) {
+    _stmtRegexById = getDb().query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?");
+    _stmtRegexByIdGen = gen;
+  }
   const row = _stmtRegexById.get(id, userId) as any;
   return row ? rowToRegexScript(row) : null;
 }
