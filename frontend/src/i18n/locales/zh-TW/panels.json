@@ -1129,7 +1129,7 @@
     "importingTags": "正在導入標籤...",
     "importUrl": "從 URL 導入",
     "importFromUrlTitle": "從 URL 導入",
-    "importFromUrlHint": "粘貼來自 Chub、JannyAI 或其他支持源的角色 URL。",
+    "importFromUrlHint": "貼上來自 Chub、JannyAI、BotBooru 或其他支援來源的角色 URL。",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "取消",
     "dropToImport": "拖放角色文件以導入",
@@ -1272,7 +1272,10 @@
       "keywordPlaceholder": "輸入關鍵詞",
       "keywordList": "關鍵詞列表",
       "keywordPrimary": "主關鍵詞",
-      "keywordSecondary": "次關鍵詞"
+      "keywordSecondary": "次關鍵詞",
+      "setPositionTitle": "設定位置",
+      "position": "位置",
+      "depth": "深度"
     },
     "entryEditor": {
       "sections": {

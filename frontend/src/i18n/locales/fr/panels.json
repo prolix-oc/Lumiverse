@@ -1129,7 +1129,7 @@
     "importingTags": "Importer des balises...",
     "importUrl": "Importer une URL",
     "importFromUrlTitle": "Importer depuis une URL",
-    "importFromUrlHint": "Coller une URL de personnage depuis Chub, JannyAI ou d'autres sources prises en charge.",
+    "importFromUrlHint": "Coller une URL de personnage depuis Chub, JannyAI, BotBooru ou d'autres sources prises en charge.",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "Annuler",
     "dropToImport": "Déposez les fichiers de caractères pour importer",
@@ -1272,7 +1272,10 @@
       "keywordPlaceholder": "Entrer le mot-clé",
       "keywordList": "Liste de mots-clés",
       "keywordPrimary": "Principal",
-      "keywordSecondary": "Secondaire"
+      "keywordSecondary": "Secondaire",
+      "setPositionTitle": "Définir la position",
+      "position": "Position",
+      "depth": "Profondeur"
     },
     "entryEditor": {
       "sections": {

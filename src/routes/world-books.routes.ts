@@ -18,6 +18,7 @@ import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.servic
 import { activateWorldInfo, finalizeActivatedWorldInfoEntries, normalizeWorldInfoSettings, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import type { WorldBookEntry } from "../types/world-book";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { loadWorldBookVectorSettings } from "../services/world-book-vector-settings.service";
 
@@ -747,14 +748,40 @@ app.post("/import", async (c) => {
   }
 });
 
+/**
+ * Accept either a lorebook-shaped payload ({ entries, ... }) or a character
+ * card, reducing the latter to its embedded lorebook. This lets a pasted
+ * character source (e.g. a BotBooru card JSON) import as a world book rather
+ * than failing with zero entries.
+ */
+function coerceLorebookPayload(payload: any): any {
+  if (!payload || typeof payload !== "object") return payload;
+  if (payload.entries) return payload; // already lorebook-shaped
+
+  const card = payload.data && typeof payload.data === "object" ? payload.data : payload;
+  const book = card.character_book ?? card.extensions?.character_book ?? payload.character_book;
+  if (book && typeof book === "object" && book.entries) {
+    return {
+      name: book.name || (card.name ? `${card.name} Lorebook` : undefined),
+      description: book.description || "",
+      entries: book.entries,
+    };
+  }
+  return payload;
+}
+
 app.post("/import-url", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.url) return c.json({ error: "url is required" }, 400);
 
+  // BotBooru hosts character cards; rewrite to the JSON download so the embedded
+  // lorebook can be extracted below. Other URLs are fetched as-is.
+  const fetchUrl = rewriteBotBooruUrl(body.url, "json") ?? body.url;
+
   let payload: any;
   try {
-    const res = await safeFetch(body.url, {
+    const res = await safeFetch(fetchUrl, {
       maxBytes: MAX_IMPORT_RESPONSE_BYTES,
       timeoutMs: 10_000,
     });
@@ -764,12 +791,16 @@ app.post("/import-url", async (c) => {
     if (text.length > MAX_IMPORT_RESPONSE_BYTES) {
       return c.json({ error: "Response too large" }, 400);
     }
-    payload = JSON.parse(text);
+    payload = coerceLorebookPayload(JSON.parse(text));
   } catch (err: any) {
     if (err instanceof SSRFError) {
       return c.json({ error: err.message }, 400);
     }
     return c.json({ error: "Failed to fetch or parse URL" }, 400);
+  }
+
+  if (svc.countImportedWorldBookEntries(payload?.entries) === 0) {
+    return c.json({ error: "No lorebook entries found at that URL" }, 400);
   }
 
   try {

@@ -1129,7 +1129,7 @@
     "importingTags": "タグをインポート中...",
     "importUrl": "インポートURL",
     "importFromUrlTitle": "URL からインポート",
-    "importFromUrlHint": "Chub、JannyAI、またはその他のサポートされているソースからキャラクター URL を貼り付けます。",
+    "importFromUrlHint": "Chub、JannyAI、BotBooru、またはその他のサポートされているソースからキャラクター URL を貼り付けます。",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "キャンセル",
     "dropToImport": "インポートするキャラクター ファイルをドロップ",
@@ -1272,7 +1272,10 @@
       "keywordPlaceholder": "キーワードを入力",
       "keywordList": "キーワードリスト",
       "keywordPrimary": "プライマリー",
-      "keywordSecondary": "二次"
+      "keywordSecondary": "二次",
+      "setPositionTitle": "位置を設定",
+      "position": "位置",
+      "depth": "奥行き"
     },
     "entryEditor": {
       "sections": {

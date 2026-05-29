@@ -13,6 +13,7 @@ import * as wbSvc from "../services/world-books.service";
 import { parsePagination } from "../services/pagination";
 import { safeFetch, SSRFError, validateHost } from "../utils/safe-fetch";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
+import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -297,14 +298,38 @@ async function fetchJannyCharacter(uuid: string, userId: string) {
 
 // ─── Generic URL fetcher (PNG or JSON) ────────────────────────────────────
 
+/**
+ * Detect a binary card container by its magic bytes. Needed because some
+ * sources (e.g. BotBooru's /download/png/{id}) serve cards from extensionless
+ * URLs, so neither the `.png`/`.charx` suffix nor a trustworthy Content-Type
+ * may be present.
+ */
+function sniffCardContainer(buf: ArrayBuffer): "png" | "zip" | null {
+  const b = new Uint8Array(buf, 0, Math.min(8, buf.byteLength));
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    b.length >= 8 &&
+    b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+    b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a
+  ) {
+    return "png";
+  }
+  // ZIP (charx): "PK" followed by a local-file / central-dir / end-of-archive marker
+  if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07)) {
+    return "zip";
+  }
+  return null;
+}
+
 async function fetchGenericCharacter(url: string, userId: string) {
   const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 100 * 1024 * 1024 });
   if (!res.ok) throw new Error(`Failed to fetch URL: ${res.status}`);
 
   const contentType = res.headers.get("content-type") || "";
   const buf = await res.arrayBuffer();
+  const sniffed = sniffCardContainer(buf);
 
-  if (contentType.includes("image/png") || url.toLowerCase().endsWith(".png")) {
+  if (sniffed === "png" || contentType.includes("image/png") || url.toLowerCase().endsWith(".png")) {
     const file = new File([buf], "import.png", { type: "image/png" });
     const cardInput = await cardSvc.extractCardFromPng(file);
     const character = svc.createCharacter(userId, cardInput);
@@ -317,7 +342,7 @@ async function fetchGenericCharacter(url: string, userId: string) {
     return svc.getCharacter(userId, character.id)!;
   }
 
-  if (contentType.includes("application/zip") || url.toLowerCase().endsWith(".charx")) {
+  if (sniffed === "zip" || contentType.includes("application/zip") || url.toLowerCase().endsWith(".charx")) {
     const file = new File([buf], "import.charx", { type: "application/zip" });
     const { card: cardInput, avatarFile, galleryFiles, risuModule, expressionAssets } = await cardSvc.extractCardFromCharx(file);
     const character = svc.createCharacter(userId, cardInput);
@@ -436,6 +461,14 @@ app.post("/import-url", async (c) => {
     const jannyId = parseJannyUrl(url);
     if (jannyId) {
       character = await fetchJannyCharacter(jannyId, userId);
+      return c.json({ character }, 201);
+    }
+
+    // Check for BotBooru URL → rewrite to the PNG download, which embeds a
+    // SillyTavern-compatible card *and* an avatar, then reuse the generic importer.
+    const botBooruPngUrl = rewriteBotBooruUrl(url, "png");
+    if (botBooruPngUrl) {
+      character = await fetchGenericCharacter(botBooruPngUrl, userId);
       return c.json({ character }, 201);
     }
 

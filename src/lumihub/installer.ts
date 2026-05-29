@@ -8,6 +8,7 @@ import * as images from "../services/images.service";
 import * as gallerySvc from "../services/character-gallery.service";
 import * as exprSvc from "../services/expressions.service";
 import { safeFetch } from "../utils/safe-fetch";
+import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getFirstUserId } from "../auth/seed";
@@ -248,7 +249,9 @@ async function installFromUrl(
   userId: string,
   payload: InstallCharacterPayload
 ): Promise<InstallResultPayload> {
-  const url = payload.importUrl!;
+  // BotBooru browseable URLs rewrite to the PNG download (card + avatar);
+  // everything else is fetched as provided.
+  const url = rewriteBotBooruUrl(payload.importUrl!, "png") ?? payload.importUrl!;
 
   const res = await safeFetch(url, {
     timeoutMs: 30_000,

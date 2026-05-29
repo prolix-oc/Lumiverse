@@ -1135,7 +1135,7 @@
     "importingTags": "Importing Tags...",
     "importUrl": "Import URL",
     "importFromUrlTitle": "Import from URL",
-    "importFromUrlHint": "Paste a character URL from Chub, JannyAI, or other supported sources.",
+    "importFromUrlHint": "Paste a character URL from Chub, JannyAI, BotBooru, or other supported sources.",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "Cancel",
     "dropToImport": "Drop character files to import",
@@ -1280,7 +1280,10 @@
       "keywordPlaceholder": "Enter keyword",
       "keywordList": "Keyword List",
       "keywordPrimary": "Primary",
-      "keywordSecondary": "Secondary"
+      "keywordSecondary": "Secondary",
+      "setPositionTitle": "Set Position",
+      "position": "Position",
+      "depth": "Depth"
     },
     "entryEditor": {
       "sections": {
