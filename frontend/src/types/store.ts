@@ -346,6 +346,7 @@ export interface WallpaperSettings {
   global: WallpaperRef | null
   opacity: number
   fit: 'cover' | 'contain' | 'fill'
+  blur: number
 }
 
 // ---- Custom CSS ----
@@ -436,6 +437,7 @@ export interface SettingsSlice {
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings
+  useCharacterBackground: boolean
   thumbnailSettings: { smallSize: number, largeSize: number }
   pushNotificationPreferences: { enabled: boolean, events: { generation_ended: boolean, generation_error: boolean } }
   chatHeadsEnabled: boolean
