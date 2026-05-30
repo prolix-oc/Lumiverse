@@ -2308,6 +2308,7 @@
     "fontScale": "Échelle de police",
     "uiScale": "Échelle UI",
     "glassEffects": "Effets de verre",
+    "useFullAvatar": "Utiliser des avatars pleine taille",
     "extensionThemesTitle": "Thèmes d'extension",
     "overridesApplied_one": "{{count}} remplacement appliqué",
     "overridesApplied_other": "{{count}} remplacements appliqués",

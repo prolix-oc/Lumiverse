@@ -2308,6 +2308,7 @@
     "fontScale": "字體縮放",
     "uiScale": "界面縮放",
     "glassEffects": "玻璃效果",
+    "useFullAvatar": "使用全尺寸頭像",
     "extensionThemesTitle": "擴展主題",
     "overridesApplied_one": "已應用 {{count}} 項覆蓋",
     "overridesApplied_other": "已應用 {{count}} 項覆蓋",
