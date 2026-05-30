@@ -733,7 +733,8 @@
       "generating": "Generating image…",
       "starting": "starting…",
       "step": "{{step}}/{{total}} ({{pct}}%)",
-      "previewAlt": "Generation preview"
+      "previewAlt": "Generation preview",
+      "finalizing": "Finalizing…"
     },
     "enable": "Enable Image Generation",
     "enableHint": "Generate scene-aware chat backgrounds through the council scene tool",

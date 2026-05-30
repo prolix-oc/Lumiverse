@@ -733,7 +733,8 @@
       "generating": "正在生成圖像…",
       "starting": "啟動中…",
       "step": "{{step}}/{{total}}（{{pct}}%）",
-      "previewAlt": "生成預覽"
+      "previewAlt": "生成預覽",
+      "finalizing": "正在完成…"
     },
     "enable": "啟用圖像生成",
     "enableHint": "通過議會場景工具生成具備場景感知的聊天背景",

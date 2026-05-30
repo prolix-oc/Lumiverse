@@ -34,13 +34,21 @@ function getImageFrameStyle(att: MessageAttachment): CSSProperties | undefined {
 export default function MessageAttachments({ attachments, isUser, chatId, messageId }: MessageAttachmentsProps) {
   const { t } = useTranslation('chat')
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [lightboxImageId, setLightboxImageId] = useState<string | null>(null)
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
   const [targetImageId, setTargetImageId] = useState<string | null>(null)
   const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
   const addToast = useStore((s) => s.addToast)
 
   const canActOnImage = messageContextMenuEnabled && !!chatId && !!messageId
-  const closeLightbox = useCallback(() => setLightboxSrc(null), [])
+  const closeLightbox = useCallback(() => {
+    setLightboxSrc(null)
+    setLightboxImageId(null)
+  }, [])
+  const openLightbox = useCallback((imageId: string) => {
+    setLightboxImageId(imageId)
+    setLightboxSrc(imagesApi.url(imageId))
+  }, [])
   const closeContextMenu = useCallback(() => {
     setContextMenuPos(null)
     setTargetImageId(null)
@@ -67,6 +75,15 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
       addToast({ type: 'error', title: t('attachments.couldNotRemoveImage'), message: err?.body?.error || err?.message || 'Unknown error' })
     }
   }, [addToast, chatId, closeContextMenu, messageId, targetImageId])
+
+  // Removes the image currently shown in the lightbox. Throws on failure so the
+  // lightbox surfaces its own error toast (the thumbnail context-menu path uses
+  // removeAttachment above, which toasts here instead).
+  const deleteLightboxImage = useCallback(async () => {
+    if (!chatId || !messageId || !lightboxImageId) return
+    const updated = await messagesApi.removeAttachment(chatId, messageId, lightboxImageId)
+    if (updated) useStore.getState().updateMessage(messageId, updated)
+  }, [chatId, messageId, lightboxImageId])
 
   const longPress = useLongPress({
     onLongPress: (pos) => {
@@ -122,7 +139,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               type="button"
               className={styles.imageThumbUser}
               style={getImageFrameStyle(att)}
-              onClick={() => setLightboxSrc(imagesApi.url(att.image_id))}
+              onClick={() => openLightbox(att.image_id)}
               onContextMenu={onImageContextMenu(att.image_id)}
               onTouchStart={canActOnImage ? onImageTouchStart(att.image_id) : undefined}
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
@@ -142,7 +159,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               type="button"
               className={styles.inlineImageBtn}
               style={getImageFrameStyle(att)}
-              onClick={() => setLightboxSrc(imagesApi.url(att.image_id))}
+              onClick={() => openLightbox(att.image_id)}
               onContextMenu={onImageContextMenu(att.image_id)}
               onTouchStart={canActOnImage ? onImageTouchStart(att.image_id) : undefined}
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
@@ -164,7 +181,11 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
         )}
       </div>
 
-      <ImageLightbox src={lightboxSrc} onClose={closeLightbox} />
+      <ImageLightbox
+        src={lightboxSrc}
+        onClose={closeLightbox}
+        onDelete={canActOnImage ? deleteLightboxImage : undefined}
+      />
       <ContextMenu position={contextMenuPos} items={contextMenuItems} onClose={closeContextMenu} />
     </>
   )

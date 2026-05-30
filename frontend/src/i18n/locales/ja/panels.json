@@ -733,7 +733,8 @@
       "generating": "画像生成中…",
       "starting": "開始中…",
       "step": "{{step}}/{{total}} ({{pct}}%)",
-      "previewAlt": "生成プレビュー"
+      "previewAlt": "生成プレビュー",
+      "finalizing": "最終処理中…"
     },
     "enable": "画像生成を有効にする",
     "enableHint": "評議会シーン ツールを通じてシーン対応チャット背景を生成する",

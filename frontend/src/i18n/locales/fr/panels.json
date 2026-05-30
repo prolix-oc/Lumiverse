@@ -733,7 +733,8 @@
       "generating": "Génération d'image…",
       "starting": "départ…",
       "step": "{{step}}/{{total}} ({{pct}}%)",
-      "previewAlt": "Aperçu de la génération"
+      "previewAlt": "Aperçu de la génération",
+      "finalizing": "Finalisation…"
     },
     "enable": "Activer la génération d'image",
     "enableHint": "Générer des arrière-plans de discussion tenant compte de la scène via l'outil de scène du conseil",

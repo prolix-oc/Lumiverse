@@ -49,7 +49,17 @@
     "createNew": "新建文件夹…"
   },
   "imageLightbox": {
-    "loadFailed": "图片加载失败"
+    "loadFailed": "图片加载失败",
+    "copyImage": "复制图片",
+    "downloadImage": "下载图片",
+    "deleteImage": "删除图片",
+    "copied": "图片已复制到剪贴板",
+    "copyFailed": "无法将图片复制到剪贴板",
+    "downloadFailed": "无法下载图片",
+    "deleteFailed": "无法删除图片",
+    "deleteTitle": "删除图片？",
+    "deleteMessage": "此操作无法撤销。",
+    "delete": "删除"
   },
   "inputPrompt": {
     "submit": "提交"

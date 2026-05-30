@@ -49,7 +49,17 @@
     "createNew": "新しいフォルダーを作成..."
   },
   "imageLightbox": {
-    "loadFailed": "画像の読み込みに失敗しました"
+    "loadFailed": "画像の読み込みに失敗しました",
+    "copyImage": "画像をコピー",
+    "downloadImage": "画像をダウンロード",
+    "deleteImage": "画像を削除",
+    "copied": "画像をクリップボードにコピーしました",
+    "copyFailed": "画像をクリップボードにコピーできませんでした",
+    "downloadFailed": "画像をダウンロードできませんでした",
+    "deleteFailed": "画像を削除できませんでした",
+    "deleteTitle": "画像を削除しますか？",
+    "deleteMessage": "この操作は取り消せません。",
+    "delete": "削除"
   },
   "inputPrompt": {
     "submit": "送信"

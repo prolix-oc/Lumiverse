@@ -1589,7 +1589,13 @@ export default function ImageGenPanel() {
         </>
       )}
 
-      {lightboxOpen && previewSrc && <ImageLightbox src={previewSrc} onClose={() => setLightboxOpen(false)} />}
+      {lightboxOpen && previewSrc && (
+        <ImageLightbox
+          src={previewSrc}
+          onClose={() => setLightboxOpen(false)}
+          onDelete={() => { setSceneBackground(null); setGeneratedPreview(null) }}
+        />
+      )}
       {workflowEditorOpen && (
         <WorkflowEditorModal
           config={workflowConfig}

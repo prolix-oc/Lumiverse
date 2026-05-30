@@ -49,7 +49,17 @@
     "createNew": "新建文件夾…"
   },
   "imageLightbox": {
-    "loadFailed": "圖片加載失敗"
+    "loadFailed": "圖片加載失敗",
+    "copyImage": "複製圖片",
+    "downloadImage": "下載圖片",
+    "deleteImage": "刪除圖片",
+    "copied": "圖片已複製到剪貼簿",
+    "copyFailed": "無法將圖片複製到剪貼簿",
+    "downloadFailed": "無法下載圖片",
+    "deleteFailed": "無法刪除圖片",
+    "deleteTitle": "刪除圖片？",
+    "deleteMessage": "此操作無法復原。",
+    "delete": "刪除"
   },
   "inputPrompt": {
     "submit": "提交"

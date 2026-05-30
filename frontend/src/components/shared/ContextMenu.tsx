@@ -96,15 +96,47 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
+    // Dismiss on scroll, but only when the scroll moves the region the menu is
+    // anchored to. Scroll events don't bubble, so capture phase hears every
+    // scroller on the page — including unrelated ones like a lyrics widget or
+    // an extension panel. The menu is position:fixed, so those don't move it
+    // and closing on them is wrong. Filter by geometry instead:
+    //  - root document scroll → the whole viewport shifted → always dismiss.
+    //  - the menu's own scrollable content → never dismiss.
+    //  - a nested scroller → dismiss only if the anchor point (where the user
+    //    right-clicked) lies inside that scroller's box.
+    const handleScroll = (e: Event) => {
+      const target = e.target as Node | null
+      if (
+        !target ||
+        target === document ||
+        target === document.documentElement ||
+        target === document.body
+      ) {
+        onClose()
+        return
+      }
+      if (!(target instanceof Element)) return
+      if (ref.current?.contains(target)) return
+      const rect = target.getBoundingClientRect()
+      if (
+        position.x >= rect.left &&
+        position.x <= rect.right &&
+        position.y >= rect.top &&
+        position.y <= rect.bottom
+      ) {
+        onClose()
+      }
+    }
     document.addEventListener('mousedown', handleDown)
     document.addEventListener('pointerdown', handleDown)
     document.addEventListener('keydown', handleKey)
-    window.addEventListener('scroll', onClose, true)
+    window.addEventListener('scroll', handleScroll, true)
     return () => {
       document.removeEventListener('mousedown', handleDown)
       document.removeEventListener('pointerdown', handleDown)
       document.removeEventListener('keydown', handleKey)
-      window.removeEventListener('scroll', onClose, true)
+      window.removeEventListener('scroll', handleScroll, true)
     }
   }, [position, onClose])
 

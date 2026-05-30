@@ -733,7 +733,8 @@
       "generating": "正在生成图像…",
       "starting": "启动中…",
       "step": "{{step}}/{{total}}（{{pct}}%）",
-      "previewAlt": "生成预览"
+      "previewAlt": "生成预览",
+      "finalizing": "正在完成…"
     },
     "enable": "启用图像生成",
     "enableHint": "通过议会场景工具生成具备场景感知的聊天背景",
