@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { MessageCircle } from 'lucide-react'
 import { useStore } from '@/store'
 import { charactersApi } from '@/api/characters'
-import { messagesApi } from '@/api/chats'
+import { messagesApi, chatsApi } from '@/api/chats'
 import GreetingPickerModal from '@/components/modals/GreetingPickerModal'
 import type { Message, Character } from '@/types/api'
 import styles from './GreetingNav.module.css'
@@ -60,6 +60,13 @@ export default function GreetingNav({ message, chatId, variant = 'minimal' }: Gr
           console.error('[GreetingNav] Failed to update greeting:', err)
         }
       }
+
+      chatsApi.patchMetadata(chatId, { activeGreetingIndex: greetingIndex }).then(() => {
+        const store = useStore.getState()
+        const prev = store.activeChatMetadata ?? {}
+        store.setActiveChatMetadata({ ...prev, activeGreetingIndex: greetingIndex })
+      }).catch(() => {})
+
       setPickerOpen(false)
 
       requestAnimationFrame(() => {

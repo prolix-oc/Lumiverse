@@ -194,6 +194,7 @@ export default function ChatView() {
   const sceneBackground = useStore((s) => s.sceneBackground)
   const imageGeneration = useStore((s) => s.imageGeneration)
   const wallpaper = useStore((s) => s.wallpaper)
+  const useCharacterBackground = useStore((s) => s.useCharacterBackground)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -629,9 +630,26 @@ export default function ChatView() {
   }, [setActiveChat])
 
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const characters = useStore((s) => s.characters)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
 
-  // Resolve effective wallpaper: per-chat overrides global
-  const effectiveWallpaper = activeChatWallpaper ?? wallpaper.global
+  const characterBackground = useMemo((): WallpaperRef | null => {
+    if (!useCharacterBackground || !activeCharacterId) return null
+    const character = characters.find((c) => c.id === activeCharacterId)
+    if (!character) return null
+
+    const greetingIndex = (activeChatMetadata?.activeGreetingIndex as number) ?? 0
+    const greetingBgs = character.extensions?.greeting_backgrounds as Record<number, string> | undefined
+    const mappedImageId = greetingBgs?.[greetingIndex]
+
+    const imageId = mappedImageId || character.image_id
+    if (!imageId) return null
+    return { image_id: imageId, type: 'image' }
+  }, [useCharacterBackground, activeCharacterId, characters, activeChatMetadata])
+
+  // Resolve effective wallpaper: per-chat > global > character avatar
+  const effectiveWallpaper = activeChatWallpaper ?? wallpaper.global ?? characterBackground
   const wallpaperUrl = effectiveWallpaper?.image_id ? imagesApi.url(effectiveWallpaper.image_id) : null
   const wallpaperIsVideo = effectiveWallpaper?.type === 'video'
   const wallpaperOpacity = wallpaper.opacity ?? 0.3
@@ -689,6 +707,7 @@ export default function ChatView() {
             opacity: sceneBackground ? 0 : wallpaperOpacity,
             objectFit: wallpaperFit,
             backgroundSize: wallpaperFit === 'fill' ? '100% 100%' : wallpaperFit,
+            filter: (wallpaper.blur ?? 0) > 0 ? `blur(${wallpaper.blur}px)` : undefined,
           }}
         />
       )}
@@ -704,6 +723,7 @@ export default function ChatView() {
           style={{
             opacity: sceneBackground ? 0 : wallpaperOpacity,
             objectFit: wallpaperFit === 'fill' ? 'fill' : wallpaperFit,
+            filter: (wallpaper.blur ?? 0) > 0 ? `blur(${wallpaper.blur}px)` : undefined,
           }}
         />
       )}

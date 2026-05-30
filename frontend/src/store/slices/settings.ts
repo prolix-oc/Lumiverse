@@ -87,6 +87,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'summarization',
   // Wallpaper settings
   'wallpaper',
+  'useCharacterBackground',
   // Reasoning / CoT settings
   'reasoningSettings',
   'promptBias',
@@ -324,7 +325,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     global: null,
     opacity: 0.3,
     fit: 'cover',
+    blur: 0,
   },
+  useCharacterBackground: false,
 
   thumbnailSettings: { smallSize: 300, largeSize: 700 },
   pushNotificationPreferences: { enabled: true, events: { generation_ended: true, generation_error: false } },
