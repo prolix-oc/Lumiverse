@@ -234,14 +234,14 @@ export default function ContentWorkshop() {
         {/* Quick Create */}
       <div>
         <div className={styles.sectionTitle}>{t('creatorWorkshop.workshop.quickCreate')}</div>
-        {customPacks.length > 1 && (
+        <div className={styles.packSelector}>
           <PackDropdown
             packs={customPacks}
             selectedPackId={selectedPackId}
             onSelect={setSelectedPackId}
             onCreateNew={handleCreatePack}
           />
-        )}
+        </div>
         <div className={styles.quickCreateGrid}>
           <button type="button" className={styles.quickCard} onClick={() => handleCreateNew('lumia')}>
             <div className={styles.quickCardIcon}><User size={18} /></div>
@@ -263,7 +263,12 @@ export default function ContentWorkshop() {
 
       {/* My Packs */}
       <div>
-        <div className={styles.sectionTitle}>{t('creatorWorkshop.workshop.myPacks')}</div>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>{t('creatorWorkshop.workshop.myPacks')}</span>
+          <button type="button" className={styles.newPackBtn} onClick={handleCreatePack}>
+            <Plus size={12} /> {t('creatorWorkshop.workshop.newPack')}
+          </button>
+        </div>
         {customPacks.length === 0 ? (
           <div className={styles.emptyPacks}>{t('creatorWorkshop.workshop.emptyPacks')}</div>
         ) : (
