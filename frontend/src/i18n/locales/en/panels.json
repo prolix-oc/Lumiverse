@@ -2323,6 +2323,7 @@
     "fontScale": "Font Scale",
     "uiScale": "UI Scale",
     "glassEffects": "Glass effects",
+    "useFullAvatar": "Use full-size avatars",
     "extensionThemesTitle": "Extension Themes",
     "overridesApplied_one": "{{count}} override applied",
     "overridesApplied_other": "{{count}} overrides applied",

@@ -19,6 +19,7 @@ interface BubbleMessageProps {
 
 export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect }: BubbleMessageProps) {
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
+  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
@@ -33,6 +34,9 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
 
   const userLeft = isUser && bubbleUserAlign === 'left'
 
+  // ── Use full-size avatar when setting is enabled ──
+  const displayAvatarUrl = bubbleUseFullAvatar && fullAvatarUrl ? fullAvatarUrl : avatarUrl
+
   // ── Build the flattened override props contract ──
   const overrideProps: MessageOverrideProps = useMemo(() => ({
     message: {
@@ -41,7 +45,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
       sendDate: message.swipe_dates?.[message.swipe_id] ?? message.send_date,
       isUser,
       displayName,
-      avatarUrl,
+      avatarUrl: displayAvatarUrl,
       isHidden,
       isStreaming: isActivelyStreaming,
       isLastMessage,
@@ -87,7 +91,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
     }),
     styles,
   }), [
-    message, isUser, displayName, avatarUrl, isHidden, isActivelyStreaming,
+    message, isUser, displayName, avatarUrl, fullAvatarUrl, isHidden, isActivelyStreaming,
     isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,
     isEditing, editContent, editReasoning, setEditContent, setEditReasoning,
     handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden,
@@ -99,7 +103,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
     message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden, userLeft,
+    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, userLeft,
     handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
     handleFork, handlePromptBreakdown,
   }

@@ -23,6 +23,8 @@ export default function ThemePanel() {
   )
 
   const openModal = useStore((s) => s.openModal)
+  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
+  const setSetting = useStore((s) => s.setSetting)
   const current = theme ?? DEFAULT_THEME
 
   // Always read the latest theme from the store to avoid stale closures
@@ -185,10 +187,12 @@ export default function ThemePanel() {
         <DepthControls
           radiusScale={current.radiusScale}
           enableGlass={current.enableGlass}
+          useFullAvatar={bubbleUseFullAvatar}
           fontScale={current.fontScale}
           uiScale={current.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
+          onFullAvatarToggle={(v) => setSetting('bubbleUseFullAvatar', v)}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
         />

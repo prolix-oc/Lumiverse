@@ -262,6 +262,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleUserAlign: 'right',
   bubbleDisableHover: false,
   bubbleHideAvatarBg: false,
+  bubbleUseFullAvatar: false,
   bubbleOpacity: 1,
   chatSheldEnterToSend: true,
   saveDraftInput: false,

@@ -171,6 +171,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
+  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
+  const displayAvatarUrl = bubbleUseFullAvatar && fullAvatarUrl ? fullAvatarUrl : avatarUrl
   const openFloatingAvatar = useStore((s) => s.openFloatingAvatar)
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
@@ -338,7 +340,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
         onClick={fullAvatarUrl ? (e) => { e.stopPropagation(); openFloatingAvatar(fullAvatarUrl, displayName) } : undefined}
       >
         <LazyImage
-          src={avatarUrl}
+          src={displayAvatarUrl}
           alt={displayName}
           fallback={
             <div className={styles.avatarFallback}>
