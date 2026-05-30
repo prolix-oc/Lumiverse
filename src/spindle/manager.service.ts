@@ -353,16 +353,70 @@ function decodeSimpleStringExpression(raw: string): string | null {
   return literalParts.length > 0 ? literalParts.join("") : null;
 }
 
-function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void {
-  for (const match of matchOutsideIgnored(source, /\b(?:require|import)\s*\(\s*String\.fromCharCode\s*\(([^)]*)\)\s*\)/)) {
-    const moduleName = decodeSimpleStringExpression(`String.fromCharCode(${match[1]})`);
-    const label = moduleName ? DANGEROUS_MODULE_LABELS.get(moduleName) : undefined;
-    if (label) hits.add(label);
+/**
+ * Resolve a dynamic `import()` / `require()` specifier ONLY when the entire
+ * expression is a provably-constant string: a single string literal, a `+`
+ * concatenation of string literals, or `String.fromCharCode(<int literals>)`.
+ * Returns the resolved module string, or `null` if any part is non-constant
+ * (template interpolation `${…}`, a variable, member/computed access, a
+ * function call, etc.).
+ *
+ * This is deliberately STRICTER than {@link decodeSimpleStringExpression},
+ * which strips `${…}` and concatenates whatever literals it can find — that
+ * leniency let a specifier like `` `node:${seg}` `` decode to the harmless
+ * "node:" and slip past the dangerous-module check. The import/require gate
+ * must fail CLOSED: anything we cannot fully prove constant is reported as
+ * "dynamic module access" and hard-blocked (there is no capability opt-in,
+ * because the unresolved string could be `node:fs`, `child_process`, etc.).
+ */
+function resolveStaticModuleSpecifier(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // `String.fromCharCode(<int literals>)` — constant only when every argument
+  // is an integer literal (a variable arg makes the whole call non-constant).
+  const charCode = trimmed.match(/^String\.fromCharCode\s*\(([^)]*)\)$/);
+  if (charCode) {
+    const parts = charCode[1].split(",").map((p) => p.trim());
+    if (parts.length === 0 || parts.some((p) => !/^\d+$/.test(p))) return null;
+    const codes = parts.map(Number);
+    if (codes.some((n) => !Number.isInteger(n) || n < 0 || n > 0x10ffff)) return null;
+    return String.fromCodePoint(...codes);
   }
 
+  // One or more string literals joined by `+`. A template literal is accepted
+  // only when it contains NO `${…}` interpolation (`\$(?!\{)` allows a bare
+  // `$`, but `${` ends the literal match and forces a `null` "dynamic" result).
+  const LITERAL = /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\$]|\\.|\$(?!\{))*`)/;
+  let rest = trimmed;
+  let value = "";
+  let matchedAny = false;
+  while (rest) {
+    const m = rest.match(LITERAL);
+    if (!m) return null;
+    const decoded = decodeQuotedLiteral(m[0]);
+    if (decoded === null) return null;
+    value += decoded;
+    matchedAny = true;
+    rest = rest.slice(m[0].length).replace(/^\s+/, "");
+    if (!rest) break;
+    if (rest[0] !== "+") return null; // any non-`+` operator/token ⇒ dynamic
+    rest = rest.slice(1).replace(/^\s+/, "");
+    if (!rest) return null; // dangling `+`
+  }
+  return matchedAny ? value : null;
+}
+
+function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void {
   for (const match of matchOutsideIgnored(source, /\b(?:require|import)\s*\(([^;\n]{1,300})\)/)) {
-    const moduleName = decodeSimpleStringExpression(match[1]);
-    const label = moduleName ? DANGEROUS_MODULE_LABELS.get(moduleName) : undefined;
+    const resolved = resolveStaticModuleSpecifier(match[1]);
+    if (resolved === null) {
+      // Specifier is not a provable constant — fail closed. We cannot tell
+      // whether it resolves to `node:fs`, `child_process`, etc., so block it.
+      hits.add("dynamic module access");
+      continue;
+    }
+    const label = DANGEROUS_MODULE_LABELS.get(resolved);
     if (label) hits.add(label);
   }
 }

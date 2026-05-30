@@ -92,6 +92,67 @@ describe("detectDangerousBackendCapabilities", () => {
     }
   });
 
+  test("fails closed on dynamic import()/require() with a non-constant specifier", () => {
+    // The whole point: a specifier the scanner cannot prove constant could
+    // resolve to node:fs / child_process / etc. at runtime, and neither the
+    // (inert) global import override nor a Bun loader plugin can intercept a
+    // node: builtin. So these MUST be hard-blocked at scan time.
+    const bypasses = [
+      'const seg = "fs"; await import(`node:${seg}`);',     // template interpolation
+      'const s = "fs"; await import("node:" + s);',          // concat with a variable
+      'await import(["node:", "fs"].join(""));',             // array join
+      'const n = 110; await import(String.fromCharCode(n, 111, 100, 101, 58, 102, 115));', // fromCharCode w/ var
+      'const k = "fs"; const fs = require(k);',              // bare variable
+      'const x = "f"; await import(`${x}s`);',               // leading interpolation
+      'await import(globalThis["node:" + "fs"]);',           // computed member access
+    ];
+    for (const code of bypasses) {
+      expect(detectDangerousBackendCapabilities(code)).toContain("dynamic module access");
+    }
+  });
+
+  test("hard-blocks dynamic module access even with every capability declared", () => {
+    // "dynamic module access" has no capability opt-in (the specifier could be
+    // any blocked builtin), mirroring fs/child_process.
+    const code = 'const seg = "fs"; await import(`node:${seg}`);';
+    expect(
+      detectDangerousBackendCapabilities(
+        code,
+        new Set<SpindleCapability>(["dynamic_code_execution", "base64_decode"]),
+      ),
+    ).toContain("dynamic module access");
+  });
+
+  test("still resolves constant dynamic specifiers to their specific label", () => {
+    // Fail-closed must not lose precision: provably-constant dangerous
+    // specifiers keep their exact label rather than the generic block.
+    const samples: Array<[string, string]> = [
+      ['await import("node:fs");', "filesystem module access"],
+      ['await import("no" + "de:" + "fs");', "filesystem module access"],
+      ['await import(String.fromCharCode(110, 111, 100, 101, 58, 102, 115));', "filesystem module access"],
+      ['require("node:child_process");', "subprocess module access"],
+    ];
+    for (const [code, label] of samples) {
+      const hits = detectDangerousBackendCapabilities(code);
+      expect(hits).toContain(label);
+      expect(hits).not.toContain("dynamic module access");
+    }
+  });
+
+  test("allows provably-constant non-dangerous dynamic imports", () => {
+    // Legitimate extensions load their own bundled modules with literal or
+    // interpolation-free specifiers — these must not be flagged.
+    const samples = [
+      'await import("./helpers.js"); export const a = 1;',
+      'await import(`./locales/en.js`);',
+      'const m = await import("zod"); void m;',
+      'const u = require("./utils.js"); void u;',
+    ];
+    for (const code of samples) {
+      expect(detectDangerousBackendCapabilities(code)).toEqual([]);
+    }
+  });
+
   test("does not flag empty-body Function probes (Zod / Cloudflare feature-detect)", () => {
     const samples = [
       `try { return new Function(""), true } catch { return false }`,
