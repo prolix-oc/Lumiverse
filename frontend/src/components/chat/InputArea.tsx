@@ -585,6 +585,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [storePersonas, activePersonaId])
 
+  // Mirror per-chat add-on states into the shared chat metadata so other
+  // surfaces (notably the Persona editor's "rebind add-ons" snapshot) read the
+  // live selections rather than the copy captured when the chat first opened.
+  const syncChatAddonMetadata = useCallback((states: Record<string, Record<string, boolean>>) => {
+    const store = useStore.getState()
+    if (store.activeChatId !== chatId) return
+    store.setActiveChatMetadata({ ...(store.activeChatMetadata ?? {}), persona_addon_states: states })
+  }, [chatId])
+
   const persistChatAddonOverride = useCallback(async (addonId: string, enabled: boolean) => {
     if (!activePersonaId) return false
     const previous = chatAddonStatesByPersona
@@ -596,15 +605,17 @@ export default function InputArea({ chatId }: InputAreaProps) {
       },
     }
     setChatAddonStatesByPersona(nextByPersona)
+    syncChatAddonMetadata(nextByPersona)
     try {
       await chatsApi.patchMetadata(chatId, { persona_addon_states: nextByPersona })
       return true
     } catch {
       setChatAddonStatesByPersona(previous)
+      syncChatAddonMetadata(previous)
       toast.error(t('toast.failedSaveAddonState'))
       return false
     }
-  }, [activePersonaId, chatId, chatAddonStatesByPersona])
+  }, [activePersonaId, chatId, chatAddonStatesByPersona, syncChatAddonMetadata])
 
   const handleToggleAddonState = useCallback((addonId: string) => {
     void persistChatAddonOverride(addonId, !(effectivePersonaAddonStates[addonId] ?? false))

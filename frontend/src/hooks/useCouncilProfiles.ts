@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS, type CouncilSettings } from 'lumiverse-spindle-types'
 import { useStore } from '@/store'
 import { councilApi, type CouncilProfileBinding, type CouncilSidecarConfig, type ResolvedCouncilProfile } from '@/api/council'
+import { loadoutsApi } from '@/api/loadouts'
 import { settingsApi } from '@/api/settings'
 import type { CouncilPersistenceTarget } from '@/types/store'
 
@@ -39,6 +41,81 @@ export function councilSourceToTarget(
     case 'none':
     default:
       return { type: 'global' }
+  }
+}
+
+/** Merge a (possibly partial) council snapshot up to the full default shape so
+ *  consumers can read every field regardless of where the snapshot came from. */
+function normalizeCouncilSettings(settings: Partial<CouncilSettings> | undefined): CouncilSettings {
+  return {
+    ...COUNCIL_SETTINGS_DEFAULTS,
+    ...(settings ?? {}),
+    toolsSettings: { ...COUNCIL_TOOLS_DEFAULTS, ...(settings?.toolsSettings ?? {}) },
+  }
+}
+
+export interface ResolvedCouncilForChat {
+  council_settings: CouncilSettings
+  sidecar_settings: CouncilSidecarConfig
+  /** The council *profile* source — drives the binding indicator. 'none' when a
+   *  loadout owns the council roster (no profile is driving it). */
+  source: ResolvedCouncilProfile['source']
+  target: CouncilPersistenceTarget
+  loadoutOwnsCouncil: boolean
+}
+
+/**
+ * Single source of truth for "which council settings apply to this chat".
+ *
+ * Loadout snapshots carry a councilSettings roster AND there is a dedicated
+ * council-profile binding system; previously both resolved independently and
+ * the profile resolver clobbered a bound loadout's roster on every chat open.
+ * This resolver folds both into one precedence (higher specificity wins, and a
+ * loadout outranks a profile bound at the same level):
+ *
+ *   chat loadout > chat profile > character loadout > character profile > defaults > none
+ *
+ * Sidecar LLM config is never part of a loadout, so it always follows the
+ * council-profile/global resolution regardless of which side owns the roster.
+ */
+export async function resolveCouncilForChat(
+  chatId: string,
+  ctx: { characterId: string | null; characterBindingEnabled: boolean },
+): Promise<ResolvedCouncilForChat> {
+  const [loadoutRes, profileRes] = await Promise.all([
+    loadoutsApi.resolve(chatId).catch(() => ({ loadout: null, source: 'none' as const })),
+    councilApi.resolve(chatId),
+  ])
+
+  // Higher rank wins. Loadout outranks a profile bound at the same specificity.
+  const loadoutRank = loadoutRes.loadout
+    ? (loadoutRes.source === 'chat' ? 5 : loadoutRes.source === 'character' ? 3 : 0)
+    : 0
+  const profileRank =
+    profileRes.source === 'chat' ? 4
+      : profileRes.source === 'character' ? 2
+        : profileRes.source === 'defaults' ? 1
+          : 0
+
+  if (loadoutRes.loadout && loadoutRank > profileRank) {
+    return {
+      council_settings: normalizeCouncilSettings(loadoutRes.loadout.snapshot.councilSettings),
+      sidecar_settings: profileRes.sidecar_settings,
+      source: 'none',
+      target: { type: 'global' },
+      loadoutOwnsCouncil: true,
+    }
+  }
+
+  return {
+    council_settings: normalizeCouncilSettings(profileRes.council_settings),
+    sidecar_settings: profileRes.sidecar_settings,
+    source: profileRes.source,
+    target: councilSourceToTarget(profileRes.source, {
+      chatId,
+      characterId: ctx.characterBindingEnabled ? ctx.characterId : null,
+    }),
+    loadoutOwnsCouncil: false,
   }
 }
 
@@ -94,18 +171,6 @@ export function useCouncilProfiles() {
 
   const characterBindingEnabled = !isGroupChat
 
-  const applyResolved = useCallback((resolved: ResolvedCouncilProfile) => {
-    setCouncilSettings(resolved.council_settings)
-    setCouncilPersistenceTarget(
-      councilSourceToTarget(resolved.source, {
-        chatId: activeChatId,
-        characterId: characterBindingEnabled ? activeCharacterId : null,
-      }),
-    )
-    setSidecarConfig({ ...SIDECAR_DEFAULTS, ...resolved.sidecar_settings })
-    setActiveSource(resolved.source)
-  }, [activeChatId, activeCharacterId, characterBindingEnabled, setCouncilPersistenceTarget, setCouncilSettings])
-
   const refreshDefaults = useCallback(async () => {
     try {
       const binding = await councilApi.getDefaults()
@@ -124,9 +189,17 @@ export function useCouncilProfiles() {
       setActiveSource('none')
       return
     }
-    const resolved = await councilApi.resolve(activeChatId)
-    applyResolved(resolved)
-  }, [activeChatId, applyResolved, setCouncilPersistenceTarget, setCouncilSettings])
+    // Loadout-aware unified resolution so a bound loadout's council roster is no
+    // longer clobbered by the council-profile/defaults resolver.
+    const resolved = await resolveCouncilForChat(activeChatId, {
+      characterId: activeCharacterId,
+      characterBindingEnabled,
+    })
+    setCouncilSettings(resolved.council_settings)
+    setCouncilPersistenceTarget(resolved.target)
+    setSidecarConfig({ ...SIDECAR_DEFAULTS, ...resolved.sidecar_settings })
+    setActiveSource(resolved.source)
+  }, [activeChatId, activeCharacterId, characterBindingEnabled, setCouncilPersistenceTarget, setCouncilSettings])
 
   useEffect(() => {
     void refreshDefaults()

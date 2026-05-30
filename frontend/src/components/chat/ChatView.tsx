@@ -8,7 +8,6 @@ import { chatsApi, messagesApi } from '@/api/chats'
 import { memoryCortexApi, type CortexIngestionStatus } from '@/api/memory-cortex'
 import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
-import { councilApi } from '@/api/council'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
@@ -19,7 +18,7 @@ import type { WallpaperRef } from '@/types/store'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
-import { councilSourceToTarget } from '@/hooks/useCouncilProfiles'
+import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
@@ -456,6 +455,25 @@ export default function ChatView() {
             }
             autoSwitchedPersonaIdRef.current = resolvedBinding.personaId
 
+            // Apply the binding's add-on snapshot so the bound selections take
+            // effect and are visible in this chat. Seed only when the chat has
+            // no per-chat states for the persona yet, so a fresh chat picks up
+            // the binding while later in-chat tweaks are never clobbered.
+            if (
+              resolvedBinding.addonStates &&
+              Object.keys(resolvedBinding.addonStates).length > 0 &&
+              !cancelled
+            ) {
+              const existing = (chat.metadata?.persona_addon_states ?? {}) as Record<string, Record<string, boolean>>
+              if (!existing[resolvedBinding.personaId]) {
+                const nextStates = { ...existing, [resolvedBinding.personaId]: { ...resolvedBinding.addonStates } }
+                // Fold into chat.metadata so the canonical setActiveChatMetadata
+                // below publishes it too; persist for future opens.
+                chat.metadata = { ...(chat.metadata ?? {}), persona_addon_states: nextStates }
+                chatsApi.patchMetadata(chatId, { persona_addon_states: nextStates }).catch(() => {})
+              }
+            }
+
           } else {
             const shouldRestoreDefault =
               autoSwitchedPersonaIdRef.current !== null &&
@@ -481,18 +499,21 @@ export default function ChatView() {
           }
         } catch { /* no loadout binding — that's fine */ }
 
+        // Resolve council with unified, loadout-aware precedence so a bound
+        // loadout's roster isn't overwritten by the council-profile/defaults
+        // resolver (which previously ran here and clobbered it on every open).
         try {
-          const resolvedCouncil = await councilApi.resolve(chatId)
+          const council = await resolveCouncilForChat(chatId, {
+            characterId: chat.character_id,
+            characterBindingEnabled: chat.metadata?.group !== true,
+          })
           if (!cancelled) {
             const store = useStore.getState()
-            store.setCouncilSettings(resolvedCouncil.council_settings)
-            store.setCouncilPersistenceTarget(councilSourceToTarget(resolvedCouncil.source, {
-              chatId,
-              characterId: chat.character_id,
-            }))
+            store.setCouncilSettings(council.council_settings)
+            store.setCouncilPersistenceTarget(council.target)
 
             const memberPackIds = new Set(
-              resolvedCouncil.council_settings.members.map((member) => member.packId).filter(Boolean),
+              council.council_settings.members.map((member) => member.packId).filter(Boolean),
             )
             for (const packId of memberPackIds) {
               if (!store.packsWithItems[packId]) {
