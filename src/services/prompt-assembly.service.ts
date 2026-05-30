@@ -3966,19 +3966,42 @@ export async function collectVectorActivatedWorldInfoDetailed(
     >();
 
     const searchStartedAt = performance.now();
-    const searchResults = await Promise.allSettled(
-      worldBookIds.map((worldBookId) =>
-        embeddingsSvc.searchWorldBookEntriesHybridWithVector(
-          userId,
-          worldBookId,
-          queryText,
-          queryVector,
-          fetchLimit,
-          cfg.hybrid_weight_mode,
-          signal,
+    // Bound how many world-book vector searches hit LanceDB concurrently. Each
+    // call is a hybrid (vector + FTS) pair of native queries; firing one per
+    // lorebook unbounded floods the native engine on large contexts (a prime
+    // segfault amplifier). A small worker pool caps in-flight native queries
+    // while preserving the PromiseSettledResult[] shape the loop below expects.
+    const WI_VECTOR_SEARCH_CONCURRENCY = 4;
+    const searchResults: PromiseSettledResult<
+      Awaited<ReturnType<typeof embeddingsSvc.searchWorldBookEntriesHybridWithVector>>
+    >[] = new Array(worldBookIds.length);
+    {
+      let nextIdx = 0;
+      const runWorker = async () => {
+        for (let i = nextIdx++; i < worldBookIds.length; i = nextIdx++) {
+          try {
+            const value = await embeddingsSvc.searchWorldBookEntriesHybridWithVector(
+              userId,
+              worldBookIds[i],
+              queryText,
+              queryVector,
+              fetchLimit,
+              cfg.hybrid_weight_mode,
+              signal,
+            );
+            searchResults[i] = { status: "fulfilled", value };
+          } catch (reason) {
+            searchResults[i] = { status: "rejected", reason };
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(WI_VECTOR_SEARCH_CONCURRENCY, worldBookIds.length) },
+          runWorker,
         ),
-      ),
-    );
+      );
+    }
     const searchMs = performance.now() - searchStartedAt;
 
     for (const result of searchResults) {

@@ -594,6 +594,43 @@ async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
+// Read tracking — lets compaction wait for in-flight native reads to finish.
+// LanceDB memory-maps its data/manifest files; optimize() with cleanupOlderThan
+// DELETES superseded version files. If a native read still holds an mmap over a
+// file being deleted, the fault is uncatchable (SIGBUS/SIGSEGV) — the same class
+// as the SQLite mmap crash. CLEANUP_GRACE_PERIOD_MS already shields freshly-
+// superseded versions for new reads; this drain closes the remaining window by
+// making optimize wait until no tracked read is in flight before it deletes.
+// All cancellable native reads flow through raceWithSignal(), which is where the
+// begin/end bookkeeping is attached — route any new native read through it too.
+// ---------------------------------------------------------------------------
+let _activeReadCount = 0;
+
+function beginRead(): () => void {
+  _activeReadCount++;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    _activeReadCount = Math.max(0, _activeReadCount - 1);
+  };
+}
+
+async function waitForReadsToDrain(timeoutMs = 30_000): Promise<void> {
+  if (_activeReadCount === 0) return;
+  const startedAt = Date.now();
+  while (_activeReadCount > 0) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      console.warn(
+        `[embeddings] Compaction proceeding with ${_activeReadCount} read(s) still in flight (drain wait timed out after ${timeoutMs}ms)`,
+      );
+      return;
+    }
+    await sleep(25);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Table handle cache — avoids repeated openTable() calls that each hit disk
 // to resolve the version manifest. Invalidated on reset/errors.
 // ---------------------------------------------------------------------------
@@ -1601,6 +1638,7 @@ export async function runStartupVectorMaintenance(): Promise<void> {
 
       try {
         console.info(`[embeddings] Running startup compaction for ${tableName}...`);
+        await waitForReadsToDrain();
         await table.optimize({ cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS) });
       } catch (err) {
         console.warn(`[embeddings] Startup compaction failed for ${tableName}:`, err);
@@ -1644,6 +1682,9 @@ export async function optimizeTable(tableNames?: string[]): Promise<void> {
         const table = await getTableIfExists(tableName, true);
         if (!table) continue;
 
+        // Wait for in-flight native reads to drain so compaction doesn't unlink
+        // version files a live read has memory-mapped (uncatchable SIGBUS).
+        await waitForReadsToDrain();
         await table.optimize({
           cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS),
         });
