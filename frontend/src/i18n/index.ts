@@ -10,7 +10,7 @@ import {
 
 export const UI_LANGUAGE_STORAGE_KEY = 'lumiverse-ui-language'
 
-const SUPPORTED = ['en', 'zh', 'zh-TW', 'ja', 'fr'] as const
+const SUPPORTED = ['en', 'zh', 'zh-TW', 'ja', 'fr', 'it'] as const
 
 /** Longest first so `dreamWeaver` wins over shorter prefixes. */
 const NAMESPACES_BY_LENGTH = [...I18N_NAMESPACES].sort((a, b) => b.length - a.length)
@@ -56,6 +56,7 @@ function detectInitialLanguage(): string {
   if (nav.startsWith('zh')) return 'zh'
   if (nav.startsWith('ja')) return 'ja'
   if (nav.startsWith('fr')) return 'fr'
+  if (nav.startsWith('it')) return 'it'
   return 'en'
 }
 
@@ -106,6 +107,7 @@ export function initI18n(): Promise<typeof i18n> {
             zh: ['en'],
             ja: ['en'],
             fr: ['en'],
+            it: ['en'],
             default: ['en'],
           },
           supportedLngs: [...SUPPORTED],

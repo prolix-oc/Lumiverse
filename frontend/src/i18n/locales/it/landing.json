@@ -1,0 +1,32 @@
+{
+  "groupChat": "Chat di gruppo",
+  "active": "Attivo",
+  "account": "Account",
+  "subtitle": {
+    "chooseGroupThreads": "Scegli tra i thread del gruppo",
+    "resumeGroupThread": "Riprendi l'ultimo thread del gruppo",
+    "chooseConversations": "Scegli tra le conversazioni recenti",
+    "resumeConversation": "Riprendi la conversazione"
+  },
+  "empty": {
+    "title": "Nessuna conversazione recente",
+    "description": "Avvia una conversazione con un personaggio per iniziare"
+  },
+  "tagline": "Continua la tua storia",
+  "logOutTitle": "Esci da questo dispositivo",
+  "loadFailed": "Caricamento delle conversazioni fallito",
+  "tryAgain": "Riprova",
+  "loadingMore": "Caricamento di altre conversazioni...",
+  "footer": "Seleziona un personaggio per continuare il tuo viaggio",
+  "deleteChat": "Elimina chat",
+  "deleteChatTitle": "Elimina chat",
+  "deleteChatConfirm": "Questo eliminerà definitivamente il tuo {{label}}. Questa azione non può essere annullata.",
+  "deleteLabelGroup": "chat di gruppo \"{{name}}\"",
+  "deleteLabelChat": "chat con {{name}}",
+  "untitled": "Senza titolo",
+  "logOut": {
+    "title": "Disconnessione",
+    "message": "Verrai disconnesso da questo dispositivo. Gli altri dispositivi rimarranno connessi.",
+    "confirm": "Disconnetti"
+  }
+}

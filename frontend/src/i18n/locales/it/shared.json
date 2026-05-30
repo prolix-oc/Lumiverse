@@ -1,0 +1,99 @@
+{
+  "connectionLost": {
+    "updatingTitle": "Aggiornamento di Lumiverse",
+    "lostTitle": "Connessione al server persa",
+    "updatingMessage": "Una nuova versione è disponibile. Applicazione dell'aggiornamento — la pagina si aggiornerà tra un attimo.",
+    "verifyingConnection": "Verifica della connessione…",
+    "resyncingSession": "Risinchronizzazione della sessione…",
+    "unreachable": "Il server non è più raggiungibile. Ripristineremo automaticamente la sessione al suo ritorno.",
+    "installingBundle": "Installazione dell'ultimo bundle…",
+    "verifying": "Verifica…",
+    "reconnecting": "Tentativo di riconnessione…"
+  },
+  "confirmDelete": "Sei sicuro?",
+  "selectCategory": "Seleziona una categoria di impostazioni",
+  "promptVariables": {
+    "title": "Configura le variabili di prompt",
+    "subtitle": "I valori impostati qui vengono sovrascritti dai blocchi predefiniti tramite {{token}}.",
+    "tokenExample": "{{var::name}}",
+    "empty": "Nessun blocco attivo definisce variabili di prompt. Aggiungine nell'editor di blocchi per configurarle qui.",
+    "untitledBlock": "Blocco senza titolo",
+    "variableCount_one": "variabile {{count}}",
+    "variableCount_other": "Variabili {{count}}",
+    "resetAll": "Reimposta tutto",
+    "saving": "Salvataggio…",
+    "resetToDefault": "Reimposta ai valori predefiniti"
+  },
+  "voicePicker": {
+    "useDefault": "Usa il suono predefinito",
+    "ariaLabel": "Voce",
+    "connection": "Connessione",
+    "selectConnection": "Seleziona una connessione…",
+    "searchConnections": "Cerca connessioni…",
+    "noConnections": "Nessuna connessione TTS configurata",
+    "voice": "Voce",
+    "loadingVoices": "Caricamento delle voci…",
+    "selectVoice": "Seleziona una voce…",
+    "searchVoices": "Cerca voci…",
+    "loading": "Caricamento…",
+    "noVoices": "Nessuna voce disponibile — usa la connessione predefinita",
+    "connectionDefault": "Connessione predefinita",
+    "connectionAria": "connessione {{label}}",
+    "voiceAria": "voce {{label}}"
+  },
+  "folderDropdown": {
+    "noFolder": "Nessuna cartella",
+    "searchFolders": "Cerca cartelle...",
+    "none": "Nessuno",
+    "folderNamePlaceholder": "Nome della cartella...",
+    "createNew": "Crea una nuova cartella..."
+  },
+  "imageLightbox": {
+    "loadFailed": "Caricamento immagine fallito"
+  },
+  "inputPrompt": {
+    "submit": "Invia"
+  },
+  "pagination": {
+    "perPage": "per pagina",
+    "previousPage": "Pagina precedente",
+    "nextPage": "Pagina successiva",
+    "total": "{{count}} totale"
+  },
+  "toast": {
+    "dismiss": "Scarta"
+  },
+  "imageCrop": {
+    "zoom": "Zoom",
+    "cropping": "Ritaglio...",
+    "confirm": "Conferma"
+  },
+  "searchableSelect": {
+    "placeholder": "Seleziona…",
+    "searchPlaceholder": "Ricerca…",
+    "emptyMessage": "Nessuna opzione disponibile",
+    "noResultsMessage": "Nessuna corrispondenza",
+    "uncategorized": "Non classificato",
+    "clear": "Nessuno"
+  },
+  "expandedTextEditor": {
+    "collapseEditor": "Comprimi l'editor",
+    "expandEditor": "Espandi l'editor",
+    "hideMacros": "Nascondi le macro",
+    "insertMacro": "Inserisci una macro",
+    "searchMacros": "Cerca macro..."
+  },
+  "spindle": {
+    "floatWidget": "Widget flottante",
+    "drawerTab": "Scheda cassetto",
+    "dockPanel": "Dock ({{edge}})",
+    "appMount": "Mount dell'applicazione",
+    "extensionUi": "Interfaccia utente dell'estensione ({{count}})",
+    "showAll": "Mostra tutto",
+    "hideAll": "Nascondi tutto",
+    "show": "Mostra",
+    "hide": "Nascondi",
+    "hideWidget": "Nascondi widget",
+    "resetPosition": "Reimposta posizione"
+  }
+}
