@@ -55,6 +55,7 @@ export interface BubbleMessageDefaultProps {
   generationMetrics: GenerationMetrics | undefined
   avatarUrl: string | null
   fullAvatarUrl: string | null
+  displayAvatarUrl: string | null
   displayName: string
   macroUserName: string
   isHidden: boolean
@@ -350,9 +351,9 @@ export default function BubbleMessageDefault({
       onTouchMove={canOpenContextMenu ? longPress.onTouchMove : undefined}
       onTouchEnd={canOpenContextMenu ? longPress.onTouchEnd : undefined}
     >
-      {avatarUrl && (
+      {displayAvatarUrl && (
         <div className={styles.avatarBg}>
-          <img className={styles.avatarBgImg} src={avatarUrl} alt="" />
+          <img className={styles.avatarBgImg} src={displayAvatarUrl} alt="" />
           <div className={styles.avatarBgScrim} />
         </div>
       )}
@@ -365,9 +366,9 @@ export default function BubbleMessageDefault({
               style={fullAvatarUrl ? { cursor: 'pointer' } : undefined}
               onClick={fullAvatarUrl ? (e) => { e.stopPropagation(); openFloatingAvatar(fullAvatarUrl, displayName) } : undefined}
             >
-              {avatarUrl ? (
+              {displayAvatarUrl ? (
                 <LazyImage
-                  src={avatarUrl}
+                  src={displayAvatarUrl}
                   alt={displayName}
                   fallback={
                     <div className={styles.avatarFallback}>

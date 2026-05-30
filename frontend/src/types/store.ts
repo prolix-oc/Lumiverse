@@ -402,6 +402,7 @@ export interface SettingsSlice {
   bubbleUserAlign: 'left' | 'right'
   bubbleDisableHover: boolean
   bubbleHideAvatarBg: boolean
+  bubbleUseFullAvatar: boolean
   /** Bubble background opacity, 0–1. 1 = the theme's natural bubble fill (default). */
   bubbleOpacity: number
   chatSheldEnterToSend: boolean
