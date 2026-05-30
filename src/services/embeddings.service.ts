@@ -2780,8 +2780,18 @@ function attachJoiner(
 }
 
 /** Race a shared promise against an abort signal so the caller's await can
- *  reject on cancel without killing the shared upstream request. */
+ *  reject on cancel without killing the shared upstream request.
+ *
+ *  Also the single chokepoint for read tracking (see beginRead/waitForReadsToDrain):
+ *  the end-read is tied to the UNDERLYING native promise, never to this race
+ *  wrapper. On abort the wrapper rejects early, but the native toArray() keeps
+ *  running — and keeps its mmap over the version files — until it actually
+ *  settles. Decrementing the read count before then would reopen the very
+ *  unlink-during-mmap window the drain exists to close. */
 function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  const endRead = beginRead();
+  promise.then(endRead, endRead);
+
   if (!signal) return promise;
   if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
   return new Promise<T>((resolve, reject) => {
