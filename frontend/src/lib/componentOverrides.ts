@@ -22,6 +22,7 @@ export interface OverrideMessageInfo {
   isUser: boolean
   displayName: string
   avatarUrl: string | null
+  fullAvatarUrl: string | null
   isHidden: boolean
   isStreaming: boolean
   isLastMessage: boolean

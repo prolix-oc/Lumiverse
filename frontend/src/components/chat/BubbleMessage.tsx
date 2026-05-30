@@ -42,6 +42,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
       isUser,
       displayName,
       avatarUrl,
+      fullAvatarUrl,
       isHidden,
       isStreaming: isActivelyStreaming,
       isLastMessage,

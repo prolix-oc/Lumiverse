@@ -24,61 +24,62 @@ export interface ComponentTemplate {
 const BUBBLE_MESSAGE: ComponentTemplate = {
   template: `export default function BubbleMessage({ message, content, reasoning, swipes, attachments, editing, actions, styles }) {
   return (
-    <div className={styles.message || ''} style={{ padding: 12 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        {message.avatarUrl && (
-          <img src={message.avatarUrl} alt="" width={32} height={32} style={{ borderRadius: '50%' }} />
+    <div className={styles.card || ''} data-part={message.isUser ? 'user' : 'character'}>
+      {/* Avatar */}
+      <div className={styles.avatar || ''}>
+        {message.avatarUrl ? (
+          <img src={message.avatarUrl} alt={message.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+        ) : (
+          <div className={styles.avatarFallback || ''}>
+            {message.displayName?.[0]?.toUpperCase() || '?'}
+          </div>
         )}
-        <strong style={{ color: message.isUser ? '#a78bfa' : '#60a5fa' }}>
-          {message.displayName}
-        </strong>
-        <span style={{ fontSize: 11, opacity: 0.5 }}>#{message.index}</span>
       </div>
 
-      {/* Reasoning */}
-      {reasoning && (
-        <details style={{ marginBottom: 8, fontSize: 12, opacity: 0.7 }}>
-          <summary>Thinking{reasoning.duration ? \` (\${reasoning.duration}ms)\` : ''}</summary>
-          <pre style={{ whiteSpace: 'pre-wrap' }}>{reasoning.raw}</pre>
-        </details>
-      )}
-
-      {/* Content */}
-      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{content.raw}</div>
-
-      {/* Attachments */}
-      {attachments.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-          {attachments.map(attachment => (
-            <img
-              key={attachment.imageId}
-              src={\`/api/v1/images/\${attachment.imageId}?size=sm\`}
-              alt={attachment.filename}
-              width={96}
-              height={96}
-              style={{ objectFit: 'cover', borderRadius: 8 }}
-            />
-          ))}
+      {/* Bubble */}
+      <div className={styles.bubble || ''}>
+        {/* Header */}
+        <div className={styles.header || ''}>
+          <span className={styles.name || ''} style={{ color: message.isUser ? 'rgba(255,165,0,0.85)' : 'var(--lumiverse-primary-text)' }}>
+            {message.displayName}
+          </span>
         </div>
-      )}
 
-      {/* Swipes */}
-      {swipes.total > 1 && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 8, fontSize: 12 }}>
-          <button onClick={actions.swipeLeft}>←</button>
-          <span>{swipes.current} / {swipes.total}</span>
-          <button onClick={actions.swipeRight}>→</button>
-        </div>
-      )}
+        {/* Reasoning */}
+        {reasoning && (
+          <details style={{ marginBottom: 8, fontSize: 12, opacity: 0.7 }}>
+            <summary>Thinking{reasoning.duration ? \` (\${reasoning.duration}ms)\` : ''}</summary>
+            <pre style={{ whiteSpace: 'pre-wrap' }}>{reasoning.raw}</pre>
+          </details>
+        )}
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 4, marginTop: 8, opacity: 0.6, fontSize: 11 }}>
-        <button onClick={actions.copy}>Copy</button>
-        <button onClick={actions.edit}>Edit</button>
-        <button onClick={actions.fork}>Fork</button>
-        <button onClick={actions.toggleHidden}>{message.isHidden ? 'Show' : 'Hide'}</button>
-        <button onClick={actions.delete}>Delete</button>
+        {/* Content */}
+        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{content.raw}</div>
+
+        {/* Attachments */}
+        {attachments.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {attachments.map(attachment => (
+              <img
+                key={attachment.imageId}
+                src={\`/api/v1/images/\${attachment.imageId}?size=sm\`}
+                alt={attachment.filename}
+                width={96}
+                height={96}
+                style={{ objectFit: 'cover', borderRadius: 8 }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Swipes */}
+        {swipes.total > 1 && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, fontSize: 12 }}>
+            <button onClick={actions.swipeLeft}>←</button>
+            <span>{swipes.current} / {swipes.total}</span>
+            <button onClick={actions.swipeRight}>→</button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -90,7 +91,8 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'sendDate', type: 'number', description: 'Unix timestamp' },
       { name: 'isUser', type: 'boolean', description: 'True if sent by user' },
       { name: 'displayName', type: 'string', description: 'Resolved display name' },
-      { name: 'avatarUrl', type: 'string | null', description: 'Avatar image URL' },
+      { name: 'avatarUrl', type: 'string | null', description: 'Avatar image URL (thumbnail)' },
+      { name: 'fullAvatarUrl', type: 'string | null', description: 'Full-size avatar image URL (original aspect ratio)' },
       { name: 'isHidden', type: 'boolean', description: 'Hidden from AI context' },
       { name: 'isStreaming', type: 'boolean', description: 'Currently streaming tokens' },
       { name: 'isLastMessage', type: 'boolean', description: 'Last message in chat' },
