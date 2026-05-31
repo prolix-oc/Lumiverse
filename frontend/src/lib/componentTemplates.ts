@@ -33,7 +33,7 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
           <img src={message.avatarUrl} alt={message.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
         ) : (
           <div className={styles.avatarFallback || ''}>
-            {message.displayName?.[0]?.toUpperCase() || '?'}
+            {message.initial}
           </div>
         )}
       </div>
@@ -77,6 +77,7 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'sendDate', type: 'number', description: 'Unix timestamp' },
       { name: 'isUser', type: 'boolean', description: 'True if sent by user' },
       { name: 'displayName', type: 'string', description: 'Resolved display name' },
+      { name: 'initial', type: 'string', description: 'First letter of displayName, uppercased (\'?\' when empty) — handy for avatar fallbacks' },
       { name: 'avatarUrl', type: 'string | null', description: 'Convenience: cropped square at the active layout’s tier (see avatar for full control)' },
       { name: 'fullAvatarUrl', type: 'string | null', description: 'Convenience: original aspect ratio at full resolution (see avatar for full control)' },
       { name: 'avatar', type: 'object', description: 'Avatar URLs by variant and size tier', children: [

@@ -45,6 +45,8 @@ export interface OverrideMessageInfo {
   sendDate: number
   isUser: boolean
   displayName: string
+  /** First character of `displayName`, uppercased ('?' when empty). Handy for avatar fallbacks — the AST sandbox cannot slice strings itself. */
+  initial: string
   /** Convenience: cropped square at the tier the active layout uses. See `avatar` for full control. */
   avatarUrl: string | null
   /** Convenience: original aspect ratio at full resolution. See `avatar` for full control. */

@@ -48,6 +48,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
       sendDate: message.swipe_dates?.[message.swipe_id] ?? message.send_date,
       isUser,
       displayName,
+      initial: (displayName || '').charAt(0).toUpperCase() || '?',
       avatarUrl,
       fullAvatarUrl,
       avatar,
