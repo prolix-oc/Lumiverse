@@ -29,6 +29,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
+  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
+  const displayAvatarUrl = bubbleUseFullAvatar && fullAvatarUrl ? fullAvatarUrl : avatarUrl
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
@@ -88,7 +90,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     }),
     styles,
   }), [
-    message, isUser, displayName, avatarUrl, fullAvatarUrl, avatar, isHidden, isActivelyStreaming,
+    message, isUser, displayName, avatarUrl, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isActivelyStreaming,
     isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,
     isEditing, editContent, editReasoning, setEditContent, setEditReasoning,
     handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden,
@@ -132,7 +134,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden,
+    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden,
     handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
     handleFork, handlePromptBreakdown,
   }

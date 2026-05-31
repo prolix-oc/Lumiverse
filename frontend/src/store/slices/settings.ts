@@ -27,6 +27,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'bubbleUserAlign',
   'bubbleDisableHover',
   'bubbleHideAvatarBg',
+  'bubbleUseFullAvatar',
   'bubbleOpacity',
   'chatSheldEnterToSend',
   'saveDraftInput',

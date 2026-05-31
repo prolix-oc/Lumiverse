@@ -2323,6 +2323,7 @@
     "fontScale": "Scala font",
     "uiScale": "Scala UI",
     "glassEffects": "Effetti vetro",
+    "useFullAvatar": "Usa avatar a dimensione piena",
     "extensionThemesTitle": "Temi estensioni",
     "overridesApplied_one": "{{count}} override applicato",
     "overridesApplied_other": "{{count}} override applicati",

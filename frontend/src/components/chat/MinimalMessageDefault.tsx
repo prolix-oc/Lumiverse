@@ -55,6 +55,7 @@ export interface MinimalMessageDefaultProps {
   generationMetrics: GenerationMetrics | undefined
   avatarUrl: string | null
   fullAvatarUrl: string | null
+  displayAvatarUrl: string | null
   displayName: string
   macroUserName: string
   isHidden: boolean
@@ -173,7 +174,7 @@ export default function MinimalMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden,
+  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden,
   handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
   handleFork, handlePromptBreakdown,
 }: MinimalMessageDefaultProps) {
@@ -343,7 +344,7 @@ export default function MinimalMessageDefault({
         onClick={fullAvatarUrl ? (e) => { e.stopPropagation(); openFloatingAvatar(fullAvatarUrl, displayName) } : undefined}
       >
         <LazyImage
-          src={avatarUrl}
+          src={displayAvatarUrl}
           alt={displayName}
           fallback={
             <div className={styles.avatarFallback}>

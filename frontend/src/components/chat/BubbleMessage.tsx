@@ -48,7 +48,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
       sendDate: message.swipe_dates?.[message.swipe_id] ?? message.send_date,
       isUser,
       displayName,
-      avatarUrl,
+      avatarUrl: displayAvatarUrl,
       fullAvatarUrl,
       avatar,
       isHidden,
@@ -95,7 +95,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
     }),
     styles,
   }), [
-    message, isUser, displayName, avatarUrl, fullAvatarUrl, avatar, isHidden, isActivelyStreaming,
+    message, isUser, displayName, avatarUrl, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isActivelyStreaming,
     isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,
     isEditing, editContent, editReasoning, setEditContent, setEditReasoning,
     handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden,
