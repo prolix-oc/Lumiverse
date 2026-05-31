@@ -15,7 +15,14 @@ import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
 
-type ScopeFilterValue = 'all' | 'global' | 'character'
+type ScopeFilterValue = 'all' | 'global' | 'character' | 'chat'
+
+const SCOPE_FILTER_LABEL_KEYS: Record<ScopeFilterValue, string> = {
+  all: 'regexPanel.scopeAll',
+  global: 'regexPanel.scopeGlobal',
+  character: 'regexPanel.scopeThisChar',
+  chat: 'regexPanel.scopeThisChat',
+}
 
 /** Insert text at cursor position in a textarea, returning new value */
 function insertAtCursor(el: HTMLTextAreaElement | null, token: string): string {
@@ -66,6 +73,7 @@ export default function RegexPanel() {
   const toggleRegexScript = useStore((s) => s.toggleRegexScript)
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeChatId = useStore((s) => s.activeChatId)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
 
   const [scopeFilter, setScopeFilter] = useState<ScopeFilterValue>('all')
@@ -108,6 +116,7 @@ export default function RegexPanel() {
     if (scopeFilter === 'all') return true
     if (scopeFilter === 'global') return s.scope === 'global'
     if (scopeFilter === 'character') return s.scope === 'character' && s.scope_id === activeCharacterId
+    if (scopeFilter === 'chat') return s.scope === 'chat' && s.scope_id === activeChatId
     return true
   })
 
@@ -372,13 +381,13 @@ export default function RegexPanel() {
       </div>
 
       <div className={styles.scopeFilter}>
-        {(['all', 'global', 'character'] as ScopeFilterValue[]).map((v) => (
+        {(['all', 'global', 'character', 'chat'] as ScopeFilterValue[]).map((v) => (
           <button
             key={v}
             className={clsx(styles.scopePill, scopeFilter === v && styles.scopePillActive)}
             onClick={() => setScopeFilter(v)}
           >
-            {v === 'all' ? t('regexPanel.scopeAll') : v === 'global' ? t('regexPanel.scopeGlobal') : t('regexPanel.scopeThisChar')}
+            {t(SCOPE_FILTER_LABEL_KEYS[v])}
           </button>
         ))}
       </div>
