@@ -2062,7 +2062,22 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
     return null;
   }
 
-  return getChat(userId, newChatId);
+  const forkedChat = getChat(userId, newChatId);
+  if (forkedChat) {
+    eventBus.emit(
+      EventType.CHAT_FORKED,
+      {
+        sourceChatId: chatId,
+        forkedChatId: newChatId,
+        chat: forkedChat,
+        branchId,
+        forkedAtMessageId: atMessageId,
+        forkedAtMessageIndex: msg.index_in_chat,
+      },
+      userId,
+    );
+  }
+  return forkedChat;
 }
 
 // Branch tree
