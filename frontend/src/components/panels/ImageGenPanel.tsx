@@ -265,37 +265,7 @@ function ParamField({
         const setImageGenSettings = useStore((s) => s.setImageGenSettings)
         const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
         const activeCharacterId = useStore((s) => s.activeCharacterId)
-        useEffect(() => {
-          if (!useAvatarUpload) return
-          if (!activeCharacterId) return
 
-          const state = useStore.getState()
-          const character = state.characters?.find(
-            (c) => c.id === activeCharacterId
-          )
-
-          if (!character?.avatar) return
-
-          let base64: string
-
-          if (character.avatar.startsWith('data:')) {
-            base64 = character.avatar.split(',')[1]
-
-            // ✅ direct base64 case
-            onChange("init_images", base64)
-
-          } else {
-            fetch(character.avatar)
-              .then((res) => res.blob())
-              .then(async (blob) => {
-                const file = new File([blob], 'avatar.png', { type: blob.type })
-                const ref = await toDataRef(file)
-
-                onChange("init_images", ref.data)
-              })
-          }
-
-        }, [activeCharacterId, useAvatarUpload])
 
         return (
 
@@ -413,6 +383,40 @@ export default function ImageGenPanel() {
   const [workflowError, setWorkflowError] = useState<string | null>(null)
   const refInputRef = useRef<HTMLInputElement | null>(null)
 
+
+  const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
+
+  useEffect(() => {
+    if (!useAvatarUpload) return
+    if (!activeCharacterId) return
+
+    const state = useStore.getState()
+    const character = state.characters?.find(
+      (c) => c.id === activeCharacterId
+    )
+
+    if (!character?.avatar) return
+
+    let base64: string
+
+    if (character.avatar.startsWith('data:')) {
+      base64 = character.avatar.split(',')[1]
+
+      // ✅ direct base64 case
+      onChange("init_images", base64)
+
+    } else {
+      fetch(character.avatar)
+        .then((res) => res.blob())
+        .then(async (blob) => {
+          const file = new File([blob], 'avatar.png', { type: blob.type })
+          const ref = await toDataRef(file)
+
+          onChange("init_images", ref.data)
+        })
+    }
+
+  }, [activeCharacterId, useAvatarUpload])
   // Load profiles and providers on mount
   useEffect(() => {
     imageGenConnectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
