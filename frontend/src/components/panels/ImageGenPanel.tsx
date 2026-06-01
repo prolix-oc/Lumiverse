@@ -276,7 +276,7 @@ function ParamField({
 
         const setImageGenSettings = useStore((s) => s.setImageGenSettings)
         const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
-        const activeCharacterId = useStore((s) => )
+        const activeCharacterId = useStore((s) => s.activeCharacterId)
         useEffect(() => {
           if (!useAvatarUpload) return
           if (!activeCharacterId) return
