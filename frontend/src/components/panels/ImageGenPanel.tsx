@@ -25,6 +25,8 @@ import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema }
 import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
 import { generateApi } from '@/api'
+import { imagesApi } from '@/api/images'
+import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 
 type RefImage = { data: string; mimeType?: string }
 const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
@@ -350,6 +352,7 @@ export default function ImageGenPanel() {
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
 
   const imageGenProfiles = useStore((s) => s.imageGenProfiles)
   const activeImageGenConnectionId = useStore((s) => s.activeImageGenConnectionId)
@@ -386,35 +389,6 @@ export default function ImageGenPanel() {
 
 
   const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
-
-  useEffect(() => {
-    if (!useAvatarUpload) return
-    if (!activeCharacterId) return
-
-    const state = useStore.getState()
-    const character = state.characters?.find(
-      (c) => c.id === activeCharacterId
-    )
-
-    if (!character?.avatar) return
-
-    if (character.avatar.startsWith('data:')) {
-      const base64 = character.avatar.split(',')[1]
-
-      updateParam("init_images", base64) // ✅ FIXED
-
-    } else {
-      fetch(character.avatar)
-        .then((res) => res.blob())
-        .then(async (blob) => {
-          const file = new File([blob], 'avatar.png', { type: blob.type })
-          const ref = await toDataRef(file)
-
-          updateParam("init_images", ref.data) // ✅ FIXED
-        })
-    }
-
-  }, [activeCharacterId, useAvatarUpload])
 
   // Load profiles and providers on mount
   useEffect(() => {
@@ -576,6 +550,43 @@ export default function ImageGenPanel() {
       refreshActiveImageGenConnection()
     })
   }, [activeConnection, genParams, imageGenProfiles, refreshActiveImageGenConnection, setImageGenProfiles])
+
+  // When enabled, pre-fill init_images from the active character's avatar (img2img).
+  useEffect(() => {
+    if (!useAvatarUpload || !activeCharacterId || !activeConnection) return
+
+    const character = useStore.getState().characters?.find((c) => c.id === activeCharacterId)
+    if (!character) return
+
+    const avatarUrl = activeChatAvatarId
+      ? imagesApi.url(activeChatAvatarId)
+      : getCharacterAvatarThumbUrl(character)
+    if (!avatarUrl) return
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch(avatarUrl)
+        if (cancelled || !res.ok) return
+        const blob = await res.blob()
+        const file = new File([blob], 'avatar.png', { type: blob.type || 'image/png' })
+        const ref = await toDataRef(file)
+        if (!cancelled) updateParam('init_images', ref.data)
+      } catch {
+        // ignore fetch/read failures
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeCharacterId,
+    activeChatAvatarId,
+    activeConnection,
+    useAvatarUpload,
+    updateParam,
+  ])
 
   const updateComfyCustomControl = useCallback((control: ComfyMappedFieldControl, value: string) => {
     const customKey = control.key.slice(COMFY_CUSTOM_CONTROL_PREFIX.length)
