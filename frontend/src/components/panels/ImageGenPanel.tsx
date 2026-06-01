@@ -24,6 +24,7 @@ import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-wea
 import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
 import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
+import { generateApi } from '@/api'
 
 type RefImage = { data: string; mimeType?: string }
 const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
@@ -269,6 +270,91 @@ function ParamField({
           </FormField>
         )
       }
+      if (schema.description?.toLowerCase().includes('base64')) {
+        const fileRef = useRef<HTMLInputElement | null>(null)
+        const textref = useRef<HTMLInputElement | null>(null)
+
+        const setImageGenSettings = useStore((s) => s.setImageGenSettings)
+        const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
+        const activeCharacterId = useStore((s) => )
+        useEffect(() => {
+          if (!useAvatarUpload) return
+          if (!activeCharacterId) return
+
+          const state = useStore.getState()
+          const character = state.characters?.find(
+            (c) => c.id === activeCharacterId
+          )
+
+          if (!character?.avatar) return
+
+          let base64: string
+
+          if (character.avatar.startsWith('data:')) {
+            base64 = character.avatar.split(',')[1]
+
+            // ✅ direct base64 case
+            onChange("init_images", base64)
+
+          } else {
+            fetch(character.avatar)
+              .then((res) => res.blob())
+              .then(async (blob) => {
+                const file = new File([blob], 'avatar.png', { type: blob.type })
+                const ref = await toDataRef(file)
+
+                onChange("init_images", ref.data)
+              })
+          }
+
+        }, [activeCharacterId, useAvatarUpload])
+
+        return (
+
+
+          <FormField label={displayName} hint={schema.description}>
+            <TextInput
+              ref={textref}
+              value={value ?? schema.default ?? ''}
+              onChange={(v) => onChange(paramKey, v)}
+            />
+
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+
+                const ref = await toDataRef(file)
+                textref.current.value = ref.data
+                onChange(paramKey, ref.data)
+              }
+
+
+              }
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => fileRef.current?.click()}
+              label="Upload Image"
+            />
+
+
+            <ToggleRow
+              checked={!!useAvatarUpload}
+              onChange={(v) => setImageGenSettings({ useAvatarUpload: v })}
+              label="Upload avatar by default?"
+            />
+
+
+          </FormField>
+
+        )
+      }
       return (
         <FormField label={displayName} hint={schema.description}>
           <TextInput
@@ -331,15 +417,15 @@ export default function ImageGenPanel() {
   useEffect(() => {
     imageGenConnectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
       setImageGenProfiles(res.data)
-    }).catch(() => {})
+    }).catch(() => { })
 
     imageGenConnectionsApi.providers().then((res) => {
       if (res.providers?.length) setImageGenProviders(res.providers)
-    }).catch(() => {})
+    }).catch(() => { })
 
     connectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
       setLlmConnections(res.data)
-    }).catch(() => {})
+    }).catch(() => { })
   }, [setImageGenProfiles, setImageGenProviders])
 
   const loadParserModels = useCallback(async () => {
@@ -654,7 +740,7 @@ export default function ImageGenPanel() {
     if (!activeCharacterId) return
     try {
       if (!presetId) {
-        await imageGenPresetBindingsApi.deleteCharacterBinding(activeCharacterId).catch(() => {})
+        await imageGenPresetBindingsApi.deleteCharacterBinding(activeCharacterId).catch(() => { })
         setCharacterPresetId(null)
         return
       }
@@ -669,7 +755,7 @@ export default function ImageGenPanel() {
     if (!activePersonaId) return
     try {
       if (!presetId) {
-        await imageGenPresetBindingsApi.deletePersonaBinding(activePersonaId).catch(() => {})
+        await imageGenPresetBindingsApi.deletePersonaBinding(activePersonaId).catch(() => { })
         setPersonaPresetId(null)
         return
       }
@@ -752,9 +838,9 @@ export default function ImageGenPanel() {
 
     const updates: Partial<typeof imageGeneration> = { promptPresets: next }
     if (editTarget === 'main') {
-      ;(updates as any).activePromptPresetId = nextPreset.id
-      ;(updates as any).customPrompt = draftPrompt
-      ;(updates as any).customNegativePrompt = draftNegative
+      ; (updates as any).activePromptPresetId = nextPreset.id
+        ; (updates as any).customPrompt = draftPrompt
+        ; (updates as any).customNegativePrompt = draftNegative
     }
     setImageGenSettings(updates as any)
     setLoadedPresetId(nextPreset.id)
@@ -787,7 +873,7 @@ export default function ImageGenPanel() {
     const next = promptPresets.filter((p) => p.id !== id)
     const updates: Partial<typeof imageGeneration> = { promptPresets: next }
     if (editTarget === 'main' && imageGeneration.activePromptPresetId === id) {
-      ;(updates as any).activePromptPresetId = null
+      ; (updates as any).activePromptPresetId = null
     }
     setImageGenSettings(updates as any)
     setLoadedPresetId(null)
@@ -937,7 +1023,7 @@ export default function ImageGenPanel() {
           initialPromptMode: promptMode,
           initialPromptPresetId: promptPresetId,
           promptGenerationTimeoutSeconds: imageGeneration.promptGenerationTimeoutSeconds,
-          onCancel: () => {},
+          onCancel: () => { },
           onConfirm: (editedPrompt: string, editedNegative: string) => {
             void runGenerationCall({
               ...baseInput,
@@ -1126,14 +1212,14 @@ export default function ImageGenPanel() {
                     editTarget === 'main'
                       ? (imageGeneration.promptMode === 'parsed_custom' ? t('imageGenPanel.parserInstructions') : t('imageGenPanel.prompt'))
                       : editTarget === 'character' ? t('imageGenPanel.characterSnippet')
-                      : editTarget === 'captioning' ? t('imageGenPanel.captioningInstructions')
-                      : t('imageGenPanel.personaSnippet')
+                        : editTarget === 'captioning' ? t('imageGenPanel.captioningInstructions')
+                          : t('imageGenPanel.personaSnippet')
                   }
                   hint={
                     editTarget === 'main'
                       ? (imageGeneration.promptMode === 'parsed_custom'
-                          ? t('imageGenPanel.parserInstructionsHint')
-                          : t('imageGenPanel.sentDirectlyHint'))
+                        ? t('imageGenPanel.parserInstructionsHint')
+                        : t('imageGenPanel.sentDirectlyHint'))
                       : editTarget === 'character'
                         ? t('imageGenPanel.characterSnippetHint')
                         : editTarget === 'captioning'
@@ -1149,8 +1235,8 @@ export default function ImageGenPanel() {
                     placeholder={
                       editTarget === 'main'
                         ? (imageGeneration.promptMode === 'parsed_custom'
-                            ? t('imageGenPanel.parserPromptExample')
-                            : t('imageGenPanel.describeImage'))
+                          ? t('imageGenPanel.parserPromptExample')
+                          : t('imageGenPanel.describeImage'))
                         : editTarget === 'character'
                           ? '1girl, long red hair, leather jacket'
                           : editTarget === 'captioning'
@@ -1318,11 +1404,11 @@ export default function ImageGenPanel() {
                       <span className={styles.workflowMeta}>
                         {workflowConfig
                           ? t('imageGenPanel.workflowMappedMeta', {
-                              count: workflowConfig.field_mappings.length,
-                              format: workflowConfig.workflow_format === 'ui_workflow'
-                                ? t('imageGenPanel.workflowFormatUi')
-                                : t('imageGenPanel.workflowFormatApi'),
-                            })
+                            count: workflowConfig.field_mappings.length,
+                            format: workflowConfig.workflow_format === 'ui_workflow'
+                              ? t('imageGenPanel.workflowFormatUi')
+                              : t('imageGenPanel.workflowFormatApi'),
+                          })
                           : t('imageGenPanel.importWorkflowHint')}
                       </span>
                     </div>
@@ -1346,7 +1432,7 @@ export default function ImageGenPanel() {
                       {comfyCustomControls.map((control) => {
                         const value = readComfyCustomControlValue(control)
                         return (
-                            <FormField key={control.key} label={control.label} hint={t('imageGenPanel.exposedFromWorkflow')}>
+                          <FormField key={control.key} label={control.label} hint={t('imageGenPanel.exposedFromWorkflow')}>
                             {control.options ? (
                               <Select
                                 value={value}
@@ -1442,7 +1528,7 @@ export default function ImageGenPanel() {
                       />
 
                       {(genParams.includeCharacterAvatar || genParams.includePersonaAvatar) && (
-                      <FormField label={t('imageGenPanel.avatarReferenceType')}>
+                        <FormField label={t('imageGenPanel.avatarReferenceType')}>
                           <Select
                             value={genParams.avatarReferenceType || 'character'}
                             onChange={(value) => updateParam('avatarReferenceType', value)}
