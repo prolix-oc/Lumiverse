@@ -258,23 +258,25 @@ function ParamField({
       )
 
     case 'string':
+
       if (schema.description?.toLowerCase().includes('base64')) {
         const fileRef = useRef<HTMLInputElement | null>(null)
         const textref = useRef<HTMLInputElement | null>(null)
 
         const setImageGenSettings = useStore((s) => s.setImageGenSettings)
         const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
-        const activeCharacterId = useStore((s) => s.activeCharacterId)
-
 
         return (
-
-
-          <FormField label={displayName} hint={schema.description}>
+          <FormField
+            label={displayName}
+            hint={schema.description}
+            style={{ fontFamily: 'var(--lumiverse-font, inherit)' }}
+          >
             <TextInput
               ref={textref}
               value={value ?? schema.default ?? ''}
               onChange={(v) => onChange(paramKey, v)}
+              style={{ fontFamily: 'var(--lumiverse-font, inherit)' }}
             />
 
             <input
@@ -287,31 +289,28 @@ function ParamField({
                 if (!file) return
 
                 const ref = await toDataRef(file)
-                textref.current.value = ref.data
+                if (textref.current) textref.current.value = ref.data
                 onChange(paramKey, ref.data)
-              }
-
-
-              }
+              }}
             />
+
             <Button
               variant="secondary"
               size="sm"
               onClick={() => fileRef.current?.click()}
-              label="Upload Image"
-            />
-
+              style={{ fontFamily: 'var(--lumiverse-font, inherit)' }}
+            >
+              Upload Image
+            </Button>
 
             <ToggleRow
               checked={!!useAvatarUpload}
               onChange={(v) => setImageGenSettings({ useAvatarUpload: v })}
               label="Upload avatar by default?"
             />
-
-
           </FormField>
-
         )
+
       }
       if (schema.description?.toLowerCase().includes('prompt') || schema.description?.toLowerCase().includes('negative')) {
         return (
@@ -386,6 +385,8 @@ export default function ImageGenPanel() {
 
   const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
 
+  const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
+
   useEffect(() => {
     if (!useAvatarUpload) return
     if (!activeCharacterId) return
@@ -397,13 +398,10 @@ export default function ImageGenPanel() {
 
     if (!character?.avatar) return
 
-    let base64: string
-
     if (character.avatar.startsWith('data:')) {
-      base64 = character.avatar.split(',')[1]
+      const base64 = character.avatar.split(',')[1]
 
-      // ✅ direct base64 case
-      onChange("init_images", base64)
+      updateParam("init_images", base64) // ✅ FIXED
 
     } else {
       fetch(character.avatar)
@@ -412,11 +410,12 @@ export default function ImageGenPanel() {
           const file = new File([blob], 'avatar.png', { type: blob.type })
           const ref = await toDataRef(file)
 
-          onChange("init_images", ref.data)
+          updateParam("init_images", ref.data) // ✅ FIXED
         })
     }
 
   }, [activeCharacterId, useAvatarUpload])
+
   // Load profiles and providers on mount
   useEffect(() => {
     imageGenConnectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
