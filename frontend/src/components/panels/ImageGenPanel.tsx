@@ -816,7 +816,10 @@ export default function ImageGenPanel() {
     updateParam('referenceImages', next)
   }
 
-  const supportsRefs = providerName === 'novelai' || providerName === 'nanogpt'
+  // Providers that accept image input: NovelAI/NanoGPT (style references) plus
+  // the img2img providers, which reuse the same reference-image config surface.
+  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini'
+  const supportsRefs = providerName === 'novelai' || providerName === 'nanogpt' || supportsImg2ImgSource
 
   const runGenerationCall = useCallback(async (input: {
     chatId: string
@@ -1396,9 +1399,26 @@ export default function ImageGenPanel() {
                 </EditorSection>
               ))}
 
-              {/* Director References — provider-specific, only for NovelAI and NanoGPT */}
+              {/* Reference / source images — NovelAI & NanoGPT style references,
+                  plus img2img init images for SwarmUI / ComfyUI / Gemini. */}
               {supportsRefs && (
-                <EditorSection title={t('imageGenPanel.directorReferences')} Icon={IconBrush} defaultExpanded={false}>
+                <EditorSection title={t(providerName === 'novelai' ? 'imageGenPanel.directorReferences' : 'imageGenPanel.references')} Icon={IconBrush} defaultExpanded={false}>
+                  {supportsImg2ImgSource && (
+                    <>
+                      <ToggleRow
+                        checked={!!genParams.includeCharacterAvatar}
+                        onChange={(checked) => updateParam('includeCharacterAvatar', checked)}
+                        label={t('imageGenPanel.includeCharacterAvatar')}
+                        hint={t('imageGenPanel.includeCharacterAvatarHint')}
+                      />
+                      <ToggleRow
+                        checked={!!genParams.includePersonaAvatar}
+                        onChange={(checked) => updateParam('includePersonaAvatar', checked)}
+                        label={t('imageGenPanel.includePersonaAvatar')}
+                        hint={t('imageGenPanel.includePersonaAvatarHint')}
+                      />
+                    </>
+                  )}
                   {providerName === 'novelai' && (
                     <>
                       <ToggleRow

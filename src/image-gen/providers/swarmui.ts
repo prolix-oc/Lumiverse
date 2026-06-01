@@ -58,6 +58,16 @@ const PARAMETERS: ImageParameterSchemaMap = {
     type: "string",
     description: "Negative prompt",
   },
+  denoise: {
+    type: "number",
+    min: 0,
+    max: 1,
+    step: 0.05,
+    default: 0.6,
+    description:
+      "Init image creativity (img2img) — applied when a reference/source image is supplied. Higher = more deviation from the source image, lower = stays closer to it.",
+    group: "img2img",
+  },
   vae: {
     type: "string",
     description: "VAE model override (leave empty for default built-in VAE)",
@@ -239,6 +249,19 @@ export class SwarmUIImageProvider implements ImageProvider {
 
     const neg = request.negativePrompt || p.negativePrompt
     if (neg) body.negativeprompt = String(neg)
+
+    // img2img: a resolved source image (or manual reference image) activates
+    // SwarmUI's init-image path. `initimagecreativity` is SwarmUI's denoise
+    // (0–1, higher = more deviation from the source).
+    const source = (Array.isArray(p.resolvedSourceImages) && p.resolvedSourceImages[0])
+      || (Array.isArray(p.referenceImages) && p.referenceImages[0])
+      || undefined
+    if (source?.data) {
+      body.initimage = `data:${source.mimeType || "image/png"};base64,${source.data}`
+      body.initimagecreativity = p.denoise != null && Number.isFinite(Number(p.denoise))
+        ? Number(p.denoise)
+        : 0.6
+    }
 
     // Model component overrides (VAE, text encoders)
     // Parameter IDs match SwarmUI's CleanTypeName: lowercase-letters-only of the display name

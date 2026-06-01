@@ -28,6 +28,8 @@ const SEMANTIC_VALUES: ComfyUIMappedFieldSemantic[] = [
   'width',
   'height',
   'checkpoint',
+  'init_image',
+  'denoise',
   'custom',
 ]
 

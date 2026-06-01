@@ -89,6 +89,8 @@ const SEMANTIC_LABEL_KEYS: Record<ComfyUIMappedFieldSemantic, string> = {
   width: 'comfyui.mappedFields.width',
   height: 'comfyui.mappedFields.height',
   checkpoint: 'comfyui.nodeMenu.semantics.checkpoint',
+  init_image: 'comfyui.nodeMenu.semantics.init_image',
+  denoise: 'comfyui.nodeMenu.semantics.denoise',
   custom: 'comfyui.nodeMenu.semantics.custom',
 }
 

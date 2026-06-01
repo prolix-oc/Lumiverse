@@ -51,8 +51,18 @@ export class GoogleGeminiImageProvider implements ImageProvider {
     const base = this.baseUrl(apiUrl);
     const endpoint = `${base}/models/${request.model}:generateContent`;
 
+    // Image input (img2img / editing): Gemini image models accept source
+    // images as inlineData parts alongside the text prompt. Sources are raw
+    // base64 `{ data, mimeType }` resolved from the reference-image config.
+    const sources: Array<{ data: string; mimeType?: string }> =
+      request.parameters.resolvedSourceImages || request.parameters.referenceImages || [];
+    const inputParts: any[] = [{ text: request.prompt }];
+    for (const src of sources) {
+      if (src?.data) inputParts.push({ inlineData: { mimeType: src.mimeType || "image/png", data: src.data } });
+    }
+
     const body: any = {
-      contents: [{ parts: [{ text: request.prompt }] }],
+      contents: [{ parts: inputParts }],
       generationConfig: {
         responseModalities: ["TEXT", "IMAGE"],
         temperature: 1,

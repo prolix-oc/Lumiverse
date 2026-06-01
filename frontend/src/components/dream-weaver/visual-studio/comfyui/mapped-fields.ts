@@ -29,6 +29,9 @@ const SEMANTIC_ORDER: ComfyUIMappedFieldSemantic[] = [
   'checkpoint',
   'sampler_name',
   'scheduler',
+  'denoise',
+  // 'init_image' is intentionally omitted: its value is supplied at generation
+  // time from the reference-image config, not edited as a per-asset field.
 ]
 
 const SEMANTIC_LABELS: Record<Exclude<ComfyUIMappedFieldSemantic, 'custom'>, string> = {
@@ -42,6 +45,8 @@ const SEMANTIC_LABELS: Record<Exclude<ComfyUIMappedFieldSemantic, 'custom'>, str
   width: 'Width',
   height: 'Height',
   checkpoint: 'Checkpoint',
+  init_image: 'Init Image',
+  denoise: 'Denoise',
 }
 
 function hasSemanticMapping(

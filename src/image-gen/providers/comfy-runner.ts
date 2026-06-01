@@ -34,6 +34,49 @@ export function buildComfyImageViewUrl(baseUrl: string, image: ComfyImageResult)
   return `${baseUrl}/view?filename=${encodeURIComponent(image.filename)}&subfolder=${encodeURIComponent(image.subfolder)}&type=${encodeURIComponent(image.type)}`
 }
 
+/**
+ * Upload a source image to ComfyUI's input directory so a LoadImage node can
+ * reference it by filename (img2img). Stock ComfyUI's LoadImage cannot accept
+ * base64 inline, so the image must be uploaded first via `POST /upload/image`.
+ *
+ * Returns the server-assigned `{ name, subfolder }` — ComfyUI may rename on
+ * collision, so callers must use the returned name, not the one they sent.
+ */
+export async function uploadComfyImage(
+  baseUrl: string,
+  image: { data: string; mimeType?: string; filename?: string },
+  opts: { cookie?: string; signal?: AbortSignal },
+): Promise<{ name: string; subfolder: string }> {
+  baseUrl = baseUrl.replace(/\/+$/, "")
+  const bytes = Buffer.from(image.data, "base64")
+  const mime = image.mimeType || "image/png"
+  const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : mime.includes("webp") ? "webp" : "png"
+  const filename = image.filename || `lumiverse-init-${crypto.randomUUID()}.${ext}`
+
+  const form = new FormData()
+  form.append("image", new Blob([bytes], { type: mime }), filename)
+  form.append("type", "input")
+  form.append("overwrite", "true")
+
+  const res = await fetch(`${baseUrl}/upload/image`, {
+    method: "POST",
+    headers: opts.cookie ? { Cookie: opts.cookie } : undefined,
+    body: form,
+    signal: opts.signal,
+  })
+
+  if (!res.ok) {
+    const rawBody = await readBoundedText(res)
+    const parsed = parseProviderErrorBody(rawBody)
+    const detail = parsed.detail || parsed.code || String(res.status)
+    throw new Error(`ComfyUI rejected image upload: ${detail}`)
+  }
+
+  const data = (await res.json()) as { name?: string; subfolder?: string }
+  if (!data?.name) throw new Error("ComfyUI /upload/image returned no filename")
+  return { name: data.name, subfolder: typeof data.subfolder === "string" ? data.subfolder : "" }
+}
+
 export function findFirstComfyImageResult(
   outputs: Record<string, any> | null | undefined,
 ): ComfyImageResult | null {

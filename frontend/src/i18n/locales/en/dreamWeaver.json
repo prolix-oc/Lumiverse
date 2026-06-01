@@ -390,6 +390,8 @@
         "width": "Width",
         "height": "Height",
         "checkpoint": "Checkpoint",
+        "init_image": "Init Image (img2img)",
+        "denoise": "Denoise (img2img)",
         "custom": "Custom Setting"
       }
     },

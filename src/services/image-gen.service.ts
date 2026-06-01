@@ -20,6 +20,7 @@ import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-d
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { readComfyUIConfig } from "../image-gen/comfyui-workflow-storage";
 import { patchWorkflow, type ComfyUIPatchValues } from "../image-gen/comfyui-workflow-patch";
+import { uploadComfyImage } from "../image-gen/providers/comfy-runner";
 import { rawGenerate } from "./generate.service";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
@@ -347,6 +348,18 @@ export async function generateSceneBackground(
       if (charTags.length > 0) {
         params.characterTags = charTags;
       }
+    }
+
+    // Resolve img2img source images (init image) for providers that accept
+    // image input. Reuses the reference-image config surface; SwarmUI/ComfyUI
+    // consume the first image, Gemini consumes all of them.
+    if (
+      connection.provider === "swarmui" ||
+      connection.provider === "comfyui" ||
+      connection.provider === "google_gemini"
+    ) {
+      const sources = await resolveSourceImages(userId, chatId, params);
+      if (sources.length > 0) params.resolvedSourceImages = sources;
     }
 
     if (connection.provider === "comfyui" || connection.provider === "swarmui") {
@@ -767,6 +780,30 @@ async function applyComfyUIWorkflowConfig(
     Object.assign(patchValues, extraFieldValues);
   }
   patchValues.seed = resolveComfySeedParam(patchValues.seed ?? params.seed);
+
+  // img2img: only engage when the workflow actually maps an init_image field
+  // (i.e. it's an img2img graph). This keeps the denoise param from clobbering
+  // the KSampler denoise of a plain txt2img workflow, whose `denoise` field may
+  // be auto-detected as a mapping but must stay at its embedded value (1.0).
+  const hasInitImageMapping = mappings.some((mapping) => mapping.mappedAs === "init_image");
+  if (hasInitImageMapping) {
+    if (patchValues.denoise === undefined) patchValues.denoise = numberParam(params.denoise);
+
+    // Upload the resolved source image and inject the returned filename. A
+    // mapping without a configured source image is a no-op (the workflow keeps
+    // its embedded LoadImage default).
+    const sourceImage = Array.isArray(params.resolvedSourceImages)
+      ? params.resolvedSourceImages[0]
+      : undefined;
+    if (sourceImage?.data && patchValues.init_image === undefined) {
+      const uploaded = await uploadComfyImage(
+        target.baseUrl,
+        { data: sourceImage.data, mimeType: sourceImage.mimeType },
+        { cookie: target.cookie },
+      );
+      patchValues.init_image = uploaded.subfolder ? `${uploaded.subfolder}/${uploaded.name}` : uploaded.name;
+    }
+  }
 
   params.workflow = patchWorkflow(normalizedWorkflow.apiWorkflow, mappings, patchValues);
   params.workflowFormat = "api_prompt";
@@ -1351,33 +1388,68 @@ async function gatherDirectorImages(
     if (ref?.data) images.push({ data: ref.data, strength, infoExtracted, refType: manualRefType });
   }
 
-  // Character avatar
-  if (params.includeCharacterAvatar) {
-    const chat = chatsSvc.getChat(userId, chatId);
-    if (chat) {
-      const character = charactersSvc.getCharacter(userId, chat.character_id);
-      if (character?.image_id) {
-        const path = await imagesSvc.getImageFilePath(userId, character.image_id);
-        if (path) {
-          const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-          images.push({ data: uint8ToBase64(bytes), strength, infoExtracted, refType: avatarRefType });
-        }
-      }
-    }
+  // Character + persona avatars (shared loader)
+  for (const avatar of await loadConfiguredAvatarImages(userId, chatId, params)) {
+    images.push({ data: avatar.data, strength, infoExtracted, refType: avatarRefType });
   }
 
-  // Persona avatar
+  return images;
+}
+
+/**
+ * Load the character and/or persona avatars selected via the
+ * `includeCharacterAvatar` / `includePersonaAvatar` params as raw-base64
+ * `{ data, mimeType }` images. Shared by NovelAI's director-reference flow and
+ * the generic img2img source resolver below.
+ */
+async function loadConfiguredAvatarImages(
+  userId: string,
+  chatId: string,
+  params: Record<string, any>,
+): Promise<Array<{ data: string; mimeType: string }>> {
+  const out: Array<{ data: string; mimeType: string }> = [];
+
+  const loadById = async (imageId: string) => {
+    const path = await imagesSvc.getImageFilePath(userId, imageId);
+    if (!path) return;
+    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+    const mimeType = imagesSvc.getImage(userId, imageId)?.mime_type || "image/png";
+    out.push({ data: uint8ToBase64(bytes), mimeType });
+  };
+
+  if (params.includeCharacterAvatar) {
+    const chat = chatsSvc.getChat(userId, chatId);
+    const character = chat ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+    if (character?.image_id) await loadById(character.image_id);
+  }
+
   if (params.includePersonaAvatar) {
     const personas = personasSvc.listPersonas(userId, { limit: 100, offset: 0 }).data;
     const persona = personas.find((p) => p.is_default) || personas[0];
-    if (persona?.image_id) {
-      const path = await imagesSvc.getImageFilePath(userId, persona.image_id);
-      if (path) {
-        const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-        images.push({ data: uint8ToBase64(bytes), strength, infoExtracted, refType: avatarRefType });
-      }
-    }
+    if (persona?.image_id) await loadById(persona.image_id);
   }
+
+  return out;
+}
+
+/**
+ * Resolve the shared img2img source image set for providers that accept image
+ * input (SwarmUI, ComfyUI, Gemini). Reuses the same config surface as the
+ * reference-image feature: manually uploaded `referenceImages` first, then any
+ * selected character/persona avatars. Returns raw-base64 `{ data, mimeType }`.
+ */
+async function resolveSourceImages(
+  userId: string,
+  chatId: string,
+  params: Record<string, any>,
+): Promise<Array<{ data: string; mimeType: string }>> {
+  const images: Array<{ data: string; mimeType: string }> = [];
+
+  for (const ref of params.referenceImages || []) {
+    if (ref?.data) images.push({ data: ref.data, mimeType: ref.mimeType || "image/png" });
+  }
+
+  images.push(...(await loadConfiguredAvatarImages(userId, chatId, params)));
 
   return images;
 }

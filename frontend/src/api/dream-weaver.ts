@@ -81,6 +81,8 @@ export type ComfyUIMappedFieldSemantic =
   | 'width'
   | 'height'
   | 'checkpoint'
+  | 'init_image'
+  | 'denoise'
   | 'custom'
 
 export interface ComfyUIFieldMapping {
