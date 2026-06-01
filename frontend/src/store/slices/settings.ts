@@ -3,7 +3,7 @@ import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSe
 import { settingsApi } from '@/api/settings'
 import { BASE_URL } from '@/api/client'
 import { generateUUID } from '@/lib/uuid'
-import { DEFAULT_THEME } from '@/theme/presets'
+import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 
 /** Default reasoning settings — used as initial state and for restore-on-unbind. */
 export const REASONING_DEFAULTS: ReasoningSettings = {
@@ -376,7 +376,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.sortDirection) patch.sortDirection = settings.sortDirection
     if (settings.viewMode) patch.viewMode = settings.viewMode
     if (typeof settings.charactersPerPage === 'number') patch.charactersPerPage = settings.charactersPerPage
-    if ('theme' in settings) patch.theme = settings.theme
+    if ('theme' in settings) patch.theme = normalizeTheme(settings.theme)
 
     set(patch as any)
   },
@@ -409,8 +409,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
 
   setTheme: (theme) => {
-    set({ theme })
-    persistKey('theme', theme)
+    // Normalize every write so a partial/legacy theme (e.g. from an applied
+    // saved-theme snapshot) can never land in the store without an accent.
+    const next = theme == null ? null : normalizeTheme(theme)
+    set({ theme: next })
+    persistKey('theme', next)
   },
 
   setCharacterThemeOverlay: (characterThemeOverlay) => {
@@ -486,10 +489,12 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   applyThemePack: (pack) => {
     const patch: Record<string, any> = {}
 
-    // Layer 1: Theme config
-    if (pack.theme) {
-      patch.theme = pack.theme
-      persistKey('theme', pack.theme)
+    // Layer 1: Theme config — normalize so an imported pack whose theme lost
+    // its accent can't crash the app on the next load.
+    const packTheme = normalizeTheme(pack.theme)
+    if (packTheme) {
+      patch.theme = packTheme
+      persistKey('theme', packTheme)
     }
 
     // Layer 2: Global CSS
@@ -621,6 +626,12 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // Migration: discard old ThemeConfig shape (has baseColors but no accent)
       if (patch.theme && 'baseColors' in patch.theme && !('accent' in patch.theme)) {
         patch.theme = null
+      }
+      // Backfill any surviving non-null theme against DEFAULT_THEME so a missing
+      // `accent` (partial write, imported pack, hand-edited value) can't throw in
+      // generateThemeVariables / ThemePanel and white-screen the app on load.
+      if (patch.theme) {
+        patch.theme = normalizeTheme(patch.theme)
       }
       if (patch.filterTab === 'all') {
         patch.filterTab = 'characters'

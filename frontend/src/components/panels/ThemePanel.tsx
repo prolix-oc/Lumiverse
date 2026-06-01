@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Bookmark, Download, Upload, Code2 } from 'lucide-react'
 import { useStore } from '@/store'
-import { DEFAULT_THEME } from '@/theme/presets'
+import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
 import type { ThemeConfig, ThemeMode, BaseColors } from '@/types/theme'
 import ModeSelector from './theme-panel/ModeSelector'
@@ -25,7 +25,9 @@ export default function ThemePanel() {
   const openModal = useStore((s) => s.openModal)
   const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const setSetting = useStore((s) => s.setSetting)
-  const current = theme ?? DEFAULT_THEME
+  // Normalize so a malformed persisted theme (e.g. missing accent) can't throw
+  // when the panel reads current.accent.* — falls back to DEFAULT_THEME.
+  const current = normalizeTheme(theme) ?? DEFAULT_THEME
 
   // Always read the latest theme from the store to avoid stale closures
   // (e.g. useCharacterTheme may async-update accent/baseColors after render)

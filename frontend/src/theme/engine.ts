@@ -1,4 +1,5 @@
 import type { ThemeConfig, ResolvedMode } from '@/types/theme'
+import { DEFAULT_THEME } from '@/theme/presets'
 
 // ── Color helpers ──
 
@@ -165,10 +166,14 @@ export function generateThemeVariables(
   config: ThemeConfig,
   mode: ResolvedMode
 ): Record<string, string> {
-  const { h, s, l } = config.accent
-  const rs = config.radiusScale
+  // Defend against malformed configs reaching the generator directly (e.g. an
+  // extension override or a stored theme that lost its accent). A missing accent
+  // here would throw and, since this runs in the theme applicator above any
+  // error boundary, white-screen the entire app. Fall back to the default.
+  const { h, s, l } = config.accent ?? DEFAULT_THEME.accent
+  const rs = config.radiusScale ?? DEFAULT_THEME.radiusScale
   const glass = config.enableGlass
-  const fs = config.fontScale
+  const fs = config.fontScale ?? DEFAULT_THEME.fontScale
 
   const isDark = mode === 'dark'
 

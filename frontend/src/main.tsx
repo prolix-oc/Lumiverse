@@ -7,6 +7,7 @@ import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { rememberRegistration } from './lib/swUpdater'
 import { router } from './router'
+import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
 import './theme/reset.css'
 import './theme/global.css'
@@ -301,7 +302,9 @@ if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 
 void initI18n().then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <RouterProvider router={router} />
+      <ErrorBoundary label="Application">
+        <RouterProvider router={router} />
+      </ErrorBoundary>
     </StrictMode>,
   )
 })
