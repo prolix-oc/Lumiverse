@@ -258,18 +258,6 @@ function ParamField({
       )
 
     case 'string':
-      if (schema.description?.toLowerCase().includes('prompt') || schema.description?.toLowerCase().includes('negative')) {
-        return (
-          <FormField label={displayName} hint={schema.description}>
-            <TextArea
-              rows={3}
-              value={value ?? schema.default ?? ''}
-              onChange={(v) => onChange(paramKey, v)}
-              placeholder={schema.default != null ? String(schema.default) : ''}
-            />
-          </FormField>
-        )
-      }
       if (schema.description?.toLowerCase().includes('base64')) {
         const fileRef = useRef<HTMLInputElement | null>(null)
         const textref = useRef<HTMLInputElement | null>(null)
@@ -353,6 +341,18 @@ function ParamField({
 
           </FormField>
 
+        )
+      }
+      if (schema.description?.toLowerCase().includes('prompt') || schema.description?.toLowerCase().includes('negative')) {
+        return (
+          <FormField label={displayName} hint={schema.description}>
+            <TextArea
+              rows={3}
+              value={value ?? schema.default ?? ''}
+              onChange={(v) => onChange(paramKey, v)}
+              placeholder={schema.default != null ? String(schema.default) : ''}
+            />
+          </FormField>
         )
       }
       return (
