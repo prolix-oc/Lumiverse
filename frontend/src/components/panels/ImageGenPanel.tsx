@@ -383,7 +383,7 @@ export default function ImageGenPanel() {
   const refInputRef = useRef<HTMLInputElement | null>(null)
 
 
-  const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
+
 
   const useAvatarUpload = useStore((s) => s.imageGeneration.useAvatarUpload)
 
