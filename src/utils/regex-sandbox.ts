@@ -136,6 +136,7 @@ class RegexWorkerPool {
       flight.reject(new RegexSandboxError(`Regex worker crashed: ${event.message || "unknown"}`));
     }
     this.discard(worker);
+    this.drainQueue();
   }
 
   private onTimeout(worker: Worker): void {

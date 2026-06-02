@@ -1127,6 +1127,7 @@ export async function applyRegexScripts(
         });
       }
     } catch (e) {
+      if (options?.outFingerprint) options.outFingerprint.cacheable = false;
       if (e instanceof RegexTimeoutError) {
         const elapsedMs = Date.now() - startedAt;
         const flagged = reportRegexScriptPerformance(script.user_id, script.id, {
