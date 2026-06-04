@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "要約した",
     "thinkingDisplayOmitted": "省略",
     "thinkingDisplayDisabledHint": "API 推論が有効な場合にのみ送信されます。",
-    "thinkingDisplayHint": "Opus 4.7 および Mythos Preview のデフォルトは省略です。概要テキストを受信するには、[要約] を選択します。",
+    "thinkingDisplayHint": "Opus 4.7/4.8 および Mythos Preview のデフォルトは省略です。概要テキストを受信するには、[要約] を選択します。",
     "keepInHistory": "履歴に保持",
     "keepAllReasoning": "プロンプトにすべての推論を保持",
     "stripAllReasoning": "プロンプトからすべての推論を削除",

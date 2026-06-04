@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "Riassunto",
     "thinkingDisplayOmitted": "Ometti",
     "thinkingDisplayDisabledHint": "Inviato solo quando il ragionamento API è attivato.",
-    "thinkingDisplayHint": "Opus 4.7 e Mythos Preview impostano Ometti come predefinito. Scegli Riassunto per ricevere il testo di riepilogo.",
+    "thinkingDisplayHint": "Opus 4.7/4.8 e Mythos Preview impostano Ometti come predefinito. Scegli Riassunto per ricevere il testo di riepilogo.",
     "keepInHistory": "Mantieni nella cronologia",
     "keepAllReasoning": "Mantieni tutto il ragionamento nel prompt",
     "stripAllReasoning": "Rimuovi tutto il ragionamento dal prompt",

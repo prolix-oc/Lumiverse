@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "Résumé",
     "thinkingDisplayOmitted": "Omis",
     "thinkingDisplayDisabledHint": "Envoyé uniquement lorsque le raisonnement API est activé.",
-    "thinkingDisplayHint": "Opus 4.7 et Mythos Preview sont par défaut Omis. Choisissez Résumé pour recevoir le texte récapitulatif.",
+    "thinkingDisplayHint": "Opus 4.7/4.8 et Mythos Preview sont par défaut Omis. Choisissez Résumé pour recevoir le texte récapitulatif.",
     "keepInHistory": "Conserver l'historique",
     "keepAllReasoning": "Conserver tous les raisonnements dans l'invite",
     "stripAllReasoning": "Supprimer tous les raisonnements de l'invite",

@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "摘要",
     "thinkingDisplayOmitted": "省略",
     "thinkingDisplayDisabledHint": "僅在啟用 API 推理時發送。",
-    "thinkingDisplayHint": "Opus 4.7 與 Mythos Preview 默認省略，選擇“摘要”可接收總結文本。",
+    "thinkingDisplayHint": "Opus 4.7/4.8 與 Mythos Preview 默認省略，選擇“摘要”可接收總結文本。",
     "keepInHistory": "歷史保留",
     "keepAllReasoning": "在提示詞中保留全部推理",
     "stripAllReasoning": "從提示詞中移除全部推理",
