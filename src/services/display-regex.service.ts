@@ -8,6 +8,7 @@ import * as charactersSvc from "./characters.service";
 import * as chatsSvc from "./chats.service";
 import * as connectionsSvc from "./connections.service";
 import * as personasSvc from "./personas.service";
+import { resolvePersonaGlobalAddons } from "./global-addons.service";
 import { populateLumiaLoomContext } from "./prompt-assembly.service";
 import { applyRegexScripts } from "./regex-scripts.service";
 import { eventBus } from "../ws/bus";
@@ -44,7 +45,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
       const messages = chatsSvc.getMessages(userId, ctx.chat_id);
       const character = charactersSvc.getCharacter(userId, chat.character_id);
       if (character) {
-        const persona = personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id);
+        const persona = resolvePersonaGlobalAddons(userId, personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id));
         const connection = connectionsSvc.getDefaultConnection(userId);
         const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) => {
           const c = charactersSvc.getCharacter(userId, cid);
@@ -70,7 +71,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
   if (ctx.character_id) {
     const character = charactersSvc.getCharacter(userId, ctx.character_id);
     if (character) {
-      const persona = personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id);
+      const persona = resolvePersonaGlobalAddons(userId, personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id));
       const connection = connectionsSvc.getDefaultConnection(userId);
       const chat: Chat = {
         id: "",
@@ -93,7 +94,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
     }
   }
 
-  const persona = personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id);
+  const persona = resolvePersonaGlobalAddons(userId, personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id));
   const personaPronouns = resolvePersonaPronouns(persona);
   const connection = connectionsSvc.getDefaultConnection(userId);
   return {

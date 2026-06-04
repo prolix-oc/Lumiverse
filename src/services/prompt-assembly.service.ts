@@ -1016,26 +1016,11 @@ export async function assemblePrompt(
     pf?.persona !== undefined
       ? pf.persona
       : personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
-  if (!pf) persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
-
-  // Resolve attached global add-ons for non-prefetched path
-  if (persona && !pf) {
-    const attachedRefs =
-      (persona.metadata?.attached_global_addons as Array<{
-        id: string;
-        enabled: boolean;
-      }>) ?? [];
-    const enabledIds = attachedRefs.filter((a) => a.enabled).map((a) => a.id);
-    if (enabledIds.length > 0) {
-      const resolved = globalAddonsSvc.getGlobalAddonsByIds(
-        ctx.userId,
-        enabledIds,
-      );
-      persona = {
-        ...persona,
-        metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved },
-      };
-    }
+  if (!pf) {
+    // Prefetch already applies add-on states + resolves global add-ons; only do
+    // it here for the non-prefetched path so {{persona}} includes global add-ons.
+    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
+    persona = globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona);
   }
 
   // Resolve connection

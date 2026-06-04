@@ -111,17 +111,10 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     )
   );
 
-  // Resolve attached global add-ons for the persona
-  if (persona) {
-    const attachedRefs = (persona.metadata?.attached_global_addons as Array<{ id: string; enabled: boolean }>) ?? [];
-    const enabledIds = attachedRefs.filter(a => a.enabled).map(a => a.id);
-    if (enabledIds.length > 0) {
-      const resolved = profiler.measureSync("global-addons", () =>
-        globalAddonsSvc.getGlobalAddonsByIds(ctx.userId, enabledIds)
-      );
-      persona = { ...persona, metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved } };
-    }
-  }
+  // Resolve attached global add-ons for the persona so {{persona}} includes them
+  persona = profiler.measureSync("global-addons", () =>
+    globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona)
+  );
 
   const connection = profiler.measureSync("connection", () =>
     ctx.connectionId

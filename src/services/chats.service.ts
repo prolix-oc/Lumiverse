@@ -17,6 +17,7 @@ import { invalidateChatMemoryCache, scheduleChatMemoryRefresh } from "./chat-mem
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import { buildEnv, type MacroEnv } from "../macros";
 import { resolvePersonaOrDefault } from "./personas.service";
+import { resolvePersonaGlobalAddons } from "./global-addons.service";
 import { resolveAndSanitizeForVectorization, contentHasMacroHints } from "./vectorization-content.service";
 
 // --- Chat helpers ---
@@ -2403,7 +2404,7 @@ export function buildMacroEnvForChat(userId: string, chatId: string): MacroEnv |
     if (!chat) return null;
     const character = getCharacter(userId, chat.character_id);
     if (!character) return null;
-    const persona = resolvePersonaOrDefault(userId);
+    const persona = resolvePersonaGlobalAddons(userId, resolvePersonaOrDefault(userId));
     return buildEnv({
       character,
       persona,
