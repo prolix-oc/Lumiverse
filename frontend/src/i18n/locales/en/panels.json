@@ -19,6 +19,7 @@
     "needsPositive": "Map a positive prompt to continue",
     "nodeCount": "{{count}} nodes",
     "needsReimport": "This workflow was imported in an older format. Replace it with a fresh API-format export.",
+    "unknownNodes": "{{count}} node type(s) aren't recognized by the connected server: {{nodes}}. You can still map and save, but generation will fail unless those custom node packs are installed on this server.",
     "notMapped": "Not mapped",
     "addCustom": "Add a custom field...",
     "customHint": "Map any other node field, including custom or extension nodes, to expose it during generation.",

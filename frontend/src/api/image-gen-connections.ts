@@ -42,6 +42,7 @@ export interface ComfyUIWorkflowConfig {
   field_options?: Record<string, string[]>
   imported_at: number
   needs_reimport?: boolean
+  unknown_nodes?: string[]
 }
 
 export const imageGenConnectionsApi = {

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import * as svc from "../services/image-gen-connections.service";
 import { getImageProviderList } from "../image-gen/registry";
-import { normalizeComfyUIWorkflow, detectComfyUIWorkflowFormat } from "../image-gen/comfyui-import";
+import { normalizeComfyUIWorkflow, detectComfyUIWorkflowFormat, findUnsupportedApiNodeTypes } from "../image-gen/comfyui-import";
 import { discoverCapabilities, getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-discovery";
 import {
   readComfyUIConfig,
@@ -154,17 +154,25 @@ app.post("/:id/comfyui/workflow/import", async (c) => {
     metadata: writeComfyUIConfig(connection.metadata, config),
   });
 
-  return c.json({ config });
+  return c.json({ config: { ...config, unknown_nodes: normalized.unknownNodes } });
 });
 
-app.get("/:id/comfyui/workflow", (c) => {
+app.get("/:id/comfyui/workflow", async (c) => {
   const userId = c.get("userId");
   const connection = svc.getConnection(userId, c.req.param("id"));
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   if (!isComfyCapableConnection(connection.provider)) {
     return c.json({ error: "Connection does not support ComfyUI workflows" }, 400);
   }
-  return c.json({ config: readComfyUIConfig(connection.metadata) });
+
+  const config = readComfyUIConfig(connection.metadata);
+  if (!config) return c.json({ config: null });
+
+  const target = await resolveComfyConnectionTarget(userId, connection);
+  const objectInfo = await getComfyUIObjectInfo(target.baseUrl, false, { cookie: target.cookie });
+  const unknownNodes = findUnsupportedApiNodeTypes(config.workflow_api_json, objectInfo);
+
+  return c.json({ config: { ...config, unknown_nodes: unknownNodes } });
 });
 
 app.put("/:id/comfyui/workflow/mappings", async (c) => {
