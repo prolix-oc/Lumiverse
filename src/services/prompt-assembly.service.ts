@@ -5338,7 +5338,7 @@ function buildParameters(
  *
  * Provider mapping:
  * - Anthropic:   thinking + output_config (adaptive 4.6+) or thinking.budget_tokens (legacy).
- *                Opus 4.7 additionally supports an "xhigh" tier between high and max.
+ *                Opus 4.7 and 4.8 additionally support an "xhigh" tier between high and max.
  *                Anthropic-only: `thinkingDisplay` ('summarized' | 'omitted') maps to the
  *                `thinking.display` field. On Opus 4.7+ the API defaults to 'omitted' when
  *                unset, so users must opt in to 'summarized' to receive summary text.
@@ -5366,13 +5366,13 @@ export function injectReasoningParams(
     if (!params.thinking) {
       // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
       const isAdaptiveModel =
-        model && /claude-(opus|sonnet)-4[-.](6|7)/i.test(model);
+        model && /claude-(opus|sonnet)-4[-.](6|7|8)/i.test(model);
       if (isAdaptiveModel) {
         // Adaptive thinking: Claude decides when/how much to think
         params.thinking = { type: "adaptive" };
-        // Opus 4.7 adds an "xhigh" tier between high and max; other adaptive models don't support it.
-        const isOpus47 = /claude-opus-4[-.]7/i.test(model!);
-        const validEfforts = isOpus47
+        // Opus 4.7 and 4.8 add an "xhigh" tier between high and max; other adaptive models don't support it.
+        const supportsXhigh = /claude-opus-4[-.](7|8)/i.test(model!);
+        const validEfforts = supportsXhigh
           ? new Set(["low", "medium", "high", "xhigh", "max"])
           : new Set(["low", "medium", "high", "max"]);
         const mappedEffort = validEfforts.has(effort) ? effort : "high";

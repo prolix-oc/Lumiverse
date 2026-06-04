@@ -70,8 +70,9 @@ export class AnthropicProvider implements LlmProvider {
     };
   }
 
-  private isOpus47Model(model: string): boolean {
-    return /^claude-opus-4-7(?:$|[-:@])/.test((model || "").trim());
+  /** Opus 4.7/4.8 use adaptive thinking and reject manual sampling params. */
+  private omitsSamplingParams(model: string): boolean {
+    return /^claude-opus-4-(?:7|8)(?:$|[-:@])/.test((model || "").trim());
   }
 
   private shouldSuppressThinking(request: GenerationRequest): boolean {
@@ -766,7 +767,7 @@ export class AnthropicProvider implements LlmProvider {
 
   private buildBody(request: GenerationRequest, stream: boolean): any {
     const params = request.parameters || {};
-    const omitSampling = this.isOpus47Model(request.model);
+    const omitSampling = this.omitsSamplingParams(request.model);
     const systemBlocks: Array<Record<string, unknown>> = [];
     const normalizedMessages: Array<{
       role: "user" | "assistant";

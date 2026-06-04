@@ -39,7 +39,7 @@ const ANTHROPIC_EFFORTS: EffortOption[] = [
   { value: 'max', label: 'Max' },
 ]
 
-const ANTHROPIC_OPUS_47_EFFORTS: EffortOption[] = [
+const ANTHROPIC_OPUS_XHIGH_EFFORTS: EffortOption[] = [
   { value: 'auto', label: 'Auto' },
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
@@ -85,7 +85,7 @@ export function getEffortOptions(provider: string | null | undefined, model: str
     case 'google_vertex':
       return GOOGLE_EFFORTS
     case 'anthropic':
-      return model && /claude-opus-4[-.]7/i.test(model) ? ANTHROPIC_OPUS_47_EFFORTS : ANTHROPIC_EFFORTS
+      return model && /claude-opus-4[-.](7|8)/i.test(model) ? ANTHROPIC_OPUS_XHIGH_EFFORTS : ANTHROPIC_EFFORTS
     case 'nanogpt':
       return NANOGPT_EFFORTS
     case 'moonshot':
