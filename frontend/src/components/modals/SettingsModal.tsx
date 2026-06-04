@@ -19,7 +19,7 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable'
-import { uiScaledTransform } from '@/lib/dndUiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { CloseButton } from '@/components/shared/CloseButton'
 import LanguageSwitcher from '@/components/shared/LanguageSwitcher'
 import { useTranslation } from 'react-i18next'
@@ -988,8 +988,8 @@ interface SortableGuideRowProps {
 function SortableGuideRow({ guide, editing, onToggleEnabled, onToggleEdit, onUpdate, onRemove }: SortableGuideRowProps) {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: guide.id })
-  const style = { transform: uiScaledTransform(transform), transition }
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: guide.id })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const positionLabel = {
     system: t('guided.positionSystem'),
     user_prefix: t('guided.positionBefore'),
