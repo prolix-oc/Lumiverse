@@ -818,7 +818,7 @@ export default function ImageGenPanel() {
 
   // Providers that accept image input: NovelAI/NanoGPT (style references) plus
   // the img2img providers, which reuse the same reference-image config surface.
-  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini' || providerName === 'openrouter'
+  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini' || providerName === 'openrouter' || providerName === 'sdapi'
   const supportsRefs = providerName === 'novelai' || providerName === 'nanogpt' || supportsImg2ImgSource
 
   const runGenerationCall = useCallback(async (input: {

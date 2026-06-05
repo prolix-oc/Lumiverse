@@ -4,6 +4,11 @@ import type { ImageGenRequest, ImageGenResponse } from "../types";
 import { applyRawOverride, PROTECTED_RAW_OVERRIDE_KEYS } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
+/** Clamp a number into the 0..1 range (denoising strength). */
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
 const PARAMETERS: ImageParameterSchemaMap = {
   prompt: {
     type: "string",
@@ -98,7 +103,8 @@ const PARAMETERS: ImageParameterSchemaMap = {
   },
   init_images: {
     type: "string",
-    description: "Base64 or data URL of the init image for img2img mode",
+    description:
+      "Manual img2img init image (base64 / data URL, or a JSON array of them). Optional override — the reference-image picker and character/persona avatars are used automatically when present.",
     group: "mode",
   },
   enable_hr: {
@@ -301,10 +307,47 @@ export class SdApiImageProvider implements ImageProvider {
     return applyRawOverride(body, p.rawRequestOverride, SDAPI_PROTECTED_KEYS);
   }
 
+  /**
+   * Collect img2img init images, preferring the orchestrated source set
+   * (manual reference uploads + character/persona avatars, resolved upstream
+   * into `resolvedSourceImages` as raw-base64 `{ data, mimeType }`) and falling
+   * back to the manual `init_images` paste field. stable-diffusion.cpp accepts
+   * both raw base64 and data URLs in `init_images`; we normalise resolved
+   * sources to data URLs so the MIME type travels with the bytes.
+   */
+  private collectInitImages(p: Record<string, any>): string[] {
+    const out: string[] = [];
+
+    const sources: Array<{ data?: string; mimeType?: string }> = Array.isArray(p.resolvedSourceImages)
+      ? p.resolvedSourceImages
+      : Array.isArray(p.referenceImages)
+        ? p.referenceImages
+        : [];
+    for (const src of sources) {
+      if (!src?.data) continue;
+      const data = String(src.data);
+      out.push(data.startsWith("data:") ? data : `data:${src.mimeType || "image/png"};base64,${data}`);
+    }
+
+    // Manual paste field — a JSON array of strings, or a single base64/data URL.
+    if (p.init_images) {
+      try {
+        const parsed = JSON.parse(String(p.init_images));
+        if (Array.isArray(parsed)) out.push(...parsed.map((s: unknown) => String(s)));
+        else out.push(String(p.init_images));
+      } catch {
+        out.push(String(p.init_images));
+      }
+    }
+
+    return out;
+  }
+
   /** Build the img2img request body from the ImageGenRequest. */
   private buildImg2ImgBody(request: ImageGenRequest): Record<string, any> {
     const p = request.parameters ?? {};
 
+    const denoise = Number(p.denoising_strength);
     const body: Record<string, any> = {
       prompt: request.prompt,
       negative_prompt: request.negativePrompt || p.negativePrompt || "",
@@ -315,18 +358,10 @@ export class SdApiImageProvider implements ImageProvider {
       cfg_scale: Number(p.cfg) || 7,
       seed: typeof p.seed === "number" && Number.isFinite(p.seed) ? Number(p.seed) : -1,
       batch_size: Number(p.batch_size) || 1,
-      denoising_strength: Number(p.denoising_strength) || 0.75,
+      // SD.cpp clamps this server-side too, but clamp here for an explicit contract.
+      denoising_strength: clamp01(Number.isFinite(denoise) ? denoise : 0.75),
+      init_images: this.collectInitImages(p),
     };
-
-    // Init images — parse JSON string or use as single data URL
-    if (p.init_images) {
-      try {
-        const initParsed = JSON.parse(String(p.init_images));
-        body.init_images = Array.isArray(initParsed) ? initParsed : [String(p.init_images)];
-      } catch {
-        body.init_images = [String(p.init_images)];
-      }
-    }
 
     if (p.sampler_name) body.sampler_name = String(p.sampler_name);
     if (p.scheduler) body.scheduler = String(p.scheduler);
@@ -354,7 +389,18 @@ export class SdApiImageProvider implements ImageProvider {
     apiUrl: string,
     request: ImageGenRequest,
   ): Promise<ImageGenResponse> {
-    const mode = request.parameters?.mode || "txt2img";
+    const p = request.parameters ?? {};
+
+    // img2img engages when the user picks it explicitly, or whenever a source
+    // image is supplied (reference upload, character/persona avatar, or a manual
+    // init image) — txt2img can't consume an init image, so its presence is the
+    // signal. This mirrors the "attach an image and it just works" behaviour of
+    // the other img2img providers.
+    const hasSourceImages =
+      (Array.isArray(p.resolvedSourceImages) && p.resolvedSourceImages.length > 0) ||
+      (Array.isArray(p.referenceImages) && p.referenceImages.length > 0) ||
+      !!p.init_images;
+    const mode = p.mode === "img2img" || hasSourceImages ? "img2img" : "txt2img";
 
     let endpoint: string;
     let body: Record<string, any>;

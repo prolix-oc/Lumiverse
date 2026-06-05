@@ -352,12 +352,13 @@ export async function generateSceneBackground(
 
     // Resolve img2img source images (init image) for providers that accept
     // image input. Reuses the reference-image config surface; SwarmUI/ComfyUI
-    // consume the first image, Gemini/OpenRouter consume all of them.
+    // consume the first image, Gemini/OpenRouter/SD API consume all of them.
     if (
       connection.provider === "swarmui" ||
       connection.provider === "comfyui" ||
       connection.provider === "google_gemini" ||
-      connection.provider === "openrouter"
+      connection.provider === "openrouter" ||
+      connection.provider === "sdapi"
     ) {
       const sources = await resolveSourceImages(userId, chatId, params);
       if (sources.length > 0) params.resolvedSourceImages = sources;
