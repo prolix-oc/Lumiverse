@@ -131,6 +131,8 @@ import {
   assemblePromptInWorker,
   canUsePromptAssemblyWorker,
 } from "./prompt-assembly-worker-client";
+import { isPromptRegexChatOwned } from "../spindle/prompt-regex-ownership";
+import { isRunning as isExtensionRunning } from "../spindle/lifecycle";
 import { clampErrorMessage, describeProviderError, ProviderRequestError } from "../utils/provider-errors";
 
 interface GenerateInput {
@@ -1121,6 +1123,7 @@ async function runPromptPipeline(opts: {
       precomputedVectorEntries: opts.precomputedVectorEntries,
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
+      skipPromptRegex: isPromptRegexChatOwned(opts.chatId, isExtensionRunning),
       signal: opts.signal,
     };
 
@@ -1210,7 +1213,11 @@ async function runPromptPipeline(opts: {
 
   // Normal assembly applies prompt-target regexes before context clipping.
   // Keep this fallback for raw/explicit message callers that bypass assembly.
-  if (opts.inputMessages) {
+  // When an extension owns this chat's prompt-regex it has already applied the
+  // rules inline via the interceptor pipeline above; running this fallback too
+  // would double-apply (non-idempotent rules compound). Mirror the assembly
+  // pass's skip in prompt-assembly.service.ts (applyPromptRegexScriptsBeforeClipping).
+  if (opts.inputMessages && !isPromptRegexChatOwned(opts.chatId, isExtensionRunning)) {
     const chatForRegex = chatsSvc.getChat(opts.userId, opts.chatId);
     const characterId = opts.targetCharacterId || chatForRegex?.character_id;
     const promptScripts = regexScriptsSvc.getActiveScripts(opts.userId, {

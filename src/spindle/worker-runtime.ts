@@ -252,6 +252,7 @@ type RuntimeWorkerToHost =
       rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
+  | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | {
       type: "user_storage_write_binary";
@@ -3270,6 +3271,12 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     error(msg: string) {
       post({ type: "log", level: "error", message: msg });
+    },
+  },
+
+  promptRegex: {
+    setOwnedChats(chatIds: string[]) {
+      post({ type: "prompt_regex_set_owned", chatIds: chatIds.map(String) });
     },
   },
 

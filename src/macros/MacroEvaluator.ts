@@ -67,8 +67,7 @@ export async function evaluate(
     if (env.signal?.aborted) throw env.signal.reason ?? new DOMException("Aborted", "AbortError");
 
     if (runInterceptors) {
-      const beforeInterceptor = text;
-      text = await macroInterceptorChain.run({
+      const interceptorResult = await macroInterceptorChain.run({
         template: text,
         env: snapshotEnvForInterceptor(env),
         commit: env.commit !== false,
@@ -76,7 +75,11 @@ export async function evaluate(
         ...(sourceHint ? { sourceHint } : {}),
         ...(userId !== undefined ? { userId } : {}),
       });
-      if (text !== beforeInterceptor) fingerprint.cacheable = false;
+      text = interceptorResult.text;
+      for (const v of interceptorResult.touchedVars) fingerprint.touched.add(v);
+      if (interceptorResult.volatile || interceptorResult.opaque) {
+        fingerprint.cacheable = false;
+      }
       if (!text.includes("{{")) break;
     }
 

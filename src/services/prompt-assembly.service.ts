@@ -284,6 +284,8 @@ async function applyPromptRegexScriptsBeforeClipping(
   characterId: string,
   macroEnv: MacroEnv,
 ): Promise<void> {
+  if (ctx.skipPromptRegex) return;
+
   const scripts = regexScriptsSvc.getActiveScripts(ctx.userId, {
     characterId,
     chatId: ctx.chatId,

@@ -15,6 +15,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Events](events.md) | Free | Subscribe to Lumiverse lifecycle events |
 | [Macros](macros.md) | Free | Register custom `{{macros}}` for prompts |
 | [Interceptors](interceptors.md) | `interceptor` | Modify the prompt before it reaches the LLM |
+| [Prompt Regex Ownership](prompt-regex.md) | Free | Apply `target:prompt` regex yourself for chats you own |
 | [Context Handlers](context-handlers.md) | `context_handler` | Enrich the generation context before assembly |
 | [Macro Interceptor](macro-interceptor.md) | `macro_interceptor` | Transform raw templates before macro parsing/dispatch |
 | [World Info Interceptor](world-info-interceptor.md) | `generation` | Disable world info entries or override their content before activation |

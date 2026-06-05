@@ -57,6 +57,10 @@ import {
   type WorldInfoInterceptorResultDTO,
 } from "./world-info-interceptor";
 import { toolRegistry } from "./tool-registry";
+import {
+  setPromptRegexOwnedChats,
+  clearPromptRegexOwner,
+} from "./prompt-regex-ownership";
 import * as managerSvc from "./manager.service";
 import {
   BUILT_IN_DRAWER_TABS,
@@ -329,6 +333,7 @@ type RuntimeWorkerToHost =
       rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
+  | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | { type: "user_get_role"; requestId: string; userId?: string }
   | {
@@ -1721,6 +1726,9 @@ export class WorkerHost {
     // Unregister all tools for this extension
     toolRegistry.unregisterByExtension(this.extensionId);
 
+    // Drop any prompt-regex ownership claims so the host resumes its own pass
+    clearPromptRegexOwner(this.extensionId);
+
     // Unregister all macros registered by this extension
     for (const macroName of this.registeredMacroNames) {
       macroRegistry.unregisterMacro(macroName);
@@ -2873,6 +2881,9 @@ export class WorkerHost {
       case "log":
         this.handleLog(msg.level, msg.message);
         break;
+      case "prompt_regex_set_owned":
+        setPromptRegexOwnedChats(this.extensionId, msg.chatIds);
+        break;
       // ─── Commands (free tier) ─────────────────────────────────────────
       case "commands_register":
         this.handleCommandsRegister(msg.commands);
@@ -3295,10 +3306,21 @@ export class WorkerHost {
         const requestId = crypto.randomUUID();
         const timeoutMs = resolveTimeoutMs();
 
+        // Expose chat-history membership explicitly on the DTO so an extension
+        // applying prompt-target regex inline can rebuild the host's depth frame
+        // (depth gating is chat-history-only; injected non-history blocks are
+        // ungated and must not shift real-turn numbering). Shallow-copy so the
+        // synthetic flag never leaks onto the outbound LLM payload.
+        const messagesWithHistoryFlag = messages.map((m) =>
+          promptAssemblySvc.isChatHistoryMessage(m as unknown as LlmMessage)
+            ? { ...m, __isChatHistory: true }
+            : m,
+        );
+
         this.postToWorker({
           type: "intercept_request",
           requestId,
-          messages,
+          messages: messagesWithHistoryFlag,
           context,
         });
 

@@ -208,6 +208,13 @@
   contain: style;
 }
 
+/* Allow card authored extension-relaxed content to render at arbitrary z levels,
+  as long as they stay below the sidebars. */
+:global([data-style-mode='extension-relaxed']) .bubble,
+:global([data-style-mode='extension-relaxed']) .content {
+  z-index: auto;
+}
+
 /* ── Bubble inner content ── */
 .bubble {
   flex: 1;
