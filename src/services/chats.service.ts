@@ -679,7 +679,10 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
       c.name,
       c.created_at,
       c.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count
+      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+      (SELECT substr(content, 1, 280) FROM messages
+         WHERE chat_id = c.id
+         ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
     FROM chats c
     WHERE c.user_id = ? AND c.character_id = ?
       AND COALESCE(json_extract(c.metadata, '$.group'), 0) != 1
@@ -692,6 +695,7 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
     message_count: row.message_count || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    last_message_preview: row.last_message_preview || '',
   }));
 }
 
@@ -731,7 +735,10 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
       c.name,
       c.created_at,
       c.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count
+      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+      (SELECT substr(content, 1, 280) FROM messages
+         WHERE chat_id = c.id
+         ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
     FROM chats c
   `;
 
@@ -761,6 +768,7 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
     message_count: row.message_count || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    last_message_preview: row.last_message_preview || '',
   }));
 }
 

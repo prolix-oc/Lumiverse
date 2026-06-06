@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence } from 'motion/react'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
+import { previewText } from '@/lib/previewText'
 import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2, Sparkles } from 'lucide-react'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { CloseButton } from '@/components/shared/CloseButton'
@@ -19,6 +20,7 @@ interface ChatSummary {
   message_count: number
   created_at: number
   updated_at: number
+  last_message_preview: string
 }
 
 interface ChatPickerModalProps {
@@ -375,6 +377,11 @@ export default function ChatPickerModal({
                 </div>
 
                 <div className={styles.cardPreview}>
+                  {item.last_message_preview && (
+                    <p className={styles.previewText}>
+                      {previewText(item.last_message_preview)}
+                    </p>
+                  )}
                   <div className={styles.metaRow}>
                     <span className={styles.metaItem}>
                       <MessageSquare size={12} />

@@ -16,6 +16,7 @@ import { toast } from '@/lib/toast'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import clsx from 'clsx'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
+import { previewText } from '@/lib/previewText'
 import styles from './ManageChatsModal.module.css'
 
 interface ChatSummary {
@@ -24,6 +25,7 @@ interface ChatSummary {
   message_count: number
   created_at: number
   updated_at: number
+  last_message_preview: string
 }
 
 type SortMode = 'date' | 'name' | 'messages'
@@ -430,6 +432,11 @@ export default function ManageChatsModal() {
                         />
                       ) : (
                         <span className={styles.cardName}>{displayName}</span>
+                      )}
+                      {chat.last_message_preview && (
+                        <span className={styles.cardPreview}>
+                          {previewText(chat.last_message_preview)}
+                        </span>
                       )}
                       <div className={styles.cardMeta}>
                         <span className={styles.cardMetaItem}>

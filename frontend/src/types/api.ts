@@ -105,6 +105,8 @@ export interface ChatSummary {
   message_count: number;
   created_at: number;
   updated_at: number;
+  /** Truncated (<=280 chars) content of the most recent message, for list previews. */
+  last_message_preview: string;
 }
 
 // ---- Chat Branch Tree ----
