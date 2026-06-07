@@ -1776,10 +1776,13 @@ export class WorkerHost {
   }
 
   private handleRuntimeTransportFailure(error: unknown): void {
+    // Already torn down by an earlier failure on this stack, bail before recursing.
+    if (!this.runtime) return;
     const message = error instanceof Error ? error.message : String(error);
     console.warn(
       `[Spindle:${this.manifest.identifier}] Runtime transport failed, cleaning up: ${message}`
     );
+    this.runtime = null;
     this.cleanup();
   }
 
