@@ -74,6 +74,7 @@
     "filesSelected": "{{count}} fichiers sélectionnés",
     "duplicate": "dupliquer",
     "wiEntries": "{{count}} WI entrées",
+    "loraReference": "LoRA : {{name}} @ {{weight}}",
     "failed": "échoué",
     "imported": "{{count}} importées",
     "skipped": "{{count}} ignoré",

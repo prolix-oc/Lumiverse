@@ -1233,9 +1233,23 @@ export interface CreateLoomToolInput {
 export type UpdateLoomToolInput = Partial<CreateLoomToolInput>;
 
 // ---- Import / Batch ----
+/**
+ * Portable LoRA hint embedded on a character card (extensions.lumiverse_image_gen_lora).
+ * Surfaced on import so the UI can show "this character expects <file>" — never
+ * used to auto-create a binding (the runtime binding is per-user).
+ */
+export interface PortableLoraReference {
+  version: 1
+  lora_filename: string
+  weight: number
+  base_tags?: string
+  source_url?: string
+}
+
 export interface ImportResult {
   character: Character
   message?: string
+  lumiverse_lora?: PortableLoraReference
 }
 
 export interface BulkImportResultItem {
@@ -1243,6 +1257,7 @@ export interface BulkImportResultItem {
   success: boolean
   character?: Character
   lorebook?: { name: string; entryCount: number }
+  lumiverse_lora?: PortableLoraReference
   error?: string
   skipped?: boolean
 }

@@ -29,6 +29,21 @@ function respondImportError(c: any, err: any, fallbackMessage: string) {
   return c.json({ error: err?.message || fallbackMessage }, 400);
 }
 
+// ─── Portable LoRA surfacing ──────────────────────────────────────────────
+//
+// The portable LoRA reference (lumiverse_image_gen_lora) rides along in a
+// character's `extensions` on every import format. We surface it in the import
+// response as `lumiverse_lora` so the UI can show "this character expects
+// <file> @ <weight>" and let the user confirm a binding. We deliberately do NOT
+// auto-bind it: the runtime binding is per-user and may point at a different
+// local LoRA library (and source_url is never auto-fetched).
+function loraSurface(
+  character: { extensions?: Record<string, any> } | null | undefined,
+): { lumiverse_lora?: characterLoraSvc.PortableLoraReference } {
+  const ref = character ? characterLoraSvc.readPortableLoraReference(character) : null;
+  return ref ? { lumiverse_lora: ref } : {};
+}
+
 // ─── URL parsing helpers ──────────────────────────────────────────────────
 
 const CHUB_DOMAINS = ["chub.ai", "www.chub.ai", "characterhub.org", "www.characterhub.org"];
@@ -353,14 +368,14 @@ app.post("/import-url", async (c) => {
     const chubPath = parseChubUrl(url);
     if (chubPath) {
       character = await fetchChubCharacter(chubPath, userId);
-      return c.json({ character }, 201);
+      return c.json({ character, ...loraSurface(character) }, 201);
     }
 
     // Check for JannyAI URL
     const jannyId = parseJannyUrl(url);
     if (jannyId) {
       character = await fetchJannyCharacter(jannyId, userId);
-      return c.json({ character }, 201);
+      return c.json({ character, ...loraSurface(character) }, 201);
     }
 
     // Check for BotBooru URL → rewrite to the PNG download, which embeds a
@@ -368,12 +383,12 @@ app.post("/import-url", async (c) => {
     const botBooruPngUrl = rewriteBotBooruUrl(url, "png");
     if (botBooruPngUrl) {
       character = await fetchGenericCharacter(botBooruPngUrl, userId);
-      return c.json({ character }, 201);
+      return c.json({ character, ...loraSurface(character) }, 201);
     }
 
     // Generic URL (direct PNG or JSON link)
     character = await fetchGenericCharacter(url, userId);
-    return c.json({ character }, 201);
+    return c.json({ character, ...loraSurface(character) }, 201);
   } catch (err: any) {
     if (err instanceof SSRFError) {
       return c.json({ error: err.message }, 400);
@@ -564,6 +579,7 @@ app.post("/import-bulk", async (c) => {
       success: boolean;
       character?: any;
       lorebook?: { name: string; entryCount: number };
+      lumiverse_lora?: characterLoraSvc.PortableLoraReference;
       error?: string;
       skipped?: boolean;
     }> = [];
@@ -647,7 +663,7 @@ app.post("/import-bulk", async (c) => {
           };
         }
 
-        results.push({ filename, success: true, character: imported, lorebook });
+        results.push({ filename, success: true, character: imported, lorebook, ...loraSurface(imported) });
       } catch (err: any) {
         results.push({
           filename,
@@ -705,7 +721,7 @@ app.post("/import", async (c) => {
         svc.setCharacterAvatar(userId, character.id, image.filename);
         autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
-        return c.json({ character: imported }, 201);
+        return c.json({ character: imported, ...loraSurface(imported) }, 201);
       } else if (detectedFormat === "charx" || detectedFormat === "jpeg_polyglot") {
         // CHARX archive (or JPEG+ZIP polyglot) — ZIP with card.json + optional
         // avatar + gallery images + lumiverse_modules. The full processing is
@@ -721,6 +737,7 @@ app.post("/import", async (c) => {
         return c.json({
           character: imported,
           ...(lumiverseModulesSummary ? { lumiverse_modules: lumiverseModulesSummary } : {}),
+          ...loraSurface(imported),
         }, 201);
       } else if (detectedFormat === "jpeg") {
         return c.json({ error: "JPEG file does not contain embedded character card data" }, 400);
@@ -737,7 +754,7 @@ app.post("/import", async (c) => {
         const character = svc.createCharacter(userId, cardInput);
         autoImportEmbeddedWorldbook(userId, character.id);
         const imported = svc.getCharacter(userId, character.id)!;
-        return c.json({ character: imported }, 201);
+        return c.json({ character: imported, ...loraSurface(imported) }, 201);
       }
     } else {
       // Raw JSON body — support both card-spec wrapper and flat input
@@ -747,7 +764,7 @@ app.post("/import", async (c) => {
       const character = svc.createCharacter(userId, input);
       autoImportEmbeddedWorldbook(userId, character.id);
       const imported = svc.getCharacter(userId, character.id)!;
-      return c.json({ character: imported }, 201);
+      return c.json({ character: imported, ...loraSurface(imported) }, 201);
     }
   } catch (err: any) {
     return respondImportError(c, err, "Failed to import character card");

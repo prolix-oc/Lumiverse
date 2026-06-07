@@ -74,6 +74,7 @@
     "filesSelected": "已選擇 {{count}} 個文件",
     "duplicate": "重複",
     "wiEntries": "{{count}} 條 WI 條目",
+    "loraReference": "LoRA：{{name}} @ {{weight}}",
     "failed": "失敗",
     "imported": "已導入 {{count}}",
     "skipped": "已跳過 {{count}}",

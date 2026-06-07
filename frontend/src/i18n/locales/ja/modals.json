@@ -74,6 +74,7 @@
     "filesSelected": "{{count}} ファイルが選択されました",
     "duplicate": "重複",
     "wiEntries": "{{count}} WI エントリ",
+    "loraReference": "LoRA: {{name}} @ {{weight}}",
     "failed": "失敗",
     "imported": "{{count}} インポート",
     "skipped": "{{count}} スキップ",
