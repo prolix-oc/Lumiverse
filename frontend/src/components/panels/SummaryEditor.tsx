@@ -412,6 +412,7 @@ function SummarizationConfig() {
                 searchPlaceholder={t('summaryEditor.searchConnections')}
                 ariaLabel={t('summaryEditor.connectionProfile')}
                 emptyMessage={t('summaryEditor.noConnectionProfiles')}
+                portal
                 clearable
                 clearLabel={t('summaryEditor.noDedicatedConnection')}
               />
