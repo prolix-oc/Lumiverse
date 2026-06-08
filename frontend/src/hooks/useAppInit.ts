@@ -9,6 +9,28 @@ import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { personasApi } from '@/api/personas'
 import { packsApi } from '@/api/packs'
 import { resetUserScopedStoreState } from '@/store/user-scoped-reset'
+import type { PaginatedResult } from '@/types/api'
+
+/**
+ * Page a connection list to exhaustion. The store-fed connection selectors
+ * treat these lists as the complete set, so the fallback path must not stop at
+ * a single page (mirrors the bootstrap service's collectAll). Driven by the
+ * reported `total`, so it's correct regardless of server-side page clamping.
+ */
+const CONNECTIONS_PAGE = 200
+async function listAllConnections<T>(
+  api: { list: (params: { limit: number; offset: number }) => Promise<PaginatedResult<T>> },
+): Promise<PaginatedResult<T>> {
+  const data: T[] = []
+  let offset = 0
+  for (;;) {
+    const page = await api.list({ limit: CONNECTIONS_PAGE, offset })
+    data.push(...page.data)
+    offset += page.data.length
+    if (page.data.length === 0 || offset >= page.total) break
+  }
+  return { data, total: data.length, limit: data.length, offset: 0 }
+}
 
 /**
  * Eagerly load shared data that multiple panels depend on.
@@ -150,7 +172,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['llm.connections'] || errors['llm.providers']) {
     Promise.allSettled([
-      connectionsApi.list({ limit: 100 }),
+      listAllConnections(connectionsApi),
       connectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setProfiles(profilesRes.value.data)
@@ -160,7 +182,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['stt.connections'] || errors['stt.providers']) {
     Promise.allSettled([
-      sttConnectionsApi.list({ limit: 100 }),
+      listAllConnections(sttConnectionsApi),
       sttConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setSttProfiles(profilesRes.value.data)
@@ -170,7 +192,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['tts.connections'] || errors['tts.providers']) {
     Promise.allSettled([
-      ttsConnectionsApi.list({ limit: 100 }),
+      listAllConnections(ttsConnectionsApi),
       ttsConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setTtsProfiles(profilesRes.value.data)
@@ -180,7 +202,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['imageGen.connections'] || errors['imageGen.providers']) {
     Promise.allSettled([
-      imageGenConnectionsApi.list({ limit: 100 }),
+      listAllConnections(imageGenConnectionsApi),
       imageGenConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setImageGenProfiles(profilesRes.value.data)

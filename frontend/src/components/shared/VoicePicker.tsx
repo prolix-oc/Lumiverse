@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import type { TtsVoice, VoiceRef } from '@/types/api'
 import styles from './VoicePicker.module.css'
@@ -54,11 +55,6 @@ export default function VoicePicker({
 
   const [voicesByConnection, setVoicesByConnection] = useState<Record<string, TtsVoice[]>>({})
   const [voicesLoading, setVoicesLoading] = useState(false)
-
-  const connectionOptions = useMemo(
-    () => ttsProfiles.map((p) => ({ value: p.id, label: p.name, sublabel: p.provider })),
-    [ttsProfiles],
-  )
 
   const activeConnection = useMemo(
     () => ttsProfiles.find((p) => p.id === value?.connectionId) ?? null,
@@ -131,10 +127,10 @@ export default function VoicePicker({
     <div className={styles.picker} data-disabled={disabled || undefined}>
       <div className={styles.row}>
         <span className={styles.label}>{t('connection')}</span>
-        <SearchableSelect
+        <ConnectionSelect
+          kind="tts"
           value={value?.connectionId ?? ''}
           onChange={handleConnectionChange}
-          options={connectionOptions}
           placeholder={t('selectConnection')}
           searchPlaceholder={t('searchConnections')}
           ariaLabel={t('connectionAria', { label: resolvedAriaLabel })}

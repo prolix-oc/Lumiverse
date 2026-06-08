@@ -6,14 +6,13 @@ import { useStore } from '@/store'
 import { imageGenApi, imageGenPresetBindingsApi, type ComfyUICapabilities, type SceneData } from '@/api/image-gen'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import ImageGenProgressBar from './ImageGenProgressBar'
-import { connectionsApi } from '@/api/connections'
 import { Toggle } from '@/components/shared/Toggle'
 import { Button, FormField, Select, TextInput, EditorSection, TextArea } from '@/components/shared/FormComponents'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { LabeledRangeSlider } from '@/components/shared/RangeSlider'
 import { useTouchActivate } from '@/hooks/useTouchActivate'
 import ModelCombobox from './connection-manager/ModelCombobox'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
@@ -21,7 +20,7 @@ import ImageLightbox from '@/components/shared/ImageLightbox'
 import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/comfyui/WorkflowEditorModal'
 import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/components/dream-weaver/visual-studio/comfyui/mapped-fields'
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-weaver'
-import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
+import type { ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
 import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
 
@@ -307,10 +306,6 @@ export default function ImageGenPanel() {
   const [error, setError] = useState<string | null>(null)
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [generatedPreview, setGeneratedPreview] = useState<string | null>(null)
-  const [llmConnections, setLlmConnections] = useState<ConnectionProfile[]>([])
-  const [parserModels, setParserModels] = useState<string[]>([])
-  const [parserModelLabels, setParserModelLabels] = useState<Record<string, string>>({})
-  const [parserModelsLoading, setParserModelsLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
   const [availableMacros, setAvailableMacros] = useState<MacroGroup[]>(() => getAvailableMacros())
   const [editTarget, setEditTarget] = useState<'main' | 'character' | 'persona' | 'captioning'>('main')
@@ -327,42 +322,14 @@ export default function ImageGenPanel() {
   const [workflowError, setWorkflowError] = useState<string | null>(null)
   const refInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Load profiles and providers on mount
+  // Connection lists (image-gen + LLM) come from the store, loaded in full at
+  // app init; only the image-gen provider registry needs a refresh here for the
+  // picker's labels.
   useEffect(() => {
-    imageGenConnectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
-      setImageGenProfiles(res.data)
-    }).catch(() => {})
-
     imageGenConnectionsApi.providers().then((res) => {
       if (res.providers?.length) setImageGenProviders(res.providers)
     }).catch(() => {})
-
-    connectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
-      setLlmConnections(res.data)
-    }).catch(() => {})
-  }, [setImageGenProfiles, setImageGenProviders])
-
-  const loadParserModels = useCallback(async () => {
-    const connectionId = imageGeneration.promptParserConnectionId
-    if (!connectionId) {
-      setParserModels([])
-      setParserModelLabels({})
-      return
-    }
-    setParserModelsLoading(true)
-    try {
-      const res = await connectionsApi.models(connectionId)
-      setParserModels(res.models || [])
-      setParserModelLabels(res.model_labels || {})
-    } catch {
-      setParserModels([])
-      setParserModelLabels({})
-    } finally {
-      setParserModelsLoading(false)
-    }
-  }, [imageGeneration.promptParserConnectionId])
-
-  useEffect(() => { void loadParserModels() }, [loadParserModels])
+  }, [setImageGenProviders])
 
   // Resolve active connection and its provider capabilities
   const activeConnection = useMemo(
@@ -983,17 +950,6 @@ export default function ImageGenPanel() {
     }
   }
 
-  // Connection selector options — just the name
-  const connectionOptions = useMemo(() => [
-    { value: '', label: t('imageGenPanel.selectConnection') },
-    ...imageGenProfiles.map((p) => ({ value: p.id, label: p.name })),
-  ], [imageGenProfiles, t])
-
-  const llmConnectionOptions = useMemo(
-    () => llmConnections.map((p) => ({ value: p.id, label: p.name })),
-    [llmConnections],
-  )
-
   const mainPresetOptions = useMemo(() => [
     { value: '', label: t('imageGenPanel.noSavedPrompt') },
     ...mainPresets.map((p) => ({ value: p.id, label: p.name })),
@@ -1042,10 +998,13 @@ export default function ImageGenPanel() {
         <>
           {/* Connection Profile Selector */}
           <FormField label={t('imageGenPanel.connection')} hint={imageGenProfiles.length === 0 ? t('imageGenPanel.createConnectionFirst') : undefined}>
-            <Select
+            <ConnectionSelect
+              kind="imageGen"
               value={activeImageGenConnectionId || ''}
               onChange={(value) => setActiveImageGenConnection(value || null)}
-              options={connectionOptions}
+              placeholder={t('imageGenPanel.selectConnection')}
+              searchPlaceholder={t('imageGenPanel.searchConnections')}
+              ariaLabel={t('imageGenPanel.connection')}
             />
             {activeConnection && (
               <div style={{ fontSize: 11, color: 'var(--lumiverse-text-muted)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1222,37 +1181,22 @@ export default function ImageGenPanel() {
           {(imageGeneration.promptMode === 'scene' || imageGeneration.promptMode === 'parsed_custom') && (
             <EditorSection title={t('imageGenPanel.promptParser')} Icon={Settings2} defaultExpanded={imageGeneration.promptMode === 'parsed_custom'}>
               <FormField label={t('imageGenPanel.parserConnection')} hint={t('imageGenPanel.parserConnectionHint')}>
-                <SearchableSelect
+                <ConnectionSelect
+                  kind="llm"
                   value={imageGeneration.promptParserConnectionId || ''}
-                  onChange={(value) => updateTop({ promptParserConnectionId: value || null, promptParserModel: '' })}
-                  options={llmConnectionOptions}
+                  onChange={(value) => updateTop({ promptParserConnectionId: value || null })}
+                  withModel
+                  modelValue={imageGeneration.promptParserModel || ''}
+                  onModelChange={(value) => updateTop({ promptParserModel: value })}
                   placeholder={t('imageGenPanel.useSidecarOrSelect')}
                   searchPlaceholder={t('imageGenPanel.searchConnections')}
-                  emptyMessage={llmConnections.length === 0 ? t('imageGenPanel.noLlmConnections') : t('imageGenPanel.noMatchingConnections')}
-                  disabled={llmConnections.length === 0}
+                  emptyMessage={t('imageGenPanel.noLlmConnections')}
                   ariaLabel={t('imageGenPanel.parserConnection')}
+                  modelPlaceholder={t('imageGenPanel.useConnectionDefault')}
+                  modelEmptyMessage={t('imageGenPanel.noModelsReturned')}
+                  modelNoConnectionMessage={t('imageGenPanel.pickParserConnectionFirst')}
+                  modelAppearance="standard"
                   portal
-                />
-              </FormField>
-
-              <FormField label={t('imageGenPanel.parserModel')}>
-                <ModelCombobox
-                  value={imageGeneration.promptParserModel || ''}
-                  onChange={(value) => updateTop({ promptParserModel: value })}
-                  models={parserModels}
-                  modelLabels={parserModelLabels}
-                  loading={parserModelsLoading}
-                  onRefresh={loadParserModels}
-                  autoRefreshOnFocus
-                  refreshKey={imageGeneration.promptParserConnectionId || ''}
-                  placeholder={t('imageGenPanel.useConnectionDefault')}
-                  emptyMessage={
-                    imageGeneration.promptParserConnectionId
-                      ? t('imageGenPanel.noModelsReturned')
-                      : t('imageGenPanel.pickParserConnectionFirst')
-                  }
-                  disabled={!imageGeneration.promptParserConnectionId}
-                  appearance="standard"
                 />
               </FormField>
 

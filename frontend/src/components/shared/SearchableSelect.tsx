@@ -61,6 +61,10 @@ type CommonProps = {
   triggerIcon?: ReactNode
   /** Force a specific trigger label (e.g. "+ Add"), ignoring current selection. */
   triggerLabel?: string
+  /** Show the selected option's sublabel as a second line in the trigger (single-select). */
+  showSelectedSublabel?: boolean
+  /** Extra class on the leading slot (trigger + rows) — e.g. to square off the default circle. */
+  leadingClassName?: string
   ariaLabel?: string
   /** Render the popover inside document.body (useful for overflow-hidden containers). */
   portal?: boolean
@@ -89,6 +93,8 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     triggerClassName,
     triggerIcon,
     triggerLabel,
+    showSelectedSublabel,
+    leadingClassName,
     ariaLabel,
     portal = false,
     align = 'left',
@@ -449,7 +455,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
                 >
                   <span className={styles.optionCheck}>{selected ? '✓' : ''}</span>
                   {opt.leading && (
-                    <span className={styles.optionLeading} aria-hidden>
+                    <span className={clsx(styles.optionLeading, leadingClassName)} aria-hidden>
                       {opt.leading}
                     </span>
                   )}
@@ -489,18 +495,25 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       >
         {triggerIcon && <span className={styles.triggerIcon}>{triggerIcon}</span>}
         {selectedOption?.leading && triggerLabel === undefined && (
-          <span className={styles.triggerLeading} aria-hidden>
+          <span className={clsx(styles.triggerLeading, leadingClassName)} aria-hidden>
             {selectedOption.leading}
           </span>
         )}
-        <span
-          className={clsx(
-            styles.triggerLabel,
-            label.isPlaceholder && styles.triggerPlaceholder,
-          )}
-        >
-          {label.text}
-        </span>
+        {showSelectedSublabel && !isMulti && triggerLabel === undefined && selectedOption?.sublabel && !label.isPlaceholder ? (
+          <span className={styles.triggerTextWrap}>
+            <span className={styles.triggerName}>{label.text}</span>
+            <span className={styles.triggerSublabel}>{selectedOption.sublabel}</span>
+          </span>
+        ) : (
+          <span
+            className={clsx(
+              styles.triggerLabel,
+              label.isPlaceholder && styles.triggerPlaceholder,
+            )}
+          >
+            {label.text}
+          </span>
+        )}
         <ChevronDown
           size={12}
           className={clsx(styles.chevron, open && styles.chevronOpen)}

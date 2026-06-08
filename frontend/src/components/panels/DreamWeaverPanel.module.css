@@ -108,17 +108,14 @@
 .selectorsGrid {
   display: grid;
   gap: 8px;
+  /* Persona is a single control; the connection cell stacks its select + model
+     combobox and is therefore taller — top-align so persona doesn't stretch. */
+  align-items: start;
 }
 
 @container (min-width: 360px) {
   .selectorsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@container (min-width: 560px) {
-  .selectorsGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

@@ -26,6 +26,7 @@ import { useStore } from "@/store";
 import { memoryCortexApi, type CortexConfig, type CortexUsageStats } from "@/api/memory-cortex";
 import { connectionsApi } from "@/api/connections";
 import ModelCombobox from "@/components/panels/connection-manager/ModelCombobox";
+import ConnectionSelect from "@/components/shared/ConnectionSelect";
 import { getReasoningBindingSummary } from "@/lib/reasoning-binding";
 import { wsClient } from "@/ws/client";
 import { EventType } from "@/ws/events";
@@ -535,27 +536,28 @@ export default function MemoryCortexSettings() {
             )}
             <div className={styles.infoRow}>
               <span className={styles.infoLabel}>{t("memoryCortex.connection")}</span>
-              <select
-                className={styles.selectInput}
+              <ConnectionSelect
+                kind="llm"
                 value={config.sidecar.connectionProfileId || ""}
-                onChange={(e) => {
-                  const id = e.target.value || null;
-                  // When selecting a connection, auto-switch modes to sidecar.
-                  // When clearing, switch back to heuristic.
+                onChange={(value) => {
+                  const id = value || null;
+                  // When selecting a connection, auto-switch modes to sidecar and
+                  // seed the model override from the connection's default. When
+                  // clearing, switch back to heuristic.
+                  const defaultModel = id ? (profiles.find((p) => p.id === id)?.model || null) : null;
                   updateConfig({
-                    sidecar: { ...config.sidecar, connectionProfileId: id, model: null },
+                    sidecar: { ...config.sidecar, connectionProfileId: id, model: defaultModel },
                     entityExtractionMode: id ? "sidecar" : "heuristic",
                     salienceScoringMode: id ? "sidecar" : "heuristic",
                     consolidation: { ...config.consolidation, useSidecar: !!id },
                   });
                   fetchModels(id);
                 }}
-              >
-                <option value="">{t("memoryCortex.connectionNone")}</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.provider})</option>
-                ))}
-              </select>
+                clearable
+                clearLabel={t("memoryCortex.connectionNone")}
+                placeholder={t("memoryCortex.connectionNone")}
+                ariaLabel={t("memoryCortex.connection")}
+              />
             </div>
             {config.sidecar.connectionProfileId && (
               <>

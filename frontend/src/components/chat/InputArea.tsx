@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, MicOff, LoaderCircle } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
@@ -21,6 +21,7 @@ import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import ProviderIcon from '@/components/shared/ProviderIcon'
 import { databankApi } from '@/api/databank'
 import { resolveMacros } from '@/api/macros'
 import type { AutocompleteResult } from '@/api/databank'
@@ -185,8 +186,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
-  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember'>(null)
-  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember'>(null)
+  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
+  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
   const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
@@ -231,6 +232,9 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
+  const profiles = useStore((s) => s.profiles)
+  const setActiveProfile = useStore((s) => s.setActiveProfile)
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || null
   const voiceSettings = useStore((s) => s.voiceSettings)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
@@ -2074,6 +2078,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
               <UserCircle size={14} />
               {sendPersonaId && <span className={styles.badge}>1</span>}
             </button>
+            <button
+              type="button"
+              className={clsx(styles.actionBtn, openPopover === 'connections' && styles.actionBtnActive)}
+              onClick={() => setOpenPopover((p) => (p === 'connections' ? null : 'connections'))}
+              title={activeProfile ? t('input.switchConnectionActive', { name: activeProfile.name }) : t('input.switchConnection')}
+            >
+              <Link2 size={14} />
+            </button>
             {hasAltFields && (() => {
               const selectionCount = activeAltSelectionCount
               const hasSelection = selectionCount > 0
@@ -2265,6 +2277,35 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   </span>
                 </button>
               ))}
+            </div>
+          )}
+
+          {renderPopover === 'connections' && (
+            <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
+              {profiles.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={clsx(styles.popRowBtn, activeProfileId === p.id && styles.popRowBtnActive)}
+                  onClick={() => {
+                    setActiveProfile(p.id)
+                    setOpenPopover(null)
+                  }}
+                >
+                  <span className={styles.personaMain}>
+                    <ProviderIcon kind="llm" provider={p.provider} size={22} />
+                    <span className={styles.personaNameGroup}>
+                      <span>{p.name}</span>
+                      <span className={styles.popMeta}>{p.provider}{p.model ? ` / ${p.model}` : ''}</span>
+                    </span>
+                  </span>
+                </button>
+              ))}
+              <button type="button" className={styles.popLink} onClick={() => {
+                setOpenPopover(null)
+                useStore.getState().openDrawer('connections')
+              }}>{t('quickMenu.manageConnections')}</button>
             </div>
           )}
 

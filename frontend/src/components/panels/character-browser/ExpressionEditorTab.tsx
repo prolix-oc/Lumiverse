@@ -10,7 +10,7 @@ import { useStore } from '@/store'
 import ExpressionSlotCard from './ExpressionSlotCard'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import NumericInput from '@/components/shared/NumericInput'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { Toggle } from '@/components/shared/Toggle'
 import type { ExpressionConfig, ExpressionSlot, ExpressionGroups } from '@/types/expressions'
@@ -58,11 +58,6 @@ export default function ExpressionEditorTab({ characterId }: Props) {
   const profiles = useStore((s) => s.profiles)
   const zipRef = useRef<HTMLInputElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
-
-  const profileOptions = useMemo(
-    () => profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` })),
-    [profiles],
-  )
 
   const fetchConfig = useCallback(() => {
     setLoading(true)
@@ -399,10 +394,10 @@ export default function ExpressionEditorTab({ characterId }: Props) {
       )}
       <div className={styles.detectionField}>
         <label className={styles.detectionFieldLabel}>{t('characterEditor.expressionEditor.connectionProfile')}</label>
-        <SearchableSelect
+        <ConnectionSelect
+          kind="llm"
           value={detection.connectionProfileId || ''}
-          onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: '' })}
-          options={profileOptions}
+          onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: profiles.find((p) => p.id === val)?.model || '' })}
           placeholder={t('characterEditor.expressionEditor.useSidecarDefault')}
           searchPlaceholder={t('characterEditor.expressionEditor.searchConnections')}
           emptyMessage={t('characterEditor.expressionEditor.noConnectionProfiles')}

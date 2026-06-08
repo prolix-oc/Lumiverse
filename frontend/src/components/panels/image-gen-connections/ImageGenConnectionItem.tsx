@@ -11,13 +11,8 @@ import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/com
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { Spinner } from '@/components/shared/Spinner'
 import styles from '../connection-manager/ConnectionItem.module.css'
+import { PROVIDER_COLORS } from '@/components/shared/providerVisuals'
 import clsx from 'clsx'
-
-const PROVIDER_COLORS: Record<string, string> = {
-  google_gemini: '#4285f4',
-  nanogpt: '#10b981',
-  novelai: '#8b5cf6',
-}
 
 function formatTimeUntil(resetAt: number | null, unknownLabel: string) {
   if (!resetAt) return unknownLabel

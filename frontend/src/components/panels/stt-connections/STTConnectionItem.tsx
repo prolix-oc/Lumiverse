@@ -7,11 +7,8 @@ import type { SttConnectionProfile, SttProviderInfo, CreateSttConnectionInput } 
 import STTConnectionForm from './STTConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import styles from '../connection-manager/ConnectionItem.module.css'
+import { PROVIDER_COLORS } from '@/components/shared/providerVisuals'
 import clsx from 'clsx'
-
-const PROVIDER_COLORS: Record<string, string> = {
-  openai: '#10a37f',
-}
 
 interface Props {
   profile: SttConnectionProfile

@@ -7,13 +7,8 @@ import type { TtsConnectionProfile, TtsProviderInfo, CreateTtsConnectionInput } 
 import TTSConnectionForm from './TTSConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import styles from '../connection-manager/ConnectionItem.module.css'
+import { PROVIDER_COLORS } from '@/components/shared/providerVisuals'
 import clsx from 'clsx'
-
-const PROVIDER_COLORS: Record<string, string> = {
-  openai_tts: '#10a37f',
-  elevenlabs: '#8b5cf6',
-  kokoro: '#f59e0b',
-}
 
 interface Props {
   profile: TtsConnectionProfile

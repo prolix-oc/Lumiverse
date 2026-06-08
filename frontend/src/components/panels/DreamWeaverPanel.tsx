@@ -13,7 +13,6 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useTranslation } from 'react-i18next'
-import { connectionsApi } from '@/api/connections'
 import { dreamWeaverApi, type DreamWeaverSession } from '@/api/dream-weaver'
 import { dreamWeaverToolingApi } from '@/api/dream-weaver-tooling'
 import { personasApi } from '@/api/personas'
@@ -29,13 +28,13 @@ import {
   TextInput,
 } from '@/components/shared/FormComponents'
 import SearchableSelect from '@/components/shared/SearchableSelect'
-import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { getPersonaAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { useStore } from '@/store'
 import { EventType } from '@/types/ws-events'
-import type { ConnectionProfile, Persona } from '@/types/api'
+import type { Persona } from '@/types/api'
 import { wsClient } from '@/ws/client'
 import {
   buildDreamWeaverSessionArchive,
@@ -74,13 +73,9 @@ export default function DreamWeaverPanel() {
   const [archiveQuery, setArchiveQuery] = useState('')
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('all')
   const [personas, setPersonas] = useState<Persona[]>([])
-  const [connections, setConnections] = useState<ConnectionProfile[]>([])
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null)
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null)
   const [selectedModel, setSelectedModel] = useState('')
-  const [connectionModels, setConnectionModels] = useState<string[]>([])
-  const [connectionModelLabels, setConnectionModelLabels] = useState<Record<string, string>>({})
-  const [connectionModelsLoading, setConnectionModelsLoading] = useState(false)
   const [expandedArchiveKeys, setExpandedArchiveKeys] = useState<Partial<Record<ArchiveKey, boolean>>>({})
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
@@ -99,8 +94,8 @@ export default function DreamWeaverPanel() {
     [activePersonaId, personas, selectedPersonaId],
   )
   const resolvedConnectionId = useMemo(
-    () => resolveSelectedConnectionId(selectedConnectionId ?? activeProfileId, connections),
-    [activeProfileId, connections, selectedConnectionId],
+    () => resolveSelectedConnectionId(selectedConnectionId ?? activeProfileId, storedProfiles),
+    [activeProfileId, storedProfiles, selectedConnectionId],
   )
 
   const filteredSessions = useMemo(() => {
@@ -121,7 +116,6 @@ export default function DreamWeaverPanel() {
   }), [sessions])
 
   useEffect(() => { setPersonas(storedPersonas) }, [storedPersonas])
-  useEffect(() => { setConnections(storedProfiles) }, [storedProfiles])
 
   useEffect(() => {
     setExpandedArchiveKeys((current) => {
@@ -148,12 +142,10 @@ export default function DreamWeaverPanel() {
   }, [t])
 
   const loadBootstrapOptions = useCallback(async () => {
-    const [personaResult, connectionResult] = await Promise.allSettled([
-      personasApi.list({ limit: 200 }),
-      connectionsApi.list({ limit: 200 }),
-    ])
-    if (personaResult.status === 'fulfilled') setPersonas(personaResult.value.data)
-    if (connectionResult.status === 'fulfilled') setConnections(connectionResult.value.data)
+    // Connections come from the store (loaded in full at app init); only
+    // personas still need a panel-local fetch here.
+    const personaResult = await personasApi.list({ limit: 200 }).catch(() => null)
+    if (personaResult) setPersonas(personaResult.data)
   }, [])
 
   useEffect(() => {
@@ -168,30 +160,6 @@ export default function DreamWeaverPanel() {
       }
     }).catch(() => {})
   }, [])
-
-  const fetchConnectionModels = useCallback(async () => {
-    if (!resolvedConnectionId) {
-      setConnectionModels([])
-      setConnectionModelLabels({})
-      return
-    }
-
-    setConnectionModelsLoading(true)
-    try {
-      const result = await connectionsApi.models(resolvedConnectionId)
-      setConnectionModels(result.models || [])
-      setConnectionModelLabels(result.model_labels || {})
-    } catch {
-      setConnectionModels([])
-      setConnectionModelLabels({})
-    } finally {
-      setConnectionModelsLoading(false)
-    }
-  }, [resolvedConnectionId])
-
-  useEffect(() => {
-    void fetchConnectionModels()
-  }, [fetchConnectionModels])
 
   const updateGenParam = useCallback(<K extends keyof DWGenParams>(key: K, value: DWGenParams[K]) => {
     setGenParams((prev) => {
@@ -301,11 +269,6 @@ export default function DreamWeaverPanel() {
     [personas],
   )
 
-  const connectionOptions = useMemo(
-    () => connections.map((c) => ({ value: c.id, label: c.name })),
-    [connections],
-  )
-
   return (
     <>
       <div className={styles.panel}>
@@ -351,7 +314,7 @@ export default function DreamWeaverPanel() {
             )}
           </div>
 
-          {/* Persona / Connection / Model */}
+          {/* Persona / Connection (+ model) */}
           <div className={styles.selectorsGrid}>
             <div className={styles.field}>
               <span className={styles.fieldLabel}>{t('create.persona')}</span>
@@ -369,35 +332,21 @@ export default function DreamWeaverPanel() {
             </div>
             <div className={styles.field}>
               <span className={styles.fieldLabel}>{t('create.connection')}</span>
-              <SearchableSelect
+              <ConnectionSelect
+                kind="llm"
                 value={resolvedConnectionId ?? ''}
-                onChange={(v) => {
-                  setSelectedConnectionId(v || null)
-                  setSelectedModel('')
-                }}
-                options={connectionOptions}
+                onChange={(v) => setSelectedConnectionId(v || null)}
+                withModel
+                modelValue={selectedModel}
+                onModelChange={setSelectedModel}
                 placeholder={t('create.connectionPlaceholder')}
                 searchPlaceholder={t('create.searchConnections')}
                 emptyMessage={t('create.noConnections')}
-                disabled={connections.length === 0}
                 ariaLabel={t('create.connection')}
+                modelPlaceholder={t('create.modelPlaceholder')}
+                modelEmptyMessage={t('create.noModelsManual')}
+                modelNoConnectionMessage={t('create.noConnection')}
                 portal
-              />
-            </div>
-            <div className={styles.field}>
-              <span className={styles.fieldLabel}>{t('create.model')}</span>
-              <ModelCombobox
-                value={selectedModel}
-                onChange={setSelectedModel}
-                models={connectionModels}
-                modelLabels={connectionModelLabels}
-                loading={connectionModelsLoading}
-                onRefresh={fetchConnectionModels}
-                autoRefreshOnFocus
-                refreshKey={resolvedConnectionId ?? ''}
-                placeholder={t('create.modelPlaceholder')}
-                emptyMessage={resolvedConnectionId ? t('create.noModelsManual') : t('create.noConnection')}
-                disabled={!resolvedConnectionId}
               />
             </div>
           </div>

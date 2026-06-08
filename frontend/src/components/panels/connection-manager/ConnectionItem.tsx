@@ -17,20 +17,8 @@ import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import styles from './ConnectionItem.module.css'
+import { PROVIDER_COLORS } from '@/components/shared/providerVisuals'
 import clsx from 'clsx'
-
-const PROVIDER_COLORS: Record<string, string> = {
-  openai: '#10a37f',
-  anthropic: '#d97757',
-  google: '#4285f4',
-  google_vertex: '#34a853',
-  openrouter: '#6366f1',
-  infermatic: '#8b5cf6',
-  nanogpt: '#10b981',
-  pollinations_text: '#f89c73',
-  pollinations: '#ff6b35',
-  custom: 'var(--lumiverse-text-dim)',
-}
 
 const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
   notation: 'compact',

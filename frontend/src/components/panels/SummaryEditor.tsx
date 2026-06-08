@@ -13,7 +13,7 @@ import NumberStepper from '@/components/shared/NumberStepper'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
 import { Button } from '@/components/shared/FormComponents'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -315,11 +315,6 @@ function SummarizationConfig() {
     setSummarization({ requestTimeoutMs: Math.max(5_000, Math.round(next)) })
   }, [setSummarization])
 
-  const connectionOptions = profiles.map((p) => ({
-    value: p.id,
-    label: `${p.name} (${p.provider})`,
-  }))
-
   return (
     <div className={styles.editor}>
       {/* Mode */}
@@ -404,15 +399,15 @@ function SummarizationConfig() {
       {/* Dedicated Connection Picker */}
       {mode !== 'disabled' && apiSource === 'dedicated' && (
         <Section icon={<Link2 size={16} />} title={t('summaryEditor.dedicatedConnection')} defaultOpen>
-          {connectionOptions.length === 0 ? (
+          {profiles.length === 0 ? (
             <p className={styles.desc}>{t('summaryEditor.noConnectionProfiles')}</p>
           ) : (
             <div className={styles.field}>
               <label className={styles.fieldLabel} htmlFor="sum-conn">{t('summaryEditor.connectionProfile')}</label>
-              <SearchableSelect
+              <ConnectionSelect
+                kind="llm"
                 value={summarization.dedicatedConnectionId || ''}
                 onChange={(val) => setSummarization({ dedicatedConnectionId: val || null })}
-                options={connectionOptions}
                 placeholder={t('summaryEditor.selectConnection')}
                 searchPlaceholder={t('summaryEditor.searchConnections')}
                 ariaLabel={t('summaryEditor.connectionProfile')}

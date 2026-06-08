@@ -94,6 +94,31 @@ interface StartupSettings {
 const LIST_LIMIT_CONNECTIONS = 100;
 const LIST_LIMIT_PACKS_PERSONAS = 200;
 const LIST_LIMIT_REGEX = 1000;
+
+/**
+ * Bootstrap must hand the client the COMPLETE connection list: every
+ * connection-selector in the app reads these from the store as its single
+ * source, so a truncated page silently hides connections (the summarize and
+ * chat pickers in particular). Page through to exhaustion — driven by the
+ * query's reported `total`, so it stays correct regardless of page size —
+ * rather than capping at a fixed limit.
+ */
+const CONNECTIONS_PAGE = 200;
+async function collectAll<T>(
+  fetchPage: (
+    pagination: { limit: number; offset: number },
+  ) => PaginatedResult<T> | Promise<PaginatedResult<T>>,
+): Promise<PaginatedResult<T>> {
+  const data: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchPage({ limit: CONNECTIONS_PAGE, offset });
+    data.push(...page.data);
+    offset += page.data.length;
+    if (page.data.length === 0 || offset >= page.total) break;
+  }
+  return { data, total: data.length, limit: data.length, offset: 0 };
+}
 const STARTUP_SETTINGS_KEYS = [
   "favorites",
   "filterTab",
@@ -215,7 +240,6 @@ export async function buildBootstrapPayload(
     }
   };
 
-  const pagLargeConnections = { limit: LIST_LIMIT_CONNECTIONS, offset: 0 };
   const pagLargeMisc = { limit: LIST_LIMIT_PACKS_PERSONAS, offset: 0 };
   const pagLargeRegex = { limit: LIST_LIMIT_REGEX, offset: 0 };
 
@@ -237,13 +261,13 @@ export async function buildBootstrapPayload(
     spindle,
   ] = await Promise.all([
     safe("startupSettings", () => getStartupSettings(userId), {} as StartupSettings),
-    safe("llm.connections", () => connectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<ConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
+    safe("llm.connections", () => collectAll((p) => connectionsSvc.listConnections(userId, p)), emptyPage<ConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
     safe("llm.providers", () => listLlmProviders(), [] as ProviderListEntry[]),
-    safe("stt.connections", () => sttConnectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<SttConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
+    safe("stt.connections", () => collectAll((p) => sttConnectionsSvc.listConnections(userId, p)), emptyPage<SttConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
     safe("stt.providers", () => listSttProviders(), [] as ProviderSummaryEntry[]),
-    safe("tts.connections", () => ttsConnectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<TtsConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
+    safe("tts.connections", () => collectAll((p) => ttsConnectionsSvc.listConnections(userId, p)), emptyPage<TtsConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
     safe("tts.providers", () => listTtsProviders(), [] as ProviderSummaryEntry[]),
-    safe("imageGen.connections", () => imageGenConnectionsSvc.listConnections(userId, pagLargeConnections), emptyPage<ImageGenConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
+    safe("imageGen.connections", () => collectAll((p) => imageGenConnectionsSvc.listConnections(userId, p)), emptyPage<ImageGenConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
     safe("imageGen.providers", () => listImageGenProviders(), [] as ProviderSummaryEntry[]),
     safe("packs", () => packsSvc.listPacks(userId, pagLargeMisc), emptyPage<Pack>(LIST_LIMIT_PACKS_PERSONAS)),
     safe("personas", () => personasSvc.listPersonas(userId, pagLargeMisc), emptyPage<Persona>(LIST_LIMIT_PACKS_PERSONAS)),
