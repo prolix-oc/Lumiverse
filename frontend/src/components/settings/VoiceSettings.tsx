@@ -5,6 +5,7 @@ import { useStore } from '@/store'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { ttsApi } from '@/api/tts'
+import { listAllConnections } from '@/api/listAllConnections'
 import { Toggle } from '@/components/shared/Toggle'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
@@ -30,13 +31,13 @@ export default function VoiceSettings() {
 
   // Load voice connections on mount
   useEffect(() => {
-    sttConnectionsApi.list({ limit: 100 }).then((res) => {
+    listAllConnections(sttConnectionsApi).then((res) => {
       setSttProfiles(res.data || [])
     }).catch(() => {})
     sttConnectionsApi.providers().then((res) => {
       setSttProviders(res.providers || [])
     }).catch(() => {})
-    ttsConnectionsApi.list().then((res) => {
+    listAllConnections(ttsConnectionsApi).then((res) => {
       setTtsProfiles(res.data || [])
     }).catch(() => {})
     ttsConnectionsApi.providers().then((res) => {

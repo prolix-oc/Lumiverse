@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { connectionsApi } from '@/api/connections'
+import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ConnectionForm from './connection-manager/ConnectionForm'
@@ -69,7 +70,7 @@ export default function ConnectionManager() {
       if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
-          connectionsApi.list({ limit: 100 }),
+          listAllConnections(connectionsApi),
           connectionsApi.providers(),
         ])
 

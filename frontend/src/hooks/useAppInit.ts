@@ -9,28 +9,7 @@ import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { personasApi } from '@/api/personas'
 import { packsApi } from '@/api/packs'
 import { resetUserScopedStoreState } from '@/store/user-scoped-reset'
-import type { PaginatedResult } from '@/types/api'
-
-/**
- * Page a connection list to exhaustion. The store-fed connection selectors
- * treat these lists as the complete set, so the fallback path must not stop at
- * a single page (mirrors the bootstrap service's collectAll). Driven by the
- * reported `total`, so it's correct regardless of server-side page clamping.
- */
-const CONNECTIONS_PAGE = 200
-async function listAllConnections<T>(
-  api: { list: (params: { limit: number; offset: number }) => Promise<PaginatedResult<T>> },
-): Promise<PaginatedResult<T>> {
-  const data: T[] = []
-  let offset = 0
-  for (;;) {
-    const page = await api.list({ limit: CONNECTIONS_PAGE, offset })
-    data.push(...page.data)
-    offset += page.data.length
-    if (page.data.length === 0 || offset >= page.total) break
-  }
-  return { data, total: data.length, limit: data.length, offset: 0 }
-}
+import { listAllConnections } from '@/api/listAllConnections'
 
 /**
  * Eagerly load shared data that multiple panels depend on.
