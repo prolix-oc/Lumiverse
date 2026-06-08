@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Volume2, Trash2, Edit3, Zap, Check, Loader, Star, Copy, MoreVertical } from 'lucide-react'
+import { Trash2, Edit3, Zap, Check, Loader, Star, Copy, MoreVertical } from 'lucide-react'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import type { TtsConnectionProfile, TtsProviderInfo, CreateTtsConnectionInput } from '@/types/api'
 import TTSConnectionForm from './TTSConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
-import { PROVIDER_COLORS } from '@/components/shared/providerVisuals'
 import clsx from 'clsx'
 
 interface Props {
@@ -56,8 +56,6 @@ export default function TTSConnectionItem({
     }
   }, [profile.id, onUpdate])
 
-  const providerColor = PROVIDER_COLORS[profile.provider] || 'var(--lumiverse-text-dim)'
-
   if (editing) {
     return (
       <div className={styles.item}>
@@ -75,15 +73,7 @@ export default function TTSConnectionItem({
     <div className={styles.item}>
       <div className={styles.itemRow}>
         <div className={styles.itemBtn} style={{ cursor: 'default' }}>
-          <div
-            className={styles.itemIcon}
-            style={{
-              background: `color-mix(in srgb, ${providerColor} 10%, transparent)`,
-              color: providerColor,
-            }}
-          >
-            <Volume2 size={16} />
-          </div>
+          <ProviderIcon kind="tts" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
           <div className={styles.itemInfo}>
             <span className={styles.itemName}>
               {profile.name}
