@@ -1005,6 +1005,8 @@ export default function ImageGenPanel() {
               placeholder={t('imageGenPanel.selectConnection')}
               searchPlaceholder={t('imageGenPanel.searchConnections')}
               ariaLabel={t('imageGenPanel.connection')}
+              clearable
+              clearLabel={t('imageGenPanel.noConnection')}
             />
             {activeConnection && (
               <div style={{ fontSize: 11, color: 'var(--lumiverse-text-muted)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

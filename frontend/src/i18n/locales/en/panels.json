@@ -742,6 +742,7 @@
     "connection": "Connection",
     "createConnectionFirst": "Create a connection in the Connections tab first",
     "selectConnection": "Select a connection...",
+    "noConnection": "No connection",
     "promptMode": "Prompt Mode",
     "mode": "Mode",
     "modeHint": "Scene analyzes chat into a scene prompt. Custom sends your prompt directly. Chat-aware custom uses your instructions to rewrite the current chat context into the final image prompt.",
