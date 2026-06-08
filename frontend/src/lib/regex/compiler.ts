@@ -1,6 +1,6 @@
 import type { RegexScript, RegexPlacement, RegexMacroMode, RegexPerformanceMetadata } from '@/types/regex'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
-import { getActiveDisplayResolver, isDisplayChatOwned } from '@/lib/spindle/display-resolver-registry'
+import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import type { SpindleDisplayContext } from 'lumiverse-spindle-types'
 
 interface DisplayRegexMatch {
@@ -329,26 +329,28 @@ export async function applyDisplayRegexAsync(
   context: ApplyDisplayRegexContext,
   resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
 ): Promise<DisplayRegexBackendResult> {
-  const resolver = getActiveDisplayResolver()
-  if (resolver && context.chatId && isDisplayChatOwned(context.chatId)) {
-    try {
-      const local = await resolver.applyScripts({
-        content,
-        scripts,
-        context: toSpindleDisplayContext(context),
-        ...(context.resolvedFindPatterns ? { resolvedFindPatterns: mapToRecord(context.resolvedFindPatterns) } : {}),
-        ...(context.resolvedReplacements ? { resolvedReplacements: mapToRecord(context.resolvedReplacements) } : {}),
-      })
-      if (local) {
-        return {
-          result: local.content,
-          ...(local.touchedVars ? { touchedVars: new Set(local.touchedVars) } : {}),
-          ...(typeof local.cacheable === 'boolean' ? { cacheable: local.cacheable } : {}),
+  if (context.chatId && isDisplayChatOwned(context.chatId)) {
+    const resolver = getDisplayResolverForChat(context.chatId)
+    if (resolver) {
+      try {
+        const local = await resolver.applyScripts({
+          content,
+          scripts,
+          context: toSpindleDisplayContext(context),
+          ...(context.resolvedFindPatterns ? { resolvedFindPatterns: mapToRecord(context.resolvedFindPatterns) } : {}),
+          ...(context.resolvedReplacements ? { resolvedReplacements: mapToRecord(context.resolvedReplacements) } : {}),
+        })
+        if (local) {
+          return {
+            result: local.content,
+            ...(local.touchedVars ? { touchedVars: new Set(local.touchedVars) } : {}),
+            ...(typeof local.cacheable === 'boolean' ? { cacheable: local.cacheable } : {}),
+          }
         }
+        console.error(`[display] resolver.applyScripts returned null for owned chat=${context.chatId}; showing raw (no backend fallback)`)
+      } catch (err) {
+        console.error(`[display] resolver.applyScripts threw for owned chat=${context.chatId}; showing raw (no backend fallback)`, err)
       }
-      console.error(`[display] resolver.applyScripts returned null for owned chat=${context.chatId}; showing raw (no backend fallback)`)
-    } catch (err) {
-      console.error(`[display] resolver.applyScripts threw for owned chat=${context.chatId}; showing raw (no backend fallback)`, err)
     }
     return { result: content, cacheable: false }
   }

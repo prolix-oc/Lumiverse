@@ -391,6 +391,7 @@ export default function ChatView() {
         if (cancelled) return
 
         setActiveChat(chatId, chat.character_id)
+        useStore.getState().setActiveChatDisplayOwner(chat.character_display_owner ?? null)
         setMessages(msgPage.data, msgPage.total)
 
         // If there's a pending council tools failure for this chat, show the retry modal now

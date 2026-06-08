@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useStore } from '@/store'
 import { applyDisplayRegex, applyDisplayRegexAsync } from '@/lib/regex/compiler'
 import { resolveMacrosBatch } from '@/api/macros'
-import { getActiveDisplayResolver, isDisplayChatOwned } from '@/lib/spindle/display-resolver-registry'
+import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
@@ -121,29 +121,31 @@ async function resolveTemplatesWithResolver(
   templates: Record<string, string>,
   ctx: { chatId?: string; characterId?: string; personaId?: string },
 ): Promise<{ resolved: Record<string, string>; touched_vars?: Record<string, string[]>; cacheable?: Record<string, boolean> }> {
-  const resolver = getActiveDisplayResolver()
-  if (resolver && ctx.chatId && isDisplayChatOwned(ctx.chatId)) {
-    try {
-      const local = await resolver.resolveTemplates({
-        templates,
-        context: {
-          chatId: ctx.chatId,
-          characterId: ctx.characterId,
-          personaId: ctx.personaId,
-          isUser: false,
-          depth: 0,
-        },
-      })
-      if (local) {
-        return {
-          resolved: local.resolved,
-          ...(local.touchedVars ? { touched_vars: local.touchedVars } : {}),
-          ...(local.cacheable ? { cacheable: local.cacheable } : {}),
+  if (ctx.chatId && isDisplayChatOwned(ctx.chatId)) {
+    const resolver = getDisplayResolverForChat(ctx.chatId)
+    if (resolver) {
+      try {
+        const local = await resolver.resolveTemplates({
+          templates,
+          context: {
+            chatId: ctx.chatId,
+            characterId: ctx.characterId,
+            personaId: ctx.personaId,
+            isUser: false,
+            depth: 0,
+          },
+        })
+        if (local) {
+          return {
+            resolved: local.resolved,
+            ...(local.touchedVars ? { touched_vars: local.touchedVars } : {}),
+            ...(local.cacheable ? { cacheable: local.cacheable } : {}),
+          }
         }
+        console.error(`[display] resolver.resolveTemplates returned null for owned chat=${ctx.chatId}; showing raw (no backend fallback)`)
+      } catch (err) {
+        console.error(`[display] resolver.resolveTemplates threw for owned chat=${ctx.chatId}; showing raw (no backend fallback)`, err)
       }
-      console.error(`[display] resolver.resolveTemplates returned null for owned chat=${ctx.chatId}; showing raw (no backend fallback)`)
-    } catch (err) {
-      console.error(`[display] resolver.resolveTemplates threw for owned chat=${ctx.chatId}; showing raw (no backend fallback)`, err)
     }
     return { resolved: { ...templates } }
   }
@@ -206,28 +208,31 @@ function enqueueDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): 
 }
 
 function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<string> {
-  const resolver = getActiveDisplayResolver()
-  if (resolver && isDisplayChatOwned(chatId)) {
-    return resolver
-      .resolveBody({
-        content: body.rawContent,
-        context: {
-          chatId,
-          isUser: body.role === 'user',
-          depth: 0,
-          messageId: body.messageId,
-          role: body.role,
-        },
-      })
-      .then((local) => {
-        if (local) return local.content
-        console.error(`[display] resolver.resolveBody returned null for owned chat=${chatId}; showing raw (no backend fallback)`)
-        return body.rawContent
-      })
-      .catch((err: unknown) => {
-        console.error(`[display] resolver.resolveBody threw for owned chat=${chatId}; showing raw (no backend fallback)`, err)
-        return body.rawContent
-      })
+  if (isDisplayChatOwned(chatId)) {
+    const resolver = getDisplayResolverForChat(chatId)
+    if (resolver) {
+      return resolver
+        .resolveBody({
+          content: body.rawContent,
+          context: {
+            chatId,
+            isUser: body.role === 'user',
+            depth: 0,
+            messageId: body.messageId,
+            role: body.role,
+          },
+        })
+        .then((local) => {
+          if (local) return local.content
+          console.error(`[display] resolver.resolveBody returned null for owned chat=${chatId}; showing raw (no backend fallback)`)
+          return body.rawContent
+        })
+        .catch((err: unknown) => {
+          console.error(`[display] resolver.resolveBody threw for owned chat=${chatId}; showing raw (no backend fallback)`, err)
+          return body.rawContent
+        })
+    }
+    return Promise.resolve(body.rawContent)
   }
   return enqueueDisplayPreprocess(chatId, body)
 }

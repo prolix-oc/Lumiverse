@@ -14,6 +14,7 @@ export interface ChatSlice {
    * write).
    */
   activeChatMetadata: Record<string, any> | null
+  activeChatDisplayOwner: string | null
   messages: Message[]
   isStreaming: boolean
   streamingContent: string
@@ -34,6 +35,7 @@ export interface ChatSlice {
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
   setActiveChatAvatarId: (imageId: string | null) => void
   setActiveChatMetadata: (metadata: Record<string, any> | null) => void
+  setActiveChatDisplayOwner: (owner: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void

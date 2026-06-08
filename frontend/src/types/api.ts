@@ -64,6 +64,7 @@ export interface Chat {
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
+  character_display_owner?: string | null;
 }
 
 export interface CreateChatInput {

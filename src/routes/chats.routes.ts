@@ -5,6 +5,7 @@ import * as charactersSvc from "../services/characters.service";
 import * as settingsSvc from "../services/settings.service";
 import * as worldBooksSvc from "../services/world-books.service";
 import * as regexScriptsSvc from "../services/regex-scripts.service";
+import * as managerSvc from "../spindle/manager.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import { parsePagination } from "../services/pagination";
 import { RECENT_CHATS_DEFAULT_LIMIT } from "../types/pagination";
@@ -251,9 +252,13 @@ app.get("/:id", (c) => {
   const userId = c.get("userId");
   const chat = svc.getChat(userId, c.req.param("id"));
   if (!chat) return c.json({ error: "Not found" }, 404);
-  if (c.req.query("messages") === "false") return c.json(chat);
+  const ownerCandidates = managerSvc.getEnabledExtensionIdentifiers();
+  const character_display_owner = chat.character_id
+    ? charactersSvc.getCharacterDisplayOwner(userId, chat.character_id, ownerCandidates)
+    : null;
+  if (c.req.query("messages") === "false") return c.json({ ...chat, character_display_owner });
   const messages = svc.getMessages(userId, chat.id);
-  return c.json({ ...chat, messages });
+  return c.json({ ...chat, character_display_owner, messages });
 });
 
 app.put("/:id", async (c) => {

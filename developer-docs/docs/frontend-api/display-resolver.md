@@ -9,7 +9,6 @@ export function setup(ctx: SpindleFrontendContext) {
   if (!ctx.display) return // host build without the display hook
 
   const unregister = ctx.display.registerResolver(myResolver)
-  ctx.display.setOwnedCharacters(['char-id-1', 'char-id-2'])
 
   return () => unregister()
 }
@@ -17,13 +16,18 @@ export function setup(ctx: SpindleFrontendContext) {
 
 ## Ownership
 
-The host consults your resolver only for chats it owns, and uses its own backend resolution for everything else. You declare ownership by publishing the character IDs you handle:
+The host consults your resolver only for chats it owns, and uses its own backend resolution for everything else. You own a chat by setting `display_owner: true` in your own namespaced character data, alongside whatever else you store there:
 
 ```ts
-ctx.display.setOwnedCharacters(myCharacterIds)
+// backend, when you write per-character state
+await characters.update(characterId, {
+  extensions: { my_extension: { ...myData, display_owner: true } },
+}, userId)
 ```
 
-A chat is owned when its active character is in that set. Call this whenever your owned set changes (on startup, after your card list loads). The host re-reads it synchronously at render time, so vanilla chats and chats from other extensions are never affected.
+A chat is owned when its character's `extensions["my_extension"].display_owner` is `true` and your extension is enabled. Storing data under your namespace without the flag does not claim display, so set it only on characters you actually render. To stop owning a character, set it `false`.
+
+Vanilla chats, and chats whose character only carries other extensions' data, are never routed to you.
 
 ## `ctx.display.registerResolver(resolver)`
 
@@ -48,7 +52,9 @@ const myResolver: SpindleDisplayResolver = {
 | `applyScripts` | Run the chat's display regex scripts over the content |
 | `ready(chatId)` | Return whether your resolver can handle this chat right now |
 
-Return `null` from any resolve method to let the host resolve that one with its own path.
+Return `null` from any resolve method to let the host resolve that one with its own path (only for chats you do not own; for owned chats a `null` return shows raw, never a backend fallback).
+
+For a chat you own, the host calls a resolve method only once `ready(chatId)` returns `true`. While it is `false` (your bundle still loading, snapshot not yet arrived) the host shows raw content and does not fall back to backend resolution. Return `true` as soon as you can resolve the chat, and call `invalidate` when your readiness or state changes so the host re-renders.
 
 ### Context
 

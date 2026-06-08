@@ -2,45 +2,41 @@ import type { SpindleDisplayResolver } from 'lumiverse-spindle-types'
 import { useStore } from '@/store'
 
 interface RegisteredDisplayResolver {
-  extensionId: string
+  identifier: string
   resolver: SpindleDisplayResolver
-  ownedCharacterIds: Set<string>
 }
 
 let active: RegisteredDisplayResolver | null = null
 
-export function setOwnedDisplayCharacters(extensionId: string, characterIds: string[]): void {
-  if (active && active.extensionId === extensionId) {
-    active.ownedCharacterIds = new Set(characterIds)
-  }
+export function getDisplayOwnerIdentifier(chatId: string): string | null {
+  const st = useStore.getState()
+  if (chatId !== st.activeChatId) return null
+  const owner = st.activeChatDisplayOwner
+  return typeof owner === 'string' && owner.length > 0 ? owner : null
 }
 
 export function isDisplayChatOwned(chatId: string): boolean {
-  if (!active) return false
-  const st = useStore.getState()
-  if (chatId !== st.activeChatId) return false
-  return st.activeCharacterId != null && active.ownedCharacterIds.has(st.activeCharacterId)
+  return getDisplayOwnerIdentifier(chatId) !== null
+}
+
+export function getDisplayResolverForChat(chatId: string): SpindleDisplayResolver | null {
+  const owner = getDisplayOwnerIdentifier(chatId)
+  if (!owner || !active || active.identifier !== owner) return null
+  if (!active.resolver.ready(chatId)) return null
+  return active.resolver
 }
 
 export function registerDisplayResolver(
-  extensionId: string,
+  identifier: string,
   resolver: SpindleDisplayResolver,
 ): () => void {
-  const entry: RegisteredDisplayResolver = {
-    extensionId,
-    resolver,
-    ownedCharacterIds: active?.extensionId === extensionId ? active.ownedCharacterIds : new Set(),
-  }
+  const entry: RegisteredDisplayResolver = { identifier, resolver }
   active = entry
   return () => {
     if (active === entry) active = null
   }
 }
 
-export function unregisterDisplayResolver(extensionId: string): void {
-  if (active && active.extensionId === extensionId) active = null
-}
-
-export function getActiveDisplayResolver(): SpindleDisplayResolver | null {
-  return active ? active.resolver : null
+export function unregisterDisplayResolver(identifier: string): void {
+  if (active && active.identifier === identifier) active = null
 }
