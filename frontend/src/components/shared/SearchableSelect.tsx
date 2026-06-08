@@ -107,7 +107,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeIdx, setActiveIdx] = useState(0)
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
 
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -237,22 +237,33 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     const layoutWidth = Math.max(r.width / uiScale, minWidth ?? 240)
     const renderedWidth = layoutWidth * uiScale
     let renderedLeft = align === 'right' ? r.right - renderedWidth : r.left
-    const renderedTop = r.bottom + 4
     // Clamp horizontally so the popover stays on screen at any UI scale.
     const vw = window.innerWidth
+    const vh = window.innerHeight
     const margin = 8
+    const gap = 4
     if (renderedLeft + renderedWidth > vw - margin) {
       renderedLeft = vw - margin - renderedWidth
     }
     if (renderedLeft < margin) {
       renderedLeft = margin
     }
+    // Vertical: prefer opening below the trigger, but flip above when there's
+    // more room there, and cap the height to the available space so the popover
+    // never runs past the viewport / a short panel (`maxHeight` is the ceiling).
+    const desired = maxHeight * uiScale
+    const spaceBelow = vh - r.bottom - margin - gap
+    const spaceAbove = r.top - margin - gap
+    const placeAbove = spaceBelow < desired && spaceAbove > spaceBelow
+    const renderedMaxHeight = Math.max(120, Math.min(desired, placeAbove ? spaceAbove : spaceBelow))
+    const renderedTop = placeAbove ? r.top - gap - renderedMaxHeight : r.bottom + gap
     setPos({
       top: renderedTop / uiScale,
       left: renderedLeft / uiScale,
       width: layoutWidth,
+      maxHeight: renderedMaxHeight / uiScale,
     })
-  }, [align, minWidth])
+  }, [align, minWidth, maxHeight])
 
   // Reposition rather than close on scroll/resize: focusing the search input
   // (mobile keyboard opens → viewport resize) or scrollIntoView inside the
@@ -371,7 +382,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       role="listbox"
       aria-multiselectable={isMulti || undefined}
       style={{
-        maxHeight,
+        maxHeight: portal && pos ? pos.maxHeight : maxHeight,
         ...(portal && pos
           ? { top: pos.top, left: pos.left, width: pos.width }
           : {}),
