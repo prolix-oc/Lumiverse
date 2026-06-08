@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '@/store'
-import { connectionsApi } from '@/api/connections'
-import { imageGenConnectionsApi } from '@/api/image-gen-connections'
-import { ttsConnectionsApi } from '@/api/tts-connections'
-import { sttConnectionsApi } from '@/api/stt-connections'
+import { fetchConnectionModels, type ConnectionKind } from '@/api/connectionModels'
 import ProviderIcon from './ProviderIcon'
 import SearchableSelect, { type SearchableSelectOption } from './SearchableSelect'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import styles from './ConnectionSelect.module.css'
 
-export type ConnectionKind = 'llm' | 'imageGen' | 'tts' | 'stt'
+export type { ConnectionKind }
 
 /** The fields every connection-profile variant shares; enough to render a row. */
 interface ConnectionLike {
@@ -49,25 +46,6 @@ interface ConnectionSelectProps {
   modelEmptyMessage?: string
   modelNoConnectionMessage?: string
   modelAppearance?: 'compact' | 'standard' | 'editor'
-}
-
-/** Normalise the per-kind models endpoint into the shape ModelCombobox wants. */
-async function fetchModels(
-  kind: ConnectionKind,
-  id: string,
-): Promise<{ models: string[]; labels: Record<string, string> }> {
-  if (kind === 'llm') {
-    const r = await connectionsApi.models(id)
-    return { models: r.models || [], labels: r.model_labels || {} }
-  }
-  // imageGen / tts / stt all return Array<{ id, label }>.
-  const api =
-    kind === 'imageGen' ? imageGenConnectionsApi : kind === 'tts' ? ttsConnectionsApi : sttConnectionsApi
-  const r = await api.models(id)
-  const models = (r.models || []).map((m) => m.id)
-  const labels: Record<string, string> = {}
-  for (const m of r.models || []) labels[m.id] = m.label
-  return { models, labels }
 }
 
 /**
@@ -131,7 +109,7 @@ export default function ConnectionSelect({
     }
     setModelsLoading(true)
     try {
-      const result = await fetchModels(kind, value)
+      const result = await fetchConnectionModels(kind, value)
       setModels(result.models)
       setModelLabels(result.labels)
     } catch {

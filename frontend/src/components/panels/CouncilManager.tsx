@@ -4,7 +4,7 @@ import { Link2, Settings, Users, Plus, Package, Power, AlertTriangle, Cpu, Info,
 import { IconAdjustments, IconAdjustmentsHorizontal } from '@tabler/icons-react'
 import clsx from 'clsx'
 import { useStore } from '@/store'
-import { connectionsApi } from '@/api/connections'
+import { fetchConnectionModels } from '@/api/connectionModels'
 import { Toggle } from '@/components/shared/Toggle'
 import { Button, EditorSection, FormField } from '@/components/shared/FormComponents'
 import NumberStepper from '@/components/shared/NumberStepper'
@@ -141,9 +141,9 @@ export default function CouncilManager() {
 
     setSidecarModelsLoading(true)
     try {
-      const result = await connectionsApi.models(councilProfiles.sidecarConfig.connectionProfileId)
-      setSidecarModels(result.models || [])
-      setSidecarModelLabels(result.model_labels || {})
+      const result = await fetchConnectionModels('llm', councilProfiles.sidecarConfig.connectionProfileId)
+      setSidecarModels(result.models)
+      setSidecarModelLabels(result.labels)
     } catch {
       setSidecarModels([])
       setSidecarModelLabels({})

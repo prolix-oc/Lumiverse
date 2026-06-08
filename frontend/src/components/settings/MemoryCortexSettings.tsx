@@ -24,7 +24,7 @@ import { Toggle } from "@/components/shared/Toggle";
 import NumericInput from "@/components/shared/NumericInput";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexConfig, type CortexUsageStats } from "@/api/memory-cortex";
-import { connectionsApi } from "@/api/connections";
+import { fetchConnectionModels } from "@/api/connectionModels";
 import ModelCombobox from "@/components/panels/connection-manager/ModelCombobox";
 import ConnectionSelect from "@/components/shared/ConnectionSelect";
 import { getReasoningBindingSummary } from "@/lib/reasoning-binding";
@@ -158,9 +158,9 @@ export default function MemoryCortexSettings() {
     }
     setModelsLoading(true);
     try {
-      const result = await connectionsApi.models(connectionId);
-      setSidecarModels(result.models || []);
-      setSidecarModelLabels(result.model_labels || {});
+      const result = await fetchConnectionModels('llm', connectionId);
+      setSidecarModels(result.models);
+      setSidecarModelLabels(result.labels);
     } catch {
       setSidecarModels([]);
       setSidecarModelLabels({});

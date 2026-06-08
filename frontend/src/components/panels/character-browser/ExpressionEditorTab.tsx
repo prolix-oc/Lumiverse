@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Plus, Upload, Image as ImageIcon, Ghost, Trash2, Users } from 'lucide-react'
 import { expressionsApi } from '@/api/expressions'
 import { characterGalleryApi } from '@/api/character-gallery'
-import { connectionsApi } from '@/api/connections'
+import { fetchConnectionModels } from '@/api/connectionModels'
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { useStore } from '@/store'
@@ -93,9 +93,9 @@ export default function ExpressionEditorTab({ characterId }: Props) {
     }
     setExprModelsLoading(true)
     try {
-      const result = await connectionsApi.models(detection.connectionProfileId)
-      setExprModels(result.models || [])
-      setExprModelLabels(result.model_labels || {})
+      const result = await fetchConnectionModels('llm', detection.connectionProfileId)
+      setExprModels(result.models)
+      setExprModelLabels(result.labels)
     } catch {
       setExprModels([])
       setExprModelLabels({})
