@@ -146,30 +146,30 @@ export default function ConnectionSelect({
     void loadModels()
   }, [loadModels])
 
-  // Switching connections replaces the model with the new connection's
-  // configured default (the old model may not exist on the new connection).
-  const handleConnectionChange = useCallback(
-    (next: string) => {
-      onChange(next)
-      if (withModel && next !== value) {
-        const profile = profiles.find((p) => p.id === next) || null
-        onModelChange?.(profile?.model || '')
-      }
-    },
-    [onChange, withModel, value, profiles, onModelChange],
-  )
+  // The dropdown just reports the new connection id; keeping the paired model in
+  // sync is the reconcile effect's job below, so it covers BOTH a dropdown pick
+  // and a programmatic `value` change (e.g. a panel bound to the active
+  // connection that gets switched out from under it).
+  const handleConnectionChange = useCallback((next: string) => onChange(next), [onChange])
 
-  // Seed the model from the connection's default when a connection is already
-  // selected on mount but no model is set yet (e.g. a panel that defaults to the
-  // active connection). Runs once, so the user can still clear the field after.
-  const seededModelRef = useRef(false)
+  // Reconcile the paired model whenever the *connection* changes:
+  //  - first reconcile (mount): seed an empty model from the connection's default,
+  //    but leave an already-set model alone (e.g. a restored saved value);
+  //  - any later connection change: reset the model to the new connection's
+  //    default (the old model may not exist on it).
+  // `prevConnRef` tracks the last reconciled connection, so editing or clearing
+  // the model on its own never triggers a reseed.
+  const prevConnRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!withModel || seededModelRef.current) return
-    if (!value || profiles.length === 0) return
-    seededModelRef.current = true
-    if (!modelValue) {
-      const profile = profiles.find((p) => p.id === value) || null
-      if (profile?.model) onModelChange?.(profile.model)
+    if (!withModel || profiles.length === 0) return
+    const prev = prevConnRef.current
+    if (prev === value) return
+    prevConnRef.current = value
+    const profile = profiles.find((p) => p.id === value) || null
+    if (prev === null) {
+      if (value && !modelValue && profile?.model) onModelChange?.(profile.model)
+    } else {
+      onModelChange?.(profile?.model || '')
     }
   }, [withModel, value, profiles, modelValue, onModelChange])
 
