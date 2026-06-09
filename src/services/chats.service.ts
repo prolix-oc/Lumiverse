@@ -1564,6 +1564,60 @@ export function patchMessageExtra(userId: string, id: string, extra: Record<stri
     .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
 }
 
+/** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
+const SWIPE_SCOPED_EXTRA_KEYS = [
+  "reasoning",
+  "reasoningDuration",
+  "tokenCount",
+  "generationMetrics",
+  "usage",
+] as const;
+
+/**
+ * Merge swipe-scoped extra fields (reasoning, usage, token metrics, …) into a
+ * SPECIFIC swipe, independent of which swipe is currently displayed. A generation
+ * can finish while the user is viewing a different swipe (swipe navigation during
+ * streaming), so keying these writes off the live `swipe_id` — as
+ * `patchMessageExtra` does — would land the result on the wrong swipe and clobber
+ * that swipe's own reasoning/metrics.
+ *
+ * Only the provided fields are written; other swipes and other extra fields are
+ * preserved. Falls back to the displayed swipe when `swipeId` is out of range.
+ */
+export function setSwipeScopedExtra(
+  userId: string,
+  id: string,
+  swipeId: number | undefined,
+  fields: Record<string, unknown>,
+): void {
+  const existing = getMessage(userId, id);
+  if (!existing) return;
+  const targetSwipeId =
+    typeof swipeId === "number" &&
+    Number.isInteger(swipeId) &&
+    swipeId >= 0 &&
+    swipeId < existing.swipes.length
+      ? swipeId
+      : existing.swipe_id;
+
+  // `existing.extra` is projected for the *displayed* swipe, so its top-level
+  // scoped fields belong to that swipe. Drop them before re-normalizing against
+  // the target swipe; the canonical `*BySwipe[]` arrays (also present) are kept,
+  // which preserves every other swipe's data.
+  const base: Record<string, unknown> = { ...(existing.extra || {}) };
+  for (const key of SWIPE_SCOPED_EXTRA_KEYS) delete base[key];
+  for (const [key, value] of Object.entries(fields)) base[key] = value;
+
+  const normalizedExtra = normalizeStoredMessageExtra(
+    base,
+    existing.swipes.length,
+    targetSwipeId,
+  );
+  getDb()
+    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
+}
+
 export function updateMessage(userId: string, id: string, input: UpdateMessageInput): Message | null {
   const existing = getMessage(userId, id);
   if (!existing) return null;
@@ -1592,11 +1646,23 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     }
   }
 
+  // Which swipe slot receives `content`. Defaults to the active swipe; a caller
+  // can target a different slot (e.g. the generation pipeline finalizing a swipe
+  // the user navigated away from) without moving swipe_id.
+  const contentSwipeId =
+    patchedContent &&
+    input.contentSwipeId !== undefined &&
+    Number.isInteger(input.contentSwipeId) &&
+    input.contentSwipeId >= 0 &&
+    input.contentSwipeId < newSwipes.length
+      ? input.contentSwipeId
+      : newSwipeId;
+
   if (patchedContent) {
     if (!Number.isFinite(newSwipeId) || newSwipeId < 0 || newSwipeId >= newSwipes.length) {
       throw new Error("updateMessage: swipe_id out of range");
     }
-    newSwipes[newSwipeId] = input.content!;
+    newSwipes[contentSwipeId] = input.content!;
   }
 
   if (newSwipes.length === 0) throw new Error("updateMessage: swipes must be non-empty");
@@ -1607,8 +1673,11 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     throw new Error("updateMessage: swipes and swipe_dates length mismatch");
   }
 
+  // The `content` column mirrors the ACTIVE swipe — which is `input.content` only
+  // when the write targeted the active slot; otherwise it's the active slot's
+  // (unchanged) text.
   const newContent = patchedContent
-    ? input.content!
+    ? newSwipes[newSwipeId]
     : swipeShapeTouched
       ? newSwipes[newSwipeId]
       : undefined;
@@ -1665,7 +1734,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   // even without a `content` patch — check the resolved active content
   // against the prior active content to catch that case.
   const activeContentChanged =
-    patchedContent ||
+    (patchedContent && contentSwipeId === newSwipeId) ||
     (swipeShapeTouched && newSwipes[newSwipeId] !== existing.swipes[existing.swipe_id]);
   if (activeContentChanged && input.skipChunkRebuild !== true) {
     try {

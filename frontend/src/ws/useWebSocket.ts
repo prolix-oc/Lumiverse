@@ -344,6 +344,11 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.updateMessage(payload.message.id, payload.message)
+          // Deleting a swipe shifts indices, so a pending "new swipe" pointer is
+          // no longer trustworthy — drop it.
+          if (payload.action === 'deleted' && payload.message?.id) {
+            state.clearUnseenSwipe(payload.message.id)
+          }
           if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
         }
       }),
@@ -383,6 +388,12 @@ export function useWebSocket() {
             // called without a targetMessageId (e.g. regeneration flow).
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+          // Anchor the streaming buffer to its swipe so the user can navigate to
+          // other swipes mid-generation without smearing live tokens onto them.
+          state.setStreamingSwipeId(payload.targetSwipeId ?? null)
+          // A new generation supersedes any stale "new swipe ready" badge on this
+          // message — the upcoming completion will re-flag the fresh swipe if needed.
+          if (payload.targetMessageId) state.clearUnseenSwipe(payload.targetMessageId)
         }
         // Track as a chat head so it appears if user navigates away
         state.addChatHead({
@@ -405,6 +416,9 @@ export function useWebSocket() {
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+          // Refine (never clobber) the swipe anchor — GENERATION_STARTED is the
+          // authoritative source; only overwrite if this event actually carries it.
+          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId)
 
           // Surface context clipping once the final assembly metadata is ready.
           const clip = payload.contextClipStats
@@ -600,6 +614,11 @@ export function useWebSocket() {
             }
 
             const optimisticMessageId = state.regeneratingMessageId
+            // Captured before endStreaming clears it: the swipe this generation
+            // filled. If the user chose to stay on a different swipe, we flag the
+            // fresh one as unseen so a "new swipe ready" badge points them to it.
+            const completedSwipeId = state.streamingSwipeId
+            const completedMessageId = payload.messageId
 
             // Reconcile before clearing streaming. Clearing first collapses long
             // streamed rows back to their blank/original content for a frame; on
@@ -613,6 +632,14 @@ export function useWebSocket() {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
+                if (completedSwipeId != null && completedMessageId) {
+                  const msg = res.data.find((m) => m.id === completedMessageId)
+                  // Only badge when there's actually another swipe to navigate to
+                  // and the user isn't already viewing the freshly-generated one.
+                  if (msg && msg.swipes.length > 1 && completedSwipeId < msg.swipes.length && msg.swipe_id !== completedSwipeId) {
+                    s.setUnseenSwipe(completedMessageId, completedSwipeId)
+                  }
+                }
                 s.endStreaming()
               }
             }).catch(() => {

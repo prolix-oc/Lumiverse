@@ -26,6 +26,9 @@ export interface PooledTokensEntry {
   tokenSeq: number;
   generationType: GenerationType;
   targetMessageId?: string;
+  /** Index of the swipe being streamed into, so recovering clients can gate the
+   *  streaming buffer to the right swipe even after navigating away. */
+  targetSwipeId?: number;
   characterName: string;
   characterId?: string;
   model: string;
@@ -95,6 +98,7 @@ export function createPoolEntry(opts: {
   characterId?: string;
   model: string;
   targetMessageId?: string;
+  targetSwipeId?: number;
 }): void {
   const entry: PooledTokensEntry = {
     generationId: opts.generationId,
@@ -105,6 +109,7 @@ export function createPoolEntry(opts: {
     tokenSeq: 0,
     generationType: opts.generationType,
     targetMessageId: opts.targetMessageId,
+    targetSwipeId: opts.targetSwipeId,
     characterName: opts.characterName,
     characterId: opts.characterId,
     model: opts.model,

@@ -108,9 +108,11 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     streamingError: null,
     activeGenerationId: null,
     regeneratingMessageId: null,
+    streamingSwipeId: null,
     streamingGenerationType: null,
     lastCompletedGenerationType: null,
     lastPooledSeq: null,
+    unseenSwipes: {},
     totalChatLength: 0,
     impersonateDraftContent: null,
 
@@ -130,8 +132,10 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: null,
         regeneratingMessageId: null,
+        streamingSwipeId: null,
         streamingGenerationType: null,
     lastPooledSeq: null,
+        unseenSwipes: {},
         messageSelectMode: false,
         selectedMessageIds: [],
       })
@@ -203,7 +207,10 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         }
         if (idx === -1) return { messages: state.messages }
         const messages = state.messages.filter((_m, i) => i !== idx)
-        return { messages, totalChatLength: Math.max(0, state.totalChatLength - 1) }
+        const unseenSwipes = id in state.unseenSwipes
+          ? Object.fromEntries(Object.entries(state.unseenSwipes).filter(([k]) => k !== id))
+          : state.unseenSwipes
+        return { messages, totalChatLength: Math.max(0, state.totalChatLength - 1), unseenSwipes }
       }),
 
     beginStreaming: (regeneratingMessageId, generationType) => {
@@ -236,6 +243,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: null,
         regeneratingMessageId: nextRegeneratingMessageId,
+        streamingSwipeId: null,
         streamingGenerationType: generationType ?? null,
         // Clear any stale recovery watermark from a prior generation so this
         // fresh stream's opening tokens (seq 1..N) are not dropped as dupes.
@@ -301,10 +309,31 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: generationId,
         regeneratingMessageId: nextRegeneratingMessageId,
+        streamingSwipeId: null,
         streamingGenerationType: resolvedGenerationType ?? null,
         // Clear any stale recovery watermark from a prior generation. Recovery
         // re-sets it via setLastPooledSeq() immediately after this call.
         lastPooledSeq: null,
+      })
+    },
+
+    setStreamingSwipeId: (swipeId) => {
+      set({ streamingSwipeId: swipeId })
+    },
+
+    setUnseenSwipe: (messageId, swipeId) => {
+      set((state) => {
+        if (state.unseenSwipes[messageId] === swipeId) return state
+        return { unseenSwipes: { ...state.unseenSwipes, [messageId]: swipeId } }
+      })
+    },
+
+    clearUnseenSwipe: (messageId) => {
+      set((state) => {
+        if (!(messageId in state.unseenSwipes)) return state
+        const unseenSwipes = { ...state.unseenSwipes }
+        delete unseenSwipes[messageId]
+        return { unseenSwipes }
       })
     },
 
@@ -361,7 +390,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       reasoningStartedAt = 0
       // Preserve the generation type before clearing — auto-summarization
       // needs to know what kind of generation just finished.
-      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, lastCompletedGenerationType: get().streamingGenerationType, streamingGenerationType: null, lastPooledSeq: null })
+      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingSwipeId: null, lastCompletedGenerationType: get().streamingGenerationType, streamingGenerationType: null, lastPooledSeq: null })
     },
 
     stopStreaming: () => {
@@ -388,6 +417,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           streamingError: null,
           activeGenerationId: null,
           regeneratingMessageId: null,
+          streamingSwipeId: null,
           streamingGenerationType: null,
           lastPooledSeq: null,
         }
@@ -418,6 +448,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           streamingReasoningStartedAt: null,
           activeGenerationId: null,
           regeneratingMessageId: null,
+          streamingSwipeId: null,
           streamingGenerationType: null,
           lastPooledSeq: null,
         }

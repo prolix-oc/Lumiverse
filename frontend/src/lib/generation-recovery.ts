@@ -38,6 +38,7 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
     genStatus.councilToolsFailure
   ) {
     latest.startStreaming(genStatus.generationId, genStatus.targetMessageId)
+    latest.setStreamingSwipeId(genStatus.targetSwipeId ?? null)
     latest.setCouncilExecuting(false)
 
     const existingFailure = latest.councilToolsFailure
@@ -54,6 +55,7 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
 
   if (genStatus.active && genStatus.generationId && (genStatus.status === 'streaming' || genStatus.status === 'reasoning')) {
     latest.startStreaming(genStatus.generationId, genStatus.targetMessageId, getLocalStreamingType(genStatus.generationType))
+    latest.setStreamingSwipeId(genStatus.targetSwipeId ?? null)
     if (genStatus.content) latest.replaceStreamContent(genStatus.content)
     if (genStatus.reasoning) latest.replaceStreamReasoning(genStatus.reasoning)
     if (genStatus.tokenSeq != null) latest.setLastPooledSeq(genStatus.tokenSeq)
@@ -67,6 +69,7 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
 
   if (genStatus.active && genStatus.generationId) {
     latest.startStreaming(genStatus.generationId, genStatus.targetMessageId, getLocalStreamingType(genStatus.generationType))
+    latest.setStreamingSwipeId(genStatus.targetSwipeId ?? null)
     return
   }
 

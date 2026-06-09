@@ -270,6 +270,8 @@ export interface GenerationStartedPayload {
   generationId: string
   chatId: string
   targetMessageId?: string
+  /** Swipe index the generation streams into (for swipe-gated streaming display). */
+  targetSwipeId?: number
   characterId?: string
   characterName?: string
   contextClipStats?: ContextClipStats

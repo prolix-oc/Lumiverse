@@ -171,6 +171,11 @@ interface GenerationLifecycle {
   targetMessageId?: string;
   /** For regenerate: index of the blank swipe to fill with generated content */
   targetSwipeIdx?: number;
+  /** Index of the swipe being streamed into, surfaced to clients (GENERATION_STARTED /
+   *  IN_PROGRESS / status) so they can gate the streaming buffer to that swipe and
+   *  let the user navigate other swipes mid-generation. Set for all generation types
+   *  (regenerate = blank swipe, normal = 0, continue = current swipe). */
+  streamingSwipeId?: number;
   /** For sidecar council: pre-created empty message to fill with generated content */
   stagedMessageId?: string;
   /** For continue: append to this message's content */
@@ -1657,6 +1662,12 @@ export async function startGeneration(
     }
 
     let excludeMessageId: string | undefined;
+    // Index of the swipe this generation streams into. Sent to the frontend so
+    // it can gate the streaming buffer to the correct swipe — letting the user
+    // navigate to other (already-saved) swipes mid-generation without smearing
+    // live tokens onto them. Distinct from lifecycle.targetSwipeIdx (which also
+    // routes the completion write) so we don't perturb normal/continue saving.
+    let targetSwipeId: number | undefined;
 
     if (genType === "regenerate") {
       const targetMsg = targetAssistantMessage;
@@ -1667,6 +1678,7 @@ export async function startGeneration(
         // before council/assembly begins (MESSAGE_SWIPED event fires now).
         const withBlank = chatsSvc.addSwipe(input.userId, targetMsg.id, "");
         lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
+        targetSwipeId = lifecycle.targetSwipeIdx;
         // Clear stale generation metrics from the previous swipe so the pill
         // doesn't display outdated values while the new generation runs.
         // Uses patchMessageExtra to avoid triggering chunk rebuilds / WS events.
@@ -1695,6 +1707,8 @@ export async function startGeneration(
       if (lastMsg) {
         lifecycle.continueMessageId = lastMsg.id;
         lifecycle.continueOriginalContent = lastMsg.content;
+        // Continue appends to the currently-displayed swipe.
+        targetSwipeId = lastMsg.swipe_id;
         // Resolve continuePostfix from the preset's completion settings so it can
         // be inserted between original content and generated text when saving.
         const cpPresetId = input.preset_id || connection.preset_id;
@@ -1726,7 +1740,13 @@ export async function startGeneration(
       stagedMessageId = stagedMsg.id;
       lifecycle.targetMessageId = stagedMsg.id;
       excludeMessageId = stagedMsg.id;
+      // A fresh message has a single swipe at index 0.
+      targetSwipeId = 0;
     }
+
+    // Carry the streaming swipe index into runGeneration so the GENERATION_IN_PROGRESS
+    // emit (different scope) can surface it too.
+    lifecycle.streamingSwipeId = targetSwipeId;
 
     // Register pool entry for recovery — at this point we have all the metadata
     pool.createPoolEntry({
@@ -1738,6 +1758,7 @@ export async function startGeneration(
       characterId: targetCharId,
       model: connection.model,
       targetMessageId: lifecycle.targetMessageId,
+      targetSwipeId,
     });
 
     // Emit GENERATION_STARTED immediately so the frontend can show a chat head
@@ -1751,6 +1772,7 @@ export async function startGeneration(
         chatId: input.chat_id,
         model: connection.model,
         targetMessageId: lifecycle.targetMessageId,
+        targetSwipeId,
         characterId: targetCharId,
         characterName,
         generationType: lifecycle.generationType,
@@ -2837,6 +2859,7 @@ async function runGeneration(
       model,
       breakdown: lifecycle.breakdown,
       targetMessageId: lifecycle.targetMessageId,
+      targetSwipeId: lifecycle.streamingSwipeId,
       characterId: lifecycle.targetCharacterId,
       characterName: lifecycle.characterName,
       contextClipStats: lifecycle.contextClipStats,
@@ -2946,12 +2969,14 @@ async function runGeneration(
       );
       messageId = updated?.id ?? lifecycle.targetMessageId;
       if (fullReasoning) {
-        const existingExtra =
-          chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
-        chatsSvc.patchMessageExtra(userId, lifecycle.targetMessageId, {
-          ...existingExtra,
-          reasoning: fullReasoning,
-        });
+        // Target the regenerated swipe, not the displayed one (the user may have
+        // navigated away mid-stream before stopping).
+        chatsSvc.setSwipeScopedExtra(
+          userId,
+          lifecycle.targetMessageId,
+          lifecycle.streamingSwipeId,
+          { reasoning: fullReasoning },
+        );
       }
     } else if (lifecycle.stagedMessageId) {
       if (!closedContent && !fullReasoning) {
@@ -2981,18 +3006,21 @@ async function runGeneration(
         (lifecycle.continueOriginalContent ?? "") +
         (lifecycle.continuePostfix ?? "") +
         closedContent;
-      const existingContinueExtra = chatsSvc.getMessage(
-        userId,
-        lifecycle.continueMessageId,
-      )?.extra;
-      const continueExtra = fullReasoning
-        ? { ...existingContinueExtra, reasoning: fullReasoning }
-        : undefined;
+      // Append onto the continued swipe (not the displayed one, in case the user
+      // navigated away before stopping).
       chatsSvc.updateMessage(userId, lifecycle.continueMessageId, {
         content: combined,
-        ...(continueExtra ? { extra: continueExtra } : {}),
+        contentSwipeId: lifecycle.streamingSwipeId,
         skipCouncilCacheInvalidation: true,
       });
+      if (fullReasoning) {
+        chatsSvc.setSwipeScopedExtra(
+          userId,
+          lifecycle.continueMessageId,
+          lifecycle.streamingSwipeId,
+          { reasoning: fullReasoning },
+        );
+      }
       messageId = lifecycle.continueMessageId;
     } else if (lifecycle.impersonateDraft) {
       // Impersonate draft: do not persist the partial content as a message.
@@ -3361,24 +3389,20 @@ async function runGeneration(
         messageId = updated?.id ?? lifecycle.targetMessageId;
       } else if (lifecycle.continueMessageId) {
         // Continue: append generated text to existing assistant message,
-        // inserting the continuePostfix separator (e.g. newline, double newline)
+        // inserting the continuePostfix separator (e.g. newline, double newline).
+        // Target the continued swipe explicitly — the user may have navigated to a
+        // different swipe while this streamed. Reasoning is persisted by the shared
+        // swipe-scoped extra write below.
         const combined =
           (lifecycle.continueOriginalContent ?? "") +
           (lifecycle.continuePostfix ?? "") +
           fullContent;
-        const existingExtra = chatsSvc.getMessage(
-          userId,
-          lifecycle.continueMessageId,
-        )?.extra;
-        const continueExtra = fullReasoning
-          ? { ...existingExtra, reasoning: fullReasoning }
-          : undefined;
         const updated = chatsSvc.updateMessage(
           userId,
           lifecycle.continueMessageId,
           {
             content: combined,
-            ...(continueExtra ? { extra: continueExtra } : {}),
+            contentSwipeId: lifecycle.streamingSwipeId,
             skipCouncilCacheInvalidation: true,
           },
         );
@@ -3440,17 +3464,35 @@ async function runGeneration(
 
       if (messageId) {
         const savedMessage = chatsSvc.getMessage(userId, messageId);
-        let resolvedMessage = savedMessage?.content ?? fullContent;
+        // The generated content lives on the generation's swipe (streamingSwipeId),
+        // which may differ from the displayed swipe_id if the user navigated
+        // mid-stream. Read and rewrite that swipe so macro resolution targets the
+        // right one (identical to the old path when not navigated, idx === swipe_id).
+        const genSwipeId =
+          lifecycle.streamingSwipeId != null &&
+          savedMessage != null &&
+          lifecycle.streamingSwipeId >= 0 &&
+          lifecycle.streamingSwipeId < savedMessage.swipes.length
+            ? lifecycle.streamingSwipeId
+            : null;
+        const baseContent =
+          genSwipeId != null
+            ? savedMessage!.swipes[genSwipeId]
+            : (savedMessage?.content ?? fullContent);
+        let resolvedMessage = baseContent ?? fullContent;
         if (macroEnv || macroEnvSeed) {
           const assistantEnv = cloneEnv(macroEnv ?? macroEnvSeed!);
           resolvedMessage = await resolveRenderedMessageContent(
-            savedMessage?.content ?? fullContent,
+            baseContent ?? fullContent,
             assistantEnv,
           );
           persistMacroVariableState(userId, chatId, assistantEnv);
         }
-        if (savedMessage && savedMessage.content !== resolvedMessage) {
-          chatsSvc.updateMessage(userId, messageId, { content: resolvedMessage });
+        if (savedMessage && baseContent !== resolvedMessage) {
+          chatsSvc.updateMessage(userId, messageId, {
+            content: resolvedMessage,
+            ...(genSwipeId != null ? { contentSwipeId: genSwipeId } : {}),
+          });
         }
         fullContent = resolvedMessage;
       }
@@ -3471,11 +3513,14 @@ async function runGeneration(
         if (reasoningDurationMs > 0)
           immediateExtra.reasoningDuration = reasoningDurationMs;
         if (messageId && Object.keys(immediateExtra).length > 0) {
-          const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-          chatsSvc.patchMessageExtra(userId, messageId, {
-            ...existing,
-            ...immediateExtra,
-          });
+          // Anchor reasoning/usage to the generated swipe, not the displayed one —
+          // the user may have navigated to another swipe while this streamed.
+          chatsSvc.setSwipeScopedExtra(
+            userId,
+            messageId,
+            lifecycle.streamingSwipeId,
+            immediateExtra,
+          );
         }
       }
 
@@ -3568,12 +3613,17 @@ async function runGeneration(
         }
 
         if (messageId && (resolvedTokenCount || generationMetrics)) {
-          const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-          const metricsExtra: Record<string, any> = { ...existing };
+          const metricsExtra: Record<string, any> = {};
           if (resolvedTokenCount) metricsExtra.tokenCount = resolvedTokenCount;
           if (generationMetrics)
             metricsExtra.generationMetrics = generationMetrics;
-          chatsSvc.patchMessageExtra(userId, messageId, metricsExtra);
+          // Anchor metrics to the generated swipe, not the displayed one.
+          chatsSvc.setSwipeScopedExtra(
+            userId,
+            messageId,
+            lifecycle.streamingSwipeId,
+            metricsExtra,
+          );
         }
 
         if (

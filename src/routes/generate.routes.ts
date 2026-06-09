@@ -102,6 +102,7 @@ app.get("/status/:chatId", (c) => {
     tokenSeq: entry.tokenSeq,
     generationType: entry.generationType,
     targetMessageId: entry.targetMessageId,
+    targetSwipeId: entry.targetSwipeId,
     characterName: entry.characterName,
     characterId: entry.characterId,
     model: entry.model,

@@ -266,6 +266,7 @@ export interface GenerationStatusResponse {
   tokenSeq?: number
   generationType?: string
   targetMessageId?: string
+  targetSwipeId?: number
   characterName?: string
   characterId?: string
   model?: string

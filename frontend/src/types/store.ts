@@ -24,10 +24,18 @@ export interface ChatSlice {
   streamingError: string | null
   activeGenerationId: string | null
   regeneratingMessageId: string | null
+  /** Index of the swipe the active generation streams into. Lets the UI gate the
+   *  streaming buffer to that swipe so the user can navigate to other swipes
+   *  mid-generation. null when unknown (pre-GENERATION_STARTED) or idle. */
+  streamingSwipeId: number | null
   streamingGenerationType: string | null
   /** The generation type of the last completed generation — survives endStreaming() */
   lastCompletedGenerationType: string | null
   lastPooledSeq: number | null
+  /** messageId → index of a freshly-generated swipe the user hasn't navigated to
+   *  yet (they stayed on an older swipe while it generated). Drives the
+   *  "new swipe ready" badge; cleared once they land on that swipe. */
+  unseenSwipes: Record<string, number>
   totalChatLength: number
   /** Content from an impersonate-draft generation, ready to populate the input box */
   impersonateDraftContent: string | null
@@ -49,6 +57,12 @@ export interface ChatSlice {
   replaceStreamReasoning: (reasoning: string) => void
   setStreamingReasoningStartedAt: (ts: number | null) => void
   setLastPooledSeq: (seq: number) => void
+  /** Set the swipe index the active generation streams into (null when unknown). */
+  setStreamingSwipeId: (swipeId: number | null) => void
+  /** Flag a freshly-generated swipe as unseen (drives the "new swipe ready" badge). */
+  setUnseenSwipe: (messageId: string, swipeId: number) => void
+  /** Clear the unseen-swipe flag for a message (e.g. once the user views it). */
+  clearUnseenSwipe: (messageId: string) => void
   endStreaming: () => void
   stopStreaming: () => void
   setStreamingError: (error: string | null) => void
