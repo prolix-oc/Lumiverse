@@ -1188,6 +1188,9 @@ export default function ImageGenPanel() {
                   value={imageGeneration.promptParserConnectionId || ''}
                   onChange={(value) => updateTop({ promptParserConnectionId: value || null })}
                   withModel
+                  // An empty parser model is meaningful ("use connection default",
+                  // resolved at request time) — never auto-fill it into settings.
+                  seedDefaultModel={false}
                   modelValue={imageGeneration.promptParserModel || ''}
                   onModelChange={(value) => updateTop({ promptParserModel: value })}
                   placeholder={t('imageGenPanel.useSidecarOrSelect')}

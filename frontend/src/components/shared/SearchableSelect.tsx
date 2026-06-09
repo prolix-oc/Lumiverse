@@ -107,7 +107,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeIdx, setActiveIdx] = useState(0)
-  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number | null; bottom: number | null; left: number; width: number; maxHeight: number } | null>(null)
 
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -251,14 +251,17 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     // Vertical: prefer opening below the trigger, but flip above when there's
     // more room there, and cap the height to the available space so the popover
     // never runs past the viewport / a short panel (`maxHeight` is the ceiling).
+    // When flipped, anchor via CSS `bottom` so the popover's bottom edge hugs
+    // the trigger — anchoring `top` at trigger − maxHeight would leave a list
+    // shorter than maxHeight floating detached above the trigger.
     const desired = maxHeight * uiScale
     const spaceBelow = vh - r.bottom - margin - gap
     const spaceAbove = r.top - margin - gap
     const placeAbove = spaceBelow < desired && spaceAbove > spaceBelow
     const renderedMaxHeight = Math.max(120, Math.min(desired, placeAbove ? spaceAbove : spaceBelow))
-    const renderedTop = placeAbove ? r.top - gap - renderedMaxHeight : r.bottom + gap
     setPos({
-      top: renderedTop / uiScale,
+      top: placeAbove ? null : (r.bottom + gap) / uiScale,
+      bottom: placeAbove ? (vh - r.top + gap) / uiScale : null,
       left: renderedLeft / uiScale,
       width: layoutWidth,
       maxHeight: renderedMaxHeight / uiScale,
@@ -384,7 +387,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       style={{
         maxHeight: portal && pos ? pos.maxHeight : maxHeight,
         ...(portal && pos
-          ? { top: pos.top, left: pos.left, width: pos.width }
+          ? { top: pos.top ?? 'auto', bottom: pos.bottom ?? 'auto', left: pos.left, width: pos.width }
           : {}),
       }}
     >

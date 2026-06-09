@@ -6,7 +6,6 @@ import { characterGalleryApi } from '@/api/character-gallery'
 import { fetchConnectionModels } from '@/api/connectionModels'
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
-import { useStore } from '@/store'
 import ExpressionSlotCard from './ExpressionSlotCard'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import NumericInput from '@/components/shared/NumericInput'
@@ -55,7 +54,6 @@ export default function ExpressionEditorTab({ characterId }: Props) {
   const [exprModels, setExprModels] = useState<string[]>([])
   const [exprModelLabels, setExprModelLabels] = useState<Record<string, string>>({})
   const [exprModelsLoading, setExprModelsLoading] = useState(false)
-  const profiles = useStore((s) => s.profiles)
   const zipRef = useRef<HTMLInputElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
 
@@ -397,7 +395,10 @@ export default function ExpressionEditorTab({ characterId }: Props) {
         <ConnectionSelect
           kind="llm"
           value={detection.connectionProfileId || ''}
-          onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: profiles.find((p) => p.id === val)?.model || '' })}
+          // Clear the model rather than seeding the connection's default: '' means
+          // "use the connection's default at detection time" (see
+          // expression-detection.service's `model || conn.model` fallback).
+          onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: '' })}
           placeholder={t('characterEditor.expressionEditor.useSidecarDefault')}
           searchPlaceholder={t('characterEditor.expressionEditor.searchConnections')}
           emptyMessage={t('characterEditor.expressionEditor.noConnectionProfiles')}

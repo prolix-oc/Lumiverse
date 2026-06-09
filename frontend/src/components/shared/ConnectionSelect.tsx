@@ -38,6 +38,15 @@ interface ConnectionSelectProps {
   withModel?: boolean
   modelValue?: string
   onModelChange?: (model: string) => void
+  /**
+   * Seed/reset the paired model from the connection's default model when the
+   * connection changes (and on mount, when the model is empty). Disable at call
+   * sites where an EMPTY model is itself meaningful — the backend resolves '' to
+   * the connection's current default at request time (image-gen prompt parser,
+   * expression detection, cortex sidecar) — so a persisted picker never pins a
+   * snapshot of that default into saved settings.
+   */
+  seedDefaultModel?: boolean
 
   // Pass-throughs to SearchableSelect — all optional; SearchableSelect supplies
   // translated defaults for the message props when omitted.
@@ -72,6 +81,7 @@ export default function ConnectionSelect({
   withModel = false,
   modelValue,
   onModelChange,
+  seedDefaultModel = true,
   placeholder,
   searchPlaceholder,
   emptyMessage,
@@ -127,17 +137,16 @@ export default function ConnectionSelect({
     void loadModels()
   }, [loadModels])
 
-  // The dropdown just reports the new connection id; keeping the paired model in
-  // sync is the reconcile effect's job below, so it covers BOTH a dropdown pick
-  // and a programmatic `value` change (e.g. a panel bound to the active
-  // connection that gets switched out from under it).
-  const handleConnectionChange = useCallback((next: string) => onChange(next), [onChange])
-
-  // Reconcile the paired model whenever the *connection* changes:
+  // Reconcile the paired model whenever the *connection* changes. The effect
+  // (rather than the dropdown's onChange) does this so it covers BOTH a dropdown
+  // pick and a programmatic `value` change (e.g. a panel bound to the active
+  // connection that gets switched out from under it):
   //  - first reconcile (mount): seed an empty model from the connection's default,
   //    but leave an already-set model alone (e.g. a restored saved value);
   //  - any later connection change: reset the model to the new connection's
   //    default (the old model may not exist on it).
+  // With `seedDefaultModel` off, the model is only ever cleared (a stale model is
+  // still wrong on the new connection) — '' means "use connection default".
   // `prevConnRef` tracks the last reconciled connection, so editing or clearing
   // the model on its own never triggers a reseed.
   const prevConnRef = useRef<string | null>(null)
@@ -146,18 +155,22 @@ export default function ConnectionSelect({
     const prev = prevConnRef.current
     if (prev === value) return
     prevConnRef.current = value
+    if (!seedDefaultModel) {
+      if (prev !== null) onModelChange?.('')
+      return
+    }
     const profile = profiles.find((p) => p.id === value) || null
     if (prev === null) {
       if (value && !modelValue && profile?.model) onModelChange?.(profile.model)
     } else {
       onModelChange?.(profile?.model || '')
     }
-  }, [withModel, value, profiles, modelValue, onModelChange])
+  }, [withModel, seedDefaultModel, value, profiles, modelValue, onModelChange])
 
   const select = (
     <SearchableSelect
       value={value}
-      onChange={handleConnectionChange}
+      onChange={onChange}
       options={options}
       placeholder={placeholder}
       searchPlaceholder={searchPlaceholder}
