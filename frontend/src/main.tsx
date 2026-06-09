@@ -51,11 +51,42 @@ navigator.serviceWorker?.addEventListener('message', (event) => {
   }
 })
 
-// Capture the no-keyboard viewport height at load time. On iOS PWA,
-// window.innerHeight may shrink with the keyboard (same as visualViewport),
-// making it useless as a reference. This value is recaptured on orientation
-// change (which dismisses the keyboard).
-let baseViewportHeight = window.visualViewport?.height ?? window.innerHeight
+// ── Virtual-keyboard-aware viewport tracking ──
+// The on-screen keyboard is the only thing that introduces a bottom inset, and
+// it can only appear while an editable element is focused. iOS 26/27 ships a
+// regression (WebKit #297779 / FB19889436) where visualViewport.height and
+// .offsetTop stay STUCK after the keyboard is dismissed — so we must not infer
+// "keyboard gone" from those numbers. We gate on focus state instead, and track
+// the no-keyboard baseline as a per-orientation max so a stuck reduced height
+// can never poison it.
+const hasVirtualKeyboard = navigator.maxTouchPoints > 0
+// Real soft keyboards are >150px tall in portrait, >100px in landscape. Treat
+// anything below this floor as an iOS viewport glitch (the stuck ~24px
+// residual), not a keyboard — prevents the input bar floating by a sliver.
+const KEYBOARD_MIN_INSET = 80
+
+function isEditableElement(el: EventTarget | Element | null): boolean {
+  return (
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement ||
+    (el instanceof HTMLElement && el.isContentEditable)
+  )
+}
+
+// Source of truth for keyboard visibility — driven by focusin/focusout below,
+// NOT by visualViewport deltas (which iOS 26/27 reports unreliably).
+let keyboardOpen = false
+
+// Per-orientation no-keyboard baseline = the MAX visual viewport height we've
+// observed with the keyboard closed, in that orientation. We never shrink it:
+// iOS 26/27 leaves visualViewport.height stuck at the keyboard-reduced value
+// after a dismissal, so the live height while "closed" can't be trusted — only
+// the largest genuine height we've seen. Keyed by orientation because the full
+// height differs between portrait and landscape.
+const initialFullHeight = window.visualViewport?.height ?? window.innerHeight
+const startedPortrait = window.matchMedia('(orientation: portrait)').matches
+let basePortrait = startedPortrait ? initialFullHeight : 0
+let baseLandscape = startedPortrait ? 0 : initialFullHeight
 
 function syncViewportVars() {
   const root = document.documentElement
@@ -65,11 +96,25 @@ function syncViewportVars() {
   const offsetTop = Math.round(viewport?.offsetTop ?? 0)
   const offsetLeft = Math.round(viewport?.offsetLeft ?? 0)
 
-  // Track the largest visualViewport.height we've seen — this is the
-  // no-keyboard height. It self-corrects on orientation change.
-  if (height > baseViewportHeight) baseViewportHeight = height
+  const keyboardActive = hasVirtualKeyboard && keyboardOpen
+  // Grow the baseline only from keyboard-closed readings — a closed viewport
+  // can't be shorter than full, so this converges to the true height and locks.
+  // Never grow it while the keyboard is up (that would bake a transient over-read
+  // into the baseline and float the bar) and never shrink it (a stuck reduced
+  // height after dismissal must not poison it). Use matchMedia for orientation,
+  // not the viewport aspect ratio — a tall keyboard can make height < width.
+  const isPortrait = window.matchMedia('(orientation: portrait)').matches
+  let base = isPortrait ? basePortrait : baseLandscape
+  if (!keyboardActive && height > base) base = height
+  if (isPortrait) basePortrait = base
+  else baseLandscape = base
 
-  const keyboardInsetBottom = Math.max(0, Math.round(baseViewportHeight - height - offsetTop))
+  let keyboardInsetBottom = Math.max(0, Math.round(base - height - offsetTop))
+  // Focus gate + dead-zone. Only honour an inset when the keyboard is genuinely
+  // up (an editable element is focused) AND it clears the real-keyboard floor.
+  // This is what neutralises the iOS 26/27 bug: a stuck residual offset can no
+  // longer lift the bar once focus is gone.
+  if (!keyboardActive || keyboardInsetBottom < KEYBOARD_MIN_INSET) keyboardInsetBottom = 0
 
   root.style.setProperty('--app-viewport-width', `${width}px`)
   root.style.setProperty('--app-viewport-height', `${height}px`)
@@ -99,15 +144,37 @@ function scheduleViewportSync() {
 scheduleViewportSync()
 window.addEventListener('resize', scheduleViewportSync, { passive: true })
 window.addEventListener('orientationchange', () => {
-  // Orientation change dismisses the keyboard. Recapture base height after
-  // the change settles so keyboard detection works in the new orientation.
-  setTimeout(() => {
-    baseViewportHeight = window.visualViewport?.height ?? window.innerHeight
-    scheduleViewportSync()
-  }, 300)
+  // Re-sync once the rotation settles. We deliberately do NOT force-recapture
+  // the baseline here: rotation does not reliably dismiss the keyboard on iOS
+  // 26/27, and capturing a keyboard-reduced height as the baseline was exactly
+  // what left the bar unable to clear the keyboard after a rotation. The
+  // focus-gated, self-healing baseline in syncViewportVars handles it instead.
+  setTimeout(scheduleViewportSync, 300)
 }, { passive: true })
 window.visualViewport?.addEventListener('resize', scheduleViewportSync)
 window.visualViewport?.addEventListener('scroll', scheduleViewportSync)
+
+// ── Keyboard visibility tracking (focus-driven) ──
+// Tie keyboard open/close to focus rather than viewport deltas. iOS fires
+// focusout→focusin when moving between fields, so debounce the close and
+// re-check document.activeElement before declaring the keyboard gone.
+let keyboardBlurTimer = 0
+document.addEventListener('focusin', (e) => {
+  if (!isEditableElement(e.target)) return
+  clearTimeout(keyboardBlurTimer)
+  if (!keyboardOpen) {
+    keyboardOpen = true
+    scheduleViewportSync()
+  }
+}, { passive: true })
+document.addEventListener('focusout', () => {
+  clearTimeout(keyboardBlurTimer)
+  keyboardBlurTimer = window.setTimeout(() => {
+    if (isEditableElement(document.activeElement)) return
+    keyboardOpen = false
+    scheduleViewportSync()
+  }, 120)
+}, { passive: true })
 
 // Utility: walk up the DOM to find the nearest ancestor that is currently
 // scrollable (has overflow AND content exceeds container). Used by the
