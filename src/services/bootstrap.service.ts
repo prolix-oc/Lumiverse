@@ -112,7 +112,22 @@ async function collectAll<T>(
   const data: T[] = [];
   let offset = 0;
   for (;;) {
-    const page = await fetchPage({ limit: CONNECTIONS_PAGE, offset });
+    let page: PaginatedResult<T>;
+    try {
+      page = await fetchPage({ limit: CONNECTIONS_PAGE, offset });
+    } catch (err) {
+      // A first-page failure is a real fetch failure — rethrow so the caller's
+      // `safe()` records it and returns the empty fallback (unchanged behaviour).
+      // But once some pages are in hand, a later-page failure must NOT discard
+      // them: that would hand the client an empty list and silently hide every
+      // already-loaded connection. Keep what we have instead.
+      if (data.length === 0) throw err;
+      console.warn(
+        `[bootstrap] connection pagination failed at offset ${offset}; returning ${data.length} already collected`,
+        err,
+      );
+      break;
+    }
     data.push(...page.data);
     offset += page.data.length;
     if (page.data.length === 0 || offset >= page.total) break;
