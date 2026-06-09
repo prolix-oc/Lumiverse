@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '@/store'
+import type { AppStore } from '@/types/store'
 import { fetchConnectionModels, type ConnectionKind } from '@/api/connectionModels'
 import ProviderIcon from './ProviderIcon'
 import SearchableSelect, { type SearchableSelectOption } from './SearchableSelect'
@@ -14,6 +15,16 @@ interface ConnectionLike {
   name: string
   provider: string
   model?: string
+}
+
+/** Map from kind to the store-slice selector for its connection list — one table
+ * instead of a kind ternary, and exhaustive over ConnectionKind (a new kind won't
+ * compile until it's added here). */
+const PROFILE_SELECTOR_MAP: Record<ConnectionKind, (s: AppStore) => ConnectionLike[]> = {
+  llm: (s) => s.profiles,
+  imageGen: (s) => s.imageGenProfiles,
+  tts: (s) => s.ttsProfiles,
+  stt: (s) => s.sttProfiles,
 }
 
 interface ConnectionSelectProps {
@@ -76,15 +87,7 @@ export default function ConnectionSelect({
   modelNoConnectionMessage,
   modelAppearance,
 }: ConnectionSelectProps) {
-  const profiles = useStore((s) =>
-    kind === 'llm'
-      ? s.profiles
-      : kind === 'imageGen'
-        ? s.imageGenProfiles
-        : kind === 'tts'
-          ? s.ttsProfiles
-          : s.sttProfiles,
-  ) as ConnectionLike[]
+  const profiles = useStore(PROFILE_SELECTOR_MAP[kind])
 
   const options: SearchableSelectOption[] = useMemo(
     () =>
