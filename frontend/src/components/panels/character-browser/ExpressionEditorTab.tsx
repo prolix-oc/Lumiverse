@@ -395,9 +395,6 @@ export default function ExpressionEditorTab({ characterId }: Props) {
         <ConnectionSelect
           kind="llm"
           value={detection.connectionProfileId || ''}
-          // Clear the model rather than seeding the connection's default: '' means
-          // "use the connection's default at detection time" (see
-          // expression-detection.service's `model || conn.model` fallback).
           onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: '' })}
           placeholder={t('characterEditor.expressionEditor.useSidecarDefault')}
           searchPlaceholder={t('characterEditor.expressionEditor.searchConnections')}

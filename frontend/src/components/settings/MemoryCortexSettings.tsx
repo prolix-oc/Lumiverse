@@ -541,12 +541,6 @@ export default function MemoryCortexSettings() {
                 value={config.sidecar.connectionProfileId || ""}
                 onChange={(value) => {
                   const id = value || null;
-                  // When selecting a connection, auto-switch modes to sidecar.
-                  // When clearing, switch back to heuristic. The model OVERRIDE
-                  // resets to null either way — null means "use the connection's
-                  // default", resolved at request time (sidecar-adapter only
-                  // sends a model param when one is set), so seeding it here
-                  // would pin a stale snapshot of that default.
                   updateConfig({
                     sidecar: { ...config.sidecar, connectionProfileId: id, model: null },
                     entityExtractionMode: id ? "sidecar" : "heuristic",

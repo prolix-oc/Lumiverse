@@ -26,9 +26,8 @@ export default function VoiceSettings() {
 
   const [testing, setTesting] = useState(false)
 
-  // Connection lists come from the store (loaded in full at app init, kept
-  // current by the managers' store writes); only the provider registries need
-  // a refresh here for labels/capabilities.
+  // Connection lists come from the store; only the provider registries need a
+  // refresh here.
   useEffect(() => {
     sttConnectionsApi.providers().then((res) => {
       setSttProviders(res.providers || [])

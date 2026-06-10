@@ -96,12 +96,8 @@ const LIST_LIMIT_PACKS_PERSONAS = 200;
 const LIST_LIMIT_REGEX = 1000;
 
 /**
- * Bootstrap must hand the client the COMPLETE connection list: every
- * connection-selector in the app reads these from the store as its single
- * source, so a truncated page silently hides connections (the summarize and
- * chat pickers in particular). Page through to exhaustion — driven by the
- * query's reported `total`, so it stays correct regardless of page size —
- * rather than capping at a fixed limit.
+ * Page connection lists to exhaustion: the client treats bootstrap's lists as
+ * complete, so a truncated page silently hides connections.
  */
 const CONNECTIONS_PAGE = 200;
 async function collectAll<T>(
@@ -116,11 +112,8 @@ async function collectAll<T>(
     try {
       page = await fetchPage({ limit: CONNECTIONS_PAGE, offset });
     } catch (err) {
-      // A first-page failure is a real fetch failure — rethrow so the caller's
-      // `safe()` records it and returns the empty fallback (unchanged behaviour).
-      // But once some pages are in hand, a later-page failure must NOT discard
-      // them: that would hand the client an empty list and silently hide every
-      // already-loaded connection. Keep what we have instead.
+      // Rethrow a first-page failure for the caller's `safe()` fallback; once
+      // pages are in hand, keep them rather than discarding.
       if (data.length === 0) throw err;
       console.warn(
         `[bootstrap] connection pagination failed at offset ${offset}; returning ${data.length} already collected`,

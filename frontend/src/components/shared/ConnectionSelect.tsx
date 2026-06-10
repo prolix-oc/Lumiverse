@@ -17,9 +17,7 @@ interface ConnectionLike {
   model?: string
 }
 
-/** Map from kind to the store-slice selector for its connection list — one table
- * instead of a kind ternary, and exhaustive over ConnectionKind (a new kind won't
- * compile until it's added here). */
+/** Store-slice selector per kind; exhaustive, so a new kind won't compile until added here. */
 const PROFILE_SELECTOR_MAP: Record<ConnectionKind, (s: AppStore) => ConnectionLike[]> = {
   llm: (s) => s.profiles,
   imageGen: (s) => s.imageGenProfiles,
@@ -34,22 +32,19 @@ interface ConnectionSelectProps {
   value: string
   onChange: (id: string) => void
 
-  /** Render a paired model picker beneath the selector (llm / imageGen / tts / stt). */
+  /** Render a paired model picker beneath the selector. */
   withModel?: boolean
   modelValue?: string
   onModelChange?: (model: string) => void
   /**
-   * Seed/reset the paired model from the connection's default model when the
-   * connection changes (and on mount, when the model is empty). Disable at call
-   * sites where an EMPTY model is itself meaningful — the backend resolves '' to
-   * the connection's current default at request time (image-gen prompt parser,
-   * expression detection, cortex sidecar) — so a persisted picker never pins a
-   * snapshot of that default into saved settings.
+   * Seed/reset the paired model from the connection's default when the
+   * connection changes. Disable where '' means "use connection default at
+   * request time", so a persisted picker never pins a snapshot of it.
    */
   seedDefaultModel?: boolean
 
-  // Pass-throughs to SearchableSelect — all optional; SearchableSelect supplies
-  // translated defaults for the message props when omitted.
+  // Pass-throughs to SearchableSelect (it supplies translated defaults for the
+  // message props).
   placeholder?: string
   searchPlaceholder?: string
   emptyMessage?: string
@@ -69,10 +64,8 @@ interface ConnectionSelectProps {
 }
 
 /**
- * Standardised connection picker. Reads the connection list from the store slice
- * for `kind` (the single source of truth — see useAppInit's load-all-at-init),
- * renders each profile with the panel's provider icon + "model · provider" sublabel,
- * and optionally pairs a model combobox whose list it fetches and owns.
+ * Shared connection picker: store-fed list for `kind`, provider icon + sublabel
+ * rows, optional paired model combobox.
  */
 export default function ConnectionSelect({
   kind,
@@ -114,9 +107,7 @@ export default function ConnectionSelect({
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
 
-  // Sequence guard: `value` can change while a fetch is in flight, and a slow
-  // response for the OLD connection must not overwrite the new one's list (the
-  // clear path bumps the sequence too, so it also invalidates in-flight fetches).
+  // A slow response for the old connection must not overwrite the new one's.
   const loadSeqRef = useRef(0)
   const loadModels = useCallback(async () => {
     const seq = ++loadSeqRef.current
@@ -144,22 +135,12 @@ export default function ConnectionSelect({
     void loadModels()
   }, [loadModels])
 
-  // Reconcile the paired model whenever the *connection* changes. The effect
-  // (rather than the dropdown's onChange) does this so it covers BOTH a dropdown
-  // pick and a programmatic `value` change (e.g. a panel bound to the active
-  // connection that gets switched out from under it):
-  //  - first connection (mount, or a '' → id transition): seed an empty model
-  //    from the connection's default, but never clear or overwrite a set model.
-  //    '' → id is not a *switch* — it's either the saved connection+model
-  //    hydrating in late (settings arrive async after the store's profiles, and
-  //    a cross-tab SETTINGS_UPDATED re-sync takes the same path; the arriving
-  //    model must survive) or the user picking a first connection (the model
-  //    combobox was disabled at '', so there's no stale model to reset);
-  //  - a real id → id/'' change: reset the model to the new connection's
-  //    default (the old model may not exist on it), or to '' with
-  //    `seedDefaultModel` off ('' = "use connection default").
-  // `prevConnRef` tracks the last reconciled connection, so editing or clearing
-  // the model on its own never triggers a reseed.
+  // Reconcile the paired model when the connection changes (an effect so it
+  // also covers programmatic `value` changes, not just dropdown picks).
+  // First connection ('' to id): seed only an empty model, never overwrite one;
+  // saved settings can hydrate in late. A real switch (id to id/''): reset to
+  // the new connection's default, or '' when seedDefaultModel is off.
+  // prevConnRef makes model edits on their own never trigger a reseed.
   const prevConnRef = useRef<string | null>(null)
   useEffect(() => {
     if (!withModel || profiles.length === 0) return

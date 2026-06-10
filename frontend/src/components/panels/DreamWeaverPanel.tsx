@@ -142,8 +142,7 @@ export default function DreamWeaverPanel() {
   }, [t])
 
   const loadBootstrapOptions = useCallback(async () => {
-    // Connections come from the store (loaded in full at app init); only
-    // personas still need a panel-local fetch here.
+    // Connections come from the store; only personas need a panel-local fetch.
     const personaResult = await personasApi.list({ limit: 200 }).catch(() => null)
     if (personaResult) setPersonas(personaResult.data)
   }, [])

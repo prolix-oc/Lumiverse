@@ -322,9 +322,8 @@ export default function ImageGenPanel() {
   const [workflowError, setWorkflowError] = useState<string | null>(null)
   const refInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Connection lists (image-gen + LLM) come from the store, loaded in full at
-  // app init; only the image-gen provider registry needs a refresh here for the
-  // picker's labels.
+  // Connection lists come from the store; only the image-gen provider registry
+  // needs a refresh here.
   useEffect(() => {
     imageGenConnectionsApi.providers().then((res) => {
       if (res.providers?.length) setImageGenProviders(res.providers)
@@ -1188,8 +1187,6 @@ export default function ImageGenPanel() {
                   value={imageGeneration.promptParserConnectionId || ''}
                   onChange={(value) => updateTop({ promptParserConnectionId: value || null })}
                   withModel
-                  // An empty parser model is meaningful ("use connection default",
-                  // resolved at request time) — never auto-fill it into settings.
                   seedDefaultModel={false}
                   modelValue={imageGeneration.promptParserModel || ''}
                   onModelChange={(value) => updateTop({ promptParserModel: value })}

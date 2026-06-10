@@ -5,14 +5,7 @@ import { sttConnectionsApi } from '@/api/stt-connections'
 
 export type ConnectionKind = 'llm' | 'imageGen' | 'tts' | 'stt'
 
-/**
- * Fetch a connection's model list and normalise the per-kind endpoint into the
- * data `ModelCombobox` wants (`{ models, labels }`). Single source for every
- * connection model picker — `ConnectionSelect`'s paired combobox and the panels
- * that keep their own model row (CouncilManager, MemoryCortexSettings,
- * ExpressionEditorTab) — so the LLM `string[]`/`model_labels` vs imageGen/tts/stt
- * `{ id, label }[]` divergence is handled in one place.
- */
+/** Fetch a connection's model list, normalising the per-kind endpoints to `{ models, labels }`. */
 export async function fetchConnectionModels(
   kind: ConnectionKind,
   id: string,

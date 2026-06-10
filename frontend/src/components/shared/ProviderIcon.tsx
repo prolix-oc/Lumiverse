@@ -5,7 +5,6 @@ import styles from './ProviderIcon.module.css'
 
 export type ProviderIconKind = 'llm' | 'imageGen' | 'tts' | 'stt'
 
-/** The per-kind icons the connection panels (ConnectionItem etc.) tag rows with. */
 const KIND_ICON: Record<ProviderIconKind, LucideIcon> = {
   llm: Link2,
   imageGen: ImageIcon,
@@ -16,19 +15,14 @@ const KIND_ICON: Record<ProviderIconKind, LucideIcon> = {
 interface ProviderIconProps {
   kind: ProviderIconKind
   provider: string
-  /** Fill the parent (for a pre-sized slot); otherwise render a `size`px chip. */
+  /** Fill the parent instead of rendering a `size`px chip. */
   fill?: boolean
   size?: number
   iconSize?: number
   className?: string
 }
 
-/**
- * The provider chip shared by the connection panels' look, the ConnectionSelect
- * dropdown, and the chat connection popover: the connection-kind's icon tinted by
- * the provider's accent colour over a faint wash of the same. One source so the
- * three can't drift apart.
- */
+/** Provider chip: the kind's icon tinted with the provider's accent colour. */
 export default function ProviderIcon({
   kind,
   provider,

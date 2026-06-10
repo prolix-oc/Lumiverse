@@ -63,7 +63,7 @@ type CommonProps = {
   triggerLabel?: string
   /** Show the selected option's sublabel as a second line in the trigger (single-select). */
   showSelectedSublabel?: boolean
-  /** Extra class on the leading slot (trigger + rows) — e.g. to square off the default circle. */
+  /** Extra class on the leading slot (trigger + rows). */
   leadingClassName?: string
   ariaLabel?: string
   /** Render the popover inside document.body (useful for overflow-hidden containers). */
@@ -158,9 +158,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         const next = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]
         ;(props.onChange as (value: string[]) => void)(next)
       } else {
-        // Match native <select>: re-picking the already-selected option is not
-        // a change — just close. Consumers treat onChange as "the value
-        // changed" (e.g. CouncilManager reseeds its sidecar model on it).
+        // Match native <select>: re-picking the selected option is not a change.
         if (v !== props.value) (props.onChange as (value: string) => void)(v)
         setOpen(false)
         setSearch('')
@@ -251,22 +249,15 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     if (renderedLeft < margin) {
       renderedLeft = margin
     }
-    // Vertical: prefer opening below the trigger, but flip above when there's
-    // more room there, and cap the height to the available space so the popover
-    // never runs past the viewport / a short panel (`maxHeight` is the ceiling).
-    // When flipped, anchor via CSS `bottom` so the popover's bottom edge hugs
-    // the trigger — anchoring `top` at trigger − maxHeight would leave a list
-    // shorter than maxHeight floating detached above the trigger.
+    // Flip above when there's more room there, capping height to the available
+    // space. Flipped popovers anchor via `bottom` so a short list hugs the trigger.
     const desired = maxHeight * uiScale
     const spaceBelow = vh - r.bottom - margin - gap
     const spaceAbove = r.top - margin - gap
     const placeAbove = spaceBelow < desired && spaceAbove > spaceBelow
     const renderedMaxHeight = Math.max(120, Math.min(desired, placeAbove ? spaceAbove : spaceBelow))
-    // The 120px floor can exceed spaceAbove on tiny viewports; bottom-anchored,
-    // that would push the popover's top — the search input that takes focus on
-    // open — above the screen, unreachable under position:fixed. Lower the
-    // anchor just enough to keep the worst-case top at the margin: overlapping
-    // the trigger beats being off-screen.
+    // On tiny viewports the 120px floor can exceed spaceAbove; lower the anchor
+    // so the focused search input stays on-screen.
     const renderedBottom = placeAbove
       ? Math.min(vh - r.top + gap, Math.max(margin, vh - margin - renderedMaxHeight))
       : null
