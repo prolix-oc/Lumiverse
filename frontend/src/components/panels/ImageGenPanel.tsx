@@ -19,6 +19,7 @@ import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
 import { uuidv7 } from '@/lib/uuid'
 import ImageLightbox from '@/components/shared/ImageLightbox'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/comfyui/WorkflowEditorModal'
 import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/components/dream-weaver/visual-studio/comfyui/mapped-fields'
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-weaver'
@@ -360,6 +361,7 @@ export default function ImageGenPanel() {
   const [draftPrompt, setDraftPrompt] = useState('')
   const [draftNegative, setDraftNegative] = useState('')
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
+  const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [characterPresetId, setCharacterPresetId] = useState<string | null>(null)
   const [personaPresetId, setPersonaPresetId] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
@@ -826,6 +828,7 @@ export default function ImageGenPanel() {
 
   const deletePromptPreset = useCallback(() => {
     if (!loadedPresetId) return
+    setConfirmDeletePreset(false)
     const id = loadedPresetId
     const next = promptPresets.filter((p) => p.id !== id)
     const updates: Partial<typeof imageGeneration> = { promptPresets: next }
@@ -1248,8 +1251,20 @@ export default function ImageGenPanel() {
                   <Button variant="secondary" size="sm" onClick={savePromptPreset}>
                     {loadedPresetId ? t('imageGenPanel.saveChanges') : t('imageGenPanel.saveAsNew')}
                   </Button>
-                  {loadedPresetId && <Button variant="danger" size="sm" onClick={deletePromptPreset}>{t('imageGenPanel.delete')}</Button>}
+                  {loadedPresetId && <Button variant="danger" size="sm" onClick={() => setConfirmDeletePreset(true)}>{t('imageGenPanel.delete')}</Button>}
                 </div>
+
+                {confirmDeletePreset && (
+                  <ConfirmationModal
+                    isOpen={true}
+                    title={t('imageGenPanel.deletePresetConfirmTitle')}
+                    message={t('imageGenPanel.deletePresetConfirmMessage', { name: loadedPreset?.name })}
+                    variant="danger"
+                    confirmText={t('imageGenPanel.delete')}
+                    onConfirm={deletePromptPreset}
+                    onCancel={() => setConfirmDeletePreset(false)}
+                  />
+                )}
                 {loadedPreset && (
                   <div className={styles.editorTargetBanner}>
                     {t('imageGenPanel.editing')} <strong>{loadedPreset.name}</strong> ({editTarget})

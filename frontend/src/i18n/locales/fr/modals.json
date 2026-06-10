@@ -542,7 +542,10 @@
     "saveFailed": "Échec de l'enregistrement du module complémentaire",
     "createFailed": "Échec de la création module complémentaire",
     "deleteFailed": "Échec de la suppression du module complémentaire",
-    "duplicateFailed": "Échec de la duplication du module complémentaire"
+    "duplicateFailed": "Échec de la duplication du module complémentaire",
+    "deleteConfirmTitle": "Supprimer le module complémentaire",
+    "deleteConfirmMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
+    "deleteConfirmMessageUnnamed": "Supprimer ce module complémentaire ? Cela ne peut pas être annulé."
   },
   "personaAddons": {
     "title": "Modules complémentaires Persona",

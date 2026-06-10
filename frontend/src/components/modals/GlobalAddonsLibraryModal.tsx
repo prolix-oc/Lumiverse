@@ -4,6 +4,7 @@ import { Plus, Check, Trash2, Copy, Globe } from 'lucide-react'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { useStore } from '@/store'
 import { globalAddonsApi } from '@/api/global-addons'
 import { toast } from '@/lib/toast'
@@ -14,10 +15,12 @@ import clsx from 'clsx'
 
 export default function GlobalAddonsLibraryModal() {
   const { t } = useTranslation('modals', { keyPrefix: 'globalAddons' })
+  const { t: tc } = useTranslation('common')
   const closeModal = useStore((s) => s.closeModal)
 
   const [addons, setAddons] = useState<GlobalAddon[]>([])
   const [loading, setLoading] = useState(true)
+  const [deleteTarget, setDeleteTarget] = useState<GlobalAddon | null>(null)
   const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   useEffect(() => {
@@ -51,6 +54,7 @@ export default function GlobalAddonsLibraryModal() {
   }, [addons.length])
 
   const handleDelete = useCallback(async (id: string) => {
+    setDeleteTarget(null)
     try {
       await globalAddonsApi.delete(id)
       setAddons((prev) => prev.filter((a) => a.id !== id))
@@ -119,7 +123,7 @@ export default function GlobalAddonsLibraryModal() {
               <button
                 type="button"
                 className={clsx(styles.addonActionBtn, styles.addonDeleteBtn)}
-                onClick={() => handleDelete(addon.id)}
+                onClick={() => setDeleteTarget(addon)}
                 title={t('deleteTitle')}
               >
                 <Trash2 size={13} />
@@ -146,6 +150,20 @@ export default function GlobalAddonsLibraryModal() {
           {t('addonCount', { count: addons.length })}
         </span>
       </div>
+
+      {deleteTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('deleteConfirmTitle')}
+          message={deleteTarget.label
+            ? t('deleteConfirmMessage', { name: deleteTarget.label })
+            : t('deleteConfirmMessageUnnamed')}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDelete(deleteTarget.id) }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </ModalShell>
   )
 }

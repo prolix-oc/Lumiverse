@@ -9,6 +9,7 @@ import { settingsApi } from '@/api/settings'
 import { useStore } from '@/store'
 import ExpressionSlotCard from './ExpressionSlotCard'
 import ImageLightbox from '@/components/shared/ImageLightbox'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import NumericInput from '@/components/shared/NumericInput'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
@@ -40,10 +41,13 @@ function toExpressionLabel(fileName: string, fallback: string) {
 
 export default function ExpressionEditorTab({ characterId }: Props) {
   const { t } = useTranslation('panels')
+  const { t: tc } = useTranslation('common')
   const defaultExpressionLabel = t('characterEditor.expressionEditor.defaultExpressionLabel')
   const [config, setConfig] = useState<ExpressionConfig | null>(null)
   const [groups, setGroups] = useState<ExpressionGroups | null>(null)
   const [activeGroup, setActiveGroup] = useState<string | null>(null)
+  const [deleteLabelTarget, setDeleteLabelTarget] = useState<{ label: string; group: string | null } | null>(null)
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
@@ -545,6 +549,43 @@ export default function ExpressionEditorTab({ characterId }: Props) {
 
   if (loading) return null
 
+  // Shared delete confirmations, rendered by both the grouped and flat views.
+  const deleteConfirmModals = (
+    <>
+      {deleteLabelTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('characterEditor.expressionEditor.deleteLabelConfirmTitle')}
+          message={t('characterEditor.expressionEditor.deleteLabelConfirmMessage', { label: deleteLabelTarget.label })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => {
+            const { label, group } = deleteLabelTarget
+            setDeleteLabelTarget(null)
+            if (group) handleGroupLabelDelete(label)
+            else handleDelete(label)
+          }}
+          onCancel={() => setDeleteLabelTarget(null)}
+        />
+      )}
+      {deleteGroupTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('characterEditor.expressionEditor.deleteGroupConfirmTitle')}
+          message={t('characterEditor.expressionEditor.deleteGroupConfirmMessage', { name: deleteGroupTarget })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => {
+            const name = deleteGroupTarget
+            setDeleteGroupTarget(null)
+            handleDeleteGroup(name)
+          }}
+          onCancel={() => setDeleteGroupTarget(null)}
+        />
+      )}
+    </>
+  )
+
   // ── Multi-character grouped view ────────────────────────────────────────
   if (groups && groupNames.length > 0) {
     const totalExpressions = Object.values(groups).reduce((sum, g) => sum + Object.keys(g).length, 0)
@@ -642,7 +683,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
                     {t('characterEditor.expressionEditor.switchToSingle')}
                   </button>
                 )}
-                <button type="button" className={styles.groupDeleteBtn} onClick={() => handleDeleteGroup(activeGroup)}>
+                <button type="button" className={styles.groupDeleteBtn} onClick={() => setDeleteGroupTarget(activeGroup)}>
                   <Trash2 size={12} /> {t('characterEditor.expressionEditor.removeGroup')}
                 </button>
               </div>
@@ -679,7 +720,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
                     key={slot.label}
                     label={slot.label}
                     imageId={slot.imageId}
-                    onDelete={handleGroupLabelDelete}
+                    onDelete={(label) => setDeleteLabelTarget({ label, group: activeGroup })}
                     onRename={handleGroupLabelRename}
                     onPreview={setLightboxSrc}
                   />
@@ -693,6 +734,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
         )}
 
         {showGalleryPicker && renderGalleryPicker(handleGroupGalleryPick)}
+        {deleteConfirmModals}
 
         {lightboxSrc && (
           <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
@@ -810,7 +852,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
               key={slot.label}
               label={slot.label}
               imageId={slot.imageId}
-              onDelete={handleDelete}
+              onDelete={(label) => setDeleteLabelTarget({ label, group: null })}
               onRename={handleRename}
               onPreview={setLightboxSrc}
             />
@@ -822,6 +864,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
       )}
 
       {showGalleryPicker && renderGalleryPicker(confirmGalleryPick)}
+      {deleteConfirmModals}
 
       {lightboxSrc && (
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />

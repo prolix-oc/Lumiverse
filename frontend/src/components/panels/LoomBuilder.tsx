@@ -1381,6 +1381,7 @@ export default function LoomBuilder({
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [showPromptVariablesModal, setShowPromptVariablesModal] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
@@ -1602,6 +1603,7 @@ export default function LoomBuilder({
 
   const handleDeletePreset = useCallback(async () => {
     if (!activePresetId) return
+    setConfirmDeletePreset(false)
     await deletePreset(activePresetId)
   }, [activePresetId, deletePreset])
 
@@ -1684,7 +1686,7 @@ export default function LoomBuilder({
             onCreate={createPreset}
             onRename={handleRenamePreset}
             onDuplicate={handleDuplicatePreset}
-            onDelete={handleDeletePreset}
+            onDelete={() => setConfirmDeletePreset(true)}
             onImport={handleImport}
             onExport={handleExport}
             onExportLegacy={() => setShowLegacyExportConfirm(true)}
@@ -2091,6 +2093,17 @@ export default function LoomBuilder({
           confirmText={tc('actions.delete')}
           onConfirm={confirmDeleteBlock}
           onCancel={() => setConfirmDelete(null)}
+        />
+
+      {/* Confirm preset delete dialog */}
+        <ConfirmationModal
+          isOpen={confirmDeletePreset}
+          title={lb('confirm.deletePresetTitle')}
+          message={lb('confirm.deletePresetMessage', { name: activePreset?.name })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDeletePreset() }}
+          onCancel={() => setConfirmDeletePreset(false)}
         />
 
         {activePreset && (

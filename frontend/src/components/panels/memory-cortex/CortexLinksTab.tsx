@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { useStore } from "@/store";
+import ConfirmationModal from "@/components/shared/ConfirmationModal";
 import { memoryCortexApi, type CortexVault, type CortexChatLink } from "@/api/memory-cortex";
 import { chatsApi } from "@/api/chats";
 import type { RecentChat } from "@/types/api";
@@ -133,10 +134,10 @@ export default function CortexLinksTab({
   };
 
   const handleRemoveLink = async (linkId: string) => {
+    setDeletingId(null);
     try {
       await memoryCortexApi.removeLink(activeChatId, linkId);
       setLinks((prev) => prev.filter((l) => l.id !== linkId));
-      setDeletingId(null);
       addToast({ type: "info", message: t(`${L}.linkRemoved`) });
     } catch {
       addToast({ type: "error", message: t(`${L}.removeLinkFailed`) });
@@ -199,11 +200,11 @@ export default function CortexLinksTab({
   // ─── Vault Library Actions ──────────────────────────────────
 
   const handleDeleteVault = async (vaultId: string) => {
+    setDeletingId(null);
     try {
       await memoryCortexApi.deleteVault(vaultId);
       setVaults((prev) => prev.filter((v) => v.id !== vaultId));
       setLinks((prev) => prev.filter((l) => l.vaultId !== vaultId));
-      setDeletingId(null);
       addToast({ type: "info", message: t(`${L}.vaultDeleted`) });
     } catch {
       addToast({ type: "error", message: t(`${L}.vaultDeleteFailed`) });
@@ -222,6 +223,10 @@ export default function CortexLinksTab({
   };
 
   const linkedVaultIds = new Set(links.filter((l) => l.linkType === "vault").map((l) => l.vaultId));
+  const deletingLink = deletingId ? links.find((l) => l.id === deletingId) : undefined;
+  const deletingVault = deletingId?.startsWith("vault-")
+    ? vaults.find((v) => `vault-${v.id}` === deletingId)
+    : undefined;
 
   if (loading) {
     return <div className={styles.loadingText}>{t(`${L}.loading`)}</div>;
@@ -247,62 +252,50 @@ export default function CortexLinksTab({
                   !link.enabled && styles.linkCardDisabled,
                 )}
               >
-                {deletingId === link.id ? (
-                  <div className={styles.linkConfirm}>
-                    <span>{t(`${L}.removeConfirm`)}</span>
-                    <div className={styles.linkConfirmActions}>
-                      <button className={styles.linkConfirmYes} onClick={() => handleRemoveLink(link.id)}>{t(`${L}.remove`)}</button>
-                      <button className={styles.linkConfirmNo} onClick={() => setDeletingId(null)}>{tc('actions.cancel')}</button>
-                    </div>
+                <div className={styles.linkIcon}>
+                  {link.linkType === "vault" ? <Archive size={14} /> : <Link2 size={14} />}
+                </div>
+                <div className={styles.linkInfo}>
+                  <div className={styles.linkName}>
+                    {link.linkType === "vault"
+                      ? link.vaultName || t(`${L}.unnamedVault`)
+                      : link.targetChatName || t(`${L}.unknownChat`)}
                   </div>
-                ) : (
-                  <>
-                    <div className={styles.linkIcon}>
-                      {link.linkType === "vault" ? <Archive size={14} /> : <Link2 size={14} />}
-                    </div>
-                    <div className={styles.linkInfo}>
-                      <div className={styles.linkName}>
-                        {link.linkType === "vault"
-                          ? link.vaultName || t(`${L}.unnamedVault`)
-                          : link.targetChatName || t(`${L}.unknownChat`)}
-                      </div>
-                      <div className={styles.linkMeta}>
-                        {link.linkType === "vault" ? (
-                          t(`${L}.entityRelationCounts`, {
-                            entities: link.vaultEntityCount ?? 0,
-                            relations: link.vaultRelationCount ?? 0,
-                          })
-                        ) : !link.targetChatExists ? (
-                          <span className={styles.linkBroken}>
-                            <AlertTriangle size={10} />
-                            {t(`${L}.brokenLink`)}
-                          </span>
-                        ) : (
-                          <span className={styles.linkLive}>
-                            <span className={styles.pulseDot} />
-                            {t(`${L}.liveConnection`)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className={styles.linkActions}>
-                      <button
-                        className={clsx(styles.linkToggle, link.enabled && styles.linkToggleOn)}
-                        onClick={() => handleToggleLink(link)}
-                        title={link.enabled ? t(`${L}.disable`) : t(`${L}.enable`)}
-                      >
-                        <div className={styles.linkToggleThumb} />
-                      </button>
-                      <button
-                        className={styles.linkDeleteBtn}
-                        onClick={() => setDeletingId(link.id)}
-                        title={t(`${L}.removeLinkTitle`)}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </>
-                )}
+                  <div className={styles.linkMeta}>
+                    {link.linkType === "vault" ? (
+                      t(`${L}.entityRelationCounts`, {
+                        entities: link.vaultEntityCount ?? 0,
+                        relations: link.vaultRelationCount ?? 0,
+                      })
+                    ) : !link.targetChatExists ? (
+                      <span className={styles.linkBroken}>
+                        <AlertTriangle size={10} />
+                        {t(`${L}.brokenLink`)}
+                      </span>
+                    ) : (
+                      <span className={styles.linkLive}>
+                        <span className={styles.pulseDot} />
+                        {t(`${L}.liveConnection`)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className={styles.linkActions}>
+                  <button
+                    className={clsx(styles.linkToggle, link.enabled && styles.linkToggleOn)}
+                    onClick={() => handleToggleLink(link)}
+                    title={link.enabled ? t(`${L}.disable`) : t(`${L}.enable`)}
+                  >
+                    <div className={styles.linkToggleThumb} />
+                  </button>
+                  <button
+                    className={styles.linkDeleteBtn}
+                    onClick={() => setDeletingId(link.id)}
+                    title={t(`${L}.removeLinkTitle`)}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -492,15 +485,7 @@ export default function CortexLinksTab({
             ) : (
               vaults.map((vault) => (
                 <div key={vault.id} className={styles.linksLibraryItem}>
-                  {deletingId === `vault-${vault.id}` ? (
-                    <div className={styles.linkConfirm}>
-                      <span>{t(`${L}.deleteVaultConfirm`, { name: vault.name })}</span>
-                      <div className={styles.linkConfirmActions}>
-                        <button className={styles.linkConfirmYes} onClick={() => handleDeleteVault(vault.id)}>{t(`${L}.deleteVault`)}</button>
-                        <button className={styles.linkConfirmNo} onClick={() => setDeletingId(null)}>{tc('actions.cancel')}</button>
-                      </div>
-                    </div>
-                  ) : renamingId === vault.id ? (
+                  {renamingId === vault.id ? (
                     <div className={styles.linksRenameRow}>
                       <input
                         ref={renameRef}
@@ -572,6 +557,30 @@ export default function CortexLinksTab({
           </div>
         )}
       </div>
+
+      {deletingLink && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t(`${L}.removeLinkTitle`)}
+          message={t(`${L}.removeConfirm`)}
+          variant="danger"
+          confirmText={t(`${L}.remove`)}
+          onConfirm={() => { void handleRemoveLink(deletingLink.id) }}
+          onCancel={() => setDeletingId(null)}
+        />
+      )}
+
+      {deletingVault && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t(`${L}.deleteVaultTitle`)}
+          message={t(`${L}.deleteVaultConfirm`, { name: deletingVault.name })}
+          variant="danger"
+          confirmText={t(`${L}.deleteVault`)}
+          onConfirm={() => { void handleDeleteVault(deletingVault.id) }}
+          onCancel={() => setDeletingId(null)}
+        />
+      )}
     </div>
   );
 }

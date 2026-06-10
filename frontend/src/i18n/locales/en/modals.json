@@ -547,7 +547,10 @@
     "saveFailed": "Failed to save add-on",
     "createFailed": "Failed to create add-on",
     "deleteFailed": "Failed to delete add-on",
-    "duplicateFailed": "Failed to duplicate add-on"
+    "duplicateFailed": "Failed to duplicate add-on",
+    "deleteConfirmTitle": "Delete Add-On",
+    "deleteConfirmMessage": "Delete \"{{name}}\"? This cannot be undone.",
+    "deleteConfirmMessageUnnamed": "Delete this add-on? This cannot be undone."
   },
   "personaAddons": {
     "title": "Persona Add-Ons",

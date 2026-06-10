@@ -6,6 +6,7 @@ import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { useStore } from '@/store'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { Button } from '@/components/shared/FormComponents'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import styles from './CharacterEditorPage.module.css'
 
 interface CharacterLoraTabProps {
@@ -43,6 +44,7 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
   const [baseTags, setBaseTags] = useState('')
   const [sourceUrl, setSourceUrl] = useState('')
   const [saving, setSaving] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
 
   const lastLoadedCharacterId = useRef<string | null>(null)
@@ -272,7 +274,7 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
           {binding ? t('characterEditor.imageLora.update') : t('characterEditor.imageLora.save')}
         </Button>
         {binding ? (
-          <Button variant="danger-ghost" onClick={handleClear} icon={<Trash2 size={14} />} disabled={saving}>
+          <Button variant="danger-ghost" onClick={() => setConfirmClear(true)} icon={<Trash2 size={14} />} disabled={saving}>
             {t('characterEditor.imageLora.clear')}
           </Button>
         ) : null}
@@ -307,6 +309,18 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
           </span>
         ) : null}
       </div>
+
+      {confirmClear && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('characterEditor.imageLora.clearConfirmTitle')}
+          message={t('characterEditor.imageLora.clearConfirmMessage')}
+          variant="danger"
+          confirmText={t('characterEditor.imageLora.clear')}
+          onConfirm={() => { setConfirmClear(false); void handleClear() }}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
     </div>
   )
 }

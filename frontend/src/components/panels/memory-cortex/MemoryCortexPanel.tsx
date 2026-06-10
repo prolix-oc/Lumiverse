@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
+import ConfirmationModal from "@/components/shared/ConfirmationModal";
 import CortexLinksTab from "./CortexLinksTab";
 import { EntityEditorModal, RelationEditorModal, RelationCreatorModal, ColorEditorModal } from "./MemoryCortexEditors";
 import styles from "./MemoryCortexPanel.module.css";
@@ -57,6 +58,8 @@ export default function MemoryCortexPanel() {
   const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [editingEntity, setEditingEntity] = useState<CortexEntity | null>(null);
+  const [deleteEntityTarget, setDeleteEntityTarget] = useState<CortexEntity | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
   // Reset read-state when the active chat changes — DURING render, not in an
   // effect. An effect runs after paint, so it can't stop the previous chat's
@@ -72,6 +75,8 @@ export default function MemoryCortexPanel() {
     setExpandedId(null);
     setSelectionMode(false);
     setSelectedEntityIds(new Set());
+    setDeleteEntityTarget(null);
+    setConfirmBulkDelete(false);
   }
 
   const loadEntities = useCallback(async () => {
@@ -167,6 +172,7 @@ export default function MemoryCortexPanel() {
   const handleBulkDeleteEntities = async () => {
     if (!activeChatId || selectedEntityIds.size === 0 || bulkDeleting) return;
     const ids = [...selectedEntityIds];
+    setConfirmBulkDelete(false);
     setBulkDeleting(true);
     try {
       const res = await memoryCortexApi.bulkDeleteEntities(activeChatId, ids);
@@ -279,7 +285,7 @@ export default function MemoryCortexPanel() {
               </button>
               <button
                 className={styles.selectionToolbarDanger}
-                onClick={handleBulkDeleteEntities}
+                onClick={() => setConfirmBulkDelete(true)}
                 disabled={selectedCount === 0 || bulkDeleting}
                 type="button"
               >
@@ -305,7 +311,7 @@ export default function MemoryCortexPanel() {
                   entity={entity}
                   expanded={expandedId === entity.id}
                   onToggle={() => setExpandedId(expandedId === entity.id ? null : entity.id)}
-                  onDelete={() => handleDeleteEntity(entity.id)}
+                  onDelete={() => setDeleteEntityTarget(entity)}
                   onEdit={() => setEditingEntity(entity)}
                   selectionMode={selectionMode}
                   selected={selectedEntityIds.has(entity.id)}
@@ -321,7 +327,7 @@ export default function MemoryCortexPanel() {
                       entity={entity}
                       expanded={expandedId === entity.id}
                       onToggle={() => setExpandedId(expandedId === entity.id ? null : entity.id)}
-                      onDelete={() => handleDeleteEntity(entity.id)}
+                      onDelete={() => setDeleteEntityTarget(entity)}
                       onEdit={() => setEditingEntity(entity)}
                       selectionMode={selectionMode}
                       selected={selectedEntityIds.has(entity.id)}
@@ -353,6 +359,34 @@ export default function MemoryCortexPanel() {
           entity={editingEntity}
           onClose={() => setEditingEntity(null)}
           onSaved={() => { setEditingEntity(null); loadEntities(); }}
+        />
+      )}
+
+      {deleteEntityTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('memoryCortexPanel.confirm.entityTitle')}
+          message={t('memoryCortexPanel.confirm.entityMessage', { name: deleteEntityTarget.name })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => {
+            const id = deleteEntityTarget.id;
+            setDeleteEntityTarget(null);
+            void handleDeleteEntity(id);
+          }}
+          onCancel={() => setDeleteEntityTarget(null)}
+        />
+      )}
+
+      {confirmBulkDelete && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('memoryCortexPanel.confirm.bulkTitle')}
+          message={t('memoryCortexPanel.confirm.bulkMessage', { count: selectedCount })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleBulkDeleteEntities() }}
+          onCancel={() => setConfirmBulkDelete(false)}
         />
       )}
     </div>
@@ -600,6 +634,7 @@ function ColorsView({
   const [colors, setColors] = useState<CortexFontColor[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingColor, setEditingColor] = useState<CortexFontColor | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CortexFontColor | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -616,6 +651,7 @@ function ColorsView({
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async (id: string) => {
+    setDeleteTarget(null);
     try {
       await memoryCortexApi.deleteColor(chatId, id);
       setColors((prev) => prev.filter((c) => c.id !== id));
@@ -670,7 +706,7 @@ function ColorsView({
         <button className={styles.colorEditBtn} onClick={() => setEditingColor(c)} title={tc('actions.edit')}>
           <Edit2 size={11} />
         </button>
-        <button className={styles.colorDeleteBtn} onClick={() => handleDelete(c.id)} title={tc('actions.delete')}>
+        <button className={styles.colorDeleteBtn} onClick={() => setDeleteTarget(c)} title={tc('actions.delete')}>
           <Trash2 size={11} />
         </button>
       </div>
@@ -715,6 +751,18 @@ function ColorsView({
         </div>
       ))}
 
+      {deleteTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('memoryCortexPanel.colors.deleteConfirmTitle')}
+          message={t('memoryCortexPanel.colors.deleteConfirmMessage', { hex: deleteTarget.hexColor })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDelete(deleteTarget.id) }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
       {editingColor && (
         <ColorEditorModal
           chatId={chatId}
@@ -744,12 +792,14 @@ function StatsView({
   addToast: (t: any) => void;
 }) {
   const { t } = useTranslation('panels')
+  const { t: tc } = useTranslation('common')
   const dl = (key: string) => t(`memoryCortexPanel.stats.drillLabels.${key}`)
   const [drill, setDrill] = useState<DrillTarget>(null);
   const [drillData, setDrillData] = useState<any[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [editingRelation, setEditingRelation] = useState<CortexRelation | null>(null);
   const [creatingRelation, setCreatingRelation] = useState(false);
+  const [deleteRelationId, setDeleteRelationId] = useState<string | null>(null);
 
   const reloadDrill = useCallback(async () => {
     if (!drill) return;
@@ -796,7 +846,7 @@ function StatsView({
   };
 
   const handleDeleteRelation = async (relationId: string) => {
-    if (!confirm(t('memoryCortexPanel.stats.deleteRelationConfirm'))) return;
+    setDeleteRelationId(null);
     try {
       await memoryCortexApi.deleteRelation(chatId, relationId);
       addToast({ type: "success", message: t('memoryCortexPanel.stats.relationDeleted') });
@@ -845,7 +895,7 @@ function StatsView({
                 key={r.id}
                 relation={r}
                 onEdit={() => setEditingRelation(r)}
-                onDelete={() => handleDeleteRelation(r.id)}
+                onDelete={() => setDeleteRelationId(r.id)}
               />
             ))}
             {drill === "consolidations" && (() => {
@@ -928,6 +978,17 @@ function StatsView({
             entities={entities}
             onClose={() => setCreatingRelation(false)}
             onSaved={() => { setCreatingRelation(false); reloadDrill(); }}
+          />
+        )}
+        {deleteRelationId && (
+          <ConfirmationModal
+            isOpen={true}
+            title={t('memoryCortexPanel.stats.deleteRelationTitle')}
+            message={t('memoryCortexPanel.stats.deleteRelationConfirm')}
+            variant="danger"
+            confirmText={tc('actions.delete')}
+            onConfirm={() => { void handleDeleteRelation(deleteRelationId) }}
+            onCancel={() => setDeleteRelationId(null)}
           />
         )}
       </div>

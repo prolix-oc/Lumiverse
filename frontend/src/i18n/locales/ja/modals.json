@@ -542,7 +542,10 @@
     "saveFailed": "アドオンの保存に失敗しました",
     "createFailed": "アドオンの作成に失敗しました",
     "deleteFailed": "アドオンの削除に失敗しました",
-    "duplicateFailed": "アドオンの複製に失敗しました"
+    "duplicateFailed": "アドオンの複製に失敗しました",
+    "deleteConfirmTitle": "アドオンを削除",
+    "deleteConfirmMessage": "「{{name}}」を削除しますか?これを元に戻すことはできません。",
+    "deleteConfirmMessageUnnamed": "このアドオンを削除しますか?これを元に戻すことはできません。"
   },
   "personaAddons": {
     "title": "ペルソナアドオン",

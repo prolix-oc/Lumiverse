@@ -11,6 +11,7 @@ import { useFolders } from '@/hooks/useFolders'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/regex'
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
@@ -63,6 +64,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
 
 export default function RegexPanel() {
   const { t } = useTranslation('panels')
+  const { t: tc } = useTranslation('common')
 
   const regexScripts = useStore((s) => s.regexScripts)
   const loadRegexScripts = useStore((s) => s.loadRegexScripts)
@@ -82,6 +84,8 @@ export default function RegexPanel() {
   const [showCreatePopover, setShowCreatePopover] = useState(false)
   const [creatingFolderName, setCreatingFolderName] = useState('')
   const [creatingFolderMode, setCreatingFolderMode] = useState(false)
+  const [deleteScriptTarget, setDeleteScriptTarget] = useState<RegexScript | null>(null)
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ scripts: RegexScript[]; folder: string } | null>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
@@ -175,8 +179,8 @@ export default function RegexPanel() {
     setShowCreatePopover(false)
   }, [creatingFolderName, createFolder])
 
-  const handleDelete = useCallback(async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDelete = useCallback(async (id: string) => {
+    setDeleteScriptTarget(null)
     try {
       await removeRegexScript(id)
       if (expandedId === id) setExpandedId(null)
@@ -185,11 +189,9 @@ export default function RegexPanel() {
     }
   }, [removeRegexScript, expandedId])
 
-  const handleDeleteFolder = useCallback(async (scripts: RegexScript[], folderLabel: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDeleteFolder = useCallback(async (scripts: RegexScript[]) => {
+    setDeleteFolderTarget(null)
     if (scripts.length === 0) return
-    const confirmMsg = t('regexPanel.deleteFolderConfirm', { count: scripts.length, folder: folderLabel })
-    if (!confirm(confirmMsg)) return
     const ids = scripts.map((s) => s.id)
     try {
       const deleted = await bulkRemoveRegexScripts(ids)
@@ -446,7 +448,7 @@ export default function RegexPanel() {
                       </button>
                       <button
                         className={styles.folderDeleteBtn}
-                        onClick={(e) => handleDeleteFolder(group.scripts, folderLabel, e)}
+                        onClick={(e) => { e.stopPropagation(); setDeleteFolderTarget({ scripts: group.scripts, folder: folderLabel }) }}
                         title={t('regexPanel.deleteFolderScripts', { folder: folderLabel })}
                         aria-label={t('regexPanel.deleteFolderScriptsAria', { folder: folderLabel })}
                       >
@@ -462,7 +464,7 @@ export default function RegexPanel() {
                       script={script}
                       expanded={expandedId === script.id}
                       onToggleExpand={() => setExpandedId(expandedId === script.id ? null : script.id)}
-                      onDelete={(e) => handleDelete(script.id, e)}
+                      onDelete={(e) => { e.stopPropagation(); setDeleteScriptTarget(script) }}
                       onToggle={(disabled, e) => handleToggle(script.id, disabled, e)}
                       onBindPreset={(e) => handleBindToPreset(script, e)}
                       onUpdate={(updates) => updateRegexScript(script.id, updates)}
@@ -484,7 +486,7 @@ export default function RegexPanel() {
               script={script}
               expanded={expandedId === script.id}
               onToggleExpand={() => setExpandedId(expandedId === script.id ? null : script.id)}
-              onDelete={(e) => handleDelete(script.id, e)}
+              onDelete={(e) => { e.stopPropagation(); setDeleteScriptTarget(script) }}
               onToggle={(disabled, e) => handleToggle(script.id, disabled, e)}
               onBindPreset={(e) => handleBindToPreset(script, e)}
               onUpdate={(updates) => updateRegexScript(script.id, updates)}
@@ -498,6 +500,30 @@ export default function RegexPanel() {
           ))
         )}
       </div>
+
+      {deleteScriptTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('regexPanel.deleteScriptTitle')}
+          message={t('regexPanel.deleteScriptConfirm', { name: deleteScriptTarget.name })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDelete(deleteScriptTarget.id) }}
+          onCancel={() => setDeleteScriptTarget(null)}
+        />
+      )}
+
+      {deleteFolderTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('regexPanel.deleteFolderTitle')}
+          message={t('regexPanel.deleteFolderConfirm', { count: deleteFolderTarget.scripts.length, folder: deleteFolderTarget.folder })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDeleteFolder(deleteFolderTarget.scripts) }}
+          onCancel={() => setDeleteFolderTarget(null)}
+        />
+      )}
     </div>
   )
 }

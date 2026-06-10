@@ -589,6 +589,9 @@
     "clickPlus": "点击 + 创建。",
     "uncategorized": "未分类",
     "deleteFolderConfirm": "删除“{{folder}}”中的 {{count}} 个正则脚本？此操作不可撤销。",
+    "deleteFolderTitle": "删除文件夹脚本",
+    "deleteScriptTitle": "删除正则脚本",
+    "deleteScriptConfirm": "确定删除“{{name}}”吗？此操作无法撤销。",
     "deleteSomeFailed": "有 {{count}} 个脚本删除失败",
     "deletedScripts": "已删除 {{count}} 个脚本",
     "selectPresetFirstScript": "请先选择 Loom 预设再绑定正则脚本",
@@ -793,6 +796,8 @@
     "saveChanges": "保存更改",
     "saveAsNew": "另存为新预设",
     "delete": "删除",
+    "deletePresetConfirmTitle": "删除提示词预设",
+    "deletePresetConfirmMessage": "确定删除“{{name}}”吗？此操作无法撤销。",
     "boundToActiveCharacter": "已绑定到当前角色",
     "boundToActivePersona": "已绑定到当前人设",
     "promptParser": "提示词解析器",
@@ -1073,6 +1078,10 @@
       "expressionsCount": "{{count}} 个表情",
       "switchToSingle": "切换为单角色",
       "removeGroup": "删除组",
+      "deleteLabelConfirmTitle": "删除表情",
+      "deleteLabelConfirmMessage": "确定删除表情“{{label}}”吗？此操作无法撤销。",
+      "deleteGroupConfirmTitle": "移除分组",
+      "deleteGroupConfirmMessage": "确定移除分组“{{name}}”及其所有表情吗？此操作无法撤销。",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1111,7 +1120,9 @@
       "saved": "已保存。",
       "saveFailed": "保存失败。",
       "cleared": "已清除。",
-      "clearFailed": "清除失败。"
+      "clearFailed": "清除失败。",
+      "clearConfirmTitle": "清除 LoRA 绑定",
+      "clearConfirmMessage": "确定移除此角色已保存的 LoRA 绑定吗？此操作无法撤销。"
     }
   },
   "characterBrowser": {
@@ -1659,7 +1670,9 @@
     "boundCharacter": "配置已绑定到当前角色",
     "unboundCharacter": "已解除角色绑定",
     "bindFailed": "绑定配置失败",
-    "unbindFailed": "解除绑定失败"
+    "unbindFailed": "解除绑定失败",
+    "deleteConfirmTitle": "删除配置",
+    "deleteConfirmMessage": "确定删除“{{name}}”吗？此操作无法撤销。"
   },
   "groupChatsPanel": {
     "loading": "正在加载群聊...",
@@ -2060,7 +2073,9 @@
       "reattributeTitle": "重新归属到…",
       "detach": "（取消归属）",
       "pickEntity": "选择实体…",
-      "unattributed": "未归属 ({{count}})"
+      "unattributed": "未归属 ({{count}})",
+      "deleteConfirmTitle": "删除颜色",
+      "deleteConfirmMessage": "确定删除颜色 {{hex}} 吗？此操作无法撤销。"
     },
     "stats": {
       "loading": "正在加载统计…",
@@ -2130,7 +2145,8 @@
         "thought": "内心",
         "words": "{{count}} 词",
         "heuristic": "启发式"
-      }
+      },
+      "deleteRelationTitle": "删除关系"
     },
     "editors": {
       "cancel": "取消",
@@ -2249,6 +2265,13 @@
       "vaultDeleteFailed": "删除保险库失败",
       "vaultRenameFailed": "重命名保险库失败",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "删除实体",
+      "entityMessage": "确定删除实体“{{name}}”吗？此操作无法撤销。",
+      "bulkTitle": "删除所选实体",
+      "bulkMessage_one": "确定删除所选的 {{count}} 个实体吗？此操作无法撤销。",
+      "bulkMessage_other": "确定删除所选的 {{count}} 个实体吗？此操作无法撤销。"
     }
   },
   "councilFeedback": {
@@ -3022,7 +3045,9 @@
       "legacyExportMessage": "Lumiverse 专用宏（如 {{lumiaDef}}、{{loomStyle}}、{{lumiaOOC}}）在 SillyTavern 中无法解析。仅 {{char}}、{{user}}、{{persona}} 等标准宏可移植。使用 Lumiverse 宏的块将按原始宏文本导出。",
       "exportAnyway": "仍要导出",
       "deleteBlockTitle": "删除块",
-      "deleteBlockMessage": "确定要删除此块？此操作无法撤销。"
+      "deleteBlockMessage": "确定要删除此块？此操作无法撤销。",
+      "deletePresetTitle": "删除预设",
+      "deletePresetMessage": "确定删除“{{name}}”吗？其所有块都将被移除。此操作无法撤销。"
     },
     "toast": {
       "exportFailed": "导出预设失败",
@@ -3104,7 +3129,9 @@
         "loadFailed": "加载主题资源失败",
         "uploaded": "已上传 {{name}}",
         "uploadFailed": "上传主题资源失败"
-      }
+      },
+      "deleteConfirmTitle": "删除主题资源",
+      "deleteConfirmMessage": "确定删除“{{name}}”吗？引用该资源的 CSS 将无法再加载它。此操作无法撤销。"
     }
   }
 }

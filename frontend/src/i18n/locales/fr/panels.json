@@ -589,6 +589,9 @@
     "clickPlus": "Cliquez sur + pour en créer un.",
     "uncategorized": "non classé",
     "deleteFolderConfirm": "Supprimez tous les scripts regex {{count}} dans \"{{folder}}\" ? Cela ne peut pas être annulé.",
+    "deleteFolderTitle": "Supprimer les scripts du dossier",
+    "deleteScriptTitle": "Supprimer le script regex",
+    "deleteScriptConfirm": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
     "deleteSomeFailed": "Les scripts {{count}} n'ont pas pu être supprimés",
     "deletedScripts": "Scripts {{count}} supprimés",
     "selectPresetFirstScript": "Sélectionnez un préréglage Loom avant de lier les scripts regex",
@@ -793,6 +796,8 @@
     "saveChanges": "Enregistrer les modifications",
     "saveAsNew": "Enregistrer sous Nouveau",
     "delete": "Supprimer",
+    "deletePresetConfirmTitle": "Supprimer le préréglage de prompt",
+    "deletePresetConfirmMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
     "boundToActiveCharacter": "lié au personnage actif",
     "boundToActivePersona": "lié au personnage actif",
     "promptParser": "Analyseur d'invite",
@@ -1073,6 +1078,10 @@
       "expressionsCount": "expressions {{count}}",
       "switchToSingle": "Passer à un seul caractère",
       "removeGroup": "Supprimer le groupe",
+      "deleteLabelConfirmTitle": "Supprimer l'expression",
+      "deleteLabelConfirmMessage": "Supprimer l'expression \"{{label}}\" ? Cela ne peut pas être annulé.",
+      "deleteGroupConfirmTitle": "Supprimer le groupe",
+      "deleteGroupConfirmMessage": "Supprimer le groupe \"{{name}}\" et toutes ses expressions ? Cela ne peut pas être annulé.",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1111,7 +1120,9 @@
       "saved": "Enregistré.",
       "saveFailed": "Échec de l'enregistrement.",
       "cleared": "Effacer.",
-      "clearFailed": "Échec de la suppression."
+      "clearFailed": "Échec de la suppression.",
+      "clearConfirmTitle": "Effacer la liaison LoRA",
+      "clearConfirmMessage": "Supprimer la liaison LoRA enregistrée de ce personnage ? Cela ne peut pas être annulé."
     }
   },
   "characterBrowser": {
@@ -1659,7 +1670,9 @@
     "boundCharacter": "Chargement lié à ce personnage",
     "unboundCharacter": "Liaison de personnage supprimée",
     "bindFailed": "Échec de la liaison du chargement",
-    "unbindFailed": "Échec de la suppression de la liaison"
+    "unbindFailed": "Échec de la suppression de la liaison",
+    "deleteConfirmTitle": "Supprimer le loadout",
+    "deleteConfirmMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé."
   },
   "groupChatsPanel": {
     "loading": "Chargement du groupe chats...",
@@ -2060,7 +2073,9 @@
       "reattributeTitle": "Réattribuer à…",
       "detach": "(détacher)",
       "pickEntity": "Choisir l'entité…",
-      "unattributed": "Non attribué ({{count}})"
+      "unattributed": "Non attribué ({{count}})",
+      "deleteConfirmTitle": "Supprimer la couleur",
+      "deleteConfirmMessage": "Supprimer la couleur {{hex}} ? Cela ne peut pas être annulé."
     },
     "stats": {
       "loading": "Chargement des statistiques...",
@@ -2130,7 +2145,8 @@
         "thought": "pensée",
         "words": "{{count}} mots",
         "heuristic": "heuristique"
-      }
+      },
+      "deleteRelationTitle": "Supprimer la relation"
     },
     "editors": {
       "cancel": "Annuler",
@@ -2249,6 +2265,13 @@
       "vaultDeleteFailed": "Échec de la suppression du coffre-fort",
       "vaultRenameFailed": "Échec de la renommage du coffre-fort",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "Supprimer l'entité",
+      "entityMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
+      "bulkTitle": "Supprimer les entités sélectionnées",
+      "bulkMessage_one": "Supprimer {{count}} entité sélectionnée ? Cela ne peut pas être annulé.",
+      "bulkMessage_other": "Supprimer {{count}} entités sélectionnées ? Cela ne peut pas être annulé."
     }
   },
   "councilFeedback": {
@@ -3022,7 +3045,9 @@
       "legacyExportMessage": "Les macros spécifiques à Lumiverse (par exemple {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) ne seront pas résolues dans SillyTavern. Seules les macros standards telles que {{char}}, {{user}} et {{persona}} sont portables. Les blocs utilisant les macros Lumiverse seront exportés tels quels avec leur texte de macro brut.",
       "exportAnyway": "Exporter quand même",
       "deleteBlockTitle": "Supprimer le bloc",
-      "deleteBlockMessage": "Êtes-vous sûr de vouloir supprimer ce bloc ? Cette action ne peut pas être annulée."
+      "deleteBlockMessage": "Êtes-vous sûr de vouloir supprimer ce bloc ? Cette action ne peut pas être annulée.",
+      "deletePresetTitle": "Supprimer le préréglage",
+      "deletePresetMessage": "Supprimer \"{{name}}\" ? Tous ses blocs seront supprimés. Cette action ne peut pas être annulée."
     },
     "toast": {
       "exportFailed": "Échec de l'exportation du préréglage",
@@ -3104,7 +3129,9 @@
         "loadFailed": "Échec du chargement des éléments du thème",
         "uploaded": "Téléchargé {{name}}",
         "uploadFailed": "Échec du téléchargement du thème actif"
-      }
+      },
+      "deleteConfirmTitle": "Supprimer l'actif du thème",
+      "deleteConfirmMessage": "Supprimer \"{{name}}\" ? Tout CSS faisant référence à cet actif ne pourra plus le charger. Cela ne peut pas être annulé."
     }
   }
 }

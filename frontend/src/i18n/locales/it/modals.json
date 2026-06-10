@@ -542,7 +542,10 @@
     "saveFailed": "Salvataggio addon fallito",
     "createFailed": "Creazione addon fallita",
     "deleteFailed": "Eliminazione addon fallita",
-    "duplicateFailed": "Duplicazione addon fallita"
+    "duplicateFailed": "Duplicazione addon fallita",
+    "deleteConfirmTitle": "Elimina addon",
+    "deleteConfirmMessage": "Eliminare \"{{name}}\"? Questa operazione non può essere annullata.",
+    "deleteConfirmMessageUnnamed": "Eliminare questo addon? Questa operazione non può essere annullata."
   },
   "personaAddons": {
     "title": "Addon Persona",

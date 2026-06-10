@@ -590,6 +590,9 @@
     "clickPlus": "Click + to create one.",
     "uncategorized": "uncategorized",
     "deleteFolderConfirm": "Delete all {{count}} regex scripts in \"{{folder}}\"? This cannot be undone.",
+    "deleteFolderTitle": "Delete Folder Scripts",
+    "deleteScriptTitle": "Delete Regex Script",
+    "deleteScriptConfirm": "Delete \"{{name}}\"? This cannot be undone.",
     "deleteSomeFailed": "{{count}} scripts could not be deleted",
     "deletedScripts": "Deleted {{count}} scripts",
     "selectPresetFirstScript": "Select a Loom preset before binding regex scripts",
@@ -800,6 +803,8 @@
     "saveChanges": "Save Changes",
     "saveAsNew": "Save as New",
     "delete": "Delete",
+    "deletePresetConfirmTitle": "Delete Prompt Preset",
+    "deletePresetConfirmMessage": "Delete \"{{name}}\"? This cannot be undone.",
     "boundToActiveCharacter": "bound to active character",
     "boundToActivePersona": "bound to active persona",
     "promptParser": "Prompt Parser",
@@ -1080,6 +1085,10 @@
       "expressionsCount": "{{count}} expressions",
       "switchToSingle": "Switch to Single-Character",
       "removeGroup": "Remove group",
+      "deleteLabelConfirmTitle": "Delete Expression",
+      "deleteLabelConfirmMessage": "Delete the expression \"{{label}}\"? This cannot be undone.",
+      "deleteGroupConfirmTitle": "Remove Group",
+      "deleteGroupConfirmMessage": "Remove the group \"{{name}}\" and all of its expressions? This cannot be undone.",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1118,7 +1127,9 @@
       "saved": "Saved.",
       "saveFailed": "Save failed.",
       "cleared": "Cleared.",
-      "clearFailed": "Clear failed."
+      "clearFailed": "Clear failed.",
+      "clearConfirmTitle": "Clear LoRA Binding",
+      "clearConfirmMessage": "Remove the saved LoRA binding from this character? This cannot be undone."
     }
   },
   "characterBrowser": {
@@ -1668,7 +1679,9 @@
     "boundCharacter": "Loadout bound to this character",
     "unboundCharacter": "Character binding removed",
     "bindFailed": "Failed to bind loadout",
-    "unbindFailed": "Failed to remove binding"
+    "unbindFailed": "Failed to remove binding",
+    "deleteConfirmTitle": "Delete Loadout",
+    "deleteConfirmMessage": "Delete \"{{name}}\"? This cannot be undone."
   },
   "groupChatsPanel": {
     "loading": "Loading group chats...",
@@ -2076,7 +2089,9 @@
       "reattributeTitle": "Reattribute to…",
       "detach": "(detach)",
       "pickEntity": "Pick entity…",
-      "unattributed": "Unattributed ({{count}})"
+      "unattributed": "Unattributed ({{count}})",
+      "deleteConfirmTitle": "Delete Color",
+      "deleteConfirmMessage": "Delete the color {{hex}}? This cannot be undone."
     },
     "stats": {
       "loading": "Loading stats...",
@@ -2146,7 +2161,8 @@
         "thought": "thought",
         "words": "{{count}} words",
         "heuristic": "heuristic"
-      }
+      },
+      "deleteRelationTitle": "Delete Relation"
     },
     "editors": {
       "cancel": "Cancel",
@@ -2265,6 +2281,13 @@
       "vaultDeleteFailed": "Failed to delete vault",
       "vaultRenameFailed": "Failed to rename vault",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "Delete Entity",
+      "entityMessage": "Delete \"{{name}}\"? This cannot be undone.",
+      "bulkTitle": "Delete Selected Entities",
+      "bulkMessage_one": "Delete {{count}} selected entity? This cannot be undone.",
+      "bulkMessage_other": "Delete {{count}} selected entities? This cannot be undone."
     }
   },
   "councilFeedback": {
@@ -3038,7 +3061,9 @@
       "legacyExportMessage": "Lumiverse-specific macros (e.g. {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) will not resolve in SillyTavern. Only standard macros like {{char}}, {{user}}, and {{persona}} are portable. Blocks using Lumiverse macros will be exported as-is with their raw macro text.",
       "exportAnyway": "Export Anyway",
       "deleteBlockTitle": "Delete Block",
-      "deleteBlockMessage": "Are you sure you want to delete this block? This action cannot be undone."
+      "deleteBlockMessage": "Are you sure you want to delete this block? This action cannot be undone.",
+      "deletePresetTitle": "Delete Preset",
+      "deletePresetMessage": "Delete \"{{name}}\"? All of its blocks will be removed. This action cannot be undone."
     },
     "toast": {
       "exportFailed": "Failed to export preset",
@@ -3120,7 +3145,9 @@
         "loadFailed": "Failed to load theme assets",
         "uploaded": "Uploaded {{name}}",
         "uploadFailed": "Failed to upload theme asset"
-      }
+      },
+      "deleteConfirmTitle": "Delete Theme Asset",
+      "deleteConfirmMessage": "Delete \"{{name}}\"? Any CSS referencing this asset will stop loading it. This cannot be undone."
     }
   }
 }

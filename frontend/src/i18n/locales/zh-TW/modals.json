@@ -542,7 +542,10 @@
     "saveFailed": "保存附加項失敗",
     "createFailed": "創建附加項失敗",
     "deleteFailed": "刪除附加項失敗",
-    "duplicateFailed": "複製附加項失敗"
+    "duplicateFailed": "複製附加項失敗",
+    "deleteConfirmTitle": "刪除附加項",
+    "deleteConfirmMessage": "確定刪除“{{name}}”嗎？此操作無法撤銷。",
+    "deleteConfirmMessageUnnamed": "確定刪除此附加項嗎？此操作無法撤銷。"
   },
   "personaAddons": {
     "title": "人格附加項",
