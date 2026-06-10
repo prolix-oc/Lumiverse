@@ -549,7 +549,7 @@ function ScriptRow({
   onDelete: (e: React.MouseEvent) => void
   onToggle: (disabled: boolean, e: React.MouseEvent) => void
   onBindPreset: (e: React.MouseEvent) => void
-  onUpdate: (updates: Record<string, any>) => void
+  onUpdate: (updates: Record<string, any>) => void | Promise<void>
   onOpenModal: () => void
   targetBadge: React.ReactNode
   scopeIcon: React.ReactNode
@@ -559,6 +559,53 @@ function ScriptRow({
 }) {
   const { t } = useTranslation('panels')
   const replaceRef = useRef<HTMLTextAreaElement>(null)
+
+  // Text fields go through a local draft so the controlled inputs update
+  // synchronously (the store round-trips through the API and a WS-triggered
+  // refetch, which would replace the value mid-typing and throw the cursor
+  // to the end) and the API write is debounced per typing pause.
+  const [draft, setDraft] = useState(() => ({
+    name: script.name,
+    find_regex: script.find_regex,
+    replace_string: script.replace_string,
+  }))
+  const pendingRef = useRef<Record<string, any>>({})
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const onUpdateRef = useRef(onUpdate)
+  onUpdateRef.current = onUpdate
+
+  // Adopt external changes (editor modal, other tabs) only when no local
+  // edits are waiting to be saved.
+  useEffect(() => {
+    if (Object.keys(pendingRef.current).length > 0) return
+    setDraft((d) =>
+      d.name === script.name && d.find_regex === script.find_regex && d.replace_string === script.replace_string
+        ? d
+        : { name: script.name, find_regex: script.find_regex, replace_string: script.replace_string }
+    )
+  }, [script.name, script.find_regex, script.replace_string])
+
+  const flushDraft = useCallback(() => {
+    clearTimeout(saveTimer.current)
+    const pending = pendingRef.current
+    pendingRef.current = {}
+    if (Object.keys(pending).length === 0) return
+    void Promise.resolve(onUpdateRef.current(pending)).catch((err: any) => {
+      toast.error(err.body?.error || err.message || i18n.t('regexPanel.requestFailed', { ns: 'panels' }))
+    })
+  }, [])
+
+  const queueDraftUpdate = useCallback((updates: Partial<Pick<RegexScript, 'name' | 'find_regex' | 'replace_string'>>) => {
+    setDraft((d) => ({ ...d, ...updates }))
+    pendingRef.current = { ...pendingRef.current, ...updates }
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(flushDraft, 400)
+  }, [flushDraft])
+
+  // Persist trailing edits when the row unmounts (folder collapse, scope
+  // filter change, panel close).
+  useEffect(() => () => flushDraft(), [flushDraft])
+
   const performance = getRegexPerformanceMetadata(script)
   const warningText = performance
     ? performance.timed_out
@@ -578,7 +625,7 @@ function ScriptRow({
       >
         <Badge size="sm">{scopeIcon}</Badge>
         <span className={clsx(styles.scriptName, script.disabled && styles.scriptNameDisabled)}>
-          {script.name}
+          {draft.name}
         </span>
         {performance && (
           <span className={styles.slowBadge} title={warningText ?? undefined} aria-label={warningText ?? undefined}>
@@ -614,8 +661,8 @@ function ScriptRow({
               <label className={styles.fieldLabel}>{t('regexPanel.name')}</label>
             <input
               className={styles.fieldInput}
-              value={script.name}
-              onChange={(e) => onUpdate({ name: e.target.value })}
+              value={draft.name}
+              onChange={(e) => queueDraftUpdate({ name: e.target.value })}
             />
           </div>
           {performance && (
@@ -644,8 +691,8 @@ function ScriptRow({
             </label>
             <input
               className={styles.fieldInputMono}
-              value={script.find_regex}
-              onChange={(e) => onUpdate({ find_regex: e.target.value })}
+              value={draft.find_regex}
+              onChange={(e) => queueDraftUpdate({ find_regex: e.target.value })}
               placeholder={t('regexPanel.findPlaceholder')}
             />
           </div>
@@ -661,7 +708,7 @@ function ScriptRow({
                   className={styles.tokenChip}
                   title={t(token.hintKey)}
                   onClick={() => {
-                    onUpdate({ replace_string: insertAtCursor(replaceRef.current, token.value) })
+                    queueDraftUpdate({ replace_string: insertAtCursor(replaceRef.current, token.value) })
                   }}
                 >
                   {token.label}
@@ -674,7 +721,7 @@ function ScriptRow({
                   className={clsx(styles.tokenChip, styles.tokenChipHtml)}
                   title={t('regexPanel.wrapIn', { tag: htmlToken.label })}
                   onClick={() => {
-                    onUpdate({ replace_string: insertAtCursor(replaceRef.current, htmlToken.value) })
+                    queueDraftUpdate({ replace_string: insertAtCursor(replaceRef.current, htmlToken.value) })
                   }}
                 >
                   {htmlToken.label}
@@ -684,8 +731,8 @@ function ScriptRow({
             <textarea
               ref={replaceRef}
               className={styles.fieldTextarea}
-              value={script.replace_string}
-              onChange={(e) => onUpdate({ replace_string: e.target.value })}
+              value={draft.replace_string}
+              onChange={(e) => queueDraftUpdate({ replace_string: e.target.value })}
               placeholder={t('regexPanel.replacePlaceholder')}
               rows={2}
             />
