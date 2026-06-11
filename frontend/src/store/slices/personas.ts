@@ -8,6 +8,12 @@ export function resolveBinding(val: string | CharacterPersonaBinding): Character
   return typeof val === 'string' ? { personaId: val } : val
 }
 
+/** Persona name for switch toasts, with the title appended in parentheses when set. */
+export function personaToastName(persona: Pick<Persona, 'name' | 'title'>): string {
+  const title = persona.title?.trim()
+  return title ? `${persona.name} (${title})` : persona.name
+}
+
 function normalizeTag(tag: string): string {
   return tag.trim().toLowerCase()
 }

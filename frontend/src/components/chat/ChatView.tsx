@@ -13,7 +13,7 @@ import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
 import { imagesApi } from '@/api/images'
 import { expressionsApi } from '@/api/expressions'
-import { resolveAutoPersonaBinding } from '@/store/slices/personas'
+import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
 import type { WallpaperRef } from '@/types/store'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
@@ -526,7 +526,7 @@ export default function ChatView() {
           if (resolvedBinding.personaId && boundPersona) {
             if (activePersonaId !== resolvedBinding.personaId) {
               setActivePersona(resolvedBinding.personaId)
-              toast.info(t('chatView.switchedPersona', { name: boundPersona.name }))
+              toast.info(t('chatView.switchedPersona', { name: personaToastName(boundPersona) }))
             }
             autoSwitchedPersonaIdRef.current = resolvedBinding.personaId
 
