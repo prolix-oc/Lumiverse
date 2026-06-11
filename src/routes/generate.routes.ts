@@ -46,8 +46,19 @@ app.post("/stop", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (body.generation_id) {
-    const stopped = svc.stopGeneration(body.generation_id);
+    const stopped = svc.stopGeneration(userId, body.generation_id);
+    // Stale id (the client's generation state raced a newer generation, e.g.
+    // council retry or a quick regen): never let stop be a silent no-op —
+    // fall back to whatever is actually running for the chat.
+    if (!stopped && body.chat_id) {
+      return c.json({ stopped: svc.stopChatGenerations(userId, body.chat_id) });
+    }
     return c.json({ stopped });
+  }
+  // No generation id yet (optimistic phase). Prefer the chat-scoped stop so a
+  // background generation in another chat isn't collateral damage.
+  if (body.chat_id) {
+    return c.json({ stopped: svc.stopChatGenerations(userId, body.chat_id) });
   }
   svc.stopUserGenerations(userId);
   return c.json({ stopped: true });

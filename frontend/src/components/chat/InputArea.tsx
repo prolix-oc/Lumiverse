@@ -971,7 +971,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       if (e.key === 'Escape' && isStreaming) {
         e.preventDefault()
         e.stopPropagation()
-        generateApi.stop(activeGenerationId || undefined).catch(console.error)
+        generateApi.stop(activeGenerationId || undefined, chatId).catch(console.error)
         // If in optimistic phase, revert locally
         if (!activeGenerationId) {
           stopStreaming()
@@ -980,7 +980,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [isStreaming, activeGenerationId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
 
   useEffect(() => {
     if (openPopover !== 'persona') return
@@ -1514,9 +1514,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
     try {
-      // If we have a generation ID, stop that specific generation.
-      // Otherwise (optimistic phase), stop all user generations.
-      await generateApi.stop(activeGenerationId || undefined)
+      // Stop the specific generation when we know its ID; the chat id lets the
+      // backend fall back to the chat's active generation if the ID is stale
+      // (or, in the optimistic phase, not yet known).
+      await generateApi.stop(activeGenerationId || undefined, chatId)
     } catch (err) {
       console.error('[InputArea] Failed to stop:', err)
     }
@@ -1524,7 +1525,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (!activeGenerationId) {
       stopStreaming()
     }
-  }, [isStreaming, activeGenerationId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
 
   const handleNewChat = useCallback(async () => {
     // For group chats, open group creator pre-populated with current members

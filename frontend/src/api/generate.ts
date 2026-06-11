@@ -300,8 +300,13 @@ export const generateApi = {
     return post<GenerateResponse>('/generate', request, LONG)
   },
 
-  stop(generationId?: string) {
-    return post<void>('/generate/stop', generationId ? { generation_id: generationId } : {})
+  stop(generationId?: string, chatId?: string) {
+    // chat_id lets the backend fall back to stopping whatever is actually
+    // running for the chat when generation_id is stale (or not yet known).
+    const body: Record<string, string> = {}
+    if (generationId) body.generation_id = generationId
+    if (chatId) body.chat_id = chatId
+    return post<void>('/generate/stop', body)
   },
 
   async regenerate(request: GenerateRequest) {

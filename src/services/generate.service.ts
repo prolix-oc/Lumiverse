@@ -3951,9 +3951,11 @@ function emitExpressionChanged(
   );
 }
 
-export function stopGeneration(generationId: string): boolean {
+export function stopGeneration(userId: string, generationId: string): boolean {
   const entry = activeGenerations.get(generationId);
-  if (!entry) return false;
+  // User scoping: a generationId is unguessable, but never let one user's
+  // stop request abort another user's generation.
+  if (!entry || entry.userId !== userId) return false;
   entry.controller.abort();
   // Tear down any fire-and-forget background work for this chat too —
   // the user asked to stop, so cache-warming cortex/databank queries
@@ -3971,14 +3973,19 @@ export function stopUserGenerations(userId: string): void {
   abortUserBackgrounds(userId);
 }
 
-export function stopChatGenerations(userId: string, chatId: string): void {
+export function stopChatGenerations(userId: string, chatId: string): boolean {
   const chatKey = `${userId}:${chatId}`;
   const genId = activeChatGenerations.get(chatKey);
+  let stopped = false;
   if (genId) {
     const entry = activeGenerations.get(genId);
-    if (entry) entry.controller.abort();
+    if (entry) {
+      entry.controller.abort();
+      stopped = true;
+    }
   }
   abortChatBackground(userId, chatId);
+  return stopped;
 }
 
 export function stopAllGenerations(): void {

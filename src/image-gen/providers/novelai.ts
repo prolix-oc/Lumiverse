@@ -4,7 +4,7 @@ import type { ImageProvider } from "../provider";
 import type { ImageProviderCapabilities } from "../param-schema";
 import type { ImageGenRequest, ImageGenResponse } from "../types";
 import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
-import { fetchWithPreflightAbort, readWithAbort } from "../../llm/stream-utils";
+import { cancelStreamAndCloseConnection, fetchWithPreflightAbort, readWithAbort } from "../../llm/stream-utils";
 import { applyRawOverride } from "../types";
 
 const DIRECTOR_REF_CANVASES: Array<[number, number]> = [
@@ -279,7 +279,7 @@ async function extractImageFromResponse(res: Response, signal?: AbortSignal): Pr
         }
       }
     } finally {
-      if (!doneNaturally) await reader.cancel().catch(() => {});
+      if (!doneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
     fullBuffer = new Uint8Array(totalBytes);
     let offset = 0;
