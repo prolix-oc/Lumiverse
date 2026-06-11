@@ -392,6 +392,7 @@ export default function ChatView() {
 
         setActiveChat(chatId, chat.character_id)
         useStore.getState().setActiveChatDisplayOwner(chat.character_display_owner ?? null)
+        useStore.getState().setActiveChatName(chat.name ?? null)
         setMessages(msgPage.data, msgPage.total)
 
         // Chat-derived store state, applied synchronously with setMessages so

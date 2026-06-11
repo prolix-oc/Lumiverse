@@ -7,6 +7,7 @@ import { useThemeApplicator } from '@/hooks/useThemeApplicator'
 import { useCharacterTheme } from '@/hooks/useCharacterTheme'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
@@ -31,6 +32,7 @@ export default function App() {
   useCharacterTheme()
   useCustomCSSApplicator()
   useAppInit()
+  useDocumentTitle()
   useBadging()
   useTTSAutoPlay()
   useAutoSummarization()

@@ -1,5 +1,6 @@
 {
   "appName": "Lumiverso",
+  "home": "Home",
   "actions": {
     "save": "Salva",
     "cancel": "Annulla",

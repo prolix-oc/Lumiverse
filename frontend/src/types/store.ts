@@ -15,6 +15,8 @@ export interface ChatSlice {
    */
   activeChatMetadata: Record<string, any> | null
   activeChatDisplayOwner: string | null
+  /** The chat row's `name` for the currently-open chat (group chats display it as the group name) */
+  activeChatName: string | null
   messages: Message[]
   isStreaming: boolean
   streamingContent: string
@@ -50,6 +52,7 @@ export interface ChatSlice {
   setActiveChatAvatarId: (imageId: string | null) => void
   setActiveChatMetadata: (metadata: Record<string, any> | null) => void
   setActiveChatDisplayOwner: (owner: string | null) => void
+  setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void

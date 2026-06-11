@@ -96,6 +96,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     activeChatId: null,
     activeCharacterId: null,
     activeChatDisplayOwner: null,
+    activeChatName: null,
     activeChatWallpaper: null,
     activeChatAvatarId: null,
     activeChatMetadata: null,
@@ -124,6 +125,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         activeChatId: chatId,
         activeCharacterId: characterId,
         activeChatDisplayOwner: null,
+        activeChatName: null,
         activeChatWallpaper: null,
         activeChatAvatarId: null,
         activeChatMetadata: null,
@@ -157,6 +159,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     setActiveChatMetadata: (metadata) => set({ activeChatMetadata: metadata }),
 
     setActiveChatDisplayOwner: (owner) => set({ activeChatDisplayOwner: owner }),
+
+    setActiveChatName: (name) => set({ activeChatName: name }),
 
     setMessages: (messages, total?) =>
       set({ messages: sortMessagesByPosition(messages), totalChatLength: total ?? messages.length }),
