@@ -976,6 +976,9 @@ export interface WorldInfoSlice {
   worldInfoStats: WorldInfoStats | null
   setActivatedWorldInfo: (entries: ActivatedWorldInfoEntry[], stats?: WorldInfoStats | null) => void
   clearActivatedWorldInfo: () => void
+  /** Book id the Lorebook tab should select on next mount/visit (cross-component navigation). */
+  pendingWorldBookEditId: string | null
+  setPendingWorldBookEditId: (id: string | null) => void
 }
 
 // Lumi Feedback Slice

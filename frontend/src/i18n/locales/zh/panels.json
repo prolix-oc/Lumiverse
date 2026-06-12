@@ -1012,6 +1012,7 @@
     "noWorldBooks": "没有可用的世界书",
     "unknown": "未知",
     "removeWorldBook": "移除世界书",
+    "openInLorebook": "在世界书标签页中打开",
     "noWorldBooksAttached": "未关联世界书",
     "embeddedLorebook": "内嵌世界书",
     "embeddedLorebookEntries": "角色卡中发现 {{count}} 条条目",

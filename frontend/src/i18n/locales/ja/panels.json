@@ -1012,6 +1012,7 @@
     "noWorldBooks": "利用可能な世界の本はありません",
     "unknown": "不明",
     "removeWorldBook": "ワールドブックを削除",
+    "openInLorebook": "ロアブックタブで開く",
     "noWorldBooksAttached": "ワールドブックが添付されていません",
     "embeddedLorebook": "キャラクタカードに見つかった埋め込まれた伝承書",
     "embeddedLorebookEntries": "{{count}}エントリ",

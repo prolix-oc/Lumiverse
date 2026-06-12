@@ -1011,6 +1011,7 @@
     "noWorldBooks": "Nessun worldbook disponibile",
     "unknown": "Sconosciuto",
     "removeWorldBook": "Rimuovi worldbook",
+    "openInLorebook": "Apri nella scheda Lorebook",
     "noWorldBooksAttached": "Nessun worldbook allegato",
     "embeddedLorebook": "Lorebook integrato",
     "embeddedLorebookEntries": "{{count}} voci trovate nella scheda personaggio",

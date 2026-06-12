@@ -6,4 +6,6 @@ export const createWorldInfoSlice: StateCreator<WorldInfoSlice> = (set) => ({
   worldInfoStats: null,
   setActivatedWorldInfo: (entries, stats) => set({ activatedWorldInfo: entries, worldInfoStats: stats ?? null }),
   clearActivatedWorldInfo: () => set({ activatedWorldInfo: [], worldInfoStats: null }),
+  pendingWorldBookEditId: null,
+  setPendingWorldBookEditId: (id) => set({ pendingWorldBookEditId: id }),
 })

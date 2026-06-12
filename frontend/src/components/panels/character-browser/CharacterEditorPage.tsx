@@ -109,6 +109,8 @@ export default function CharacterEditorPage() {
 
   const editingCharacterId = useStore((s) => s.editingCharacterId)
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
+  const openDrawer = useStore((s) => s.openDrawer)
+  const setPendingWorldBookEditId = useStore((s) => s.setPendingWorldBookEditId)
   const allCharacters = useStore((s) => s.characters)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -1277,7 +1279,20 @@ export default function CharacterEditorPage() {
                               const wb = worldBooks.find((b) => b.id === id)
                               return (
                                 <span key={id} className={styles.charWbPill}>
-                                  <span className={styles.charWbPillName}>{wb?.name || t('characterEditor.unknown')}</span>
+                                  <button
+                                    type="button"
+                                    className={styles.charWbPillName}
+                                    disabled={!wb}
+                                    onClick={() => {
+                                      if (!wb) return
+                                      setPendingWorldBookEditId(wb.id)
+                                      close()
+                                      openDrawer('lorebook')
+                                    }}
+                                    title={wb ? t('characterEditor.openInLorebook') : undefined}
+                                  >
+                                    {wb?.name || t('characterEditor.unknown')}
+                                  </button>
                                   <button
                                     type="button"
                                     className={styles.charWbPillRemove}

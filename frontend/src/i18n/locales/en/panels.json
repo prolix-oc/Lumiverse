@@ -1013,6 +1013,7 @@
     "noWorldBooks": "No world books available",
     "unknown": "Unknown",
     "removeWorldBook": "Remove world book",
+    "openInLorebook": "Open in Lorebook tab",
     "noWorldBooksAttached": "No world books attached",
     "embeddedLorebook": "Embedded Lorebook",
     "embeddedLorebookEntries": "{{count}} entries found in character card",

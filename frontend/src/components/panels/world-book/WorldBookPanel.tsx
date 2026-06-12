@@ -42,6 +42,16 @@ export default function WorldBookPanel() {
   // Book list state
   const [books, setBooks] = useState<WorldBook[]>([])
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null)
+
+  // Cross-component navigation: other panels (e.g. the character editor) can
+  // request a book be opened here via the store before switching to this tab.
+  const pendingWorldBookEditId = useStore((s) => s.pendingWorldBookEditId)
+  const setPendingWorldBookEditId = useStore((s) => s.setPendingWorldBookEditId)
+  useEffect(() => {
+    if (!pendingWorldBookEditId) return
+    setSelectedBookId(pendingWorldBookEditId)
+    setPendingWorldBookEditId(null)
+  }, [pendingWorldBookEditId, setPendingWorldBookEditId])
   // Books are presented alphabetically (case-insensitive) in every selector;
   // the backend returns them in updated_at order which made navigation tedious
   // once there were more than a handful.

@@ -1012,6 +1012,7 @@
     "noWorldBooks": "Aucun livre du monde disponible",
     "unknown": "Inconnu",
     "removeWorldBook": "Supprimer le livre du monde",
+    "openInLorebook": "Ouvrir dans l'onglet Lorebook",
     "noWorldBooksAttached": "Aucun livre du monde attaché",
     "embeddedLorebook": "Livre d'histoire intégré",
     "embeddedLorebookEntries": "{{count}} entrées trouvées dans la carte de personnage",
