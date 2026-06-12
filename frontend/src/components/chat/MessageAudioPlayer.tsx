@@ -13,6 +13,12 @@ import {
   isRegenerating,
   subscribeRegenerating,
 } from '@/lib/ttsPersistence'
+import {
+  speak,
+  stop as stopTTSEngine,
+  getActiveMessageId,
+  subscribeActiveMessage,
+} from '@/lib/ttsAudio'
 import styles from './MessageAudioPlayer.module.css'
 import clsx from 'clsx'
 
@@ -123,6 +129,41 @@ export default function MessageAudioPlayer({
     () => false,
   )
 
+  // ── Engine playback observation ─────────────────────────────────────────
+  // True while the shared Web Audio engine is speaking THIS message — either
+  // the autoplay-policy fallback below or a pipeline fallback (e.g. save
+  // failure during regen). The play button doubles as Stop in that state so
+  // the widget never looks idle while its audio is audibly playing.
+  const enginePlaying = useSyncExternalStore(
+    subscribeActiveMessage,
+    () => (messageId ? getActiveMessageId() === messageId : false),
+    () => false,
+  )
+
+  // Autoplay fallback: HTMLAudioElement.play() without a recent user gesture
+  // is rejected by autoplay policy in some browsers (Safari/iOS always by
+  // default, Chrome in hidden tabs) — and by the time a generation + synth
+  // round-trip finishes, the send gesture is long expired. The Web Audio
+  // engine doesn't have that problem: its AudioContext is unlocked once by
+  // the app-level primer and stays unlocked, which is exactly how pre-widget
+  // auto-play worked. Fetch the saved file and route it through the engine
+  // so the user still hears the message; `enginePlaying` keeps the button
+  // state coherent.
+  const playViaEngineFallback = useCallback(() => {
+    if (!messageId) return
+    fetch(src, { credentials: 'include' })
+      .then((res) => {
+        if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`)
+        return res.arrayBuffer()
+      })
+      .then((buffer) => {
+        speak(buffer, messageId)
+      })
+      .catch((err) => {
+        console.warn('[MessageAudioPlayer] engine fallback failed:', err)
+      })
+  }, [src, messageId])
+
   // ── HTMLAudioElement event wiring ───────────────────────────────────────
   useEffect(() => {
     const el = audioRef.current
@@ -185,8 +226,9 @@ export default function MessageAudioPlayer({
     if (!el) return
     void el.play().catch((err) => {
       console.warn('[MessageAudioPlayer] autoplay-on-src-change rejected:', err)
+      if ((err as any)?.name === 'NotAllowedError') playViaEngineFallback()
     })
-  }, [src, messageId])
+  }, [src, messageId, playViaEngineFallback])
 
   // Pause whenever we enter the regenerating state. The audio attachment
   // hasn't actually changed yet at this point (the backend save hasn't
@@ -218,16 +260,25 @@ export default function MessageAudioPlayer({
 
   // ── Actions ─────────────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
+    // Engine owns playback (autoplay-policy fallback or pipeline fallback)
+    // → the button acts as Stop for it.
+    if (messageId && getActiveMessageId() === messageId) {
+      stopTTSEngine()
+      return
+    }
     const el = audioRef.current
     if (!el) return
     if (el.paused || el.ended) {
+      // Preempt any engine playback (including other messages') so widget
+      // and engine audio never overlap.
+      stopTTSEngine()
       void el.play().catch((err) => {
         console.warn('[MessageAudioPlayer] play() rejected:', err)
       })
     } else {
       el.pause()
     }
-  }, [])
+  }, [messageId])
 
   const toggleMute = useCallback(() => {
     const el = audioRef.current
@@ -286,7 +337,10 @@ export default function MessageAudioPlayer({
     if (!exiting) return
     const el = audioRef.current
     if (el && !el.paused) el.pause()
-  }, [exiting])
+    // If the engine fallback is speaking this message's audio, stop it too —
+    // the attachment is going away, ghost audio shouldn't outlive it.
+    if (messageId && getActiveMessageId() === messageId) stopTTSEngine()
+  }, [exiting, messageId])
 
   // ── Wrapper animation lifecycle ─────────────────────────────────────────
   // Two animations can run on the wrapper: load-in (.wrapperFresh) and
@@ -297,7 +351,12 @@ export default function MessageAudioPlayer({
   // requested it) kicks off playback. We wait until the load-in finishes
   // before starting audio so playback isn't disconnected from the
   // arrival animation.
-  const onWrapperAnimationEnd = useCallback(() => {
+  const onWrapperAnimationEnd = useCallback((e: React.AnimationEvent<HTMLDivElement>) => {
+    // animationend bubbles — only react to the wrapper's own load-in/exit
+    // animations, not child animations (custom CSS themes can animate
+    // anything inside the bubble, which would otherwise end the load-in
+    // early or fire a spurious onExited).
+    if (e.target !== e.currentTarget) return
     if (exiting) {
       onExited?.()
       return
@@ -308,12 +367,15 @@ export default function MessageAudioPlayer({
     const el = audioRef.current
     if (!el) return
     void el.play().catch((err) => {
-      // Browser autoplay policy may block this when no recent user gesture
-      // exists for this origin. Not a hard error — the user can still click
-      // the play button. Log for visibility.
+      // Browser autoplay policy blocks unmuted HTMLAudioElement playback
+      // without a recent user gesture (Safari/iOS by default, Chrome in
+      // hidden tabs) — and the send gesture has long expired by the time
+      // generation + synthesis complete. Route the audio through the
+      // gesture-primed Web Audio engine instead so auto-play still sounds.
       console.warn('[MessageAudioPlayer] autoplay rejected:', err)
+      if ((err as any)?.name === 'NotAllowedError') playViaEngineFallback()
     })
-  }, [exiting, onExited, animationDone, shouldAutoPlay])
+  }, [exiting, onExited, animationDone, shouldAutoPlay, playViaEngineFallback])
 
   return (
     <div
@@ -344,10 +406,10 @@ export default function MessageAudioPlayer({
             type="button"
             className={styles.playBtn}
             onClick={togglePlay}
-            aria-label={isPlaying ? 'Pause' : 'Play'}
-            aria-pressed={isPlaying}
+            aria-label={isPlaying || enginePlaying ? 'Pause' : 'Play'}
+            aria-pressed={isPlaying || enginePlaying}
           >
-            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+            {isPlaying || enginePlaying ? <Pause size={14} /> : <Play size={14} />}
           </button>
 
           <input
