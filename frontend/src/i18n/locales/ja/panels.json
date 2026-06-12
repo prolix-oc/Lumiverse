@@ -1207,6 +1207,7 @@
     "searchWorldBooks": "世界の本を検索…",
     "noWorldBooksAvailable": "利用可能な世界の本はありません",
     "removeFromAlwaysActive": "常にアクティブから削除",
+    "editBook": "このワールドブックを編集",
     "noGlobalActive": "アクティブなグローバル ワールド ブックはありません",
     "thisChatOnly": "このチャットのみ",
     "openChatToAdd": "チャットを開き、チャット範囲のワールド ブックを追加",

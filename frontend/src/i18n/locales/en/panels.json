@@ -1208,6 +1208,7 @@
     "searchWorldBooks": "Search world books…",
     "noWorldBooksAvailable": "No world books available",
     "removeFromAlwaysActive": "Remove from always active",
+    "editBook": "Edit this world book",
     "noGlobalActive": "No global world books active",
     "thisChatOnly": "This Chat Only",
     "openChatToAdd": "Open a chat to add chat-scoped world books",

@@ -98,6 +98,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.globalPillName:hover {
+  text-decoration: underline;
 }
 
 .globalPillRemove {
@@ -182,6 +192,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chatPillName:hover {
+  text-decoration: underline;
 }
 
 .chatPillRemove {

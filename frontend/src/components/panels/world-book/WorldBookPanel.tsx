@@ -544,7 +544,14 @@ export default function WorldBookPanel() {
           <div className={styles.globalPills}>
             {activeGlobalBooks.map((book) => (
               <span key={book.id} className={styles.globalPill}>
-                <span className={styles.globalPillName}>{book.name}</span>
+                <button
+                  type="button"
+                  className={styles.globalPillName}
+                  onClick={() => setSelectedBookId(book.id)}
+                  title={t('worldBookPanel.editBook')}
+                >
+                  {book.name}
+                </button>
                 <button
                   type="button"
                   className={styles.globalPillRemove}
@@ -589,7 +596,14 @@ export default function WorldBookPanel() {
           <div className={styles.chatPills}>
             {activeChatBooks.map((book) => (
               <span key={book.id} className={styles.chatPill}>
-                <span className={styles.chatPillName}>{book.name}</span>
+                <button
+                  type="button"
+                  className={styles.chatPillName}
+                  onClick={() => setSelectedBookId(book.id)}
+                  title={t('worldBookPanel.editBook')}
+                >
+                  {book.name}
+                </button>
                 <button
                   type="button"
                   className={styles.chatPillRemove}
