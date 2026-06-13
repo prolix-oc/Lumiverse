@@ -5104,10 +5104,16 @@ const FALLBACK_MAX_RESPONSE_TOKENS = 4096;
  * Clip oldest chat-history messages from the assembled prompt so the total
  * fits within the preset's `contextSize` (minus response headroom + margin).
  *
- * Single-pass tokenization: each message is counted exactly once. Chat-history
- * messages are identified by the `__chatHistorySource` marker (survives all
- * spread-based mutations). Newest→oldest walk picks keepers until the budget
- * is hit; the remaining oldest are dropped via a single `filter()`.
+ * Lazy newest→oldest tokenization: fixed (always-included) overhead is counted
+ * up front, then chat-history messages are tokenized newest→oldest only until
+ * the budget is hit. History older than the cut point is never tokenized —
+ * tokenizing carries significant per-call cost (regex preprocessing, BPE
+ * merges, array alloc), so skipping the clipped-away prefix is the main speed
+ * win on long chats. Chat-history messages are identified by the
+ * `__chatHistorySource` marker (survives all spread-based mutations). The kept
+ * run is counted exactly; the dropped prefix's token total is a char/4 estimate
+ * used only for the display-only "N messages dropped" stats. Surviving messages
+ * are compacted into `result` in place.
  *
  * Mutates `result` in place when clipping occurs. Returns stats so the caller
  * can emit them on `GENERATION_STARTED` / dry-run so the UI can surface a
@@ -5152,34 +5158,47 @@ export async function clipToContextBudget(
 
   const counter = await resolveCounter(modelId || "");
 
+  // Tokenizing every message is the dominant cost on long chats. The clip only
+  // ever keeps the newest run of history that fits the budget, so we tokenize
+  // lazily newest→oldest and stop at the cut point — history older than the cut
+  // is never fed to the (per-call-expensive) tokenizer. Fixed (always-included)
+  // overhead must be measured in full, so those are counted up front.
   const n = result.length;
-  const tokens: number[] = new Array(n);
   const historyIndices: number[] = [];
   let fixedTokens = 0;
-  let chatHistoryTokensBefore = 0;
   for (let i = 0; i < n; i++) {
-    // Cooperative yield every 64 messages so a stop clicked during tokenization
-    // of a long chat can land before we finish. `counter.count()` is sync and
-    // can be ~0.5ms/message on Termux; a 2000-message chat would otherwise
-    // block the event loop for a full second.
-    if (i > 0 && (i & 63) === 0) {
+    // Cheap classification pass — history is just index-pushed, so only the
+    // (few) fixed messages are tokenized here. The expensive tokenization now
+    // lives in the newest→oldest walk below, which yields by tokenization count;
+    // this loop only needs a coarse safety yield so a stop can still land on a
+    // pathologically long chat. Yielding per-iteration here would add macrotask
+    // overhead that, on fast hardware, costs more than the work it interrupts.
+    if (i > 0 && (i & 4095) === 0) {
       await new Promise<void>((r) => setTimeout(r, 0));
       if (signal?.aborted)
         throw signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const msg = result[i];
-    const text = `${msg.role}\n${getTextContent(msg)}`;
-    const t = counter.count(text);
-    tokens[i] = t;
     if (isChatHistoryMessage(msg)) {
       historyIndices.push(i);
-      chatHistoryTokensBefore += t;
     } else {
-      fixedTokens += t;
+      fixedTokens += counter.count(`${msg.role}\n${getTextContent(msg)}`);
     }
   }
 
   const remainingHistoryBudget = inputBudget - fixedTokens;
+
+  // char/4 approximation for history we intentionally never tokenize (the
+  // clipped-away prefix). Feeds the display-only "N messages / ~M tokens
+  // dropped" stats; the kept run below is always counted exactly.
+  const approxHistoryTokens = (from: number, to: number): number => {
+    let sum = 0;
+    for (let k = from; k < to; k++) {
+      const msg = result[historyIndices[k]];
+      sum += Math.ceil((msg.role.length + 1 + getTextContent(msg).length) / 4);
+    }
+    return sum;
+  };
 
   const makeStats = (
     overrides: Partial<ContextClipStats>,
@@ -5191,8 +5210,8 @@ export async function clipToContextBudget(
     inputBudget,
     fixedTokens,
     remainingHistoryBudget,
-    chatHistoryTokensBefore,
-    chatHistoryTokensAfter: chatHistoryTokensBefore,
+    chatHistoryTokensBefore: 0,
+    chatHistoryTokensAfter: 0,
     messagesDropped: 0,
     tokensDropped: 0,
     tokenizerUsed: counter.name,
@@ -5202,7 +5221,12 @@ export async function clipToContextBudget(
   // Misconfigured budget (e.g. maxContext smaller than max_tokens + margin).
   // Don't clip silently — surface the misconfiguration via `budgetInvalid`.
   if (inputBudget <= 0) {
-    return makeStats({ budgetInvalid: true });
+    const allHistory = approxHistoryTokens(0, historyIndices.length);
+    return makeStats({
+      budgetInvalid: true,
+      chatHistoryTokensBefore: allHistory,
+      chatHistoryTokensAfter: allHistory,
+    });
   }
 
   if (remainingHistoryBudget <= 0) {
@@ -5215,37 +5239,52 @@ export async function clipToContextBudget(
     }
     result.length = write;
 
+    const allHistory = approxHistoryTokens(0, historyIndices.length);
     return makeStats({
+      chatHistoryTokensBefore: allHistory,
       chatHistoryTokensAfter: 0,
       messagesDropped: historyIndices.length,
-      tokensDropped: chatHistoryTokensBefore,
+      tokensDropped: allHistory,
       fixedOverBudget: remainingHistoryBudget < 0,
     });
   }
 
-  // Walk history newest→oldest; remember the oldest index we can keep.
-  const remainingBudget = remainingHistoryBudget;
+  // Walk history newest→oldest, tokenizing each message only as we reach it.
+  // The first message that would overflow the budget stops the walk; every
+  // older message is dropped without ever being tokenized.
   let accHistoryTokens = 0;
   let oldestKeptHistoryIdx = -1;
-  if (remainingBudget > 0) {
-    for (let i = historyIndices.length - 1; i >= 0; i--) {
-      const t = tokens[historyIndices[i]];
-      if (accHistoryTokens + t > remainingBudget) break;
-      accHistoryTokens += t;
-      oldestKeptHistoryIdx = i;
+  let tokenized = 0;
+  for (let i = historyIndices.length - 1; i >= 0; i--) {
+    // Yield every 256 tokenized messages. `counter.count()` is sync (~0.5ms/msg
+    // on Termux), so a large budget keeping thousands of messages must yield to
+    // keep /generate/stop responsive — but each setTimeout(0) costs ~1ms of
+    // event-loop overhead, so yielding too often dominates the work it guards.
+    // 256 ≈ 128ms between yields on Termux (well within stop-button latency)
+    // while keeping the macrotask overhead negligible.
+    if (tokenized > 0 && (tokenized & 255) === 0) {
+      await new Promise<void>((r) => setTimeout(r, 0));
+      if (signal?.aborted)
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
     }
+    const msg = result[historyIndices[i]];
+    const t = counter.count(`${msg.role}\n${getTextContent(msg)}`);
+    tokenized++;
+    if (accHistoryTokens + t > remainingHistoryBudget) break;
+    accHistoryTokens += t;
+    oldestKeptHistoryIdx = i;
   }
 
   if (oldestKeptHistoryIdx === 0 || historyIndices.length === 0) {
-    return makeStats({});
+    return makeStats({
+      chatHistoryTokensBefore: accHistoryTokens,
+      chatHistoryTokensAfter: accHistoryTokens,
+    });
   }
 
   const droppedCount =
     oldestKeptHistoryIdx === -1 ? historyIndices.length : oldestKeptHistoryIdx;
-  let tokensDropped = 0;
-  for (let i = 0; i < droppedCount; i++) {
-    tokensDropped += tokens[historyIndices[i]];
-  }
+  const tokensDropped = approxHistoryTokens(0, droppedCount);
 
   // historyIndices is monotonically increasing, so messages with raw index
   // below `firstKeptRawIdx` are exactly the dropped history messages. Using
@@ -5264,6 +5303,7 @@ export async function clipToContextBudget(
   result.length = write;
 
   return makeStats({
+    chatHistoryTokensBefore: accHistoryTokens + tokensDropped,
     chatHistoryTokensAfter: accHistoryTokens,
     messagesDropped: droppedCount,
     tokensDropped,
