@@ -58,6 +58,10 @@ export const PROTECTED_RAW_OVERRIDE_KEYS = new Set<string>([
  * Deep-merge `override` into `target`, returning a new object.
  * Arrays in override replace (not concat) arrays in target.
  * Top-level keys in `protectedKeys` are dropped from the override before merging.
+ *
+ * Throws on invalid JSON or a non-object value: silently generating without
+ * the user's params reads as "the feature doesn't work", and a scalar/array
+ * override would replace the entire request body via deepMerge.
  */
 export function applyRawOverride<T extends Record<string, any>>(
   target: T,
@@ -68,15 +72,17 @@ export function applyRawOverride<T extends Record<string, any>>(
   let override: any;
   try {
     override = JSON.parse(rawJson);
-  } catch {
-    // Invalid JSON — skip silently, user error
-    return target;
+  } catch (err) {
+    throw new Error(
+      `Raw Request Override is not valid JSON (${err instanceof Error ? err.message : "parse error"}). Fix or clear the field and retry.`,
+    );
   }
-  if (override && typeof override === "object" && !Array.isArray(override)) {
-    const blocked = new Set(protectedKeys);
-    for (const key of Object.keys(override)) {
-      if (blocked.has(key)) delete override[key];
-    }
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    throw new Error('Raw Request Override must be a JSON object of request fields, e.g. {"steps": 30}');
+  }
+  const blocked = new Set(protectedKeys);
+  for (const key of Object.keys(override)) {
+    if (blocked.has(key)) delete override[key];
   }
   return deepMerge(target, override);
 }

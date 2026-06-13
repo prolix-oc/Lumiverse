@@ -194,7 +194,6 @@ export async function executeCouncil(
       availableTools,
       contextMessages,
       namedResults,
-      historicalByAssignment,
     );
     allResults.push(...memberResults);
 
@@ -247,7 +246,6 @@ async function executeMemberTools(
   tools: Map<string, RuntimeCouncilToolDefinition>,
   contextMessages: LlmMessage[],
   namedResults: Map<string, string>,
-  historicalByAssignment: Map<string, CouncilHistoricalDeliberationEntry[]>
 ): Promise<CouncilToolResult[]> {
   const results: CouncilToolResult[] = [];
 
@@ -288,12 +286,14 @@ async function executeMemberTools(
     const execution = getCouncilToolExecution(input.userId, toolDef);
     const extToolReg = execution === "extension" ? getExtensionToolRegistration(toolName) : undefined;
     const mcpMatch = execution === "mcp" ? parseMcpToolName(input.userId, toolName) : null;
-    const toolContextMessages = withHistoricalCouncilContext(
-      contextMessages,
-      member,
-      toolDef,
-      historicalByAssignment.get(assignmentKey(member.id, toolName)) ?? [],
-    );
+
+    // Note: a member's retained history is intentionally NOT injected into its
+    // own deliberation prompt. Showing the sidecar its verbatim prior output
+    // reliably made it re-emit that output (the "history > 0 repeats the last
+    // item" bug) — anti-repeat prompting alone did not hold. Continuity is
+    // still preserved for the FINAL response via formatHistoricalDeliberations
+    // (historicalDeliberationBlock), which is injected into the main synthesis
+    // prompt rather than the per-member deliberation.
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
@@ -304,7 +304,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            toolContextMessages,
+            contextMessages,
             settings.toolsSettings.timeoutMs,
             input.signal,
           );
@@ -332,7 +332,7 @@ async function executeMemberTools(
           //      extracted. Delivered via worker-host so it can't collide
           //      with user-space `args` (same rationale as `councilMember`).
           const bareToolName = extToolReg!.name;
-          const contextSummary = toolContextMessages
+          const contextSummary = contextMessages
             .map((m) => {
               const prefix = m.role === "system" ? "" : `${m.role}: `;
               return `${prefix}${typeof m.content === "string" ? m.content : ""}`;
@@ -351,7 +351,7 @@ async function executeMemberTools(
             },
             settings.toolsSettings.timeoutMs,
             memberContext,
-            toolContextMessages
+            contextMessages
           );
         } else if (execution === "host") {
           const plannedArgs = await planCallableToolArgs(
@@ -360,7 +360,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            toolContextMessages,
+            contextMessages,
             settings.toolsSettings.timeoutMs,
             input.signal,
           );
@@ -371,7 +371,7 @@ async function executeMemberTools(
             args: plannedArgs,
             member,
             memberContext,
-            contextMessages: toolContextMessages,
+            contextMessages,
             timeoutMs: settings.toolsSettings.timeoutMs,
             signal: input.signal,
           });
@@ -382,7 +382,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            toolContextMessages,
+            contextMessages,
             settings.toolsSettings,
             input.signal,
             input.enrichment
@@ -526,60 +526,6 @@ function formatHistoricalDeliberations(
   return lines.join("\n").trimEnd();
 }
 
-function formatToolHistoricalContext(
-  member: CouncilMember,
-  tool: RuntimeCouncilToolDefinition,
-  entries: CouncilHistoricalDeliberationEntry[],
-): string {
-  if (entries.length === 0) return "";
-
-  // Framing matters a lot here: the model is about to be shown its OWN prior
-  // output and then asked to perform the same analysis on a chat that has
-  // usually only advanced by one message. Without a hard "this is past, do not
-  // repeat" contract it tends to simply restate the previous deliberation
-  // (the reported "history > 0 makes them repeat" behaviour). Keep the
-  // anti-repeat rules up front, fence the quoted text so it can't be mistaken
-  // for the current scene, and close with a fresh-output instruction.
-  const lines: string[] = [
-    `## Your Earlier ${tool.displayName} Notes — REFERENCE ONLY, DO NOT REPEAT`,
-    "",
-    `The block below is what ${member.itemName} already wrote with ${tool.displayName} on EARLIER turns of this chat. It is shown only so you stay consistent with threads, plans, and decisions you set up before — it is not the current scene and not a template.`,
-    "",
-    "Rules (these override the quoted text on any conflict):",
-    "- This has already been said. Do NOT restate, paraphrase, summarize, or re-output it.",
-    "- The scene has moved on. Write a FRESH deliberation about the CURRENT latest message only.",
-    "- If a past plan still holds, ADVANCE it to its next step instead of repeating it.",
-    "- If nothing new is needed this turn, say so briefly — never echo the notes below.",
-    "",
-    "--- BEGIN PAST NOTES (reference only) ---",
-  ];
-
-  for (let i = 0; i < entries.length; i++) {
-    lines.push(`### ${formatHistoryAgeLabel(i, entries.length)}`);
-    lines.push(entries[i].content);
-    lines.push("");
-  }
-
-  lines.push("--- END PAST NOTES ---");
-  lines.push("");
-  lines.push(
-    `Now produce NEW ${tool.displayName} output for the current turn. Do not reuse the wording above.`,
-  );
-
-  return lines.join("\n").trimEnd();
-}
-
-function withHistoricalCouncilContext(
-  contextMessages: LlmMessage[],
-  member: CouncilMember,
-  tool: RuntimeCouncilToolDefinition,
-  entries: CouncilHistoricalDeliberationEntry[],
-): LlmMessage[] {
-  const content = formatToolHistoricalContext(member, tool, entries);
-  if (!content) return contextMessages;
-  return [{ role: "system", content }, ...contextMessages];
-}
-
 export function appendCouncilDeliberationHistory(input: {
   userId: string;
   chatId: string;
@@ -715,7 +661,7 @@ ${tool.prompt}${dynamicSuffix}${brevityNote}${userControlNote}`;
   const messages: LlmMessage[] = [
     { role: "system", content: systemPrompt },
     ...contextMessages,
-    { role: "user", content: `Respond to the CURRENT latest message in the story context above with specific, actionable input from your unique perspective as ${member.itemName}, filtered through your personality, biases, and worldview. Produce something new for this turn — do not repeat, restate, or paraphrase any earlier notes shown above.` },
+    { role: "user", content: `Respond to the CURRENT latest message in the story context above with specific, actionable input from your unique perspective as ${member.itemName}, filtered through your personality, biases, and worldview. Produce a fresh contribution for this turn.` },
   ];
 
   // Resolve the connection to get the provider name
@@ -1204,7 +1150,7 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
 
   // Character info
   if (ts.includeCharacterInfo && chat) {
-    if (!character) character = charactersSvc.getCharacter(input.userId, chat.character_id);
+    if (!character && chat.character_id) character = charactersSvc.getCharacter(input.userId, chat.character_id);
     if (character) {
       const charInfo = [
         character.name && `Name: ${character.name}`,
@@ -1240,7 +1186,7 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
       console.debug("[council] Using %d pre-activated world info entries from enrichment", activatedEntries.length);
     } else {
       // Fallback: independently activate WI (for callers without enrichment)
-      if (!character) character = charactersSvc.getCharacter(input.userId, chat.character_id);
+      if (!character && chat.character_id) character = charactersSvc.getCharacter(input.userId, chat.character_id);
       const { entries: wiEntries } = collectWorldInfoForCouncil(input.userId, character, persona, input.chatId);
       if (wiEntries.length > 0) {
         const allMsgs = chatsSvc.getMessages(input.userId, input.chatId);

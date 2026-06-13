@@ -100,8 +100,14 @@ export default function ImageCaptionModal() {
     [loadFile],
   )
 
-  const onPaste = useCallback(
-    (e: React.ClipboardEvent) => {
+  // Listen for paste at the document level while the modal is open. The modal is
+  // portalled to document.body and nothing inside it is autofocused, so a fresh
+  // Ctrl+V dispatches to document.body — an ancestor of the modal — and never
+  // reaches an onPaste on the modal's own DOM. A document listener catches the
+  // paste regardless of focus, mirroring the always-focused chat input textarea.
+  useEffect(() => {
+    if (!isOpen) return
+    const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items
       if (!items) return
       for (const item of items) {
@@ -114,9 +120,10 @@ export default function ImageCaptionModal() {
           }
         }
       }
-    },
-    [loadFile],
-  )
+    }
+    document.addEventListener('paste', handlePaste)
+    return () => document.removeEventListener('paste', handlePaste)
+  }, [isOpen, loadFile])
 
   const loadAvatar = useCallback(async (kind: 'character' | 'persona') => {
     const url = kind === 'character'
@@ -181,7 +188,7 @@ export default function ImageCaptionModal() {
         </p>
       </div>
 
-      <div className={styles.body} onPaste={onPaste}>
+      <div className={styles.body}>
         {/* Image upload / drop zone */}
         <div className={styles.fieldGroup}>
           <label className={styles.label}>Image</label>

@@ -13,6 +13,16 @@
     "description": "与角色开始对话后，会显示在这里"
   },
   "tagline": "继续你的故事",
+  "tempChat": "临时聊天",
+  "tempChatWithProfile": "临时聊天 · {{name}}",
+  "tempChatTitle": "开始一次性聊天 — 返回主页时将被删除",
+  "tempChatTitleWithProfile": "在一次性聊天中试用 {{name}} — 返回主页时将被删除",
+  "tempChatMenu": {
+    "withPreset": "使用当前预设",
+    "withPresetHint": "使用你当前激活的预设",
+    "noPreset": "无预设",
+    "noPresetHint": "原始模型测试 — 不含预设模块或参数"
+  },
   "logOutTitle": "在此设备上退出登录",
   "loadFailed": "加载聊天失败",
   "tryAgain": "重试",

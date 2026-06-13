@@ -13,6 +13,16 @@
     "description": "Avvia una conversazione con un personaggio per iniziare"
   },
   "tagline": "Continua la tua storia",
+  "tempChat": "Chat temporanea",
+  "tempChatWithProfile": "Chat temporanea · {{name}}",
+  "tempChatTitle": "Avvia una chat usa e getta — eliminata al ritorno alla home",
+  "tempChatTitleWithProfile": "Prova {{name}} in una chat usa e getta — eliminata al ritorno alla home",
+  "tempChatMenu": {
+    "withPreset": "Con il preset attuale",
+    "withPresetHint": "Usa il tuo preset attivo",
+    "noPreset": "Senza preset",
+    "noPresetHint": "Test del modello puro — senza blocchi né parametri del preset"
+  },
   "logOutTitle": "Esci da questo dispositivo",
   "loadFailed": "Caricamento delle conversazioni fallito",
   "tryAgain": "Riprova",

@@ -57,6 +57,10 @@ import {
   type WorldInfoInterceptorResultDTO,
 } from "./world-info-interceptor";
 import { toolRegistry } from "./tool-registry";
+import {
+  setPromptRegexOwnedChats,
+  clearPromptRegexOwner,
+} from "./prompt-regex-ownership";
 import * as managerSvc from "./manager.service";
 import {
   BUILT_IN_DRAWER_TABS,
@@ -72,6 +76,7 @@ import {
   setCharacterWorldBookIds,
 } from "../utils/character-world-books";
 import * as worldBooksSvc from "../services/world-books.service";
+import { pruneOrphanedWiState } from "../services/wi-state-prune.service";
 import * as presetsSvc from "../services/presets.service";
 import * as regexScriptsSvc from "../services/regex-scripts.service";
 import * as databanksSvc from "../services/databank";
@@ -329,6 +334,7 @@ type RuntimeWorkerToHost =
       rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
+  | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | { type: "user_get_role"; requestId: string; userId?: string }
   | {
@@ -1721,6 +1727,9 @@ export class WorkerHost {
     // Unregister all tools for this extension
     toolRegistry.unregisterByExtension(this.extensionId);
 
+    // Drop any prompt-regex ownership claims so the host resumes its own pass
+    clearPromptRegexOwner(this.extensionId);
+
     // Unregister all macros registered by this extension
     for (const macroName of this.registeredMacroNames) {
       macroRegistry.unregisterMacro(macroName);
@@ -1768,10 +1777,13 @@ export class WorkerHost {
   }
 
   private handleRuntimeTransportFailure(error: unknown): void {
+    // Already torn down by an earlier failure on this stack, bail before recursing.
+    if (!this.runtime) return;
     const message = error instanceof Error ? error.message : String(error);
     console.warn(
       `[Spindle:${this.manifest.identifier}] Runtime transport failed, cleaning up: ${message}`
     );
+    this.runtime = null;
     this.cleanup();
   }
 
@@ -2708,6 +2720,19 @@ export class WorkerHost {
       case "world_books_get_activated":
         this.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
         break;
+      // ─── Global World Books (gated: "world_books") ───────────────────
+      case "world_books_get_global":
+        this.handleWorldBooksGetGlobal(msg.requestId, msg.userId);
+        break;
+      case "world_books_set_global":
+        this.handleWorldBooksSetGlobal(msg.requestId, msg.worldBookIds, msg.userId);
+        break;
+      case "world_books_activate_global":
+        this.handleWorldBooksActivateGlobal(msg.requestId, msg.worldBookId, msg.userId);
+        break;
+      case "world_books_deactivate_global":
+        this.handleWorldBooksDeactivateGlobal(msg.requestId, msg.worldBookId, msg.userId);
+        break;
       // ─── Regex Scripts (gated: "regex_scripts") ──────────────────────
       case "regex_scripts_list":
         this.handleRegexScriptsList(
@@ -2872,6 +2897,9 @@ export class WorkerHost {
         break;
       case "log":
         this.handleLog(msg.level, msg.message);
+        break;
+      case "prompt_regex_set_owned":
+        setPromptRegexOwnedChats(this.extensionId, msg.chatIds);
         break;
       // ─── Commands (free tier) ─────────────────────────────────────────
       case "commands_register":
@@ -3295,10 +3323,28 @@ export class WorkerHost {
         const requestId = crypto.randomUUID();
         const timeoutMs = resolveTimeoutMs();
 
+        // Expose chat-history membership explicitly on the DTO so an extension
+        // applying prompt-target regex inline can rebuild the host's depth frame
+        // (depth gating is chat-history-only; injected non-history blocks are
+        // ungated and must not shift real-turn numbering). Shallow-copy so the
+        // synthetic flag never leaks onto the outbound LLM payload.
+        const messagesWithHistoryFlag = messages.map((m) => {
+          const llm = m as unknown as LlmMessage;
+          if (!promptAssemblySvc.isChatHistoryMessage(llm)) return m;
+          const sourceMessageId = promptAssemblySvc.getSourceMessageId(llm);
+          const sourceIndexInChat = promptAssemblySvc.getSourceIndexInChat(llm);
+          return {
+            ...m,
+            __isChatHistory: true,
+            ...(sourceMessageId !== undefined ? { sourceMessageId } : {}),
+            ...(sourceIndexInChat !== undefined ? { sourceIndexInChat } : {}),
+          };
+        });
+
         this.postToWorker({
           type: "intercept_request",
           requestId,
-          messages,
+          messages: messagesWithHistoryFlag,
           context,
         });
 
@@ -6815,8 +6861,19 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const c = chatsSvc.updateChat(resolvedUserId, chatId, input || {});
+      const before = chatsSvc.getChat(resolvedUserId, chatId);
+      let c = chatsSvc.updateChat(resolvedUserId, chatId, input || {});
       if (!c) throw new Error("Chat not found");
+      // Spindle metadata updates are full replaces, so book attachments can
+      // change (or vanish) on any metadata write — mirror the REST routes'
+      // orphaned wi_state pruning.
+      if (input?.metadata !== undefined) {
+        const beforeIds = JSON.stringify(before?.metadata?.chat_world_book_ids ?? []);
+        const afterIds = JSON.stringify(c.metadata?.chat_world_book_ids ?? []);
+        if (beforeIds !== afterIds) {
+          c = pruneOrphanedWiState(resolvedUserId, c);
+        }
+      }
       this.postToWorker({ type: "response", requestId, result: this.toChatDTO(c) });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -7692,9 +7749,93 @@ export class WorkerHost {
         keys: e.keys,
         source: e.source,
         score: e.score,
+        bookId: e.bookId,
+        bookSource: e.bookSource,
       }));
 
       this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Global World Books (gated: "world_books") ───────────────────────
+
+  // Global activation lives in the per-user "globalWorldBooks" setting, the
+  // same store the frontend World Book panel writes. putSetting emits
+  // SETTINGS_UPDATED, which keeps open frontend tabs in sync.
+  private readGlobalWorldBookIds(userId: string): string[] {
+    const raw = settingsSvc.getSetting(userId, "globalWorldBooks")?.value;
+    return this.sanitizeWorldBookIds(raw);
+  }
+
+  private requireWorldBooksUser(userId?: string): string {
+    if (!this.hasPermission("world_books")) {
+      throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
+    }
+    const resolvedUserId = this.resolveEffectiveUserId(userId);
+    if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+    this.enforceScopedUser(resolvedUserId);
+    return resolvedUserId;
+  }
+
+  private handleWorldBooksGetGlobal(requestId: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.requireWorldBooksUser(userId);
+      this.postToWorker({ type: "response", requestId, result: this.readGlobalWorldBookIds(resolvedUserId) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleWorldBooksSetGlobal(requestId: string, worldBookIds: unknown, userId?: string): void {
+    try {
+      const resolvedUserId = this.requireWorldBooksUser(userId);
+      // Drop IDs that don't resolve to an existing book rather than throwing:
+      // the stored setting may carry stale IDs of since-deleted books, and a
+      // round-tripped getGlobal() → setGlobal() must not fail because of them.
+      const ids = this.sanitizeWorldBookIds(worldBookIds).filter((id) =>
+        worldBooksSvc.getWorldBook(resolvedUserId, id),
+      );
+      settingsSvc.putSetting(resolvedUserId, "globalWorldBooks", ids);
+      this.postToWorker({ type: "response", requestId, result: ids });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleWorldBooksActivateGlobal(requestId: string, worldBookId: unknown, userId?: string): void {
+    try {
+      const resolvedUserId = this.requireWorldBooksUser(userId);
+      if (typeof worldBookId !== "string" || !worldBookId.trim()) {
+        throw new Error("worldBookId is required");
+      }
+      if (!worldBooksSvc.getWorldBook(resolvedUserId, worldBookId)) {
+        throw new Error("World book not found");
+      }
+      const ids = this.readGlobalWorldBookIds(resolvedUserId);
+      if (!ids.includes(worldBookId)) {
+        ids.push(worldBookId);
+        settingsSvc.putSetting(resolvedUserId, "globalWorldBooks", ids);
+      }
+      this.postToWorker({ type: "response", requestId, result: ids });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleWorldBooksDeactivateGlobal(requestId: string, worldBookId: unknown, userId?: string): void {
+    try {
+      const resolvedUserId = this.requireWorldBooksUser(userId);
+      if (typeof worldBookId !== "string" || !worldBookId.trim()) {
+        throw new Error("worldBookId is required");
+      }
+      const current = this.readGlobalWorldBookIds(resolvedUserId);
+      const ids = current.filter((id) => id !== worldBookId);
+      if (ids.length !== current.length) {
+        settingsSvc.putSetting(resolvedUserId, "globalWorldBooks", ids);
+      }
+      this.postToWorker({ type: "response", requestId, result: ids });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -10248,6 +10389,7 @@ export class WorkerHost {
       const charactersSvc = await import("../services/characters.service");
       const personasSvc = await import("../services/personas.service");
       const connectionsSvc = await import("../services/connections.service");
+      const personaAddonStatesSvc = await import("../services/persona-addon-states");
 
       let env;
 
@@ -10255,9 +10397,15 @@ export class WorkerHost {
         const chat = chatsSvc.getChat(resolvedUserId, chatId);
         if (chat) {
           const charId = characterId || chat.character_id;
-          const character = charactersSvc.getCharacter(resolvedUserId, charId);
+          const { makeAssistantCharacter } = await import("../types/character");
+          const { isTemporaryChatMetadata } = await import("../types/chat");
+          const character = charId
+            ? charactersSvc.getCharacter(resolvedUserId, charId)
+            : makeAssistantCharacter();
           if (character) {
-            const persona = personasSvc.resolvePersonaOrDefault(resolvedUserId);
+            const persona = isTemporaryChatMetadata(chat.metadata)
+              ? null
+              : personaAddonStatesSvc.resolvePersonaForChatMacros(resolvedUserId, personasSvc.resolvePersonaOrDefault(resolvedUserId), chat.metadata);
             const messages = chatsSvc.getMessages(resolvedUserId, chatId);
             const connection = connectionsSvc.getDefaultConnection(resolvedUserId);
 
@@ -10277,7 +10425,7 @@ export class WorkerHost {
       if (!env && characterId) {
         const character = charactersSvc.getCharacter(resolvedUserId, characterId);
         if (character) {
-          const persona = personasSvc.resolvePersonaOrDefault(resolvedUserId);
+          const persona = personaAddonStatesSvc.resolvePersonaForChatMacros(resolvedUserId, personasSvc.resolvePersonaOrDefault(resolvedUserId), null);
           const connection = connectionsSvc.getDefaultConnection(resolvedUserId);
 
           env = buildEnv({

@@ -325,7 +325,7 @@
     "thinkingDisplaySummarized": "Summarized",
     "thinkingDisplayOmitted": "Omitted",
     "thinkingDisplayDisabledHint": "Only sent when API reasoning is enabled.",
-    "thinkingDisplayHint": "Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.",
+    "thinkingDisplayHint": "Opus 4.7/4.8 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.",
     "keepInHistory": "Keep in history",
     "keepAllReasoning": "Keep all reasoning in prompt",
     "stripAllReasoning": "Strip all reasoning from prompt",
@@ -633,6 +633,9 @@
     "clickPlus": "Click + to create one.",
     "uncategorized": "uncategorized",
     "deleteFolderConfirm": "Delete all {{count}} regex scripts in \"{{folder}}\"? This cannot be undone.",
+    "deleteFolderTitle": "Delete Folder Scripts",
+    "deleteScriptTitle": "Delete Regex Script",
+    "deleteScriptConfirm": "Delete \"{{name}}\"? This cannot be undone.",
     "deleteSomeFailed": "{{count}} scripts could not be deleted",
     "deletedScripts": "Deleted {{count}} scripts",
     "selectPresetFirstScript": "Select a Loom preset before binding regex scripts",
@@ -782,6 +785,23 @@
     },
     "enable": "Enable Image Generation",
     "enableHint": "Generate scene-aware chat backgrounds through the council scene tool",
+    "importExport": "Import / Export",
+    "exportModalTitle": "Export Image Generation Config",
+    "exportIncludeSettings": "Include settings",
+    "exportIncludeParameters": "Include generation parameters",
+    "exportIncludeParametersHint": "Steps, CFG, size, seed and other parameters of the active connection. Applied on import to the active connection when the provider matches.",
+    "exportIncludeConnections": "Include provider connections",
+    "exportIncludeConnectionsHint": "Connection parameters, workflows and server URLs. API keys are never exported.",
+    "exportPresets": "Prompt presets",
+    "selectAll": "Select all",
+    "selectNone": "Select none",
+    "noPresetsToExport": "No saved presets to export",
+    "selectedCount": "{{selected}} of {{total}} presets selected",
+    "exportConfig": "Export",
+    "importConfig": "Import",
+    "importSuccess": "Image generation config imported ({{presets}} presets, {{connections}} connections)",
+    "importFailed": "Import failed",
+    "exportFailed": "Export failed",
     "connection": "Connection",
     "createConnectionFirst": "Create a connection in the Connections tab first",
     "selectConnection": "Select a connection...",
@@ -843,6 +863,8 @@
     "saveChanges": "Save Changes",
     "saveAsNew": "Save as New",
     "delete": "Delete",
+    "deletePresetConfirmTitle": "Delete Prompt Preset",
+    "deletePresetConfirmMessage": "Delete \"{{name}}\"? This cannot be undone.",
     "boundToActiveCharacter": "bound to active character",
     "boundToActivePersona": "bound to active persona",
     "promptParser": "Prompt Parser",
@@ -898,6 +920,8 @@
     "workflowDefault": "(workflow default)",
     "workflowOrConnectionDefault": "(workflow / connection default)",
     "advanced": "Advanced",
+    "rawOverrideInvalidJson": "Invalid JSON — generation will fail until this is fixed or cleared",
+    "rawOverrideNotObject": "Must be a JSON object of request fields, e.g. {\"steps\": 30}",
     "directorReferences": "Director References",
     "includeCharacterAvatar": "Include Character Avatar",
     "includeCharacterAvatarHint": "Send current character avatar as director reference",
@@ -928,6 +952,8 @@
     "addGeneratedToGalleryHint": "When on, every generated image is also linked into the active chat's character gallery. Turn off to keep generations out of the gallery.",
     "generatedImagesResend": "Generated Images To Re-Send",
     "generatedImagesResendHint": "Only the most recent generated images are included in multimodal context.",
+    "contextMessageLimit": "Chat Messages In Context",
+    "contextMessageLimitHint": "Number of most recent chat messages sent to the prompt parser for scene analysis and parsed custom prompts.",
     "sceneChangeSensitivity": "Scene Change Sensitivity",
     "backgroundDisplay": "Background Display",
     "opacity": "Opacity",
@@ -1030,6 +1056,7 @@
     "noWorldBooks": "No world books available",
     "unknown": "Unknown",
     "removeWorldBook": "Remove world book",
+    "openInLorebook": "Open in Lorebook tab",
     "noWorldBooksAttached": "No world books attached",
     "embeddedLorebook": "Embedded Lorebook",
     "embeddedLorebookEntries": "{{count}} entries found in character card",
@@ -1121,6 +1148,10 @@
       "expressionsCount": "{{count}} expressions",
       "switchToSingle": "Switch to Single-Character",
       "removeGroup": "Remove group",
+      "deleteLabelConfirmTitle": "Delete Expression",
+      "deleteLabelConfirmMessage": "Delete the expression \"{{label}}\"? This cannot be undone.",
+      "deleteGroupConfirmTitle": "Remove Group",
+      "deleteGroupConfirmMessage": "Remove the group \"{{name}}\" and all of its expressions? This cannot be undone.",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1159,7 +1190,9 @@
       "saved": "Saved.",
       "saveFailed": "Save failed.",
       "cleared": "Cleared.",
-      "clearFailed": "Clear failed."
+      "clearFailed": "Clear failed.",
+      "clearConfirmTitle": "Clear LoRA Binding",
+      "clearConfirmMessage": "Remove the saved LoRA binding from this character? This cannot be undone."
     }
   },
   "characterBrowser": {
@@ -1219,6 +1252,7 @@
     "searchWorldBooks": "Search world books…",
     "noWorldBooksAvailable": "No world books available",
     "removeFromAlwaysActive": "Remove from always active",
+    "editBook": "Edit this world book",
     "noGlobalActive": "No global world books active",
     "thisChatOnly": "This Chat Only",
     "openChatToAdd": "Open a chat to add chat-scoped world books",
@@ -1709,7 +1743,9 @@
     "boundCharacter": "Loadout bound to this character",
     "unboundCharacter": "Character binding removed",
     "bindFailed": "Failed to bind loadout",
-    "unbindFailed": "Failed to remove binding"
+    "unbindFailed": "Failed to remove binding",
+    "deleteConfirmTitle": "Delete Loadout",
+    "deleteConfirmMessage": "Delete \"{{name}}\"? This cannot be undone."
   },
   "groupChatsPanel": {
     "loading": "Loading group chats...",
@@ -2117,7 +2153,9 @@
       "reattributeTitle": "Reattribute to…",
       "detach": "(detach)",
       "pickEntity": "Pick entity…",
-      "unattributed": "Unattributed ({{count}})"
+      "unattributed": "Unattributed ({{count}})",
+      "deleteConfirmTitle": "Delete Color",
+      "deleteConfirmMessage": "Delete the color {{hex}}? This cannot be undone."
     },
     "stats": {
       "loading": "Loading stats...",
@@ -2187,7 +2225,8 @@
         "thought": "thought",
         "words": "{{count}} words",
         "heuristic": "heuristic"
-      }
+      },
+      "deleteRelationTitle": "Delete Relation"
     },
     "editors": {
       "cancel": "Cancel",
@@ -2306,6 +2345,13 @@
       "vaultDeleteFailed": "Failed to delete vault",
       "vaultRenameFailed": "Failed to rename vault",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "Delete Entity",
+      "entityMessage": "Delete \"{{name}}\"? This cannot be undone.",
+      "bulkTitle": "Delete Selected Entities",
+      "bulkMessage_one": "Delete {{count}} selected entity? This cannot be undone.",
+      "bulkMessage_other": "Delete {{count}} selected entities? This cannot be undone."
     }
   },
   "councilFeedback": {
@@ -3079,7 +3125,9 @@
       "legacyExportMessage": "Lumiverse-specific macros (e.g. {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) will not resolve in SillyTavern. Only standard macros like {{char}}, {{user}}, and {{persona}} are portable. Blocks using Lumiverse macros will be exported as-is with their raw macro text.",
       "exportAnyway": "Export Anyway",
       "deleteBlockTitle": "Delete Block",
-      "deleteBlockMessage": "Are you sure you want to delete this block? This action cannot be undone."
+      "deleteBlockMessage": "Are you sure you want to delete this block? This action cannot be undone.",
+      "deletePresetTitle": "Delete Preset",
+      "deletePresetMessage": "Delete \"{{name}}\"? All of its blocks will be removed. This action cannot be undone."
     },
     "toast": {
       "exportFailed": "Failed to export preset",
@@ -3161,7 +3209,9 @@
         "loadFailed": "Failed to load theme assets",
         "uploaded": "Uploaded {{name}}",
         "uploadFailed": "Failed to upload theme asset"
-      }
+      },
+      "deleteConfirmTitle": "Delete Theme Asset",
+      "deleteConfirmMessage": "Delete \"{{name}}\"? Any CSS referencing this asset will stop loading it. This cannot be undone."
     }
   }
 }

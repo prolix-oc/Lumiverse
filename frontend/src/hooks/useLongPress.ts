@@ -33,8 +33,13 @@ export function useLongPress({ onLongPress, delay = 500, moveThreshold = 10 }: U
   // when the image-lift/preview gesture starts. Catching it at capture phase
   // on the touch target stops the native preview before our synthetic event
   // fires. React's onContextMenu runs at bubble phase, which can be too late.
+  //
+  // Only suppress *trusted* native events. The synthetic contextmenu we dispatch
+  // below (isTrusted === false) must pass through untouched — otherwise it gets
+  // preventDefault()'d before reaching bubble-phase handlers, and consumers that
+  // gate on `e.defaultPrevented` (e.g. the drawer tab quick-menu) never fire.
   const suppressNativeContextMenu = useCallback((e: Event) => {
-    e.preventDefault()
+    if (e.isTrusted) e.preventDefault()
   }, [])
 
   const detachNativeContextMenu = useCallback(() => {

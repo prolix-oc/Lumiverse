@@ -40,6 +40,10 @@ const deleted = await spindle.world_books.delete(newBook.id)
 | `create(input)` | `Promise<WorldBookDTO>` | Create a new world book. `name` is required. |
 | `update(worldBookId, input)` | `Promise<WorldBookDTO>` | Update a world book. All fields are optional. |
 | `delete(worldBookId)` | `Promise<boolean>` | Delete a world book and all its entries. Returns `true` if deleted. |
+| `getGlobal()` | `Promise<string[]>` | Get the IDs of the user's globally-active world books. |
+| `setGlobal(worldBookIds)` | `Promise<string[]>` | Replace the set of globally-active world books. Returns the applied ID list. |
+| `activateGlobal(worldBookId)` | `Promise<string[]>` | Activate a single world book globally. Returns the updated global ID list. |
+| `deactivateGlobal(worldBookId)` | `Promise<string[]>` | Deactivate a single globally-active world book. Returns the updated global ID list. |
 
 ## WorldBookDTO
 
@@ -181,6 +185,33 @@ See `WorldBookEntryDTO` above for the full list of supported fields.
 
 ---
 
+## Global Activation
+
+Global world books apply to every chat for a user. They live in the same `globalWorldBooks` setting the World Book panel toggles, so changes made here show up in the frontend immediately (and vice versa).
+
+```ts
+// Which books are globally active right now?
+const globalIds = await spindle.world_books.getGlobal()
+
+// Turn a book on globally (atomic add — safe against concurrent toggles)
+await spindle.world_books.activateGlobal('world-book-id')
+
+// Turn it off again (no-op if it wasn't active)
+await spindle.world_books.deactivateGlobal('world-book-id')
+
+// Replace the whole set at once
+const applied = await spindle.world_books.setGlobal(['book-a', 'book-b'])
+```
+
+Behavior notes:
+
+- `activateGlobal` throws if the book doesn't exist. `deactivateGlobal` never throws for unknown IDs — it just returns the (unchanged) list.
+- `setGlobal` silently drops IDs that don't resolve to an existing world book (including stale IDs of deleted books that may linger in the setting). The returned array is the list that was actually applied.
+- All four methods require the `world_books` permission. Mutators are unavailable in read-only contexts.
+- Prefer `activateGlobal`/`deactivateGlobal` over read-modify-write with `setGlobal` when toggling single books — they're atomic on the host side, so you won't race the frontend or other extensions.
+
+---
+
 ## World Info Activation
 
 Query which world info entries would activate for a given chat — without running a full generation. This runs the complete activation pipeline: keyword matching, selective logic, probability rolls, sticky/cooldown/delay state, group competition, budget enforcement, and vector-based activation (if embeddings are configured).
@@ -216,7 +247,7 @@ This is useful for:
 
 ### Returns
 
-`Promise<ActivatedWorldInfoEntryDTO[]>` — an array of activated entries from all sources (character world book, persona world book, global world books).
+`Promise<ActivatedWorldInfoEntryDTO[]>` — an array of activated entries from all sources (character, persona, chat, and global world books). Each entry carries `bookId`/`bookSource` so you can tell which book contributed it and through which attachment scope.
 
 ### ActivatedWorldInfoEntryDTO
 
@@ -227,12 +258,15 @@ This is useful for:
 | `keys` | `string[]` | The entry's primary activation keywords. |
 | `source` | `"keyword" \| "vector"` | How the entry was activated — via keyword matching or vector similarity search. |
 | `score` | `number` | Optional. For vector-activated entries, the similarity score (lower = more similar in cosine distance). Not present for keyword-activated entries. |
+| `bookId` | `string` | Optional. ID of the world book the entry belongs to. Can be used with `spindle.world_books.get()`. |
+| `bookSource` | `"character" \| "persona" \| "chat" \| "global"` | Optional. Which attachment scope contributed the entry's book. When a book is attached at multiple scopes the narrowest one wins (character → persona → chat → global). |
 
 !!! note "What gets scanned"
     The activation pipeline evaluates entries from all world books attached to the current context:
 
-    - The character's attached world book (from `character.extensions.world_book_id`)
+    - The character's attached world books (from `character.extensions.world_book_ids`)
     - The active persona's attached world book (from `persona.attached_world_book_id`)
+    - The chat's attached world books (from `chat.metadata.chat_world_book_ids`)
     - All global world books (from the `globalWorldBooks` setting)
 
     Entries are scanned against the chat's message history using the same logic as prompt assembly.

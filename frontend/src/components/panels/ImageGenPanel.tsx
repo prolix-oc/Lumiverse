@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Image as ImageIcon, Settings2, Trash2, Plus, X, Workflow, Shuffle } from 'lucide-react'
+import { Image as ImageIcon, Settings2, Trash2, Plus, X, Workflow, Shuffle, Download, Upload } from 'lucide-react'
 import { IconBrush } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { imageGenApi, imageGenPresetBindingsApi, type ComfyUICapabilities, type SceneData } from '@/api/image-gen'
@@ -17,10 +17,14 @@ import SearchableSelect from '@/components/shared/SearchableSelect'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
+import { uuidv7 } from '@/lib/uuid'
+import { toast } from '@/lib/toast'
+import ImageGenExportModal from './ImageGenExportModal'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import { ComfyWorkflowEditor } from './image-gen-connections/ComfyWorkflowEditor'
 import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/lib/comfyui-mapped-fields'
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
 import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
@@ -142,6 +146,38 @@ function ModelComboField({
 }
 
 /** Render a single parameter from the provider capability schema */
+/** Raw Request Override editor — validates JSON inline so typos don't silently break generation. */
+function RawOverrideField({
+  label,
+  schema,
+  value,
+  onChange,
+}: {
+  label: string
+  schema: ImageGenParameterSchema
+  value: any
+  onChange: (value: string) => void
+}) {
+  const { t } = useTranslation('panels')
+  const text = typeof value === 'string' ? value : ''
+  let error: string | undefined
+  if (text.trim()) {
+    try {
+      const parsed = JSON.parse(text)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        error = t('imageGenPanel.rawOverrideNotObject')
+      }
+    } catch {
+      error = t('imageGenPanel.rawOverrideInvalidJson')
+    }
+  }
+  return (
+    <FormField label={label} hint={schema.description} error={error}>
+      <TextArea rows={3} value={text} onChange={onChange} placeholder='{"steps": 30}' />
+    </FormField>
+  )
+}
+
 function ParamField({
   paramKey,
   schema,
@@ -257,6 +293,16 @@ function ParamField({
       )
 
     case 'string':
+      if (paramKey === 'rawRequestOverride') {
+        return (
+          <RawOverrideField
+            label={displayName}
+            schema={schema}
+            value={value}
+            onChange={(v) => onChange(paramKey, v)}
+          />
+        )
+      }
       if (schema.description?.toLowerCase().includes('prompt') || schema.description?.toLowerCase().includes('negative')) {
         return (
           <FormField label={displayName} hint={schema.description}>
@@ -317,6 +363,7 @@ export default function ImageGenPanel() {
   const [draftPrompt, setDraftPrompt] = useState('')
   const [draftNegative, setDraftNegative] = useState('')
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
+  const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [characterPresetId, setCharacterPresetId] = useState<string | null>(null)
   const [personaPresetId, setPersonaPresetId] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
@@ -326,6 +373,9 @@ export default function ImageGenPanel() {
   const [workflowLoading, setWorkflowLoading] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
   const refInputRef = useRef<HTMLInputElement | null>(null)
+  const importConfigInputRef = useRef<HTMLInputElement | null>(null)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [importConfigBusy, setImportConfigBusy] = useState(false)
 
   // Load profiles and providers on mount
   useEffect(() => {
@@ -736,7 +786,7 @@ export default function ImageGenPanel() {
     const name = presetName.trim() || loadedPreset?.name || targetLabel
     const existingId = loadedPresetId
     const nextPreset: ImageGenPromptPreset = {
-      id: existingId || crypto.randomUUID(),
+      id: existingId || uuidv7(),
       name,
       mode: imageGeneration.promptMode === 'parsed_custom' ? 'parsed_custom' : 'custom',
       prompt: draftPrompt,
@@ -783,6 +833,7 @@ export default function ImageGenPanel() {
 
   const deletePromptPreset = useCallback(() => {
     if (!loadedPresetId) return
+    setConfirmDeletePreset(false)
     const id = loadedPresetId
     const next = promptPresets.filter((p) => p.id !== id)
     const updates: Partial<typeof imageGeneration> = { promptPresets: next }
@@ -810,6 +861,32 @@ export default function ImageGenPanel() {
     setImageGenSettings,
   ])
 
+  const handleImportConfigFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImportConfigBusy(true)
+    try {
+      const payload = JSON.parse(await file.text())
+      const res = await imageGenApi.importConfig(payload)
+      // The backend already persisted the merged settings; this re-syncs the store.
+      setImageGenSettings(res.settings)
+      if (res.imported.connections > 0) {
+        const list = await imageGenConnectionsApi.list({ limit: 100, offset: 0 })
+        setImageGenProfiles(list.data)
+      }
+      toast.success(t('imageGenPanel.importSuccess', {
+        presets: res.imported.presets,
+        connections: res.imported.connections,
+      }))
+      for (const issue of res.errors || []) toast.error(issue)
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message || t('imageGenPanel.importFailed'))
+    } finally {
+      setImportConfigBusy(false)
+    }
+  }
+
   // Reference images are provider parameters and stay scoped to this connection.
   const currentRefs: RefImage[] = genParams.referenceImages || []
   const setCurrentRefs = (next: RefImage[]) => {
@@ -818,7 +895,7 @@ export default function ImageGenPanel() {
 
   // Providers that accept image input: NovelAI/NanoGPT (style references) plus
   // the img2img providers, which reuse the same reference-image config surface.
-  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini'
+  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini' || providerName === 'openrouter' || providerName === 'openai' || providerName === 'sdapi'
   const supportsRefs = providerName === 'novelai' || providerName === 'nanogpt' || supportsImg2ImgSource
 
   const runGenerationCall = useCallback(async (input: {
@@ -832,7 +909,7 @@ export default function ImageGenPanel() {
     attachToMessageId?: string
     skipParse?: boolean
   }) => {
-    const jobId = crypto.randomUUID()
+    const jobId = uuidv7()
     setCurrentJobId(jobId)
     setSceneGenerating(true)
     try {
@@ -1038,6 +1115,35 @@ export default function ImageGenPanel() {
         </Button>
       </FormField>
 
+      <EditorSection title={t('imageGenPanel.importExport')} Icon={Settings2} defaultExpanded={false}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="secondary" size="sm" onClick={() => setExportModalOpen(true)}>
+            <Download size={14} /> {t('imageGenPanel.exportConfig')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => importConfigInputRef.current?.click()}
+            disabled={importConfigBusy}
+          >
+            <Upload size={14} /> {t('imageGenPanel.importConfig')}
+          </Button>
+        </div>
+        <input
+          ref={importConfigInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: 'none' }}
+          onChange={handleImportConfigFile}
+        />
+      </EditorSection>
+
+      <ImageGenExportModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        presets={promptPresets}
+      />
+
       {imageGeneration.enabled && (
         <>
           {/* Connection Profile Selector */}
@@ -1205,8 +1311,20 @@ export default function ImageGenPanel() {
                   <Button variant="secondary" size="sm" onClick={savePromptPreset}>
                     {loadedPresetId ? t('imageGenPanel.saveChanges') : t('imageGenPanel.saveAsNew')}
                   </Button>
-                  {loadedPresetId && <Button variant="danger" size="sm" onClick={deletePromptPreset}>{t('imageGenPanel.delete')}</Button>}
+                  {loadedPresetId && <Button variant="danger" size="sm" onClick={() => setConfirmDeletePreset(true)}>{t('imageGenPanel.delete')}</Button>}
                 </div>
+
+                {confirmDeletePreset && (
+                  <ConfirmationModal
+                    isOpen={true}
+                    title={t('imageGenPanel.deletePresetConfirmTitle')}
+                    message={t('imageGenPanel.deletePresetConfirmMessage', { name: loadedPreset?.name })}
+                    variant="danger"
+                    confirmText={t('imageGenPanel.delete')}
+                    onConfirm={deletePromptPreset}
+                    onCancel={() => setConfirmDeletePreset(false)}
+                  />
+                )}
                 {loadedPreset && (
                   <div className={styles.editorTargetBanner}>
                     {t('imageGenPanel.editing')} <strong>{loadedPreset.name}</strong> ({editTarget})
@@ -1556,6 +1674,18 @@ export default function ImageGenPanel() {
                 />
               </FormField>
             )}
+            <FormField label={t('imageGenPanel.contextMessageLimit')} hint={t('imageGenPanel.contextMessageLimitHint')}>
+              <TextInput
+                type="number"
+                min={1}
+                max={200}
+                value={String(imageGeneration.promptContextMessageLimit ?? 3)}
+                onChange={(value) => {
+                  const parsed = Number(value)
+                  updateTop({ promptContextMessageLimit: Math.max(1, Math.min(200, Number.isFinite(parsed) ? Math.floor(parsed) : 3)) })
+                }}
+              />
+            </FormField>
             <LabeledRangeSlider
               label={t('imageGenPanel.sceneChangeSensitivity')}
               min={1}

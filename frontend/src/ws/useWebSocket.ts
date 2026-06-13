@@ -18,7 +18,7 @@ import {
   invalidateDisplayRegexCacheForVars,
 } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
-import { recoverPooledGeneration } from '@/lib/generation-recovery'
+import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
 import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
@@ -344,6 +344,11 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.updateMessage(payload.message.id, payload.message)
+          // Deleting a swipe shifts indices, so a pending "new swipe" pointer is
+          // no longer trustworthy — drop it.
+          if (payload.action === 'deleted' && payload.message?.id) {
+            state.clearUnseenSwipe(payload.message.id)
+          }
           if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
         }
       }),
@@ -383,6 +388,12 @@ export function useWebSocket() {
             // called without a targetMessageId (e.g. regeneration flow).
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+          // Anchor the streaming buffer to its swipe so the user can navigate to
+          // other swipes mid-generation without smearing live tokens onto them.
+          state.setStreamingSwipeId(payload.targetSwipeId ?? null)
+          // A new generation supersedes any stale "new swipe ready" badge on this
+          // message — the upcoming completion will re-flag the fresh swipe if needed.
+          if (payload.targetMessageId) state.clearUnseenSwipe(payload.targetMessageId)
         }
         // Track as a chat head so it appears if user navigates away
         state.addChatHead({
@@ -405,6 +416,9 @@ export function useWebSocket() {
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+          // Refine (never clobber) the swipe anchor — GENERATION_STARTED is the
+          // authoritative source; only overwrite if this event actually carries it.
+          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId)
 
           // Surface context clipping once the final assembly metadata is ready.
           const clip = payload.contextClipStats
@@ -453,23 +467,16 @@ export function useWebSocket() {
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
-          if (state.lastPooledSeq != null) {
-            // startSeq..seq is this segment's coalesced tokenSeq range. If its
-            // start is at/below the recovery watermark, the leading tokens are
-            // already present in the backfilled pool content — drop the whole
-            // segment instead of re-appending the overlapping prefix (the
-            // recovery double-render). Any new tail tokens are reconciled by the
-            // authoritative pool (watchdog re-poll + final DB message), so this
-            // defers rather than loses content.
-            const segStart = payload.startSeq ?? payload.seq
-            if (segStart != null && segStart <= state.lastPooledSeq) return
-            // First segment fully past the watermark — clear it and render normally.
-            state.setLastPooledSeq(null as any)
-          }
-          if (payload.type === 'reasoning') {
-            state.appendStreamReasoning(payload.token)
-          } else {
-            state.appendStreamToken(payload.token)
+          // `offset` (char position of the segment in the server's cumulative
+          // buffer) gives exact reconciliation: overlap with recovery-backfilled
+          // content is sliced off inside the append, and a segment starting
+          // beyond our buffer means we missed tokens — pull the authoritative
+          // pool immediately instead of waiting for the 4s watchdog.
+          const result = payload.type === 'reasoning'
+            ? state.appendStreamReasoning(payload.token, payload.offset)
+            : state.appendStreamToken(payload.token, payload.offset)
+          if (result === 'gap' && payload.chatId) {
+            requestStreamGapRecovery(payload.chatId)
           }
         }
         // Phase transitions are now handled explicitly by GENERATION_PHASE_CHANGED
@@ -600,6 +607,11 @@ export function useWebSocket() {
             }
 
             const optimisticMessageId = state.regeneratingMessageId
+            // Captured before endStreaming clears it: the swipe this generation
+            // filled. If the user chose to stay on a different swipe, we flag the
+            // fresh one as unseen so a "new swipe ready" badge points them to it.
+            const completedSwipeId = state.streamingSwipeId
+            const completedMessageId = payload.messageId
 
             // Reconcile before clearing streaming. Clearing first collapses long
             // streamed rows back to their blank/original content for a frame; on
@@ -613,6 +625,14 @@ export function useWebSocket() {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
+                if (completedSwipeId != null && completedMessageId) {
+                  const msg = res.data.find((m) => m.id === completedMessageId)
+                  // Only badge when there's actually another swipe to navigate to
+                  // and the user isn't already viewing the freshly-generated one.
+                  if (msg && msg.swipes.length > 1 && completedSwipeId < msg.swipes.length && msg.swipe_id !== completedSwipeId) {
+                    s.setUnseenSwipe(completedMessageId, completedSwipeId)
+                  }
+                }
                 s.endStreaming()
               }
             }).catch(() => {
@@ -856,7 +876,7 @@ export function useWebSocket() {
         // Re-sync any pooled generation for the active chat. Covers sockets
         // that were killed during backgrounding (mobile OS suspend, long tab
         // switch) — tokens streamed while we were offline are pulled from the
-        // server pool and the seq watermark de-dupes the live WS replay.
+        // server pool and segment offsets de-dupe the live WS replay exactly.
         const activeChatId = store.getState().activeChatId
         if (activeChatId) {
           recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
@@ -1368,7 +1388,7 @@ export function useWebSocket() {
     // background tabs may miss live STREAM_TOKEN_RECEIVED events while hidden
     // even when the WS stays open; the server pool is authoritative, so a
     // status poll on every visible transition restores all accumulated content
-    // (and the tokenSeq watermark drops tokens the client already rendered).
+    // (segment offsets slice off anything the client already rendered).
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return
       const activeChatId = store.getState().activeChatId

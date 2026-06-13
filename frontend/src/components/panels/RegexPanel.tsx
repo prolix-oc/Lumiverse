@@ -11,6 +11,7 @@ import { useFolders } from '@/hooks/useFolders'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/regex'
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
@@ -63,6 +64,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
 
 export default function RegexPanel() {
   const { t } = useTranslation('panels')
+  const { t: tc } = useTranslation('common')
 
   const regexScripts = useStore((s) => s.regexScripts)
   const loadRegexScripts = useStore((s) => s.loadRegexScripts)
@@ -82,6 +84,8 @@ export default function RegexPanel() {
   const [showCreatePopover, setShowCreatePopover] = useState(false)
   const [creatingFolderName, setCreatingFolderName] = useState('')
   const [creatingFolderMode, setCreatingFolderMode] = useState(false)
+  const [deleteScriptTarget, setDeleteScriptTarget] = useState<RegexScript | null>(null)
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ scripts: RegexScript[]; folder: string } | null>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
@@ -175,8 +179,8 @@ export default function RegexPanel() {
     setShowCreatePopover(false)
   }, [creatingFolderName, createFolder])
 
-  const handleDelete = useCallback(async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDelete = useCallback(async (id: string) => {
+    setDeleteScriptTarget(null)
     try {
       await removeRegexScript(id)
       if (expandedId === id) setExpandedId(null)
@@ -185,11 +189,9 @@ export default function RegexPanel() {
     }
   }, [removeRegexScript, expandedId])
 
-  const handleDeleteFolder = useCallback(async (scripts: RegexScript[], folderLabel: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDeleteFolder = useCallback(async (scripts: RegexScript[]) => {
+    setDeleteFolderTarget(null)
     if (scripts.length === 0) return
-    const confirmMsg = t('regexPanel.deleteFolderConfirm', { count: scripts.length, folder: folderLabel })
-    if (!confirm(confirmMsg)) return
     const ids = scripts.map((s) => s.id)
     try {
       const deleted = await bulkRemoveRegexScripts(ids)
@@ -446,7 +448,7 @@ export default function RegexPanel() {
                       </button>
                       <button
                         className={styles.folderDeleteBtn}
-                        onClick={(e) => handleDeleteFolder(group.scripts, folderLabel, e)}
+                        onClick={(e) => { e.stopPropagation(); setDeleteFolderTarget({ scripts: group.scripts, folder: folderLabel }) }}
                         title={t('regexPanel.deleteFolderScripts', { folder: folderLabel })}
                         aria-label={t('regexPanel.deleteFolderScriptsAria', { folder: folderLabel })}
                       >
@@ -462,7 +464,7 @@ export default function RegexPanel() {
                       script={script}
                       expanded={expandedId === script.id}
                       onToggleExpand={() => setExpandedId(expandedId === script.id ? null : script.id)}
-                      onDelete={(e) => handleDelete(script.id, e)}
+                      onDelete={(e) => { e.stopPropagation(); setDeleteScriptTarget(script) }}
                       onToggle={(disabled, e) => handleToggle(script.id, disabled, e)}
                       onBindPreset={(e) => handleBindToPreset(script, e)}
                       onUpdate={(updates) => updateRegexScript(script.id, updates)}
@@ -484,7 +486,7 @@ export default function RegexPanel() {
               script={script}
               expanded={expandedId === script.id}
               onToggleExpand={() => setExpandedId(expandedId === script.id ? null : script.id)}
-              onDelete={(e) => handleDelete(script.id, e)}
+              onDelete={(e) => { e.stopPropagation(); setDeleteScriptTarget(script) }}
               onToggle={(disabled, e) => handleToggle(script.id, disabled, e)}
               onBindPreset={(e) => handleBindToPreset(script, e)}
               onUpdate={(updates) => updateRegexScript(script.id, updates)}
@@ -498,6 +500,30 @@ export default function RegexPanel() {
           ))
         )}
       </div>
+
+      {deleteScriptTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('regexPanel.deleteScriptTitle')}
+          message={t('regexPanel.deleteScriptConfirm', { name: deleteScriptTarget.name })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDelete(deleteScriptTarget.id) }}
+          onCancel={() => setDeleteScriptTarget(null)}
+        />
+      )}
+
+      {deleteFolderTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('regexPanel.deleteFolderTitle')}
+          message={t('regexPanel.deleteFolderConfirm', { count: deleteFolderTarget.scripts.length, folder: deleteFolderTarget.folder })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDeleteFolder(deleteFolderTarget.scripts) }}
+          onCancel={() => setDeleteFolderTarget(null)}
+        />
+      )}
     </div>
   )
 }
@@ -523,7 +549,7 @@ function ScriptRow({
   onDelete: (e: React.MouseEvent) => void
   onToggle: (disabled: boolean, e: React.MouseEvent) => void
   onBindPreset: (e: React.MouseEvent) => void
-  onUpdate: (updates: Record<string, any>) => void
+  onUpdate: (updates: Record<string, any>) => void | Promise<void>
   onOpenModal: () => void
   targetBadge: React.ReactNode
   scopeIcon: React.ReactNode
@@ -533,6 +559,53 @@ function ScriptRow({
 }) {
   const { t } = useTranslation('panels')
   const replaceRef = useRef<HTMLTextAreaElement>(null)
+
+  // Text fields go through a local draft so the controlled inputs update
+  // synchronously (the store round-trips through the API and a WS-triggered
+  // refetch, which would replace the value mid-typing and throw the cursor
+  // to the end) and the API write is debounced per typing pause.
+  const [draft, setDraft] = useState(() => ({
+    name: script.name,
+    find_regex: script.find_regex,
+    replace_string: script.replace_string,
+  }))
+  const pendingRef = useRef<Record<string, any>>({})
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const onUpdateRef = useRef(onUpdate)
+  onUpdateRef.current = onUpdate
+
+  // Adopt external changes (editor modal, other tabs) only when no local
+  // edits are waiting to be saved.
+  useEffect(() => {
+    if (Object.keys(pendingRef.current).length > 0) return
+    setDraft((d) =>
+      d.name === script.name && d.find_regex === script.find_regex && d.replace_string === script.replace_string
+        ? d
+        : { name: script.name, find_regex: script.find_regex, replace_string: script.replace_string }
+    )
+  }, [script.name, script.find_regex, script.replace_string])
+
+  const flushDraft = useCallback(() => {
+    clearTimeout(saveTimer.current)
+    const pending = pendingRef.current
+    pendingRef.current = {}
+    if (Object.keys(pending).length === 0) return
+    void Promise.resolve(onUpdateRef.current(pending)).catch((err: any) => {
+      toast.error(err.body?.error || err.message || i18n.t('regexPanel.requestFailed', { ns: 'panels' }))
+    })
+  }, [])
+
+  const queueDraftUpdate = useCallback((updates: Partial<Pick<RegexScript, 'name' | 'find_regex' | 'replace_string'>>) => {
+    setDraft((d) => ({ ...d, ...updates }))
+    pendingRef.current = { ...pendingRef.current, ...updates }
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(flushDraft, 400)
+  }, [flushDraft])
+
+  // Persist trailing edits when the row unmounts (folder collapse, scope
+  // filter change, panel close).
+  useEffect(() => () => flushDraft(), [flushDraft])
+
   const performance = getRegexPerformanceMetadata(script)
   const warningText = performance
     ? performance.timed_out
@@ -552,7 +625,7 @@ function ScriptRow({
       >
         <Badge size="sm">{scopeIcon}</Badge>
         <span className={clsx(styles.scriptName, script.disabled && styles.scriptNameDisabled)}>
-          {script.name}
+          {draft.name}
         </span>
         {performance && (
           <span className={styles.slowBadge} title={warningText ?? undefined} aria-label={warningText ?? undefined}>
@@ -588,8 +661,8 @@ function ScriptRow({
               <label className={styles.fieldLabel}>{t('regexPanel.name')}</label>
             <input
               className={styles.fieldInput}
-              value={script.name}
-              onChange={(e) => onUpdate({ name: e.target.value })}
+              value={draft.name}
+              onChange={(e) => queueDraftUpdate({ name: e.target.value })}
             />
           </div>
           {performance && (
@@ -618,8 +691,8 @@ function ScriptRow({
             </label>
             <input
               className={styles.fieldInputMono}
-              value={script.find_regex}
-              onChange={(e) => onUpdate({ find_regex: e.target.value })}
+              value={draft.find_regex}
+              onChange={(e) => queueDraftUpdate({ find_regex: e.target.value })}
               placeholder={t('regexPanel.findPlaceholder')}
             />
           </div>
@@ -635,7 +708,7 @@ function ScriptRow({
                   className={styles.tokenChip}
                   title={t(token.hintKey)}
                   onClick={() => {
-                    onUpdate({ replace_string: insertAtCursor(replaceRef.current, token.value) })
+                    queueDraftUpdate({ replace_string: insertAtCursor(replaceRef.current, token.value) })
                   }}
                 >
                   {token.label}
@@ -648,7 +721,7 @@ function ScriptRow({
                   className={clsx(styles.tokenChip, styles.tokenChipHtml)}
                   title={t('regexPanel.wrapIn', { tag: htmlToken.label })}
                   onClick={() => {
-                    onUpdate({ replace_string: insertAtCursor(replaceRef.current, htmlToken.value) })
+                    queueDraftUpdate({ replace_string: insertAtCursor(replaceRef.current, htmlToken.value) })
                   }}
                 >
                   {htmlToken.label}
@@ -658,8 +731,8 @@ function ScriptRow({
             <textarea
               ref={replaceRef}
               className={styles.fieldTextarea}
-              value={script.replace_string}
-              onChange={(e) => onUpdate({ replace_string: e.target.value })}
+              value={draft.replace_string}
+              onChange={(e) => queueDraftUpdate({ replace_string: e.target.value })}
               placeholder={t('regexPanel.replacePlaceholder')}
               rows={2}
             />

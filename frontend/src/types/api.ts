@@ -59,11 +59,13 @@ export interface TagCount {
 // ---- Chat ----
 export interface Chat {
   id: string;
-  character_id: string;
+  /** Null for temporary character-less chats (metadata.temporary). */
+  character_id: string | null;
   name: string;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
+  character_display_owner?: string | null;
 }
 
 export interface CreateChatInput {
@@ -105,6 +107,8 @@ export interface ChatSummary {
   message_count: number;
   created_at: number;
   updated_at: number;
+  /** Truncated (<=280 chars) content of the most recent message, for list previews. */
+  last_message_preview: string;
 }
 
 // ---- Chat Branch Tree ----
@@ -193,7 +197,13 @@ export interface Message {
   content: string;
   send_date: number;
   swipe_id: number;
-  swipes: string[];
+  /**
+   * List endpoints deliver a light projection: only the active swipe's text
+   * is populated, non-active slots are null (length is preserved for the n/m
+   * indicator and at-first/at-last checks). Swipe actions and single-message
+   * fetches return fully populated arrays.
+   */
+  swipes: (string | null)[];
   swipe_dates: number[];
   extra: MessageExtra;
   parent_message_id: string | null;
@@ -1231,9 +1241,23 @@ export interface CreateLoomToolInput {
 export type UpdateLoomToolInput = Partial<CreateLoomToolInput>;
 
 // ---- Import / Batch ----
+/**
+ * Portable LoRA hint embedded on a character card (extensions.lumiverse_image_gen_lora).
+ * Surfaced on import so the UI can show "this character expects <file>" — never
+ * used to auto-create a binding (the runtime binding is per-user).
+ */
+export interface PortableLoraReference {
+  version: 1
+  lora_filename: string
+  weight: number
+  base_tags?: string
+  source_url?: string
+}
+
 export interface ImportResult {
   character: Character
   message?: string
+  lumiverse_lora?: PortableLoraReference
 }
 
 export interface BulkImportResultItem {
@@ -1241,6 +1265,7 @@ export interface BulkImportResultItem {
   success: boolean
   character?: Character
   lorebook?: { name: string; entryCount: number }
+  lumiverse_lora?: PortableLoraReference
   error?: string
   skipped?: boolean
 }

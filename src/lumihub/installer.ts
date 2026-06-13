@@ -6,7 +6,6 @@ import * as svc from "../services/characters.service";
 import * as cardSvc from "../services/character-card.service";
 import * as images from "../services/images.service";
 import * as gallerySvc from "../services/character-gallery.service";
-import * as exprSvc from "../services/expressions.service";
 import { safeFetch } from "../utils/safe-fetch";
 import { mapWithConcurrency } from "../utils/concurrency";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
@@ -18,6 +17,7 @@ import * as presetsSvc from "../services/presets.service";
 import * as settingsSvc from "../services/settings.service";
 import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
+import { applyCharxModulesAndAssets } from "../services/charx-import.service";
 import type {
   InstallCharacterPayload,
   InstallPresetPayload,
@@ -272,118 +272,17 @@ async function installFromUrl(
   if (contentType.includes("application/zip") || url.toLowerCase().endsWith(".charx")) {
     const file = new File([buf], "import.charx", { type: "application/zip" });
     const charxResult = await cardSvc.extractCardFromCharx(file);
-    const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles } = charxResult;
-    const character = svc.createCharacter(userId, cardInput);
+    const character = svc.createCharacter(userId, charxResult.card);
 
-    if (avatarFile) {
-      const image = await images.uploadImage(userId, avatarFile);
-      svc.setCharacterImage(userId, character.id, image.id);
-      svc.setCharacterAvatar(userId, character.id, image.filename);
-    }
-
-    // Track consumed asset paths so remaining go to gallery
-    const consumedPaths = new Set<string>();
-
-    if (lumiverseModules) {
-      const extensions: Record<string, any> = { ...(character.extensions || {}) };
-
-      // Import expressions from Lumiverse modules
-      if (lumiverseModules.expressions?.mappings) {
-        const exprMappings: Record<string, string> = {};
-        for (const [label, archivePath] of Object.entries(lumiverseModules.expressions.mappings)) {
-          const assetFile = assetFiles.get(archivePath);
-          if (assetFile) {
-            const img = await images.uploadImage(userId, assetFile);
-            exprMappings[label] = img.id;
-            consumedPaths.add(archivePath);
-          }
-        }
-        if (Object.keys(exprMappings).length > 0) {
-          extensions.expressions = {
-            enabled: lumiverseModules.expressions.enabled,
-            defaultExpression: lumiverseModules.expressions.defaultExpression,
-            mappings: exprMappings,
-          };
-        }
-      }
-
-      // Import alternate fields
-      if (lumiverseModules.alternate_fields) {
-        extensions.alternate_fields = lumiverseModules.alternate_fields;
-      }
-
-      // Import alternate avatars
-      const altAvatars: Array<{ id: string; image_id: string; label: string }> = [];
-      if (Array.isArray(lumiverseModules.alternate_avatars)) {
-        for (const av of lumiverseModules.alternate_avatars) {
-          const assetFile = assetFiles.get(av.path);
-          if (assetFile) {
-            const img = await images.uploadImage(userId, assetFile);
-            altAvatars.push({ id: av.id || crypto.randomUUID(), image_id: img.id, label: av.label });
-            consumedPaths.add(av.path);
-          }
-        }
-        if (altAvatars.length > 0) {
-          extensions.alternate_avatars = altAvatars;
-        }
-      }
-
-      svc.updateCharacter(userId, character.id, { extensions });
-    }
-
-    // Upload remaining unconsumed images to gallery
-    const remainingGalleryFiles: File[] = [];
-    for (const [path, assetFile] of assetFiles) {
-      if (consumedPaths.has(path)) continue;
-      if (avatarFile && assetFile.name === avatarFile.name) continue;
-      if (/^assets\/(icon|other)\//i.test(path)) {
-        remainingGalleryFiles.push(assetFile);
-      }
-    }
-    if (remainingGalleryFiles.length > 3) {
-      await gallerySvc.uploadBulkToGallery(userId, character.id, remainingGalleryFiles);
-    } else {
-      for (const gf of remainingGalleryFiles) {
-        try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
-      }
-    }
-
-    // Import RisuAI expression assets (heuristic-based, from x-risu-asset entries)
-    if (expressionAssets.length > 0) {
-      await exprSvc.importFromAssets(userId, character.id, expressionAssets);
-    }
-
-    // Import regex scripts from Lumiverse modules (bundled .charx)
-    if (lumiverseModules?.regex_scripts?.length) {
-      try {
-        const regexSvc = await import("../services/regex-scripts.service");
-        for (const bundled of lumiverseModules.regex_scripts) {
-          try {
-            regexSvc.createRegexScript(userId, {
-              ...(bundled as import("../types/regex-script").CreateRegexScriptInput),
-              scope: "character",
-              scope_id: character.id,
-              character_id: character.id,
-              metadata: { ...bundled.metadata, source: "charx_bundle" },
-            });
-          } catch { /* skip individual failures */ }
-        }
-      } catch { /* skip if regex service unavailable */ }
-    }
-
-    // Import RisuAI regex scripts
-    if (risuModule?.regex?.length) {
-      const scripts = cardSvc.convertRisuRegexScripts(risuModule.regex, character.id);
-      for (const script of scripts) {
-        // Best-effort — skip failures
-        try {
-          const regexSvc = await import("../services/regex-scripts.service");
-          regexSvc.createRegexScript(userId, script);
-        } catch { /* skip */ }
-      }
-    }
-
-    maybeExtractWorldbook(userId, character.id, payload.characterName, payload);
+    // Full CHARX processing shared with the app's import endpoints: expressions,
+    // expression groups, alternate fields/avatars, bundled regex scripts, gallery
+    // + inline asset resolution, and RisuAI module/expressions. World-book import
+    // — both lumiverse_modules.world_books and the embedded character_book, which
+    // a Lumiverse export carries identically — is gated on the hub user's opt-in
+    // so "don't import the worldbook" is honored.
+    await applyCharxModulesAndAssets(userId, character, charxResult, {
+      importWorldBooks: !!payload.importEmbeddedWorldbook,
+    });
 
     const final = svc.getCharacter(userId, character.id);
 

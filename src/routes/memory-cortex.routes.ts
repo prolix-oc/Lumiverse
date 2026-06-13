@@ -79,7 +79,7 @@ async function resolveCortexParticipants(userId: string, chat: ReturnType<typeof
 
   if (!chat) return { characterNames, descriptionAliases: undefined as Map<string, string> | undefined };
 
-  const character = getCharacter(userId, chat.character_id);
+  const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
   if (character) {
     const normalized = memoryCortex.normalizeCharacterName(character.name);
     characterNames.push(normalized);

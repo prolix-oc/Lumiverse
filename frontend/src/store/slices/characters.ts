@@ -2,7 +2,7 @@ import type { StateCreator } from 'zustand'
 import type { CharactersSlice } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 
-export const createCharactersSlice: StateCreator<CharactersSlice> = (set) => ({
+export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) => ({
   characters: [],
   charactersLoaded: false,
   favorites: [],
@@ -28,7 +28,22 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set) => ({
 
   setEditingCharacterId: (id) => set({ editingCharacterId: id }),
 
-  updateCharacter: (id, character) =>
+  updateCharacter: (id, character) => {
+    // Chat open re-applies the active character on every visit. An unchanged
+    // snapshot must not churn the array identity: every mounted message card
+    // derives charName/risuAssetMap from `characters`, so a no-op update
+    // re-renders the whole list. updated_at (epoch seconds) alone can't
+    // distinguish rapid successive edits, so it only gates the deep compare.
+    const existing = get().characters.find((c) => c.id === id)
+    if (
+      existing &&
+      (existing === character ||
+        (existing.updated_at === character.updated_at &&
+          JSON.stringify(existing) === JSON.stringify(character)))
+    ) {
+      return
+    }
+
     set((state) => {
       const existingIndex = state.characters.findIndex((c) => c.id === id)
       if (existingIndex === -1) {
@@ -38,7 +53,8 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set) => ({
       const characters = [...state.characters]
       characters[existingIndex] = character
       return { characters }
-    }),
+    })
+  },
 
   toggleFavorite: (id) =>
     set((state) => {

@@ -1,4 +1,5 @@
 import { get, post, put, del } from './client'
+import type { ImageGenSettings, ImageGenPromptPreset } from '@/types/store'
 
 export interface ComfyUICapabilities {
   checkpoints: string[]
@@ -70,6 +71,31 @@ export interface ImageGenPresetBinding {
 export type ImageGenPromptMode = 'scene' | 'custom' | 'parsed_custom'
 export type ImageGenOutputTarget = 'background' | 'chat_attachment' | 'preview' | 'attach_to_message'
 
+export interface ImageGenConnectionExport {
+  name: string
+  provider: string
+  api_url: string
+  model: string
+  default_parameters: Record<string, any>
+  metadata: Record<string, any>
+}
+
+export interface ImageGenConfigExport {
+  version: number
+  type: string
+  exported_at: number
+  settings?: Partial<ImageGenSettings>
+  presets?: ImageGenPromptPreset[]
+  connections?: ImageGenConnectionExport[]
+  generation_parameters?: { provider: string; parameters: Record<string, any> }
+}
+
+export interface ImageGenConfigImportResult {
+  settings: ImageGenSettings
+  imported: { settings: boolean; presets: number; connections: number; parameters: boolean }
+  errors: string[]
+}
+
 const CLIENT_TIMEOUT_BUFFER_MS = 10_000
 
 function resolveClientTimeoutMs(promptTimeoutSeconds?: number, generationTimeoutSeconds?: number): number {
@@ -126,6 +152,27 @@ export const imageGenApi = {
     return post<{ caption: string }>('/image-gen/caption', input, {
       timeout: timeoutSec > 0 ? timeoutSec * 1000 + CLIENT_TIMEOUT_BUFFER_MS : 0,
     })
+  },
+
+  exportConfig(input: {
+    includeSettings: boolean
+    includePresets: boolean
+    includeConnections: boolean
+    includeParameters: boolean
+    /** Restricts the exported presets; omit to export all of them. */
+    presetIds?: string[]
+  }) {
+    return post<ImageGenConfigExport>('/image-gen/export', {
+      include_settings: input.includeSettings,
+      include_presets: input.includePresets,
+      include_connections: input.includeConnections,
+      include_parameters: input.includeParameters,
+      preset_ids: input.presetIds,
+    })
+  },
+
+  importConfig(payload: unknown) {
+    return post<ImageGenConfigImportResult>('/image-gen/import', payload)
   },
 }
 

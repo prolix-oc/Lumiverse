@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "要約した",
     "thinkingDisplayOmitted": "省略",
     "thinkingDisplayDisabledHint": "API 推論が有効な場合にのみ送信されます。",
-    "thinkingDisplayHint": "Opus 4.7 および Mythos Preview のデフォルトは省略です。概要テキストを受信するには、[要約] を選択します。",
+    "thinkingDisplayHint": "Opus 4.7/4.8 および Mythos Preview のデフォルトは省略です。概要テキストを受信するには、[要約] を選択します。",
     "keepInHistory": "履歴に保持",
     "keepAllReasoning": "プロンプトにすべての推論を保持",
     "stripAllReasoning": "プロンプトからすべての推論を削除",
@@ -589,6 +589,9 @@
     "clickPlus": "作成するには、+ をクリックしてください。",
     "uncategorized": "未分類",
     "deleteFolderConfirm": "「{{folder}}」内の {{count}} 正規表現スクリプトをすべて削除しますか?これは元に戻すことはできません。",
+    "deleteFolderTitle": "フォルダーのスクリプトを削除",
+    "deleteScriptTitle": "正規表現スクリプトを削除",
+    "deleteScriptConfirm": "「{{name}}」を削除しますか?これを元に戻すことはできません。",
     "deleteSomeFailed": "{{count}} スクリプトを削除できませんでした",
     "deletedScripts": "削除された {{count}} スクリプト",
     "selectPresetFirstScript": "正規表現スクリプトをバインドする前に Loom プリセットを選択してください",
@@ -738,6 +741,23 @@
     },
     "enable": "画像生成を有効にする",
     "enableHint": "評議会シーン ツールを通じてシーン対応チャット背景を生成する",
+    "importExport": "インポート / エクスポート",
+    "exportModalTitle": "画像生成設定をエクスポート",
+    "exportIncludeSettings": "設定を含める",
+    "exportIncludeParameters": "生成パラメータを含める",
+    "exportIncludeParametersHint": "アクティブな接続のステップ数、CFG、サイズ、シードなどのパラメータです。インポート時、プロバイダーが一致する場合にアクティブな接続へ適用されます。",
+    "exportIncludeConnections": "プロバイダー接続を含める",
+    "exportIncludeConnectionsHint": "接続パラメータ、ワークフロー、サーバーURLを含みます。APIキーはエクスポートされません。",
+    "exportPresets": "プロンプトプリセット",
+    "selectAll": "すべて選択",
+    "selectNone": "選択を解除",
+    "noPresetsToExport": "エクスポートできる保存済みプリセットがありません",
+    "selectedCount": "{{total}}件中{{selected}}件のプリセットを選択中",
+    "exportConfig": "エクスポート",
+    "importConfig": "インポート",
+    "importSuccess": "画像生成設定をインポートしました（プリセット{{presets}}件、接続{{connections}}件）",
+    "importFailed": "インポートに失敗しました",
+    "exportFailed": "エクスポートに失敗しました",
     "connection": "繋がり",
     "createConnectionFirst": "まず [接続] タブで接続を作成します",
     "selectConnection": "接続を選択...",
@@ -758,22 +778,27 @@
     "mainPreset": "メイン プリセット",
     "characterPreset": "キャラクター プリセット",
     "personaPreset": "ペルソナ プリセット",
+    "captioningPreset": "キャプション プリセット",
     "activeMainPreset": "アクティブ メイン プリセット",
     "boundCharacterPreset": "バインド キャラクター プリセット",
     "boundPersonaPreset": "バインド ペルソナ プリセット",
+    "boundCaptioningPreset": "キャプション プリセット",
     "pickMainPresetHint": "保存されたメイン プリセットを選択して、下のエディターにロードします。また、生成時に送信されるアクティブなプロンプトにもなります。",
     "pickCharacterPresetHint": "キャラクタ プリセットを選択してエディタにロードし、現在のチャットのキャラクタにバインドします。",
     "openChatBindPreset": "チャットを開いてプリセットをそのキャラクタにバインドします。それまで、選択は保持されません。",
     "pickPersonaPresetHint": "ペルソナ プリセットを選択してエディターにロードし、アクティブなペルソナにバインドします。",
     "selectActivePersona": "アクティブなペルソナを選択してプリセットをバインドします。",
+    "pickCaptioningPresetHint": "保存済みのキャプション プリセットを選択して読み込みます。これらのプリセットは、Image Captioner がアップロードされた画像をどのように説明するかを定義します。",
     "parserInstructions": "パーサーの手順",
     "prompt": "プロンプト",
     "characterSnippet": "文字スニペット",
     "personaSnippet": "ペルソナ スニペット",
+    "captioningInstructions": "キャプション指示",
     "parserInstructionsHint": "パーサー LLM がチャット コンテキストを最終的な画像プロンプトに変換する方法についての説明。これは画像プロバイダーに直接送信されません。",
     "sentDirectlyHint": "画像プロバイダーに直接送信されます。",
     "characterSnippetHint": "メイン プリセットの {{character_prompt}} が表示される場所にテキストが結合されます。",
     "personaSnippetHint": "メイン プリセットの {{persona_prompt}} が表示される場所にテキストが結合されます。",
+    "captioningInstructionsHint": "Image Captioner モーダルで、アップロードされた画像とともにパーサー LLM へ送信される指示です。",
     "editingPresetTitle": "編集: {{name}}",
     "editTargetPromptTitle": "{{target}} プロンプト",
     "parserPromptExample": "例: 現在のポーズ、表情、衣服、照明、部屋の詳細に焦点を当てます。簡潔なイメージ生成タグを使用します。",
@@ -783,6 +808,7 @@
     "negativePrompt": "ネガティブ プロンプト",
     "character": "キャラクター",
     "persona": "ペルソナ",
+    "captioning": "キャプション",
     "negativeSnippet": "ネガティブ スニペット",
     "negativeSnippetHint": "メイン プリセットのネガティブ プロンプト内の一致するネガティブ マクロを置き換えます。",
     "editingPresetNegativeTitle": "編集: {{name}} - ネガティブ",
@@ -793,6 +819,8 @@
     "saveChanges": "変更を保存",
     "saveAsNew": "新規として保存",
     "delete": "削除",
+    "deletePresetConfirmTitle": "プロンプトプリセットを削除",
+    "deletePresetConfirmMessage": "「{{name}}」を削除しますか?これを元に戻すことはできません。",
     "boundToActiveCharacter": "アクティブ キャラクターにバインド",
     "boundToActivePersona": "アクティブ ペルソナにバインド",
     "promptParser": "プロンプト パーサー",
@@ -848,6 +876,8 @@
     "workflowDefault": "(ワークフローのデフォルト)",
     "workflowOrConnectionDefault": "(ワークフロー / 接続のデフォルト)",
     "advanced": "高度な",
+    "rawOverrideInvalidJson": "JSONが無効です — 修正またはクリアするまで生成は失敗します",
+    "rawOverrideNotObject": "リクエストフィールドのJSONオブジェクトである必要があります（例: {\"steps\": 30}）",
     "directorReferences": "ディレクター リファレンス",
     "includeCharacterAvatar": "キャラクター アバターを含める",
     "includeCharacterAvatarHint": "現在のキャラクター アバターをディレクター リファレンスとして送信",
@@ -878,6 +908,8 @@
     "addGeneratedToGalleryHint": "オンの場合、生成されたすべての画像はアクティブなチャットのキャラクター ギャラリーにもリンクされます。ギャラリーに何世代も表示されないようにするには、オフにします。",
     "generatedImagesResend": "再送信する生成画像",
     "generatedImagesResendHint": "マルチモーダル コンテキストには、最新の生成画像のみが含まれます。",
+    "contextMessageLimit": "コンテキストに含めるチャットメッセージ数",
+    "contextMessageLimitHint": "シーン分析および解析済みカスタムプロンプトのためにプロンプトパーサーへ送信される最新チャットメッセージの数。",
     "sceneChangeSensitivity": "シーン変更感度",
     "backgroundDisplay": "背景表示",
     "opacity": "不透明度",
@@ -980,6 +1012,7 @@
     "noWorldBooks": "利用可能な世界の本はありません",
     "unknown": "不明",
     "removeWorldBook": "ワールドブックを削除",
+    "openInLorebook": "ロアブックタブで開く",
     "noWorldBooksAttached": "ワールドブックが添付されていません",
     "embeddedLorebook": "キャラクタカードに見つかった埋め込まれた伝承書",
     "embeddedLorebookEntries": "{{count}}エントリ",
@@ -1071,6 +1104,10 @@
       "expressionsCount": "{{count}} 式",
       "switchToSingle": "単一キャラクターに切り替える",
       "removeGroup": "グループを削除",
+      "deleteLabelConfirmTitle": "表情を削除",
+      "deleteLabelConfirmMessage": "表情「{{label}}」を削除しますか?これを元に戻すことはできません。",
+      "deleteGroupConfirmTitle": "グループを削除",
+      "deleteGroupConfirmMessage": "グループ「{{name}}」とそのすべての表情を削除しますか?これを元に戻すことはできません。",
       "defaultExpressionLabel": "表現"
     },
     "imageLora": {
@@ -1109,7 +1146,9 @@
       "saved": "保存されました。",
       "saveFailed": "保存に失敗しました。",
       "cleared": "クリアできませんでした。",
-      "clearFailed": "クリアに失敗しました。"
+      "clearFailed": "クリアに失敗しました。",
+      "clearConfirmTitle": "LoRA バインディングをクリア",
+      "clearConfirmMessage": "このキャラクターに保存された LoRA バインディングを削除しますか?これを元に戻すことはできません。"
     }
   },
   "characterBrowser": {
@@ -1169,6 +1208,7 @@
     "searchWorldBooks": "世界の本を検索…",
     "noWorldBooksAvailable": "利用可能な世界の本はありません",
     "removeFromAlwaysActive": "常にアクティブから削除",
+    "editBook": "このワールドブックを編集",
     "noGlobalActive": "アクティブなグローバル ワールド ブックはありません",
     "thisChatOnly": "このチャットのみ",
     "openChatToAdd": "チャットを開き、チャット範囲のワールド ブックを追加",
@@ -1657,7 +1697,9 @@
     "boundCharacter": "ロードアウトのバインドこのキャラクターへの",
     "unboundCharacter": "キャラクター バインドが削除されました",
     "bindFailed": "ロードアウトのバインドに失敗しました",
-    "unbindFailed": "バインドを削除できませんでした"
+    "unbindFailed": "バインドを削除できませんでした",
+    "deleteConfirmTitle": "ロードアウトを削除",
+    "deleteConfirmMessage": "「{{name}}」を削除しますか?これを元に戻すことはできません。"
   },
   "groupChatsPanel": {
     "loading": "グループ チャットをロード中...",
@@ -2058,7 +2100,9 @@
       "reattributeTitle": "属性を指定します…",
       "detach": "(切り離し)",
       "pickEntity": "エンティティを選択します…",
-      "unattributed": "未属性 ({{count}})"
+      "unattributed": "未属性 ({{count}})",
+      "deleteConfirmTitle": "色を削除",
+      "deleteConfirmMessage": "色 {{hex}} を削除しますか?これを元に戻すことはできません。"
     },
     "stats": {
       "loading": "統計を読み込み中...",
@@ -2128,7 +2172,8 @@
         "thought": "考え",
         "words": "{{count}} 単語",
         "heuristic": "ヒューリスティック"
-      }
+      },
+      "deleteRelationTitle": "関係を削除"
     },
     "editors": {
       "cancel": "キャンセル",
@@ -2247,6 +2292,13 @@
       "vaultDeleteFailed": "ボールトの削除に失敗しました",
       "vaultRenameFailed": "ボールトの名前変更に失敗しました",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "エンティティを削除",
+      "entityMessage": "エンティティ「{{name}}」を削除しますか?これを元に戻すことはできません。",
+      "bulkTitle": "選択したエンティティを削除",
+      "bulkMessage_one": "選択した {{count}} 件のエンティティを削除しますか?これを元に戻すことはできません。",
+      "bulkMessage_other": "選択した {{count}} 件のエンティティを削除しますか?これを元に戻すことはできません。"
     }
   },
   "councilFeedback": {
@@ -3020,7 +3072,9 @@
       "legacyExportMessage": "Lumiverse 固有のマクロ (例: {{lumiaDef}}、{{loomStyle}}、{{lumiaOOC}}) は SillyTavern では解決されません。 {{char}}、{{user}}、{{persona}} などの標準マクロのみが移植可能です。 Lumiverse マクロを使用しているブロックは、生のマクロ テキストとともにそのままエクスポートされます。",
       "exportAnyway": "とにかくエクスポート",
       "deleteBlockTitle": "ブロックを削除",
-      "deleteBlockMessage": "このブロックを削除してもよろしいですか?この操作は元に戻すことができません。"
+      "deleteBlockMessage": "このブロックを削除してもよろしいですか?この操作は元に戻すことができません。",
+      "deletePresetTitle": "プリセットを削除",
+      "deletePresetMessage": "「{{name}}」を削除しますか?すべてのブロックが削除されます。この操作を元に戻すことはできません。"
     },
     "toast": {
       "exportFailed": "プリセットのエクスポートに失敗しました",
@@ -3102,7 +3156,9 @@
         "loadFailed": "テーマ アセットの読み込みに失敗しました",
         "uploaded": "アップロードされました {{name}}",
         "uploadFailed": "テーマ アセットのアップロードに失敗しました"
-      }
+      },
+      "deleteConfirmTitle": "テーマアセットを削除",
+      "deleteConfirmMessage": "「{{name}}」を削除しますか?このアセットを参照している CSS は読み込めなくなります。これを元に戻すことはできません。"
     }
   }
 }

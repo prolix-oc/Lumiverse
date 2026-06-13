@@ -26,9 +26,10 @@ import type {
 } from "../types/preset";
 import type { WorldInfoCache } from "../types/world-book";
 import type { Character } from "../types/character";
-import { getEffectiveCharacterName } from "../types/character";
+import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Persona } from "../types/persona";
 import type { Chat } from "../types/chat";
+import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import type { Message, MessageAttachment } from "../types/message";
 import type { Preset } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
@@ -127,14 +128,33 @@ export type {
 // outbound requests, so the tag never leaks to the LLM.
 
 const CHAT_HISTORY_KEY = "__chatHistorySource";
+const SOURCE_ID_KEY = "__sourceMessageId";
+const SOURCE_INDEX_KEY = "__sourceIndexInChat";
 
-function markAsChatHistory(msg: LlmMessage): LlmMessage {
+function markAsChatHistory(
+  msg: LlmMessage,
+  source?: { id: string; index_in_chat: number },
+): LlmMessage {
   (msg as any)[CHAT_HISTORY_KEY] = true;
+  if (source) {
+    (msg as any)[SOURCE_ID_KEY] = source.id;
+    (msg as any)[SOURCE_INDEX_KEY] = source.index_in_chat;
+  }
   return msg;
 }
 
 export function isChatHistoryMessage(msg: LlmMessage): boolean {
   return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
+
+export function getSourceMessageId(msg: LlmMessage): string | undefined {
+  const v = (msg as any)[SOURCE_ID_KEY];
+  return typeof v === "string" ? v : undefined;
+}
+
+export function getSourceIndexInChat(msg: LlmMessage): number | undefined {
+  const v = (msg as any)[SOURCE_INDEX_KEY];
+  return typeof v === "number" ? v : undefined;
 }
 
 export function resolveChatHistoryInsertionIndex(
@@ -280,11 +300,13 @@ function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
 async function applyPromptRegexScriptsBeforeClipping(
   result: LlmMessage[],
   ctx: AssemblyContext,
-  characterId: string,
+  characterId: string | null,
   macroEnv: MacroEnv,
 ): Promise<void> {
+  if (ctx.skipPromptRegex) return;
+
   const scripts = regexScriptsSvc.getActiveScripts(ctx.userId, {
-    characterId,
+    characterId: characterId ?? undefined,
     chatId: ctx.chatId,
     target: "prompt",
   });
@@ -1007,34 +1029,26 @@ export async function assemblePrompt(
     : allMessages;
   // For group chats, resolve the target character; fall back to the chat's primary character
   const characterId = ctx.targetCharacterId || chat.character_id;
+  // Temporary chats have no character: a synthetic "Assistant" stands in so
+  // assembly/macros run unchanged, and the persona is skipped entirely
+  // (temp chats are persona-less by contract).
   const character =
-    pf?.character ?? charactersSvc.getCharacter(ctx.userId, characterId);
+    pf?.character ??
+    (characterId
+      ? charactersSvc.getCharacter(ctx.userId, characterId)
+      : makeAssistantCharacter());
   if (!character) throw new Error("Character not found");
 
-  let persona =
-    pf?.persona !== undefined
+  let persona = isTemporaryChatMetadata(chat.metadata)
+    ? null
+    : pf?.persona !== undefined
       ? pf.persona
       : personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId);
-  if (!pf) persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
-
-  // Resolve attached global add-ons for non-prefetched path
-  if (persona && !pf) {
-    const attachedRefs =
-      (persona.metadata?.attached_global_addons as Array<{
-        id: string;
-        enabled: boolean;
-      }>) ?? [];
-    const enabledIds = attachedRefs.filter((a) => a.enabled).map((a) => a.id);
-    if (enabledIds.length > 0) {
-      const resolved = globalAddonsSvc.getGlobalAddonsByIds(
-        ctx.userId,
-        enabledIds,
-      );
-      persona = {
-        ...persona,
-        metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved },
-      };
-    }
+  if (!pf) {
+    // Prefetch already applies add-on states + resolves global add-ons; only do
+    // it here for the non-prefetched path so {{persona}} includes global add-ons.
+    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
+    persona = globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona);
   }
 
   // Resolve connection
@@ -1047,22 +1061,27 @@ export async function assemblePrompt(
 
   // Resolve preset: request presetId takes priority, then connection's
   // preset_id, then any more-specific preset-profile binding can override that
-  // preset selection for the active chat/character context.
-  const requestedPresetId = ctx.presetId || connection?.preset_id || null;
+  // preset selection for the active chat/character context. No-preset temp
+  // chats opt out entirely — no preset blocks or parameters, no bindings, no
+  // fallback — so assembly drops to the raw legacy message mapping below.
+  const noPreset = isNoPresetChatMetadata(chat.metadata);
+  const requestedPresetId = noPreset ? null : ctx.presetId || connection?.preset_id || null;
   const resolvedProfile =
-    ctx.forcePresetId && ctx.presetId
-      ? { preset_id: ctx.presetId, binding: null, source: "none" as const }
-      : presetProfilesSvc.resolveProfile(
-          ctx.userId,
-          requestedPresetId,
-          chat.id,
-          characterId,
-          { isGroup: chat.metadata?.group === true, connectionId: connection?.id ?? null },
-        );
+    noPreset
+      ? { preset_id: null, binding: null, source: "none" as const }
+      : ctx.forcePresetId && ctx.presetId
+        ? { preset_id: ctx.presetId, binding: null, source: "none" as const }
+        : presetProfilesSvc.resolveProfile(
+            ctx.userId,
+            requestedPresetId,
+            chat.id,
+            characterId,
+            { isGroup: chat.metadata?.group === true, connectionId: connection?.id ?? null },
+          );
   const resolvedPresetId = resolvedProfile.preset_id;
 
   let preset: Preset | null = null;
-  const prefetchedPreset = pf?.preset !== undefined ? pf.preset : null;
+  const prefetchedPreset = noPreset ? null : pf?.preset !== undefined ? pf.preset : null;
   if (resolvedPresetId) {
     preset =
       prefetchedPreset?.id === resolvedPresetId
@@ -1350,7 +1369,8 @@ export async function assemblePrompt(
       chatTurn: messages.length,
       chatMetadata: chat.metadata ?? {},
     },
-    ctx.userId
+    ctx.userId,
+    wiSources.bookSourceMap
   );
   const wiResult = activateWorldInfo({
     entries: intercepted,
@@ -2112,13 +2132,19 @@ export async function assemblePrompt(
               });
             }
           }
+          const source = { id: msg.id, index_in_chat: msg.index_in_chat };
           if (parts.length > 0) {
-            result.push(markAsChatHistory({ role, content: parts }));
+            result.push(markAsChatHistory({ role, content: parts }, source));
           } else {
-            result.push(markAsChatHistory({ role, content: resolvedContent }));
+            result.push(markAsChatHistory({ role, content: resolvedContent }, source));
           }
         } else {
-          result.push(markAsChatHistory({ role, content: resolvedContent }));
+          result.push(
+            markAsChatHistory(
+              { role, content: resolvedContent },
+              { id: msg.id, index_in_chat: msg.index_in_chat },
+            ),
+          );
         }
         historyCount++;
       }
@@ -4113,10 +4139,14 @@ export async function getActivatedWorldInfoForChat(
   if (!chat) throw new Error("Chat not found");
 
   const messages = chatsSvc.getMessages(userId, chatId);
-  const character = charactersSvc.getCharacter(userId, chat.character_id);
+  const character = chat.character_id
+    ? charactersSvc.getCharacter(userId, chat.character_id)
+    : makeAssistantCharacter();
   if (!character) throw new Error("Character not found");
 
-  const persona = personasSvc.resolvePersonaOrDefault(userId);
+  const persona = isTemporaryChatMetadata(chat.metadata)
+    ? null
+    : personasSvc.resolvePersonaOrDefault(userId);
 
   const globalWorldBookIds =
     (settingsSvc.getSetting(userId, "globalWorldBooks")?.value as
@@ -4614,6 +4644,10 @@ function mergeConsecutiveUserMessages(
       // — both are typically chat-history user turns being merged.
       const wasChatHistory =
         isChatHistoryMessage(result[i]) || isChatHistoryMessage(result[i + 1]);
+      const mergedSourceId =
+        getSourceMessageId(result[i]) ?? getSourceMessageId(result[i + 1]);
+      const mergedSourceIndex =
+        getSourceIndexInChat(result[i]) ?? getSourceIndexInChat(result[i + 1]);
       if (allParts.length > 0) {
         result[i] = {
           role: "user",
@@ -4622,7 +4656,14 @@ function mergeConsecutiveUserMessages(
       } else {
         result[i] = { role: "user", content: mergedText };
       }
-      if (wasChatHistory) markAsChatHistory(result[i]);
+      if (wasChatHistory) {
+        markAsChatHistory(
+          result[i],
+          typeof mergedSourceId === "string" && typeof mergedSourceIndex === "number"
+            ? { id: mergedSourceId, index_in_chat: mergedSourceIndex }
+            : undefined,
+        );
+      }
       result.splice(i + 1, 1);
       remaining--;
       // Don't increment — next element slid into i+1, check again
@@ -5338,7 +5379,7 @@ function buildParameters(
  *
  * Provider mapping:
  * - Anthropic:   thinking + output_config (adaptive 4.6+) or thinking.budget_tokens (legacy).
- *                Opus 4.7 additionally supports an "xhigh" tier between high and max.
+ *                Opus 4.7 and 4.8 additionally support an "xhigh" tier between high and max.
  *                Anthropic-only: `thinkingDisplay` ('summarized' | 'omitted') maps to the
  *                `thinking.display` field. On Opus 4.7+ the API defaults to 'omitted' when
  *                unset, so users must opt in to 'summarized' to receive summary text.
@@ -5366,13 +5407,13 @@ export function injectReasoningParams(
     if (!params.thinking) {
       // Claude 4.6+ models support adaptive thinking (recommended over manual budget)
       const isAdaptiveModel =
-        model && /claude-(opus|sonnet)-4[-.](6|7)/i.test(model);
+        model && /claude-(opus|sonnet)-4[-.](6|7|8)/i.test(model);
       if (isAdaptiveModel) {
         // Adaptive thinking: Claude decides when/how much to think
         params.thinking = { type: "adaptive" };
-        // Opus 4.7 adds an "xhigh" tier between high and max; other adaptive models don't support it.
-        const isOpus47 = /claude-opus-4[-.]7/i.test(model!);
-        const validEfforts = isOpus47
+        // Opus 4.7 and 4.8 add an "xhigh" tier between high and max; other adaptive models don't support it.
+        const supportsXhigh = /claude-opus-4[-.](7|8)/i.test(model!);
+        const validEfforts = supportsXhigh
           ? new Set(["low", "medium", "high", "xhigh", "max"])
           : new Set(["low", "medium", "high", "max"]);
         const mappedEffort = validEfforts.has(effort) ? effort : "high";

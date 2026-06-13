@@ -19,6 +19,7 @@ export const createGenerationSlice: StateCreator<AppStore, [], [], GenerationSli
     parameters: {},
     promptGenerationTimeoutSeconds: 60,
     generationTimeoutSeconds: 300,
+    promptContextMessageLimit: 3,
     sceneChangeThreshold: 2,
     autoGenerate: true,
     forceGeneration: false,

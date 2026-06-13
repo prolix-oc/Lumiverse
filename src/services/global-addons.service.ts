@@ -1,7 +1,7 @@
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { GlobalAddon, CreateGlobalAddonInput, UpdateGlobalAddonInput } from "../types/persona";
+import type { GlobalAddon, CreateGlobalAddonInput, UpdateGlobalAddonInput, Persona } from "../types/persona";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 
@@ -35,6 +35,39 @@ export function getGlobalAddonsByIds(userId: string, ids: string[]): GlobalAddon
     .query(`SELECT * FROM global_addons WHERE id IN (${placeholders}) AND user_id = ? ORDER BY sort_order ASC`)
     .all(...ids, userId) as any[];
   return rows.map(rowToGlobalAddon);
+}
+
+/**
+ * Inject the persona's enabled attached global add-ons into its metadata as
+ * `_resolvedGlobalAddons`, which MacroEnv's `buildPersonaWithAddons` reads when
+ * expanding the `{{persona}}` macro. Persona-specific (local) add-ons live on
+ * the persona row itself and need no resolution, but global add-ons are stored
+ * by reference and must be joined in here — so every macro-env construction
+ * site (generation, macro preview, display regex, chat-memory, image-gen,
+ * Spindle) must run a persona through this before `buildEnv` or `{{persona}}`
+ * silently drops global add-ons while still rendering local ones.
+ *
+ * Apply persona add-on enabled/disabled states (see `applyPersonaAddonStates`)
+ * BEFORE calling this so toggled-off globals are excluded. Returns the persona
+ * unchanged when nothing is attached/enabled.
+ */
+export function resolvePersonaGlobalAddons(
+  userId: string,
+  persona: Persona | null,
+): Persona | null {
+  if (!persona) return persona;
+  const attachedRefs =
+    (persona.metadata?.attached_global_addons as Array<{
+      id: string;
+      enabled: boolean;
+    }>) ?? [];
+  const enabledIds = attachedRefs.filter((a) => a.enabled).map((a) => a.id);
+  if (enabledIds.length === 0) return persona;
+  const resolved = getGlobalAddonsByIds(userId, enabledIds);
+  return {
+    ...persona,
+    metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved },
+  };
 }
 
 export function createGlobalAddon(userId: string, input: CreateGlobalAddonInput): GlobalAddon {

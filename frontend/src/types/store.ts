@@ -1,4 +1,4 @@
-import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
+import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
 
 // ---- Chat Slice ----
@@ -15,6 +15,9 @@ export interface ChatSlice {
    * write).
    */
   activeChatMetadata: Record<string, any> | null
+  activeChatDisplayOwner: string | null
+  /** The chat row's `name` for the currently-open chat (group chats display it as the group name) */
+  activeChatName: string | null
   messages: Message[]
   isStreaming: boolean
   streamingContent: string
@@ -24,17 +27,33 @@ export interface ChatSlice {
   streamingError: string | null
   activeGenerationId: string | null
   regeneratingMessageId: string | null
+  /** Index of the swipe the active generation streams into. Lets the UI gate the
+   *  streaming buffer to that swipe so the user can navigate to other swipes
+   *  mid-generation. null when unknown (pre-GENERATION_STARTED) or idle. */
+  streamingSwipeId: number | null
   streamingGenerationType: string | null
   /** The generation type of the last completed generation — survives endStreaming() */
   lastCompletedGenerationType: string | null
-  lastPooledSeq: number | null
+  /** messageId → index of a freshly-generated swipe the user hasn't navigated to
+   *  yet (they stayed on an older swipe while it generated). Drives the
+   *  "new swipe ready" badge; cleared once they land on that swipe. */
+  unseenSwipes: Record<string, number>
   totalChatLength: number
   /** Content from an impersonate-draft generation, ready to populate the input box */
   impersonateDraftContent: string | null
+  /**
+   * First recent-chats page delivered by GET /bootstrap so the landing page
+   * can render without its own fetch. Consume-once: the landing page clears
+   * it when applied, so later mounts and WS-driven refreshes always refetch.
+   */
+  landingRecentChats: PaginatedResult<GroupedRecentChat> | null
+  setLandingRecentChats: (result: PaginatedResult<GroupedRecentChat> | null) => void
   setActiveChat: (chatId: string | null, characterId?: string | null) => void
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
   setActiveChatAvatarId: (imageId: string | null) => void
   setActiveChatMetadata: (metadata: Record<string, any> | null) => void
+  setActiveChatDisplayOwner: (owner: string | null) => void
+  setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
@@ -42,12 +61,26 @@ export interface ChatSlice {
   removeMessage: (id: string) => void
   beginStreaming: (regeneratingMessageId?: string, generationType?: string) => void
   startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string) => void
-  appendStreamToken: (token: string) => void
-  appendStreamReasoning: (token: string) => void
-  replaceStreamContent: (content: string) => void
-  replaceStreamReasoning: (reasoning: string) => void
+  /** Append a live stream segment. When `offset` (char position of the segment
+   *  start in the server's cumulative buffer) is provided, overlap with already-
+   *  rendered content is sliced off exactly; returns 'gap' when the segment
+   *  starts beyond the local buffer (missed tokens — caller should re-poll the
+   *  pool), 'stale' when fully covered, 'appended' otherwise. */
+  appendStreamToken: (token: string, offset?: number) => 'appended' | 'stale' | 'gap'
+  appendStreamReasoning: (token: string, offset?: number) => 'appended' | 'stale' | 'gap'
+  /** Apply a pool snapshot (offset 0) or delta (offset = where `content` begins).
+   *  Monotonic: never rewinds the local buffer (snapshots race live WS tokens). */
+  reconcileStreamContent: (content: string, offset: number) => void
+  reconcileStreamReasoning: (reasoning: string, offset: number) => void
+  /** Current raw (unflushed) streaming buffers — used to request pool deltas. */
+  getStreamBuffers: () => { content: string; reasoning: string }
   setStreamingReasoningStartedAt: (ts: number | null) => void
-  setLastPooledSeq: (seq: number) => void
+  /** Set the swipe index the active generation streams into (null when unknown). */
+  setStreamingSwipeId: (swipeId: number | null) => void
+  /** Flag a freshly-generated swipe as unseen (drives the "new swipe ready" badge). */
+  setUnseenSwipe: (messageId: string, swipeId: number) => void
+  /** Clear the unseen-swipe flag for a message (e.g. once the user views it). */
+  clearUnseenSwipe: (messageId: string) => void
   endStreaming: () => void
   stopStreaming: () => void
   setStreamingError: (error: string | null) => void
@@ -82,6 +115,8 @@ export interface StartupSettings {
   viewMode?: CharacterViewMode
   charactersPerPage?: number
   theme?: ThemeConfig | null
+  landingPageChatsDisplayed?: number
+  landingPageLayoutMode?: 'cards' | 'compact'
 }
 
 export interface CharactersSlice {
@@ -674,6 +709,8 @@ export interface ImageGenSettings {
   promptGenerationTimeoutSeconds?: number
   /** Maximum seconds for the image provider generation phase. 0 disables the timeout. */
   generationTimeoutSeconds?: number
+  /** Maximum recent chat messages sent to the prompt parser for scene analysis and parsed custom prompts. */
+  promptContextMessageLimit?: number
   sceneChangeThreshold: number
   autoGenerate: boolean
   forceGeneration: boolean
@@ -940,6 +977,9 @@ export interface WorldInfoSlice {
   worldInfoStats: WorldInfoStats | null
   setActivatedWorldInfo: (entries: ActivatedWorldInfoEntry[], stats?: WorldInfoStats | null) => void
   clearActivatedWorldInfo: () => void
+  /** Book id the Lorebook tab should select on next mount/visit (cross-component navigation). */
+  pendingWorldBookEditId: string | null
+  setPendingWorldBookEditId: (id: string | null) => void
 }
 
 // Lumi Feedback Slice

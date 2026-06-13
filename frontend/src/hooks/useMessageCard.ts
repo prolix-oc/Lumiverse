@@ -68,18 +68,27 @@ export function useMessageCard(message: Message, chatId: string) {
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
   const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
+  const streamingSwipeId = useStore((s) => s.streamingSwipeId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
 
   const isUser = message.is_user
   const isLastMessage = messages.length > 0 && messages[messages.length - 1].id === message.id
-  const isRegenerating = isStreaming && regeneratingMessageId === message.id
-  const isContinuing = isStreaming && streamingGenerationType === 'continue' && isLastMessage && !isUser
-  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId)
+  // The streaming buffer only belongs on the swipe that is actually being
+  // generated. If the user navigates to a different swipe of this message while
+  // it streams, paint that swipe's saved content instead and let the stream
+  // keep filling the target swipe in the background. (null = swipe index not
+  // yet known, e.g. before GENERATION_STARTED — fall back to painting in-place.)
+  const onStreamingSwipe = streamingSwipeId == null || message.swipe_id === streamingSwipeId
+  const isRegenerating = isStreaming && regeneratingMessageId === message.id && onStreamingSwipe
+  const isContinuing = isStreaming && streamingGenerationType === 'continue' && isLastMessage && !isUser && onStreamingSwipe
+  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId && onStreamingSwipe)
   // When this message is being regenerated, show streaming content in-place
   // instead of the saved (blank) swipe content.
   // When continuing, append streaming content to the existing message content.
   // For non-regeneration streaming (normal generation), the streaming bubble
   // in MessageList handles display to avoid race conditions with MESSAGE_SENT.
+  // When navigated to a non-streaming swipe, falls through to message.content
+  // (kept in sync with the active swipe by cycleSwipe / MESSAGE_SWIPED).
   const rawContent = isRegenerating
     ? (streamingContent || message.content)
     : isContinuing
@@ -115,9 +124,13 @@ export function useMessageCard(message: Message, chatId: string) {
 
   const isGroupChat = useStore((s) => s.isGroupChat)
 
+  // Temporary chats are persona-less: never attribute the user's messages to
+  // the globally active persona (name or avatar).
+  const isTemporaryChat = useStore((s) => s.activeChatMetadata?.temporary === true)
+
   const userPersonaId = typeof message.extra?.persona_id === 'string' ? message.extra.persona_id : null
   const messagePersona = userPersonaId ? personas.find((p) => p.id === userPersonaId) : null
-  const activePersona = activePersonaId ? personas.find((p) => p.id === activePersonaId) ?? null : null
+  const activePersona = activePersonaId && !isTemporaryChat ? personas.find((p) => p.id === activePersonaId) ?? null : null
   const activeCharacter = activeCharacterId ? characters.find((c) => c.id === activeCharacterId) : null
 
   // In group chats, assistant messages carry character_id in message.extra
@@ -133,7 +146,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const isGenericUserName = normalizedMessageName.length === 0 || /^user$/i.test(normalizedMessageName)
 
   const displayName = isUser
-    ? (messagePersona?.name || (isGenericUserName ? (personas.find((p) => p.id === activePersonaId)?.name || 'User') : normalizedMessageName))
+    ? (messagePersona?.name || (isGenericUserName ? (activePersona?.name || 'User') : normalizedMessageName))
     : ((isGenericAssistantName ? effectiveCharacter?.name : normalizedMessageName) || effectiveCharacter?.name || 'Assistant')
 
   const effectiveCharId = messageCharacterId || activeCharacterId

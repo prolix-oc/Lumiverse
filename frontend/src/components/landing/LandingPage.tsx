@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence } from 'motion/react'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
 import { wsClient } from '@/ws/client'
@@ -11,6 +11,7 @@ import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { useStore } from '@/store'
 import { useScrollGate } from '@/hooks/useScrollGate'
+import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
 import LazyImage from '@/components/shared/LazyImage'
 import type { GroupedRecentChat } from '@/types/api'
 import styles from './LandingPage.module.css'
@@ -119,7 +120,7 @@ function SkeletonCard({ index }: { index: number }) {
       className={styles.skeletonCard}
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: index * 0.05 }}
+      transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.35) }}
     >
       <div className={styles.skeletonImage} />
       <div className={styles.skeletonContent}>
@@ -136,7 +137,7 @@ function SkeletonListItem({ index }: { index: number }) {
       className={styles.listSkeleton}
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: index * 0.04 }}
+      transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.35) }}
     >
       <div className={styles.listSkeletonAvatar} />
       <div className={styles.listSkeletonBody}>
@@ -145,6 +146,33 @@ function SkeletonListItem({ index }: { index: number }) {
       </div>
     </motion.div>
   )
+}
+
+// Last-known landing layout + item count, persisted so the skeleton matches
+// the real layout from the very first frame — before settings arrive from
+// bootstrap. Without it the page sat blank until settingsLoaded, then showed
+// a fixed 8 placeholders regardless of how many items would render.
+const LANDING_HINT_KEY = '__lumiverse_landing_hint'
+const SKELETON_MAX = 24
+
+interface LandingHint {
+  layout?: 'cards' | 'compact'
+  count?: number
+}
+
+function readLandingHint(): LandingHint {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LANDING_HINT_KEY) || '')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeLandingHint(hint: LandingHint) {
+  try {
+    localStorage.setItem(LANDING_HINT_KEY, JSON.stringify(hint))
+  } catch { /* private mode etc. — hint is best-effort */ }
 }
 
 function EmptyState() {
@@ -356,6 +384,58 @@ export default function LandingPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
+  const [creatingTempChat, setCreatingTempChat] = useState(false)
+  const [tempChatMenuOpen, setTempChatMenuOpen] = useState(false)
+  const tempChatMenuRef = useRef<HTMLDivElement>(null)
+  const tempChatMenuOpenedAt = useRef(0)
+
+  const profiles = useStore((s) => s.profiles)
+  const activeProfileId = useStore((s) => s.activeProfileId)
+  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const loomRegistry = useStore((s) => s.loomRegistry)
+  const activeProfile = useMemo(
+    () => profiles.find((p) => p.id === activeProfileId) ?? profiles.find((p) => p.is_default) ?? null,
+    [profiles, activeProfileId]
+  )
+  const activePresetName = activeLoomPresetId ? loomRegistry[activeLoomPresetId]?.name ?? null : null
+
+  // pointerdown + openedAt guard per the project's Android outside-click rule
+  useEffect(() => {
+    if (!tempChatMenuOpen) return
+    const onPointerDown = (e: PointerEvent) => {
+      if (Date.now() - tempChatMenuOpenedAt.current < 100) return
+      if (tempChatMenuRef.current?.contains(e.target as Node)) return
+      setTempChatMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [tempChatMenuOpen])
+
+  // Temporary chats are disposable by contract: landing on the home page
+  // sweeps any the user left behind (closed tab, back navigation, etc.).
+  useEffect(() => {
+    chatsApi.deleteTemporary().catch(() => {})
+  }, [])
+
+  // Skeleton shape/count for the pre-settings window and the fetch window.
+  // Before settings arrive the store only has defaults, so fall back to the
+  // persisted last-known layout and item count.
+  const [landingHint] = useState(readLandingHint)
+  const skeletonLayout = settingsLoaded
+    ? landingPageLayoutMode
+    : landingHint.layout ?? landingPageLayoutMode
+  const expectedCount = settingsLoaded
+    ? Math.min(landingHint.count ?? landingPageChatsDisplayed, landingPageChatsDisplayed)
+    : landingHint.count ?? landingPageChatsDisplayed
+  const skeletonCount = Math.max(1, Math.min(expectedCount, SKELETON_MAX))
+
+  useEffect(() => {
+    if (!settingsLoaded || loading) return
+    writeLandingHint({
+      layout: landingPageLayoutMode,
+      count: Math.min(items.length, landingPageChatsDisplayed),
+    })
+  }, [settingsLoaded, loading, landingPageLayoutMode, items.length, landingPageChatsDisplayed])
 
   const sentinelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -364,6 +444,20 @@ export default function LandingPage() {
 
   const fetchChats = useCallback(async () => {
     if (!settingsLoaded) return
+
+    // Bootstrap delivers the first recent-chats page alongside settings —
+    // consume it once instead of issuing another round trip. Later runs
+    // (WS chat-deleted, limit changes, revisits) find it cleared and fetch.
+    const preload = useStore.getState().landingRecentChats
+    if (preload) {
+      useStore.getState().setLandingRecentChats(null)
+      setItems(preload.data)
+      setTotal(preload.total)
+      setError(null)
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     setError(null)
     try {
@@ -422,6 +516,11 @@ export default function LandingPage() {
 
   const handleChatClick = useCallback(
     (item: GroupedRecentChat) => {
+      // Warm the avatar palette in parallel with the route change + chat
+      // fetch so character-aware theming applies with first paint instead of
+      // after the character record round-trips.
+      warmCharacterPalette(item.character_id, item.character_image_id)
+
       if (item.is_group) {
         const groupCharacterIds = item.group_character_ids ?? []
         if (item.chat_count > 1 && groupCharacterIds.length > 1) {
@@ -500,6 +599,26 @@ export default function LandingPage() {
     navigate('/characters')
   }, [navigate])
 
+  const handleTempChat = useCallback(async (noPreset: boolean) => {
+    if (creatingTempChat) return
+    setCreatingTempChat(true)
+    setTempChatMenuOpen(false)
+    try {
+      const chat = await chatsApi.createTemporary({ noPreset })
+      navigate(`/chat/${chat.id}`)
+    } catch (err: any) {
+      console.error('[Lumiverse] Error creating temporary chat:', err)
+      setCreatingTempChat(false)
+    }
+  }, [creatingTempChat, navigate])
+
+  const toggleTempChatMenu = useCallback(() => {
+    setTempChatMenuOpen((open) => {
+      if (!open) tempChatMenuOpenedAt.current = Date.now()
+      return !open
+    })
+  }, [])
+
   const handleLogout = useCallback(() => {
     openModal('confirm', {
       title: t('logOut.title'),
@@ -570,31 +689,65 @@ export default function LandingPage() {
               </button>
             </div>
           </div>
-          <button
-            type="button"
-            className={styles.accountBtn}
-            onClick={handleLogout}
-            title={t('logOutTitle')}
-          >
-            <span className={styles.accountName}>{accountLabel}</span>
-            <LogOut size={13} strokeWidth={1.5} />
-          </button>
+          <div className={styles.headerActions}>
+            <div className={styles.tempChatWrap} ref={tempChatMenuRef}>
+              <button
+                type="button"
+                className={styles.accountBtn}
+                onClick={toggleTempChatMenu}
+                disabled={creatingTempChat}
+                title={
+                  activeProfile
+                    ? t('tempChatTitleWithProfile', { name: activeProfile.name })
+                    : t('tempChatTitle')
+                }
+              >
+                <span className={styles.accountName}>
+                  {activeProfile
+                    ? t('tempChatWithProfile', { name: activeProfile.name })
+                    : t('tempChat')}
+                </span>
+                <FlaskConical size={13} strokeWidth={1.5} />
+              </button>
+              {tempChatMenuOpen && (
+                <div className={styles.tempChatMenu}>
+                  <button type="button" className={styles.tempChatMenuItem} onClick={() => handleTempChat(false)}>
+                    <span className={styles.tempChatMenuLabel}>{t('tempChatMenu.withPreset')}</span>
+                    <span className={styles.tempChatMenuHint}>
+                      {activePresetName || t('tempChatMenu.withPresetHint')}
+                    </span>
+                  </button>
+                  <button type="button" className={styles.tempChatMenuItem} onClick={() => handleTempChat(true)}>
+                    <span className={styles.tempChatMenuLabel}>{t('tempChatMenu.noPreset')}</span>
+                    <span className={styles.tempChatMenuHint}>{t('tempChatMenu.noPresetHint')}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className={styles.accountBtn}
+              onClick={handleLogout}
+              title={t('logOutTitle')}
+            >
+              <span className={styles.accountName}>{accountLabel}</span>
+              <LogOut size={13} strokeWidth={1.5} />
+            </button>
+          </div>
         </motion.header>
 
         <main className={styles.main}>
           <AnimatePresence mode="wait">
-            {!settingsLoaded ? (
-              <motion.div key="awaiting-settings" />
-            ) : loading && items.length === 0 ? (
+            {!settingsLoaded || (loading && items.length === 0) ? (
               <motion.div
-                key={`loading-${landingPageLayoutMode}`}
-                className={landingPageLayoutMode === 'compact' ? styles.compactList : styles.gridCards}
+                key={`loading-${skeletonLayout}`}
+                className={skeletonLayout === 'compact' ? styles.compactList : styles.gridCards}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
               >
-                {Array.from({ length: 8 }).map((_, i) => (
-                  landingPageLayoutMode === 'compact'
+                {Array.from({ length: skeletonCount }).map((_, i) => (
+                  skeletonLayout === 'compact'
                     ? <SkeletonListItem key={i} index={i} />
                     : <SkeletonCard key={i} index={i} />
                 ))}

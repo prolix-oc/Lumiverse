@@ -235,6 +235,9 @@ Memory Cortex data is available in your presets through macros. Add these via **
 
 The standard memory macros (`{{memories}}`, `{{memoriesRaw}}`, etc.) continue to work alongside cortex macros. When the cortex is enabled, `{{memories}}` returns cortex-enhanced results formatted in shadow-prompt style.
 
+!!! important "Cortex memories inject automatically too"
+    As with [long-term memory](memory.md), the cortex-enhanced memory section injects whenever the cortex is enabled — the `{{memories}}` macro only controls **where** it lands. Remove the macro and the section still injects as a system message before the chat history. To stop it, disable Memory Cortex (and, if you don't want basic recall either, **Vectorise chat messages**). Note that the standalone cortex macros (`{{entities}}`, `{{relationships}}`, `{{arc}}`, etc.) render *only* where you place them — they have no auto-injection fallback.
+
 ---
 
 ## Configuration Reference

@@ -18,6 +18,7 @@ import {
 import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
 import { activateWorldInfo, finalizeActivatedWorldInfoEntries, normalizeWorldInfoSettings, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import type { WorldBookEntry } from "../types/world-book";
+import { makeAssistantCharacter } from "../types/character";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
@@ -481,7 +482,9 @@ app.post("/:id/diagnostics", async (c) => {
   const chat = chatsSvc.getChat(userId, body.chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
-  const character = charSvc.getCharacter(userId, chat.character_id);
+  const character = chat.character_id
+    ? charSvc.getCharacter(userId, chat.character_id)
+    : makeAssistantCharacter();
   if (!character) return c.json({ error: "Character not found" }, 404);
 
   const persona = personasSvc.resolvePersonaOrDefault(userId);

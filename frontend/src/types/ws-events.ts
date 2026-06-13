@@ -236,10 +236,14 @@ export interface StreamTokenPayload {
   token: string
   type?: 'text' | 'reasoning'
   // seq is the tokenSeq of the LAST token coalesced into this segment; startSeq
-  // is the FIRST. Recovery dedup uses startSeq to drop a segment whose range is
-  // already covered by backfilled pool content.
+  // is the FIRST. Retained for Spindle extensions; reconciliation now uses
+  // `offset` instead.
   seq?: number
   startSeq?: number
+  // Char position of this segment's start within the server's cumulative
+  // buffer for its stream type (content vs reasoning). Drives exact overlap
+  // dedupe after recovery and immediate gap detection (missed segments).
+  offset?: number
 }
 
 export interface ContextClipStats {
@@ -263,6 +267,8 @@ export interface GenerationStartedPayload {
   generationId: string
   chatId: string
   targetMessageId?: string
+  /** Swipe index the generation streams into (for swipe-gated streaming display). */
+  targetSwipeId?: number
   characterId?: string
   characterName?: string
   contextClipStats?: ContextClipStats

@@ -42,6 +42,16 @@ export default function WorldBookPanel() {
   // Book list state
   const [books, setBooks] = useState<WorldBook[]>([])
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null)
+
+  // Cross-component navigation: other panels (e.g. the character editor) can
+  // request a book be opened here via the store before switching to this tab.
+  const pendingWorldBookEditId = useStore((s) => s.pendingWorldBookEditId)
+  const setPendingWorldBookEditId = useStore((s) => s.setPendingWorldBookEditId)
+  useEffect(() => {
+    if (!pendingWorldBookEditId) return
+    setSelectedBookId(pendingWorldBookEditId)
+    setPendingWorldBookEditId(null)
+  }, [pendingWorldBookEditId, setPendingWorldBookEditId])
   // Books are presented alphabetically (case-insensitive) in every selector;
   // the backend returns them in updated_at order which made navigation tedious
   // once there were more than a handful.
@@ -544,7 +554,14 @@ export default function WorldBookPanel() {
           <div className={styles.globalPills}>
             {activeGlobalBooks.map((book) => (
               <span key={book.id} className={styles.globalPill}>
-                <span className={styles.globalPillName}>{book.name}</span>
+                <button
+                  type="button"
+                  className={styles.globalPillName}
+                  onClick={() => setSelectedBookId(book.id)}
+                  title={t('worldBookPanel.editBook')}
+                >
+                  {book.name}
+                </button>
                 <button
                   type="button"
                   className={styles.globalPillRemove}
@@ -589,7 +606,14 @@ export default function WorldBookPanel() {
           <div className={styles.chatPills}>
             {activeChatBooks.map((book) => (
               <span key={book.id} className={styles.chatPill}>
-                <span className={styles.chatPillName}>{book.name}</span>
+                <button
+                  type="button"
+                  className={styles.chatPillName}
+                  onClick={() => setSelectedBookId(book.id)}
+                  title={t('worldBookPanel.editBook')}
+                >
+                  {book.name}
+                </button>
                 <button
                   type="button"
                   className={styles.chatPillRemove}

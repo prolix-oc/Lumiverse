@@ -27,6 +27,24 @@ function rowToSummary(row: any): CharacterSummary {
   };
 }
 
+export function getCharacterDisplayOwner(
+  userId: string,
+  characterId: string,
+  providerIds: string[],
+): string | null {
+  if (providerIds.length === 0) return null;
+  const db = getDb();
+  const whens = providerIds
+    .map(() => `WHEN json_extract(extensions, '$.' || ? || '.display_owner') = 1 THEN ?`)
+    .join(" ");
+  const params: string[] = [];
+  for (const id of providerIds) params.push(id, id);
+  const row = db
+    .query(`SELECT (CASE ${whens} ELSE NULL END) AS owner FROM characters WHERE id = ? AND user_id = ?`)
+    .get(...params, characterId, userId) as { owner: string | null } | null;
+  return row?.owner ?? null;
+}
+
 /**
  * Build an FTS5 MATCH query for the trigram tokenizer. Each whitespace-delimited
  * token is wrapped in a quoted phrase (substring needle); tokens are AND-ed

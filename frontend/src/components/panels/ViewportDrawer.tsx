@@ -215,6 +215,7 @@ export default function ViewportDrawer() {
                       onTouchStart={tabQuickMenu.onTouchStart}
                       onTouchMove={tabQuickMenu.onTouchMove}
                       onTouchEnd={tabQuickMenu.onTouchEnd}
+                      onTouchCancel={tabQuickMenu.onTouchCancel}
                       title={translateDrawerField(tab.id, 'tabName', tab.tabName)}
                     >
                       <Icon size={20} strokeWidth={1.5} />
@@ -238,6 +239,7 @@ export default function ViewportDrawer() {
                           onTouchStart={tabQuickMenu.onTouchStart}
                           onTouchMove={tabQuickMenu.onTouchMove}
                           onTouchEnd={tabQuickMenu.onTouchEnd}
+                          onTouchCancel={tabQuickMenu.onTouchCancel}
                           title={dt.title}
                         >
                           {dt.iconSvg ? (

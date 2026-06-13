@@ -43,7 +43,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { uiScaledTransform } from '@/lib/dndUiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
@@ -115,14 +115,16 @@ function SortableEntryRow({
 }: EntryRowProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
   const labels = useWorldBookEntryLabels()
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
     id: entry.id,
     disabled: !dragEnabled,
   })
-  const style = {
-    transform: uiScaledTransform(transform),
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
     transition,
-  }
+    isDragging,
+  })
 
   const controlWrapProps = {
     onClick: (e: React.MouseEvent) => e.stopPropagation(),

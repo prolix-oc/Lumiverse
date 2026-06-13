@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import type { ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort, yieldToEventLoop } from "../stream-utils";
 import type { GenerationRequest, GenerationResponse, StreamChunk, ToolCallResult, LlmMessage, LlmMessagePart } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
@@ -214,7 +214,11 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    const maybeYield = createCooperativeYielder(64, request.signal);
+    // Inline counter instead of createCooperativeYielder: the yielder is an
+    // async fn, so calling it allocates a promise (and an await hop) on every
+    // SSE line even when it doesn't yield. The sync modulo check keeps the
+    // 63/64 non-yielding lines allocation-free.
+    let lineCount = 0;
     // Auto-detect reasoning field: modern APIs use `reasoning`, legacy uses
     // `reasoning_content`. Lock to whichever key appears first so we don't
     // check both on every chunk.
@@ -236,7 +240,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        await maybeYield();
+        if (++lineCount % 64 === 0) await yieldToEventLoop(request.signal);
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
@@ -312,7 +316,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       }
     }
     } finally {
-      if (!streamDoneNaturally) await reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 

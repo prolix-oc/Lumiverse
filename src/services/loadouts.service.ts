@@ -217,7 +217,7 @@ export function resolveLoadout(userId: string, chatId: string): ResolvedLoadout 
 
   // 2. Character-level binding
   const chat = chatsSvc.getChat(userId, chatId);
-  if (chat) {
+  if (chat?.character_id) {
     const charBinding = getCharacterBinding(userId, chat.character_id);
     if (charBinding) {
       const loadout = getLoadout(userId, charBinding.loadout_id);

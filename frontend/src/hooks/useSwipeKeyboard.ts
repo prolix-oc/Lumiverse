@@ -46,7 +46,9 @@ export default function useSwipeKeyboard(): void {
       // Guard conditions
       if (!state.swipeGesturesEnabled) return
       if (!state.activeChatId) return
-      if (state.isStreaming) return
+      // Note: streaming no longer blocks navigation — executeSwipe still refuses
+      // to spawn a NEW swipe while a generation is in flight, but lets the user
+      // page through existing swipes (including back to the live one).
       if (state.activeModal) return
       if (state.commandPaletteOpen) return
       if (state.messageSelectMode) return

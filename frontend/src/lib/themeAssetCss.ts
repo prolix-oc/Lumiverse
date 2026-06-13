@@ -24,9 +24,16 @@ export function rewriteThemeAssetUrls(css: string, bundleId: string | null | und
   return css.replace(/url\(\s*(['"]?)([^)'"\s][^)'\"]*)\1\s*\)/gi, (full, quote: string, rawPath: string) => {
     const path = rawPath.trim()
     if (!shouldRewritePath(path)) return full
-    const normalized = path.replace(/^\.\//, '')
-    const encodedPath = normalized.split('/').map((segment) => encodeURIComponent(segment)).join('/')
-    const nextQuote = quote || '"'
-    return `url(${nextQuote}/api/v1/theme-assets/bundles/${encodeURIComponent(bundleId)}/${encodedPath}${nextQuote})`
+    try {
+      const normalized = path.replace(/^\.\//, '')
+      const encodedPath = normalized.split('/').map((segment) => encodeURIComponent(segment)).join('/')
+      const nextQuote = quote || '"'
+      return `url(${nextQuote}/api/v1/theme-assets/bundles/${encodeURIComponent(bundleId)}/${encodedPath}${nextQuote})`
+    } catch {
+      // Malformed UTF-16 (a lone surrogate) in the path makes encodeURIComponent
+      // throw a URIError. Leave the original url() untouched rather than let the
+      // exception propagate and crash the caller.
+      return full
+    }
   })
 }

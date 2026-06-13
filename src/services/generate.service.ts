@@ -19,6 +19,7 @@ import {
 } from "./prompt-assembly.service";
 import * as charactersSvc from "./characters.service";
 import { getEffectiveCharacterName } from "../types/character";
+import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import {
   getTextContent,
   type LlmMessage,
@@ -131,6 +132,8 @@ import {
   assemblePromptInWorker,
   canUsePromptAssemblyWorker,
 } from "./prompt-assembly-worker-client";
+import { isPromptRegexChatOwned } from "../spindle/prompt-regex-ownership";
+import { isRunning as isExtensionRunning } from "../spindle/lifecycle";
 import { clampErrorMessage, describeProviderError, ProviderRequestError } from "../utils/provider-errors";
 
 interface GenerateInput {
@@ -169,6 +172,11 @@ interface GenerationLifecycle {
   targetMessageId?: string;
   /** For regenerate: index of the blank swipe to fill with generated content */
   targetSwipeIdx?: number;
+  /** Index of the swipe being streamed into, surfaced to clients (GENERATION_STARTED /
+   *  IN_PROGRESS / status) so they can gate the streaming buffer to that swipe and
+   *  let the user navigate other swipes mid-generation. Set for all generation types
+   *  (regenerate = blank swipe, normal = 0, continue = current swipe). */
+  streamingSwipeId?: number;
   /** For sidecar council: pre-created empty message to fill with generated content */
   stagedMessageId?: string;
   /** For continue: append to this message's content */
@@ -1121,6 +1129,7 @@ async function runPromptPipeline(opts: {
       precomputedVectorEntries: opts.precomputedVectorEntries,
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
+      skipPromptRegex: isPromptRegexChatOwned(opts.chatId, isExtensionRunning),
       signal: opts.signal,
     };
 
@@ -1210,9 +1219,13 @@ async function runPromptPipeline(opts: {
 
   // Normal assembly applies prompt-target regexes before context clipping.
   // Keep this fallback for raw/explicit message callers that bypass assembly.
-  if (opts.inputMessages) {
+  // When an extension owns this chat's prompt-regex it has already applied the
+  // rules inline via the interceptor pipeline above; running this fallback too
+  // would double-apply (non-idempotent rules compound). Mirror the assembly
+  // pass's skip in prompt-assembly.service.ts (applyPromptRegexScriptsBeforeClipping).
+  if (opts.inputMessages && !isPromptRegexChatOwned(opts.chatId, isExtensionRunning)) {
     const chatForRegex = chatsSvc.getChat(opts.userId, opts.chatId);
-    const characterId = opts.targetCharacterId || chatForRegex?.character_id;
+    const characterId = opts.targetCharacterId || chatForRegex?.character_id || undefined;
     const promptScripts = regexScriptsSvc.getActiveScripts(opts.userId, {
       characterId,
       chatId: opts.chatId,
@@ -1508,32 +1521,41 @@ export async function startGeneration(
 
   try {
     const connection = resolveConnection(input.userId, input.connection_id);
-    if (!input.preset_id) {
-      input.preset_id = resolveActivePresetId(input.userId);
-    }
-    if (
-      input.force_preset_id &&
-      genType === "impersonate" &&
-      input.impersonate_mode === "oneliner" &&
-      input.preset_id &&
-      !presetsSvc.getPreset(input.userId, input.preset_id)
-    ) {
-      console.warn(
-        "[generate] Clearing stale chat impersonation preset override %s for chat %s",
-        input.preset_id,
-        input.chat_id,
-      );
-      chatsSvc.mergeChatMetadata(input.userId, input.chat_id, {
-        impersonation_preset_id: undefined,
-      });
+    // Loaded before preset resolution: no-preset temp chats bypass the preset
+    // requirement entirely (assertUsablePreset would otherwise reject them).
+    const chat = chatsSvc.getChat(input.userId, input.chat_id);
+    const isNoPresetChat = isNoPresetChatMetadata(chat?.metadata);
+    if (isNoPresetChat) {
       input.preset_id = undefined;
       input.force_preset_id = false;
+    } else {
+      if (!input.preset_id) {
+        input.preset_id = resolveActivePresetId(input.userId);
+      }
+      if (
+        input.force_preset_id &&
+        genType === "impersonate" &&
+        input.impersonate_mode === "oneliner" &&
+        input.preset_id &&
+        !presetsSvc.getPreset(input.userId, input.preset_id)
+      ) {
+        console.warn(
+          "[generate] Clearing stale chat impersonation preset override %s for chat %s",
+          input.preset_id,
+          input.chat_id,
+        );
+        chatsSvc.mergeChatMetadata(input.userId, input.chat_id, {
+          impersonation_preset_id: undefined,
+        });
+        input.preset_id = undefined;
+        input.force_preset_id = false;
+      }
+      presetsSvc.assertUsablePreset(
+        input.userId,
+        input.preset_id,
+        connection.preset_id,
+      );
     }
-    presetsSvc.assertUsablePreset(
-      input.userId,
-      input.preset_id,
-      connection.preset_id,
-    );
     const { provider, apiKey, apiUrl } = await resolveProviderAndKey(
       input.userId,
       connection.id,
@@ -1542,7 +1564,6 @@ export async function startGeneration(
     // Resolve the assistant message being modified before choosing a character.
     // Group retries/continues are tied to the message's speaker, not the chat's
     // primary/greeting character.
-    const chat = chatsSvc.getChat(input.userId, input.chat_id);
     const isGroupChat = chat?.metadata?.group === true;
     const groupCharacterIds =
       isGroupChat && Array.isArray(chat?.metadata?.character_ids)
@@ -1595,16 +1616,20 @@ export async function startGeneration(
     const resolvedTargetCharId = targetExistingAssistant
       ? inferredGroupTargetCharId || requestedTargetCharId
       : requestedTargetCharId || inferredGroupTargetCharId;
-    const targetCharId = resolvedTargetCharId || chat?.character_id;
+    const targetCharId = resolvedTargetCharId || chat?.character_id || undefined;
     const pipelineTargetCharId = resolvedTargetCharId;
     if (targetCharId) {
       const character = charactersSvc.getCharacter(input.userId, targetCharId);
       if (character) characterName = getEffectiveCharacterName(character);
     }
 
+    // Temporary chats are persona-less by contract — never fall back to the
+    // active/default persona for them.
+    const isTemporaryChat = isTemporaryChatMetadata(chat?.metadata);
+
     // Resolve persona_id from settings if not provided by the frontend, so the
     // persona's attached world book is always included regardless of UI state.
-    if (!input.persona_id) {
+    if (!input.persona_id && !isTemporaryChat) {
       const activePersonaSetting = settingsSvc.getSetting(
         input.userId,
         "activePersonaId",
@@ -1619,10 +1644,9 @@ export async function startGeneration(
 
     // Resolve target message EARLY (before council) so we can visually clear the
     // message on the frontend before council tools start executing.
-    let resolvedPersona = personasSvc.resolvePersonaOrDefault(
-      input.userId,
-      input.persona_id,
-    );
+    let resolvedPersona = isTemporaryChat
+      ? null
+      : personasSvc.resolvePersonaOrDefault(input.userId, input.persona_id);
     if (!input.persona_addon_states) {
       input.persona_addon_states = getChatPersonaAddonStates(
         chat?.metadata,
@@ -1650,6 +1674,12 @@ export async function startGeneration(
     }
 
     let excludeMessageId: string | undefined;
+    // Index of the swipe this generation streams into. Sent to the frontend so
+    // it can gate the streaming buffer to the correct swipe — letting the user
+    // navigate to other (already-saved) swipes mid-generation without smearing
+    // live tokens onto them. Distinct from lifecycle.targetSwipeIdx (which also
+    // routes the completion write) so we don't perturb normal/continue saving.
+    let targetSwipeId: number | undefined;
 
     if (genType === "regenerate") {
       const targetMsg = targetAssistantMessage;
@@ -1660,6 +1690,7 @@ export async function startGeneration(
         // before council/assembly begins (MESSAGE_SWIPED event fires now).
         const withBlank = chatsSvc.addSwipe(input.userId, targetMsg.id, "");
         lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
+        targetSwipeId = lifecycle.targetSwipeIdx;
         // Clear stale generation metrics from the previous swipe so the pill
         // doesn't display outdated values while the new generation runs.
         // Uses patchMessageExtra to avoid triggering chunk rebuilds / WS events.
@@ -1688,6 +1719,8 @@ export async function startGeneration(
       if (lastMsg) {
         lifecycle.continueMessageId = lastMsg.id;
         lifecycle.continueOriginalContent = lastMsg.content;
+        // Continue appends to the currently-displayed swipe.
+        targetSwipeId = lastMsg.swipe_id;
         // Resolve continuePostfix from the preset's completion settings so it can
         // be inserted between original content and generated text when saving.
         const cpPresetId = input.preset_id || connection.preset_id;
@@ -1719,7 +1752,13 @@ export async function startGeneration(
       stagedMessageId = stagedMsg.id;
       lifecycle.targetMessageId = stagedMsg.id;
       excludeMessageId = stagedMsg.id;
+      // A fresh message has a single swipe at index 0.
+      targetSwipeId = 0;
     }
+
+    // Carry the streaming swipe index into runGeneration so the GENERATION_IN_PROGRESS
+    // emit (different scope) can surface it too.
+    lifecycle.streamingSwipeId = targetSwipeId;
 
     // Register pool entry for recovery — at this point we have all the metadata
     pool.createPoolEntry({
@@ -1731,6 +1770,7 @@ export async function startGeneration(
       characterId: targetCharId,
       model: connection.model,
       targetMessageId: lifecycle.targetMessageId,
+      targetSwipeId,
     });
 
     // Emit GENERATION_STARTED immediately so the frontend can show a chat head
@@ -1744,6 +1784,7 @@ export async function startGeneration(
         chatId: input.chat_id,
         model: connection.model,
         targetMessageId: lifecycle.targetMessageId,
+        targetSwipeId,
         characterId: targetCharId,
         characterName,
         generationType: lifecycle.generationType,
@@ -1867,11 +1908,9 @@ export async function startGeneration(
             // we miss. The hash of these messages is mixed into the cache
             // fingerprint so editing or deleting any in-window message
             // invalidates a stale cached deliberation block.
-            const fullCharacter = chat
-              ? charactersSvc.getCharacter(
-                  input.userId,
-                  targetCharId || chat.character_id,
-                )
+            const fullCharacterId = targetCharId || chat?.character_id;
+            const fullCharacter = chat && fullCharacterId
+              ? charactersSvc.getCharacter(input.userId, fullCharacterId)
               : null;
             const councilMessages = chatsSvc
               .getMessages(input.userId, input.chat_id)
@@ -2631,7 +2670,14 @@ export async function dryRunGeneration(
 ): Promise<DryRunResult> {
   const genType = input.generation_type || "normal";
 
-  if (!input.preset_id) {
+  // No-preset temp chats bypass preset resolution/assertion (same as
+  // startGeneration); assembly falls back to raw message mapping.
+  const dryRunChat = chatsSvc.getChat(input.userId, input.chat_id);
+  const isNoPresetChat = isNoPresetChatMetadata(dryRunChat?.metadata);
+  if (isNoPresetChat) {
+    input.preset_id = undefined;
+    input.force_preset_id = false;
+  } else if (!input.preset_id) {
     input.preset_id = resolveActivePresetId(input.userId);
   }
 
@@ -2650,11 +2696,13 @@ export async function dryRunGeneration(
   }
 
   const connection = resolveConnection(input.userId, input.connection_id);
-  presetsSvc.assertUsablePreset(
-    input.userId,
-    input.preset_id,
-    connection.preset_id,
-  );
+  if (!isNoPresetChat) {
+    presetsSvc.assertUsablePreset(
+      input.userId,
+      input.preset_id,
+      connection.preset_id,
+    );
+  }
   const { provider } = await resolveProviderAndKey(input.userId, connection.id);
 
   const pipeline = await runPromptPipeline({
@@ -2755,11 +2803,15 @@ async function runGeneration(
     token: string;
     type?: "reasoning";
     // seq is the tokenSeq of the LAST token merged into this segment; startSeq
-    // is the FIRST. Carrying both lets a client that recovered via GET /status
-    // mid-batch drop a segment whose entire range it has already rendered,
-    // instead of re-appending the prefix (the recovery double-render bug).
+    // is the FIRST. Retained for Spindle extensions and stale (pre-refresh)
+    // clients; the frontend now reconciles via `offset` instead.
     seq: number;
     startSeq: number;
+    // Char position of this segment's first token within the cumulative pool
+    // buffer for its stream type (content or reasoning). Lets clients dedupe
+    // exactly against recovery snapshots (slice off the overlap) and detect
+    // gaps (offset ahead of local buffer → re-poll immediately).
+    offset: number;
   };
 
   const streamTopic = `stream:${userId}:${chatId}`;
@@ -2768,6 +2820,7 @@ async function runGeneration(
   let pendingStreamSegments: PendingStreamSegment[] = [];
   let pendingStreamChars = 0;
   let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastStreamFlushAt = 0;
 
   function flushPendingStreamSegments(): void {
     if (streamFlushTimer) {
@@ -2779,6 +2832,7 @@ async function runGeneration(
     const segments = pendingStreamSegments;
     pendingStreamSegments = [];
     pendingStreamChars = 0;
+    lastStreamFlushAt = Date.now();
 
     for (const segment of segments) {
       eventBus.emit(
@@ -2790,6 +2844,7 @@ async function runGeneration(
           ...(segment.type ? { type: segment.type } : {}),
           seq: segment.seq,
           startSeq: segment.startSeq,
+          offset: segment.offset,
         },
         userId,
         { topic: streamTopic },
@@ -2799,18 +2854,25 @@ async function runGeneration(
 
   function schedulePendingStreamFlush(): void {
     if (streamFlushTimer) return;
+    // Leading-edge after idle: if the last flush is older than the emit
+    // interval, fire immediately (delay 0) instead of holding the buffer the
+    // full interval. Takes ~40ms off TTFT and off every quiet-period
+    // resumption (reasoning→content transitions) without raising the steady
+    // emit rate.
+    const elapsed = Date.now() - lastStreamFlushAt;
+    const delay = Math.max(0, STREAM_EMIT_INTERVAL_MS - elapsed);
     streamFlushTimer = setTimeout(() => {
       flushPendingStreamSegments();
-    }, STREAM_EMIT_INTERVAL_MS);
+    }, delay);
   }
 
-  function queueStreamSegment(token: string, seq: number, type?: "reasoning"): void {
+  function queueStreamSegment(token: string, seq: number, offset: number, type?: "reasoning"): void {
     const previous = pendingStreamSegments[pendingStreamSegments.length - 1];
     if (previous && previous.type === type) {
       previous.token += token;
       previous.seq = seq;
     } else {
-      pendingStreamSegments.push({ token, seq, startSeq: seq, ...(type ? { type } : {}) });
+      pendingStreamSegments.push({ token, seq, startSeq: seq, offset, ...(type ? { type } : {}) });
     }
 
     pendingStreamChars += token.length;
@@ -2830,6 +2892,7 @@ async function runGeneration(
       model,
       breakdown: lifecycle.breakdown,
       targetMessageId: lifecycle.targetMessageId,
+      targetSwipeId: lifecycle.streamingSwipeId,
       characterId: lifecycle.targetCharacterId,
       characterName: lifecycle.characterName,
       contextClipStats: lifecycle.contextClipStats,
@@ -2866,16 +2929,16 @@ async function runGeneration(
       reasoningDurationMs = Date.now() - reasoningStartedAt;
     }
     fullContent += text;
-    const seq = pool.appendPoolContent(generationId, text);
-    queueStreamSegment(text, seq);
+    const appended = pool.appendPoolContent(generationId, text);
+    queueStreamSegment(text, appended.seq, appended.offset);
   }
 
   function emitReasoningToken(text: string) {
     if (!text) return;
     if (!reasoningStartedAt) reasoningStartedAt = Date.now();
     fullReasoning += text;
-    const seq = pool.appendPoolReasoning(generationId, text);
-    queueStreamSegment(text, seq, "reasoning");
+    const appended = pool.appendPoolReasoning(generationId, text);
+    queueStreamSegment(text, appended.seq, appended.offset, "reasoning");
   }
 
   function processContentToken(token: string) {
@@ -2939,12 +3002,14 @@ async function runGeneration(
       );
       messageId = updated?.id ?? lifecycle.targetMessageId;
       if (fullReasoning) {
-        const existingExtra =
-          chatsSvc.getMessage(userId, lifecycle.targetMessageId)?.extra || {};
-        chatsSvc.patchMessageExtra(userId, lifecycle.targetMessageId, {
-          ...existingExtra,
-          reasoning: fullReasoning,
-        });
+        // Target the regenerated swipe, not the displayed one (the user may have
+        // navigated away mid-stream before stopping).
+        chatsSvc.setSwipeScopedExtra(
+          userId,
+          lifecycle.targetMessageId,
+          lifecycle.streamingSwipeId,
+          { reasoning: fullReasoning },
+        );
       }
     } else if (lifecycle.stagedMessageId) {
       if (!closedContent && !fullReasoning) {
@@ -2974,18 +3039,21 @@ async function runGeneration(
         (lifecycle.continueOriginalContent ?? "") +
         (lifecycle.continuePostfix ?? "") +
         closedContent;
-      const existingContinueExtra = chatsSvc.getMessage(
-        userId,
-        lifecycle.continueMessageId,
-      )?.extra;
-      const continueExtra = fullReasoning
-        ? { ...existingContinueExtra, reasoning: fullReasoning }
-        : undefined;
+      // Append onto the continued swipe (not the displayed one, in case the user
+      // navigated away before stopping).
       chatsSvc.updateMessage(userId, lifecycle.continueMessageId, {
         content: combined,
-        ...(continueExtra ? { extra: continueExtra } : {}),
+        contentSwipeId: lifecycle.streamingSwipeId,
         skipCouncilCacheInvalidation: true,
       });
+      if (fullReasoning) {
+        chatsSvc.setSwipeScopedExtra(
+          userId,
+          lifecycle.continueMessageId,
+          lifecycle.streamingSwipeId,
+          { reasoning: fullReasoning },
+        );
+      }
       messageId = lifecycle.continueMessageId;
     } else if (lifecycle.impersonateDraft) {
       // Impersonate draft: do not persist the partial content as a message.
@@ -3186,8 +3254,8 @@ async function runGeneration(
         if (chunk.reasoning) {
           if (!reasoningStartedAt) reasoningStartedAt = Date.now();
           fullReasoning += chunk.reasoning;
-          const seq = pool.appendPoolReasoning(generationId, chunk.reasoning);
-          queueStreamSegment(chunk.reasoning, seq, "reasoning");
+          const appended = pool.appendPoolReasoning(generationId, chunk.reasoning);
+          queueStreamSegment(chunk.reasoning, appended.seq, appended.offset, "reasoning");
         }
 
         if (chunk.token) {
@@ -3354,24 +3422,20 @@ async function runGeneration(
         messageId = updated?.id ?? lifecycle.targetMessageId;
       } else if (lifecycle.continueMessageId) {
         // Continue: append generated text to existing assistant message,
-        // inserting the continuePostfix separator (e.g. newline, double newline)
+        // inserting the continuePostfix separator (e.g. newline, double newline).
+        // Target the continued swipe explicitly — the user may have navigated to a
+        // different swipe while this streamed. Reasoning is persisted by the shared
+        // swipe-scoped extra write below.
         const combined =
           (lifecycle.continueOriginalContent ?? "") +
           (lifecycle.continuePostfix ?? "") +
           fullContent;
-        const existingExtra = chatsSvc.getMessage(
-          userId,
-          lifecycle.continueMessageId,
-        )?.extra;
-        const continueExtra = fullReasoning
-          ? { ...existingExtra, reasoning: fullReasoning }
-          : undefined;
         const updated = chatsSvc.updateMessage(
           userId,
           lifecycle.continueMessageId,
           {
             content: combined,
-            ...(continueExtra ? { extra: continueExtra } : {}),
+            contentSwipeId: lifecycle.streamingSwipeId,
             skipCouncilCacheInvalidation: true,
           },
         );
@@ -3433,17 +3497,35 @@ async function runGeneration(
 
       if (messageId) {
         const savedMessage = chatsSvc.getMessage(userId, messageId);
-        let resolvedMessage = savedMessage?.content ?? fullContent;
+        // The generated content lives on the generation's swipe (streamingSwipeId),
+        // which may differ from the displayed swipe_id if the user navigated
+        // mid-stream. Read and rewrite that swipe so macro resolution targets the
+        // right one (identical to the old path when not navigated, idx === swipe_id).
+        const genSwipeId =
+          lifecycle.streamingSwipeId != null &&
+          savedMessage != null &&
+          lifecycle.streamingSwipeId >= 0 &&
+          lifecycle.streamingSwipeId < savedMessage.swipes.length
+            ? lifecycle.streamingSwipeId
+            : null;
+        const baseContent =
+          genSwipeId != null
+            ? savedMessage!.swipes[genSwipeId]
+            : (savedMessage?.content ?? fullContent);
+        let resolvedMessage = baseContent ?? fullContent;
         if (macroEnv || macroEnvSeed) {
           const assistantEnv = cloneEnv(macroEnv ?? macroEnvSeed!);
           resolvedMessage = await resolveRenderedMessageContent(
-            savedMessage?.content ?? fullContent,
+            baseContent ?? fullContent,
             assistantEnv,
           );
           persistMacroVariableState(userId, chatId, assistantEnv);
         }
-        if (savedMessage && savedMessage.content !== resolvedMessage) {
-          chatsSvc.updateMessage(userId, messageId, { content: resolvedMessage });
+        if (savedMessage && baseContent !== resolvedMessage) {
+          chatsSvc.updateMessage(userId, messageId, {
+            content: resolvedMessage,
+            ...(genSwipeId != null ? { contentSwipeId: genSwipeId } : {}),
+          });
         }
         fullContent = resolvedMessage;
       }
@@ -3464,11 +3546,14 @@ async function runGeneration(
         if (reasoningDurationMs > 0)
           immediateExtra.reasoningDuration = reasoningDurationMs;
         if (messageId && Object.keys(immediateExtra).length > 0) {
-          const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-          chatsSvc.patchMessageExtra(userId, messageId, {
-            ...existing,
-            ...immediateExtra,
-          });
+          // Anchor reasoning/usage to the generated swipe, not the displayed one —
+          // the user may have navigated to another swipe while this streamed.
+          chatsSvc.setSwipeScopedExtra(
+            userId,
+            messageId,
+            lifecycle.streamingSwipeId,
+            immediateExtra,
+          );
         }
       }
 
@@ -3561,12 +3646,17 @@ async function runGeneration(
         }
 
         if (messageId && (resolvedTokenCount || generationMetrics)) {
-          const existing = chatsSvc.getMessage(userId, messageId)?.extra || {};
-          const metricsExtra: Record<string, any> = { ...existing };
+          const metricsExtra: Record<string, any> = {};
           if (resolvedTokenCount) metricsExtra.tokenCount = resolvedTokenCount;
           if (generationMetrics)
             metricsExtra.generationMetrics = generationMetrics;
-          chatsSvc.patchMessageExtra(userId, messageId, metricsExtra);
+          // Anchor metrics to the generated swipe, not the displayed one.
+          chatsSvc.setSwipeScopedExtra(
+            userId,
+            messageId,
+            lifecycle.streamingSwipeId,
+            metricsExtra,
+          );
         }
 
         if (
@@ -3878,9 +3968,11 @@ function emitExpressionChanged(
   );
 }
 
-export function stopGeneration(generationId: string): boolean {
+export function stopGeneration(userId: string, generationId: string): boolean {
   const entry = activeGenerations.get(generationId);
-  if (!entry) return false;
+  // User scoping: a generationId is unguessable, but never let one user's
+  // stop request abort another user's generation.
+  if (!entry || entry.userId !== userId) return false;
   entry.controller.abort();
   // Tear down any fire-and-forget background work for this chat too —
   // the user asked to stop, so cache-warming cortex/databank queries
@@ -3898,14 +3990,19 @@ export function stopUserGenerations(userId: string): void {
   abortUserBackgrounds(userId);
 }
 
-export function stopChatGenerations(userId: string, chatId: string): void {
+export function stopChatGenerations(userId: string, chatId: string): boolean {
   const chatKey = `${userId}:${chatId}`;
   const genId = activeChatGenerations.get(chatKey);
+  let stopped = false;
   if (genId) {
     const entry = activeGenerations.get(genId);
-    if (entry) entry.controller.abort();
+    if (entry) {
+      entry.controller.abort();
+      stopped = true;
+    }
   }
   abortChatBackground(userId, chatId);
+  return stopped;
 }
 
 export function stopAllGenerations(): void {

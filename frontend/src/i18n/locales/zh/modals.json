@@ -74,6 +74,7 @@
     "filesSelected": "已选择 {{count}} 个文件",
     "duplicate": "重复",
     "wiEntries": "{{count}} 条 WI 条目",
+    "loraReference": "LoRA：{{name}} @ {{weight}}",
     "failed": "失败",
     "imported": "已导入 {{count}}",
     "skipped": "已跳过 {{count}}",
@@ -541,7 +542,10 @@
     "saveFailed": "保存附加项失败",
     "createFailed": "创建附加项失败",
     "deleteFailed": "删除附加项失败",
-    "duplicateFailed": "复制附加项失败"
+    "duplicateFailed": "复制附加项失败",
+    "deleteConfirmTitle": "删除附加项",
+    "deleteConfirmMessage": "确定删除“{{name}}”吗？此操作无法撤销。",
+    "deleteConfirmMessageUnnamed": "确定删除此附加项吗？此操作无法撤销。"
   },
   "personaAddons": {
     "title": "人格附加项",

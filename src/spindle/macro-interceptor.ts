@@ -30,7 +30,20 @@ export interface MacroInterceptorCtx {
   readonly userId?: string;
 }
 
-export type MacroInterceptorResult = string | void;
+export interface MacroInterceptorRichResult {
+  text: string;
+  touchedVars?: readonly string[];
+  volatile?: boolean;
+}
+
+export type MacroInterceptorResult = string | MacroInterceptorRichResult | void;
+
+export interface MacroInterceptorRunResult {
+  text: string;
+  touchedVars: readonly string[];
+  volatile: boolean;
+  opaque: boolean;
+}
 
 export interface MacroInterceptor {
   extensionId: string;
@@ -58,8 +71,11 @@ class MacroInterceptorChain {
     this.handlers = this.handlers.filter((h) => h.extensionId !== extensionId);
   }
 
-  async run(ctx: MacroInterceptorCtx): Promise<string> {
+  async run(ctx: MacroInterceptorCtx): Promise<MacroInterceptorRunResult> {
     let template = ctx.template;
+    const touchedVars = new Set<string>();
+    let volatile = false;
+    let opaque = false;
 
     for (const handler of this.handlers) {
       if (handler.userId && handler.userId !== ctx.userId) continue;
@@ -78,7 +94,22 @@ class MacroInterceptorChain {
             )
           ),
         ]);
-        if (typeof next === "string") template = next;
+        if (typeof next === "string") {
+          if (next !== template) {
+            template = next;
+            opaque = true;
+          }
+        } else if (
+          next &&
+          typeof next === "object" &&
+          typeof next.text === "string"
+        ) {
+          if (next.text !== template) template = next.text;
+          if (next.touchedVars) {
+            for (const v of next.touchedVars) touchedVars.add(v);
+          }
+          if (next.volatile) volatile = true;
+        }
       } catch (err) {
         console.error(
           `[Spindle] Macro interceptor error from ${handler.extensionId}:`,
@@ -87,7 +118,7 @@ class MacroInterceptorChain {
       }
     }
 
-    return template;
+    return { text: template, touchedVars: [...touchedVars], volatile, opaque };
   }
 
   get count(): number {

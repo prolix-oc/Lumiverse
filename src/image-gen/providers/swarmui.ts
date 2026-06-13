@@ -129,9 +129,29 @@ const PARAMETERS: ImageParameterSchemaMap = {
   },
   rawRequestOverride: {
     type: "string",
-    description: "Raw JSON merged into the request body for advanced usage",
+    description:
+      'Raw JSON merged into the request body — flat SwarmUI params (e.g. {"refinermethod": "PostApply", "refinercontrolpercentage": 0.45}), {"presets": ["name"]} to apply a preset saved in SwarmUI, or a pasted SwarmUI preset export',
     group: "advanced",
   },
+}
+
+/**
+ * SwarmUI preset exports wrap their params in `param_map`
+ * ({"title": ..., "param_map": {"refinerupscale": "1.25"}}). Users paste these
+ * wholesale, so unwrap the map — SwarmUI stringifies param values server-side,
+ * so the export's string values apply as-is.
+ */
+function unwrapPresetExport(rawJson: unknown): string | undefined {
+  if (typeof rawJson !== "string" || !rawJson.trim()) return undefined
+  try {
+    const paramMap = JSON.parse(rawJson)?.param_map
+    if (paramMap && typeof paramMap === "object" && !Array.isArray(paramMap)) {
+      return JSON.stringify(paramMap)
+    }
+  } catch {
+    // Leave invalid JSON for applyRawOverride to reject with a clear error.
+  }
+  return rawJson
 }
 
 /** Cached SwarmUI session entry. */
@@ -283,7 +303,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         : String(p.loraWeights)
     }
 
-    return applyRawOverride(body, p.rawRequestOverride)
+    return applyRawOverride(body, unwrapPresetExport(p.rawRequestOverride))
   }
 
   /** Fetch an image from a SwarmUI-relative path and return a data URL. */

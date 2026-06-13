@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import Fuse from 'fuse.js'
 import { personasApi } from '@/api/personas'
 import { useStore } from '@/store'
-import { resolveAutoPersonaBinding } from '@/store/slices/personas'
+import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
 import { toast } from '@/lib/toast'
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from '@/types/api'
 
@@ -267,11 +267,11 @@ export function usePersonaBrowser() {
         })
         if (!resolved.personaId) {
           setActivePersona(id)
-          toast.info(`Switched to persona: ${updated.name}`)
+          toast.info(t('switchedToPersona', { name: personaToastName(updated) }))
         }
       }
     },
-    [personas, updatePersonaInStore, activePersonaId, setActivePersona]
+    [personas, updatePersonaInStore, activePersonaId, setActivePersona, t]
   )
 
   const setLorebook = useCallback(
@@ -294,7 +294,7 @@ export function usePersonaBrowser() {
       } else {
         const persona = personas.find((p) => p.id === id)
         if (persona) {
-          toast.info(t('switchedToPersona', { name: persona.name }))
+          toast.info(t('switchedToPersona', { name: personaToastName(persona) }))
         }
       }
     },

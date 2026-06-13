@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer, defaultRangeExtractor, type Range } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
@@ -27,7 +27,19 @@ const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
 const MOBILE_MOMENTUM_SETTLE_MS = 260
+// After touchend, the prepend visual offset is only flushed once scroll events
+// have been quiet for this long. A fixed post-touchend timer lands mid-fling on
+// iOS (momentum runs 1-2s) and the scrollTop write kills the fling dead.
+const MOBILE_MOMENTUM_QUIET_MS = 150
+// Hard ceiling on flush deferral so a busy event source (streaming repins,
+// settle re-measures) can't postpone history rebasing indefinitely.
+const MOBILE_MOMENTUM_FLUSH_CAP_MS = 4000
 const MOBILE_RANGE_WARM_MS = 1200
+// How long after the first rows render before the mounted range widens from
+// the cold-start window to the full warm range. Long enough for the initial
+// frame to paint on slow devices, short enough that early scrolling still
+// finds rows mounted.
+const INITIAL_RANGE_WARM_DELAY_MS = 300
 
 type VirtualListItem =
   | { type: 'loadingOlder'; key: string }
@@ -140,6 +152,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const bottomRef = useRef<HTMLDivElement>(null)
   const isPinnedRef = useRef(true)
   const isProgrammaticScrollRef = useRef(false)
+  // scrollTop recorded at the moment of a programmatic write. A scroll event
+  // is only swallowed as programmatic when the position matches — a bare
+  // boolean gets consumed by whichever event arrives first (on iOS that can be
+  // Safari's own caret-reveal scroll), which eats the user-scroll unpin and
+  // lets auto-repin fight the native scroll indefinitely.
+  const programmaticScrollTargetRef = useRef<number | null>(null)
   const topLoadArmedRef = useRef(true)
   const touchYRef = useRef<number | null>(null)
   const { visibleMessages, hasMore, loadMore, loadingOlder, justPrependedRef } = useChunkedMessages(messages, chatId)
@@ -157,13 +175,21 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const prependVisualOffsetRef = useRef(0)
   const isPrependingRef = useRef(false)
   const suppressNextPinUpdateRef = useRef(false)
-  const touchMomentumHoldRef = useRef(false)
+  const touchActiveRef = useRef(false)
   const touchMomentumTimerRef = useRef<number | null>(null)
+  const momentumFlushDeadlineRef = useRef(0)
+  const lastScrollAtRef = useRef(0)
   const rangeWarmTimerRef = useRef<number | null>(null)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   )
   const [mobileRangeWarm, setMobileRangeWarm] = useState(true)
+  // Initial mount staging: the first paint of a freshly opened chat mounts
+  // only the viewport plus a tight overscan. The wide warm range (which can
+  // mount the entire loaded page on touch devices) flips on shortly after, so
+  // the per-message render pipeline doesn't block the first visible frame.
+  const [initialRangeWarm, setInitialRangeWarm] = useState(false)
+  const initialWarmTimerRef = useRef<number | null>(null)
   const [prependVisualOffset, setPrependVisualOffsetState] = useState(0)
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
@@ -202,20 +228,29 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     setPrependVisualOffsetState((prev) => (prev === clamped ? prev : clamped))
   }, [])
 
+  // Record a programmatic scrollTop write so handleScroll can identify the
+  // matching event. Read back rather than store the requested value — the
+  // browser clamps writes past the scroll range, and the clamped position is
+  // what the scroll event will report.
+  const markProgrammaticScroll = useCallback((el: HTMLElement) => {
+    isProgrammaticScrollRef.current = true
+    programmaticScrollTargetRef.current = el.scrollTop
+  }, [])
+
   const flushPrependVisualOffset = useCallback(() => {
     const el = scrollRef.current
     const pendingOffset = prependVisualOffsetRef.current
     if (!el || pendingOffset <= 0) return
 
     // Convert any temporary visual-only prepend offset back into real scroll
-    // position once touch momentum settles so history loading can't get stuck
-    // behind a synthetic top gap.
-    isProgrammaticScrollRef.current = true
+    // position once scrolling has gone quiet so history loading can't get
+    // stuck behind a synthetic top gap.
     el.scrollTop += pendingOffset
+    markProgrammaticScroll(el)
     lastScrollTopRef.current = el.scrollTop
     lastScrollHeightRef.current = el.scrollHeight
     setPrependVisualOffset(0)
-  }, [setPrependVisualOffset])
+  }, [markProgrammaticScroll, setPrependVisualOffset])
 
   const warmMobileRange = useCallback((duration = MOBILE_RANGE_WARM_MS) => {
     setMobileRangeWarm(true)
@@ -301,8 +336,35 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [displayMode, isCoarsePointer, lumiaOOCStyle])
 
   useEffect(() => {
-    warmMobileRange()
-  }, [chatId, warmMobileRange])
+    setInitialRangeWarm(false)
+    if (initialWarmTimerRef.current != null) {
+      window.clearTimeout(initialWarmTimerRef.current)
+      initialWarmTimerRef.current = null
+    }
+  }, [chatId])
+
+  // Widen to the warm range once the first rows have painted. The flip mounts
+  // the remaining offscreen rows in one go, so run it as a transition to keep
+  // scrolling responsive while React renders them. The chat_id check matters
+  // on chat switch: the previous chat's rows linger in the store until the new
+  // tail arrives, and they must not start the warm timer early.
+  const hasRows = visibleMessages.length > 0 && visibleMessages[0]?.chat_id === chatId
+  useEffect(() => {
+    if (!hasRows || initialRangeWarm) return
+    initialWarmTimerRef.current = window.setTimeout(() => {
+      initialWarmTimerRef.current = null
+      startTransition(() => {
+        setInitialRangeWarm(true)
+        warmMobileRange()
+      })
+    }, INITIAL_RANGE_WARM_DELAY_MS)
+    return () => {
+      if (initialWarmTimerRef.current != null) {
+        window.clearTimeout(initialWarmTimerRef.current)
+        initialWarmTimerRef.current = null
+      }
+    }
+  }, [hasRows, initialRangeWarm, warmMobileRange])
 
   useEffect(() => {
     if (interceptorRegistryVersion === 0) return
@@ -316,6 +378,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       }
       if (rangeWarmTimerRef.current != null) {
         window.clearTimeout(rangeWarmTimerRef.current)
+      }
+      if (initialWarmTimerRef.current != null) {
+        window.clearTimeout(initialWarmTimerRef.current)
       }
     }
   }, [])
@@ -394,10 +459,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const rangeExtractor = useCallback((range: Range) => {
     const indexes = new Set(defaultRangeExtractor(range))
-    const nearTail = range.endIndex >= range.count - (isCoarsePointer ? 10 : 8)
-    const isWarm = mobileRangeWarm || nearTail
-    const extraBefore = isCoarsePointer ? (isWarm ? 32 : 18) : (isWarm ? 18 : 8)
-    const extraAfter = isCoarsePointer ? (isWarm ? 10 : 6) : (isWarm ? 5 : 3)
+    // Cold start: only a tight band around the viewport so the expensive
+    // per-message pipeline can't block the first paint of a freshly opened
+    // chat. The warm flip shortly after mounts the rest.
+    const nearTail = initialRangeWarm && range.endIndex >= range.count - (isCoarsePointer ? 10 : 8)
+    const isWarm = initialRangeWarm && (mobileRangeWarm || nearTail)
+    const extraBefore = !initialRangeWarm ? 4 : isCoarsePointer ? (isWarm ? 32 : 18) : (isWarm ? 18 : 8)
+    const extraAfter = !initialRangeWarm ? 2 : isCoarsePointer ? (isWarm ? 10 : 6) : (isWarm ? 5 : 3)
     const start = Math.max(0, range.startIndex - extraBefore)
     const end = Math.min(range.count - 1, range.endIndex + extraAfter)
 
@@ -406,7 +474,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
 
     return Array.from(indexes).sort((a, b) => a - b)
-  }, [isCoarsePointer, mobileRangeWarm])
+  }, [isCoarsePointer, mobileRangeWarm, initialRangeWarm])
 
   const getItemKey = useCallback(
     (index: number) => {
@@ -436,7 +504,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           return 1
       }
     },
-    overscan: isCoarsePointer ? 12 : 8,
+    overscan: initialRangeWarm ? (isCoarsePointer ? 12 : 8) : 3,
     getItemKey,
     rangeExtractor,
     useAnimationFrameWithResizeObserver: true,
@@ -577,11 +645,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (!anchor || !el || !anchor.el.isConnected) return
     const delta = (anchor.el.getBoundingClientRect().top - anchor.top) / getUiScale()
     if (Math.abs(delta) < 1) return
-    isProgrammaticScrollRef.current = true
     el.scrollTop += delta
+    markProgrammaticScroll(el)
     lastScrollTopRef.current = el.scrollTop
     lastScrollHeightRef.current = el.scrollHeight
-  }, [])
+  }, [markProgrammaticScroll])
 
   // A one-shot correction misses the progressive reflow (deferred render,
   // async image loads) and leaves a visible bounce.
@@ -602,12 +670,28 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (settleRafRef.current) cancelAnimationFrame(settleRafRef.current)
   }, [])
 
+  // While the user is typing inside the list (message edit textarea, an
+  // extension-mounted input), every auto-pin fights the browser's native
+  // caret-reveal scrolling — on iOS Safari the two attractors oscillate the
+  // viewport on every keystroke. Suspend auto-pinning until focus leaves.
+  const hasInListEditableFocus = useCallback(() => {
+    const el = scrollRef.current
+    const active = document.activeElement
+    if (!el || !active || !el.contains(active)) return false
+    return (
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLTextAreaElement ||
+      (active instanceof HTMLElement && active.isContentEditable)
+    )
+  }, [])
+
   const pinToBottomIfNeeded = useCallback((el: HTMLElement) => {
+    if (hasInListEditableFocus()) return
     const target = el.scrollHeight - el.clientHeight
     if (Math.abs(el.scrollTop - target) <= 1) return
-    isProgrammaticScrollRef.current = true
     el.scrollTop = target
-  }, [])
+    markProgrammaticScroll(el)
+  }, [hasInListEditableFocus, markProgrammaticScroll])
 
   if (isStreamingRef.current && !isStreaming) {
     const el = scrollRef.current
@@ -627,23 +711,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (!el || virtualListItems.length === 0) return
 
     isPinnedRef.current = true
+    // Smooth scrollToIndex emits a stream of events with no single target
+    // position — consume the first one unconditionally (null target).
     isProgrammaticScrollRef.current = true
+    programmaticScrollTargetRef.current = null
     setPrependVisualOffset(0)
     rowVirtualizer.scrollToIndex(virtualListItems.length - 1, { align: 'end', behavior })
 
     requestAnimationFrame(() => {
       const latest = scrollRef.current
       if (!latest) return
-      isProgrammaticScrollRef.current = true
       latest.scrollTop = latest.scrollHeight - latest.clientHeight
+      markProgrammaticScroll(latest)
       lastScrollTopRef.current = latest.scrollTop
     })
-  }, [rowVirtualizer, setPrependVisualOffset, virtualListItems.length])
+  }, [markProgrammaticScroll, rowVirtualizer, setPrependVisualOffset, virtualListItems.length])
 
   const BOTTOM_REPIN_EPSILON = 6
 
   const recoverTailVoid = useCallback(() => {
     if (!isPinnedRef.current) return false
+    if (hasInListEditableFocus()) return false
 
     const el = scrollRef.current
     if (!el || virtualListItems.length === 0) return false
@@ -670,13 +758,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
 
     const nextScrollTop = Math.max(0, actualContentBottom - el.clientHeight)
-    isProgrammaticScrollRef.current = true
     el.scrollTop = nextScrollTop
+    markProgrammaticScroll(el)
     lastScrollTopRef.current = el.scrollTop
     lastScrollHeightRef.current = el.scrollHeight
     isPinnedRef.current = true
     return true
-  }, [rowVirtualizer, virtualListItems.length])
+  }, [hasInListEditableFocus, markProgrammaticScroll, rowVirtualizer, virtualListItems.length])
 
   const updatePinState = (scrollTop: number, scrollHeight: number, clientHeight: number) => {
     const distance = scrollHeight - scrollTop - clientHeight
@@ -689,14 +777,21 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     if (!el) return
 
+    lastScrollAtRef.current = performance.now()
+
     if (recoverTailVoid()) return
 
     const deltaTop = el.scrollTop - lastScrollTopRef.current
     lastScrollTopRef.current = el.scrollTop
 
     if (isProgrammaticScrollRef.current) {
+      const target = programmaticScrollTargetRef.current
       isProgrammaticScrollRef.current = false
-      return
+      programmaticScrollTargetRef.current = null
+      // Only swallow the event when the position matches the programmatic
+      // write. A mismatch means a native scroll (user touch, Safari caret
+      // reveal) arrived first — fall through so it can unpin normally.
+      if (target == null || Math.abs(el.scrollTop - target) <= 2) return
     }
 
     if (streamEndSettleUntilRef.current !== 0) {
@@ -742,7 +837,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       window.clearTimeout(touchMomentumTimerRef.current)
       touchMomentumTimerRef.current = null
     }
-    touchMomentumHoldRef.current = true
+    touchActiveRef.current = true
     touchYRef.current = event.touches[0]?.clientY ?? null
   }, [])
 
@@ -756,16 +851,30 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     touchYRef.current = nextY
   }, [])
 
-  const releaseTouchMomentumHold = useCallback(() => {
+  // Flush the prepend visual offset once scroll events go quiet instead of on
+  // a fixed timer — an iOS fling keeps emitting scroll events for 1-2s after
+  // touchend, and a scrollTop write during that window halts the momentum.
+  const scheduleMomentumFlush = useCallback(() => {
     if (touchMomentumTimerRef.current != null) {
       window.clearTimeout(touchMomentumTimerRef.current)
     }
-    touchMomentumTimerRef.current = window.setTimeout(() => {
-      touchMomentumHoldRef.current = false
-      flushPrependVisualOffset()
+    momentumFlushDeadlineRef.current = performance.now() + MOBILE_MOMENTUM_FLUSH_CAP_MS
+    const tick = () => {
       touchMomentumTimerRef.current = null
-    }, MOBILE_MOMENTUM_SETTLE_MS)
+      const quietFor = performance.now() - lastScrollAtRef.current
+      if (quietFor >= MOBILE_MOMENTUM_QUIET_MS || performance.now() >= momentumFlushDeadlineRef.current) {
+        flushPrependVisualOffset()
+        return
+      }
+      touchMomentumTimerRef.current = window.setTimeout(tick, MOBILE_MOMENTUM_QUIET_MS)
+    }
+    touchMomentumTimerRef.current = window.setTimeout(tick, MOBILE_MOMENTUM_SETTLE_MS)
   }, [flushPrependVisualOffset])
+
+  const releaseTouchMomentumHold = useCallback(() => {
+    touchActiveRef.current = false
+    scheduleMomentumFlush()
+  }, [scheduleMomentumFlush])
 
   // Scroll anchoring: when older messages are prepended, adjust scrollTop so
   // the user's viewport stays on the same content instead of jumping to the top.
@@ -779,11 +888,16 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       warmMobileRange(900)
       const heightDiff = el.scrollHeight - lastScrollHeightRef.current
       if (heightDiff > 0 && lastScrollHeightRef.current > 0) {
-        if (!isPinnedRef.current && isCoarsePointer && touchMomentumHoldRef.current) {
+        if (!isPinnedRef.current && isCoarsePointer) {
+          // Never write scrollTop for a prepend on touch devices — the batch
+          // resolves mid-fling more often than not and the write kills the
+          // momentum. Translate rows instead and rebase once scrolling goes
+          // quiet.
           setPrependVisualOffset(prependVisualOffsetRef.current + heightDiff)
+          if (!touchActiveRef.current) scheduleMomentumFlush()
         } else {
-          isProgrammaticScrollRef.current = true
           el.scrollTop += heightDiff
+          markProgrammaticScroll(el)
           lastScrollTopRef.current = el.scrollTop
         }
       }
@@ -808,7 +922,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         loadMore()
       })
     }
-  }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, setPrependVisualOffset, warmMobileRange])
+  }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, markProgrammaticScroll, scheduleMomentumFlush, setPrependVisualOffset, warmMobileRange])
 
   // Unified scroll guard: watches scrollHeight changes caused by streaming
   // tokens, extension mounts, lazy image loads, or virtual row resizing.
@@ -923,12 +1037,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     if (el) {
       isPinnedRef.current = true
-      isProgrammaticScrollRef.current = true
       setPrependVisualOffset(0)
       el.scrollTop = el.scrollHeight - el.clientHeight
+      markProgrammaticScroll(el)
       lastScrollTopRef.current = el.scrollTop
     }
-  }, [chatId, setPrependVisualOffset])
+  }, [chatId, markProgrammaticScroll, setPrependVisualOffset])
 
   useEffect(() => {
     const handleScrollToBottom = () => scrollToHistoryBottom('smooth')

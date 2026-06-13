@@ -1,4 +1,5 @@
 import type { Persona } from "../types/persona";
+import { resolvePersonaGlobalAddons } from "./global-addons.service";
 
 export type PersonaAddonStateMap = Record<string, boolean>;
 
@@ -47,4 +48,26 @@ export function applyPersonaAddonStates(
       ...(Array.isArray(metadata.attached_global_addons) ? { attached_global_addons: attachedGlobalAddons } : {}),
     },
   };
+}
+
+/**
+ * Resolve a persona for rendering `{{persona}}` in a chat context: overlay the
+ * chat's per-persona add-on binding overrides on top of the persona's stored
+ * defaults, then resolve attached global add-ons into `_resolvedGlobalAddons`.
+ *
+ * Use this anywhere `{{persona}}` is resolved with a chat in scope (macro
+ * preview/resolve, display regex, Spindle) so add-on visibility matches the
+ * chat's bindings rather than the persona defaults. The main generation
+ * pipeline applies the equivalent overlay via `ctx.personaAddonStates`. Pass
+ * `chatMetadata` as null/undefined when there is no chat (character-only or
+ * persona-only contexts) — only global add-on resolution is applied then.
+ */
+export function resolvePersonaForChatMacros(
+  userId: string,
+  persona: Persona | null,
+  chatMetadata: Record<string, any> | null | undefined,
+): Persona | null {
+  const states = getChatPersonaAddonStates(chatMetadata, persona?.id);
+  const withStates = applyPersonaAddonStates(persona, states);
+  return resolvePersonaGlobalAddons(userId, withStates);
 }

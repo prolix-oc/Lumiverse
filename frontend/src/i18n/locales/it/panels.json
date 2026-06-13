@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "Riassunto",
     "thinkingDisplayOmitted": "Ometti",
     "thinkingDisplayDisabledHint": "Inviato solo quando il ragionamento API è attivato.",
-    "thinkingDisplayHint": "Opus 4.7 e Mythos Preview impostano Ometti come predefinito. Scegli Riassunto per ricevere il testo di riepilogo.",
+    "thinkingDisplayHint": "Opus 4.7/4.8 e Mythos Preview impostano Ometti come predefinito. Scegli Riassunto per ricevere il testo di riepilogo.",
     "keepInHistory": "Mantieni nella cronologia",
     "keepAllReasoning": "Mantieni tutto il ragionamento nel prompt",
     "stripAllReasoning": "Rimuovi tutto il ragionamento dal prompt",
@@ -589,6 +589,9 @@
     "clickPlus": "Clicca + per crearne uno.",
     "uncategorized": "non categorizzato",
     "deleteFolderConfirm": "Eliminare tutti gli {{count}} script regex in \"{{folder}}\"? Questa operazione non può essere annullata.",
+    "deleteFolderTitle": "Elimina script della cartella",
+    "deleteScriptTitle": "Elimina script regex",
+    "deleteScriptConfirm": "Eliminare \"{{name}}\"? Questa operazione non può essere annullata.",
     "deleteSomeFailed": "{{count}} script non possono essere eliminati",
     "deletedScripts": "{{count}} script eliminati",
     "selectPresetFirstScript": "Seleziona un preset Loom prima di associare gli script regex",
@@ -737,6 +740,23 @@
     },
     "enable": "Abilita generazione immagini",
     "enableHint": "Genera sfondi delle chat basati sulla scena tramite lo strumento scena del consiglio",
+    "importExport": "Importa / Esporta",
+    "exportModalTitle": "Esporta configurazione di generazione immagini",
+    "exportIncludeSettings": "Includi impostazioni",
+    "exportIncludeParameters": "Includi parametri di generazione",
+    "exportIncludeParametersHint": "Steps, CFG, dimensioni, seed e altri parametri della connessione attiva. All'importazione vengono applicati alla connessione attiva se il provider corrisponde.",
+    "exportIncludeConnections": "Includi connessioni del provider",
+    "exportIncludeConnectionsHint": "Parametri di connessione, workflow e URL del server. Le chiavi API non vengono mai esportate.",
+    "exportPresets": "Preset dei prompt",
+    "selectAll": "Seleziona tutto",
+    "selectNone": "Deseleziona tutto",
+    "noPresetsToExport": "Nessun preset salvato da esportare",
+    "selectedCount": "{{selected}} preset su {{total}} selezionati",
+    "exportConfig": "Esporta",
+    "importConfig": "Importa",
+    "importSuccess": "Configurazione di generazione immagini importata ({{presets}} preset, {{connections}} connessioni)",
+    "importFailed": "Importazione non riuscita",
+    "exportFailed": "Esportazione non riuscita",
     "connection": "Connessione",
     "createConnectionFirst": "Crea prima una connessione nella scheda Connessioni",
     "selectConnection": "Seleziona una connessione...",
@@ -798,6 +818,8 @@
     "saveChanges": "Salva modifiche",
     "saveAsNew": "Salva come nuovo",
     "delete": "Elimina",
+    "deletePresetConfirmTitle": "Elimina preset del prompt",
+    "deletePresetConfirmMessage": "Eliminare \"{{name}}\"? Questa operazione non può essere annullata.",
     "boundToActiveCharacter": "associato al personaggio attivo",
     "boundToActivePersona": "associato alla persona attiva",
     "promptParser": "Parser prompt",
@@ -853,6 +875,8 @@
     "workflowDefault": "(valore predefinito del flusso di lavoro)",
     "workflowOrConnectionDefault": "(valore predefinito del flusso di lavoro/connessione)",
     "advanced": "Avanzate",
+    "rawOverrideInvalidJson": "JSON non valido — la generazione fallirà finché il campo non viene corretto o svuotato",
+    "rawOverrideNotObject": "Deve essere un oggetto JSON di campi della richiesta, ad es. {\"steps\": 30}",
     "directorReferences": "Riferimenti regista",
     "includeCharacterAvatar": "Includi avatar personaggio",
     "includeCharacterAvatarHint": "Invia l'avatar del personaggio attuale come riferimento regista",
@@ -883,6 +907,8 @@
     "addGeneratedToGalleryHint": "Quando attivo, ogni immagine generata viene anche collegata alla galleria dei personaggi della chat attiva. Disattiva per tenere le generazioni fuori dalla galleria.",
     "generatedImagesResend": "Immagini generate da rinviare",
     "generatedImagesResendHint": "Solo le immagini generate più recenti sono incluse nel contesto multimodale.",
+    "contextMessageLimit": "Messaggi di chat nel contesto",
+    "contextMessageLimitHint": "Numero di messaggi di chat più recenti inviati al parser dei prompt per l'analisi della scena e i prompt personalizzati analizzati.",
     "sceneChangeSensitivity": "Sensibilità cambio scena",
     "backgroundDisplay": "Visualizzazione sfondo",
     "opacity": "Opacità",
@@ -985,6 +1011,7 @@
     "noWorldBooks": "Nessun worldbook disponibile",
     "unknown": "Sconosciuto",
     "removeWorldBook": "Rimuovi worldbook",
+    "openInLorebook": "Apri nella scheda Lorebook",
     "noWorldBooksAttached": "Nessun worldbook allegato",
     "embeddedLorebook": "Lorebook integrato",
     "embeddedLorebookEntries": "{{count}} voci trovate nella scheda personaggio",
@@ -1076,6 +1103,10 @@
       "expressionsCount": "{{count}} espressioni",
       "switchToSingle": "Passa a singolo personaggio",
       "removeGroup": "Rimuovi gruppo",
+      "deleteLabelConfirmTitle": "Elimina espressione",
+      "deleteLabelConfirmMessage": "Eliminare l'espressione \"{{label}}\"? Questa operazione non può essere annullata.",
+      "deleteGroupConfirmTitle": "Rimuovi gruppo",
+      "deleteGroupConfirmMessage": "Rimuovere il gruppo \"{{name}}\" e tutte le sue espressioni? Questa operazione non può essere annullata.",
       "defaultExpressionLabel": "espressione"
     },
     "imageLora": {
@@ -1114,7 +1145,9 @@
       "saved": "Salvato.",
       "saveFailed": "Salvataggio fallito.",
       "cleared": "Cancellato.",
-      "clearFailed": "Cancellazione fallita."
+      "clearFailed": "Cancellazione fallita.",
+      "clearConfirmTitle": "Cancella associazione LoRA",
+      "clearConfirmMessage": "Rimuovere l'associazione LoRA salvata da questo personaggio? Questa operazione non può essere annullata."
     }
   },
   "characterBrowser": {
@@ -1174,6 +1207,7 @@
     "searchWorldBooks": "Cerca worldbook...",
     "noWorldBooksAvailable": "Nessun worldbook disponibile",
     "removeFromAlwaysActive": "Rimuovi da sempre attivo",
+    "editBook": "Modifica questo libro del mondo",
     "noGlobalActive": "Nessun worldbook globale attivo",
     "thisChatOnly": "Solo questa chat",
     "openChatToAdd": "Apri una chat per aggiungere worldbook limitati alla chat",
@@ -1664,7 +1698,9 @@
     "boundCharacter": "Loadout associato a questo personaggio",
     "unboundCharacter": "Binding personaggio rimosso",
     "bindFailed": "Errore nell'associazione del loadout",
-    "unbindFailed": "Errore nella rimozione del binding"
+    "unbindFailed": "Errore nella rimozione del binding",
+    "deleteConfirmTitle": "Elimina loadout",
+    "deleteConfirmMessage": "Eliminare \"{{name}}\"? Questa operazione non può essere annullata."
   },
   "groupChatsPanel": {
     "loading": "Caricamento chat di gruppo...",
@@ -2072,7 +2108,9 @@
       "reattributeTitle": "Riattribui a...",
       "detach": "(stacca)",
       "pickEntity": "Scegli entità...",
-      "unattributed": "Non attribuito ({{count}})"
+      "unattributed": "Non attribuito ({{count}})",
+      "deleteConfirmTitle": "Elimina colore",
+      "deleteConfirmMessage": "Eliminare il colore {{hex}}? Questa operazione non può essere annullata."
     },
     "stats": {
       "loading": "Caricamento statistiche...",
@@ -2142,7 +2180,8 @@
         "thought": "pensiero",
         "words": "{{count}} parole",
         "heuristic": "euristica"
-      }
+      },
+      "deleteRelationTitle": "Elimina relazione"
     },
     "editors": {
       "cancel": "Annulla",
@@ -2261,6 +2300,13 @@
       "vaultDeleteFailed": "Errore nell'eliminazione del vault",
       "vaultRenameFailed": "Errore nella rinomina del vault",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "Elimina entità",
+      "entityMessage": "Eliminare \"{{name}}\"? Questa operazione non può essere annullata.",
+      "bulkTitle": "Elimina entità selezionate",
+      "bulkMessage_one": "Eliminare {{count}} entità selezionata? Questa operazione non può essere annullata.",
+      "bulkMessage_other": "Eliminare {{count}} entità selezionate? Questa operazione non può essere annullata."
     }
   },
   "councilFeedback": {
@@ -3034,7 +3080,9 @@
       "legacyExportMessage": "Le macro specifiche di Lumiverse (es. {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) non verranno risolte in SillyTavern. Solo le macro standard come {{char}}, {{user}} e {{persona}} sono portatili. I blocchi che usano macro Lumiverse verranno esportati così com'è con il loro testo macro grezzo.",
       "exportAnyway": "Esporta comunque",
       "deleteBlockTitle": "Elimina blocco",
-      "deleteBlockMessage": "Sei sicuro di voler eliminare questo blocco? Questa operazione non può essere annullata."
+      "deleteBlockMessage": "Sei sicuro di voler eliminare questo blocco? Questa operazione non può essere annullata.",
+      "deletePresetTitle": "Elimina preset",
+      "deletePresetMessage": "Eliminare \"{{name}}\"? Tutti i suoi blocchi verranno rimossi. Questa operazione non può essere annullata."
     },
     "toast": {
       "exportFailed": "Impossibile esportare il preset",
@@ -3116,7 +3164,9 @@
         "loadFailed": "Impossibile caricare le risorse tema",
         "uploaded": "Caricato {{name}}",
         "uploadFailed": "Impossibile caricare la risorsa tema"
-      }
+      },
+      "deleteConfirmTitle": "Elimina risorsa tema",
+      "deleteConfirmMessage": "Eliminare \"{{name}}\"? Qualsiasi CSS che fa riferimento a questa risorsa non potrà più caricarla. Questa operazione non può essere annullata."
     }
   }
 }

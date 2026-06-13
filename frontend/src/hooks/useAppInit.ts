@@ -114,6 +114,12 @@ function applyBootstrap(payload: BootstrapPayload, errors: Record<string, string
   if (!errors['personas']) store.setPersonas(payload.personas.data)
   if (!errors['regexScripts']) store.setRegexScripts(payload.regexScripts.data)
 
+  // Landing page preload — no fallback needed: when absent, the landing page
+  // falls back to its own recent-grouped fetch.
+  if (!errors['recentChats'] && payload.recentChats) {
+    store.setLandingRecentChats(payload.recentChats)
+  }
+
   if (!errors['council.settings']) {
     // Mirror the normalization from council.slice.ts:loadCouncilSettings —
     // merge in defaults so missing keys don't surface as `undefined`.

@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "摘要",
     "thinkingDisplayOmitted": "省略",
     "thinkingDisplayDisabledHint": "僅在啟用 API 推理時發送。",
-    "thinkingDisplayHint": "Opus 4.7 與 Mythos Preview 默認省略，選擇“摘要”可接收總結文本。",
+    "thinkingDisplayHint": "Opus 4.7/4.8 與 Mythos Preview 默認省略，選擇“摘要”可接收總結文本。",
     "keepInHistory": "歷史保留",
     "keepAllReasoning": "在提示詞中保留全部推理",
     "stripAllReasoning": "從提示詞中移除全部推理",
@@ -589,6 +589,9 @@
     "clickPlus": "點擊 + 創建。",
     "uncategorized": "未分類",
     "deleteFolderConfirm": "刪除“{{folder}}”中的 {{count}} 個正則腳本？此操作不可撤銷。",
+    "deleteFolderTitle": "刪除文件夾腳本",
+    "deleteScriptTitle": "刪除正則腳本",
+    "deleteScriptConfirm": "確定刪除“{{name}}”嗎？此操作無法撤銷。",
     "deleteSomeFailed": "有 {{count}} 個腳本刪除失敗",
     "deletedScripts": "已刪除 {{count}} 個腳本",
     "selectPresetFirstScript": "請先選擇 Loom 預設再綁定正則腳本",
@@ -738,6 +741,23 @@
     },
     "enable": "啟用圖像生成",
     "enableHint": "通過議會場景工具生成具備場景感知的聊天背景",
+    "importExport": "匯入 / 匯出",
+    "exportModalTitle": "匯出圖像生成設定",
+    "exportIncludeSettings": "包含設定",
+    "exportIncludeParameters": "包含生成參數",
+    "exportIncludeParametersHint": "活動連線的步數、CFG、尺寸、種子等參數。匯入時如果服務商匹配，將應用到活動連線。",
+    "exportIncludeConnections": "包含服務商連線",
+    "exportIncludeConnectionsHint": "包括連線參數、工作流程與伺服器 URL。絕不會匯出 API 金鑰。",
+    "exportPresets": "提示詞預設",
+    "selectAll": "全選",
+    "selectNone": "全不選",
+    "noPresetsToExport": "沒有可匯出的已儲存預設",
+    "selectedCount": "已選擇 {{selected}}/{{total}} 個預設",
+    "exportConfig": "匯出",
+    "importConfig": "匯入",
+    "importSuccess": "已匯入圖像生成設定（{{presets}} 個預設、{{connections}} 個連線）",
+    "importFailed": "匯入失敗",
+    "exportFailed": "匯出失敗",
     "connection": "連接",
     "createConnectionFirst": "請先在 Connections 標籤頁創建連接",
     "selectConnection": "選擇連接...",
@@ -758,22 +778,27 @@
     "mainPreset": "主預設",
     "characterPreset": "角色預設",
     "personaPreset": "人設預設",
+    "captioningPreset": "圖像描述預設",
     "activeMainPreset": "當前主預設",
     "boundCharacterPreset": "已綁定角色預設",
     "boundPersonaPreset": "已綁定人設預設",
+    "boundCaptioningPreset": "圖像描述預設",
     "pickMainPresetHint": "選擇一個已保存主預設加載到下方編輯器，並將其設為生成時使用的活動提示詞。",
     "pickCharacterPresetHint": "選擇角色預設並加載到編輯器，同時綁定到當前聊天角色。",
     "openChatBindPreset": "請先打開聊天后再綁定角色預設，否則選擇不會持久化。",
     "pickPersonaPresetHint": "選擇人設預設並加載到編輯器，同時綁定到當前人設。",
     "selectActivePersona": "請選擇一個活動人設後再綁定。",
+    "pickCaptioningPresetHint": "選擇一個已儲存的圖像描述預設以載入。這些預設定義圖像描述器如何描述上傳的圖像。",
     "parserInstructions": "解析器指令",
     "prompt": "提示詞",
     "characterSnippet": "角色片段",
     "personaSnippet": "人設片段",
+    "captioningInstructions": "圖像描述指令",
     "parserInstructionsHint": "用於指導解析器 LLM 如何將聊天上下文轉成最終圖像提示詞，此內容不會直接發送給圖像提供商。",
     "sentDirectlyHint": "將直接發送給圖像提供商。",
     "characterSnippetHint": "會在主預設中出現 {{character_prompt}} 的位置插入該文本。",
     "personaSnippetHint": "會在主預設中出現 {{persona_prompt}} 的位置插入該文本。",
+    "captioningInstructionsHint": "在圖像描述器彈窗中與上傳圖像一同發送給解析器 LLM 的指令。",
     "editingPresetTitle": "編輯中：{{name}}",
     "editTargetPromptTitle": "{{target}} 提示詞",
     "parserPromptExample": "示例：聚焦當前姿態、表情、服裝、光照和房間細節，使用精煉的生圖標籤。",
@@ -783,6 +808,7 @@
     "negativePrompt": "負向提示詞",
     "character": "角色",
     "persona": "人設",
+    "captioning": "圖像描述",
     "negativeSnippet": "負向片段",
     "negativeSnippetHint": "會替換主預設負向提示詞中的對應宏。",
     "editingPresetNegativeTitle": "編輯中：{{name}} - 負向",
@@ -793,6 +819,8 @@
     "saveChanges": "保存更改",
     "saveAsNew": "另存為新預設",
     "delete": "刪除",
+    "deletePresetConfirmTitle": "刪除提示詞預設",
+    "deletePresetConfirmMessage": "確定刪除“{{name}}”嗎？此操作無法撤銷。",
     "boundToActiveCharacter": "已綁定到當前角色",
     "boundToActivePersona": "已綁定到當前人設",
     "promptParser": "提示詞解析器",
@@ -848,6 +876,8 @@
     "workflowDefault": "（工作流默認）",
     "workflowOrConnectionDefault": "（工作流 / 連接默認）",
     "advanced": "高級",
+    "rawOverrideInvalidJson": "JSON 無效 — 在修復或清空此欄位之前，生成將失敗",
+    "rawOverrideNotObject": "必須是請求欄位的 JSON 物件，例如 {\"steps\": 30}",
     "directorReferences": "導演參考圖",
     "includeCharacterAvatar": "包含角色頭像",
     "includeCharacterAvatarHint": "將當前角色頭像作為導演參考圖發送",
@@ -878,6 +908,8 @@
     "addGeneratedToGalleryHint": "開啟後，每張生成圖都會關聯到當前聊天角色圖庫。關閉則不入庫。",
     "generatedImagesResend": "可重複發送的生成圖數量",
     "generatedImagesResendHint": "僅最近生成的圖片會進入多模態上下文。",
+    "contextMessageLimit": "上下文中的聊天訊息數",
+    "contextMessageLimitHint": "傳送給提示詞解析器用於場景分析和解析自訂提示詞的最近聊天訊息數量。",
     "sceneChangeSensitivity": "場景變化敏感度",
     "backgroundDisplay": "背景顯示",
     "opacity": "透明度",
@@ -980,6 +1012,7 @@
     "noWorldBooks": "沒有可用的世界書",
     "unknown": "未知",
     "removeWorldBook": "移除世界書",
+    "openInLorebook": "在世界書標籤頁中打開",
     "noWorldBooksAttached": "未關聯世界書",
     "embeddedLorebook": "內嵌世界書",
     "embeddedLorebookEntries": "角色卡中發現 {{count}} 條條目",
@@ -1071,6 +1104,10 @@
       "expressionsCount": "{{count}} 個表情",
       "switchToSingle": "切換為單角色",
       "removeGroup": "刪除組",
+      "deleteLabelConfirmTitle": "刪除表情",
+      "deleteLabelConfirmMessage": "確定刪除表情“{{label}}”嗎？此操作無法撤銷。",
+      "deleteGroupConfirmTitle": "移除分組",
+      "deleteGroupConfirmMessage": "確定移除分組“{{name}}”及其所有表情嗎？此操作無法撤銷。",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1109,7 +1146,9 @@
       "saved": "已保存。",
       "saveFailed": "保存失敗。",
       "cleared": "已清除。",
-      "clearFailed": "清除失敗。"
+      "clearFailed": "清除失敗。",
+      "clearConfirmTitle": "清除 LoRA 綁定",
+      "clearConfirmMessage": "確定移除此角色已保存的 LoRA 綁定嗎？此操作無法撤銷。"
     }
   },
   "characterBrowser": {
@@ -1169,6 +1208,7 @@
     "searchWorldBooks": "搜索世界書…",
     "noWorldBooksAvailable": "沒有可用的世界書",
     "removeFromAlwaysActive": "從始終激活中移除",
+    "editBook": "編輯此世界書",
     "noGlobalActive": "沒有全局激活的世界書",
     "thisChatOnly": "僅當前聊天",
     "openChatToAdd": "打開聊天以添加聊天範圍的世界書",
@@ -1657,7 +1697,9 @@
     "boundCharacter": "配置已綁定到當前角色",
     "unboundCharacter": "已解除角色綁定",
     "bindFailed": "綁定配置失敗",
-    "unbindFailed": "解除綁定失敗"
+    "unbindFailed": "解除綁定失敗",
+    "deleteConfirmTitle": "刪除配置",
+    "deleteConfirmMessage": "確定刪除“{{name}}”嗎？此操作無法撤銷。"
   },
   "groupChatsPanel": {
     "loading": "正在加載群聊...",
@@ -2058,7 +2100,9 @@
       "reattributeTitle": "重新歸屬到…",
       "detach": "（取消歸屬）",
       "pickEntity": "選擇實體…",
-      "unattributed": "未歸屬 ({{count}})"
+      "unattributed": "未歸屬 ({{count}})",
+      "deleteConfirmTitle": "刪除顏色",
+      "deleteConfirmMessage": "確定刪除顏色 {{hex}} 嗎？此操作無法撤銷。"
     },
     "stats": {
       "loading": "正在加載統計…",
@@ -2128,7 +2172,8 @@
         "thought": "內心",
         "words": "{{count}} 詞",
         "heuristic": "啟發式"
-      }
+      },
+      "deleteRelationTitle": "刪除關係"
     },
     "editors": {
       "cancel": "取消",
@@ -2247,6 +2292,13 @@
       "vaultDeleteFailed": "刪除保險庫失敗",
       "vaultRenameFailed": "重命名保險庫失敗",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "刪除實體",
+      "entityMessage": "確定刪除實體“{{name}}”嗎？此操作無法撤銷。",
+      "bulkTitle": "刪除所選實體",
+      "bulkMessage_one": "確定刪除所選的 {{count}} 個實體嗎？此操作無法撤銷。",
+      "bulkMessage_other": "確定刪除所選的 {{count}} 個實體嗎？此操作無法撤銷。"
     }
   },
   "councilFeedback": {
@@ -3020,7 +3072,9 @@
       "legacyExportMessage": "Lumiverse 專用宏（如 {{lumiaDef}}、{{loomStyle}}、{{lumiaOOC}}）在 SillyTavern 中無法解析。僅 {{char}}、{{user}}、{{persona}} 等標準宏可移植。使用 Lumiverse 宏的塊將按原始宏文本導出。",
       "exportAnyway": "仍要導出",
       "deleteBlockTitle": "刪除塊",
-      "deleteBlockMessage": "確定要刪除此塊？此操作無法撤銷。"
+      "deleteBlockMessage": "確定要刪除此塊？此操作無法撤銷。",
+      "deletePresetTitle": "刪除預設",
+      "deletePresetMessage": "確定刪除“{{name}}”嗎？其所有塊都將被移除。此操作無法撤銷。"
     },
     "toast": {
       "exportFailed": "導出預設失敗",
@@ -3102,7 +3156,9 @@
         "loadFailed": "加載主題資源失敗",
         "uploaded": "已上傳 {{name}}",
         "uploadFailed": "上傳主題資源失敗"
-      }
+      },
+      "deleteConfirmTitle": "刪除主題資源",
+      "deleteConfirmMessage": "確定刪除“{{name}}”嗎？引用該資源的 CSS 將無法再加載它。此操作無法撤銷。"
     }
   }
 }

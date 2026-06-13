@@ -1,6 +1,8 @@
 import type { SpindleManifest, SpindleFrontendContext, SpindleFrontendModule, PermissionRequestOptions } from 'lumiverse-spindle-types'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
+import { registerDisplayResolver, unregisterDisplayResolver } from './display-resolver-registry'
+import { invalidateDisplayRegexCacheForVars, invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
 import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidget } from './message-widgets'
 import {
   createDrawerTabHandle,
@@ -654,6 +656,15 @@ async function doLoadFrontendExtension(
           return updated
         },
       },
+      display: {
+        registerResolver(resolver) {
+          return registerDisplayResolver(manifest.identifier, resolver)
+        },
+        invalidate(touchedVars: string[]) {
+          if (touchedVars.includes('*')) invalidateDisplayRegexCache()
+          else invalidateDisplayRegexCacheForVars(new Set(touchedVars))
+        },
+      },
       manifest,
     }
 
@@ -785,6 +796,7 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
   loaded.backendHandlers.clear()
   loaded.processHandlers.clear()
   unregisterTagInterceptorsByExtension(extensionId)
+  unregisterDisplayResolver(loaded.identifier)
   removeMessageWidgetsByExtension(extensionId)
   destroyAllComponentsForExtension(extensionId)
   destroyAllPlacementsForExtension(extensionId)

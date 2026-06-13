@@ -8,6 +8,8 @@
  */
 
 import type { AssemblyContext, PrefetchedData } from "../llm/types";
+import { makeAssistantCharacter } from "../types/character";
+import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
@@ -99,29 +101,30 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   }
 
   const characterId = ctx.targetCharacterId || chat.character_id;
+  // Temporary chats are character-less and persona-less: a synthetic
+  // "Assistant" stands in for prompt assembly, and persona resolution is
+  // skipped (no default-persona fallback).
   const character = profiler.measureSync("character", () =>
-    charactersSvc.getCharacter(ctx.userId, characterId)
+    characterId
+      ? charactersSvc.getCharacter(ctx.userId, characterId)
+      : makeAssistantCharacter()
   );
   if (!character) throw new Error("Character not found");
 
+  const isTemporaryChat = isTemporaryChatMetadata(chat.metadata);
   let persona = profiler.measureSync("persona", () =>
-    applyPersonaAddonStates(
-      personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId),
-      ctx.personaAddonStates,
-    )
+    isTemporaryChat
+      ? null
+      : applyPersonaAddonStates(
+          personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId),
+          ctx.personaAddonStates,
+        )
   );
 
-  // Resolve attached global add-ons for the persona
-  if (persona) {
-    const attachedRefs = (persona.metadata?.attached_global_addons as Array<{ id: string; enabled: boolean }>) ?? [];
-    const enabledIds = attachedRefs.filter(a => a.enabled).map(a => a.id);
-    if (enabledIds.length > 0) {
-      const resolved = profiler.measureSync("global-addons", () =>
-        globalAddonsSvc.getGlobalAddonsByIds(ctx.userId, enabledIds)
-      );
-      persona = { ...persona, metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved } };
-    }
-  }
+  // Resolve attached global add-ons for the persona so {{persona}} includes them
+  persona = profiler.measureSync("global-addons", () =>
+    globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona)
+  );
 
   const connection = profiler.measureSync("connection", () =>
     ctx.connectionId
@@ -129,7 +132,11 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
       : connectionsSvc.getDefaultConnection(ctx.userId)
   );
 
-  const resolvedPresetId = ctx.presetId || connection?.preset_id;
+  // No-preset temp chats skip preset loading entirely (assembly re-checks the
+  // same flag and falls back to the raw legacy message mapping).
+  const resolvedPresetId = isNoPresetChatMetadata(chat.metadata)
+    ? null
+    : ctx.presetId || connection?.preset_id;
   const preset = profiler.measureSync("preset", () =>
     resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null
   );

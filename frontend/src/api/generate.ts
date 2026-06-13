@@ -263,9 +263,14 @@ export interface GenerationStatusResponse {
   }
   content?: string
   reasoning?: string
+  /** Char position where the returned content/reasoning slice begins (0 = full
+   *  buffer). Non-zero only when the poll sent matching known lengths. */
+  contentOffset?: number
+  reasoningOffset?: number
   tokenSeq?: number
   generationType?: string
   targetMessageId?: string
+  targetSwipeId?: number
   characterName?: string
   characterId?: string
   model?: string
@@ -295,8 +300,13 @@ export const generateApi = {
     return post<GenerateResponse>('/generate', request, LONG)
   },
 
-  stop(generationId?: string) {
-    return post<void>('/generate/stop', generationId ? { generation_id: generationId } : {})
+  stop(generationId?: string, chatId?: string) {
+    // chat_id lets the backend fall back to stopping whatever is actually
+    // running for the chat when generation_id is stale (or not yet known).
+    const body: Record<string, string> = {}
+    if (generationId) body.generation_id = generationId
+    if (chatId) body.chat_id = chatId
+    return post<void>('/generate/stop', body)
   },
 
   async regenerate(request: GenerateRequest) {
@@ -347,8 +357,8 @@ export const generateApi = {
     return get<BreakdownResponse>(`/generate/breakdown/${messageId}`)
   },
 
-  getStatus(chatId: string) {
-    return get<GenerationStatusResponse>(`/generate/status/${chatId}`)
+  getStatus(chatId: string, known?: { generationId: string; contentLen: number; reasoningLen: number }) {
+    return get<GenerationStatusResponse>(`/generate/status/${chatId}`, known)
   },
 
   getActive() {

@@ -1,4 +1,5 @@
 import type { SpindleSandboxFrameHandle, SpindleSandboxFrameOptions } from 'lumiverse-spindle-types'
+import { uuidv7 } from '@/lib/uuid'
 
 interface SandboxFrameRecord {
   iframe: HTMLIFrameElement
@@ -291,8 +292,7 @@ function clampDimension(value: number, min: number, max: number): number {
 }
 
 function makeSandboxToken(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`
+  // uuidv7() uses crypto.getRandomValues(), which (unlike crypto.randomUUID())
+  // is available in insecure contexts on Chrome/Android — no fallback needed.
+  return uuidv7()
 }

@@ -1,5 +1,6 @@
 {
   "appName": "Lumiverse",
+  "home": "Home",
   "actions": {
     "save": "Save",
     "cancel": "Cancel",

@@ -95,6 +95,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
   return {
     activeChatId: null,
     activeCharacterId: null,
+    activeChatDisplayOwner: null,
+    activeChatName: null,
     activeChatWallpaper: null,
     activeChatAvatarId: null,
     activeChatMetadata: null,
@@ -107,17 +109,23 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     streamingError: null,
     activeGenerationId: null,
     regeneratingMessageId: null,
+    streamingSwipeId: null,
     streamingGenerationType: null,
     lastCompletedGenerationType: null,
-    lastPooledSeq: null,
+    unseenSwipes: {},
     totalChatLength: 0,
     impersonateDraftContent: null,
+    landingRecentChats: null,
+
+    setLandingRecentChats: (result) => set({ landingRecentChats: result }),
 
     setActiveChat: (chatId, characterId = null) => {
       endedGenerationIds.clear()
       set({
         activeChatId: chatId,
         activeCharacterId: characterId,
+        activeChatDisplayOwner: null,
+        activeChatName: null,
         activeChatWallpaper: null,
         activeChatAvatarId: null,
         activeChatMetadata: null,
@@ -128,8 +136,9 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: null,
         regeneratingMessageId: null,
+        streamingSwipeId: null,
         streamingGenerationType: null,
-    lastPooledSeq: null,
+        unseenSwipes: {},
         messageSelectMode: false,
         selectedMessageIds: [],
       })
@@ -148,6 +157,10 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     setActiveChatAvatarId: (imageId) => set({ activeChatAvatarId: imageId }),
 
     setActiveChatMetadata: (metadata) => set({ activeChatMetadata: metadata }),
+
+    setActiveChatDisplayOwner: (owner) => set({ activeChatDisplayOwner: owner }),
+
+    setActiveChatName: (name) => set({ activeChatName: name }),
 
     setMessages: (messages, total?) =>
       set({ messages: sortMessagesByPosition(messages), totalChatLength: total ?? messages.length }),
@@ -199,7 +212,10 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         }
         if (idx === -1) return { messages: state.messages }
         const messages = state.messages.filter((_m, i) => i !== idx)
-        return { messages, totalChatLength: Math.max(0, state.totalChatLength - 1) }
+        const unseenSwipes = id in state.unseenSwipes
+          ? Object.fromEntries(Object.entries(state.unseenSwipes).filter(([k]) => k !== id))
+          : state.unseenSwipes
+        return { messages, totalChatLength: Math.max(0, state.totalChatLength - 1), unseenSwipes }
       }),
 
     beginStreaming: (regeneratingMessageId, generationType) => {
@@ -232,10 +248,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: null,
         regeneratingMessageId: nextRegeneratingMessageId,
+        streamingSwipeId: null,
         streamingGenerationType: generationType ?? null,
-        // Clear any stale recovery watermark from a prior generation so this
-        // fresh stream's opening tokens (seq 1..N) are not dropped as dupes.
-        lastPooledSeq: null,
       })
     },
 
@@ -297,26 +311,53 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
         streamingError: null,
         activeGenerationId: generationId,
         regeneratingMessageId: nextRegeneratingMessageId,
+        streamingSwipeId: null,
         streamingGenerationType: resolvedGenerationType ?? null,
-        // Clear any stale recovery watermark from a prior generation. Recovery
-        // re-sets it via setLastPooledSeq() immediately after this call.
-        lastPooledSeq: null,
       })
     },
 
-    replaceStreamContent: (content) => {
-      rawStreamContent = content
-      set({ streamingContent: content })
+    setStreamingSwipeId: (swipeId) => {
+      set({ streamingSwipeId: swipeId })
     },
 
-    replaceStreamReasoning: (reasoning) => {
-      rawStreamReasoning = reasoning
-      set({ streamingReasoning: reasoning })
+    setUnseenSwipe: (messageId, swipeId) => {
+      set((state) => {
+        if (state.unseenSwipes[messageId] === swipeId) return state
+        return { unseenSwipes: { ...state.unseenSwipes, [messageId]: swipeId } }
+      })
     },
 
-    setLastPooledSeq: (seq) => {
-      set({ lastPooledSeq: seq })
+    clearUnseenSwipe: (messageId) => {
+      set((state) => {
+        if (!(messageId in state.unseenSwipes)) return state
+        const unseenSwipes = { ...state.unseenSwipes }
+        delete unseenSwipes[messageId]
+        return { unseenSwipes }
+      })
     },
+
+    reconcileStreamContent: (content, offset) => {
+      // Apply a pool snapshot (offset 0 = full) or a delta (offset = char
+      // position where `content` begins). The pool buffer is append-only
+      // within a generation, so a candidate that doesn't extend what's already
+      // rendered is a stale snapshot (tokens arrived over WS during the poll's
+      // round-trip) — applying it would rewind or hole the visible text.
+      if (offset > rawStreamContent.length) return
+      const candidate = rawStreamContent.slice(0, offset) + content
+      if (candidate.length < rawStreamContent.length) return
+      rawStreamContent = candidate
+      set({ streamingContent: candidate })
+    },
+
+    reconcileStreamReasoning: (reasoning, offset) => {
+      if (offset > rawStreamReasoning.length) return
+      const candidate = rawStreamReasoning.slice(0, offset) + reasoning
+      if (candidate.length < rawStreamReasoning.length) return
+      rawStreamReasoning = candidate
+      set({ streamingReasoning: candidate })
+    },
+
+    getStreamBuffers: () => ({ content: rawStreamContent, reasoning: rawStreamReasoning }),
 
     setStreamingReasoningStartedAt: (ts) => {
       // Also restore the closure variable so appendStreamToken can finalize
@@ -325,7 +366,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       set({ streamingReasoningStartedAt: ts })
     },
 
-    appendStreamToken: (token) => {
+    appendStreamToken: (token, offset) => {
       // CoT detection (reasoning prefix/suffix separation) is now handled
       // server-side in generate.service.ts. The backend emits pre-separated
       // tokens: regular content tokens here, reasoning tokens via
@@ -333,14 +374,39 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       if (reasoningStartedAt && !get().streamingReasoningDuration) {
         set({ streamingReasoningDuration: Date.now() - reasoningStartedAt })
       }
+      if (offset != null) {
+        const localLen = rawStreamContent.length
+        // Segment starts beyond our buffer — we missed tokens (subscription
+        // race after reconnect, events dropped while hidden). Don't append out
+        // of place; the caller re-polls the authoritative pool.
+        if (offset > localLen) return 'gap'
+        if (offset < localLen) {
+          // Overlaps content we already hold (recovery snapshot raced the live
+          // stream). Slice off exactly the overlap; drop if fully covered.
+          const overlap = localLen - offset
+          if (token.length <= overlap) return 'stale'
+          token = token.slice(overlap)
+        }
+      }
       rawStreamContent += token
       scheduleStreamFlush()
+      return 'appended'
     },
 
-    appendStreamReasoning: (token) => {
+    appendStreamReasoning: (token, offset) => {
       if (!reasoningStartedAt) reasoningStartedAt = Date.now()
+      if (offset != null) {
+        const localLen = rawStreamReasoning.length
+        if (offset > localLen) return 'gap'
+        if (offset < localLen) {
+          const overlap = localLen - offset
+          if (token.length <= overlap) return 'stale'
+          token = token.slice(overlap)
+        }
+      }
       rawStreamReasoning += token
       scheduleStreamFlush()
+      return 'appended'
     },
 
     endStreaming: () => {
@@ -357,7 +423,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       reasoningStartedAt = 0
       // Preserve the generation type before clearing — auto-summarization
       // needs to know what kind of generation just finished.
-      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, lastCompletedGenerationType: get().streamingGenerationType, streamingGenerationType: null, lastPooledSeq: null })
+      set({ isStreaming: false, streamingContent: '', streamingReasoning: '', streamingReasoningDuration: null, streamingReasoningStartedAt: null, streamingError: null, activeGenerationId: null, regeneratingMessageId: null, streamingSwipeId: null, lastCompletedGenerationType: get().streamingGenerationType, streamingGenerationType: null })
     },
 
     stopStreaming: () => {
@@ -384,8 +450,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           streamingError: null,
           activeGenerationId: null,
           regeneratingMessageId: null,
+          streamingSwipeId: null,
           streamingGenerationType: null,
-          lastPooledSeq: null,
         }
       })
     },
@@ -414,8 +480,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           streamingReasoningStartedAt: null,
           activeGenerationId: null,
           regeneratingMessageId: null,
+          streamingSwipeId: null,
           streamingGenerationType: null,
-          lastPooledSeq: null,
         }
       })
     },

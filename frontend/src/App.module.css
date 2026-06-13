@@ -39,6 +39,20 @@
   padding-bottom: var(--spindle-dock-bottom, 0px);
 }
 
+/* Same treatment for Chromium/Android PWAs. Since Chrome 135 the Android
+   viewport goes edge-to-edge by default, so env(safe-area-inset-bottom) is
+   the gesture-navigation-bar height (large on foldables like the Galaxy
+   Fold) rather than 0. Reserving it as shell padding leaves a dead band
+   below the floating input bar — the "bottom gap" — and ChatView's
+   overflow:clip stops the bar reaching the screen edge. Drop the bottom
+   padding so the shell and bottom bars fill edge-to-edge; each bottom bar
+   pads its own interactive content above the nav bar instead (see
+   InputArea / MessageSelectBar). No-op on desktop Chromium PWAs where the
+   inset is 0. */
+:global(html[data-pwa]:not([data-ios-pwa])) .app {
+  padding-bottom: var(--spindle-dock-bottom, 0px);
+}
+
 .main {
   flex: 1 1 0;
   display: flex;

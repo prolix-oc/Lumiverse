@@ -1559,6 +1559,14 @@ export async function getEnabledExtensions(): Promise<ExtensionInfo[]> {
   return Promise.all(rows.map(rowToExtensionInfo));
 }
 
+export function getEnabledExtensionIdentifiers(): string[] {
+  const db = getDb();
+  const rows = db
+    .query("SELECT identifier FROM extensions WHERE enabled = 1")
+    .all() as { identifier: string }[];
+  return rows.map((r) => r.identifier);
+}
+
 export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
   const manifest = await readManifest(identifier);
   const entry = manifest.entry_frontend || "dist/frontend.js";

@@ -15,6 +15,10 @@ export interface SwipeActionResult {
   isLastAssistantMessage: boolean
   disableLeft: boolean
   disableRight: boolean
+  /** True when this message is the one a generation is actively streaming into. */
+  isStreamTarget: boolean
+  /** Index of the swipe being streamed into (only when this message is the target). */
+  liveSwipeId: number | null
 }
 
 /**
@@ -25,6 +29,9 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
   const { t: te } = useTranslation('errors')
   const messages = useStore((s) => s.messages)
   const isStreaming = useStore((s) => s.isStreaming)
+  const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
+  const streamingSwipeId = useStore((s) => s.streamingSwipeId)
+  const streamingGenerationType = useStore((s) => s.streamingGenerationType)
   const beginStreaming = useStore((s) => s.beginStreaming)
   const startStreaming = useStore((s) => s.startStreaming)
   const setStreamingError = useStore((s) => s.setStreamingError)
@@ -38,10 +45,21 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
   const isLastAssistantMessage = !message.is_user && messages.length > 0 && messages[messages.length - 1].id === message.id
   const regenerateNonceRef = useRef(0)
 
+  // Is THIS message the one currently being streamed into?
+  const isStreamTarget = isStreaming && (
+    regeneratingMessageId === message.id ||
+    (streamingGenerationType === 'continue' && isLastAssistantMessage)
+  )
+  const liveSwipeId = isStreamTarget ? streamingSwipeId : null
+
   const atFirst = message.swipe_id <= 0
   const atLast = message.swipe_id >= message.swipes.length - 1
-  const disableLeft = isStreaming || atFirst
-  const disableRight = isStreaming || (atLast && !isLastAssistantMessage)
+  // Navigating between existing swipes never touches the active stream, so it
+  // stays enabled mid-generation. The only blocked action is the one that would
+  // START a new generation: swiping right past the last swipe of the last
+  // assistant message while one is already in flight.
+  const disableLeft = atFirst
+  const disableRight = atLast && (!isLastAssistantMessage || isStreaming)
 
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isStreaming) return
@@ -99,11 +117,14 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
   const handleSwipe = useCallback(
     async (direction: 'left' | 'right') => {
       if (direction === 'left' && atFirst) return
-      if (direction === 'right' && atLast && isLastAssistantMessage) {
-        await handleRegenerate()
+      if (direction === 'right' && atLast) {
+        // The trailing edge of the last assistant message spawns a new swipe —
+        // but not while a generation is already running (that would abort it).
+        if (isLastAssistantMessage && !isStreaming) {
+          await handleRegenerate()
+        }
         return
       }
-      if (direction === 'right' && atLast) return
 
       try {
         await messagesApi.swipe(chatId, message.id, direction)
@@ -111,10 +132,10 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
         console.error('[useSwipeAction] Failed to swipe:', err)
       }
     },
-    [chatId, message.id, atFirst, atLast, isLastAssistantMessage, handleRegenerate]
+    [chatId, message.id, atFirst, atLast, isLastAssistantMessage, isStreaming, handleRegenerate]
   )
 
-  return { handleSwipe, handleRegenerate, atFirst, atLast, isLastAssistantMessage, disableLeft, disableRight }
+  return { handleSwipe, handleRegenerate, atFirst, atLast, isLastAssistantMessage, disableLeft, disableRight, isStreamTarget, liveSwipeId }
 }
 
 /**
@@ -123,7 +144,6 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
  */
 export async function executeSwipe(message: Message, chatId: string, direction: 'left' | 'right'): Promise<void> {
   const state = useStore.getState()
-  if (state.isStreaming) return
 
   const atFirst = message.swipe_id <= 0
   const atLast = message.swipe_id >= message.swipes.length - 1
@@ -133,6 +153,8 @@ export async function executeSwipe(message: Message, chatId: string, direction: 
   if (direction === 'right' && atLast && !isLastAssistant) return
 
   if (direction === 'right' && atLast && isLastAssistant) {
+    // Spawning a new swipe is the only swipe action blocked mid-generation.
+    if (state.isStreaming) return
     const { regenFeedback, openModal, beginStreaming, startStreaming, setStreamingError, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration } = state
 
     const doRegen = async (feedback?: string | null) => {

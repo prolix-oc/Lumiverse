@@ -194,6 +194,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const dragCounterRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
@@ -230,6 +232,9 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const voiceSettings = useStore((s) => s.voiceSettings)
+  // Temporary chats are persona-less: messages send as plain "User" and no
+  // persona_id is attached to message extras or generation requests.
+  const isTemporaryChat = useStore((s) => s.activeChatMetadata?.temporary === true)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const regenFeedback = useStore((s) => s.regenFeedback)
@@ -966,7 +971,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       if (e.key === 'Escape' && isStreaming) {
         e.preventDefault()
         e.stopPropagation()
-        generateApi.stop(activeGenerationId || undefined).catch(console.error)
+        generateApi.stop(activeGenerationId || undefined, chatId).catch(console.error)
         // If in optimistic phase, revert locally
         if (!activeGenerationId) {
           stopStreaming()
@@ -975,7 +980,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [isStreaming, activeGenerationId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
 
   useEffect(() => {
     if (openPopover !== 'persona') return
@@ -1009,7 +1014,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     return DOCUMENT_EXTENSIONS.has(ext)
   }, [DOCUMENT_EXTENSIONS])
 
-  const handleAttachFiles = useCallback(async (files: FileList | null) => {
+  const handleAttachFiles = useCallback(async (files: FileList | File[] | null) => {
     if (!files || files.length === 0) return
     setUploading(true)
     try {
@@ -1062,6 +1067,61 @@ export default function InputArea({ chatId }: InputAreaProps) {
     setPendingAttachments((prev) => prev.filter((a) => a.image_id !== imageId))
   }, [])
 
+  // Paste-to-attach: pull any files (e.g. screenshots) out of the clipboard and
+  // route them through the same pipeline as the file picker. Plain-text pastes
+  // contain no files, so we leave the default behavior untouched for those.
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (!file) continue
+      // Clipboard images arrive with a generic name like "image.png"; stamp a
+      // friendlier, unique name so the attachment strip and saved filename read clearly.
+      if (file.type.startsWith('image/') && /^image\.\w+$/i.test(file.name)) {
+        const ext = file.name.slice(file.name.lastIndexOf('.'))
+        files.push(new File([file], `pasted-image-${Date.now()}${ext}`, { type: file.type }))
+      } else {
+        files.push(file)
+      }
+    }
+    if (files.length === 0) return
+    e.preventDefault()
+    handleAttachFiles(files)
+  }, [handleAttachFiles])
+
+  // Drag-and-drop: a counter tracks enter/leave across child elements so the
+  // overlay doesn't flicker as the cursor moves over nested nodes.
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+    e.preventDefault()
+    dragCounterRef.current += 1
+    setDragActive(true)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+    e.preventDefault()
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragCounterRef.current === 0) return
+    e.preventDefault()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current === 0) setDragActive(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setDragActive(false)
+    handleAttachFiles(files)
+  }, [handleAttachFiles])
+
   // Detect trailing consecutive user messages (queued messages awaiting generation)
   const hasQueuedMessages = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -1094,7 +1154,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     })
 
     try {
-      const effectivePersonaId = sendPersonaId || activePersonaId
+      const effectivePersonaId = isTemporaryChat ? null : (sendPersonaId || activePersonaId)
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const extra: Record<string, any> = {}
       if (effectivePersonaId) extra.persona_id = effectivePersonaId
@@ -1115,7 +1175,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
+  }, [text, chatId, isStreaming, isTemporaryChat, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
 
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
@@ -1142,7 +1202,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     })
 
     try {
-      const effectivePersonaId = sendPersonaId || activePersonaId
+      const effectivePersonaId = isTemporaryChat ? null : (sendPersonaId || activePersonaId)
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const presetId = getActivePresetForGeneration() || undefined
       const genOpts: import('@/api/generate').GenerateRequest = {
@@ -1250,7 +1310,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
+  }, [text, chatId, isStreaming, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -1454,9 +1514,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
     try {
-      // If we have a generation ID, stop that specific generation.
-      // Otherwise (optimistic phase), stop all user generations.
-      await generateApi.stop(activeGenerationId || undefined)
+      // Stop the specific generation when we know its ID; the chat id lets the
+      // backend fall back to the chat's active generation if the ID is stale
+      // (or, in the optimistic phase, not yet known).
+      await generateApi.stop(activeGenerationId || undefined, chatId)
     } catch (err) {
       console.error('[InputArea] Failed to stop:', err)
     }
@@ -1464,7 +1525,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (!activeGenerationId) {
       stopStreaming()
     }
-  }, [isStreaming, activeGenerationId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
 
   const handleNewChat = useCallback(async () => {
     // For group chats, open group creator pre-populated with current members
@@ -1958,6 +2019,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
       data-component="InputArea"
       ref={containerRef}
       className={styles.container}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       style={(() => {
         const s: CSSProperties = {}
         if (screenCornerRadius) {
@@ -1969,6 +2034,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
         return Object.keys(s).length ? s : undefined
       })()}
     >
+      {dragActive && (
+        <div className={styles.dropOverlay} aria-hidden="true">
+          <Paperclip size={20} />
+          <span>{t('input.dropToAttach')}</span>
+        </div>
+      )}
+
       {/* Author's Note Panel */}
       <AuthorsNotePanel
         chatId={chatId}
@@ -2936,6 +3008,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
               onChange={handleInput}
               onScroll={handleTextareaScroll}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
               onFocus={() => setInputFocused(true)}

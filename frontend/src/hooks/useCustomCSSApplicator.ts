@@ -32,38 +32,47 @@ export function useCustomCSSApplicator() {
   useEffect(() => {
     const el = getOrCreateStyleElement()
 
-    // Collect all CSS sources
-    const parts: string[] = []
+    try {
+      // Collect all CSS sources
+      const parts: string[] = []
 
-    // Global CSS (independent toggle)
-    if (customCSS.enabled && customCSS.css.trim()) {
-      parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
-    }
-
-    // Per-component CSS — each override has its own toggle, independent of global
-    for (const [, override] of Object.entries(componentOverrides)) {
-      if (override.enabled && override.css?.trim()) {
-        parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
+      // Global CSS (independent toggle)
+      if (customCSS.enabled && customCSS.css.trim()) {
+        parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
       }
-    }
 
-    if (parts.length === 0) {
-      el.textContent = ''
-      lastHashRef.current = ''
-      return
-    }
+      // Per-component CSS — each override has its own toggle, independent of global
+      for (const [, override] of Object.entries(componentOverrides)) {
+        if (override.enabled && override.css?.trim()) {
+          parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
+        }
+      }
 
-    const combined = parts.join('\n\n')
+      if (parts.length === 0) {
+        el.textContent = ''
+        lastHashRef.current = ''
+        return
+      }
 
-    // Skip if nothing changed
-    if (combined === lastHashRef.current) return
+      const combined = parts.join('\n\n')
 
-    const result = validateCSS(combined)
-    if (result.valid) {
-      el.textContent = combined
-      lastHashRef.current = combined
-    } else {
-      toast.error(i18n.t('common.toast.customCssError', { error: result.error }))
+      // Skip if nothing changed
+      if (combined === lastHashRef.current) return
+
+      const result = validateCSS(combined)
+      if (result.valid) {
+        el.textContent = combined
+        lastHashRef.current = combined
+      } else {
+        toast.error(i18n.t('common.toast.customCssError', { error: result.error }))
+      }
+    } catch (err) {
+      // The transforms (sanitize/rewrite) can throw on pathological input —
+      // e.g. encodeURIComponent() rejects malformed UTF-16 in url() paths.
+      // This hook runs at the app root inside the only ErrorBoundary, so an
+      // uncaught throw here tears down the whole app. Surface a toast and keep
+      // the previously-applied CSS in place instead of crashing.
+      toast.error(i18n.t('common.toast.customCssError', { error: (err as Error).message }))
     }
   }, [customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
 

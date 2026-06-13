@@ -146,6 +146,14 @@
   white-space: nowrap;
 }
 
+.cardPreview {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cardMeta {
   display: flex;
   align-items: center;

@@ -12,7 +12,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useStore } from '@/store'
-import { getCharacterAvatarThumbUrl, pickCharacterThumbImageId } from '@/lib/avatarUrls'
+import { getCharacterAvatarThumbUrl, getCharacterAvatarThumbUrlById, pickCharacterThumbImageId } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
 import { extractPalette, type ImagePalette } from '@/lib/colorExtraction'
 import { deriveCharacterOverlay, deriveCharacterNameVars } from '@/lib/characterTheme'
@@ -23,6 +23,83 @@ import type { ThemeConfig } from '@/types/theme'
 
 /** In-memory palette cache keyed by avatar identity to avoid re-extraction. */
 const paletteCache = new Map<string, ImagePalette>()
+
+// ── Persisted palette layer ──
+// Extraction means a thumb fetch + decode + pixel scan, and it can't even
+// start until the character record is in the store — on a cold load that put
+// the theme tint several round trips behind first paint. Persisting palettes
+// (~1KB each) makes re-entry instantaneous. Map insertion order doubles as
+// LRU order; bump PALETTE_CACHE_VERSION when ImagePalette's shape changes.
+const PALETTE_CACHE_KEY = '__lumiverse_palette_cache'
+const PALETTE_CACHE_VERSION = 1
+const PALETTE_CACHE_MAX = 60
+
+try {
+  const stored = JSON.parse(localStorage.getItem(PALETTE_CACHE_KEY) || '')
+  if (stored?.v === PALETTE_CACHE_VERSION && Array.isArray(stored.entries)) {
+    for (const [key, palette] of stored.entries) {
+      if (typeof key === 'string' && palette?.ui?.dark?.accent && palette?.dominant) {
+        paletteCache.set(key, palette as ImagePalette)
+      }
+    }
+  }
+} catch { /* no usable cache — first run or private mode */ }
+
+let palettePersistTimer: number | null = null
+function schedulePalettePersist(): void {
+  if (palettePersistTimer != null) return
+  palettePersistTimer = window.setTimeout(() => {
+    palettePersistTimer = null
+    try {
+      while (paletteCache.size > PALETTE_CACHE_MAX) {
+        const oldest = paletteCache.keys().next().value
+        if (oldest === undefined) break
+        paletteCache.delete(oldest)
+      }
+      localStorage.setItem(
+        PALETTE_CACHE_KEY,
+        JSON.stringify({ v: PALETTE_CACHE_VERSION, entries: [...paletteCache.entries()] }),
+      )
+    } catch { /* quota/private mode — cache stays in-memory only */ }
+  }, 250)
+}
+
+function getCachedPalette(key: string): ImagePalette | undefined {
+  const hit = paletteCache.get(key)
+  if (hit) {
+    // Re-insert so frequently used palettes survive the LRU trim.
+    paletteCache.delete(key)
+    paletteCache.set(key, hit)
+  }
+  return hit
+}
+
+function setCachedPalette(key: string, palette: ImagePalette): void {
+  paletteCache.set(key, palette)
+  schedulePalettePersist()
+}
+
+/**
+ * Fire-and-forget palette warm-up so chat entry finds the palette already
+ * extracted (e.g. called from the landing page on chat click, in parallel
+ * with the route change and chat fetch). No-op when character-aware theming
+ * is off or the palette is already cached.
+ */
+export function warmCharacterPalette(
+  characterId: string | null | undefined,
+  imageId: string | null | undefined,
+): void {
+  if (!characterId) return
+  const theme = useStore.getState().theme as ThemeConfig | null
+  if (theme?.characterAware !== true) return
+  const key = `${characterId}:${imageId ?? 'legacy'}`
+  if (paletteCache.has(key)) return
+  const url = getCharacterAvatarThumbUrlById(characterId, imageId)
+  if (!url) return
+  extractPalette(url)
+    .then((palette) => setCachedPalette(key, palette))
+    .catch(() => { /* warm-up is best-effort */ })
+}
 
 /** Keys we set on the root so we can clean them up. */
 const NAME_VAR_KEYS = ['--char-name-dark', '--char-name-light']
@@ -78,11 +155,11 @@ export function useCharacterTheme() {
 
     const apply = async () => {
       try {
-        let palette = paletteCache.get(avatarCacheKey)
+        let palette = getCachedPalette(avatarCacheKey)
         if (!palette) {
           const extracted = await extractPalette(avatarUrl)
           if (isStale()) return
-          paletteCache.set(avatarCacheKey, extracted)
+          setCachedPalette(avatarCacheKey, extracted)
           palette = extracted
         }
 
@@ -128,11 +205,11 @@ export function useCharacterTheme() {
 
     const apply = async () => {
       try {
-        let palette = paletteCache.get(avatarCacheKey)
+        let palette = getCachedPalette(avatarCacheKey)
         if (!palette) {
           const extracted = await extractPalette(avatarUrl)
           if (isStale()) return
-          paletteCache.set(avatarCacheKey, extracted)
+          setCachedPalette(avatarCacheKey, extracted)
           palette = extracted
         }
 
@@ -166,7 +243,7 @@ export function useCharacterTheme() {
       // Invalidate cache so the next render cycle resamples
       const newImageId = payload.imageId ?? activeCharacter?.image_id ?? null
       const newKey = activeCharacterId ? `${activeCharacterId}:${newImageId ?? 'legacy'}` : null
-      if (newKey) paletteCache.delete(newKey)
+      if (newKey && paletteCache.delete(newKey)) schedulePalettePersist()
 
       // Reset applied refs to force both effects to re-run
       nameAppliedAvatarKeyRef.current = null

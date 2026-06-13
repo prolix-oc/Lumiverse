@@ -252,6 +252,7 @@ type RuntimeWorkerToHost =
       rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
+  | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | {
       type: "user_storage_write_binary";
@@ -2251,6 +2252,29 @@ const spindleApi: RuntimeSpindleAPI = {
       });
       return result as import("lumiverse-spindle-types").ActivatedWorldInfoEntryDTO[];
     },
+    async getGlobal(userId?: string): Promise<string[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_get_global", requestId, userId });
+      return result as string[];
+    },
+    async setGlobal(worldBookIds: string[], userId?: string): Promise<string[]> {
+      assertMutationAllowed("spindle.world_books.setGlobal()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_set_global", requestId, worldBookIds, userId });
+      return result as string[];
+    },
+    async activateGlobal(worldBookId: string, userId?: string): Promise<string[]> {
+      assertMutationAllowed("spindle.world_books.activateGlobal()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_activate_global", requestId, worldBookId, userId });
+      return result as string[];
+    },
+    async deactivateGlobal(worldBookId: string, userId?: string): Promise<string[]> {
+      assertMutationAllowed("spindle.world_books.deactivateGlobal()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_deactivate_global", requestId, worldBookId, userId });
+      return result as string[];
+    },
   },
 
   regex_scripts: {
@@ -3270,6 +3294,12 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     error(msg: string) {
       post({ type: "log", level: "error", message: msg });
+    },
+  },
+
+  promptRegex: {
+    setOwnedChats(chatIds: string[]) {
+      post({ type: "prompt_regex_set_owned", chatIds: chatIds.map(String) });
     },
   },
 

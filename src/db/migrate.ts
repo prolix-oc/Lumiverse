@@ -164,7 +164,39 @@ function isBaselineDriftAlreadyApplied(db: Database, file: string): boolean {
     const columns = db.query("PRAGMA table_info('memory_entities')").all() as Array<{ name: string }>;
     return columns.some((column) => column.name === "salience_peak");
   }
+  if (file === "078_chats_character_id_nullable.sql") {
+    const columns = db.query("PRAGMA table_info('chats')").all() as Array<{ name: string; notnull: number }>;
+    const characterId = columns.find((column) => column.name === "character_id");
+    return !!characterId && characterId.notnull === 0;
+  }
   return false;
+}
+
+// Migrations that rebuild a table with child FKs (drop + recreate) must run
+// with foreign-key enforcement off: with it on, DROP TABLE performs an
+// implicit DELETE that fires ON DELETE CASCADE into every child table.
+// PRAGMA foreign_keys is a no-op inside a transaction, so the runner flips
+// it around the transaction instead of the .sql file doing it itself.
+const FOREIGN_KEYS_OFF_MIGRATIONS = new Set(["078_chats_character_id_nullable.sql"]);
+
+function applyMigrationWithForeignKeysOff(db: Database, file: string, sql: string): void {
+  db.run("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.run(sql);
+      db.run("INSERT INTO _migrations (name) VALUES (?)", [file]);
+    })();
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      console.warn(
+        `[db] WARNING: ${violations.length} foreign key violation(s) present after ${file} ` +
+          `(database-wide check; orphaned rows may pre-date this migration). First:`,
+        violations[0],
+      );
+    }
+  } finally {
+    db.run("PRAGMA foreign_keys = ON");
+  }
 }
 
 export async function runMigrations(db: Database, migrationsDir?: string): Promise<void> {
@@ -255,6 +287,11 @@ export async function runMigrations(db: Database, migrationsDir?: string): Promi
 
     const sql = await Bun.file(join(dir, file)).text();
     console.log(`Applying migration: ${file}`);
+
+    if (FOREIGN_KEYS_OFF_MIGRATIONS.has(file)) {
+      applyMigrationWithForeignKeysOff(db, file, sql);
+      continue;
+    }
 
     db.transaction(() => {
       db.run(sql);

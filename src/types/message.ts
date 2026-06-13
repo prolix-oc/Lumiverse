@@ -52,6 +52,11 @@ export interface UpdateMessageInput {
   swipe_id?: number;
   /** Replace the per-swipe date array. Must have the same length as `swipes`. */
   swipe_dates?: number[];
+  /** Write `content` to this swipe slot instead of the active swipe, WITHOUT
+   *  moving `swipe_id`. Used by the generation pipeline to finalize a swipe the
+   *  user may have navigated away from mid-stream. Defaults to the active swipe;
+   *  ignored if out of range. */
+  contentSwipeId?: number;
   /** Internal-only escape hatch for extension/system rewrites that should not invalidate chat chunks. */
   skipChunkRebuild?: boolean;
   /** Internal-only escape hatch when this update is the generation pipeline

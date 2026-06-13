@@ -118,6 +118,18 @@ export default function BulkImportProgressModal({
   const skippedCount = results.filter((r) => r.skipped).length
   const errorCount = results.filter((r) => !r.success).length
 
+  // Detail line for a successful import: combine the embedded lorebook entry
+  // count and the portable LoRA reference, whichever are present.
+  const successDetail = (r: BulkImportResultItem): string =>
+    [
+      r.lorebook ? t('bulkImport.wiEntries', { count: r.lorebook.entryCount }) : null,
+      r.lumiverse_lora
+        ? t('bulkImport.loraReference', { name: r.lumiverse_lora.lora_filename, weight: r.lumiverse_lora.weight })
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+
   return (
     <ModalShell isOpen={isOpen} onClose={onClose} maxWidth={520} closeOnBackdrop={done} closeOnEscape={done}>
       <div className={styles.header}>
@@ -184,9 +196,7 @@ export default function BulkImportProgressModal({
                     {r.skipped
                       ? t('bulkImport.duplicate')
                       : r.success
-                        ? r.lorebook
-                          ? t('bulkImport.wiEntries', { count: r.lorebook.entryCount })
-                          : ''
+                        ? successDetail(r)
                         : r.error || t('bulkImport.failed')}
                   </span>
                 </div>

@@ -81,6 +81,33 @@ app.post("/caption", async (c) => {
   }
 });
 
+// ─── Config import/export ──────────────────────────────────────────────
+
+app.post("/export", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  return c.json(
+    svc.exportImageGenConfig(userId, {
+      includeSettings: body?.include_settings !== false,
+      includePresets: body?.include_presets !== false,
+      includeConnections: body?.include_connections !== false,
+      includeParameters: body?.include_parameters !== false,
+      presetIds: Array.isArray(body?.preset_ids) ? body.preset_ids.map(String) : undefined,
+      connectionIds: Array.isArray(body?.connection_ids) ? body.connection_ids.map(String) : undefined,
+    }),
+  );
+});
+
+app.post("/import", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  try {
+    return c.json(await svc.importImageGenConfig(userId, body), 201);
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Import failed" }, 400);
+  }
+});
+
 // ─── Character preset bindings ─────────────────────────────────────────
 
 app.get("/preset-bindings/character/:characterId", (c) => {

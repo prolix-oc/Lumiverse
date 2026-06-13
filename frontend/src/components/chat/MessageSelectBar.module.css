@@ -19,6 +19,15 @@
   bottom: calc(110px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
 }
 
+/* Chromium/Android PWA: shell no longer reserves the gesture-nav-bar inset,
+   so add it here to keep the bar clear of the nav bar (and above the input
+   bar). resizes-content shrinks the dvh shell above the keyboard, so the bar
+   rides up on its own and env() collapses to 0 — no keyboard-inset subtraction
+   like iOS. */
+:global(html[data-pwa]:not([data-ios-pwa])) .bar {
+  bottom: calc(110px + env(safe-area-inset-bottom, 0px));
+}
+
 @media (max-width: 600px) {
   .bar {
     bottom: 90px;
@@ -28,6 +37,10 @@
 
   :global(html[data-ios-pwa]) .bar {
     bottom: calc(90px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+  }
+
+  :global(html[data-pwa]:not([data-ios-pwa])) .bar {
+    bottom: calc(90px + env(safe-area-inset-bottom, 0px));
   }
 }
 

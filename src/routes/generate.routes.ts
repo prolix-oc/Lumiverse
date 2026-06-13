@@ -46,8 +46,19 @@ app.post("/stop", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (body.generation_id) {
-    const stopped = svc.stopGeneration(body.generation_id);
+    const stopped = svc.stopGeneration(userId, body.generation_id);
+    // Stale id (the client's generation state raced a newer generation, e.g.
+    // council retry or a quick regen): never let stop be a silent no-op —
+    // fall back to whatever is actually running for the chat.
+    if (!stopped && body.chat_id) {
+      return c.json({ stopped: svc.stopChatGenerations(userId, body.chat_id) });
+    }
     return c.json({ stopped });
+  }
+  // No generation id yet (optimistic phase). Prefer the chat-scoped stop so a
+  // background generation in another chat isn't collateral damage.
+  if (body.chat_id) {
+    return c.json({ stopped: svc.stopChatGenerations(userId, body.chat_id) });
   }
   svc.stopUserGenerations(userId);
   return c.json({ stopped: true });
@@ -90,18 +101,43 @@ app.get("/status/:chatId", (c) => {
   const entry = poolSvc.getPoolForChat(userId, chatId);
   if (!entry) return c.json({ active: false });
   const active = entry.status === "assembling" || entry.status === "council" || entry.status === "waiting" || entry.status === "reasoning" || entry.status === "streaming";
-  
+
+  // Delta support: a client polling while it already holds a prefix of this
+  // generation's buffers sends its known lengths so we only ship the tail.
+  // Only honored when the client's generationId matches — lengths from a
+  // different generation are meaningless. contentOffset/reasoningOffset tell
+  // the client where the returned slice begins (0 = full buffer).
+  let content = entry.content;
+  let reasoning = entry.reasoning;
+  let contentOffset = 0;
+  let reasoningOffset = 0;
+  if (c.req.query("generationId") === entry.generationId) {
+    const contentLen = Number(c.req.query("contentLen"));
+    if (Number.isInteger(contentLen) && contentLen > 0 && contentLen <= entry.content.length) {
+      content = entry.content.slice(contentLen);
+      contentOffset = contentLen;
+    }
+    const reasoningLen = Number(c.req.query("reasoningLen"));
+    if (Number.isInteger(reasoningLen) && reasoningLen > 0 && reasoningLen <= entry.reasoning.length) {
+      reasoning = entry.reasoning.slice(reasoningLen);
+      reasoningOffset = reasoningLen;
+    }
+  }
+
   return c.json({
     active,
     generationId: entry.generationId,
     status: entry.status,
     councilRetryPending: entry.councilRetryPending || false,
     councilToolsFailure: entry.councilToolsFailure,
-    content: entry.content,
-    reasoning: entry.reasoning,
+    content,
+    reasoning,
+    contentOffset,
+    reasoningOffset,
     tokenSeq: entry.tokenSeq,
     generationType: entry.generationType,
     targetMessageId: entry.targetMessageId,
+    targetSwipeId: entry.targetSwipeId,
     characterName: entry.characterName,
     characterId: entry.characterId,
     model: entry.model,

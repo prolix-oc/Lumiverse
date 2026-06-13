@@ -45,4 +45,5 @@ Frontend UI can follow two supported rendering paths:
 | [Backend Communication](backend-communication.md) | Free | Send/receive messages to/from backend worker |
 | [Frontend Process Lifecycle](processes.md) | Free | Register backend-spawned frontend process handlers |
 | [Message Tags](message-tags.md) | Free | Intercept custom XML tags in chat messages |
+| [Display Resolver](display-resolver.md) | Free | Resolve message display (macros, format, regex) in the browser for chats your extension owns |
 | [File Uploads](file-uploads.md) | Free | Open file picker and read selected files |

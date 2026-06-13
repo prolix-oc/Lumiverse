@@ -4,7 +4,7 @@ import type {
   SttConnectionProfile, SttProviderInfo,
   TtsConnectionProfile, TtsProviderInfo,
   ImageGenConnectionProfile, ImageGenProviderInfo,
-  Pack, Persona, PaginatedResult,
+  Pack, Persona, PaginatedResult, GroupedRecentChat,
 } from '@/types/api'
 import type { RegexScript } from '@/types/regex'
 import type { StartupSettings } from '@/types/store'
@@ -45,6 +45,8 @@ export interface BootstrapPayload {
     isPrivileged: boolean
     tools: ToolRegistration[]
   }
+  /** First landing-page recent-chats page, sized by landingPageChatsDisplayed. */
+  recentChats: PaginatedResult<GroupedRecentChat>
 }
 
 export interface BootstrapResponse {

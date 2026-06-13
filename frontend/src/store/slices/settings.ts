@@ -377,6 +377,12 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.viewMode) patch.viewMode = settings.viewMode
     if (typeof settings.charactersPerPage === 'number') patch.charactersPerPage = settings.charactersPerPage
     if ('theme' in settings) patch.theme = normalizeTheme(settings.theme)
+    if (typeof settings.landingPageChatsDisplayed === 'number' && Number.isFinite(settings.landingPageChatsDisplayed)) {
+      patch.landingPageChatsDisplayed = settings.landingPageChatsDisplayed
+    }
+    if (settings.landingPageLayoutMode === 'cards' || settings.landingPageLayoutMode === 'compact') {
+      patch.landingPageLayoutMode = settings.landingPageLayoutMode
+    }
 
     set(patch as any)
   },

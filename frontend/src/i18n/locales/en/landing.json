@@ -13,6 +13,16 @@
     "description": "Start a conversation with a character to begin"
   },
   "tagline": "Continue your story",
+  "tempChat": "Temporary chat",
+  "tempChatWithProfile": "Temporary chat · {{name}}",
+  "tempChatTitle": "Start a disposable chat — deleted when you return home",
+  "tempChatTitleWithProfile": "Try {{name}} in a disposable chat — deleted when you return home",
+  "tempChatMenu": {
+    "withPreset": "With current preset",
+    "withPresetHint": "Uses your active preset",
+    "noPreset": "No preset",
+    "noPresetHint": "Raw model test — no preset blocks or parameters"
+  },
   "logOutTitle": "Log out of this device",
   "loadFailed": "Failed to load chats",
   "tryAgain": "Try Again",
