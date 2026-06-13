@@ -1,5 +1,5 @@
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
-import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverCommittedFact, WeaverGap, WeaverQuestion, WeaverInterviewState, WeaverResponseKind, WeaverAxis, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverStartChatResult } from '@/api/weaver'
+import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -1349,8 +1349,10 @@ export interface WeaverSlice {
   weaverSessions: WeaverSession[]
   activeWeaverSessionId: string | null
   weaverLoading: boolean
+  weaverChooserIntent: boolean
+  setWeaverChooserIntent: (intent: boolean) => void
   loadWeaverSessions: () => Promise<void>
-  createWeaverSession: () => Promise<WeaverSession>
+  createWeaverSession: (input?: CreateWeaverSessionInput) => Promise<WeaverSession>
   openWeaverSession: (id: string | null) => void
   updateWeaverSeed: (id: string, text: string) => Promise<void>
   setWeaverSessionConfig: (
@@ -1360,10 +1362,15 @@ export interface WeaverSlice {
   setWeaverStage: (id: string, stage: WeaverStage) => Promise<void>
   deleteWeaverSession: (id: string) => Promise<void>
   weaverSlots: WeaverSpineSlot[]
+  weaverSlotGroups: WeaverSynthesisGroup[]
+  weaverBookRoles: WeaverBookRole[]
+  weaverSlotsBuildType: string | null
+  weaverBuildTypes: WeaverBuildType[]
   weaverExtraction: WeaverExtraction | null
   weaverReadbackRunning: boolean
   weaverReadbackError: string | null
-  loadWeaverSlots: () => Promise<void>
+  loadWeaverSlots: (buildType: string) => Promise<void>
+  loadWeaverBuildTypes: () => Promise<void>
   loadWeaverExtraction: (sessionId: string) => Promise<void>
   runWeaverReadback: (sessionId: string) => Promise<void>
   saveWeaverExtraction: (
@@ -1371,7 +1378,7 @@ export interface WeaverSlice {
     input: { committed_facts?: WeaverCommittedFact[]; gaps?: WeaverGap[] },
   ) => Promise<void>
   weaverInterview: WeaverInterviewState | null
-  weaverQuestion: WeaverQuestion | null
+  weaverQuestion: WeaverInterviewQuestion | null
   weaverQuestionLoading: boolean
   weaverInterviewError: string | null
   weaverStateSessionId: string | null
@@ -1379,9 +1386,12 @@ export interface WeaverSlice {
   nextWeaverQuestion: (sessionId: string, steer?: string) => Promise<void>
   answerWeaverQuestion: (
     sessionId: string,
-    input: { slot: string; part: string; axis: WeaverAxis; kind: WeaverResponseKind; content: string; steer?: string },
+    input: { question: WeaverInterviewQuestion; kind: WeaverResponseKind; content: string; steer?: string },
   ) => Promise<void>
+  sparkWeaverQuestion: (sessionId: string, steer?: string, avoid?: string[]) => Promise<WeaverCandidate[]>
+  enhanceWeaverAnswer: (sessionId: string, draft: string) => Promise<WeaverCandidate[]>
   beginWeaverInterview: (sessionId: string) => Promise<void>
+  decideWeaverOptIn: (sessionId: string, slot: string, enabled: boolean) => Promise<void>
   completeWeaverInterview: (sessionId: string) => Promise<void>
   resetWeaverInterview: (sessionId: string) => Promise<void>
   weaverBible: WeaverBible | null
@@ -1393,10 +1403,11 @@ export interface WeaverSlice {
   saveWeaverBible: (sessionId: string, input: UpdateWeaverBibleInput) => Promise<void>
 
   weaverFieldDefs: WeaverFieldDef[]
+  weaverFieldDefsBuildType: string | null
   weaverFields: WeaverField[]
   weaverFieldRendering: string[]
   weaverRenderError: string | null
-  loadWeaverFieldDefs: () => Promise<void>
+  loadWeaverFieldDefs: (buildType: string) => Promise<void>
   loadWeaverFields: (sessionId: string) => Promise<void>
   renderWeaverFields: (sessionId: string) => Promise<void>
   renderWeaverField: (sessionId: string, fieldId: string, force?: boolean) => Promise<void>
@@ -1408,7 +1419,7 @@ export interface WeaverSlice {
   weaverStartingChat: boolean
   weaverFinalizeError: string | null
   weaverFinalizeResult: WeaverFinalizeResult | null
-  finalizeWeaver: (sessionId: string) => Promise<WeaverFinalizeResult>
+  finalizeWeaver: (sessionId: string, input?: WeaverFinalizeInput) => Promise<WeaverFinalizeResult>
   startWeaverChat: (sessionId: string) => Promise<WeaverStartChatResult>
 }
 

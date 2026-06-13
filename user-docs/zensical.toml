@@ -31,7 +31,11 @@ nav = [
   { "Weaver" = [
     { "Overview" = "weaver/index.md" },
     { "Studio Workflow" = "weaver/studio-workflow.md" },
+    { "Worlds" = "weaver/worlds.md" },
+    { "People" = "weaver/people.md" },
+    { "Imports" = "weaver/imports.md" },
     { "Visual Studio" = "weaver/visual-studio.md" },
+    { "Settings" = "weaver/settings.md" },
   ] },
   { "Chatting" = [
     { "Overview" = "chatting/index.md" },

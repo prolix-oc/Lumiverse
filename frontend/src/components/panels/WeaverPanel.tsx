@@ -1,225 +1,170 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, ArrowRight, Trash2 } from 'lucide-react'
+import { ArrowRight, Plus } from 'lucide-react'
 import { useStore } from '@/store'
-import { connectionsApi } from '@/api/connections'
-import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
-import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
+import type { WeaverSession } from '@/api/weaver'
+import { Icon, StageTicks, Tile, stageIndexOf, timeAgo } from '@/components/weaver/primitives'
+import { sessionDisplay, shortDate } from '@/components/weaver/sessionDisplay'
 import styles from './WeaverPanel.module.css'
 
-const PERSONA_NONE = '__none__'
+function useDisplay(session: WeaverSession) {
+  const { t } = useTranslation('weaver')
+  const buildTypes = useStore((s) => s.weaverBuildTypes)
+  const characters = useStore((s) => s.characters)
+  return sessionDisplay(session, buildTypes, characters, t('sessions.untitled'))
+}
+
+function ResumeCard({ session, onOpen }: { session: WeaverSession; onOpen: () => void }) {
+  const { t } = useTranslation('weaver')
+  const d = useDisplay(session)
+  const stage = stageIndexOf(session)
+  return (
+    <button type="button" className={styles.resume} onClick={onOpen}>
+      <span className={styles.resumeTop}>
+        <Tile name={d.title} icon={d.icon} size={40} empty={d.empty} />
+        <span className={styles.resumeId}>
+          <span className={styles.resumeTitle}>{d.title}</span>
+          <span className={styles.resumeMeta}>
+            {t(`new.types.${session.build_type}.title`, { defaultValue: session.build_type })}
+            <span className={styles.dotSep}>·</span>
+            <span className={styles.resumeStage}>
+              {stage >= 6 ? t('stages.finalize') : t(`stages.${session.stage}`)}
+            </span>
+            <span className={styles.dotSep}>·</span>
+            {timeAgo(session.updated_at)}
+          </span>
+        </span>
+        <ArrowRight size={15} className={styles.resumeArrow} />
+      </span>
+      <span className={styles.resumeTicks}>
+        <StageTicks stage={stage} stretch />
+      </span>
+    </button>
+  )
+}
+
+function SessionRow({ session, onOpen, trailing }: {
+  session: WeaverSession
+  onOpen: () => void
+  trailing: React.ReactNode
+}) {
+  const d = useDisplay(session)
+  return (
+    <button type="button" className={styles.row} onClick={onOpen}>
+      <Tile name={d.title} icon={d.icon} size={24} empty={d.empty} />
+      <span className={styles.rowTitle}>{d.title}</span>
+      {trailing}
+    </button>
+  )
+}
 
 export default function WeaverPanel() {
   const { t } = useTranslation('weaver')
   const openModal = useStore((s) => s.openModal)
 
-  const personas = useStore((s) => s.personas)
-  const profiles = useStore((s) => s.profiles)
-  const activeProfileId = useStore((s) => s.activeProfileId)
-
   const sessions = useStore((s) => s.weaverSessions)
-  const activeId = useStore((s) => s.activeWeaverSessionId)
   const loadSessions = useStore((s) => s.loadWeaverSessions)
-  const createSession = useStore((s) => s.createWeaverSession)
+  const loadBuildTypes = useStore((s) => s.loadWeaverBuildTypes)
   const openSession = useStore((s) => s.openWeaverSession)
-  const deleteSession = useStore((s) => s.deleteWeaverSession)
-  const updateSeed = useStore((s) => s.updateWeaverSeed)
-  const setConfig = useStore((s) => s.setWeaverSessionConfig)
-
-  const active = useMemo(
-    () => sessions.find((s) => s.id === activeId) ?? null,
-    [sessions, activeId],
-  )
-
-  const [dream, setDream] = useState('')
-  const [personaId, setPersonaId] = useState<string>(PERSONA_NONE)
-  const [connectionId, setConnectionId] = useState<string>('')
-  const [model, setModel] = useState<string>('')
-  const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
-  const [loadingModels, setLoadingModels] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const setChooserIntent = useStore((s) => s.setWeaverChooserIntent)
 
   useEffect(() => {
     void loadSessions()
-  }, [loadSessions])
+    void loadBuildTypes()
+  }, [loadSessions, loadBuildTypes])
 
-  useEffect(() => {
-    setDream(active?.seed.text ?? '')
-    setPersonaId(active?.persona_id ?? PERSONA_NONE)
-    setConnectionId(active?.connection_id ?? '')
-    setModel(active?.model ?? '')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id])
-
-  const effectiveConnectionId = connectionId || activeProfileId || ''
-  const selectedConnection = useMemo(
-    () => profiles.find((p) => p.id === effectiveConnectionId),
-    [profiles, effectiveConnectionId],
+  const drafts = useMemo(
+    () => sessions.filter((x) => x.status !== 'finalized').sort((a, b) => b.updated_at - a.updated_at),
+    [sessions],
   )
-
-  const fetchModels = useCallback(async () => {
-    if (!effectiveConnectionId) {
-      setAvailableModels([])
-      setModelLabels({})
-      return
-    }
-    setLoadingModels(true)
-    try {
-      const result = await connectionsApi.models(effectiveConnectionId)
-      setAvailableModels(result.models || [])
-      setModelLabels(result.model_labels || {})
-    } catch {
-      setAvailableModels([])
-      setModelLabels({})
-    } finally {
-      setLoadingModels(false)
-    }
-  }, [effectiveConnectionId])
-
-  useEffect(() => {
-    void fetchModels()
-  }, [fetchModels])
-
-  const personaOptions = useMemo<SearchableSelectOption[]>(() => {
-    const opts: SearchableSelectOption[] = [{ value: PERSONA_NONE, label: t('panel.personaNone') }]
-    personas.forEach((p) => opts.push({ value: p.id, label: p.name }))
-    return opts
-  }, [personas, t])
-
-  const connectionOptions = useMemo<SearchableSelectOption[]>(
-    () => profiles.map((p) => ({ value: p.id, label: p.name, sublabel: p.provider })),
-    [profiles],
+  const finished = useMemo(
+    () => sessions.filter((x) => x.status === 'finalized').sort((a, b) => b.updated_at - a.updated_at),
+    [sessions],
   )
+  const resume = drafts[0] ?? null
+  const loomRest = drafts.slice(1)
 
-  const handleBegin = async () => {
-    if (!dream.trim() || busy) return
-    setBusy(true)
-    try {
-      let id = active?.id
-      if (!id) id = (await createSession()).id
-      await updateSeed(id, dream)
-      await setConfig(id, {
-        connection_id: effectiveConnectionId || null,
-        model: model || selectedConnection?.model || null,
-        persona_id: personaId === PERSONA_NONE ? null : personaId,
-      })
-      openSession(id)
-      openModal('weaver')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const startFresh = () => {
+  const openHome = () => {
     openSession(null)
-    setDream('')
-    setPersonaId(PERSONA_NONE)
-    setConnectionId('')
-    setModel('')
+    openModal('weaver')
+  }
+  const openNew = () => {
+    setChooserIntent(true)
+    openHome()
+  }
+  const open = (id: string) => {
+    openSession(id)
+    openModal('weaver')
   }
 
   return (
     <div className={styles.panel}>
       <div className={styles.head}>
         <span className={styles.eyebrow}>{t('title')}</span>
-        {active && (
-          <button className={styles.newBtn} onClick={startFresh}>
-            <Plus size={14} />
-            {t('sessions.new')}
-          </button>
-        )}
       </div>
 
-      <div className={styles.field}>
-        <span className={styles.fieldLabel}>{t('panel.persona')}</span>
-        <SearchableSelect
-          options={personaOptions}
-          value={personaId}
-          onChange={(v) => setPersonaId(v || PERSONA_NONE)}
-          placeholder={t('panel.personaNone')}
-          ariaLabel={t('panel.persona')}
-          portal
-        />
+      {sessions.length === 0 && <p className={styles.blurb}>{t('panel.blurb')}</p>}
+
+      {resume && (
+        <div className={styles.block}>
+          <span className={styles.sectLabel}>{t('panel.pickUp')}</span>
+          <ResumeCard session={resume} onOpen={() => open(resume.id)} />
+        </div>
+      )}
+
+      <div className={styles.actions}>
+        <button type="button" className={styles.openStudio} onClick={openHome}>
+          {t('panel.openStudio')}
+          <ArrowRight size={15} />
+        </button>
+        <button type="button" className={styles.newBtn} onClick={openNew}>
+          <Plus size={13} />
+          {t('home.new')}
+        </button>
       </div>
 
-      <div className={styles.field}>
-        <span className={styles.fieldLabel}>{t('panel.connection')}</span>
-        <SearchableSelect
-          options={connectionOptions}
-          value={effectiveConnectionId}
-          onChange={(v) => {
-            setConnectionId(v)
-            setModel('')
-          }}
-          placeholder={t('panel.connectionNone')}
-          ariaLabel={t('panel.connection')}
-          disabled={connectionOptions.length === 0}
-          portal
-        />
-      </div>
-
-      <div className={styles.field}>
-        <span className={styles.fieldLabel}>{t('panel.model')}</span>
-        <ModelCombobox
-          value={model}
-          onChange={setModel}
-          models={availableModels}
-          modelLabels={modelLabels}
-          loading={loadingModels}
-          onRefresh={fetchModels}
-          autoRefreshOnFocus
-          refreshKey={effectiveConnectionId}
-          placeholder={t('panel.modelNone')}
-          disabled={!effectiveConnectionId}
-        />
-      </div>
-
-      <div className={styles.dreamWrap}>
-        <span className={styles.fieldLabel}>{t('dream.heading')}</span>
-        <textarea
-          className={styles.dream}
-          value={dream}
-          placeholder={t('dream.placeholder')}
-          onChange={(e) => setDream(e.target.value)}
-        />
-      </div>
-
-      <button className={styles.begin} onClick={() => void handleBegin()} disabled={!dream.trim() || busy}>
-        {active ? t('panel.resume') : t('panel.begin')}
-        <ArrowRight size={15} />
-      </button>
-
-      {sessions.length > 0 && (
-        <div className={styles.sessions}>
-          <span className={styles.fieldLabel}>{t('sessions.title')}</span>
-          <ul className={styles.sessionList}>
-            {sessions.map((s) => (
-              <li key={s.id} className={s.id === activeId ? styles.sessionActive : styles.session}>
-                <button
-                  className={styles.sessionOpen}
-                  onClick={() => {
-                    openSession(s.id)
-                    openModal('weaver')
-                  }}
-                >
-                  <span className={styles.sessionLabel}>
-                    {s.seed.text.trim().slice(0, 48) || t('sessions.untitled')}
-                  </span>
-                  <span className={styles.sessionMeta}>{t(`stages.${s.stage}`)}</span>
-                </button>
-                <button
-                  className={styles.sessionDelete}
-                  onClick={() => {
-                    if (window.confirm(t('sessions.deleteConfirm'))) void deleteSession(s.id)
-                  }}
-                  aria-label={t('sessions.delete')}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </li>
+      {loomRest.length > 0 && (
+        <div className={styles.block}>
+          <div className={styles.sectRow}>
+            <span className={styles.sectLabel}>{t('home.loom')}</span>
+            <span className={styles.sectCount}>{drafts.length}</span>
+          </div>
+          <div className={styles.list}>
+            {loomRest.map((s) => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                onOpen={() => open(s.id)}
+                trailing={<span className={styles.rowTicks}><StageTicks stage={stageIndexOf(s)} compact /></span>}
+              />
             ))}
-          </ul>
+          </div>
+        </div>
+      )}
+
+      {finished.length > 0 && (
+        <div className={styles.block}>
+          <div className={styles.sectRow}>
+            <span className={styles.sectLabel}>{t('home.library')}</span>
+            <span className={styles.sectCount}>{finished.length}</span>
+          </div>
+          <div className={styles.list}>
+            {finished.map((s) => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                onOpen={() => open(s.id)}
+                trailing={<span className={styles.rowDate}>{shortDate(s.updated_at)}</span>}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sessions.length === 0 && (
+        <div className={styles.emptyHint}>
+          <Icon name="sparkles" size={18} />
+          <span>{t('home.empty')}</span>
         </div>
       )}
     </div>

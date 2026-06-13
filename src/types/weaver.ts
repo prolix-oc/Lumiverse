@@ -26,6 +26,7 @@ export interface WeaverSession {
   created_at: number;
   updated_at: number;
 
+  build_type: string;
   seed: WeaverSeed;
 
   stage: WeaverStage;
@@ -40,9 +41,12 @@ export interface WeaverSession {
 
   interview_started_at: number | null;
   interview_completed_at: number | null;
+
+  display_name: string | null;
 }
 
 export interface CreateWeaverSessionInput {
+  build_type?: string;
   seed_type?: string;
   seed_text?: string;
   seed_provenance?: Record<string, unknown>;
@@ -62,11 +66,20 @@ export interface UpdateWeaverSessionInput {
   launch_chat_id?: string | null;
 }
 
+export type WeaverFactSource = "extracted" | "user" | "picked" | "enhanced";
+
+export const WEAVER_FACT_SOURCES: readonly WeaverFactSource[] = [
+  "extracted",
+  "user",
+  "picked",
+  "enhanced",
+];
+
 export interface WeaverCommittedFact {
   slot: string;
   part?: string;
   fact: string;
-  source: "extracted" | "user";
+  source: WeaverFactSource;
 }
 
 export interface WeaverGap {
@@ -94,14 +107,9 @@ export interface UpdateWeaverExtractionInput {
   gaps?: WeaverGap[];
 }
 
-export interface WeaverAxisOption {
+export interface WeaverCandidate {
   caption: string;
   content: string;
-}
-
-export interface WeaverAxis {
-  name: string;
-  description: string;
 }
 
 export interface WeaverElicitTarget {
@@ -110,14 +118,23 @@ export interface WeaverElicitTarget {
   label: string;
 }
 
-export interface WeaverQuestion {
-  slot: string;
-  part: string;
-  axis: WeaverAxis;
-  options: WeaverAxisOption[];
+export const DYNAMIC_TARGET = "dynamic";
+
+export interface WeaverInterviewQuestion {
+  id: string;
+  prompt: string;
+  why: string;
+  target: string;
 }
 
-export type WeaverResponseKind = "pick" | "blend" | "redirect" | "typed" | "inferred";
+export type WeaverResponseKind =
+  | "typed"
+  | "picked"
+  | "enhanced"
+  | "pick"
+  | "blend"
+  | "redirect"
+  | "inferred";
 
 export interface WeaverInterviewTurn {
   id: string;
@@ -125,7 +142,7 @@ export interface WeaverInterviewTurn {
   seq: number;
   slot: string;
   part: string;
-  axis: WeaverAxis;
+  question: { prompt: string; why: string };
   response_kind: WeaverResponseKind;
   response: string;
   created_at: number;
@@ -133,11 +150,20 @@ export interface WeaverInterviewTurn {
 
 export type WeaverInterviewPhase = "pending" | "active" | "complete";
 
+export const OPT_IN_PREFIX = "optin";
+
+export interface WeaverOptInOffer {
+  slot: string;
+}
+
 export interface WeaverInterviewState {
   phase: WeaverInterviewPhase;
   answered: WeaverInterviewTurn[];
   remaining_targets: WeaverElicitTarget[];
   no_gaps_remaining: boolean;
+  dynamic_count: number;
+  at_dynamic_cap: boolean;
+  opt_in: WeaverOptInOffer | null;
 }
 
 export interface WeaverTasteProfile {
@@ -149,13 +175,71 @@ export interface GenerateQuestionInput {
   avoid?: string[];
 }
 
-export interface AnswerQuestionInput {
-  slot: string;
-  part: string;
-  axis: WeaverAxis;
+export interface AnswerInterviewQuestionInput {
+  question: WeaverInterviewQuestion;
   kind: WeaverResponseKind;
   content: string;
   steer?: string;
+}
+
+export interface SparkQuestionInput {
+  question: WeaverInterviewQuestion;
+  steer?: string;
+  avoid?: string[];
+}
+
+export interface EnhanceAnswerInput {
+  question: WeaverInterviewQuestion;
+  draft: string;
+}
+
+export interface WeaverDynamicItem {
+  id: string;
+  question: string;
+  answer: string;
+}
+
+export interface WeaverDynamicQuestion {
+  id: string;
+  question: string;
+}
+
+export interface WeaverDynamicState {
+  items: WeaverDynamicItem[];
+  at_cap: boolean;
+}
+
+export interface AnswerDynamicQuestionInput {
+  id: string;
+  question: string;
+  answer: string;
+}
+
+export type WeaverPersonTier = "unfleshed" | "extra" | "named";
+
+export const WEAVER_PERSON_TIERS: readonly WeaverPersonTier[] = ["unfleshed", "extra", "named"];
+
+export type WeaverPersonOrigin = "proposed" | "manual" | "interview";
+
+export interface WeaverPersonAnswer {
+  id: string;
+  question: string;
+  answer: string;
+  kind: WeaverResponseKind;
+}
+
+export interface WeaverPerson {
+  id: string;
+  session_id: string;
+  name: string;
+  hook: string;
+  origin: WeaverPersonOrigin;
+  tier: WeaverPersonTier;
+  interview: WeaverPersonAnswer[];
+  npc_entry_id: string | null;
+  promoted_session_id: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 export type WeaverBibleOrigin = "established" | "authored" | "inferred";
@@ -179,10 +263,18 @@ export interface WeaverBibleCausalLink {
   relation: string;
 }
 
+export interface WeaverBibleDynamicEntry {
+  id: string;
+  question: string;
+  content: string;
+  origin: WeaverBibleOrigin;
+}
+
 export interface WeaverBibleSpine {
   entries: WeaverBibleEntry[];
   causal_links: WeaverBibleCausalLink[];
   brief: string;
+  dynamic: WeaverBibleDynamicEntry[];
 }
 
 export interface WeaverOcean {
@@ -392,12 +484,28 @@ export type WeaverVisualProvider =
   | "sdapi"
   | "swarmui";
 
+
+export type WeaverVisualImageInputMechanism = "edit" | "reference" | "init";
+
+export interface WeaverVisualSourceImage {
+  data: string;
+  mimeType: string;
+}
+
+export interface WeaverVisualVariantDef {
+  id: string;
+  tags: string;
+  negative_tags?: string;
+  cues: string;
+}
+
 export interface WeaverVisualKindMeta {
   id: string;
   width: number;
   height: number;
   aspect_ratio: string;
   base_negative: string;
+  variants?: readonly WeaverVisualVariantDef[];
 }
 
 export interface WeaverVisualAsset {
@@ -411,6 +519,7 @@ export interface WeaverVisualAsset {
   provider: WeaverVisualProvider | null;
   provider_state: Record<string, unknown>;
   variant?: string;
+  source_image?: WeaverVisualSourceImage;
 }
 
 export interface WeaverVisualGenerateInput {
@@ -424,6 +533,7 @@ export interface WeaverVisualGenerateInput {
   seed?: number | null;
   variant?: string;
   provider_state?: Record<string, unknown>;
+  source_image_id?: string;
 }
 
 export type WeaverVisualJobStatus = "queued" | "running" | "completed" | "failed";

@@ -1,4 +1,6 @@
 import { getDb } from "../../db/connection";
+import { DEFAULT_BUILD_TYPE, getBuildType, isEnabledBuildType } from "./build-types";
+import { getBuildRegistry } from "./build-registry";
 import type {
   WeaverSession,
   CreateWeaverSessionInput,
@@ -37,6 +39,7 @@ function rowToSession(row: any): WeaverSession {
       text: row.seed_text ?? "",
       provenance: parseJsonObject(row.seed_provenance),
     },
+    build_type: getBuildType(row.build_type) ? row.build_type : DEFAULT_BUILD_TYPE,
     stage: VALID_STAGES.includes(row.stage) ? row.stage : "dream",
     status: VALID_STATUSES.includes(row.status) ? row.status : "draft",
     connection_id: row.connection_id ?? null,
@@ -46,7 +49,60 @@ function rowToSession(row: any): WeaverSession {
     launch_chat_id: row.launch_chat_id ?? null,
     interview_started_at: row.interview_started_at ?? null,
     interview_completed_at: row.interview_completed_at ?? null,
+    display_name: null,
   };
+}
+
+export function nameFromSpine(spineJson: unknown, nameSlot: string): string | null {
+  if (typeof spineJson !== "string" || !spineJson.trim()) return null;
+  try {
+    const spine = JSON.parse(spineJson);
+    const entries = Array.isArray(spine?.entries) ? spine.entries : [];
+    for (const e of entries) {
+      if (e?.slot === nameSlot && typeof e.content === "string" && e.content.trim()) {
+        return e.content.trim();
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export function nameFromFacts(factsJson: unknown, nameSlot: string): string | null {
+  if (typeof factsJson !== "string" || !factsJson.trim()) return null;
+  try {
+    const facts = JSON.parse(factsJson);
+    if (!Array.isArray(facts)) return null;
+    for (const f of facts) {
+      if (f?.slot === nameSlot && typeof f.fact === "string" && f.fact.trim()) {
+        return f.fact.trim();
+      }
+    }
+  } catch { }
+  return null;
+}
+
+function fillDisplayNames(userId: string, sessions: WeaverSession[]): WeaverSession[] {
+  if (sessions.length === 0) return sessions;
+  const ids = sessions.map((s) => s.id);
+  const marks = ids.map(() => "?").join(", ");
+  const spines = new Map(
+    (getDb()
+      .prepare(`SELECT session_id, spine FROM weaver_bible WHERE user_id = ? AND session_id IN (${marks})`)
+      .all(userId, ...ids) as Array<{ session_id: string; spine: unknown }>)
+      .map((r) => [r.session_id, r.spine]),
+  );
+  const facts = new Map(
+    (getDb()
+      .prepare(`SELECT session_id, committed_facts FROM weaver_extraction WHERE user_id = ? AND session_id IN (${marks})`)
+      .all(userId, ...ids) as Array<{ session_id: string; committed_facts: unknown }>)
+      .map((r) => [r.session_id, r.committed_facts]),
+  );
+  return sessions.map((s) => {
+    const nameSlot = getBuildRegistry(s.build_type).nameSlot;
+    const name =
+      nameFromSpine(spines.get(s.id), nameSlot) ?? nameFromFacts(facts.get(s.id), nameSlot);
+    return name ? { ...s, display_name: name } : s;
+  });
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
@@ -87,18 +143,24 @@ export function createSession(
   const now = Math.floor(Date.now() / 1000);
   const sessionNumber = nextSessionNumber(userId);
 
+  const buildType = input.build_type ?? DEFAULT_BUILD_TYPE;
+  if (!isEnabledBuildType(buildType)) {
+    throw new Error(`This build type is not available yet: ${String(buildType)}`);
+  }
+
   db.prepare(
     `INSERT INTO weaver_sessions (
        id, user_id, session_number, created_at, updated_at,
-       seed_type, seed_text, seed_provenance,
+       build_type, seed_type, seed_text, seed_provenance,
        connection_id, model, persona_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     userId,
     sessionNumber,
     now,
     now,
+    buildType,
     input.seed_type?.trim() || "dream",
     input.seed_text ?? "",
     JSON.stringify(input.seed_provenance ?? {}),
@@ -114,7 +176,7 @@ export function getSession(userId: string, sessionId: string): WeaverSession | n
   const row = getDb()
     .prepare(`SELECT * FROM weaver_sessions WHERE id = ? AND user_id = ?`)
     .get(sessionId, userId) as any;
-  return row ? rowToSession(row) : null;
+  return row ? fillDisplayNames(userId, [rowToSession(row)])[0] : null;
 }
 
 export function listSessions(userId: string): WeaverSession[] {
@@ -125,7 +187,7 @@ export function listSessions(userId: string): WeaverSession[] {
         ORDER BY updated_at DESC, created_at DESC`,
     )
     .all(userId) as any[];
-  return rows.map(rowToSession);
+  return fillDisplayNames(userId, rows.map(rowToSession));
 }
 
 export function updateSession(
@@ -187,7 +249,6 @@ export function updateSession(
   return getSession(userId, sessionId)!;
 }
 
-/** Explicit stage transition helper — stage changes are first-class (plan #24). */
 export function setStage(
   userId: string,
   sessionId: string,

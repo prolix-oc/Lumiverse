@@ -1,75 +1,72 @@
 import { getSession, updateSession } from "./session.service";
 import { getBible } from "./bible.service";
 import { getFields } from "./render.service";
-import { FIELD_IDS, getField as getFieldDef } from "./fields";
-import { buildGovernanceEntries } from "./governance-entries";
+import { getBuildRegistry, type WeaverGovernanceContext } from "./build-registry";
+import { ensureRoleBook, renderBackingWorldbook } from "./worldbook-render.service";
+import { DEPTH_ROLE_ID, GOVERNANCE_ROLE_ID, getWorldbookRole } from "./worldbook-roles";
+import {
+  createEntry,
+  getWorldBook,
+  listEntries,
+  normalizeImportedEntryInput,
+} from "../world-books.service";
 import * as charactersSvc from "../characters.service";
 import * as chatsSvc from "../chats.service";
+import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../../utils/character-world-books";
 import type { Character, CreateCharacterInput } from "../../types/character";
 import type { Chat } from "../../types/chat";
-import type { WeaverBibleSpine, WeaverField } from "../../types/weaver";
+import type { WorldBook } from "../../types/world-book";
+import type { WeaverBibleSpine, WeaverField, WeaverSession } from "../../types/weaver";
+import type { WeaverFieldDef } from "./fields";
 
 const WEAVER_CREATOR = "Lumiverse Weaver";
 const WEAVER_TAG = "weaver";
 
 const WEAVER_EXTENSION_SCHEMA = 1;
 
-const WEAVER_EXTENSION_SLOTS: readonly string[] = [
-  "archetype",
-  "form",
-  "gradient",
-  "tensions",
-  "intents",
-  "negative_space",
-  "relational_axis",
-  "intimacy",
-];
-
 function isFieldReady(field: WeaverField | undefined): boolean {
   if (!field || !field.content.trim()) return false;
   return field.status === "passed" || field.status === "manually_edited" || field.provenance.accepted === true;
 }
 
-function slotContent(spine: WeaverBibleSpine, slot: string): string {
-  return spine.entries.find((e) => e.slot === slot)?.content.trim() ?? "";
+export function splitListField(content: string, separator: string): string[] {
+  const token = separator.trim();
+  const trimmed = content.trim();
+  if (!token) return trimmed ? [trimmed] : [];
+  const parts: string[] = [];
+  let buf: string[] = [];
+  for (const line of content.split("\n")) {
+    if (line.trim() === token) {
+      parts.push(buf.join("\n"));
+      buf = [];
+    } else {
+      buf.push(line);
+    }
+  }
+  parts.push(buf.join("\n"));
+  return parts.map((p) => p.trim()).filter(Boolean);
 }
 
-function compactLine(text: string, max = 240): string {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+export function applyFieldsToCard(
+  base: CreateCharacterInput,
+  defs: readonly WeaverFieldDef[],
+  contentFor: (fieldId: string) => string,
+): CreateCharacterInput {
+  const card: Record<string, unknown> = { ...base };
+  for (const def of defs) {
+    const content = contentFor(def.id);
+    card[def.charlField] = def.list ? splitListField(content, def.list.separator) : content;
+  }
+  return card as unknown as CreateCharacterInput;
 }
 
-function buildReanchorEntry(name: string, spine: WeaverBibleSpine): Record<string, unknown> {
-  const core = compactLine(slotContent(spine, "archetype") || slotContent(spine, "central_contradiction") || spine.brief);
-  const drives = compactLine(slotContent(spine, "intents") || slotContent(spine, "values"));
-  const voice = compactLine(slotContent(spine, "voice"));
-  const axis = slotContent(spine, "relational_axis");
-  const now = axis ? compactLine(`${axis} (baseline)`) : "baseline";
-
-  const lines = [
-    `Core: ${core}`,
-    drives ? `Drives: ${drives}` : "",
-    voice ? `Voice: ${voice}` : "",
-    `Now: ${now}`,
-  ].filter(Boolean);
-
-  return {
-    keys: [name].filter(Boolean),
-    content: lines.join("\n"),
-    comment: "Weaver re-anchor",
-    constant: true,
-    enabled: true,
-    insertion_order: 0,
-    position: "before_char",
-    depth: 4,
-    role: "system",
-    case_sensitive: false,
-  };
-}
-
-function buildWeaverExtension(sessionId: string, spine: WeaverBibleSpine): Record<string, unknown> {
+function buildWeaverExtension(
+  sessionId: string,
+  spine: WeaverBibleSpine,
+  extensionSlots: readonly string[],
+): Record<string, unknown> {
   const structured: Record<string, { content: string; parts?: unknown }> = {};
-  for (const slot of WEAVER_EXTENSION_SLOTS) {
+  for (const slot of extensionSlots) {
     const entry = spine.entries.find((e) => e.slot === slot);
     if (!entry || !entry.content.trim()) continue;
     structured[slot] = entry.parts ? { content: entry.content, parts: entry.parts } : { content: entry.content };
@@ -82,17 +79,111 @@ function buildWeaverExtension(sessionId: string, spine: WeaverBibleSpine): Recor
   };
 }
 
+export function provenanceBindBookIds(provenance: unknown): string[] {
+  if (!provenance || typeof provenance !== "object") return [];
+  const raw = (provenance as Record<string, unknown>).bind_world_book_ids;
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const id of raw) {
+    if (typeof id === "string" && id.trim() && !out.includes(id.trim())) out.push(id.trim());
+  }
+  return out;
+}
+
+export function provenanceAvatarImageId(provenance: unknown): string | null {
+  if (!provenance || typeof provenance !== "object") return null;
+  const raw = (provenance as Record<string, unknown>).avatar_image_id;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+export function missingGovernanceEntries(
+  existing: readonly { comment?: unknown }[],
+  wanted: readonly Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const have = new Set(
+    existing.map((e) => (typeof e.comment === "string" ? e.comment : "")).filter(Boolean),
+  );
+  return wanted.filter((w) => typeof w.comment === "string" && w.comment && !have.has(w.comment));
+}
+
+export function ensureGovernanceForContext(
+  userId: string,
+  session: WeaverSession,
+  character: Character,
+  ctx: WeaverGovernanceContext,
+): Character {
+  const reg = getBuildRegistry(session.build_type);
+  const bible = getBible(userId, session.id);
+  if (!bible) return character;
+
+  const wanted = [
+    reg.reanchorEntry(character.name, bible.spine),
+    ...reg.governanceEntries(bible.spine, ctx),
+  ];
+
+  const ensured = ensureRoleBook(userId, session, GOVERNANCE_ROLE_ID, character);
+  const existing = listEntries(userId, ensured.book.id);
+  const missing = missingGovernanceEntries(existing, wanted);
+
+  for (const [i, entry] of missing.entries()) {
+    createEntry(userId, ensured.book.id, normalizeImportedEntryInput(entry, existing.length + i));
+  }
+  return ensured.character;
+}
+
 export interface WeaverFinalizeResult {
   character: Character;
+  books: Record<string, WorldBook | null>;
+  book_errors?: Record<string, string>;
+  depth_book: WorldBook | null;
+  depth_book_error?: string;
+}
+
+export interface WeaverFinalizeOptions {
+  books?: Record<string, boolean>;
+  depthBook?: boolean;
 }
 
 export interface WeaverStartChatResult {
   chat: Chat;
 }
 
-export function finalizeSession(userId: string, sessionId: string): WeaverFinalizeResult {
+function requestedBooks(options: WeaverFinalizeOptions): Record<string, boolean> {
+  return {
+    ...(options.depthBook === undefined ? {} : { [DEPTH_ROLE_ID]: options.depthBook }),
+    ...options.books,
+  };
+}
+
+async function attachBackingBook(
+  userId: string,
+  session: WeaverSession,
+  roleId: string,
+  character: Character,
+): Promise<{ character: Character; book: WorldBook | null; error?: string }> {
+  try {
+    const book = await renderBackingWorldbook(userId, session, roleId, character);
+    if (!book) return { character, book: null };
+
+    const ids = getCharacterWorldBookIds(character.extensions);
+    const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...ids, book.id]);
+    const updated = charactersSvc.updateCharacter(userId, character.id, { extensions });
+    return { character: updated ?? character, book };
+  } catch (err) {
+    const role = getWorldbookRole(roleId);
+    const message = err instanceof Error ? err.message : `${role?.label ?? roleId} render failed`;
+    return { character, book: null, error: message };
+  }
+}
+
+export async function finalizeSession(
+  userId: string,
+  sessionId: string,
+  options: WeaverFinalizeOptions = {},
+): Promise<WeaverFinalizeResult> {
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
+  const reg = getBuildRegistry(session.build_type);
 
   const bible = getBible(userId, sessionId);
   if (!bible || bible.spine.entries.length === 0) {
@@ -102,48 +193,75 @@ export function finalizeSession(userId: string, sessionId: string): WeaverFinali
   const fields = getFields(userId, sessionId);
   const byName = new Map(fields.map((f) => [f.field_name, f]));
 
-  const notReady = FIELD_IDS.filter((id) => !isFieldReady(byName.get(id)));
+  const notReady = reg.fieldDefs.filter((def) => !isFieldReady(byName.get(def.id)));
   if (notReady.length > 0) {
-    const labels = notReady.map((id) => getFieldDef(id)?.label ?? id).join(", ");
+    const labels = notReady.map((def) => def.label).join(", ");
     throw new Error(`Render and accept every field before finalizing — still pending: ${labels}`);
   }
 
   const fieldContent = (id: string) => byName.get(id)!.content.trim();
   const name = fieldContent("name");
 
-  const input: CreateCharacterInput = {
+  const base: CreateCharacterInput = {
     name,
-    description: fieldContent("description"),
-    personality: fieldContent("personality"),
-    scenario: fieldContent("scenario"),
-    first_mes: fieldContent("first_mes"),
-    mes_example: fieldContent("mes_example"),
     system_prompt: "",
     post_history_instructions: "",
     creator: WEAVER_CREATOR,
-    creator_notes: "Authored with the Lumiverse Weaver. Governance travels on the card (character_book), so it works under any preset.",
+    creator_notes: reg.creatorNotes,
     tags: [WEAVER_TAG],
     alternate_greetings: [],
     extensions: {
-      character_book: {
-        entries: [
-          buildReanchorEntry(name, bible.spine),
-          ...buildGovernanceEntries(bible.spine),
-        ],
-      },
-      weaver: buildWeaverExtension(sessionId, bible.spine),
+      weaver: buildWeaverExtension(sessionId, bible.spine, reg.extensionSlots),
     },
   };
+  const input = applyFieldsToCard(base, reg.fieldDefs, fieldContent);
 
-  const character = charactersSvc.createCharacter(userId, input);
+  const created = charactersSvc.createCharacter(userId, input);
+
+  const wanted = requestedBooks(options);
+  let character = ensureGovernanceForContext(userId, session, created, {});
+  const books: Record<string, WorldBook | null> = {};
+  const bookErrors: Record<string, string> = {};
+  for (const roleId of reg.finalizeBookRoles) {
+    const role = getWorldbookRole(roleId);
+    if (!role) continue;
+    if (!(wanted[roleId] ?? role.defaultEnabled)) continue;
+    const attached = await attachBackingBook(userId, session, roleId, character);
+    character = attached.character;
+    books[roleId] = attached.book;
+    if (attached.error) bookErrors[roleId] = attached.error;
+  }
+
+  const seedBookIds = provenanceBindBookIds(session.seed.provenance).filter((id) =>
+    Boolean(getWorldBook(userId, id)),
+  );
+  if (seedBookIds.length > 0) {
+    const current = getCharacterWorldBookIds(character.extensions);
+    const fresh = seedBookIds.filter((id) => !current.includes(id));
+    if (fresh.length > 0) {
+      const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...current, ...fresh]);
+      character = charactersSvc.updateCharacter(userId, character.id, { extensions }) ?? character;
+    }
+  }
+
+  const avatarImageId = provenanceAvatarImageId(session.seed.provenance);
+  if (avatarImageId) {
+    character = charactersSvc.setCharacterAvatarFromImage(userId, character.id, avatarImageId) ?? character;
+  }
 
   updateSession(userId, sessionId, {
     stage: "finalize",
     status: "finalized",
-    character_id: character.id,
+    character_id: created.id,
   });
 
-  return { character };
+  return {
+    character,
+    books,
+    ...(Object.keys(bookErrors).length > 0 ? { book_errors: bookErrors } : {}),
+    depth_book: books[DEPTH_ROLE_ID] ?? null,
+    ...(bookErrors[DEPTH_ROLE_ID] ? { depth_book_error: bookErrors[DEPTH_ROLE_ID] } : {}),
+  };
 }
 
 export function startChat(userId: string, sessionId: string): WeaverStartChatResult {

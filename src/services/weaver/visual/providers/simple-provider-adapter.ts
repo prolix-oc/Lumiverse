@@ -1,12 +1,76 @@
 import { getImageProvider } from "../../../../image-gen/registry";
 import "../../../../image-gen/index";
-import type { WeaverVisualProvider, WeaverVisualAsset } from "../../../../types/weaver";
+import type {
+  WeaverVisualProvider,
+  WeaverVisualAsset,
+  WeaverVisualImageInputMechanism,
+  WeaverVisualSourceImage,
+} from "../../../../types/weaver";
 import type { VisualProviderAdapter } from "../provider-adapter";
 
 type SimpleVisualProvider = Extract<
   WeaverVisualProvider,
   "novelai" | "nanogpt" | "google_gemini" | "sdapi" | "swarmui"
 >;
+
+const IMAGE_INPUT: Record<SimpleVisualProvider, WeaverVisualImageInputMechanism> = {
+  google_gemini: "edit",
+  nanogpt: "edit",
+  novelai: "reference",
+  sdapi: "init",
+  swarmui: "init",
+};
+
+const NAI_REFERENCE_STRENGTH = 0.6;
+const INIT_DENOISE_DEFAULT = 0.5;
+const IMAGE_PAYLOAD_KEYS = new Set([
+  "resolvedSourceImages",
+  "referenceImages",
+  "resolvedReferenceImages",
+  "init_images",
+]);
+
+export function snapshotParameters(parameters: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(
+    Object.entries(parameters).map(([key, value]) =>
+      IMAGE_PAYLOAD_KEYS.has(key) ? [key, "[source image]"] : [key, value],
+    ),
+  );
+}
+
+function applySourceImage(
+  provider: SimpleVisualProvider,
+  source: WeaverVisualSourceImage,
+  parameters: Record<string, any>,
+): void {
+  switch (provider) {
+    case "google_gemini":
+      parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      return;
+    case "nanogpt":
+      parameters.referenceImages = [{ data: source.data, mimeType: source.mimeType }];
+      if (parameters.strength == null) parameters.strength = INIT_DENOISE_DEFAULT;
+      return;
+    case "novelai":
+      parameters.resolvedReferenceImages = [
+        {
+          data: source.data,
+          strength: parameters.referenceStrength ?? NAI_REFERENCE_STRENGTH,
+          infoExtracted: 1,
+          refType: "character&style",
+        },
+      ];
+      return;
+    case "sdapi":
+      parameters.mode = "img2img";
+      parameters.init_images = `data:${source.mimeType};base64,${source.data}`;
+      if (parameters.denoising_strength == null) parameters.denoising_strength = INIT_DENOISE_DEFAULT;
+      return;
+    case "swarmui":
+      parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      return;
+  }
+}
 
 function filterSupportedParameters(
   provider: SimpleVisualProvider,
@@ -58,6 +122,7 @@ export function createSimpleProviderAdapter(
     provider,
     supportsWorkflowImport: false,
     supportsAdvancedMode: false,
+    imageInput: IMAGE_INPUT[provider],
     async validate(asset, connection) {
       const errors: string[] = [];
       if (connection.provider !== provider) {
@@ -87,6 +152,10 @@ export function createSimpleProviderAdapter(
         ...providerParameters,
       };
 
+      if (asset.source_image) {
+        applySourceImage(provider, asset.source_image, parameters);
+      }
+
       return {
         request: {
           prompt: asset.prompt,
@@ -97,7 +166,7 @@ export function createSimpleProviderAdapter(
         settingsSnapshot: {
           provider,
           model: connection.model,
-          parameters,
+          parameters: snapshotParameters(parameters),
         },
       };
     },

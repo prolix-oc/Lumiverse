@@ -1,8 +1,13 @@
 import { rawGenerate } from "../generate.service";
 import { getConnection, getDefaultConnection } from "../connections.service";
-import type { WeaverSession } from "../../types/weaver";
+import { getWeaverTuning } from "./tuning";
 
-export function resolveWeaverConnection(userId: string, session: WeaverSession) {
+export interface WeaverConnectionPrefs {
+  connection_id?: string | null;
+  model?: string | null;
+}
+
+export function resolveWeaverConnection(userId: string, session: WeaverConnectionPrefs) {
   const conn =
     (session.connection_id ? getConnection(userId, session.connection_id) : null) ??
     getDefaultConnection(userId);
@@ -19,11 +24,19 @@ export function stripCodeFence(s: string): string {
 
 export interface WeaverGenerateInput {
   userId: string;
-  session: WeaverSession;
+  session: WeaverConnectionPrefs;
   system: string;
   user: string;
   temperature?: number;
+  kind?: "generate" | "review";
   signal?: AbortSignal;
+}
+
+function resolveTemperature(input: WeaverGenerateInput, fallback: number): number {
+  const tuning = getWeaverTuning(input.userId);
+  const override =
+    input.kind === "review" ? tuning.review_temperature : tuning.generation_temperature;
+  return override ?? input.temperature ?? fallback;
 }
 
 export interface WeaverUsage {
@@ -56,7 +69,7 @@ export async function weaverGenerateJsonWithUsage(
       { role: "system", content: input.system },
       { role: "user", content: input.user },
     ],
-    parameters: { temperature: input.temperature ?? 0.4 },
+    parameters: { temperature: resolveTemperature(input, 0.4) },
     signal: input.signal,
   });
 
@@ -95,7 +108,7 @@ export async function weaverGenerateTextWithUsage(
       { role: "system", content: input.system },
       { role: "user", content: input.user },
     ],
-    parameters: { temperature: input.temperature ?? 0.7 },
+    parameters: { temperature: resolveTemperature(input, 0.7) },
     signal: input.signal,
   });
 

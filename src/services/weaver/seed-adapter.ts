@@ -1,6 +1,7 @@
 import { rawGenerate } from "../generate.service";
 import { getConnection, getDefaultConnection } from "../connections.service";
-import { isSlotId, slotParts } from "./slots";
+import { isSlotId, slotParts, type SpineSlot } from "./slots";
+import { getBuildRegistry } from "./build-registry";
 import { buildExtractionPrompt, buildExtractionUserMessage } from "./prompts";
 import type {
   WeaverSession,
@@ -11,6 +12,7 @@ import type {
 
 export interface SeedAdapter {
   type: string;
+  sourceNoun: string;
   extract(userId: string, session: WeaverSession, signal?: AbortSignal): Promise<WeaverExtractedMaterial>;
 }
 
@@ -19,35 +21,35 @@ function stripCodeFence(s: string): string {
   return m ? m[1] : s;
 }
 
-function coercePart(slot: string, value: unknown): string | undefined {
+function coercePart(slots: readonly SpineSlot[], slot: string, value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
   const v = value.trim();
-  return slotParts(slot).some((p) => p.id === v) ? v : undefined;
+  return slotParts(slots, slot).some((p) => p.id === v) ? v : undefined;
 }
 
-function coerceFacts(value: unknown): WeaverCommittedFact[] {
+function coerceFacts(slots: readonly SpineSlot[], value: unknown): WeaverCommittedFact[] {
   if (!Array.isArray(value)) return [];
   const out: WeaverCommittedFact[] = [];
   for (const raw of value) {
     if (!raw || typeof raw !== "object") continue;
     const slot = (raw as any).slot;
     const fact = (raw as any).fact;
-    if (!isSlotId(slot)) continue;
+    if (!isSlotId(slots, slot)) continue;
     if (typeof fact !== "string" || !fact.trim()) continue;
-    const part = coercePart(slot, (raw as any).part);
+    const part = coercePart(slots, slot, (raw as any).part);
     out.push({ slot, ...(part ? { part } : {}), fact: fact.trim(), source: "extracted" });
   }
   return out;
 }
 
-function coerceGaps(value: unknown): WeaverGap[] {
+function coerceGaps(slots: readonly SpineSlot[], value: unknown): WeaverGap[] {
   if (!Array.isArray(value)) return [];
   const out: WeaverGap[] = [];
   for (const raw of value) {
     if (!raw || typeof raw !== "object") continue;
     const slot = (raw as any).slot;
     const note = (raw as any).note;
-    if (!isSlotId(slot)) continue;
+    if (!isSlotId(slots, slot)) continue;
     out.push({
       slot,
       note: typeof note === "string" ? note.trim() : "",
@@ -63,6 +65,7 @@ async function runExtraction(
   seedText: string,
   signal?: AbortSignal,
 ): Promise<{ committed_facts: WeaverCommittedFact[]; gaps: WeaverGap[] }> {
+  const reg = getBuildRegistry(session.build_type);
   const conn = (session.connection_id ? getConnection(userId, session.connection_id) : null)
     ?? getDefaultConnection(userId);
   if (!conn) throw new Error("Weaver session has no connection configured");
@@ -74,7 +77,7 @@ async function runExtraction(
     model,
     connection_id: conn.id,
     messages: [
-      { role: "system", content: buildExtractionPrompt() },
+      { role: "system", content: buildExtractionPrompt(reg) },
       { role: "user", content: buildExtractionUserMessage(seedText) },
     ],
     parameters: { temperature: 0.4 },
@@ -90,13 +93,14 @@ async function runExtraction(
   }
   const obj = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
   return {
-    committed_facts: coerceFacts(obj.committed_facts),
-    gaps: coerceGaps(obj.gaps),
+    committed_facts: coerceFacts(reg.slots, obj.committed_facts),
+    gaps: coerceGaps(reg.slots, obj.gaps),
   };
 }
 
 const dreamAdapter: SeedAdapter = {
   type: "dream",
+  sourceNoun: "dream",
   async extract(userId, session, signal) {
     const seedText = session.seed.text.trim();
     if (!seedText) throw new Error("Seed is empty — nothing to read back");
@@ -110,8 +114,16 @@ const dreamAdapter: SeedAdapter = {
   },
 };
 
-const ADAPTERS: SeedAdapter[] = [dreamAdapter];
+const npcAdapter: SeedAdapter = { ...dreamAdapter, type: "npc", sourceNoun: "dossier" };
+const cardAdapter: SeedAdapter = { ...dreamAdapter, type: "card", sourceNoun: "imported card" };
+const worldbookAdapter: SeedAdapter = { ...dreamAdapter, type: "worldbook", sourceNoun: "imported worldbook" };
+
+const ADAPTERS: SeedAdapter[] = [dreamAdapter, npcAdapter, cardAdapter, worldbookAdapter];
 
 export function getSeedAdapter(seedType: string): SeedAdapter {
   return ADAPTERS.find((a) => a.type === seedType) ?? dreamAdapter;
+}
+
+export function seedSourceNoun(seedType: string): string {
+  return getSeedAdapter(seedType).sourceNoun;
 }

@@ -6,6 +6,7 @@ import type {
   WeaverVisualGenerateInput,
   WeaverVisualJob,
   WeaverVisualJobResult,
+  WeaverVisualSourceImage,
 } from "../../../types/weaver";
 import { eventBus } from "../../../ws/bus";
 import { EventType } from "../../../ws/events";
@@ -27,6 +28,7 @@ export interface StartWeaverVisualJobInput {
   input: WeaverVisualGenerateInput;
   connection: ImageGenConnectionProfile;
   apiKey: string;
+  sourceImage?: WeaverVisualSourceImage;
   macroValues?: Record<string, string | undefined>;
   signal?: AbortSignal;
   onSettled?: () => void;
@@ -60,6 +62,7 @@ function toPublicVisualError(error: unknown): string {
 export function buildVisualAsset(
   input: WeaverVisualGenerateInput,
   connection: ImageGenConnectionProfile,
+  sourceImage?: WeaverVisualSourceImage,
 ): WeaverVisualAsset {
   const kindMeta = getVisualKind(input.kind);
   return {
@@ -73,6 +76,7 @@ export function buildVisualAsset(
     provider: connection.provider as WeaverVisualAsset["provider"],
     provider_state: input.provider_state ?? {},
     variant: input.variant,
+    ...(sourceImage ? { source_image: sourceImage } : {}),
   };
 }
 
@@ -171,7 +175,7 @@ async function executeWeaverVisualJob(
     input.connection.provider,
   );
   try {
-    const asset = buildVisualAsset(input.input, input.connection);
+    const asset = buildVisualAsset(input.input, input.connection, input.sourceImage);
 
     emitJobEvent(
       EventType.WEAVER_VISUAL_JOB_PROGRESS,

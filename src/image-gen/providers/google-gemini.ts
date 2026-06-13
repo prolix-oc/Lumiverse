@@ -72,7 +72,7 @@ export class GoogleGeminiImageProvider implements ImageProvider {
 
     const aspectRatio = request.parameters.aspectRatio;
     if (aspectRatio) {
-      body.generationConfig.imageGenerationConfig = { aspectRatio };
+      body.generationConfig.imageConfig = { aspectRatio };
     }
 
     // Apply raw request override (power-user escape hatch)

@@ -9,7 +9,8 @@ import type { WeaverVisualCandidate, WeaverVisualJob, WeaverVisualJobProgress } 
 import type { Character, ImageGenConnectionProfile, ImageGenParameterSchema, ImageGenProviderInfo } from '@/types/api'
 import type { ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
-import { Btn, Icon, IconBtn } from './WeaverStudio'
+import { Btn, Icon, IconBtn } from './primitives'
+import { ParamField } from './VisualParamField'
 import styles from './PortraitPane.module.css'
 
 const KIND = 'portrait'
@@ -130,7 +131,6 @@ export function PortraitPane({ sessionId, character, onCharacterUpdate, onCount 
 
   useEffect(() => { onCount?.(candidates.length) }, [candidates, onCount])
 
-  // Load connections, providers, kind defaults, candidates.
   useEffect(() => {
     void imageGenConnectionsApi.list({ limit: 100 }).then((r) => {
       setConnections(r.data)
@@ -411,44 +411,6 @@ function NumField({ label, value, placeholder, disabled, onChange }: { label: st
     <label className={styles.field}>
       <span className={styles.fieldLabel}>{label}</span>
       <input className={styles.input} type="number" value={value} placeholder={placeholder} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
-    </label>
-  )
-}
-
-function ParamField({ paramKey, schema, value, disabled, onChange }: { paramKey: string; schema: ImageGenParameterSchema; value: any; disabled?: boolean; onChange: (v: any) => void }) {
-  const label = paramKey.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2')
-  if (schema.type === 'select') {
-    return (
-      <label className={styles.field}>
-        <span className={styles.fieldLabel}>{label}</span>
-        <select className={styles.input} value={value ?? ''} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-          {(schema.options ?? []).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-        </select>
-      </label>
-    )
-  }
-  if (schema.type === 'boolean') {
-    return (
-      <label className={styles.fieldInline}>
-        <input type="checkbox" checked={Boolean(value)} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
-        <span className={styles.fieldLabel}>{label}</span>
-      </label>
-    )
-  }
-  const isNum = schema.type === 'number' || schema.type === 'integer'
-  return (
-    <label className={styles.field}>
-      <span className={styles.fieldLabel}>{label}</span>
-      <input
-        className={styles.input}
-        type={isNum ? 'number' : 'text'}
-        value={value ?? ''}
-        min={schema.min}
-        max={schema.max}
-        step={schema.step}
-        disabled={disabled}
-        onChange={(e) => onChange(isNum ? (e.target.value === '' ? undefined : Number(e.target.value)) : e.target.value)}
-      />
     </label>
   )
 }

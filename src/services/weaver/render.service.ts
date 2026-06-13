@@ -3,6 +3,7 @@ import { getSession, setStage } from "./session.service";
 import { getBible } from "./bible.service";
 import { addSteer } from "./interview.service";
 import { getField as getFieldDef, rankByOrder, isFieldId } from "./fields";
+import { getBuildRegistry, type WeaverBuildRegistry } from "./build-registry";
 import {
   criteriaForKind,
   buildFieldGateVerdict,
@@ -215,14 +216,20 @@ function currentSpineHash(userId: string, sessionId: string): string | null {
   return bible ? spineContentHash(bible.spine) : null;
 }
 
+function regFor(userId: string, sessionId: string): WeaverBuildRegistry {
+  const session = getSession(userId, sessionId);
+  return getBuildRegistry(session?.build_type ?? "");
+}
+
 /** All rendered fields for a session, in registry render order, with derived stale (4.1). */
 export function getFields(userId: string, sessionId: string): WeaverField[] {
+  const reg = regFor(userId, sessionId);
   const rows = getDb()
     .prepare(`SELECT * FROM weaver_fields WHERE session_id = ? AND user_id = ?`)
     .all(sessionId, userId) as Record<string, unknown>[];
   const byName = new Map(rows.map((r) => [r.field_name as string, rowToField(r)]));
   const currentHash = currentSpineHash(userId, sessionId);
-  return rankByOrder().flatMap<WeaverField>((def) => {
+  return rankByOrder(reg.fieldDefs).flatMap<WeaverField>((def) => {
     const field = byName.get(def.id);
     return field ? [{ ...field, stale: deriveStale(def, field, currentHash) }] : [];
   });
@@ -235,7 +242,7 @@ export function getField(userId: string, sessionId: string, fieldId: string): We
     .get(sessionId, userId, fieldId) as Record<string, unknown> | undefined;
   if (!row) return null;
   const field = rowToField(row);
-  const def = getFieldDef(fieldId);
+  const def = getFieldDef(regFor(userId, sessionId).fieldDefs, fieldId);
   return { ...field, stale: def ? deriveStale(def, field, currentSpineHash(userId, sessionId)) : false };
 }
 
@@ -255,6 +262,7 @@ function failureVerdict(message: string): WeaverGateVerdict {
 async function gateContent(
   userId: string,
   session: WeaverSession,
+  reg: WeaverBuildRegistry,
   field: WeaverFieldDef,
   content: string,
   spine: WeaverBibleSpine,
@@ -263,12 +271,16 @@ async function gateContent(
   const res = await weaverGenerateJsonWithUsage({
     userId,
     session,
-    system: buildFieldGatePrompt(field),
-    user: buildFieldGateUserMessage({ field, content, spine }),
+    system: buildFieldGatePrompt(reg, field),
+    user: buildFieldGateUserMessage(reg, { field, content, spine }),
     temperature: 0.2,
+    kind: "review",
     signal,
   });
-  return { verdict: buildFieldGateVerdict(res.data, criteriaForKind(field.kind)), usage: res.usage };
+  return {
+    verdict: buildFieldGateVerdict(res.data, criteriaForKind(reg.fieldGateCriteria, field.kind)),
+    usage: res.usage,
+  };
 }
 
 export async function renderField(
@@ -280,8 +292,9 @@ export async function renderField(
   const { signal, force, nudge } = opts;
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
-  if (!isFieldId(fieldId)) throw new Error(`Unknown field: ${fieldId}`);
-  const field = getFieldDef(fieldId)!;
+  const reg = getBuildRegistry(session.build_type);
+  if (!isFieldId(reg.fieldDefs, fieldId)) throw new Error(`Unknown field: ${fieldId}`);
+  const field = getFieldDef(reg.fieldDefs, fieldId)!;
 
   const existing = getField(userId, sessionId, fieldId);
   if (existing?.status === "manually_edited" && !force) throw new Error(HAND_EDIT_GUARD);
@@ -322,10 +335,10 @@ export async function renderField(
     const render = await weaverGenerateTextWithUsage({
       userId,
       session,
-      system: buildFieldRenderPrompt(field),
+      system: buildFieldRenderPrompt(reg, field),
       user: steer
-        ? buildFieldNudgeUserMessage({ field, spine, nudge: steer, previous: existing?.content })
-        : buildFieldRenderUserMessage({ field, spine }),
+        ? buildFieldNudgeUserMessage(reg, { field, spine, nudge: steer, previous: existing?.content })
+        : buildFieldRenderUserMessage(reg, { field, spine }),
       temperature: 0.7,
       signal,
     });
@@ -333,7 +346,7 @@ export async function renderField(
     if (!content) throw new Error("The model returned an empty field");
     let usage = addUsage(emptyUsage(), render.usage);
 
-    let gate = await gateContent(userId, session, field, content, spine, signal);
+    let gate = await gateContent(userId, session, reg, field, content, spine, signal);
     usage = addUsage(usage, gate.usage);
     let revised = false;
 
@@ -341,8 +354,8 @@ export async function renderField(
       const revise = await weaverGenerateTextWithUsage({
         userId,
         session,
-        system: buildFieldRenderPrompt(field),
-        user: buildFieldReviseUserMessage({ field, spine, previous: content, verdict: gate.verdict }),
+        system: buildFieldRenderPrompt(reg, field),
+        user: buildFieldReviseUserMessage(reg, { field, spine, previous: content, verdict: gate.verdict }),
         temperature: 0.7,
         signal,
       });
@@ -351,7 +364,7 @@ export async function renderField(
         content = revisedText;
         revised = true;
         usage = addUsage(usage, revise.usage);
-        gate = await gateContent(userId, session, field, content, spine, signal);
+        gate = await gateContent(userId, session, reg, field, content, spine, signal);
         usage = addUsage(usage, gate.usage);
       }
     }
@@ -384,6 +397,7 @@ export async function renderAllFields(
 ): Promise<WeaverField[]> {
   const session = getSession(userId, sessionId);
   if (!session) throw new Error("Session not found");
+  const reg = getBuildRegistry(session.build_type);
   const bible = getBible(userId, sessionId);
   if (!bible) throw new Error("Synthesize a Bible first — there is nothing to render from");
   if (bible.spine.entries.length === 0) throw new Error("The Bible has no spine yet — synthesize it first");
@@ -393,7 +407,7 @@ export async function renderAllFields(
       .filter((f) => f.status === "manually_edited")
       .map((f) => f.field_name),
   );
-  const defs = rankByOrder().filter((def) => !edited.has(def.id));
+  const defs = rankByOrder(reg.fieldDefs).filter((def) => !edited.has(def.id));
   let cursor = 0;
   async function worker(): Promise<void> {
     while (cursor < defs.length) {
@@ -435,7 +449,7 @@ export function editField(
   fieldId: string,
   content: string,
 ): WeaverField {
-  if (!isFieldId(fieldId)) throw new Error(`Unknown field: ${fieldId}`);
+  if (!isFieldId(regFor(userId, sessionId).fieldDefs, fieldId)) throw new Error(`Unknown field: ${fieldId}`);
   const existing = getField(userId, sessionId, fieldId);
   if (!existing) throw new Error("Render the field first — there is nothing to edit yet");
   const trimmed = content.trim();
@@ -457,7 +471,7 @@ export function acceptField(
   fieldId: string,
   accepted: boolean,
 ): WeaverField {
-  if (!isFieldId(fieldId)) throw new Error(`Unknown field: ${fieldId}`);
+  if (!isFieldId(regFor(userId, sessionId).fieldDefs, fieldId)) throw new Error(`Unknown field: ${fieldId}`);
   const existing = getField(userId, sessionId, fieldId);
   if (!existing) throw new Error("Render the field first — there is nothing to accept yet");
   const provenance: WeaverFieldProvenance = { ...existing.provenance, accepted };

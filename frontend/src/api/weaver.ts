@@ -1,5 +1,5 @@
-import { get, post, patch, del } from './client'
-import type { Character, Chat } from '@/types/api'
+import { get, post, put, patch, del, upload } from './client'
+import type { Character, Chat, WorldBook } from '@/types/api'
 
 const LLM_CALL = { timeout: 0 } as const
 
@@ -24,12 +24,21 @@ export interface WeaverSeed {
   provenance: Record<string, unknown>
 }
 
+export interface WeaverBuildType {
+  id: string
+  enabled: boolean
+  order: number
+  hub?: boolean
+  door?: boolean
+}
+
 export interface WeaverSession {
   id: string
   user_id: string
   session_number: number
   created_at: number
   updated_at: number
+  build_type: string
   seed: WeaverSeed
   stage: WeaverStage
   status: WeaverSessionStatus
@@ -40,9 +49,11 @@ export interface WeaverSession {
   launch_chat_id: string | null
   interview_started_at: number | null
   interview_completed_at: number | null
+  display_name: string | null
 }
 
 export interface CreateWeaverSessionInput {
+  build_type?: string
   seed_type?: string
   seed_text?: string
   seed_provenance?: Record<string, unknown>
@@ -89,6 +100,20 @@ export interface WeaverVisualKindMeta {
   height: number
   aspect_ratio: string
   base_negative: string
+  variants?: WeaverVisualVariantDef[]
+}
+
+export interface WeaverVisualVariantDef {
+  id: string
+  tags: string
+  negative_tags?: string
+  cues: string
+}
+
+export interface WeaverVisualImageInputSupport {
+  supported: boolean
+  mechanism: 'edit' | 'reference' | 'init' | null
+  reason?: string
 }
 
 export interface WeaverVisualJobProgress {
@@ -137,9 +162,9 @@ export interface WeaverVisualGenerateInput {
   seed?: number | null
   variant?: string
   provider_state?: Record<string, unknown>
+  source_image_id?: string
 }
 
-/** A staged candidate image (owned by the character, uncommitted). */
 export interface WeaverVisualCandidate {
   id: string
   url: string
@@ -163,15 +188,42 @@ export function getVisualJob(sessionId: string, jobId: string): Promise<WeaverVi
 export function listVisualCandidates(
   sessionId: string,
   kind: string,
+  variant?: string,
 ): Promise<{ data: WeaverVisualCandidate[]; total: number }> {
   return get<{ data: WeaverVisualCandidate[]; total: number }>(
     `/weaver/sessions/${sessionId}/visual/candidates`,
-    { kind },
+    variant ? { kind, variant } : { kind },
+  )
+}
+
+export function getVisualImageInput(
+  sessionId: string,
+  connectionId: string,
+): Promise<WeaverVisualImageInputSupport> {
+  return get<WeaverVisualImageInputSupport>(
+    `/weaver/sessions/${sessionId}/visual/image-input`,
+    { connection_id: connectionId },
   )
 }
 
 export function commitAvatar(sessionId: string, imageId: string): Promise<Character> {
   return post<Character>(`/weaver/sessions/${sessionId}/visual/commit/avatar`, { image_id: imageId })
+}
+
+export interface WeaverExpressionConfig {
+  enabled: boolean
+  defaultExpression: string
+  mappings: Record<string, string>
+}
+
+export function commitExpressions(
+  sessionId: string,
+  mappings: Record<string, string>,
+): Promise<WeaverExpressionConfig> {
+  return post<WeaverExpressionConfig>(
+    `/weaver/sessions/${sessionId}/visual/commit/expressions`,
+    { mappings },
+  )
 }
 
 export function suggestVisualTags(sessionId: string): Promise<{ suggestedTags: string; suggestedNegativeTags: string }> {
@@ -199,6 +251,7 @@ export interface WeaverSpineSlot {
   description: string
   impact: WeaverSlotImpact
   fill: WeaverSlotFill
+  synthesisGroup?: string
   parts?: WeaverSpinePart[]
   optional?: boolean
 }
@@ -223,8 +276,86 @@ export interface WeaverExtraction {
   edited_at: number
 }
 
-export function getSlots(): Promise<WeaverSpineSlot[]> {
-  return get<WeaverSpineSlot[]>('/weaver/slots')
+export function listBuildTypes(): Promise<WeaverBuildType[]> {
+  return get<WeaverBuildType[]>('/weaver/build-types')
+}
+
+// ----- The import door (FULL_WEAVER_PLAN §6) -----
+
+export interface WeaverImportReading {
+  action: string
+  reason: string
+}
+
+export interface WeaverImportFieldStat {
+  id: string
+  words: number
+}
+
+export interface WeaverImportInspection {
+  artifact: 'card' | 'worldbook'
+  format: string
+  name: string
+  field_stats: WeaverImportFieldStat[]
+  entry_count: number
+  has_embedded_book: boolean
+  has_portrait: boolean
+  source_chars: number
+  actions: string[]
+  reading: WeaverImportReading | null
+}
+
+export interface WeaverImportStartResult {
+  session?: WeaverSession
+  world_book?: WorldBook
+  book_work?: boolean
+}
+
+export interface WeaverEnrichEntryResult {
+  entry_id: string
+  enriched: boolean
+  content: string
+  note: string
+}
+
+export function inspectImport(file: File): Promise<WeaverImportInspection> {
+  const form = new FormData()
+  form.append('file', file)
+  return upload<WeaverImportInspection>('/weaver/import/inspect', form, LLM_CALL)
+}
+
+export function startImport(file: File, action: string): Promise<WeaverImportStartResult> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('action', action)
+  return upload<WeaverImportStartResult>('/weaver/import/start', form, LLM_CALL)
+}
+
+export function enrichImportEntry(bookId: string, entryId: string): Promise<WeaverEnrichEntryResult> {
+  return post<WeaverEnrichEntryResult>(`/weaver/import/enrich/${bookId}/entries/${entryId}`, {}, LLM_CALL)
+}
+
+export interface WeaverSynthesisGroup {
+  id: string
+  label: string
+  instruction: string
+}
+
+export interface WeaverBookRole {
+  id: string
+  label: string
+  defaultEnabled: boolean
+  triggering: string
+}
+
+export interface WeaverSlotsResponse {
+  slots: WeaverSpineSlot[]
+  groups: WeaverSynthesisGroup[]
+  bookRoles: WeaverBookRole[]
+}
+
+export function getSlots(buildType: string): Promise<WeaverSlotsResponse> {
+  return get<WeaverSlotsResponse>(`/weaver/slots?build_type=${encodeURIComponent(buildType)}`)
 }
 
 export function getExtraction(sessionId: string): Promise<WeaverExtraction> {
@@ -242,16 +373,18 @@ export function updateExtraction(
   return patch<WeaverExtraction>(`/weaver/sessions/${sessionId}/extraction`, input)
 }
 
-export type WeaverResponseKind = 'pick' | 'blend' | 'redirect' | 'typed' | 'inferred'
+export type WeaverResponseKind =
+  | 'typed'
+  | 'picked'
+  | 'enhanced'
+  | 'pick'
+  | 'blend'
+  | 'redirect'
+  | 'inferred'
 
-export interface WeaverAxisOption {
+export interface WeaverCandidate {
   caption: string
   content: string
-}
-
-export interface WeaverAxis {
-  name: string
-  description: string
 }
 
 export interface WeaverElicitTarget {
@@ -260,11 +393,13 @@ export interface WeaverElicitTarget {
   label: string
 }
 
-export interface WeaverQuestion {
-  slot: string
-  part: string
-  axis: WeaverAxis
-  options: WeaverAxisOption[]
+export const DYNAMIC_TARGET = 'dynamic'
+
+export interface WeaverInterviewQuestion {
+  id: string
+  prompt: string
+  why: string
+  target: string
 }
 
 export interface WeaverInterviewTurn {
@@ -273,7 +408,7 @@ export interface WeaverInterviewTurn {
   seq: number
   slot: string
   part: string
-  axis: WeaverAxis
+  question: { prompt: string; why: string }
   response_kind: WeaverResponseKind
   response: string
   created_at: number
@@ -281,11 +416,16 @@ export interface WeaverInterviewTurn {
 
 export type WeaverInterviewPhase = 'pending' | 'active' | 'complete'
 
+export const OPT_IN_PREFIX = 'optin'
+
 export interface WeaverInterviewState {
   phase: WeaverInterviewPhase
   answered: WeaverInterviewTurn[]
   remaining_targets: WeaverElicitTarget[]
   no_gaps_remaining: boolean
+  dynamic_count: number
+  at_dynamic_cap: boolean
+  opt_in: { slot: string } | null
 }
 
 export function getInterviewState(sessionId: string): Promise<WeaverInterviewState> {
@@ -295,8 +435,8 @@ export function getInterviewState(sessionId: string): Promise<WeaverInterviewSta
 export function generateQuestion(
   sessionId: string,
   input: { steer?: string; avoid?: string[] } = {},
-): Promise<{ question: WeaverQuestion | null }> {
-  return post<{ question: WeaverQuestion | null }>(
+): Promise<{ question: WeaverInterviewQuestion | null }> {
+  return post<{ question: WeaverInterviewQuestion | null }>(
     `/weaver/sessions/${sessionId}/interview/question`,
     input,
     LLM_CALL,
@@ -306,15 +446,43 @@ export function generateQuestion(
 export function answerQuestion(
   sessionId: string,
   input: {
-    slot: string
-    part: string
-    axis: WeaverAxis
+    question: WeaverInterviewQuestion
     kind: WeaverResponseKind
     content: string
     steer?: string
   },
 ): Promise<WeaverInterviewState> {
-  return post<WeaverInterviewState>(`/weaver/sessions/${sessionId}/interview/answer`, input)
+  // The answer runs a spillover listen pass server-side, so it is an LLM-length call.
+  return post<WeaverInterviewState>(`/weaver/sessions/${sessionId}/interview/answer`, input, LLM_CALL)
+}
+
+export function sparkQuestion(
+  sessionId: string,
+  input: { question: WeaverInterviewQuestion; steer?: string; avoid?: string[] },
+): Promise<{ options: WeaverCandidate[] }> {
+  return post<{ options: WeaverCandidate[] }>(
+    `/weaver/sessions/${sessionId}/interview/spark`,
+    input,
+    LLM_CALL,
+  )
+}
+
+export function enhanceAnswer(
+  sessionId: string,
+  input: { question: WeaverInterviewQuestion; draft: string },
+): Promise<{ options: WeaverCandidate[] }> {
+  return post<{ options: WeaverCandidate[] }>(
+    `/weaver/sessions/${sessionId}/interview/enhance`,
+    input,
+    LLM_CALL,
+  )
+}
+
+export function decideOptIn(
+  sessionId: string,
+  input: { slot: string; enabled: boolean },
+): Promise<WeaverInterviewState> {
+  return post<WeaverInterviewState>(`/weaver/sessions/${sessionId}/interview/optin`, input)
 }
 
 export function resetInterview(sessionId: string): Promise<WeaverInterviewState> {
@@ -351,10 +519,18 @@ export interface WeaverBibleCausalLink {
   relation: string
 }
 
+export interface WeaverBibleDynamicEntry {
+  id: string
+  question: string
+  content: string
+  origin: WeaverBibleOrigin
+}
+
 export interface WeaverBibleSpine {
   entries: WeaverBibleEntry[]
   causal_links: WeaverBibleCausalLink[]
   brief: string
+  dynamic: WeaverBibleDynamicEntry[]
 }
 
 export interface WeaverGateCriterion {
@@ -412,7 +588,7 @@ export function updateBible(
   return patch<WeaverBible>(`/weaver/sessions/${sessionId}/bible`, input)
 }
 
-export type WeaverFieldKind = 'short' | 'bundle' | 'voice' | 'scene' | 'voiced' | 'alichat'
+export type WeaverFieldKind = 'short' | 'bundle' | 'voice' | 'scene' | 'voiced' | 'alichat' | 'greetings'
 export type WeaverFieldRender = 'synthesize' | 'direct'
 
 export interface WeaverFieldDef {
@@ -425,6 +601,8 @@ export interface WeaverFieldDef {
   directSlot?: string
   primarySlots: string[]
   renderGuidance: string
+  usesVoiceMaterial?: boolean
+  list?: { separator: string }
 }
 
 export type WeaverFieldStatus =
@@ -458,8 +636,8 @@ export interface WeaverField {
   stale?: boolean
 }
 
-export function getFieldDefs(): Promise<WeaverFieldDef[]> {
-  return get<WeaverFieldDef[]>('/weaver/field-defs')
+export function getFieldDefs(buildType: string): Promise<WeaverFieldDef[]> {
+  return get<WeaverFieldDef[]>(`/weaver/field-defs?build_type=${encodeURIComponent(buildType)}`)
 }
 
 export function getFields(sessionId: string): Promise<WeaverField[]> {
@@ -491,15 +669,210 @@ export function nudgeField(sessionId: string, fieldId: string, nudge: string, fo
 }
 
 export interface WeaverFinalizeResult {
+  books: Record<string, WorldBook | null>
+  book_errors?: Record<string, string>
   character: Character
+  depth_book: WorldBook | null
+  depth_book_error?: string
+}
+
+export interface WeaverFinalizeInput {
+  books?: Record<string, boolean>
+  depth_book?: boolean
 }
 
 export interface WeaverStartChatResult {
   chat: Chat
 }
 
-export function finalizeSession(sessionId: string): Promise<WeaverFinalizeResult> {
-  return post<WeaverFinalizeResult>(`/weaver/sessions/${sessionId}/finalize`, {})
+export interface WeaverHubBook {
+  id: string
+  name: string
+  role: string | null
+  entry_count: number
+}
+
+export interface WeaverHubCharacter {
+  id: string
+  name: string
+}
+
+export interface WeaverHubPromotion {
+  person_id: string
+  name: string
+  session_id: string
+}
+
+export interface WeaverAgencyState {
+  present: boolean
+  enabled: boolean
+  agenda: string
+  holds: string[]
+}
+
+export interface WeaverHubSummary {
+  character_id: string
+  character_name: string
+  build_type: string
+  book_roles: string[]
+  people: { question_target: number } | null
+  agency: WeaverAgencyState | null
+  books: WeaverHubBook[]
+  characters: WeaverHubCharacter[]
+  promotions: WeaverHubPromotion[]
+}
+
+export function getHub(sessionId: string): Promise<WeaverHubSummary> {
+  return get<WeaverHubSummary>(`/weaver/sessions/${sessionId}/hub`)
+}
+
+export function setAgencyEnabled(
+  sessionId: string,
+  enabled: boolean,
+): Promise<{ agency: WeaverAgencyState }> {
+  return post<{ agency: WeaverAgencyState }>(`/weaver/sessions/${sessionId}/agency`, { enabled })
+}
+
+export function updateAgency(
+  sessionId: string,
+  input: { agenda: string; holds: string[] },
+): Promise<{ agency: WeaverAgencyState }> {
+  return put<{ agency: WeaverAgencyState }>(`/weaver/sessions/${sessionId}/agency`, input)
+}
+
+export function loreQuestion(
+  sessionId: string,
+  input: { steer?: string; avoid?: string[] } = {},
+): Promise<{ question: WeaverInterviewQuestion | null }> {
+  return post<{ question: WeaverInterviewQuestion | null }>(
+    `/weaver/sessions/${sessionId}/lore/question`,
+    input,
+    LLM_CALL,
+  )
+}
+
+export interface WeaverLoreAnswerResult {
+  added: number
+  book: WeaverHubBook | null
+  book_error?: string
+}
+
+export function loreAnswer(
+  sessionId: string,
+  input: { question: WeaverInterviewQuestion; kind: WeaverResponseKind; content: string },
+): Promise<WeaverLoreAnswerResult> {
+  return post<WeaverLoreAnswerResult>(`/weaver/sessions/${sessionId}/lore/answer`, input, LLM_CALL)
+}
+
+export function finalizeSession(sessionId: string, input: WeaverFinalizeInput = {}): Promise<WeaverFinalizeResult> {
+  return post<WeaverFinalizeResult>(`/weaver/sessions/${sessionId}/finalize`, input, LLM_CALL)
+}
+
+export type WeaverPersonTier = 'unfleshed' | 'extra' | 'named'
+
+export interface WeaverPersonAnswer {
+  id: string
+  question: string
+  answer: string
+  kind: WeaverResponseKind
+}
+
+export interface WeaverPerson {
+  id: string
+  session_id: string
+  name: string
+  hook: string
+  origin: 'proposed' | 'manual' | 'interview'
+  tier: WeaverPersonTier
+  interview: WeaverPersonAnswer[]
+  npc_entry_id: string | null
+  promoted_session_id: string | null
+  created_at: number
+  updated_at: number
+}
+
+export function getPeople(sessionId: string): Promise<{ people: WeaverPerson[] }> {
+  return get<{ people: WeaverPerson[] }>(`/weaver/sessions/${sessionId}/people`)
+}
+
+export interface WeaverTuning {
+  propose_count: number | null
+  named_question_target: number | null
+  dynamic_question_cap: number | null
+  harvest_cap: number | null
+  generation_temperature: number | null
+  review_temperature: number | null
+}
+
+export interface WeaverTuningResponse {
+  tuning: WeaverTuning
+  defaults: Record<string, number>
+}
+
+export function getTuning(): Promise<WeaverTuningResponse> {
+  return get<WeaverTuningResponse>('/weaver/tuning')
+}
+
+export function putTuning(input: Partial<WeaverTuning>): Promise<WeaverTuningResponse> {
+  return put<WeaverTuningResponse>('/weaver/tuning', input)
+}
+
+export function proposePeople(
+  sessionId: string,
+): Promise<{ proposed: WeaverPerson[]; people: WeaverPerson[] }> {
+  return post<{ proposed: WeaverPerson[]; people: WeaverPerson[] }>(
+    `/weaver/sessions/${sessionId}/people/propose`,
+    {},
+    LLM_CALL,
+  )
+}
+
+export function addPerson(
+  sessionId: string,
+  input: { name: string; hook?: string },
+): Promise<{ person: WeaverPerson }> {
+  return post<{ person: WeaverPerson }>(`/weaver/sessions/${sessionId}/people`, input)
+}
+
+export function removePerson(sessionId: string, personId: string): Promise<{ removed: boolean }> {
+  return del<{ removed: boolean }>(`/weaver/sessions/${sessionId}/people/${personId}`)
+}
+
+export interface WeaverPersonFleshResult {
+  person: WeaverPerson
+  book: { id: string; name: string }
+}
+
+export function fleshExtra(sessionId: string, personId: string): Promise<WeaverPersonFleshResult> {
+  return post<WeaverPersonFleshResult>(`/weaver/sessions/${sessionId}/people/${personId}/extra`, {}, LLM_CALL)
+}
+
+export function personQuestion(
+  sessionId: string,
+  personId: string,
+  input: { avoid?: string[] } = {},
+): Promise<{ question: WeaverInterviewQuestion | null }> {
+  return post<{ question: WeaverInterviewQuestion | null }>(
+    `/weaver/sessions/${sessionId}/people/${personId}/question`,
+    input,
+    LLM_CALL,
+  )
+}
+
+export function answerPersonQuestion(
+  sessionId: string,
+  personId: string,
+  input: { question: WeaverInterviewQuestion; kind: WeaverResponseKind; content: string },
+): Promise<{ person: WeaverPerson }> {
+  return post<{ person: WeaverPerson }>(`/weaver/sessions/${sessionId}/people/${personId}/answer`, input)
+}
+
+export function weaveNamed(sessionId: string, personId: string): Promise<WeaverPersonFleshResult> {
+  return post<WeaverPersonFleshResult>(`/weaver/sessions/${sessionId}/people/${personId}/weave`, {}, LLM_CALL)
+}
+
+export function promoteNamed(sessionId: string, personId: string): Promise<{ session: WeaverSession }> {
+  return post<{ session: WeaverSession }>(`/weaver/sessions/${sessionId}/people/${personId}/promote`, {})
 }
 
 export function startChat(sessionId: string): Promise<WeaverStartChatResult> {

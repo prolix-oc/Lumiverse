@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand'
 import type { AppStore, WeaverSlice } from '@/types/store'
 import type { WeaverSession, WeaverField } from '@/api/weaver'
 import * as api from '@/api/weaver'
+import { isEmptyDraft } from '@/components/weaver/sessionDisplay'
 
 function replaceSession(sessions: WeaverSession[], updated: WeaverSession): WeaverSession[] {
   return sessions.map((s) => (s.id === updated.id ? updated : s))
@@ -37,6 +38,8 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
   weaverSessions: [],
   activeWeaverSessionId: null,
   weaverLoading: false,
+  weaverChooserIntent: false,
+  setWeaverChooserIntent: (intent) => set({ weaverChooserIntent: intent }),
 
   loadWeaverSessions: async () => {
     set({ weaverLoading: true })
@@ -48,14 +51,17 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     }
   },
 
-  createWeaverSession: async () => {
+  createWeaverSession: async (input) => {
     const state = get()
     const profiles = state.profiles ?? []
     const resolvedId =
       (state.activeProfileId && profiles.some((p) => p.id === state.activeProfileId)
         ? state.activeProfileId
         : profiles.find((p) => p.is_default)?.id ?? profiles[0]?.id) ?? undefined
-    const session = await api.createSession(resolvedId ? { connection_id: resolvedId } : {})
+    const session = await api.createSession({
+      ...(resolvedId ? { connection_id: resolvedId } : {}),
+      ...input,
+    })
     set((s) => ({
       weaverSessions: [session, ...s.weaverSessions],
       activeWeaverSessionId: session.id,
@@ -76,7 +82,14 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     return session
   },
 
-  openWeaverSession: (id) =>
+  openWeaverSession: (id) => {
+    const prevId = get().activeWeaverSessionId
+    if (prevId && prevId !== id) {
+      const departing = get().weaverSessions.find((s) => s.id === prevId)
+      if (departing && isEmptyDraft(departing)) {
+        void get().deleteWeaverSession(prevId).catch(() => { /* a failed reap is harmless */ })
+      }
+    }
     set((s) => ({
       activeWeaverSessionId: id,
       ...(id === s.activeWeaverSessionId
@@ -96,7 +109,8 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
             weaverFinalizeResult: null,
             weaverStateSessionId: id,
           }),
-    })),
+    }))
+  },
 
   updateWeaverSeed: async (id, text) => {
     if (get().activeWeaverSessionId !== id) return
@@ -125,14 +139,29 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
   },
 
   weaverSlots: [],
+  weaverSlotGroups: [],
+  weaverBookRoles: [],
+  weaverSlotsBuildType: null,
+  weaverBuildTypes: [],
   weaverExtraction: null,
   weaverReadbackRunning: false,
   weaverReadbackError: null,
 
-  loadWeaverSlots: async () => {
-    if (get().weaverSlots.length > 0) return
-    const slots = await api.getSlots()
-    set({ weaverSlots: slots })
+  loadWeaverSlots: async (buildType) => {
+    if (get().weaverSlotsBuildType === buildType && get().weaverSlots.length > 0) return
+    const res = await api.getSlots(buildType)
+    set({
+      weaverSlots: res.slots,
+      weaverSlotGroups: res.groups,
+      weaverBookRoles: res.bookRoles,
+      weaverSlotsBuildType: buildType,
+    })
+  },
+
+  loadWeaverBuildTypes: async () => {
+    if (get().weaverBuildTypes.length > 0) return
+    const types = await api.listBuildTypes()
+    set({ weaverBuildTypes: [...types].sort((a, b) => a.order - b.order) })
   },
 
   loadWeaverExtraction: async (sessionId) => {
@@ -193,7 +222,7 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
       const state = await api.beginInterview(sessionId)
       if (get().activeWeaverSessionId !== sessionId) return
       set({ weaverInterview: state, weaverStateSessionId: sessionId })
-      if (!state.no_gaps_remaining) {
+      if (!state.opt_in && (!state.no_gaps_remaining || !state.at_dynamic_cap)) {
         await (get() as AppStore).nextWeaverQuestion(sessionId)
       }
       set((s) => ({
@@ -214,7 +243,7 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     set({ weaverQuestionLoading: true, weaverInterviewError: null })
     try {
       const current = get().weaverQuestion
-      const avoid = steer && current ? current.options.map((o) => o.content) : undefined
+      const avoid = steer && current ? [current.prompt] : undefined
       const { question } = await api.generateQuestion(sessionId, steer ? { steer, avoid } : {})
       if (get().activeWeaverSessionId !== sessionId) return
       set({ weaverQuestion: question, weaverStateSessionId: sessionId })
@@ -238,7 +267,46 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
       const state = await api.answerQuestion(sessionId, input)
       if (get().activeWeaverSessionId !== sessionId) return
       set({ weaverInterview: state, weaverQuestion: null, weaverStateSessionId: sessionId })
-      if (!state.no_gaps_remaining) {
+      if (!state.opt_in && (!state.no_gaps_remaining || !state.at_dynamic_cap)) {
+        await (get() as AppStore).nextWeaverQuestion(sessionId)
+      }
+    } catch (err) {
+      if (get().activeWeaverSessionId !== sessionId) return
+      set({ weaverInterviewError: errorMessage(err) })
+    }
+  },
+
+  sparkWeaverQuestion: async (sessionId, steer, avoid) => {
+    const question = get().weaverQuestion
+    if (!question) return []
+    const { options } = await api.sparkQuestion(sessionId, {
+      question,
+      ...(steer ? { steer } : {}),
+      ...(avoid && avoid.length > 0 ? { avoid } : {}),
+    })
+    return options
+  },
+
+  enhanceWeaverAnswer: async (sessionId, draft) => {
+    const question = get().weaverQuestion
+    if (!question) return []
+    const { options } = await api.enhanceAnswer(sessionId, { question, draft })
+    return options
+  },
+
+  decideWeaverOptIn: async (sessionId, slot, enabled) => {
+    if (get().activeWeaverSessionId !== sessionId) return
+    set({ weaverInterviewError: null })
+    try {
+      const state = await api.decideOptIn(sessionId, { slot, enabled })
+      if (get().activeWeaverSessionId !== sessionId) return
+      set({ weaverInterview: state, weaverStateSessionId: sessionId })
+      if (enabled) {
+        const extraction = await api.getExtraction(sessionId).catch(() => null)
+        if (get().activeWeaverSessionId !== sessionId) return
+        if (extraction) set({ weaverExtraction: extraction })
+      }
+      if (!state.opt_in && (!state.no_gaps_remaining || !state.at_dynamic_cap)) {
         await (get() as AppStore).nextWeaverQuestion(sessionId)
       }
     } catch (err) {
@@ -264,7 +332,7 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
       const extraction = await api.getExtraction(sessionId).catch(() => null)
       if (get().activeWeaverSessionId !== sessionId) return
       if (extraction) set({ weaverExtraction: extraction })
-      if (!state.no_gaps_remaining) {
+      if (!state.opt_in && (!state.no_gaps_remaining || !state.at_dynamic_cap)) {
         await (get() as AppStore).nextWeaverQuestion(sessionId)
       }
     } catch (err) {
@@ -347,6 +415,7 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
   },
 
   weaverFieldDefs: [],
+  weaverFieldDefsBuildType: null,
   weaverFields: [],
   weaverFieldRendering: [],
   weaverRenderError: null,
@@ -356,10 +425,10 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
   weaverFinalizeError: null,
   weaverFinalizeResult: null,
 
-  loadWeaverFieldDefs: async () => {
-    if (get().weaverFieldDefs.length > 0) return
-    const defs = await api.getFieldDefs()
-    set({ weaverFieldDefs: defs })
+  loadWeaverFieldDefs: async (buildType) => {
+    if (get().weaverFieldDefsBuildType === buildType && get().weaverFieldDefs.length > 0) return
+    const defs = await api.getFieldDefs(buildType)
+    set({ weaverFieldDefs: defs, weaverFieldDefsBuildType: buildType })
   },
 
   loadWeaverFields: async (sessionId) => {
@@ -480,11 +549,11 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     }
   },
 
-  finalizeWeaver: async (sessionId) => {
+  finalizeWeaver: async (sessionId, input) => {
     if (get().activeWeaverSessionId !== sessionId) throw new Error('Cannot finalize a session that is not open')
     set({ weaverFinalizing: true, weaverFinalizeError: null })
     try {
-      const result = await api.finalizeSession(sessionId)
+      const result = await api.finalizeSession(sessionId, input)
       if (get().activeWeaverSessionId !== sessionId) return result
       set((state) => ({
         weaverFinalizeResult: result,
