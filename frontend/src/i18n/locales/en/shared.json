@@ -105,5 +105,11 @@
     "hide": "Hide",
     "hideWidget": "Hide Widget",
     "resetPosition": "Reset Position"
+  },
+  "modelCombobox": {
+    "refreshModels": "Refresh models",
+    "noMatching": "No matching models",
+    "loading": "Loading models...",
+    "emptyDefault": "No models found. Enter one manually."
   }
 }

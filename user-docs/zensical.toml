@@ -28,11 +28,14 @@ nav = [
     { "Expressions" = "characters/expressions.md" },
     { "Alternate Fields & Avatars" = "characters/alternate-fields.md" },
   ] },
-  { "Dream Weaver" = [
-    { "Overview" = "dream-weaver/index.md" },
-    { "Studio Workflow" = "dream-weaver/studio-workflow.md" },
-    { "Sources & Roadmap" = "dream-weaver/sources-and-roadmap.md" },
-    { "Visuals & Finalizing" = "dream-weaver/visuals-and-finalizing.md" },
+  { "Weaver" = [
+    { "Overview" = "weaver/index.md" },
+    { "Studio Workflow" = "weaver/studio-workflow.md" },
+    { "Worlds" = "weaver/worlds.md" },
+    { "People" = "weaver/people.md" },
+    { "Imports" = "weaver/imports.md" },
+    { "Visual Studio" = "weaver/visual-studio.md" },
+    { "Settings" = "weaver/settings.md" },
   ] },
   { "Chatting" = [
     { "Overview" = "chatting/index.md" },

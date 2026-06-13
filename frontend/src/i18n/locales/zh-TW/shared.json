@@ -105,5 +105,11 @@
     "hide": "隱藏",
     "hideWidget": "隱藏組件",
     "resetPosition": "重置位置"
+  },
+  "modelCombobox": {
+    "refreshModels": "刷新模型列表",
+    "noMatching": "無匹配模型",
+    "loading": "正在加載模型…",
+    "emptyDefault": "未找到模型，可手動輸入。"
   }
 }

@@ -8,7 +8,7 @@ export const I18N_NAMESPACES = [
   'modals',
   'panels',
   'settings',
-  'dreamWeaver',
+  'weaver',
   'errors',
 ] as const
 

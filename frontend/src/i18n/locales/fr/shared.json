@@ -105,5 +105,11 @@
     "hide": "Masquer",
     "hideWidget": "Cacher le widget",
     "resetPosition": "Réinitialiser la position"
+  },
+  "modelCombobox": {
+    "refreshModels": "Actualiser les modèles",
+    "noMatching": "Aucun modèle correspondant",
+    "loading": "Chargement des modèles...",
+    "emptyDefault": "Aucun modèle trouvé. Saisissez-en un manuellement."
   }
 }

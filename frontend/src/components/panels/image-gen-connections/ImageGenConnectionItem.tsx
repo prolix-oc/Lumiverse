@@ -3,11 +3,10 @@ import { useTranslation } from 'react-i18next'
 
 import { Trash2, Edit3, Zap, Check, Star, Copy, MoreVertical, RefreshCw, Workflow } from 'lucide-react'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
-import type { ComfyUICapabilities } from '@/api/image-gen'
-import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-weaver'
+import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
 import type { ImageGenConnectionProfile, ImageGenProviderInfo, CreateImageGenConnectionInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ImageGenConnectionForm from './ImageGenConnectionForm'
-import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/comfyui/WorkflowEditorModal'
+import { ComfyWorkflowEditor } from './ComfyWorkflowEditor'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { Spinner } from '@/components/shared/Spinner'
 import ProviderIcon from '@/components/shared/ProviderIcon'
@@ -50,7 +49,6 @@ export default function ImageGenConnectionItem({
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
   const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false)
   const [workflowConfig, setWorkflowConfig] = useState<ComfyUIWorkflowConfig | null>(null)
-  const [workflowCapabilities, setWorkflowCapabilities] = useState<ComfyUICapabilities | null>(null)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
 
   const isNanoGpt = profile.provider === 'nanogpt'
@@ -108,12 +106,8 @@ export default function ImageGenConnectionItem({
     setWorkflowEditorOpen(true)
     setWorkflowError(null)
     try {
-      const [configResponse, capabilities] = await Promise.all([
-        imageGenConnectionsApi.getComfyUIWorkflowConfig(profile.id),
-        imageGenConnectionsApi.getComfyUICapabilities(profile.id),
-      ])
+      const configResponse = await imageGenConnectionsApi.getComfyUIWorkflowConfig(profile.id)
       setWorkflowConfig(configResponse.config)
-      setWorkflowCapabilities(capabilities)
     } catch (err: any) {
       setWorkflowError(err?.message || t('connectionItem.loadComfyWorkflowFailed'))
     }
@@ -227,9 +221,8 @@ export default function ImageGenConnectionItem({
         </div>
       )}
       {workflowEditorOpen && (
-        <WorkflowEditorModal
+        <ComfyWorkflowEditor
           config={workflowConfig}
-          capabilities={workflowCapabilities}
           error={workflowError}
           onImportWorkflow={importComfyWorkflow}
           onUpdateMappings={updateComfyMappings}

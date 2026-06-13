@@ -195,6 +195,7 @@ export function normalizeComfyUIWorkflow(
   format: ComfyUIWorkflowFormat;
   graphWorkflow: Record<string, any>;
   apiWorkflow: Record<string, any>;
+  unknownNodes: string[];
 } {
   if (!raw || typeof raw !== "object") {
     throw new Error("normalizeComfyUIWorkflow: workflow is not an object");
@@ -204,19 +205,19 @@ export function normalizeComfyUIWorkflow(
     const apiWorkflow = pruneDisconnectedApiWorkflow(
       convertUiWorkflowToApi(raw as Record<string, any>, objectInfo),
     );
-    assertApiNodeTypesAvailable(apiWorkflow, objectInfo);
     return {
       format,
       graphWorkflow: raw as Record<string, any>,
       apiWorkflow,
+      unknownNodes: findUnsupportedApiNodeTypes(apiWorkflow, objectInfo),
     };
   }
   const apiWorkflow = pruneDisconnectedApiWorkflow(raw as Record<string, any>);
-  assertApiNodeTypesAvailable(apiWorkflow, objectInfo);
   return {
     format,
     graphWorkflow: apiWorkflow,
     apiWorkflow,
+    unknownNodes: findUnsupportedApiNodeTypes(apiWorkflow, objectInfo),
   };
 }
 
@@ -410,26 +411,23 @@ function pruneDisconnectedApiWorkflow(workflow: Record<string, any>): Record<str
   );
 }
 
-function assertApiNodeTypesAvailable(
+export function findUnsupportedApiNodeTypes(
   workflow: Record<string, any>,
-  objectInfo?: ComfyUIObjectInfo,
-): void {
-  if (!objectInfo) return;
+  objectInfo?: ComfyUIObjectInfo | null,
+): string[] {
+  if (!objectInfo) return [];
 
-  const unsupportedNodes = Object.entries(workflow).flatMap(([nodeId, node]) => {
+  const unknown = new Set<string>();
+  for (const node of Object.values(workflow)) {
     const classType =
       node && typeof node === "object" && typeof (node as any).class_type === "string"
         ? String((node as any).class_type)
         : "";
-    if (!classType || objectInfo[classType]) return [];
-    return [`${classType} (#${nodeId})`];
-  });
+    if (!classType || objectInfo[classType]) continue;
+    unknown.add(classType);
+  }
 
-  if (unsupportedNodes.length === 0) return;
-
-  throw new Error(
-    `This workflow uses nodes that are not available on the connected ComfyUI server: ${unsupportedNodes.join(", ")}`,
-  );
+  return [...unknown];
 }
 
 function getWidgetFieldNames(

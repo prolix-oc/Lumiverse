@@ -637,6 +637,25 @@ export function setCharacterImage(userId: string, id: string, imageId: string): 
   return result.changes > 0;
 }
 
+export function setCharacterAvatarFromImage(userId: string, id: string, imageId: string): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+  const image = imagesSvc.getImage(userId, imageId);
+  if (!image) return null;
+
+  setCharacterImage(userId, id, image.id);
+  setCharacterAvatar(userId, id, image.filename);
+
+  const extensions = { ...(existing.extensions ?? {}) };
+  delete extensions.avatar_crop_image_id;
+  delete extensions.original_image_id;
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+
+  return getCharacter(userId, id);
+}
+
 export async function replaceCharacterAvatar(userId: string, id: string, file: File, originalFile?: File): Promise<Character | null> {
   const existing = getCharacter(userId, id);
   if (!existing) return null;

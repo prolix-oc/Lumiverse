@@ -163,7 +163,7 @@ function normalizeKeywordList(values: string[]): string[] {
   return normalized;
 }
 
-function normalizeImportedEntries(raw: unknown): any[] {
+export function normalizeImportedEntries(raw: unknown): any[] {
   if (Array.isArray(raw)) return raw;
   if (raw && typeof raw === "object") return Object.values(raw as Record<string, any>);
   return [];
@@ -221,7 +221,7 @@ function normalizeImportedPosition(position: unknown): number {
   return 0;
 }
 
-function normalizeImportedEntryInput(raw: any, index: number): CreateWorldBookEntryInput {
+export function normalizeImportedEntryInput(raw: any, index: number): CreateWorldBookEntryInput {
   const keys: string[] = Array.isArray(raw.keys) ? raw.keys
     : Array.isArray(raw.key) ? raw.key
     : typeof raw.key === "string" ? raw.key.split(",").map((k: string) => k.trim()).filter(Boolean)
@@ -498,7 +498,6 @@ export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId
     `SELECT id
        FROM world_books
       WHERE user_id = ?
-        AND json_extract(metadata, '$.source') = 'character'
         AND json_extract(metadata, '$.auto_managed_by_character') = 1
         AND json_extract(metadata, '$.source_character_id') = ?`
   ).all(userId, characterId) as Array<{ id: string }>;

@@ -95,5 +95,11 @@
     "hide": "Nascondi",
     "hideWidget": "Nascondi widget",
     "resetPosition": "Reimposta posizione"
+  },
+  "modelCombobox": {
+    "refreshModels": "Aggiorna modelli",
+    "noMatching": "Nessun modello corrispondente",
+    "loading": "Caricamento modelli...",
+    "emptyDefault": "Nessun modello trovato. Inseriscine uno manualmente."
   }
 }

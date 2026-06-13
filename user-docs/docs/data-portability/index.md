@@ -19,7 +19,6 @@ An archive (a `.lvbak` file — really a renamed ZIP) carries every piece of dat
 | **Memory Cortex** | Entities, relations, consolidations, font colors, vaults, interlinks |
 | **Databanks** | Knowledge banks, documents, chunks |
 | **Packs** | Lumia, Loom, and tool packs — both user-authored and downloaded |
-| **Dream Weaver** | Sessions, generated messages, saved prompts |
 | **Theme Assets** | Bundles, custom CSS, wallpapers |
 | **Settings** | Every preference — display, chat behavior, voice, push, extensions |
 | **Spindle Extensions** | User-installed extensions and their enclave-stored preferences |

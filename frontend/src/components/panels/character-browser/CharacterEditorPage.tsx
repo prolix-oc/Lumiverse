@@ -44,12 +44,6 @@ import CharacterLoraTab from './CharacterLoraTab'
 import AlternateFieldEditor from './AlternateFieldEditor'
 import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
-import { VoiceGuidanceEditor } from '@/components/dream-weaver/components/VoiceGuidanceEditor'
-import {
-  EMPTY_DREAM_WEAVER_VOICE_GUIDANCE,
-  getDreamWeaverAppearanceText,
-  getDreamWeaverCharacterMetadata,
-} from '@/lib/dream-weaver-character'
 
 const DEBOUNCE_MS = 2000
 
@@ -404,10 +398,6 @@ export default function CharacterEditorPage() {
     return pendingExtensionsRef.current ?? character?.extensions ?? {}
   }, [extensionsJson, character?.extensions])
 
-  const dreamWeaverMetadata = useMemo(
-    () => getDreamWeaverCharacterMetadata({ extensions: workingExtensions } as Pick<Character, 'extensions'>),
-    [workingExtensions],
-  )
 
   const flushExtensionsSave = useCallback(async () => {
     if (!editingCharacterId) return
@@ -443,25 +433,6 @@ export default function CharacterEditorPage() {
     [editingCharacterId, character, flushExtensionsSave]
   )
 
-  const mutateDreamWeaver = useCallback(
-    (mutator: (metadata: Record<string, any>) => Record<string, any>) => {
-      mutateExtensions((ext) => {
-        const next = { ...ext }
-        const currentDreamWeaver = isRecord(ext.dream_weaver) ? { ...ext.dream_weaver } : {}
-        const updatedDreamWeaver = mutator(currentDreamWeaver)
-
-        if (Object.keys(updatedDreamWeaver).length > 0) {
-          next.dream_weaver = updatedDreamWeaver
-        } else {
-          delete next.dream_weaver
-        }
-
-        return next
-      }, false)
-    },
-    [mutateExtensions],
-  )
-
   const handleNameChange = useCallback(
     (value: string) => {
       setName(value)
@@ -476,46 +447,6 @@ export default function CharacterEditorPage() {
       debouncedSave(field, value)
     },
     [debouncedSave]
-  )
-
-  const handleDreamWeaverAppearanceChange = useCallback(
-    (value: string) => {
-      mutateDreamWeaver((metadata) => {
-        const next = { ...metadata }
-        if (value.trim()) next.appearance = value
-        else delete next.appearance
-        return next
-      })
-    },
-    [mutateDreamWeaver],
-  )
-
-  const handleDreamWeaverVoiceChange = useCallback(
-    (voiceGuidance: typeof EMPTY_DREAM_WEAVER_VOICE_GUIDANCE) => {
-      mutateDreamWeaver((metadata) => {
-        const hasStructuredRules = Object.values(voiceGuidance.rules).some((items) => items.length > 0)
-        const hasVoiceContent = hasStructuredRules || Boolean(voiceGuidance.compiled.trim())
-        const next = { ...metadata }
-
-        if (hasVoiceContent) {
-          next.voice_guidance = {
-            compiled: voiceGuidance.compiled,
-            rules: {
-              baseline: [...voiceGuidance.rules.baseline],
-              rhythm: [...voiceGuidance.rules.rhythm],
-              diction: [...voiceGuidance.rules.diction],
-              quirks: [...voiceGuidance.rules.quirks],
-              hard_nos: [...voiceGuidance.rules.hard_nos],
-            },
-          }
-        } else {
-          delete next.voice_guidance
-        }
-
-        return next
-      })
-    },
-    [mutateDreamWeaver],
   )
 
   const handleAlternatesChange = useCallback(
@@ -977,15 +908,6 @@ export default function CharacterEditorPage() {
                 <div className={styles.tabContent}>
                   {activeTab === 'core' && (
                     <>
-                      {dreamWeaverMetadata && (
-                        <Field
-                          label={t('characterEditor.appearance')}
-                          helper={t('characterEditor.appearanceHelper')}
-                          value={getDreamWeaverAppearanceText(dreamWeaverMetadata)}
-                          onChange={handleDreamWeaverAppearanceChange}
-                          rows={4}
-                        />
-                      )}
                       <AlternateFieldEditor
                         label={t('characterEditor.description')}
                         helper={t('characterEditor.descriptionHelper')}
@@ -1018,18 +940,6 @@ export default function CharacterEditorPage() {
 
                   {activeTab === 'system' && (
                     <>
-                      {dreamWeaverMetadata && (
-                        <div className={styles.fieldGroup}>
-                          <span className={styles.fieldLabel}>{t('characterEditor.voiceGuidance')}</span>
-                          <span className={styles.fieldHelper}>
-                            {t('characterEditor.voiceGuidanceHelper')}
-                          </span>
-                          <VoiceGuidanceEditor
-                            voice={dreamWeaverMetadata.voiceGuidance || EMPTY_DREAM_WEAVER_VOICE_GUIDANCE}
-                            onChange={handleDreamWeaverVoiceChange}
-                          />
-                        </div>
-                      )}
                       <Field
                         label={t('characterEditor.systemPrompt')}
                         helper={t('characterEditor.systemPromptHelper')}

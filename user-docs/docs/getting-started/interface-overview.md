@@ -77,7 +77,7 @@ The drawer hosts every workspace panel as a tab. You can reorder them with drag-
 |-----|---------|
 | **OOC** | Out-of-character comment display settings |
 | **Branch Tree** | Visualize and navigate the chat's branch history |
-| **Dream Weaver** | Generate brand-new characters from prompts |
+| **Weaver** | Author characters and worlds from your idea through a guided interview |
 | **Extensions** | Install and manage [Spindle](../extensions/index.md) extensions |
 
 Spindle extensions can register additional drawer tabs that appear alongside the built-ins.

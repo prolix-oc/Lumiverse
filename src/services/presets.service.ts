@@ -189,6 +189,15 @@ export function findPresetByLumihubId(userId: string, lumihubId: string): Preset
   return row ? rowToPreset(row) : null;
 }
 
+export function findPresetBySlug(userId: string, slug: string): Preset | null {
+  const row = getDb()
+    .query(
+      "SELECT * FROM presets WHERE user_id = ? AND json_extract(metadata, '$._lumiverse_preset_slug') = ? LIMIT 1"
+    )
+    .get(userId, slug) as any;
+  return row ? rowToPreset(row) : null;
+}
+
 export interface PresetManifestRow {
   name: string;
   created_at: number;

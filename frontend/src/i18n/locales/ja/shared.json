@@ -105,5 +105,11 @@
     "hide": "非表示",
     "hideWidget": "ウィジェットを非表示",
     "resetPosition": "位置をリセットする"
+  },
+  "modelCombobox": {
+    "refreshModels": "モデルを更新",
+    "noMatching": "一致するモデルがありません",
+    "loading": "モデルをロード中...",
+    "emptyDefault": "モデルが見つかりません。手動で入力してください。"
   }
 }

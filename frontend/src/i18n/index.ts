@@ -12,7 +12,7 @@ export const UI_LANGUAGE_STORAGE_KEY = 'lumiverse-ui-language'
 
 const SUPPORTED = ['en', 'zh', 'zh-TW', 'ja', 'fr', 'it'] as const
 
-/** Longest first so `dreamWeaver` wins over shorter prefixes. */
+/** Longest first so a longer namespace wins over a shorter prefix of it. */
 const NAMESPACES_BY_LENGTH = [...I18N_NAMESPACES].sort((a, b) => b.length - a.length)
 
 /**

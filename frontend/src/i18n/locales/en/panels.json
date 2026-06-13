@@ -1,4 +1,47 @@
 {
+  "comfyWorkflowEditor": {
+    "eyebrow": "COMFYUI",
+    "title": "Workflow setup",
+    "replace": "Replace",
+    "importLead": "Import a ComfyUI workflow once, then map which node field plays each role. The setup is saved to this connection and reused for every generation.",
+    "importStep1": "In ComfyUI, open Settings and turn on Enable Dev mode Options.",
+    "importStep2": "Build your workflow, then use Save (API Format).",
+    "importStep3": "Drop or paste that JSON here. The UI export is not supported.",
+    "chooseFile": "Choose API JSON",
+    "importing": "Importing...",
+    "or": "or",
+    "pastePlaceholder": "Paste the API-format workflow JSON",
+    "importPasted": "Import pasted JSON",
+    "invalidJson": "That is not valid JSON.",
+    "importFailed": "Import failed. Make sure it is the API-format export.",
+    "mapFailed": "Could not save the mapping. Try again.",
+    "ready": "Ready to generate",
+    "needsPositive": "Map a positive prompt to continue",
+    "nodeCount": "{{count}} nodes",
+    "needsReimport": "This workflow was imported in an older format. Replace it with a fresh API-format export.",
+    "unknownNodes": "{{count}} node type(s) aren't recognized by the connected server: {{nodes}}. You can still map and save, but generation will fail unless those custom node packs are installed on this server.",
+    "notMapped": "Not mapped",
+    "addCustom": "Add a custom field...",
+    "customHint": "Map any other node field, including custom or extension nodes, to expose it during generation.",
+    "group": {
+      "core": "Roles",
+      "sampling": "Sampling",
+      "model": "Model",
+      "custom": "Custom fields"
+    },
+    "role": {
+      "positive_prompt": "Positive prompt",
+      "negative_prompt": "Negative prompt",
+      "seed": "Seed",
+      "width": "Width",
+      "height": "Height",
+      "steps": "Steps",
+      "cfg": "CFG",
+      "sampler_name": "Sampler",
+      "scheduler": "Scheduler",
+      "checkpoint": "Checkpoint"
+    }
+  },
   "drawer": {
     "profile": {
       "shortName": "Profile",

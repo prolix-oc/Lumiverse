@@ -1,7 +1,7 @@
 import { getDb } from "../db/connection";
 import * as settingsSvc from "../services/settings.service";
 
-const DEFAULT_PRESET_BLOCKS = [
+export const DEFAULT_PRESET_BLOCKS = [
   {
     id: "019e62a4-7dba-7001-a422-10836ade35dd",
     name: "System Prompt",
@@ -284,7 +284,7 @@ const DEFAULT_PRESET_BLOCKS = [
   },
 ];
 
-const DEFAULT_PRESET_PARAMETERS = {
+export const DEFAULT_PRESET_PARAMETERS = {
   samplerOverrides: {
     enabled: true,
     maxTokens: null,
@@ -304,7 +304,7 @@ const DEFAULT_PRESET_PARAMETERS = {
   },
 };
 
-const DEFAULT_PRESET_PROMPTS = {
+export const DEFAULT_PRESET_PROMPTS = {
   promptBehavior: {
     continueNudge: "[Continue your last message without repeating its original content.]",
     emptySendNudge: "[Write the next reply only as {{char}}.]",

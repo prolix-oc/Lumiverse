@@ -3,7 +3,7 @@ import {
   User, Wand2, GitFork, Link2, Package, Zap,
   Users, Drama, PenTool, MessageCircle, FileText, Brain, ScrollText,
   MessageSquareReply, Image, Palette, Puzzle, Terminal,
-  GitBranch, Globe, Wallpaper, Replace, Library, Sparkles, Database,
+  GitBranch, Globe, Wallpaper, Replace, Library, Feather, Database,
 } from 'lucide-react'
 import { IconUsersGroup } from '@tabler/icons-react'
 import { useStore } from '@/store'
@@ -20,7 +20,7 @@ import STTConnectionManager from '@/components/panels/stt-connections/STTConnect
 import TTSConnectionManager from '@/components/panels/tts-connections/TTSConnectionManager'
 import PresetManager from '@/components/panels/PresetManager'
 import LoomBuilder from '@/components/panels/LoomBuilder'
-import DreamWeaverPanel from '@/components/panels/DreamWeaverPanel'
+import WeaverPanel from '@/components/panels/WeaverPanel'
 import SummaryEditor from '@/components/panels/SummaryEditor'
 import ThemePanel from '@/components/panels/ThemePanel'
 import WorldBookPanel from '@/components/panels/world-book/WorldBookPanel'
@@ -133,13 +133,13 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     component: () => <LoomBuilder compact />,
   },
   {
-    id: 'dream-weaver',
-    shortName: 'Dream',
-    tabName: 'Dream Weaver',
-    tabDescription: 'Create characters from your imagination',
-    tabIcon: Sparkles,
-    keywords: ['dream', 'weave', 'create'],
-    component: () => <DreamWeaverPanel />,
+    id: 'weaver',
+    shortName: 'Weaver',
+    tabName: 'Weaver',
+    tabDescription: 'Craft a character from your idea',
+    tabIcon: Feather,
+    keywords: ['weaver', 'dream', 'character', 'create', 'ai'],
+    component: () => <WeaverPanel />,
   },
   {
     id: 'connections',
