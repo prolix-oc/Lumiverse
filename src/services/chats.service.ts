@@ -2408,10 +2408,13 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[],
 
   tx();
 
-  // Update chat's updated_at to last message timestamp
+  // Update chat's updated_at to last message timestamp, clamped so it never
+  // predates created_at. Migrated chats (e.g. SillyTavern group chats) can have
+  // message send_dates older than the import-time created_at; an updated_at that
+  // precedes created_at breaks updated_at DESC sorting in recent/search lists.
   if (messages.length > 0) {
     const lastDate = messages[messages.length - 1].send_date ?? now;
-    db.query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(lastDate, chatId, userId);
+    db.query("UPDATE chats SET updated_at = MAX(?, created_at) WHERE id = ? AND user_id = ?").run(lastDate, chatId, userId);
   }
 
   return messages.length;
