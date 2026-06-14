@@ -1232,7 +1232,11 @@
       "labelWithCount": "Tags ({{count}})",
       "clearTags": "Clear tags",
       "searchPlaceholder": "Search tags...",
-      "noTagsFound": "No tags found"
+      "noTagsFound": "No tags found",
+      "cycleHint": "Click to include, again to exclude, again to clear.",
+      "stateNeutral": "Not filtered — click to include",
+      "stateIncluded": "Included — click to exclude",
+      "stateExcluded": "Excluded — click to clear"
     },
     "alternateAvatars": {
       "title": "Alternate Avatars",

@@ -71,6 +71,7 @@ function escapeLike(input: string): string {
 export interface SummaryQueryOptions {
   search?: string;
   tags?: string[];
+  excludeTags?: string[];
   sort?: string;
   direction?: "asc" | "desc";
   favoriteIds?: string[];
@@ -153,7 +154,7 @@ export function listCharacterSummaries(
   options: SummaryQueryOptions = {}
 ): PaginatedResult<CharacterSummary> {
   const db = getDb();
-  const { search, tags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
+  const { search, tags, excludeTags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -195,10 +196,18 @@ export function listCharacterSummaries(
     }
   }
 
-  // Tag AND filter
+  // Tag AND filter (character must have ALL of these tags)
   if (tags && tags.length > 0) {
     for (const tag of tags) {
       whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  // Tag exclusion filter (character must have NONE of these tags)
+  if (excludeTags && excludeTags.length > 0) {
+    for (const tag of excludeTags) {
+      whereClauses.push("NOT EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
       whereParams.push(tag);
     }
   }
@@ -253,7 +262,7 @@ function listCharacterSummariesDiscover(
   const db = getDb();
   const nowSeconds = Math.floor(Date.now() / 1000);
   const shuffleSeed = normalizeShuffleSeed(options.seed);
-  const { search, tags, favoriteIds, filterMode = "all" } = options;
+  const { search, tags, excludeTags, favoriteIds, filterMode = "all" } = options;
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -289,6 +298,13 @@ function listCharacterSummariesDiscover(
   if (tags && tags.length > 0) {
     for (const tag of tags) {
       whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  if (excludeTags && excludeTags.length > 0) {
+    for (const tag of excludeTags) {
+      whereClauses.push("NOT EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
       whereParams.push(tag);
     }
   }

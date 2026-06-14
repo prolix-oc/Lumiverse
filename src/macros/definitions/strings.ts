@@ -144,7 +144,17 @@ export function registerStringMacros(): void {
     isList: true,
     handler: (ctx) => {
       const sep = ctx.args[0] ?? ", ";
-      const items = ctx.args.slice(1).filter((a) => a !== "");
+      // Trim each item before filtering blanks. When a join is written across
+      // multiple indented lines for readability, every `::`-separated item
+      // picks up the surrounding newlines/indentation as literal text (and a
+      // nested macro that resolves to "" leaves just its indentation behind).
+      // Items are list values, so that structural whitespace is noise and
+      // would otherwise accumulate into joined output. The separator (arg 0)
+      // is intentionally left intact — its whitespace is meaningful.
+      const items = ctx.args
+        .slice(1)
+        .map((a) => a.trim())
+        .filter((a) => a !== "");
       return items.join(sep);
     },
   });

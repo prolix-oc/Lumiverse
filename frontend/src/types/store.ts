@@ -132,6 +132,7 @@ export interface CharactersSlice {
   sortDirection: CharacterSortDirection
   viewMode: CharacterViewMode
   selectedTags: string[]
+  excludedTags: string[]
   batchMode: boolean
   batchSelected: string[]
 
@@ -153,6 +154,11 @@ export interface CharactersSlice {
   setViewMode: (mode: CharacterViewMode) => void
   setSelectedTags: (tags: string[]) => void
   toggleSelectedTag: (tag: string) => void
+  setExcludedTags: (tags: string[]) => void
+  /** Cycle a tag through the filter states: neutral → include → exclude → neutral. */
+  cycleTagFilter: (tag: string) => void
+  /** Clear both included and excluded tag filters. */
+  clearTagFilters: () => void
   setBatchMode: (enabled: boolean) => void
   toggleBatchSelect: (id: string) => void
   selectAllBatch: (ids: string[]) => void

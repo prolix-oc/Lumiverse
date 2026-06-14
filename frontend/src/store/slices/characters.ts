@@ -15,6 +15,7 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
   sortDirection: 'asc',
   viewMode: typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'single' : 'grid',
   selectedTags: [],
+  excludedTags: [],
   batchMode: false,
   batchSelected: [],
 
@@ -125,6 +126,29 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
         ? state.selectedTags.filter((t) => t !== tag)
         : [...state.selectedTags, tag],
     })),
+
+  setExcludedTags: (tags) => set({ excludedTags: tags }),
+
+  // Tri-state cycle: a tag is either neutral, included, or excluded — never both.
+  // Clicking advances neutral → include → exclude → neutral.
+  cycleTagFilter: (tag) =>
+    set((state) => {
+      if (state.selectedTags.includes(tag)) {
+        // include → exclude
+        return {
+          selectedTags: state.selectedTags.filter((t) => t !== tag),
+          excludedTags: [...state.excludedTags, tag],
+        }
+      }
+      if (state.excludedTags.includes(tag)) {
+        // exclude → neutral
+        return { excludedTags: state.excludedTags.filter((t) => t !== tag) }
+      }
+      // neutral → include
+      return { selectedTags: [...state.selectedTags, tag] }
+    }),
+
+  clearTagFilters: () => set({ selectedTags: [], excludedTags: [] }),
 
   setBatchMode: (enabled) =>
     set({ batchMode: enabled, batchSelected: enabled ? [] : [] }),

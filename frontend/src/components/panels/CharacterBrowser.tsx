@@ -180,8 +180,9 @@ export default function CharacterBrowser() {
       <TagFilter
         allTags={browser.allTags}
         selectedTags={browser.selectedTags}
-        onToggleTag={browser.toggleSelectedTag}
-        onClearTags={() => browser.setSelectedTags([])}
+        excludedTags={browser.excludedTags}
+        onCycleTag={browser.cycleTagFilter}
+        onClearTags={browser.clearTagFilters}
       />
 
       {browser.batchMode && (

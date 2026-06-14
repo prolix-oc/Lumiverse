@@ -18,6 +18,7 @@ export interface SummaryParams {
   offset?: number
   search?: string
   tags?: string
+  exclude_tags?: string
   sort?: string
   direction?: string
   filter?: string

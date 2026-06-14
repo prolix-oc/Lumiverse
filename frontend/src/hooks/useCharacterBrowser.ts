@@ -67,6 +67,9 @@ export function useCharacterBrowser() {
   const selectedTags = useStore((s) => s.selectedTags)
   const setSelectedTags = useStore((s) => s.setSelectedTags)
   const toggleSelectedTag = useStore((s) => s.toggleSelectedTag)
+  const excludedTags = useStore((s) => s.excludedTags)
+  const cycleTagFilter = useStore((s) => s.cycleTagFilter)
+  const clearTagFilters = useStore((s) => s.clearTagFilters)
   const batchMode = useStore((s) => s.batchMode)
   const setBatchMode = useStore((s) => s.setBatchMode)
   const batchSelected = useStore((s) => s.batchSelected)
@@ -195,6 +198,10 @@ export function useCharacterBrowser() {
         params.tags = selectedTags.join(',')
       }
 
+      if (excludedTags.length > 0) {
+        params.exclude_tags = excludedTags.join(',')
+      }
+
       if (filterTab === 'favorites' || filterTab === 'characters') {
         params.filter = filterTab === 'favorites' ? 'favorites' : 'non-favorites'
         if (activeFavorites.length > 0) {
@@ -204,7 +211,7 @@ export function useCharacterBrowser() {
 
       return params
     },
-    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, filterTab]
+    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, excludedTags, filterTab]
   )
 
   const loadAllCharacters = useCallback(async () => {
@@ -262,7 +269,7 @@ export function useCharacterBrowser() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
-  }, [filterTab, selectedTags, debouncedQuery, sortField, sortDirection, shuffleSeed])
+  }, [filterTab, selectedTags, excludedTags, debouncedQuery, sortField, sortDirection, shuffleSeed])
 
   const totalPages = Math.max(1, Math.ceil(browserTotal / charactersPerPage))
   const safePage = Math.min(currentPage, totalPages)
@@ -745,6 +752,7 @@ export function useCharacterBrowser() {
     sortDirection,
     viewMode,
     selectedTags,
+    excludedTags,
     allTags,
     batchMode,
     batchSelected,
@@ -763,6 +771,8 @@ export function useCharacterBrowser() {
     setViewMode,
     setSelectedTags,
     toggleSelectedTag,
+    cycleTagFilter,
+    clearTagFilters,
     toggleFavorite: handleToggleFavorite,
     setBatchMode,
     toggleBatchSelect,

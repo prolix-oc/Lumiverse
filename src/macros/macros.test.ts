@@ -672,6 +672,31 @@ describe("String macros", () => {
     expect(await ev("{{join:: | ::a::::b}}")).toBe("a | b");
   });
 
+  test("join trims items and drops whitespace-only items", async () => {
+    // Separator whitespace is preserved; per-item structural whitespace is not.
+    expect(await ev("{{join::, ::  a  ::\n  b\n::   }}")).toBe("a, b");
+  });
+
+  test("join across indented lines does not leak newlines (regression)", async () => {
+    const template = `{{trim}}
+{{setvar::cotexpansion::}}
+{{setvar::cotexpansion::
+  {{join::{{newline}}::
+    {{getvar::cotexpansion}}::
+    first string
+  }}
+}}
+{{setvar::cotexpansion::
+  {{join::{{newline}}::
+    {{getvar::cotexpansion}}::
+    second string
+  }}
+}}
+{{.cotexpansion}}
+{{/trim}}`;
+    expect(await ev(template)).toBe("first string\nsecond string");
+  });
+
   test("repeat", async () => {
     expect(await ev("{{repeat::3::ha}}")).toBe("hahaha");
   });

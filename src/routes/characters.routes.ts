@@ -318,6 +318,8 @@ app.get("/summary", (c) => {
   const search = c.req.query("search") || undefined;
   const rawTags = c.req.query("tags");
   const tags = rawTags ? rawTags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+  const rawExcludeTags = c.req.query("exclude_tags");
+  const excludeTags = rawExcludeTags ? rawExcludeTags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
   const sort = c.req.query("sort") || undefined;
   const direction = (c.req.query("direction") as "asc" | "desc") || undefined;
   const filterMode = (c.req.query("filter") as "all" | "favorites" | "non-favorites") || undefined;
@@ -330,6 +332,7 @@ app.get("/summary", (c) => {
     svc.listCharacterSummaries(userId, pagination, {
       search,
       tags,
+      excludeTags,
       sort,
       direction,
       favoriteIds,
