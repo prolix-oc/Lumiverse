@@ -1,6 +1,12 @@
 {
   "title": "Settings",
   "selectCategory": "Select a settings category",
+  "search": {
+    "placeholder": "Search settings…",
+    "clear": "Clear search",
+    "resultsAria": "Settings search results",
+    "noResults": "No matching settings"
+  },
   "tabs": {
     "account": { "shortName": "Account", "tabName": "Account Settings", "tabDescription": "Manage your account details and password" },
     "display": { "shortName": "Display", "tabName": "Display & Layout", "tabDescription": "Panel width, sidebar position, and layout options" },

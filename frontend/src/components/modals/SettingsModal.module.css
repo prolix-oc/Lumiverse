@@ -40,6 +40,7 @@
   font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
+  flex-shrink: 0;
 }
 
 .body {
@@ -418,6 +419,35 @@
   font-weight: 600;
   color: var(--lumiverse-text);
   margin-bottom: 4px;
+  /* Leave breathing room when scrolled to via the settings search. */
+  scroll-margin-top: 14px;
+  border-radius: 6px;
+}
+
+/* Brief highlight pulse applied when the settings search jumps to a section. */
+.sectionFlash {
+  animation: sectionFlash 1.4s ease-out;
+}
+
+@keyframes sectionFlash {
+  0% {
+    background: var(--lumiverse-primary-020);
+    box-shadow: 0 0 0 6px var(--lumiverse-primary-020);
+  }
+  60% {
+    background: var(--lumiverse-primary-015, var(--lumiverse-primary-020));
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sectionFlash {
+    animation: none;
+  }
 }
 
 .danger {
@@ -1180,5 +1210,18 @@
 
   .poolNumbers {
     text-align: left;
+  }
+
+  /* Tighten the header so the settings search has room next to the title. */
+  .header {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 380px) {
+  /* On very narrow screens, drop the title to keep the search field usable. */
+  .title {
+    display: none;
   }
 }

@@ -6,7 +6,25 @@ import {
   PackageOpen,
 } from 'lucide-react'
 import { useStore } from '@/store'
+import { translateSettingsField, translateSettingsSectionTitle } from '@/lib/i18n/resolveLabel'
 import type { Command, CommandScope } from '@/lib/commands'
+
+/**
+ * A searchable, scroll-to-able section within a settings tab. The `key` is combined
+ * with the tab id to form a stable DOM anchor (see {@link sectionAnchorId}) that is
+ * attached to the matching `<h3>` heading in SettingsModal. Tabs with no `sections`
+ * are still searchable at the tab level (the search falls back to scrolling to top).
+ */
+export interface SettingsSection {
+  /** Anchor key, unique within the tab (e.g. 'swipe'). */
+  key: string
+  /** Existing i18n key (settings ns) for the section title, e.g. 'chat.widthTitle'. */
+  titleKey: string
+  /** English fallback title, mirrors the heading text. */
+  titleFallback: string
+  /** Extra keywords for in-modal search, merged with the tab keywords. */
+  keywords: string[]
+}
 
 export interface SettingsTabEntry {
   /** Unique view id used by the store's settingsActiveView */
@@ -25,6 +43,8 @@ export interface SettingsTabEntry {
   scope?: CommandScope
   /** Access restriction — omit for all users */
   role?: 'admin' | 'owner'
+  /** Searchable sections within the tab, for the in-modal settings search. */
+  sections?: SettingsSection[]
   /** React component factory to render the settings content */
   component: () => ReactNode
 }
@@ -51,6 +71,13 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Panel width, sidebar position, and layout options',
     tabIcon: PanelRight,
     keywords: ['display', 'layout', 'sidebar', 'drawer', 'width', 'panel', 'position', 'modal', 'chat heads'],
+    sections: [
+      { key: 'modalWidth', titleKey: 'display.modalWidth.title', titleFallback: 'Modal Width', keywords: ['modal width', 'width', 'max width', 'full', 'comfortable', 'compact', 'custom'] },
+      { key: 'drawer', titleKey: 'display.drawer.title', titleFallback: 'Drawer', keywords: ['drawer', 'sidebar', 'side', 'panel width', 'tab position', 'tab size', 'tab labels'] },
+      { key: 'toast', titleKey: 'display.toast.title', titleFallback: 'Notifications', keywords: ['toast', 'toast position', 'popup position', 'alert position'] },
+      { key: 'chatHeads', titleKey: 'display.chatHeads.title', titleFallback: 'Chat Heads', keywords: ['chat heads', 'heads', 'floating avatar', 'completion sound', 'opacity', 'size', 'direction'] },
+      { key: 'landing', titleKey: 'display.landing.title', titleFallback: 'Pagination', keywords: ['landing', 'pagination', 'recent chats', 'chats displayed', 'layout', 'page size'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -60,6 +87,15 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Message display mode, send key, and chat options',
     tabIcon: MessageSquare,
     keywords: ['chat', 'behavior', 'enter to send', 'bubble', 'minimal', 'immersive', 'streaming', 'message'],
+    sections: [
+      { key: 'general', titleKey: 'chat.title', titleFallback: 'Chat', keywords: ['message display', 'display mode', 'bubble', 'minimal', 'immersive', 'enter to send', 'streaming', 'markdown'] },
+      { key: 'width', titleKey: 'chat.widthTitle', titleFallback: 'Chat Width', keywords: ['chat width', 'content width', 'message width'] },
+      { key: 'messagesPerPage', titleKey: 'chat.messagesPerPageTitle', titleFallback: 'Messages Per Page', keywords: ['messages per page', 'pagination', 'page size', 'load more'] },
+      { key: 'input', titleKey: 'chat.inputTitle', titleFallback: 'Input', keywords: ['input', 'composer', 'textarea', 'send', 'enter key'] },
+      { key: 'regen', titleKey: 'chat.regenTitle', titleFallback: 'Regeneration Feedback', keywords: ['regeneration', 'regen', 'feedback', 'swipe regenerate'] },
+      { key: 'messageInfo', titleKey: 'chat.messageInfoTitle', titleFallback: 'Message Info', keywords: ['message info', 'timestamp', 'token count', 'metadata'] },
+      { key: 'swipe', titleKey: 'chat.swipeTitle', titleFallback: 'Swipe Navigation', keywords: ['swipe', 'swipe navigation', 'alternate responses', 'variations'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -69,6 +105,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Manage Spindle extension configuration',
     tabIcon: Puzzle,
     keywords: ['extensions', 'spindle', 'plugins', 'addons', 'settings'],
+    sections: [
+      { key: 'general', titleKey: 'extensions.title', titleFallback: 'Extension Settings', keywords: ['extensions', 'spindle', 'plugins', 'addons'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -78,6 +117,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure guided generation sequences and prompt biases',
     tabIcon: Compass,
     keywords: ['guided', 'generation', 'sequences', 'bias', 'prompt', 'persistent'],
+    sections: [
+      { key: 'general', titleKey: 'guided.title', titleFallback: 'Guided Generations', keywords: ['guided generation', 'sequences', 'bias', 'persistent', 'prompt'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -87,6 +129,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Manage quick reply sets and message shortcuts',
     tabIcon: Reply,
     keywords: ['quick replies', 'shortcuts', 'messages', 'macros', 'quick'],
+    sections: [
+      { key: 'general', titleKey: 'quickReplies.title', titleFallback: 'Quick Replies', keywords: ['quick replies', 'shortcuts', 'macros', 'message shortcuts'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -96,6 +141,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure extension resource pool limits',
     tabIcon: HardDrive,
     keywords: ['extension', 'pools', 'resources', 'limits', 'storage'],
+    sections: [
+      { key: 'general', titleKey: 'extensionPools.title', titleFallback: 'Extension Ephemeral Pools', keywords: ['extension pools', 'ephemeral', 'resource limits', 'storage', 'quota'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -105,6 +153,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure SearXNG-backed web search for council tools',
     tabIcon: Search,
     keywords: ['web search', 'searxng', 'search', 'browse', 'internet', 'web', 'council tool'],
+    sections: [
+      { key: 'general', titleKey: 'webSearch.title', titleFallback: 'Web Search', keywords: ['web search', 'searxng', 'browse', 'internet', 'council tool'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -114,6 +165,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure embedding models and vector storage',
     tabIcon: Database,
     keywords: ['embeddings', 'vectors', 'semantic', 'search', 'similarity', 'database', 'memory'],
+    sections: [
+      { key: 'general', titleKey: 'embeddings.title', titleFallback: 'Embeddings', keywords: ['embeddings', 'vectors', 'embedding model', 'dimensions', 'semantic', 'world book vectorization', 'retrieval', 'provider'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -159,6 +213,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Advanced configuration and debug options',
     tabIcon: Sliders,
     keywords: ['advanced', 'debug', 'config', 'technical', 'expert', 'context filters', 'reasoning'],
+    sections: [
+      { key: 'general', titleKey: 'advanced.title', titleFallback: 'Advanced', keywords: ['advanced', 'image optimization', 'long term memory', 'chunking', 'retrieval', 'query', 'formatting', 'similarity', 'top k', 'context filters', 'reasoning'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -168,6 +225,9 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'LumiHub cloud sync and sharing settings',
     tabIcon: Globe,
     keywords: ['lumihub', 'cloud', 'sync', 'sharing', 'online', 'hub'],
+    sections: [
+      { key: 'general', titleKey: 'lumihub.title', titleFallback: 'LumiHub', keywords: ['lumihub', 'cloud', 'sync', 'manifest', 'sharing', 'online'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -244,6 +304,70 @@ export function getVisibleSettingsTabs(userRole?: string): SettingsTabEntry[] {
     if (tab.role === 'admin') return isAdmin
     return false
   })
+}
+
+/**
+ * Stable DOM anchor id for a settings section. Used both by the registry-driven
+ * search (to know where to scroll) and by the `<h3>` heading `id` in SettingsModal,
+ * so the two never drift apart.
+ */
+export function sectionAnchorId(tabId: string, sectionKey: string): string {
+  return `setsec-${tabId}-${sectionKey}`
+}
+
+/** A single searchable result in the in-modal settings search. */
+export interface SettingsSearchEntry {
+  /** Stable result id (`${tabId}:${sectionKey}` or `${tabId}` for tab-level). */
+  id: string
+  /** Tab to open when selected. */
+  tabId: string
+  /** Group label (resolved tab short name). */
+  group: string
+  /** Icon shown next to the result. */
+  icon: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
+  /** DOM anchor to scroll to, or null to scroll to the top of the tab. */
+  anchorId: string | null
+  /** Result label (resolved section/tab title). */
+  title: string
+  /** Combined keywords used for matching. */
+  keywords: string[]
+}
+
+/**
+ * Build the flattened, role-aware search index for the in-modal settings search.
+ * Tabs with declared `sections` contribute one entry per section (each scroll-anchored);
+ * tabs without sections contribute a single tab-level entry that scrolls to the top.
+ * Resolves i18n at call time — callers should memoize on role + active language.
+ */
+export function getSettingsSearchIndex(userRole?: string): SettingsSearchEntry[] {
+  const out: SettingsSearchEntry[] = []
+  for (const tab of getVisibleSettingsTabs(userRole)) {
+    const group = translateSettingsField(tab.id, 'shortName', tab.shortName)
+    if (tab.sections?.length) {
+      for (const sec of tab.sections) {
+        out.push({
+          id: `${tab.id}:${sec.key}`,
+          tabId: tab.id,
+          group,
+          icon: tab.tabIcon,
+          anchorId: sectionAnchorId(tab.id, sec.key),
+          title: translateSettingsSectionTitle(sec.titleKey, sec.titleFallback),
+          keywords: Array.from(new Set([...tab.keywords, ...sec.keywords])),
+        })
+      }
+    } else {
+      out.push({
+        id: tab.id,
+        tabId: tab.id,
+        group,
+        icon: tab.tabIcon,
+        anchorId: null,
+        title: translateSettingsField(tab.id, 'tabName', tab.tabName),
+        keywords: tab.keywords,
+      })
+    }
+  }
+  return out
 }
 
 /** Generate Settings commands from the registry for the command palette. */
