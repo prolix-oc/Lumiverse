@@ -16,13 +16,14 @@ import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
 
-type ScopeFilterValue = 'all' | 'global' | 'character' | 'chat'
+type ScopeFilterValue = 'all' | 'global' | 'character' | 'chat' | 'preset'
 
 const SCOPE_FILTER_LABEL_KEYS: Record<ScopeFilterValue, string> = {
   all: 'regexPanel.scopeAll',
   global: 'regexPanel.scopeGlobal',
   character: 'regexPanel.scopeThisChar',
   chat: 'regexPanel.scopeThisChat',
+  preset: 'regexPanel.scopePreset',
 }
 
 /** Insert text at cursor position in a textarea, returning new value */
@@ -116,11 +117,24 @@ export default function RegexPanel() {
     }
   }, [creatingFolderMode])
 
+  // The active Loom preset exposes a dedicated filter tab only when it actually
+  // bundles regexes (e.g. built-in scripts shipped with the preset).
+  const presetHasRegexes = useMemo(
+    () => !!activeLoomPresetId && regexScripts.some((s) => s.preset_id === activeLoomPresetId),
+    [activeLoomPresetId, regexScripts]
+  )
+
+  // Drop the preset filter if the linked preset changes to one without regexes.
+  useEffect(() => {
+    if (scopeFilter === 'preset' && !presetHasRegexes) setScopeFilter('all')
+  }, [scopeFilter, presetHasRegexes])
+
   const filteredScripts = regexScripts.filter((s) => {
     if (scopeFilter === 'all') return true
     if (scopeFilter === 'global') return s.scope === 'global'
     if (scopeFilter === 'character') return s.scope === 'character' && s.scope_id === activeCharacterId
     if (scopeFilter === 'chat') return s.scope === 'chat' && s.scope_id === activeChatId
+    if (scopeFilter === 'preset') return s.preset_id === activeLoomPresetId
     return true
   })
 
@@ -383,7 +397,13 @@ export default function RegexPanel() {
       </div>
 
       <div className={styles.scopeFilter}>
-        {(['all', 'global', 'character', 'chat'] as ScopeFilterValue[]).map((v) => (
+        {([
+          'all',
+          'global',
+          'character',
+          'chat',
+          ...(presetHasRegexes ? (['preset'] as const) : []),
+        ] as ScopeFilterValue[]).map((v) => (
           <button
             key={v}
             className={clsx(styles.scopePill, scopeFilter === v && styles.scopePillActive)}

@@ -629,6 +629,7 @@
     "scopeGlobal": "Global",
     "scopeThisChar": "This Char",
     "scopeThisChat": "This Chat",
+    "scopePreset": "Preset",
     "noScripts": "No regex scripts yet.",
     "clickPlus": "Click + to create one.",
     "uncategorized": "uncategorized",

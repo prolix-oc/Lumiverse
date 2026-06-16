@@ -42,6 +42,7 @@ import {
   FileText,
   Zap,
   Settings2,
+  Braces,
   RotateCcw,
   Wifi,
   Code2,
@@ -1392,10 +1393,11 @@ export default function LoomBuilder({
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
-  const hasConfigurableVariables = useMemo(() => {
-    return (activePreset?.blocks ?? []).some(
-      (b) => b.enabled && Array.isArray(b.variables) && b.variables.length > 0,
-    )
+  const configurableVariableCount = useMemo(() => {
+    return (activePreset?.blocks ?? []).reduce((count, b) => {
+      if (!b.enabled || !Array.isArray(b.variables)) return count
+      return count + b.variables.filter((v) => v && v.name).length
+    }, 0)
   }, [activePreset?.blocks])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importTypeRef = useRef<string>('json')
@@ -1933,15 +1935,16 @@ export default function LoomBuilder({
         {activePreset && <AdvancedSettingsPanel advancedSettings={activePreset.advancedSettings} completionSettings={activePreset.completionSettings} onSave={saveAdvancedSettings} onSaveCompletion={saveCompletionSettings} />}
         {activePreset && <ContextMeter />}
 
-        {activePreset && hasConfigurableVariables && (
-          <div style={{ padding: '0 12px 8px' }}>
+        {activePreset && configurableVariableCount > 0 && (
+          <div className={s.variablesAction}>
             <button
               type="button"
-              className={clsx(s.btn)}
-              style={{ width: '100%', justifyContent: 'center' }}
+              className={clsx(s.btn, s.variablesBtn)}
               onClick={() => setShowPromptVariablesModal(true)}
             >
-              <Settings2 size={14} /> {lb('actions.configureVariables')}
+              <Braces size={14} />
+              <span>{lb('actions.configureVariables')}</span>
+              <span className={s.accordionBadge}>{configurableVariableCount}</span>
             </button>
           </div>
         )}
