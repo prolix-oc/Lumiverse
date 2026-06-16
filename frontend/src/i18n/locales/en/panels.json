@@ -625,6 +625,8 @@
     "newScript": "New Script",
     "newFolder": "New Folder",
     "folderName": "Folder name...",
+    "dragToReorder": "Drag to reorder",
+    "dragToFolderAria": "Drag handle — reorder, or drop onto a folder to move",
     "scopeAll": "All",
     "scopeGlobal": "Global",
     "scopeThisChar": "This Char",

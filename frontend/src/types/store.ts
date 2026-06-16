@@ -1141,7 +1141,7 @@ export interface RegexSlice {
   updateRegexScript: (id: string, updates: UpdateRegexScriptInput) => Promise<void>
   removeRegexScript: (id: string) => Promise<void>
   bulkRemoveRegexScripts: (ids: string[]) => Promise<number>
-  reorderRegexScripts: (fromIdx: number, toIdx: number) => Promise<void>
+  reorderRegexScripts: (orderedIds: string[], folderChange?: { id: string; folder: string }) => Promise<void>
   toggleRegexScript: (id: string, disabled: boolean) => Promise<void>
   setRegexEditingId: (id: string | null) => void
 }
