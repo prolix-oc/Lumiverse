@@ -87,6 +87,10 @@ import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import * as memoryCortex from "./memory-cortex";
 import { buildEmotionalContext } from "./memory-cortex";
+import {
+  canUseCortexWorker,
+  warmCortexInWorker,
+} from "./cortex-warm-worker-client";
 import * as databankSvc from "./databank";
 import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { getSidecarSettings } from "./sidecar-settings.service";
@@ -211,6 +215,15 @@ async function yieldAndCheckAbort(signal?: AbortSignal): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, 0));
   if (signal?.aborted)
     throw signal.reason ?? new DOMException("Aborted", "AbortError");
+}
+
+/** True when assemblePrompt is executing inside the prompt-assembly worker
+ *  isolate (flag set by prompt-assembly-worker.ts at module load). */
+function runningInAssemblyWorker(): boolean {
+  return (
+    (globalThis as { __LUMIVERSE_ASSEMBLY_WORKER?: boolean })
+      .__LUMIVERSE_ASSEMBLY_WORKER === true
+  );
 }
 
 function normalizeWorldInfoOutletName(value: unknown): string | null {
@@ -1152,7 +1165,12 @@ export async function assemblePrompt(
     | import("./embeddings.service").PerChatMemoryOverrides
     | null = null;
 
-  if (cortexConfig.enabled) {
+  // Skip the warm task when assembly runs inside the assembly worker: its
+  // results must land in the MAIN process's cortex cache, and warmCortexInWorker
+  // would otherwise spawn a nested cortex worker from in here. Cortex warming
+  // runs only on the in-process assembly path (where it reaches the real cache),
+  // matching prior behavior — the per-call worker killed this task anyway.
+  if (cortexConfig.enabled && !runningInAssemblyWorker()) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ??
@@ -1215,26 +1233,68 @@ export async function assemblePrompt(
         .join(" ");
       const emotionalContext = buildEmotionalContext(recentContent);
 
-      // Fire main cortex query + linked cortex queries in parallel. The
-      // combined signal is threaded through so a user-initiated stop OR a
-      // newer generation on this chat tears down the embedding API call
-      // and LanceDB retrieval instead of letting the background task live
-      // on as an orphan.
+      const excludeMessageIds = ctx.excludeMessageId
+        ? [ctx.excludeMessageId]
+        : undefined;
+      const mainQueryParams = {
+        chatId: ctx.chatId,
+        userId: ctx.userId,
+        queryText: cortexQueryText,
+        emotionalContext,
+        generationType: ctx.generationType,
+        topK: cortexPerChatOverrides?.retrievalTopK ?? effective.retrievalTopK,
+        includeConsolidations: cortexConfig.consolidation.enabled,
+        includeRelationships: cortexConfig.retrieval.relationshipInjection,
+        excludeMessageIds,
+      };
+
+      // Off-thread the retrieval. queryCortex/queryLinkedCortex perform native
+      // LanceDB vector search + Arrow marshaling that blocks whatever event
+      // loop they run on; on the main thread (the in-process assembly path)
+      // that stalls the WS ping handler long enough to trip the frontend's
+      // pong watchdog and flash a spurious disconnect overlay mid-generation.
+      // The worker computes the results and we mirror them into the host warm
+      // cache here. The worker has no AbortSignal — warm work is best-effort,
+      // so it runs to completion off-thread, but we skip priming if this
+      // generation aborted in the meantime.
+      if (canUseCortexWorker()) {
+        try {
+          const { mainResult, linkedResult } = await warmCortexInWorker({
+            chatId: ctx.chatId,
+            userId: ctx.userId,
+            cortexConfig,
+            mainQuery: mainQueryParams,
+            linkedQueryText: cortexQueryText,
+          });
+          if (cortexSignal.aborted) return;
+          if (mainResult) {
+            memoryCortex.primeCortexCache(
+              ctx.chatId,
+              mainResult,
+              excludeMessageIds ?? [],
+            );
+          }
+          if (linkedResult) {
+            memoryCortex.primeLinkedCortexCache(ctx.chatId, linkedResult);
+          }
+          return;
+        } catch (err) {
+          if (cortexSignal.aborted) return;
+          console.warn(
+            "[prompt-assembly] Cortex worker failed; falling back to in-process retrieval:",
+            err,
+          );
+          // Fall through to the in-process path below.
+        }
+      }
+
+      // In-process fallback (worker disabled via env or crashed). The combined
+      // signal is threaded through so a user-initiated stop OR a newer
+      // generation on this chat tears down the embedding API call and LanceDB
+      // retrieval instead of letting the background task live on as an orphan.
+      // These calls self-populate the warm cache as a side effect.
       const mainQuery = memoryCortex.queryCortex(
-        {
-          chatId: ctx.chatId,
-          userId: ctx.userId,
-          queryText: cortexQueryText,
-          emotionalContext,
-          generationType: ctx.generationType,
-          topK:
-            cortexPerChatOverrides?.retrievalTopK ?? effective.retrievalTopK,
-          includeConsolidations: cortexConfig.consolidation.enabled,
-          includeRelationships: cortexConfig.retrieval.relationshipInjection,
-          excludeMessageIds: ctx.excludeMessageId
-            ? [ctx.excludeMessageId]
-            : undefined,
-        },
+        mainQueryParams,
         cortexConfig,
         cortexSignal,
       );

@@ -4,6 +4,13 @@ import { configureLanceDbNativeOverride } from "../lancedb-preflight";
 import { initIdentity } from "../crypto/init";
 import { initDatabase } from "../db/connection";
 
+// Mark this isolate as the assembly worker so assemblePrompt can skip work that
+// only makes sense in the main process — notably the deferred cortex warm task,
+// whose results must populate the *main* process's cache (and which would
+// otherwise spawn a nested cortex worker from in here). Set at module load,
+// before any assemblePrompt() call.
+(globalThis as { __LUMIVERSE_ASSEMBLY_WORKER?: boolean }).__LUMIVERSE_ASSEMBLY_WORKER = true;
+
 type AssembleRequest = {
   type: "assemble";
   requestId: string;

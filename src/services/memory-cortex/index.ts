@@ -472,6 +472,31 @@ export function invalidateCortexCache(chatId: string): void {
   cortexResultCache.delete(chatId);
 }
 
+/**
+ * Prime the warm cache with a cortex result computed off the main thread.
+ *
+ * `queryCortex` normally writes the cache as a side effect, but when the warm
+ * query runs inside the cortex worker (so its CPU-bound LanceDB/embedding work
+ * never blocks the WS event loop), the side effect lands in the *worker's*
+ * module instance. The main process calls this to mirror the result into its
+ * own cache so `getCachedCortexResult` serves it on the next generation.
+ *
+ * Mirrors `queryCortex`'s caching contract: timeouts/aborts are not cached,
+ * so a stale-but-real entry survives instead of a hollow placeholder.
+ */
+export function primeCortexCache(
+  chatId: string,
+  result: CortexResult,
+  excludeMessageIds: string[] = [],
+): void {
+  if (result.stats?.timedOut || result.stats?.aborted) return;
+  cortexResultCache.set(chatId, {
+    result,
+    queriedAt: Date.now(),
+    excludeMessageIds: [...excludeMessageIds],
+  });
+}
+
 // ─── Linked Cortex Cache ──────────────────────────────────────
 
 interface CachedLinkedEntry {
@@ -516,6 +541,18 @@ export function getCachedLinkedCortexResult(chatId: string): LinkedCortexResult 
 
 export function invalidateLinkedCortexCache(chatId: string): void {
   linkedCortexResultCache.delete(chatId);
+}
+
+/**
+ * Prime the linked-cortex warm cache with a result computed off the main
+ * thread (see `primeCortexCache`). `queryLinkedCortex` skips caching on abort;
+ * callers must not prime a result assembled after their own abort fired.
+ */
+export function primeLinkedCortexCache(
+  chatId: string,
+  result: LinkedCortexResult,
+): void {
+  linkedCortexResultCache.set(chatId, { result, queriedAt: Date.now() });
 }
 
 // ─── Ingestion Status / Telemetry ──────────────────────────────

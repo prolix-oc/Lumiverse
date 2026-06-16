@@ -74,6 +74,13 @@ export async function searchDatabanks(
     return { chunks: [], formatted: "", count: 0 };
   }
 
+  // Skip everything — most importantly the query embedding round-trip — when
+  // the active banks hold nothing searchable. An attached-but-empty databank
+  // would otherwise pay ~500ms to embed a query against zero chunks.
+  if (!crud.hasSearchableChunks(userId, databankIds)) {
+    return { chunks: [], formatted: "", count: 0 };
+  }
+
   try {
     if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
 
