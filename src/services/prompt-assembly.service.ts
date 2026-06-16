@@ -999,6 +999,13 @@ export async function assemblePrompt(
     prefetched: !!ctx.prefetched,
   });
 
+  // Releases the deferred cortex warm-cache task (built in the pre-flight
+  // below). Declared outside the try so the finally can fire it on every exit
+  // path. Firing only after assembly's hot path completes keeps the task's
+  // CPU-bound work off the cooperatively-yielding assembly loop, where it
+  // would otherwise be charged to the assembly-loop phase.
+  let resolveCortexGate: (() => void) | undefined;
+
   try {
   // Macrotask yield + abort check at the entry point so the event loop can
   // process pending HTTP requests (crucially `/generate/stop`) before we
@@ -1127,11 +1134,15 @@ export async function assemblePrompt(
     );
   }
 
-  // ---- Pre-flight: kick off cortex query ----
-  // The cortex query runs concurrently with world info activation and macro
-  // setup below. Prompt assembly only ever consumes warm-cache hits from this
-  // request path; on a cold miss we fall back immediately so cortex never
-  // blocks generation or dry-run rendering.
+  // ---- Pre-flight: prepare deferred cortex warm-cache task ----
+  // The cortex warm-cache task is BUILT here but DEFERRED (see cortexGate
+  // below): it parks until the function's finally releases it, so its
+  // CPU-bound work (query embedding, LanceDB Arrow marshaling, cross-chat
+  // linked retrieval) never interleaves with the cooperatively-yielding
+  // assembly loop on this single thread — where it would otherwise be charged
+  // to the assembly-loop phase. Prompt assembly only ever consumes warm-cache
+  // hits from the prefetch on this request path; on a cold miss we fall back
+  // immediately so cortex never blocks generation or dry-run rendering.
   const cortexConfig =
     pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
   let cortexChatMemSettings:
@@ -1154,9 +1165,10 @@ export async function assemblePrompt(
         | import("./embeddings.service").PerChatMemoryOverrides
         | undefined) ?? null;
 
-    // Fire cortex retrieval as best-effort warm-cache work for subsequent
-    // generations. This must stay detached from the hot path.
-    // Build query text eagerly so it's available for both main + linked queries.
+    // Cortex retrieval is best-effort warm-cache work for subsequent
+    // generations. It must stay detached from the hot path.
+    // Resolving the embedding config early is cheap/cached; the actual query
+    // text + retrieval are built inside the deferred task below.
     const embCfgPromise = pf?.embeddingConfig
       ? Promise.resolve(pf.embeddingConfig)
       : embeddingsSvc.getEmbeddingConfig(ctx.userId);
@@ -1170,7 +1182,18 @@ export async function assemblePrompt(
       ? AbortSignal.any([ctx.signal, chatBgSignal])
       : chatBgSignal;
 
+    // Gate the heavy work behind assembly completion. The task is created and
+    // tracked now (so stop/teardown wiring is in place), but parks on this
+    // gate until the function's finally releases it. By then the hot path is
+    // done, so the work runs during the network-bound streaming window
+    // instead of stealing CPU from the cooperatively-yielding assembly loop.
+    const cortexGate = new Promise<void>((resolve) => {
+      resolveCortexGate = resolve;
+    });
+
     const cortexBgTask = (async () => {
+      await cortexGate;
+      if (cortexSignal.aborted) return;
       const embCfg = await embCfgPromise;
       if (cortexSignal.aborted) return;
       const effective = cortexChatMemSettings
@@ -3004,6 +3027,10 @@ export async function assemblePrompt(
     macroEnvSeed,
   };
   } finally {
+    // Release the deferred cortex warm-cache task now that the hot path is
+    // complete (or aborted — it self-cancels via cortexSignal). Runs on every
+    // exit path, including the abort throw, so the parked task never leaks.
+    resolveCortexGate?.();
     profiler.finish();
   }
 }
