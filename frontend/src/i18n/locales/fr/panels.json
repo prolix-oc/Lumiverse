@@ -761,6 +761,7 @@
     "connection": "Connexion",
     "createConnectionFirst": "Créez d'abord une connexion dans l'onglet Connexions",
     "selectConnection": "Sélectionnez une connexion...",
+    "noConnection": "Aucune connexion",
     "promptMode": "Mode invite",
     "mode": "Mode",
     "modeHint": "La scène analyse la discussion dans une invite de scène. Custom envoie votre invite directement. Chat-aware personnalisé utilise vos instructions pour réécrire le contexte de chat actuel dans l'invite d'image finale.",

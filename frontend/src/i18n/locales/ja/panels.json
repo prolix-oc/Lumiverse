@@ -761,6 +761,7 @@
     "connection": "繋がり",
     "createConnectionFirst": "まず [接続] タブで接続を作成します",
     "selectConnection": "接続を選択...",
+    "noConnection": "接続なし",
     "promptMode": "プロンプトMode",
     "mode": "モード",
     "modeHint": "Scene はシーン プロンプトへのチャットを分析します。カスタムはプロンプトを直接送信します。チャット対応カスタムは、指示を使用して現在のチャット コンテキストを最終的な画像プロンプトに書き換えます。",

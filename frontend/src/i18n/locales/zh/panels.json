@@ -761,6 +761,7 @@
     "connection": "连接",
     "createConnectionFirst": "请先在 Connections 标签页创建连接",
     "selectConnection": "选择连接...",
+    "noConnection": "无连接",
     "promptMode": "提示模式",
     "mode": "模式",
     "modeHint": "Scene 会分析聊天生成场景提示词；Custom 直接发送你的提示词；Chat-aware custom 会根据聊天上下文重写为最终图像提示词。",

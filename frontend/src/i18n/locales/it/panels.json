@@ -760,6 +760,7 @@
     "connection": "Connessione",
     "createConnectionFirst": "Crea prima una connessione nella scheda Connessioni",
     "selectConnection": "Seleziona una connessione...",
+    "noConnection": "Nessuna connessione",
     "promptMode": "Modalità prompt",
     "mode": "Modalità",
     "modeHint": "La scena analizza la chat in un prompt di scena. Personalizzato invia il tuo prompt direttamente. Personalizzato awareness chat usa le tue istruzioni per riscrivere il contesto della chat attuale nel prompt immagine finale.",
