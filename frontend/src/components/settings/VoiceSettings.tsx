@@ -6,7 +6,7 @@ import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { ttsApi } from '@/api/tts'
 import { Toggle } from '@/components/shared/Toggle'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
 import { speak, stop, setTTSVolume, setTTSSpeed, isSpeaking } from '@/lib/ttsAudio'
 import { isWebSpeechAvailable } from '@/lib/sttEngine'
@@ -18,46 +18,28 @@ export default function VoiceSettings() {
   const voiceSettings = useStore((s) => s.voiceSettings)
   const setVoiceSettings = useStore((s) => s.setVoiceSettings)
   const sttProfiles = useStore((s) => s.sttProfiles)
-  const setSttProfiles = useStore((s) => s.setSttProfiles)
   const setSttProviders = useStore((s) => s.setSttProviders)
   const ttsProfiles = useStore((s) => s.ttsProfiles)
-  const setTtsProfiles = useStore((s) => s.setTtsProfiles)
   const setTtsProviders = useStore((s) => s.setTtsProviders)
   const addToast = useStore((s) => s.addToast)
   const openDrawer = useStore((s) => s.openDrawer)
 
   const [testing, setTesting] = useState(false)
 
-  // Load voice connections on mount
+  // Connection lists come from the store; only the provider registries need a
+  // refresh here.
   useEffect(() => {
-    sttConnectionsApi.list({ limit: 100 }).then((res) => {
-      setSttProfiles(res.data || [])
-    }).catch(() => {})
     sttConnectionsApi.providers().then((res) => {
       setSttProviders(res.providers || [])
-    }).catch(() => {})
-    ttsConnectionsApi.list().then((res) => {
-      setTtsProfiles(res.data || [])
     }).catch(() => {})
     ttsConnectionsApi.providers().then((res) => {
       setTtsProviders(res.providers || [])
     }).catch(() => {})
-  }, [setSttProfiles, setSttProviders, setTtsProfiles, setTtsProviders])
-
-  const sttConnectionOptions = useMemo(
-    () => sttProfiles
-      .map((p) => ({ value: p.id, label: `${p.name} (${p.provider})`, sublabel: p.model || undefined })),
-    [sttProfiles],
-  )
+  }, [setSttProviders, setTtsProviders])
 
   const activeSttConnection = useMemo(
     () => sttProfiles.find((p) => p.id === voiceSettings.sttConnectionId) || null,
     [sttProfiles, voiceSettings.sttConnectionId],
-  )
-
-  const connectionOptions = useMemo(
-    () => ttsProfiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` })),
-    [ttsProfiles],
   )
 
   const activeConnection = useMemo(
@@ -139,10 +121,10 @@ export default function VoiceSettings() {
         <div className={styles.row}>
           <span className={styles.label}>{t('voice.connection')}</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0 }}>
-            <SearchableSelect
+            <ConnectionSelect
+              kind="tts"
               value={voiceSettings.ttsConnectionId || ''}
               onChange={(val) => setVoiceSettings({ ttsConnectionId: val || null })}
-              options={connectionOptions}
               placeholder={t('voice.selectConnection')}
               searchPlaceholder={t('voice.searchConnections')}
               ariaLabel={t('voice.ttsConnectionAria')}
@@ -451,10 +433,10 @@ export default function VoiceSettings() {
             <div className={styles.row}>
               <span className={styles.label}>{t('voice.connection')}</span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0 }}>
-                <SearchableSelect
+                <ConnectionSelect
+                  kind="stt"
                   value={voiceSettings.sttConnectionId || ''}
                   onChange={(val) => setVoiceSettings({ sttConnectionId: val || null })}
-                  options={sttConnectionOptions}
                   placeholder={t('voice.selectConnection')}
                   searchPlaceholder={t('voice.searchConnections')}
                   ariaLabel={t('voice.sttConnectionAria')}

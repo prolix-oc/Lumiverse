@@ -3,15 +3,14 @@ import { useTranslation } from 'react-i18next'
 import { Plus, Upload, Image as ImageIcon, Ghost, Trash2, Users } from 'lucide-react'
 import { expressionsApi } from '@/api/expressions'
 import { characterGalleryApi } from '@/api/character-gallery'
-import { connectionsApi } from '@/api/connections'
+import { fetchConnectionModels } from '@/api/connectionModels'
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
-import { useStore } from '@/store'
 import ExpressionSlotCard from './ExpressionSlotCard'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import NumericInput from '@/components/shared/NumericInput'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { Toggle } from '@/components/shared/Toggle'
 import type { ExpressionConfig, ExpressionSlot, ExpressionGroups } from '@/types/expressions'
@@ -59,14 +58,8 @@ export default function ExpressionEditorTab({ characterId }: Props) {
   const [exprModels, setExprModels] = useState<string[]>([])
   const [exprModelLabels, setExprModelLabels] = useState<Record<string, string>>({})
   const [exprModelsLoading, setExprModelsLoading] = useState(false)
-  const profiles = useStore((s) => s.profiles)
   const zipRef = useRef<HTMLInputElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
-
-  const profileOptions = useMemo(
-    () => profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` })),
-    [profiles],
-  )
 
   const fetchConfig = useCallback(() => {
     setLoading(true)
@@ -102,9 +95,9 @@ export default function ExpressionEditorTab({ characterId }: Props) {
     }
     setExprModelsLoading(true)
     try {
-      const result = await connectionsApi.models(detection.connectionProfileId)
-      setExprModels(result.models || [])
-      setExprModelLabels(result.model_labels || {})
+      const result = await fetchConnectionModels('llm', detection.connectionProfileId)
+      setExprModels(result.models)
+      setExprModelLabels(result.labels)
     } catch {
       setExprModels([])
       setExprModelLabels({})
@@ -403,10 +396,10 @@ export default function ExpressionEditorTab({ characterId }: Props) {
       )}
       <div className={styles.detectionField}>
         <label className={styles.detectionFieldLabel}>{t('characterEditor.expressionEditor.connectionProfile')}</label>
-        <SearchableSelect
+        <ConnectionSelect
+          kind="llm"
           value={detection.connectionProfileId || ''}
           onChange={(val) => saveDetection({ ...detection, connectionProfileId: val, model: '' })}
-          options={profileOptions}
           placeholder={t('characterEditor.expressionEditor.useSidecarDefault')}
           searchPlaceholder={t('characterEditor.expressionEditor.searchConnections')}
           emptyMessage={t('characterEditor.expressionEditor.noConnectionProfiles')}

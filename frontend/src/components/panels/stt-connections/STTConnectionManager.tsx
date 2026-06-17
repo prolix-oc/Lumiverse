@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { sttConnectionsApi } from '@/api/stt-connections'
+import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import STTConnectionForm from './STTConnectionForm'
@@ -33,7 +34,7 @@ export default function STTConnectionManager() {
       if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
-          sttConnectionsApi.list({ limit: 100 }),
+          listAllConnections(sttConnectionsApi),
           sttConnectionsApi.providers(),
         ])
 

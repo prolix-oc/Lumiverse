@@ -4,11 +4,11 @@ import { Link2, Settings, Users, Plus, Package, Power, AlertTriangle, Cpu, Info,
 import { IconAdjustments, IconAdjustmentsHorizontal } from '@tabler/icons-react'
 import clsx from 'clsx'
 import { useStore } from '@/store'
-import { connectionsApi } from '@/api/connections'
+import { fetchConnectionModels } from '@/api/connectionModels'
 import { Toggle } from '@/components/shared/Toggle'
 import { Button, EditorSection, FormField } from '@/components/shared/FormComponents'
 import NumberStepper from '@/components/shared/NumberStepper'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import ModelCombobox from './connection-manager/ModelCombobox'
 import LoadoutSelector from './LoadoutSelector'
 import CouncilMemberItem from './council/CouncilMemberItem'
@@ -141,9 +141,9 @@ export default function CouncilManager() {
 
     setSidecarModelsLoading(true)
     try {
-      const result = await connectionsApi.models(councilProfiles.sidecarConfig.connectionProfileId)
-      setSidecarModels(result.models || [])
-      setSidecarModelLabels(result.model_labels || {})
+      const result = await fetchConnectionModels('llm', councilProfiles.sidecarConfig.connectionProfileId)
+      setSidecarModels(result.models)
+      setSidecarModelLabels(result.labels)
     } catch {
       setSidecarModels([])
       setSidecarModelLabels({})
@@ -180,8 +180,6 @@ export default function CouncilManager() {
   }, [loadAvailableTools])
 
   const ts = councilSettings.toolsSettings
-
-  const profileOptions = profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.provider})` }))
 
   const handleToggleEnabled = useCallback(() => {
     saveCouncilSettings({
@@ -498,10 +496,10 @@ export default function CouncilManager() {
           </div>
 
           <FormField label={t('sidecar.connectionProfile')}>
-            <SearchableSelect
+            <ConnectionSelect
+              kind="llm"
               value={councilProfiles.sidecarConfig.connectionProfileId}
-              onChange={(val) => councilProfiles.saveSidecar({ connectionProfileId: val })}
-              options={profileOptions}
+              onChange={(val) => councilProfiles.saveSidecar({ connectionProfileId: val, model: profiles.find((p) => p.id === val)?.model || '' })}
               placeholder={t('sidecar.selectConnection')}
               searchPlaceholder={t('sidecar.searchConnections')}
               emptyMessage={t('sidecar.noConnections')}

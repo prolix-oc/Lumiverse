@@ -61,6 +61,10 @@ type CommonProps = {
   triggerIcon?: ReactNode
   /** Force a specific trigger label (e.g. "+ Add"), ignoring current selection. */
   triggerLabel?: string
+  /** Show the selected option's sublabel as a second line in the trigger (single-select). */
+  showSelectedSublabel?: boolean
+  /** Extra class on the leading slot (trigger + rows). */
+  leadingClassName?: string
   ariaLabel?: string
   /** Render the popover inside document.body (useful for overflow-hidden containers). */
   portal?: boolean
@@ -89,6 +93,8 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     triggerClassName,
     triggerIcon,
     triggerLabel,
+    showSelectedSublabel,
+    leadingClassName,
     ariaLabel,
     portal = false,
     align = 'left',
@@ -101,7 +107,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeIdx, setActiveIdx] = useState(0)
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number | null; bottom: number | null; left: number; width: number; maxHeight: number } | null>(null)
 
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -152,7 +158,8 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         const next = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]
         ;(props.onChange as (value: string[]) => void)(next)
       } else {
-        ;(props.onChange as (value: string) => void)(v)
+        // Match native <select>: re-picking the selected option is not a change.
+        if (v !== props.value) (props.onChange as (value: string) => void)(v)
         setOpen(false)
         setSearch('')
       }
@@ -231,22 +238,37 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     const layoutWidth = Math.max(r.width / uiScale, minWidth ?? 240)
     const renderedWidth = layoutWidth * uiScale
     let renderedLeft = align === 'right' ? r.right - renderedWidth : r.left
-    const renderedTop = r.bottom + 4
     // Clamp horizontally so the popover stays on screen at any UI scale.
     const vw = window.innerWidth
+    const vh = window.innerHeight
     const margin = 8
+    const gap = 4
     if (renderedLeft + renderedWidth > vw - margin) {
       renderedLeft = vw - margin - renderedWidth
     }
     if (renderedLeft < margin) {
       renderedLeft = margin
     }
+    // Flip above when there's more room there, capping height to the available
+    // space. Flipped popovers anchor via `bottom` so a short list hugs the trigger.
+    const desired = maxHeight * uiScale
+    const spaceBelow = vh - r.bottom - margin - gap
+    const spaceAbove = r.top - margin - gap
+    const placeAbove = spaceBelow < desired && spaceAbove > spaceBelow
+    const renderedMaxHeight = Math.max(120, Math.min(desired, placeAbove ? spaceAbove : spaceBelow))
+    // On tiny viewports the 120px floor can exceed spaceAbove; lower the anchor
+    // so the focused search input stays on-screen.
+    const renderedBottom = placeAbove
+      ? Math.min(vh - r.top + gap, Math.max(margin, vh - margin - renderedMaxHeight))
+      : null
     setPos({
-      top: renderedTop / uiScale,
+      top: placeAbove ? null : (r.bottom + gap) / uiScale,
+      bottom: renderedBottom === null ? null : renderedBottom / uiScale,
       left: renderedLeft / uiScale,
       width: layoutWidth,
+      maxHeight: renderedMaxHeight / uiScale,
     })
-  }, [align, minWidth])
+  }, [align, minWidth, maxHeight])
 
   // Reposition rather than close on scroll/resize: focusing the search input
   // (mobile keyboard opens → viewport resize) or scrollIntoView inside the
@@ -365,9 +387,9 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       role="listbox"
       aria-multiselectable={isMulti || undefined}
       style={{
-        maxHeight,
+        maxHeight: portal && pos ? pos.maxHeight : maxHeight,
         ...(portal && pos
-          ? { top: pos.top, left: pos.left, width: pos.width }
+          ? { top: pos.top ?? 'auto', bottom: pos.bottom ?? 'auto', left: pos.left, width: pos.width }
           : {}),
       }}
     >
@@ -449,7 +471,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
                 >
                   <span className={styles.optionCheck}>{selected ? '✓' : ''}</span>
                   {opt.leading && (
-                    <span className={styles.optionLeading} aria-hidden>
+                    <span className={clsx(styles.optionLeading, leadingClassName)} aria-hidden>
                       {opt.leading}
                     </span>
                   )}
@@ -489,18 +511,25 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       >
         {triggerIcon && <span className={styles.triggerIcon}>{triggerIcon}</span>}
         {selectedOption?.leading && triggerLabel === undefined && (
-          <span className={styles.triggerLeading} aria-hidden>
+          <span className={clsx(styles.triggerLeading, leadingClassName)} aria-hidden>
             {selectedOption.leading}
           </span>
         )}
-        <span
-          className={clsx(
-            styles.triggerLabel,
-            label.isPlaceholder && styles.triggerPlaceholder,
-          )}
-        >
-          {label.text}
-        </span>
+        {showSelectedSublabel && !isMulti && triggerLabel === undefined && selectedOption?.sublabel && !label.isPlaceholder ? (
+          <span className={styles.triggerTextWrap}>
+            <span className={styles.triggerName}>{label.text}</span>
+            <span className={styles.triggerSublabel}>{selectedOption.sublabel}</span>
+          </span>
+        ) : (
+          <span
+            className={clsx(
+              styles.triggerLabel,
+              label.isPlaceholder && styles.triggerPlaceholder,
+            )}
+          >
+            {label.text}
+          </span>
+        )}
         <ChevronDown
           size={12}
           className={clsx(styles.chevron, open && styles.chevronOpen)}

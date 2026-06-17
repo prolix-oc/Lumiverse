@@ -9,6 +9,7 @@ import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { personasApi } from '@/api/personas'
 import { packsApi } from '@/api/packs'
 import { resetUserScopedStoreState } from '@/store/user-scoped-reset'
+import { listAllConnections } from '@/api/listAllConnections'
 
 /**
  * Eagerly load shared data that multiple panels depend on.
@@ -156,7 +157,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['llm.connections'] || errors['llm.providers']) {
     Promise.allSettled([
-      connectionsApi.list({ limit: 100 }),
+      listAllConnections(connectionsApi),
       connectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setProfiles(profilesRes.value.data)
@@ -166,7 +167,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['stt.connections'] || errors['stt.providers']) {
     Promise.allSettled([
-      sttConnectionsApi.list({ limit: 100 }),
+      listAllConnections(sttConnectionsApi),
       sttConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setSttProfiles(profilesRes.value.data)
@@ -176,7 +177,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['tts.connections'] || errors['tts.providers']) {
     Promise.allSettled([
-      ttsConnectionsApi.list({ limit: 100 }),
+      listAllConnections(ttsConnectionsApi),
       ttsConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setTtsProfiles(profilesRes.value.data)
@@ -186,7 +187,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
 
   if (errors['imageGen.connections'] || errors['imageGen.providers']) {
     Promise.allSettled([
-      imageGenConnectionsApi.list({ limit: 100 }),
+      listAllConnections(imageGenConnectionsApi),
       imageGenConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
       if (profilesRes.status === 'fulfilled') store.setImageGenProfiles(profilesRes.value.data)

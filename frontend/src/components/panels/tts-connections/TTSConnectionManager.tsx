@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { ttsConnectionsApi } from '@/api/tts-connections'
+import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import TTSConnectionForm from './TTSConnectionForm'
@@ -36,7 +37,7 @@ export default function TTSConnectionManager() {
       if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
-          ttsConnectionsApi.list({ limit: 100 }),
+          listAllConnections(ttsConnectionsApi),
           ttsConnectionsApi.providers(),
         ])
 
