@@ -1,12 +1,14 @@
 import { getDb } from "../../db/connection";
 import { DEFAULT_BUILD_TYPE, getBuildType, isEnabledBuildType } from "./build-types";
 import { getBuildRegistry } from "./build-registry";
-import type {
-  WeaverSession,
-  CreateWeaverSessionInput,
-  UpdateWeaverSessionInput,
-  WeaverStage,
-  WeaverSessionStatus,
+import {
+  emptyPersonaPlan,
+  type WeaverSession,
+  type CreateWeaverSessionInput,
+  type UpdateWeaverSessionInput,
+  type WeaverStage,
+  type WeaverSessionStatus,
+  type WeaverPersonaPlan,
 } from "../../types/weaver";
 
 const VALID_STAGES: readonly WeaverStage[] = [
@@ -15,6 +17,7 @@ const VALID_STAGES: readonly WeaverStage[] = [
   "interview",
   "bible",
   "render",
+  "persona",
   "finalize",
 ];
 
@@ -45,6 +48,8 @@ function rowToSession(row: any): WeaverSession {
     connection_id: row.connection_id ?? null,
     model: row.model ?? null,
     persona_id: row.persona_id ?? null,
+    narration_mode: row.narration_mode ?? null,
+    persona_plan: parsePersonaPlan(row.persona_plan),
     character_id: row.character_id ?? null,
     launch_chat_id: row.launch_chat_id ?? null,
     interview_started_at: row.interview_started_at ?? null,
@@ -117,6 +122,28 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   }
 }
 
+function parsePersonaPlan(value: unknown): WeaverPersonaPlan {
+  const base = emptyPersonaPlan();
+  if (typeof value !== "string" || !value.trim()) return base;
+  try {
+    const p = JSON.parse(value);
+    if (!p || typeof p !== "object") return base;
+    const pairing = (p.pairing && typeof p.pairing === "object" ? p.pairing : {}) as Record<string, unknown>;
+    return {
+      enabled: p.enabled === true,
+      seed: typeof p.seed === "string" ? p.seed : "",
+      draft: p.draft && typeof p.draft === "object" ? p.draft : null,
+      pairing: {
+        greeting: pairing.greeting === true,
+        register: typeof pairing.register === "string" && pairing.register ? pairing.register : base.pairing.register,
+        greeting_text: typeof pairing.greeting_text === "string" ? pairing.greeting_text : "",
+      },
+    };
+  } catch {
+    return base;
+  }
+}
+
 function normalizeOptionalText(value: string | null | undefined): string | null {
   if (value == null) return null;
   const trimmed = value.trim();
@@ -152,8 +179,8 @@ export function createSession(
     `INSERT INTO weaver_sessions (
        id, user_id, session_number, created_at, updated_at,
        build_type, seed_type, seed_text, seed_provenance,
-       connection_id, model, persona_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       connection_id, model, persona_id, narration_mode
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     userId,
@@ -167,6 +194,7 @@ export function createSession(
     normalizeOptionalText(input.connection_id),
     normalizeOptionalText(input.model),
     normalizeOptionalText(input.persona_id),
+    normalizeOptionalText(input.narration_mode),
   );
 
   return getSession(userId, id)!;
@@ -226,6 +254,14 @@ export function updateSession(
   if ("persona_id" in input) {
     updates.push("persona_id = ?");
     params.push(normalizeOptionalText(input.persona_id));
+  }
+  if ("narration_mode" in input) {
+    updates.push("narration_mode = ?");
+    params.push(normalizeOptionalText(input.narration_mode));
+  }
+  if ("persona_plan" in input && input.persona_plan) {
+    updates.push("persona_plan = ?");
+    params.push(JSON.stringify(input.persona_plan));
   }
   if ("character_id" in input) {
     updates.push("character_id = ?");

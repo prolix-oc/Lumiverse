@@ -17,6 +17,7 @@ import {
   buildFieldGatePrompt,
   buildFieldGateUserMessage,
 } from "./prompts";
+import { getNarrationMode } from "./narration";
 import {
   weaverGenerateTextWithUsage,
   weaverGenerateJsonWithUsage,
@@ -335,7 +336,7 @@ export async function renderField(
     const render = await weaverGenerateTextWithUsage({
       userId,
       session,
-      system: buildFieldRenderPrompt(reg, field),
+      system: buildFieldRenderPrompt(reg, field, getNarrationMode(session.narration_mode)),
       user: steer
         ? buildFieldNudgeUserMessage(reg, { field, spine, nudge: steer, previous: existing?.content })
         : buildFieldRenderUserMessage(reg, { field, spine }),
@@ -354,7 +355,7 @@ export async function renderField(
       const revise = await weaverGenerateTextWithUsage({
         userId,
         session,
-        system: buildFieldRenderPrompt(reg, field),
+        system: buildFieldRenderPrompt(reg, field, getNarrationMode(session.narration_mode)),
         user: buildFieldReviseUserMessage(reg, { field, spine, previous: content, verdict: gate.verdict }),
         temperature: 0.7,
         signal,
@@ -402,12 +403,12 @@ export async function renderAllFields(
   if (!bible) throw new Error("Synthesize a Bible first — there is nothing to render from");
   if (bible.spine.entries.length === 0) throw new Error("The Bible has no spine yet — synthesize it first");
 
-  const edited = new Set(
+  const locked = new Set(
     getFields(userId, sessionId)
-      .filter((f) => f.status === "manually_edited")
+      .filter((f) => f.status === "manually_edited" || f.provenance.accepted === true)
       .map((f) => f.field_name),
   );
-  const defs = rankByOrder(reg.fieldDefs).filter((def) => !edited.has(def.id));
+  const defs = rankByOrder(reg.fieldDefs).filter((def) => !locked.has(def.id));
   let cursor = 0;
   async function worker(): Promise<void> {
     while (cursor < defs.length) {

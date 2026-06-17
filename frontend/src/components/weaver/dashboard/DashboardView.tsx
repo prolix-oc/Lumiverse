@@ -212,7 +212,7 @@ export function DashboardView({ session, character, starting, onBuild, onStartCh
           ) : !character ? (
             <div className={styles.dashPaneInner}><Placeholder icon="refresh" spin>{t('dashboard.loadingCard')}</Placeholder></div>
           ) : kind === 'overview' ? (
-            <OverviewPane character={character} session={session} onBuild={onBuild} />
+            <OverviewPane character={character} session={session} onBuild={onBuild} onCharacterUpdate={onCharacterUpdate} />
           ) : kind === 'portrait' ? (
             <PortraitPane sessionId={session.id} character={character} onCharacterUpdate={onCharacterUpdate} onCount={setPortraitCount} />
           ) : kind === 'expressions' ? (

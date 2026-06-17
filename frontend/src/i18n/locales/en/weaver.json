@@ -1,6 +1,10 @@
 {
   "title": "Weaver",
   "subtitle": "Craft a character from your idea",
+  "advisories": {
+    "hide": "Hide quality warnings",
+    "show": "Show quality warnings"
+  },
   "panel": {
     "blurb": "Author characters and worlds in the studio. Finished cards land in your library.",
     "pickUp": "Pick back up",
@@ -40,6 +44,64 @@
         "title": "Import",
         "desc": "Bring in an existing card or worldbook and build from it."
       }
+    }
+  },
+  "persona": {
+    "createToggle": "Create a persona",
+    "createHint": "Adds a persona step before finalize. The Weaver writes a persona to play opposite this build, attached to the launched chat.",
+    "step": {
+      "heading": "Create a persona",
+      "help": "A persona to play opposite this build. Generate one from the idea below, edit it, then continue to finalize.",
+      "ideaBand": "Idea",
+      "ideaHelp": "Optional — a name, a vibe, a few details. Leave it blank to let the Weaver invent one that fits.",
+      "ideaPlaceholder": "e.g. Mara, a wry field medic who jokes to deflect and is fiercely loyal once you earn it…",
+      "generate": "Generate persona",
+      "regenerate": "Regenerate",
+      "generating": "Generating…",
+      "back": "Back to render",
+      "continue": "Continue to finalize"
+    },
+    "pairing": {
+      "band": "Paired opening",
+      "toggle": "Write an opening opposite this persona",
+      "help": "An alternate greeting on the character card that opens the scene with this persona in play. Pick the relationship register so it reads right.",
+      "registerLabel": "Relationship register",
+      "generate": "Generate opening",
+      "generating": "Writing…",
+      "placeholder": "The opening greeting, written opposite this persona…"
+    },
+    "register": {
+      "neutral": "Neutral",
+      "canon": "Canon",
+      "au": "Alternate universe",
+      "romantic": "Romantic",
+      "adversarial": "Adversarial"
+    },
+    "review": {
+      "heading": "Review your persona",
+      "help": "Edit anything before saving. The body is always in play; depth surfaces only when relevant.",
+      "identityBand": "Identity",
+      "name": "Name",
+      "pronouns": "Pronouns (subject / object / possessive)",
+      "bodyBand": "Body — always on",
+      "bodyHelp": "One detail per line. Kept lean: this rides every turn.",
+      "sectionPlaceholder": "One detail per line…",
+      "depthBand": "Depth — surfaces on relevance",
+      "depthHelp": "Background, history, secrets — stored in a worldbook and triggered by keywords, so it never bloats every turn.",
+      "depthTitle": "Title",
+      "depthContent": "What surfaces…",
+      "depthKeys": "Trigger words, comma-separated",
+      "depthRemove": "Remove",
+      "depthAdd": "Add detail",
+      "regenerate": "Regenerate",
+      "save": "Save persona",
+      "saving": "Saving…"
+    },
+    "done": {
+      "band": "Persona created",
+      "body": "Your persona is in your library. Pick it when you start a chat, or edit it any time in Personas.",
+      "backToStudio": "Back to studio",
+      "close": "Done"
     }
   },
   "import": {
@@ -143,6 +205,7 @@
     "interview": "Interview",
     "bible": "Bible",
     "render": "Render",
+    "persona": "Persona",
     "finalize": "Finalize",
     "comingSoon": "Coming soon"
   },
@@ -154,6 +217,12 @@
     "saving": "Saving…",
     "saved": "Saved",
     "tokens": "{{count}} tokens",
+    "narration": {
+      "label": "Narration",
+      "first": "First person",
+      "second": "Second person",
+      "third": "Third person"
+    },
     "nextTitle": "What happens next",
     "pipeline": {
       "readback": {
@@ -278,6 +347,10 @@
     "rebuildHint": "Throw this away and synthesize a fresh Bible from your facts.",
     "recheck": "Re-check",
     "recheckHint": "Run the quality gate again on your edits.",
+    "redoHint": "Let the Weaver write this one entry again — the rest stays put.",
+    "redoDirtyHint": "Save or discard your edits first, then redo this entry.",
+    "redoPlaceholder": "Optional: steer this entry, e.g. darker, more specific",
+    "redoRun": "Redo entry",
     "checking": "Checking…",
     "none": "No Bible yet.",
     "briefTitle": "The brief",
@@ -324,6 +397,7 @@
     "renderingField": "Rendering {{field}}…",
     "flaggedNoContent": "This field couldn't be written. Re-render it, or strengthen the Bible.",
     "directFieldNote": "Carried from the Bible · not model-generated",
+    "carryFromBible": "Carry from the Bible",
     "staleHint": "Written before the Bible last changed. Re-render to refresh it.",
     "edit": "Edit",
     "editSave": "Save edit",
@@ -333,7 +407,11 @@
     "unaccept": "Undo accept",
     "acceptedTag": "Accepted",
     "nudgePlaceholder": "Steer this field, e.g. leaner, more guarded",
+    "nudgePlaceholderList": "Steer all openings, e.g. higher stakes, more distinct",
     "nudgeRun": "Re-render with nudge",
+    "greetingN": "Opening {{n}}",
+    "greetingAdd": "Add an opening",
+    "greetingRemove": "Remove this opening",
     "staleTitle": "The Bible changed",
     "staleBody": "This field was written before the latest Bible edit. Re-render to bring it in line.",
     "staleBodyEdited": "This field was written before the latest Bible edit. Re-rendering will replace your hand-edit.",
@@ -387,6 +465,8 @@
     "tagPreset": "Governance on the card",
     "finalize": "Finalize the card",
     "finalizing": "Finalizing",
+    "update": "Update card",
+    "updating": "Updating",
     "blocked": "Accept every field first",
     "startChat": "Start chat",
     "continueToStudio": "Continue to Visual Studio",
@@ -420,6 +500,7 @@
       "meta_one": "{{count}} field · finalized {{date}}",
       "meta_other": "{{count}} fields · finalized {{date}}",
       "editFields": "Edit fields",
+      "editField": "Edit this field",
       "rebuiltFrom": "Rebuilt from {{name}}",
       "originalNote": "original in library, untouched",
       "emptyField": "Empty. Edit fields to add one.",

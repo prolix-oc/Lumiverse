@@ -321,9 +321,10 @@ const FIELD_DEFS: readonly WeaverFieldDef[] = [
     kind: "voiced",
     render: "synthesize",
     usesVoiceMaterial: true,
+    narrated: true,
     primarySlots: ["voice", "stance_toward_user", "central_contradiction", "gradient"],
     renderGuidance:
-      "Write the character's opening message to {{user}}, in their own voice, in the scenario's moment. The NARRATION must be in the character's first-person lens and idiolect (not a neutral third-person camera), and the dialogue must sound like this specific person (the Bible's voice material is the source of truth); reflect their stance toward {{user}} and let them act on an intent. Use {{user}} for the user and {{char}} for the character where natural; *italics* may carry inner thought. Do not write {{user}}'s actions or words. No meta or preamble.",
+      "Write the character's opening message to {{user}}, in the scenario's moment. The dialogue must sound like this specific person (the Bible's voice material is the source of truth); reflect their stance toward {{user}} and let them act on an intent. Use {{user}} for the user and {{char}} for the character where natural. Do not write {{user}}'s actions or words. No meta or preamble.",
   },
   {
     id: "mes_example",
@@ -333,9 +334,10 @@ const FIELD_DEFS: readonly WeaverFieldDef[] = [
     kind: "alichat",
     render: "synthesize",
     usesVoiceMaterial: true,
+    narrated: true,
     primarySlots: ["voice", "tensions", "gradient", "intents"],
     renderGuidance:
-      "Write 3 to 5 example exchanges in the Ali:Chat convention. Begin each exchange with a line containing only \"<START>\", then a \"{{user}}:\" turn and a \"{{char}}:\" turn. Across the set, COVER varied and distinct beats: a peak emotional moment, a boundary the character holds, a moment of their humor, a value-driven choice, and a mundane everyday exchange — not the same register repeated. If the Bible carries a relational arc, also include one low-closeness and one high-closeness exchange that show the same through-line at different distances. Every {{char}} turn must be in the character's voice with first-person narration in their idiolect; *italics* may carry inner thought. Use {{user}} and {{char}}; do not write {{user}}'s lines beyond the short prompt that sets up each exchange. No meta or preamble.",
+      "Write 3 to 5 example exchanges in the Ali:Chat convention. Begin each exchange with a line containing only \"<START>\", then a \"{{user}}:\" turn and a \"{{char}}:\" turn. Across the set, COVER varied and distinct beats: a peak emotional moment, a boundary the character holds, a moment of their humor, a value-driven choice, and a mundane everyday exchange — not the same register repeated. If the Bible carries a relational arc, also include one low-closeness and one high-closeness exchange that show the same through-line at different distances. Every {{char}} turn must be in the character's own voice; *italics* may carry inner thought. Use {{user}} and {{char}}; do not write {{user}}'s lines beyond the short prompt that sets up each exchange. No meta or preamble.",
   },
 ] as const;
 

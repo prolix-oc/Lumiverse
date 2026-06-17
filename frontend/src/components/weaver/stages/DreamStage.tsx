@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
-import type { WeaverSession } from '@/api/weaver'
+import { emptyPersonaPlan, type WeaverSession } from '@/api/weaver'
 import { connectionsApi } from '@/api/connections'
 import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
@@ -17,6 +17,9 @@ function SessionConfigRail({ session }: { session: WeaverSession }) {
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const setConfig = useStore((s) => s.setWeaverSessionConfig)
+  const buildTypes = useStore((s) => s.weaverBuildTypes)
+  const narrationModes = useStore((s) => s.weaverNarrationModes)
+  const loadNarrationModes = useStore((s) => s.loadWeaverNarrationModes)
 
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
@@ -57,25 +60,63 @@ function SessionConfigRail({ session }: { session: WeaverSession }) {
     return opts
   }, [personas, t])
 
+  useEffect(() => { void loadNarrationModes() }, [loadNarrationModes])
+
+  const supportsNarration = useMemo(
+    () => buildTypes.find((b) => b.id === session.build_type)?.narration === true,
+    [buildTypes, session.build_type],
+  )
+  const narrationOptions = useMemo<SearchableSelectOption[]>(
+    () => narrationModes.map((m) => ({ value: m.id, label: t(`dream.narration.${m.id}`, { defaultValue: m.label }) })),
+    [narrationModes, t],
+  )
+
   const connectionOptions = useMemo<SearchableSelectOption[]>(
     () => profiles.map((p) => ({ value: p.id, label: p.name, sublabel: p.provider })),
     [profiles],
   )
 
+  const createNewPersona = session.persona_plan?.enabled ?? false
+  const setCreateNewPersona = (on: boolean) => {
+    const base = session.persona_plan ?? emptyPersonaPlan()
+    void setConfig(session.id, { persona_plan: { ...base, enabled: on } })
+  }
+
   return (
     <div className={styles.configRail}>
       <div className={styles.railGroupLabel}>{t('dream.configTitle')}</div>
+      {!createNewPersona && (
+        <div className={styles.configField}>
+          <span className={styles.configLabel}>{t('panel.persona')}</span>
+          <SearchableSelect
+            options={personaOptions}
+            value={session.persona_id ?? PERSONA_NONE}
+            onChange={(v) => void setConfig(session.id, { persona_id: !v || v === PERSONA_NONE ? null : v })}
+            placeholder={t('panel.personaNone')}
+            ariaLabel={t('panel.persona')}
+            portal
+          />
+        </div>
+      )}
       <div className={styles.configField}>
-        <span className={styles.configLabel}>{t('panel.persona')}</span>
-        <SearchableSelect
-          options={personaOptions}
-          value={session.persona_id ?? PERSONA_NONE}
-          onChange={(v) => void setConfig(session.id, { persona_id: !v || v === PERSONA_NONE ? null : v })}
-          placeholder={t('panel.personaNone')}
-          ariaLabel={t('panel.persona')}
-          portal
-        />
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={createNewPersona} onChange={(e) => setCreateNewPersona(e.target.checked)} />
+          <span>{t('persona.createToggle')}</span>
+        </label>
+        {createNewPersona && <p className={styles.stageHelp}>{t('persona.createHint')}</p>}
       </div>
+      {supportsNarration && narrationOptions.length > 0 && (
+        <div className={styles.configField}>
+          <span className={styles.configLabel}>{t('dream.narration.label')}</span>
+          <SearchableSelect
+            options={narrationOptions}
+            value={session.narration_mode ?? narrationModes[0]?.id ?? ''}
+            onChange={(v) => void setConfig(session.id, { narration_mode: v || null })}
+            ariaLabel={t('dream.narration.label')}
+            portal
+          />
+        </div>
+      )}
       <div className={styles.configField}>
         <span className={styles.configLabel}>{t('panel.connection')}</span>
         <SearchableSelect

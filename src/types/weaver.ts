@@ -4,7 +4,49 @@ export type WeaverStage =
   | "interview"
   | "bible"
   | "render"
+  | "persona"
   | "finalize";
+
+export interface PersonaDraftSection {
+  id: string;
+  label: string;
+  lines: string[];
+}
+
+export interface PersonaDepthEntry {
+  title: string;
+  content: string;
+  keys: string[];
+}
+
+export interface PersonaDraft {
+  name: string;
+  pronouns: { subjective: string; objective: string; possessive: string };
+  sections: PersonaDraftSection[];
+  depth: PersonaDepthEntry[];
+}
+
+export interface WeaverPersonaPairing {
+  greeting: boolean;
+  register: string;
+  greeting_text: string;
+}
+
+export interface WeaverPersonaPlan {
+  enabled: boolean;
+  seed: string;
+  draft: PersonaDraft | null;
+  pairing: WeaverPersonaPairing;
+}
+
+export function emptyPersonaPlan(): WeaverPersonaPlan {
+  return {
+    enabled: false,
+    seed: "",
+    draft: null,
+    pairing: { greeting: false, register: "neutral", greeting_text: "" },
+  };
+}
 
 export type WeaverSessionStatus =
   | "draft"
@@ -35,6 +77,8 @@ export interface WeaverSession {
   connection_id: string | null;
   model: string | null;
   persona_id: string | null;
+  narration_mode: string | null;
+  persona_plan: WeaverPersonaPlan;
 
   character_id: string | null;
   launch_chat_id: string | null;
@@ -53,6 +97,7 @@ export interface CreateWeaverSessionInput {
   connection_id?: string;
   model?: string;
   persona_id?: string;
+  narration_mode?: string;
 }
 
 export interface UpdateWeaverSessionInput {
@@ -62,6 +107,8 @@ export interface UpdateWeaverSessionInput {
   connection_id?: string | null;
   model?: string | null;
   persona_id?: string | null;
+  narration_mode?: string | null;
+  persona_plan?: WeaverPersonaPlan;
   character_id?: string | null;
   launch_chat_id?: string | null;
 }

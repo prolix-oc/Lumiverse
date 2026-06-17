@@ -1,10 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { useStore } from '@/store'
-import type { WeaverField, WeaverFieldDef, WeaverSession } from '@/api/weaver'
+import type { WeaverField, WeaverFieldDef, WeaverFieldKind, WeaverSession } from '@/api/weaver'
 import { Btn, FlagBand, Icon, IconBtn, renderFieldPreview, SDot, Tag } from '../primitives'
 import styles from '../WeaverStudio.module.css'
+
+/** Split a list field's content into items, mirroring the server's splitListField. */
+function splitItems(content: string, token: string): string[] {
+  if (!token) {
+    const trimmed = content.trim()
+    return trimmed ? [trimmed] : []
+  }
+  const parts: string[] = []
+  let buf: string[] = []
+  for (const line of content.split('\n')) {
+    if (line.trim() === token) {
+      parts.push(buf.join('\n'))
+      buf = []
+    } else {
+      buf.push(line)
+    }
+  }
+  parts.push(buf.join('\n'))
+  return parts.map((p) => p.trim()).filter(Boolean)
+}
 
 function fieldStatusOf(def: WeaverFieldDef, field: WeaverField | undefined, rendering: string[]): string {
   if (rendering.includes(def.id)) return 'rendering'
@@ -35,6 +55,7 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
   const rendering = useStore((s) => s.weaverFieldRendering)
   const error = useStore((s) => s.weaverRenderError)
   const bible = useStore((s) => (s.weaverStateSessionId === session.id ? s.weaverBible : null))
+  const hideAdvisories = useStore((s) => s.weaverHideAdvisories)
   const loadFieldDefs = useStore((s) => s.loadWeaverFieldDefs)
   const loadFields = useStore((s) => s.loadWeaverFields)
   const loadBible = useStore((s) => s.loadWeaverBible)
@@ -64,6 +85,19 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
     [orderedDefs, fieldBy],
   )
 
+  const carriedRef = useRef<Set<string>>(new Set())
+  useEffect(() => { carriedRef.current = new Set() }, [session.id])
+  useEffect(() => {
+    if (!bible) return
+    for (const def of orderedDefs) {
+      if (def.render !== 'direct') continue
+      if (fieldBy.get(def.id)) continue
+      if (carriedRef.current.has(def.id) || rendering.includes(def.id)) continue
+      carriedRef.current.add(def.id)
+      void renderOne(session.id, def.id)
+    }
+  }, [bible, orderedDefs, fieldBy, rendering, renderOne, session.id])
+
   const [focusKey, setFocusKey] = useState<string | null>(null)
   const focusDef = useMemo(
     () => orderedDefs.find((d) => d.id === focusKey) ?? orderedDefs[0] ?? null,
@@ -89,7 +123,7 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
         </div>
         <div className={styles.scroll}>
           {error && <p className={styles.errorText}>{error}</p>}
-          {bible && bible.status === 'flagged' && (
+          {!hideAdvisories && bible && bible.status === 'flagged' && (
             <div style={{ marginBottom: 24 }}>
               <FlagBand
                 compact
@@ -121,21 +155,19 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
                       >
                         <span className={styles.railMarker}><SDot status={st} /></span>
                         <span className={styles.railName}>{def.label}</span>
-                        {!isDirect && (
-                          <IconBtn
-                            icon="refresh"
-                            size={13}
-                            cls={styles.sq22}
-                            title={t('render.rerender')}
-                            spin={st === 'rendering'}
-                            disabled={anyRendering}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              if (fieldBy.get(def.id)?.status === 'manually_edited') setFocusKey(def.id)
-                              else void renderOne(session.id, def.id)
-                            }}
-                          />
-                        )}
+                        <IconBtn
+                          icon="refresh"
+                          size={13}
+                          cls={styles.sq22}
+                          title={isDirect ? t('render.carryFromBible') : t('render.rerender')}
+                          spin={st === 'rendering'}
+                          disabled={anyRendering}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (fieldBy.get(def.id)?.status === 'manually_edited') setFocusKey(def.id)
+                            else void renderOne(session.id, def.id)
+                          }}
+                        />
                       </div>
                     )
                   })}
@@ -156,6 +188,7 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
                   field={fieldBy.get(focusDef.id)}
                   status={fieldStatusOf(focusDef, fieldBy.get(focusDef.id), rendering)}
                   anyRendering={anyRendering}
+                  hideAdvisories={hideAdvisories}
                   onReRender={(force) => void renderOne(session.id, focusDef.id, force)}
                   onEdit={(content) => void editOne(session.id, focusDef.id, content)}
                   onAccept={(accepted) => void acceptOne(session.id, focusDef.id, accepted)}
@@ -185,11 +218,12 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
   )
 }
 
-function FieldView({ def, field, status, anyRendering, onReRender, onEdit, onAccept, onNudge }: {
+function FieldView({ def, field, status, anyRendering, hideAdvisories, onReRender, onEdit, onAccept, onNudge }: {
   def: WeaverFieldDef
   field: WeaverField | undefined
   status: string
   anyRendering: boolean
+  hideAdvisories: boolean
   onReRender: (force?: boolean) => void
   onEdit: (content: string) => void
   onAccept: (accepted: boolean) => void
@@ -197,6 +231,7 @@ function FieldView({ def, field, status, anyRendering, onReRender, onEdit, onAcc
 }) {
   const { t } = useTranslation('weaver')
   const isDirect = def.render === 'direct'
+  const isList = Boolean(def.list)
   const isRendered = Boolean(field)
   const isEdited = field?.status === 'manually_edited'
   const accepted = field?.provenance.accepted === true
@@ -236,19 +271,28 @@ function FieldView({ def, field, status, anyRendering, onReRender, onEdit, onAcc
           <RenderStatusTag status={status} revised={field?.provenance.revised} />
           {isEdited && <Tag kind="neutral" icon="pencil">{t('render.editTag')}</Tag>}
           {accepted && <Tag kind="success" icon="check">{t('render.acceptedTag')}</Tag>}
-          {isRendered && !editing && <IconBtn icon="pencil" size={15} cls={styles.sq26} title={t('render.edit')} disabled={busy} onClick={beginEdit} />}
-          {!isDirect && <IconBtn icon="refresh" size={15} cls={styles.sq26} title={t('render.rerender')} spin={status === 'rendering'} disabled={anyRendering} onClick={requestReRender} />}
+          {/* List fields edit per-item below, so no whole-field pencil. */}
+          {isRendered && !isList && !editing && <IconBtn icon="pencil" size={15} cls={styles.sq26} title={t('render.edit')} disabled={busy} onClick={beginEdit} />}
+          <IconBtn
+            icon="refresh"
+            size={15}
+            cls={styles.sq26}
+            title={isDirect ? t('render.carryFromBible') : t('render.rerender')}
+            spin={status === 'rendering'}
+            disabled={anyRendering}
+            onClick={requestReRender}
+          />
         </div>
       </div>
 
-      {stale && !editing && status !== 'rendering' && (
+      {stale && !hideAdvisories && !editing && status !== 'rendering' && (
         <FlagBand
           inField
           subject={def.label}
           detail={isEdited ? t('render.staleBodyEdited') : t('render.staleBody')}
           fix={t('render.staleTitle')}
           note={t('render.noRetryNote')}
-          action={{ label: t('render.rerender'), onClick: requestReRender }}
+          action={{ label: isDirect ? t('render.carryFromBible') : t('render.rerender'), onClick: requestReRender }}
         />
       )}
 
@@ -282,11 +326,19 @@ function FieldView({ def, field, status, anyRendering, onReRender, onEdit, onAcc
         <div className={styles.fieldEmpty}>{field?.status === 'flagged' ? t('render.flaggedNoContent') : t('render.notRendered')}</div>
       ) : isDirect ? (
         <div className={styles.fieldNameBig}>{field.content}</div>
+      ) : isList ? (
+        <GreetingsEditor
+          value={field.content}
+          separator={def.list!.separator}
+          kind={def.kind}
+          busy={busy}
+          onChange={onEdit}
+        />
       ) : (
         <div className={styles.fieldBody} dangerouslySetInnerHTML={{ __html: renderFieldPreview(def.kind, field.content) }} />
       )}
 
-      {status === 'flagged' && field?.provenance.gate && !editing && (
+      {status === 'flagged' && !hideAdvisories && field?.provenance.gate && !editing && (
         <FlagBand
           inField
           subject={t('render.fieldFlaggedSubject', { field: def.label })}
@@ -307,7 +359,7 @@ function FieldView({ def, field, status, anyRendering, onReRender, onEdit, onAcc
               <input
                 className={styles.toolin}
                 value={nudge}
-                placeholder={t('render.nudgePlaceholder')}
+                placeholder={isList ? t('render.nudgePlaceholderList') : t('render.nudgePlaceholder')}
                 disabled={anyRendering}
                 onChange={(e) => setNudge(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitNudge() } }}
@@ -317,6 +369,76 @@ function FieldView({ def, field, status, anyRendering, onReRender, onEdit, onAcc
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function GreetingsEditor({ value, separator, kind, busy, onChange }: {
+  value: string
+  separator: string
+  kind: WeaverFieldKind
+  busy: boolean
+  onChange: (content: string) => void
+}) {
+  const { t } = useTranslation('weaver')
+  const token = separator.trim()
+  const items = useMemo(() => splitItems(value, token), [value, token])
+  const [edit, setEdit] = useState<{ idx: number | 'new'; text: string } | null>(null)
+
+  const join = (arr: string[]) => arr.filter((s) => s.trim()).join(`\n${token}\n`)
+  const save = () => {
+    if (!edit) return
+    const text = edit.text.trim()
+    if (!text) { setEdit(null); return }
+    const next = edit.idx === 'new'
+      ? [...items, text]
+      : items.map((g, i) => (i === edit.idx ? text : g))
+    setEdit(null)
+    onChange(join(next))
+  }
+  const remove = (i: number) => onChange(join(items.filter((_, idx) => idx !== i)))
+
+  const editorCard = (idx: number | 'new', n: number) => (
+    <div className={styles.greetingCard}>
+      <div className={styles.greetingHead}><span className={styles.greetingLabel}>{t('render.greetingN', { n })}</span></div>
+      <div className={styles.editArea}>
+        <textarea
+          className={styles.field}
+          rows={8}
+          autoFocus
+          value={edit?.text ?? ''}
+          onChange={(e) => setEdit({ idx, text: e.target.value })}
+        />
+        <div className={styles.editActions}>
+          <Btn onClick={() => setEdit(null)}>{t('render.editCancel')}</Btn>
+          <Btn variant="primary" disabled={!edit?.text.trim()} onClick={save}>{t('render.editSave')}</Btn>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className={styles.greetings}>
+      {items.map((g, i) => (
+        edit && edit.idx === i ? (
+          <div key={i}>{editorCard(i, i + 1)}</div>
+        ) : (
+          <div className={styles.greetingCard} key={i}>
+            <div className={styles.greetingHead}>
+              <span className={styles.greetingLabel}>{t('render.greetingN', { n: i + 1 })}</span>
+              <div className={styles.greetingTools}>
+                <IconBtn icon="pencil" size={14} cls={styles.sq22} title={t('render.edit')} disabled={busy || edit !== null} onClick={() => setEdit({ idx: i, text: g })} />
+                <IconBtn icon="trash" size={14} cls={styles.sq22} title={t('render.greetingRemove')} disabled={busy || edit !== null || items.length <= 1} onClick={() => remove(i)} />
+              </div>
+            </div>
+            <div className={styles.fieldBody} dangerouslySetInnerHTML={{ __html: renderFieldPreview(kind, g) }} />
+          </div>
+        )
+      ))}
+      {edit && edit.idx === 'new' && editorCard('new', items.length + 1)}
+      <div className={styles.greetingAddRow}>
+        <Btn icon="plus" disabled={busy || edit !== null} onClick={() => setEdit({ idx: 'new', text: '' })}>{t('render.greetingAdd')}</Btn>
+      </div>
     </div>
   )
 }

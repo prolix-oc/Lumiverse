@@ -3,8 +3,14 @@ import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { useStore } from '@/store'
 import type { WeaverBibleEntry, WeaverSession } from '@/api/weaver'
-import { Band, Btn, EditableProse, FlagBand, Icon, OriginTag, Placeholder, StageRunning } from '../primitives'
+import { Band, Btn, EditableProse, FlagBand, Icon, IconBtn, OriginTag, Placeholder, StageRunning } from '../primitives'
 import styles from '../WeaverStudio.module.css'
+
+function canRedoEntry(entry: WeaverBibleEntry): boolean {
+  return entry.parts && entry.parts.length > 0
+    ? entry.parts.some((p) => p.origin !== 'established')
+    : entry.origin !== 'established'
+}
 
 export function BibleStage({ session, onBack, onContinue }: { session: WeaverSession; onBack: () => void; onContinue: () => void }) {
   const { t } = useTranslation('weaver')
@@ -14,10 +20,12 @@ export function BibleStage({ session, onBack, onContinue }: { session: WeaverSes
   const bible = useStore((s) => (s.weaverStateSessionId === session.id ? s.weaverBible : null))
   const running = useStore((s) => s.weaverBibleRunning)
   const error = useStore((s) => s.weaverBibleError)
+  const hideAdvisories = useStore((s) => s.weaverHideAdvisories)
   const loadBible = useStore((s) => s.loadWeaverBible)
   const synthesize = useStore((s) => s.synthesizeWeaverBible)
   const gate = useStore((s) => s.gateWeaverBible)
   const saveBible = useStore((s) => s.saveWeaverBible)
+  const resynthEntry = useStore((s) => s.resynthesizeWeaverBibleEntry)
 
   const [loading, setLoading] = useState(true)
   const [entries, setEntries] = useState<WeaverBibleEntry[]>([])
@@ -145,7 +153,7 @@ export function BibleStage({ session, onBack, onContinue }: { session: WeaverSes
             </div>
 
             <div className={styles.workMain}>
-              {flagged && (
+              {flagged && !hideAdvisories && (
                 <FlagBand
                   subject={t('bible.flagSubject')}
                   criteria={failedCrit.map((c) => c.label)}
@@ -168,24 +176,16 @@ export function BibleStage({ session, onBack, onContinue }: { session: WeaverSes
                   <Band key={group.id} label={t(`bible.group.${group.id}`, group.label)}>
                     <div className={styles.ledger}>
                       {groupEntries.map((entry) => (
-                        <div className={styles.ledgerRow} key={entry.slot}>
-                          <div className={clsx(styles.ledgerCell, styles.ledgerLabel)}><span>{labelFor(entry.slot)}</span></div>
-                          <div className={clsx(styles.ledgerCell, styles.ledgerContent)}>
-                            {entry.parts && entry.parts.length > 0 ? (
-                              <div className={styles.partProvenance}>
-                                {entry.parts.map((p) => (
-                                  <span className={styles.partProvItem} key={p.id}>
-                                    <span className={styles.partProvLabel}>{partLabelFor(entry.slot, p.id)}</span>
-                                    <OriginTag origin={p.origin} />
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              entry.origin !== 'established' && <div><OriginTag origin={entry.origin} /></div>
-                            )}
-                            <EditableProse value={entry.content} onChange={(v) => editEntry(entry.slot, v)} />
-                          </div>
-                        </div>
+                        <EntryRow
+                          key={entry.slot}
+                          entry={entry}
+                          label={labelFor(entry.slot)}
+                          partLabelFor={partLabelFor}
+                          dirty={dirty}
+                          running={running}
+                          onEdit={(v) => editEntry(entry.slot, v)}
+                          onRedo={(nudge) => void resynthEntry(session.id, entry.slot, nudge)}
+                        />
                       ))}
                     </div>
                   </Band>
@@ -239,5 +239,74 @@ export function BibleStage({ session, onBack, onContinue }: { session: WeaverSes
         )}
       </div>
     </>
+  )
+}
+
+function EntryRow({ entry, label, partLabelFor, dirty, running, onEdit, onRedo }: {
+  entry: WeaverBibleEntry
+  label: string
+  partLabelFor: (slotId: string, partId: string) => string
+  dirty: boolean
+  running: boolean
+  onEdit: (value: string) => void
+  onRedo: (nudge?: string) => void
+}) {
+  const { t } = useTranslation('weaver')
+  const canRedo = canRedoEntry(entry)
+  const [open, setOpen] = useState(false)
+  const [nudge, setNudge] = useState('')
+
+  const redo = () => {
+    onRedo(nudge.trim() || undefined)
+    setNudge('')
+    setOpen(false)
+  }
+
+  return (
+    <div className={styles.ledgerRow}>
+      <div className={clsx(styles.ledgerCell, styles.ledgerLabel)}>
+        <span>{label}</span>
+        {canRedo && (
+          <IconBtn
+            icon="sparkles"
+            size={13}
+            cls={styles.sq22}
+            spin={running}
+            disabled={running || dirty}
+            title={dirty ? t('bible.redoDirtyHint') : t('bible.redoHint')}
+            onClick={() => setOpen((v) => !v)}
+          />
+        )}
+      </div>
+      <div className={clsx(styles.ledgerCell, styles.ledgerContent)}>
+        {entry.parts && entry.parts.length > 0 ? (
+          <div className={styles.partProvenance}>
+            {entry.parts.map((p) => (
+              <span className={styles.partProvItem} key={p.id}>
+                <span className={styles.partProvLabel}>{partLabelFor(entry.slot, p.id)}</span>
+                <OriginTag origin={p.origin} />
+              </span>
+            ))}
+          </div>
+        ) : (
+          entry.origin !== 'established' && <div><OriginTag origin={entry.origin} /></div>
+        )}
+        <EditableProse value={entry.content} onChange={onEdit} />
+        {canRedo && open && (
+          <div className={styles.entryRedo}>
+            <input
+              className={styles.toolin}
+              value={nudge}
+              placeholder={t('bible.redoPlaceholder')}
+              disabled={running}
+              onChange={(e) => setNudge(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); redo() } }}
+            />
+            <Btn icon="sparkles" disabled={running} onClick={redo}>{t('bible.redoRun')}</Btn>
+            <Btn onClick={() => { setOpen(false); setNudge('') }}>{t('render.editCancel')}</Btn>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }

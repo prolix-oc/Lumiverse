@@ -26,6 +26,16 @@ function upsertRenderedField(
   }
 }
 
+const HIDE_ADVISORIES_KEY = 'weaver:hideAdvisories'
+
+function readHideAdvisories(): boolean {
+  try {
+    return localStorage.getItem(HIDE_ADVISORIES_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 function errorMessage(err: unknown): string {
   if (err && typeof err === 'object' && 'body' in err) {
     const body = (err as { body?: { error?: string } }).body
@@ -40,6 +50,17 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
   weaverLoading: false,
   weaverChooserIntent: false,
   setWeaverChooserIntent: (intent) => set({ weaverChooserIntent: intent }),
+
+  weaverHideAdvisories: readHideAdvisories(),
+  setWeaverHideAdvisories: (hide) => {
+    try {
+      if (hide) localStorage.setItem(HIDE_ADVISORIES_KEY, '1')
+      else localStorage.removeItem(HIDE_ADVISORIES_KEY)
+    } catch {
+      /* preference persistence is best-effort */
+    }
+    set({ weaverHideAdvisories: hide })
+  },
 
   loadWeaverSessions: async () => {
     set({ weaverLoading: true })
@@ -143,9 +164,16 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
   weaverBookRoles: [],
   weaverSlotsBuildType: null,
   weaverBuildTypes: [],
+  weaverNarrationModes: [],
+  weaverPersonaRegisters: [],
   weaverExtraction: null,
   weaverReadbackRunning: false,
   weaverReadbackError: null,
+
+  weaverPersonaDraft: null,
+  weaverPersonaGenerating: false,
+  weaverPersonaGreetingGenerating: false,
+  weaverPersonaError: null,
 
   loadWeaverSlots: async (buildType) => {
     if (get().weaverSlotsBuildType === buildType && get().weaverSlots.length > 0) return
@@ -162,6 +190,18 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     if (get().weaverBuildTypes.length > 0) return
     const types = await api.listBuildTypes()
     set({ weaverBuildTypes: [...types].sort((a, b) => a.order - b.order) })
+  },
+
+  loadWeaverNarrationModes: async () => {
+    if (get().weaverNarrationModes.length > 0) return
+    const modes = await api.listNarrationModes()
+    set({ weaverNarrationModes: modes })
+  },
+
+  loadWeaverPersonaRegisters: async () => {
+    if (get().weaverPersonaRegisters.length > 0) return
+    const registers = await api.listPersonaRegisters()
+    set({ weaverPersonaRegisters: registers })
   },
 
   loadWeaverExtraction: async (sessionId) => {
@@ -414,6 +454,21 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     set({ weaverBible: bible })
   },
 
+  resynthesizeWeaverBibleEntry: async (sessionId, slot, nudge) => {
+    if (get().activeWeaverSessionId !== sessionId) return
+    set({ weaverBibleRunning: true, weaverBibleError: null })
+    try {
+      const bible = await api.resynthesizeBibleEntry(sessionId, slot, nudge)
+      if (get().activeWeaverSessionId !== sessionId) return
+      set({ weaverBible: bible, weaverStateSessionId: sessionId })
+    } catch (err) {
+      if (get().activeWeaverSessionId !== sessionId) return
+      set({ weaverBibleError: errorMessage(err) })
+    } finally {
+      if (get().activeWeaverSessionId === sessionId) set({ weaverBibleRunning: false })
+    }
+  },
+
   weaverFieldDefs: [],
   weaverFieldDefsBuildType: null,
   weaverFields: [],
@@ -444,7 +499,14 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
 
   renderWeaverFields: async (sessionId) => {
     if (get().activeWeaverSessionId !== sessionId) return
-    const renderingAll = get().weaverFieldDefs.map((d) => d.id)
+    // Render All leaves committed fields (hand-edited or accepted) untouched, so the
+    // optimistic spinner only covers the fields the server will actually re-roll.
+    const locked = new Set(
+      get().weaverFields
+        .filter((f) => f.status === 'manually_edited' || f.provenance.accepted === true)
+        .map((f) => f.field_name),
+    )
+    const renderingAll = get().weaverFieldDefs.map((d) => d.id).filter((id) => !locked.has(id))
     set({ weaverRenderError: null, weaverFieldRendering: renderingAll })
     try {
       const fields = await api.renderFields(sessionId)
@@ -560,7 +622,7 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
         weaverStateSessionId: sessionId,
         weaverSessions: state.weaverSessions.map((s) =>
           s.id === sessionId
-            ? { ...s, stage: 'finalize', status: 'finalized', character_id: result.character.id }
+            ? { ...s, stage: 'finalize', status: 'finalized', character_id: result.character.id, persona_id: result.persona_id }
             : s,
         ),
       }))
@@ -578,6 +640,8 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     set({ weaverStartingChat: true, weaverFinalizeError: null })
     try {
       const result = await api.startChat(sessionId)
+      const personaId = get().weaverSessions.find((s) => s.id === sessionId)?.persona_id
+      if (personaId) get().setActivePersona(personaId)
       if (get().activeWeaverSessionId === sessionId) {
         set((state) => ({
           weaverSessions: state.weaverSessions.map((s) =>
@@ -591,6 +655,48 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
       throw err
     } finally {
       if (get().activeWeaverSessionId === sessionId) set({ weaverStartingChat: false })
+    }
+  },
+
+  setWeaverPersonaDraft: (draft) => set({ weaverPersonaDraft: draft }),
+
+  setWeaverPersonaPlan: async (sessionId, plan) => {
+    if (get().activeWeaverSessionId !== sessionId) return
+    set((state) => ({
+      weaverSessions: state.weaverSessions.map((s) =>
+        s.id === sessionId ? { ...s, persona_plan: plan } : s,
+      ),
+    }))
+    const updated = await api.updateSession(sessionId, { persona_plan: plan })
+    if (get().activeWeaverSessionId === sessionId) {
+      set((state) => ({ weaverSessions: replaceSession(state.weaverSessions, updated) }))
+    }
+  },
+
+  generateWeaverPersona: async (sessionId) => {
+    set({ weaverPersonaGenerating: true, weaverPersonaError: null })
+    try {
+      const draft = await api.generatePersonaDraft(sessionId)
+      if (get().activeWeaverSessionId === sessionId) set({ weaverPersonaDraft: draft })
+      return draft
+    } catch (err) {
+      if (get().activeWeaverSessionId === sessionId) set({ weaverPersonaError: errorMessage(err) })
+      throw err
+    } finally {
+      if (get().activeWeaverSessionId === sessionId) set({ weaverPersonaGenerating: false })
+    }
+  },
+
+  generateWeaverPersonaGreeting: async (sessionId, draft, register) => {
+    set({ weaverPersonaGreetingGenerating: true, weaverPersonaError: null })
+    try {
+      const { greeting } = await api.generatePersonaGreeting(sessionId, draft, register)
+      return greeting
+    } catch (err) {
+      if (get().activeWeaverSessionId === sessionId) set({ weaverPersonaError: errorMessage(err) })
+      throw err
+    } finally {
+      if (get().activeWeaverSessionId === sessionId) set({ weaverPersonaGreetingGenerating: false })
     }
   },
 })

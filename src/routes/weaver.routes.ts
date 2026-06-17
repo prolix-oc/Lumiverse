@@ -8,7 +8,11 @@ import * as finalizeSvc from "../services/weaver/finalize.service";
 import * as peopleSvc from "../services/weaver/people.service";
 import * as agencySvc from "../services/weaver/agency.service";
 import * as importSvc from "../services/weaver/import.service";
+import * as personaBuildSvc from "../services/weaver/persona-build.service";
+import type { PersonaDraft } from "../types/weaver";
 import { WEAVER_BUILD_TYPES, getBuildType, DEFAULT_BUILD_TYPE } from "../services/weaver/build-types";
+import { NARRATION_MODES } from "../services/weaver/narration";
+import { PERSONA_REGISTERS } from "../services/weaver/persona-register";
 import { getBuildRegistry } from "../services/weaver/build-registry";
 import * as tuningSvc from "../services/weaver/tuning";
 import { MAX_DYNAMIC_QUESTIONS } from "../services/weaver/dynamic-question.service";
@@ -113,6 +117,14 @@ app.delete("/sessions/:id", (c) => {
 });
 
 app.get("/build-types", (c) => c.json(WEAVER_BUILD_TYPES));
+
+app.get("/narration-modes", (c) =>
+  c.json(NARRATION_MODES.map((m) => ({ id: m.id, label: m.label }))),
+);
+
+app.get("/persona-registers", (c) =>
+  c.json(PERSONA_REGISTERS.map((r) => ({ id: r.id, label: r.label }))),
+);
 
 app.post("/import/inspect", async (c) => {
   const userId = c.get("userId");
@@ -398,6 +410,24 @@ app.post("/sessions/:id/bible/gate", async (c) => {
     const message = err instanceof Error ? err.message : "Check failed";
     if (message === "Session not found" || message === "No Bible to check yet")
       return c.json({ error: message }, 404);
+    return c.json({ error: publicWeaverError(err) }, 400);
+  }
+});
+
+app.post("/sessions/:id/bible/entries/:slot/resynthesize", async (c) => {
+  const userId = c.get("userId");
+  const body = (await c.req.json().catch(() => ({}))) as { nudge?: string };
+  try {
+    const bible = await bibleSvc.resynthesizeEntry(
+      userId,
+      c.req.param("id"),
+      c.req.param("slot"),
+      body.nudge,
+    );
+    return c.json(bible);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Redo failed";
+    if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: publicWeaverError(err) }, 400);
   }
 });
@@ -778,6 +808,37 @@ app.post("/sessions/:id/start-chat", async (c) => {
     return c.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Could not start the chat";
+    if (message === "Session not found") return c.json({ error: message }, 404);
+    return c.json({ error: publicWeaverError(err) }, 400);
+  }
+});
+
+app.post("/sessions/:id/persona/generate", async (c) => {
+  const userId = c.get("userId");
+  try {
+    const draft = await personaBuildSvc.generatePersonaDraft(userId, c.req.param("id"));
+    return c.json(draft);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Persona generation failed";
+    if (message === "Session not found") return c.json({ error: message }, 404);
+    return c.json({ error: publicWeaverError(err) }, 400);
+  }
+});
+
+app.post("/sessions/:id/persona/greeting", async (c) => {
+  const userId = c.get("userId");
+  try {
+    const body = (await c.req.json().catch(() => null)) as { draft?: PersonaDraft; register?: string } | null;
+    if (!body?.draft) return c.json({ error: "Missing persona draft" }, 400);
+    const greeting = await personaBuildSvc.generatePairedGreeting(
+      userId,
+      c.req.param("id"),
+      body.draft,
+      typeof body.register === "string" ? body.register : "neutral",
+    );
+    return c.json({ greeting });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Greeting generation failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: publicWeaverError(err) }, 400);
   }

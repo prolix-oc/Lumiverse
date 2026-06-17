@@ -4,10 +4,12 @@ export interface WeaverBuildTypeDef {
   order: number;
   hub?: boolean;
   door?: boolean;
+  narration?: boolean;
+  pairing?: boolean;
 }
 
 export const WEAVER_BUILD_TYPES: readonly WeaverBuildTypeDef[] = [
-  { id: "character", enabled: true, order: 1 },
+  { id: "character", enabled: true, order: 1, narration: true, pairing: true },
   { id: "world", enabled: true, order: 2, hub: true },
   { id: "import", enabled: true, order: 3, door: true },
 ];

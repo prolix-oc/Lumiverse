@@ -1204,6 +1204,57 @@
     var(--lumiverse-border-light, rgba(255, 255, 255, 0.075));
 }
 
+.greetings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.greetingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--lumiverse-border-light, rgba(255, 255, 255, 0.075));
+  border-radius: var(--lumiverse-radius, 8px);
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.025));
+}
+.greetingHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.greetingLabel {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-dim, rgba(255, 255, 255, 0.55));
+}
+.greetingTools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.greetingAddRow {
+  display: flex;
+}
+
+/* Inline steer/redo box under a Bible entry. */
+.entryRedo {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.entryRedo .toolin {
+  flex: 1;
+}
+
+/* The header advisories toggle reads as muted once warnings are hidden. */
+.hdrToggleOff {
+  color: var(--lumiverse-text-hint, rgba(255, 255, 255, 0.29));
+}
+
 .fieldBody {
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.7;
@@ -1957,6 +2008,18 @@
     border-radius: 0;
     border: none;
   }
+  .hdr {
+    flex-wrap: wrap;
+    gap: 10px;
+    row-gap: 9px;
+    padding: 11px 14px;
+  }
+  .hdrActions {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
   .panel {
     padding: 18px 18px 0;
   }
@@ -2261,13 +2324,97 @@
 }
 .cardField {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr) 52px;
+  grid-template-columns: 132px minmax(0, 1fr) auto;
   gap: 16px;
   align-items: baseline;
   padding: 12px 2px;
   border-bottom: 1px solid var(--lumiverse-border-light, rgba(255, 255, 255, 0.075));
   cursor: pointer;
   transition: background 150ms ease;
+}
+.cardFieldRight {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 52px;
+}
+.cardField .cardFieldRight :global(button) {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.cardField:hover .cardFieldRight :global(button),
+.cardField:focus-within .cardFieldRight :global(button) {
+  opacity: 1;
+}
+@media (hover: none) {
+  .cardField .cardFieldRight :global(button) {
+    opacity: 1;
+  }
+}
+.cardFieldEdit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.cardFieldArea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+}
+.cardFieldEditActions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Persona review */
+.personaIdRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.personaPronouns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.personaSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.personaSection .field {
+  min-height: 72px;
+  resize: vertical;
+}
+.personaDepthRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-top: 10px;
+  border: 1px solid var(--lumiverse-border-light, rgba(255, 255, 255, 0.075));
+  border-radius: var(--lumiverse-radius, 8px);
+}
+.personaDepthRow .field {
+  min-height: 60px;
+  resize: vertical;
+}
+.personaDepthHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.personaDepthHead .field {
+  min-height: 0;
+  flex: 1;
+}
+@media (max-width: 600px) {
+  .personaIdRow {
+    grid-template-columns: 1fr;
+  }
 }
 .cardField:hover {
   background: var(--lumiverse-bg-hover, rgba(255, 255, 255, 0.04));

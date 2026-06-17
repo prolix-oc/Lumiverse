@@ -3,6 +3,7 @@ import { compactLine } from "./text";
 import type { GateCriterion } from "./gate";
 import { criteriaForKind } from "./field-gate";
 import type { WeaverFieldDef } from "./fields";
+import type { NarrationMode } from "./narration";
 import type { WeaverBuildRegistry } from "./build-registry";
 import type {
   WeaverCommittedFact,
@@ -433,6 +434,7 @@ export function buildBibleSynthesisUserMessage(
     priorAuthored: SynthesisPriorPart[];
     dynamic?: WeaverBibleDynamicEntry[];
     source_noun?: string;
+    nudge?: string;
   },
 ): string {
   const parts: string[] = [];
@@ -455,6 +457,11 @@ export function buildBibleSynthesisUserMessage(
       `\nALREADY AUTHORED by earlier passes (stay consistent; build on this):\n${input.priorAuthored
         .map((p) => `- ${getSlot(reg.slots, p.slot)?.label ?? p.slot}${p.part !== p.slot ? ` · ${p.part}` : ""}: ${p.content}`)
         .join("\n")}`,
+    );
+  }
+  if (input.nudge && input.nudge.trim()) {
+    parts.push(
+      `\nSTEER from the author for this pass (re-aim what you author toward this; stay faithful to the locked facts and never contradict them): ${input.nudge.trim()}`,
     );
   }
   parts.push(
@@ -583,9 +590,17 @@ export function buildBibleGateUserMessage(
   return parts.join("\n");
 }
 
-export function buildFieldRenderPrompt(reg: WeaverBuildRegistry, field: WeaverFieldDef): string {
+export function buildFieldRenderPrompt(
+  reg: WeaverBuildRegistry,
+  field: WeaverFieldDef,
+  narrationMode?: NarrationMode,
+): string {
   const { noun } = reg.subject;
   const focus = field.primarySlots.map((s) => getSlot(reg.slots, s)?.label ?? s).join(", ");
+  const narration =
+    field.narrated && narrationMode
+      ? `\n\nNARRATION POV — applies to the prose narration in this field (dialogue always stays in {{char}}'s own idiolect):\n${narrationMode.guidance}`
+      : "";
   return `You are the Weaver's render stage. You are writing ONE field of a ${noun} — the "${field.label}" field — from the ${noun}'s FROZEN BIBLE.
 
 The Bible is the single shared source of truth. Write ONLY from it: every choice must trace to the Bible's brief, spine, and causal links. Never invent details that contradict the Bible, and never drift toward the generic, average version of this ${noun} — the Bible exists precisely to keep this ${noun} specific. The first thing that comes to mind for a premise is usually the mean; the Bible is how you reach past it.
@@ -595,7 +610,7 @@ You are writing this field in ISOLATION. You will NOT see the other rendered fie
 Lean especially on these parts of the spine for this field: ${focus}. The whole Bible remains available as context.
 
 FIELD GUIDANCE — "${field.label}":
-${field.renderGuidance}
+${field.renderGuidance}${narration}
 
 Output ONLY the field's content as plain text — no JSON, no code fence, no field label, no preamble, and no commentary before or after.`;
 }

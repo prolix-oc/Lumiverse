@@ -1,5 +1,5 @@
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
-import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
+import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -1409,13 +1409,15 @@ export interface WeaverSlice {
   weaverLoading: boolean
   weaverChooserIntent: boolean
   setWeaverChooserIntent: (intent: boolean) => void
+  weaverHideAdvisories: boolean
+  setWeaverHideAdvisories: (hide: boolean) => void
   loadWeaverSessions: () => Promise<void>
   createWeaverSession: (input?: CreateWeaverSessionInput) => Promise<WeaverSession>
   openWeaverSession: (id: string | null) => void
   updateWeaverSeed: (id: string, text: string) => Promise<void>
   setWeaverSessionConfig: (
     id: string,
-    patch: { connection_id?: string | null; model?: string | null; persona_id?: string | null },
+    patch: { connection_id?: string | null; model?: string | null; persona_id?: string | null; narration_mode?: string | null; persona_plan?: WeaverPersonaPlan },
   ) => Promise<void>
   setWeaverStage: (id: string, stage: WeaverStage) => Promise<void>
   deleteWeaverSession: (id: string) => Promise<void>
@@ -1424,11 +1426,23 @@ export interface WeaverSlice {
   weaverBookRoles: WeaverBookRole[]
   weaverSlotsBuildType: string | null
   weaverBuildTypes: WeaverBuildType[]
+  weaverNarrationModes: WeaverNarrationMode[]
+  weaverPersonaRegisters: WeaverPersonaRegister[]
   weaverExtraction: WeaverExtraction | null
   weaverReadbackRunning: boolean
   weaverReadbackError: string | null
+  weaverPersonaDraft: PersonaDraft | null
+  weaverPersonaGenerating: boolean
+  weaverPersonaGreetingGenerating: boolean
+  weaverPersonaError: string | null
+  setWeaverPersonaDraft: (draft: PersonaDraft | null) => void
+  setWeaverPersonaPlan: (sessionId: string, plan: WeaverPersonaPlan) => Promise<void>
+  generateWeaverPersona: (sessionId: string) => Promise<PersonaDraft>
+  generateWeaverPersonaGreeting: (sessionId: string, draft: PersonaDraft, register: string) => Promise<string>
   loadWeaverSlots: (buildType: string) => Promise<void>
   loadWeaverBuildTypes: () => Promise<void>
+  loadWeaverNarrationModes: () => Promise<void>
+  loadWeaverPersonaRegisters: () => Promise<void>
   loadWeaverExtraction: (sessionId: string) => Promise<void>
   runWeaverReadback: (sessionId: string) => Promise<void>
   saveWeaverExtraction: (
@@ -1459,6 +1473,7 @@ export interface WeaverSlice {
   synthesizeWeaverBible: (sessionId: string) => Promise<void>
   gateWeaverBible: (sessionId: string) => Promise<void>
   saveWeaverBible: (sessionId: string, input: UpdateWeaverBibleInput) => Promise<void>
+  resynthesizeWeaverBibleEntry: (sessionId: string, slot: string, nudge?: string) => Promise<void>
 
   weaverFieldDefs: WeaverFieldDef[]
   weaverFieldDefsBuildType: string | null

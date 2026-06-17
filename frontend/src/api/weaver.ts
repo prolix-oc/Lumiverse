@@ -9,6 +9,7 @@ export type WeaverStage =
   | 'interview'
   | 'bible'
   | 'render'
+  | 'persona'
   | 'finalize'
 
 export type WeaverSessionStatus =
@@ -30,6 +31,59 @@ export interface WeaverBuildType {
   order: number
   hub?: boolean
   door?: boolean
+  narration?: boolean
+  pairing?: boolean
+}
+
+export interface WeaverNarrationMode {
+  id: string
+  label: string
+}
+
+export interface WeaverPersonaRegister {
+  id: string
+  label: string
+}
+
+export interface PersonaDraftSection {
+  id: string
+  label: string
+  lines: string[]
+}
+
+export interface PersonaDepthEntry {
+  title: string
+  content: string
+  keys: string[]
+}
+
+export interface PersonaDraft {
+  name: string
+  pronouns: { subjective: string; objective: string; possessive: string }
+  sections: PersonaDraftSection[]
+  depth: PersonaDepthEntry[]
+}
+
+export interface WeaverPersonaPairing {
+  greeting: boolean
+  register: string
+  greeting_text: string
+}
+
+export interface WeaverPersonaPlan {
+  enabled: boolean
+  seed: string
+  draft: PersonaDraft | null
+  pairing: WeaverPersonaPairing
+}
+
+export function emptyPersonaPlan(): WeaverPersonaPlan {
+  return {
+    enabled: false,
+    seed: '',
+    draft: null,
+    pairing: { greeting: false, register: 'neutral', greeting_text: '' },
+  }
 }
 
 export interface WeaverSession {
@@ -45,6 +99,8 @@ export interface WeaverSession {
   connection_id: string | null
   model: string | null
   persona_id: string | null
+  narration_mode: string | null
+  persona_plan: WeaverPersonaPlan
   character_id: string | null
   launch_chat_id: string | null
   interview_started_at: number | null
@@ -69,6 +125,8 @@ export interface UpdateWeaverSessionInput {
   connection_id?: string | null
   model?: string | null
   persona_id?: string | null
+  narration_mode?: string | null
+  persona_plan?: WeaverPersonaPlan
 }
 
 export function createSession(input: CreateWeaverSessionInput = {}): Promise<WeaverSession> {
@@ -278,6 +336,30 @@ export interface WeaverExtraction {
 
 export function listBuildTypes(): Promise<WeaverBuildType[]> {
   return get<WeaverBuildType[]>('/weaver/build-types')
+}
+
+export function listNarrationModes(): Promise<WeaverNarrationMode[]> {
+  return get<WeaverNarrationMode[]>('/weaver/narration-modes')
+}
+
+export function listPersonaRegisters(): Promise<WeaverPersonaRegister[]> {
+  return get<WeaverPersonaRegister[]>('/weaver/persona-registers')
+}
+
+export function generatePersonaDraft(sessionId: string): Promise<PersonaDraft> {
+  return post<PersonaDraft>(`/weaver/sessions/${sessionId}/persona/generate`, {}, LLM_CALL)
+}
+
+export function generatePersonaGreeting(
+  sessionId: string,
+  draft: PersonaDraft,
+  register: string,
+): Promise<{ greeting: string }> {
+  return post<{ greeting: string }>(
+    `/weaver/sessions/${sessionId}/persona/greeting`,
+    { draft, register },
+    LLM_CALL,
+  )
 }
 
 // ----- The import door (FULL_WEAVER_PLAN §6) -----
@@ -588,6 +670,18 @@ export function updateBible(
   return patch<WeaverBible>(`/weaver/sessions/${sessionId}/bible`, input)
 }
 
+export function resynthesizeBibleEntry(
+  sessionId: string,
+  slot: string,
+  nudge?: string,
+): Promise<WeaverBible> {
+  return post<WeaverBible>(
+    `/weaver/sessions/${sessionId}/bible/entries/${slot}/resynthesize`,
+    nudge && nudge.trim() ? { nudge: nudge.trim() } : {},
+    LLM_CALL,
+  )
+}
+
 export type WeaverFieldKind = 'short' | 'bundle' | 'voice' | 'scene' | 'voiced' | 'alichat' | 'greetings'
 export type WeaverFieldRender = 'synthesize' | 'direct'
 
@@ -674,6 +768,7 @@ export interface WeaverFinalizeResult {
   character: Character
   depth_book: WorldBook | null
   depth_book_error?: string
+  persona_id: string | null
 }
 
 export interface WeaverFinalizeInput {

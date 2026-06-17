@@ -1,6 +1,7 @@
 import { getSession, updateSession } from "./session.service";
 import { getBible } from "./bible.service";
 import { getFields } from "./render.service";
+import { commitPersona } from "./persona-build.service";
 import { getBuildRegistry, type WeaverGovernanceContext } from "./build-registry";
 import { ensureRoleBook, renderBackingWorldbook } from "./worldbook-render.service";
 import { DEPTH_ROLE_ID, GOVERNANCE_ROLE_ID, getWorldbookRole } from "./worldbook-roles";
@@ -13,7 +14,7 @@ import {
 import * as charactersSvc from "../characters.service";
 import * as chatsSvc from "../chats.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../../utils/character-world-books";
-import type { Character, CreateCharacterInput } from "../../types/character";
+import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../../types/character";
 import type { Chat } from "../../types/chat";
 import type { WorldBook } from "../../types/world-book";
 import type { WeaverBibleSpine, WeaverField, WeaverSession } from "../../types/weaver";
@@ -137,6 +138,7 @@ export interface WeaverFinalizeResult {
   book_errors?: Record<string, string>;
   depth_book: WorldBook | null;
   depth_book_error?: string;
+  persona_id: string | null;
 }
 
 export interface WeaverFinalizeOptions {
@@ -201,6 +203,11 @@ export async function finalizeSession(
 
   const fieldContent = (id: string) => byName.get(id)!.content.trim();
   const name = fieldContent("name");
+  const plan = session.persona_plan;
+  const pairedGreeting =
+    plan?.enabled && plan.pairing.greeting && plan.pairing.greeting_text.trim()
+      ? plan.pairing.greeting_text.trim()
+      : "";
 
   const base: CreateCharacterInput = {
     name,
@@ -209,50 +216,81 @@ export async function finalizeSession(
     creator: WEAVER_CREATOR,
     creator_notes: reg.creatorNotes,
     tags: [WEAVER_TAG],
-    alternate_greetings: [],
+    alternate_greetings: pairedGreeting ? [pairedGreeting] : [],
     extensions: {
       weaver: buildWeaverExtension(sessionId, bible.spine, reg.extensionSlots),
     },
   };
   const input = applyFieldsToCard(base, reg.fieldDefs, fieldContent);
+  const existing = session.character_id
+    ? charactersSvc.getCharacter(userId, session.character_id)
+    : null;
 
-  const created = charactersSvc.createCharacter(userId, input);
-
-  const wanted = requestedBooks(options);
-  let character = ensureGovernanceForContext(userId, session, created, {});
   const books: Record<string, WorldBook | null> = {};
   const bookErrors: Record<string, string> = {};
-  for (const roleId of reg.finalizeBookRoles) {
-    const role = getWorldbookRole(roleId);
-    if (!role) continue;
-    if (!(wanted[roleId] ?? role.defaultEnabled)) continue;
-    const attached = await attachBackingBook(userId, session, roleId, character);
-    character = attached.character;
-    books[roleId] = attached.book;
-    if (attached.error) bookErrors[roleId] = attached.error;
+  let committedPersonaId: string | null = null;
+  let created: Character;
+
+  if (existing) {
+    const update: UpdateCharacterInput = {};
+    for (const def of reg.fieldDefs) {
+      const content = fieldContent(def.id);
+      (update as Record<string, unknown>)[def.charlField] = def.list
+        ? splitListField(content, def.list.separator)
+        : content;
+    }
+    update.extensions = {
+      ...(existing.extensions ?? {}),
+      weaver: buildWeaverExtension(sessionId, bible.spine, reg.extensionSlots),
+    };
+    created = charactersSvc.updateCharacter(userId, existing.id, update) ?? existing;
+  } else {
+    created = charactersSvc.createCharacter(userId, input);
   }
 
-  const seedBookIds = provenanceBindBookIds(session.seed.provenance).filter((id) =>
-    Boolean(getWorldBook(userId, id)),
-  );
-  if (seedBookIds.length > 0) {
-    const current = getCharacterWorldBookIds(character.extensions);
-    const fresh = seedBookIds.filter((id) => !current.includes(id));
-    if (fresh.length > 0) {
-      const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...current, ...fresh]);
-      character = charactersSvc.updateCharacter(userId, character.id, { extensions }) ?? character;
+  let character = ensureGovernanceForContext(userId, session, created, {});
+
+  if (!existing) {
+    const wanted = requestedBooks(options);
+    for (const roleId of reg.finalizeBookRoles) {
+      const role = getWorldbookRole(roleId);
+      if (!role) continue;
+      if (!(wanted[roleId] ?? role.defaultEnabled)) continue;
+      const attached = await attachBackingBook(userId, session, roleId, character);
+      character = attached.character;
+      books[roleId] = attached.book;
+      if (attached.error) bookErrors[roleId] = attached.error;
+    }
+
+    const seedBookIds = provenanceBindBookIds(session.seed.provenance).filter((id) =>
+      Boolean(getWorldBook(userId, id)),
+    );
+    if (seedBookIds.length > 0) {
+      const current = getCharacterWorldBookIds(character.extensions);
+      const fresh = seedBookIds.filter((id) => !current.includes(id));
+      if (fresh.length > 0) {
+        const extensions = setCharacterWorldBookIds(character.extensions ?? {}, [...current, ...fresh]);
+        character = charactersSvc.updateCharacter(userId, character.id, { extensions }) ?? character;
+      }
+    }
+
+    const avatarImageId = provenanceAvatarImageId(session.seed.provenance);
+    if (avatarImageId) {
+      character = charactersSvc.setCharacterAvatarFromImage(userId, character.id, avatarImageId) ?? character;
+    }
+
+    if (plan?.enabled && plan.draft) {
+      committedPersonaId = commitPersona(userId, session, plan.draft).id;
     }
   }
 
-  const avatarImageId = provenanceAvatarImageId(session.seed.provenance);
-  if (avatarImageId) {
-    character = charactersSvc.setCharacterAvatarFromImage(userId, character.id, avatarImageId) ?? character;
-  }
+  const boundPersonaId = committedPersonaId ?? session.persona_id;
 
   updateSession(userId, sessionId, {
     stage: "finalize",
     status: "finalized",
     character_id: created.id,
+    ...(committedPersonaId ? { persona_id: committedPersonaId } : {}),
   });
 
   return {
@@ -261,6 +299,7 @@ export async function finalizeSession(
     ...(Object.keys(bookErrors).length > 0 ? { book_errors: bookErrors } : {}),
     depth_book: books[DEPTH_ROLE_ID] ?? null,
     ...(bookErrors[DEPTH_ROLE_ID] ? { depth_book_error: bookErrors[DEPTH_ROLE_ID] } : {}),
+    persona_id: boundPersonaId,
   };
 }
 

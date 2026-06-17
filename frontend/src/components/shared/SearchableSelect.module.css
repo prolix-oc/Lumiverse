@@ -112,6 +112,13 @@
 .popoverPortal {
   position: fixed;
   right: auto;
+  /* Portaled popovers float over arbitrary content (modals, rails, the page).
+     --lumiverse-bg is intentionally translucent (0.95) for inline use, but over a
+     busy/blurred backdrop that bleed makes the list unreadable — see it stacking
+     over the Weaver config rail on mobile. Composite an opaque base behind it. */
+  background:
+    linear-gradient(var(--lumiverse-bg, rgba(28, 24, 38, 0.95)), var(--lumiverse-bg, rgba(28, 24, 38, 0.95))),
+    var(--lumiverse-bg-deep, #0a0812);
 }
 
 /* Search */

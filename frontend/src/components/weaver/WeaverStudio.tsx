@@ -1,11 +1,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { useStore } from '@/store'
 import type { WeaverSession, WeaverStage } from '@/api/weaver'
 import type { Character } from '@/types/api'
 import { charactersApi } from '@/api/characters'
-import { IconBtn, KindChip, STAGES, Tile } from './primitives'
+import { IconBtn, KindChip, stagesFor, Tile } from './primitives'
 import { sessionDisplay } from './sessionDisplay'
 import { StudioHome } from './StudioHome'
 import { DreamStage } from './stages/DreamStage'
@@ -13,11 +14,10 @@ import { ReadbackStage } from './stages/ReadbackStage'
 import { InterviewStage } from './stages/InterviewStage'
 import { BibleStage } from './stages/BibleStage'
 import { RenderStage } from './stages/RenderStage'
+import { PersonaStep } from './stages/PersonaStep'
 import { FinalizeStage } from './stages/FinalizeStage'
 import { DashboardHeader, DashboardView } from './dashboard/DashboardView'
 import styles from './WeaverStudio.module.css'
-
-const REACHABLE: WeaverStage[] = ['dream', 'readback', 'interview', 'bible', 'render', 'finalize']
 
 export function WeaverStudio() {
   const { t } = useTranslation('weaver')
@@ -63,27 +63,29 @@ export function WeaverStudio() {
 }
 
 function useStartWeaverChat(sessionId: string) {
+  const navigate = useNavigate()
   const startChat = useStore((s) => s.startWeaverChat)
-  const setActiveChat = useStore((s) => s.setActiveChat)
   const closeModal = useStore((s) => s.closeModal)
   const starting = useStore((s) => s.weaverStartingChat)
   const run = useCallback(async () => {
     try {
       const r = await startChat(sessionId)
-      setActiveChat(r.chat.id, r.chat.character_id)
       closeModal()
+      navigate(`/chat/${r.chat.id}`)
     } catch {
     }
-  }, [sessionId, startChat, setActiveChat, closeModal])
+  }, [sessionId, startChat, closeModal, navigate])
   return { run, starting }
 }
 
 function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClose: () => void }) {
   const { t } = useTranslation('weaver')
+  const setWeaverStage = useStore((s) => s.setWeaverStage)
+  const stages = stagesFor(session)
   const isFinalized = session.status === 'finalized'
   const [viewMode, setViewMode] = useState<'pipeline' | 'dashboard'>(isFinalized ? 'dashboard' : 'pipeline')
   const [viewStage, setViewStage] = useState<WeaverStage>(
-    REACHABLE.includes(session.stage) ? session.stage : 'dream',
+    stages.includes(session.stage) ? session.stage : 'dream',
   )
 
   const finalizeResult = useStore((s) => (s.weaverStateSessionId === session.id ? s.weaverFinalizeResult : null))
@@ -91,7 +93,7 @@ function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClos
 
   useEffect(() => {
     setViewMode(isFinalized ? 'dashboard' : 'pipeline')
-    setViewStage(REACHABLE.includes(session.stage) ? session.stage : 'dream')
+    setViewStage(stages.includes(session.stage) ? session.stage : 'dream')
   }, [session.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -108,11 +110,25 @@ function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClos
     if (character) void charactersApi.exportCharacter(character.id, 'png', character.name)
   }, [character])
 
-  const reachedIndex = STAGES.indexOf(session.stage)
+  const onBuild = useCallback(() => {
+    setViewStage('render')
+    setViewMode('pipeline')
+  }, [])
+
+  const reachedIndex = stages.indexOf(session.stage)
 
   const goToStage = (stage: WeaverStage) => {
-    const idx = STAGES.indexOf(stage)
-    if (idx <= reachedIndex && REACHABLE.includes(stage)) setViewStage(stage)
+    const idx = stages.indexOf(stage)
+    if (idx >= 0 && idx <= reachedIndex) setViewStage(stage)
+  }
+
+  const afterRender = () => {
+    if (stages.includes('persona')) {
+      void setWeaverStage(session.id, 'persona')
+      setViewStage('persona')
+    } else {
+      setViewStage('finalize')
+    }
   }
 
   const inDashboard = viewMode === 'dashboard' && isFinalized
@@ -124,7 +140,7 @@ function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClos
           character={character}
           buildType={session.build_type}
           starting={starting}
-          onBuild={() => setViewMode('pipeline')}
+          onBuild={onBuild}
           onExport={onExport}
           onStartChat={() => void startChat()}
           onClose={onClose}
@@ -133,7 +149,7 @@ function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClos
           session={session}
           character={character}
           starting={starting}
-          onBuild={() => setViewMode('pipeline')}
+          onBuild={onBuild}
           onStartChat={() => void startChat()}
           onCharacterUpdate={setCharacter}
         />
@@ -145,8 +161,8 @@ function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClos
     <>
       <PipelineHeader session={session} onClose={onClose} />
       <nav className={styles.track} aria-label="stages">
-        {STAGES.map((stage, index) => {
-          const isReachable = REACHABLE.includes(stage) && index <= reachedIndex
+        {stages.map((stage, index) => {
+          const isReachable = index <= reachedIndex
           const isCurrent = stage === viewStage
           return (
             <Fragment key={stage}>
@@ -179,10 +195,13 @@ function SessionWorkspace({ session, onClose }: { session: WeaverSession; onClos
           <BibleStage session={session} onBack={() => setViewStage('interview')} onContinue={() => setViewStage('render')} />
         )}
         {viewStage === 'render' && (
-          <RenderStage session={session} onBack={() => setViewStage('bible')} onContinue={() => setViewStage('finalize')} />
+          <RenderStage session={session} onBack={() => setViewStage('bible')} onContinue={afterRender} />
+        )}
+        {viewStage === 'persona' && (
+          <PersonaStep session={session} onBack={() => setViewStage('render')} onContinue={() => setViewStage('finalize')} />
         )}
         {viewStage === 'finalize' && (
-          <FinalizeStage session={session} onBack={() => setViewStage('render')} onOpenStudio={() => setViewMode('dashboard')} />
+          <FinalizeStage session={session} onBack={() => setViewStage(stages.includes('persona') ? 'persona' : 'render')} onOpenStudio={() => setViewMode('dashboard')} />
         )}
       </div>
     </>
@@ -194,6 +213,8 @@ function PipelineHeader({ session, onClose }: { session: WeaverSession; onClose:
   const openSession = useStore((s) => s.openWeaverSession)
   const buildTypes = useStore((s) => s.weaverBuildTypes)
   const characters = useStore((s) => s.characters)
+  const hideAdvisories = useStore((s) => s.weaverHideAdvisories)
+  const setHideAdvisories = useStore((s) => s.setWeaverHideAdvisories)
   const d = sessionDisplay(session, buildTypes, characters, t('sessions.untitled'))
   return (
     <header className={styles.hdr}>
@@ -205,6 +226,13 @@ function PipelineHeader({ session, onClose }: { session: WeaverSession; onClose:
           <KindChip>{t(`new.types.${session.build_type}.title`, { defaultValue: session.build_type })}</KindChip>
         </div>
       </div>
+      <IconBtn
+        icon={hideAdvisories ? 'shield' : 'alert'}
+        size={16}
+        cls={clsx(styles.sq32, hideAdvisories && styles.hdrToggleOff)}
+        title={hideAdvisories ? t('advisories.show') : t('advisories.hide')}
+        onClick={() => setHideAdvisories(!hideAdvisories)}
+      />
       <IconBtn icon="home" size={16} cls={styles.sq32} title={t('home.backTitle')} onClick={() => openSession(null)} />
       <span className={styles.headSep} />
       <IconBtn icon="x" size={16} cls={styles.sq32} title={t('close')} onClick={onClose} />

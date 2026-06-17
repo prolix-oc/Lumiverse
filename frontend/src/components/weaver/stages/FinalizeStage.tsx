@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import type { WeaverFieldDef, WeaverSession } from '@/api/weaver'
@@ -15,7 +16,7 @@ export function FinalizeStage({ session, onBack, onOpenStudio }: { session: Weav
   const fieldDefs = useStore((s) => s.weaverFieldDefs)
   const finalize = useStore((s) => s.finalizeWeaver)
   const startChat = useStore((s) => s.startWeaverChat)
-  const setActiveChat = useStore((s) => s.setActiveChat)
+  const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
   const loadFields = useStore((s) => s.loadWeaverFields)
   const loadFieldDefs = useStore((s) => s.loadWeaverFieldDefs)
@@ -47,8 +48,8 @@ export function FinalizeStage({ session, onBack, onOpenStudio }: { session: Weav
   const onStart = async () => {
     try {
       const r = await startChat(session.id)
-      setActiveChat(r.chat.id, r.chat.character_id)
       closeModal()
+      navigate(`/chat/${r.chat.id}`)
     } catch {
     }
   }
@@ -122,6 +123,15 @@ export function FinalizeStage({ session, onBack, onOpenStudio }: { session: Weav
         <div className={styles.spacer} />
         {finalized ? (
           <>
+            <Btn
+              icon={finalizing ? 'refresh' : 'check'}
+              spin={finalizing}
+              disabled={!allReady || finalizing}
+              title={allReady ? t('finalize.update') : t('finalize.blocked')}
+              onClick={() => void finalize(session.id, { books: Object.fromEntries(bookRoles.map((r) => [r.id, bookEnabled(r)])) })}
+            >
+              {finalizing ? t('finalize.updating') : t('finalize.update')}
+            </Btn>
             <Btn icon={startingChat ? 'refresh' : 'chat'} spin={startingChat} disabled={startingChat} onClick={() => void onStart()}>
               {t('finalize.startChat')}
             </Btn>

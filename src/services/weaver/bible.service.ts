@@ -18,6 +18,7 @@ import {
   buildBibleGatePrompt,
   buildBibleGateUserMessage,
   type SynthesisTarget,
+  type SynthesisPriorPart,
 } from "./prompts";
 import { buildGateVerdict, deriveStatus, applicableBibleCriteria } from "./gate";
 import { seedSourceNoun } from "./seed-adapter";
@@ -141,6 +142,63 @@ function parseDynamicRegion(value: unknown): WeaverBibleDynamicEntry[] {
   return out;
 }
 
+function buildFactContent(reg: WeaverBuildRegistry, facts: WeaverCommittedFact[]): Map<string, string[]> {
+  const factContent = new Map<string, string[]>();
+  for (const f of facts) {
+    if (!f.fact.trim() || !isSlotId(reg.slots, f.slot)) continue;
+    const key = factKey(f);
+    const bucket = factContent.get(key);
+    if (bucket) bucket.push(f.fact.trim());
+    else factContent.set(key, [f.fact.trim()]);
+  }
+  return factContent;
+}
+
+function buildSlotEntry(
+  reg: WeaverBuildRegistry,
+  slot: SpineSlot,
+  factContent: Map<string, string[]>,
+  authoredBy: Map<string, string>,
+): WeaverBibleEntry | null {
+  const hybrid = isHybrid(slot);
+  const builtParts: WeaverBibleEntryPart[] = [];
+
+  if (hybrid) {
+    const general = factContent.get(`${slot.id}:${slot.id}`);
+    if (general && general.length) {
+      builtParts.push({ id: slot.id, content: general.join(" "), origin: "established" });
+    }
+  }
+
+  for (const part of slotParts(reg.slots, slot.id)) {
+    const key = `${slot.id}:${part.id}`;
+    const established = factContent.get(key);
+    if (established && established.length) {
+      builtParts.push({ id: part.id, content: established.join(" "), origin: "established" });
+      continue;
+    }
+    const authored = authoredBy.get(key);
+    if (authored) {
+      builtParts.push({
+        id: part.id,
+        content: authored,
+        origin: part.fill === "generate" ? "authored" : "inferred",
+      });
+    }
+  }
+
+  if (builtParts.length === 0) return null;
+
+  if (hybrid) {
+    const partLabel = (id: string) =>
+      id === slot.id ? slot.label : slot.parts!.find((p) => p.id === id)?.label ?? id;
+    const content = builtParts.map((bp) => `${partLabel(bp.id)}: ${bp.content}`).join(" ");
+    return { slot: slot.id, content, origin: dominantOrigin(builtParts), parts: builtParts };
+  }
+  const only = builtParts[0];
+  return { slot: slot.id, content: only.content, origin: only.origin };
+}
+
 export function assembleSpine(
   reg: WeaverBuildRegistry,
   facts: WeaverCommittedFact[],
@@ -154,55 +212,12 @@ export function assembleSpine(
     coerceAuthoredParts(reg.slots, authoredRaw, authorable).map((a) => [`${a.slot}:${a.part}`, a.content]),
   );
 
-  const factContent = new Map<string, string[]>();
-  for (const f of facts) {
-    if (!f.fact.trim() || !isSlotId(reg.slots, f.slot)) continue;
-    const key = factKey(f);
-    const bucket = factContent.get(key);
-    if (bucket) bucket.push(f.fact.trim());
-    else factContent.set(key, [f.fact.trim()]);
-  }
+  const factContent = buildFactContent(reg, facts);
 
   const entries: WeaverBibleEntry[] = [];
   for (const slot of activeSlots(reg, facts)) {
-    const hybrid = isHybrid(slot);
-    const builtParts: WeaverBibleEntryPart[] = [];
-
-    if (hybrid) {
-      const general = factContent.get(`${slot.id}:${slot.id}`);
-      if (general && general.length) {
-        builtParts.push({ id: slot.id, content: general.join(" "), origin: "established" });
-      }
-    }
-
-    for (const part of slotParts(reg.slots, slot.id)) {
-      const key = `${slot.id}:${part.id}`;
-      const established = factContent.get(key);
-      if (established && established.length) {
-        builtParts.push({ id: part.id, content: established.join(" "), origin: "established" });
-        continue;
-      }
-      const authored = authoredBy.get(key);
-      if (authored) {
-        builtParts.push({
-          id: part.id,
-          content: authored,
-          origin: part.fill === "generate" ? "authored" : "inferred",
-        });
-      }
-    }
-
-    if (builtParts.length === 0) continue;
-
-    if (hybrid) {
-      const partLabel = (id: string) =>
-        id === slot.id ? slot.label : slot.parts!.find((p) => p.id === id)?.label ?? id;
-      const content = builtParts.map((bp) => `${partLabel(bp.id)}: ${bp.content}`).join(" ");
-      entries.push({ slot: slot.id, content, origin: dominantOrigin(builtParts), parts: builtParts });
-    } else {
-      const only = builtParts[0];
-      entries.push({ slot: slot.id, content: only.content, origin: only.origin });
-    }
+    const entry = buildSlotEntry(reg, slot, factContent, authoredBy);
+    if (entry) entries.push(entry);
   }
 
   const brief = typeof briefRaw === "string" ? briefRaw.trim() : "";
@@ -443,6 +458,96 @@ export async function synthesizeBible(
   usage = addUsage(usage, gateRes.usage);
 
   persist(userId, sessionId, spine, status, verdict, usage, Math.floor(Date.now() / 1000));
+  setStage(userId, sessionId, "bible");
+  return getBible(userId, sessionId)!;
+}
+
+export async function resynthesizeEntry(
+  userId: string,
+  sessionId: string,
+  slotId: string,
+  nudge?: string,
+  signal?: AbortSignal,
+): Promise<WeaverBible> {
+  const session = getSession(userId, sessionId);
+  if (!session) throw new Error("Session not found");
+  const reg = getBuildRegistry(session.build_type);
+  if (!isSlotId(reg.slots, slotId)) throw new Error(`Unknown entry: ${slotId}`);
+
+  const bible = getBible(userId, sessionId);
+  if (!bible || bible.spine.entries.length === 0) {
+    throw new Error("Synthesize a Bible first — there is nothing to redo");
+  }
+  const existingEntry = bible.spine.entries.find((e) => e.slot === slotId);
+  if (!existingEntry) throw new Error("That entry isn't in the Bible");
+
+  const extraction = getExtraction(userId, sessionId);
+  if (!extraction) throw new Error("Read the dream first — there is nothing to synthesize");
+  const facts = extraction.committed_facts;
+
+  const targets = partsToAuthor(reg, facts).filter((t) => t.slot === slotId);
+  if (targets.length === 0) {
+    throw new Error("This entry is built from your own committed facts — edit it directly.");
+  }
+
+  const slot = reg.slots.find((s) => s.id === slotId)!;
+  const group = reg.synthesisGroups.find(
+    (g) => g.id === slotSynthesisGroup(reg.slots, reg.synthesisGroups, slotId),
+  )!;
+  const taste = getTaste(userId);
+  const sourceNoun = seedSourceNoun(session.seed.type);
+  const dynamicEntries = getDynamicEntries(userId, sessionId);
+
+  // Every other entry's authored content gives the re-author pass coherence context.
+  const priorAuthored = bible.spine.entries
+    .filter((e) => e.slot !== slotId)
+    .flatMap<SynthesisPriorPart>((e) =>
+      e.parts && e.parts.length > 0
+        ? e.parts
+            .filter((p) => p.origin !== "established")
+            .map((p) => ({ slot: e.slot, part: p.id, content: p.content }))
+        : e.origin !== "established"
+          ? [{ slot: e.slot, part: e.slot, content: e.content }]
+          : [],
+    );
+
+  const res = await weaverGenerateJsonWithUsage({
+    userId,
+    session,
+    system: buildBibleSynthesisPrompt(reg, group, sourceNoun),
+    user: buildBibleSynthesisUserMessage(reg, {
+      dream: session.seed.text,
+      facts,
+      taste,
+      targets,
+      priorAuthored,
+      dynamic: dynamicEntries,
+      source_noun: sourceNoun,
+      nudge,
+    }),
+    temperature: 0.7,
+    signal,
+  });
+
+  const authorable = new Set(targets.map((t) => `${t.slot}:${t.part}`));
+  const authored = coerceAuthoredParts(reg.slots, res.data.authored, authorable);
+  const authoredBy = new Map<string, string>();
+  if (existingEntry.parts && existingEntry.parts.length > 0) {
+    for (const p of existingEntry.parts) {
+      if (p.origin !== "established") authoredBy.set(`${slotId}:${p.id}`, p.content);
+    }
+  } else if (existingEntry.origin !== "established") {
+    authoredBy.set(`${slotId}:${slotId}`, existingEntry.content);
+  }
+  for (const a of authored) authoredBy.set(`${a.slot}:${a.part}`, a.content);
+
+  const rebuilt = buildSlotEntry(reg, slot, buildFactContent(reg, facts), authoredBy);
+  if (!rebuilt) throw new Error("The model returned nothing usable for this entry");
+
+  const entries = bible.spine.entries.map((e) => (e.slot === slotId ? rebuilt : e));
+  const spine: WeaverBibleSpine = { ...bible.spine, entries };
+  const usage = addUsage(bible.token_usage, res.usage);
+  persist(userId, sessionId, spine, "pending", bible.gate, usage, bible.gated_at);
   setStage(userId, sessionId, "bible");
   return getBible(userId, sessionId)!;
 }

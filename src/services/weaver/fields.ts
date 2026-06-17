@@ -29,6 +29,7 @@ export interface WeaverFieldDef {
   primarySlots: string[];
   renderGuidance: string;
   usesVoiceMaterial?: boolean;
+  narrated?: boolean;
   list?: { separator: string };
 }
 

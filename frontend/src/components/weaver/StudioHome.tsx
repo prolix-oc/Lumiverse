@@ -4,7 +4,7 @@ import clsx from 'clsx'
 import { useStore } from '@/store'
 import type { WeaverBuildType, WeaverSession } from '@/api/weaver'
 import { getCharacterAvatarUrlById } from '@/lib/avatarUrls'
-import { BUILD_TYPE_ICONS, Btn, Icon, IconBtn, KindChip, Placeholder, StageTicks, Tile, stageIndexOf, timeAgo } from './primitives'
+import { BUILD_TYPE_ICONS, Btn, Icon, IconBtn, KindChip, Placeholder, StageTicks, Tile, stageIndexOf, stagesFor, timeAgo } from './primitives'
 import { ImportPane } from './ImportPane'
 import { TuningPane } from './TuningPane'
 import { isEmptyDraft, sessionDisplay, shortDate } from './sessionDisplay'
@@ -106,7 +106,7 @@ function LoomRow({ session, onOpen, onDelete }: {
           {d.empty ? t('home.noDream') : d.excerpt}
         </span>
       </div>
-      <StageTicks stage={stageIndexOf(session)} word />
+      <StageTicks stage={stageIndexOf(session)} stages={stagesFor(session)} word />
       <span className={s.rowTime}>{timeAgo(session.updated_at)}</span>
       <IconBtn icon="trash" size={14} cls={clsx(styles.sq28, s.rowDelete)} title={t('sessions.delete')} onClick={(e) => { e.stopPropagation(); onDelete() }} />
     </div>

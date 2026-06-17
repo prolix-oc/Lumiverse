@@ -15,6 +15,13 @@ import styles from './WeaverStudio.module.css'
 
 export const STAGES: WeaverStage[] = ['dream', 'readback', 'interview', 'bible', 'render', 'finalize']
 
+/** The stage track for a session — the optional persona step is spliced in before
+    finalize only when the build opted into creating a persona. */
+export function stagesFor(session: WeaverSession): WeaverStage[] {
+  if (!session.persona_plan?.enabled) return STAGES
+  return ['dream', 'readback', 'interview', 'bible', 'render', 'persona', 'finalize']
+}
+
 const fieldMarked = new Marked({ gfm: true, breaks: true })
 
 const LITERAL_MARKER_KINDS: ReadonlySet<WeaverFieldKind> = new Set(['alichat'])
@@ -42,8 +49,9 @@ export function monogram(name: string): string {
 }
 
 export function stageIndexOf(session: WeaverSession): number {
-  if (session.status === 'finalized') return STAGES.length
-  const idx = STAGES.indexOf(session.stage)
+  const stages = stagesFor(session)
+  if (session.status === 'finalized') return stages.length
+  const idx = stages.indexOf(session.stage)
   return idx < 0 ? 0 : idx
 }
 
@@ -91,7 +99,7 @@ export const ICONS: Record<string, LucideIcon> = {
 }
 
 export const BUILD_TYPE_ICONS: Record<string, string> = {
-  character: 'user', world: 'globe', import: 'fileUp',
+  character: 'user', world: 'globe', persona: 'smile', import: 'fileUp',
 }
 
 export function tileIconFor(buildType: WeaverBuildType | undefined): string | null {
@@ -123,12 +131,12 @@ export function Tile({ name, icon, size = 40, empty }: { name: string; icon?: st
   )
 }
 
-export function StageTicks({ stage, word, compact, stretch }: { stage: number; word?: boolean; compact?: boolean; stretch?: boolean }) {
+export function StageTicks({ stage, stages = STAGES, word, compact, stretch }: { stage: number; stages?: WeaverStage[]; word?: boolean; compact?: boolean; stretch?: boolean }) {
   const { t } = useTranslation('weaver')
   return (
     <span className={clsx(styles.ticksWrap, compact && styles.ticksWrapCompact, stretch && styles.ticksStretch)}>
       <span className={styles.ticks}>
-        {STAGES.map((s, i) => (
+        {stages.map((s, i) => (
           <span
             key={s}
             title={t(`stages.${s}`)}
@@ -138,7 +146,7 @@ export function StageTicks({ stage, word, compact, stretch }: { stage: number; w
       </span>
       {word && (
         <span className={clsx(styles.ticksWord, stage > 0 && styles.ticksWordOn)}>
-          {stage >= STAGES.length ? t('stages.finalize') : t(`stages.${STAGES[stage]}`)}
+          {stage >= stages.length ? t('stages.finalize') : t(`stages.${stages[stage]}`)}
         </span>
       )}
     </span>
