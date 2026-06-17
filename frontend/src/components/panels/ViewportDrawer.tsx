@@ -10,6 +10,7 @@ import { useLongPress } from '@/hooks/useLongPress'
 import { DRAWER_TABS, adaptExtensionTabs, applyDrawerTabOrder, sanitizeDrawerTabOrder, sanitizeHiddenDrawerTabIds } from '@/lib/drawer-tab-registry'
 import { translateDrawerField } from '@/lib/i18n/resolveLabel'
 import { useTranslation } from 'react-i18next'
+import TabPanelContent from './TabPanelContent'
 import styles from './ViewportDrawer.module.css'
 import DOMPurify from 'dompurify'
 import clsx from 'clsx'
@@ -47,6 +48,7 @@ export default function ViewportDrawer() {
   const isMobile = useIsMobile()
   const sidebarRef = useRef<HTMLDivElement>(null)
   const tabListRef = useRef<HTMLDivElement>(null)
+  const panelContentRef = useRef<HTMLDivElement>(null)
   const [tabListScroll, setTabListScroll] = useState({ up: false, down: false })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
 
@@ -105,6 +107,17 @@ export default function ViewportDrawer() {
       setDrawerTab(activeTab)
     }
   }, [drawerTab, activeTab, setDrawerTab])
+
+  // Reset active tab when the current tab is moved out of main-drawer
+  const pendingActiveTabReset = useStore((s) => s.pendingActiveTabReset)
+  const clearPendingReset = useStore((s) => s.clearPendingActiveTabReset)
+  useEffect(() => {
+    if (!pendingActiveTabReset) return
+    // Find the first available built-in tab that isn't the one being moved away
+    const fallback = allTabs.find((t) => t.id !== pendingActiveTabReset)
+    setDrawerTab(fallback?.id ?? 'profile')
+    clearPendingReset()
+  }, [pendingActiveTabReset, allTabs, setDrawerTab, clearPendingReset])
 
   const handleTabClick = useCallback(
     (tabId: string) => {
@@ -210,6 +223,7 @@ export default function ViewportDrawer() {
                       key={tab.id}
                       type="button"
                       className={clsx(styles.tabBtn, showTabLabels && styles.tabBtnLabeled, activeTab === tab.id && styles.tabBtnActive)}
+                      data-tab-id={tab.id}
                       onClick={() => handleTabClick(tab.id)}
                       onContextMenu={handleTabContextMenu}
                       onTouchStart={tabQuickMenu.onTouchStart}
@@ -289,10 +303,8 @@ export default function ViewportDrawer() {
               </h2>
               <CloseButton onClick={closeDrawer} />
             </div>
-            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)}>
-              <ErrorBoundary key={activeTab} label={activeTabConfig?.tabName}>
-                {activeTabConfig?.component()}
-              </ErrorBoundary>
+            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)} ref={panelContentRef}>
+              <TabPanelContent tabId={activeTab} location={{ kind: 'main-drawer' }} />
             </div>
           </div>
         </div>

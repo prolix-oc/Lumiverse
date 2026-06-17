@@ -32,6 +32,7 @@ import { createChatHeadsSlice } from './slices/chat-heads'
 import { createDatabankSlice } from './slices/databank'
 import { createConnectionSlice } from './slices/connection'
 import { createWeaverSlice } from './slices/weaver'
+import { createContainersSlice } from './slices/containers'
 import { registerUserScopedResetStore } from './user-scoped-reset'
 
 export const useStore = create<AppStore>()((...a) => ({
@@ -67,6 +68,7 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createDatabankSlice(...a),
   ...createConnectionSlice(...a),
   ...createWeaverSlice(...a),
+  ...createContainersSlice(...a),
 }))
 
 registerUserScopedResetStore(useStore, useStore.getState())

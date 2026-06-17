@@ -6,6 +6,7 @@ import { useStore } from '@/store'
 import SpindleFloatWidget from './SpindleFloatWidget'
 import SpindleDockPanel from './SpindleDockPanel'
 import SpindleAppMount from './SpindleAppMount'
+import ContainerTabContent from './ContainerTabContent'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { InputPromptModal } from '@/components/shared/InputPromptModal'
@@ -78,6 +79,9 @@ export default function SpindleUIManager() {
         .map((m) => (
           <SpindleAppMount key={m.id} mount={m} />
         ))}
+
+      {/* Re-parents tab roots into registered containers (e.g. Canvas secondary drawer) */}
+      <ContainerTabContent />
 
       <SpindleTextEditor />
       <SpindleModal />

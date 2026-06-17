@@ -1051,6 +1051,7 @@ import type {
   InputBarActionState,
   ExtensionCommandState,
 } from '@/store/slices/spindle-placement'
+import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
 
 export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]
@@ -1060,6 +1061,11 @@ export interface SpindlePlacementSlice {
   inputBarActions: InputBarActionState[]
   extensionCommands: ExtensionCommandState[]
   hiddenPlacements: string[]
+
+  // ── Tab Mobility ──
+  tabLocations: Record<string, TabLocation>
+  /** When set, ViewportDrawer resets main-drawer activeTab to this value then nulls it. */
+  pendingActiveTabReset: string | null
 
   registerDrawerTab: (tab: DrawerTabState) => void
   unregisterDrawerTab: (tabId: string) => void
@@ -1089,6 +1095,10 @@ export interface SpindlePlacementSlice {
   setPlacementHidden: (placementId: string, hidden: boolean) => void
   showAllPlacements: () => void
   hideAllPlacements: () => void
+
+  // ── Tab Mobility Actions ──
+  moveTabTo: (tabId: string, location: TabLocation) => void
+  clearPendingActiveTabReset: () => void
 }
 
 // ---- Prompt Breakdown Slice ----
@@ -1391,6 +1401,8 @@ export interface DatabankSlice {
 }
 
 // ---- Combined Store ----
+import type { ContainerEntry, ContainersSlice } from '@/store/slices/containers'
+
 export interface WeaverSlice {
   weaverSessions: WeaverSession[]
   activeWeaverSessionId: string | null
@@ -1500,4 +1512,5 @@ export type AppStore = ChatSlice &
   FloatingAvatarSlice &
   ChatHeadsSlice &
   DatabankSlice &
-  ConnectionSlice
+  ConnectionSlice &
+  ContainersSlice
