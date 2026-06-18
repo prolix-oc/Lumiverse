@@ -122,6 +122,16 @@
   opacity: 1;
 }
 
+/* Touch-only devices have no hover, so reveal the row actions (bind/delete)
+   permanently. `any-hover: none` matches only when NO input device supports
+   hover (true phones/tablets), avoiding false matches on Windows touchscreen
+   laptops where `hover: none` misfires in Firefox/Edge. */
+@media (any-hover: none) {
+  .deleteBtn {
+    opacity: 1;
+  }
+}
+
 /* ── Drag handle ─────────────────────────────────── */
 
 .dragHandle {
@@ -412,6 +422,14 @@
 
 .folderHeader:hover .folderDeleteBtn {
   opacity: 1;
+}
+
+/* Touch-only devices have no hover, so reveal the folder actions permanently
+   (see note on .deleteBtn above for why `any-hover`). */
+@media (any-hover: none) {
+  .folderDeleteBtn {
+    opacity: 1;
+  }
 }
 
 .folderDeleteBtn:hover {
